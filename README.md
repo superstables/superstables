@@ -54,6 +54,23 @@ Nothing in the review build moves money or talks to a backend; every action is l
 - `/app/applicants` (behind the review gate) lists every submission and exports CSV.
 - `/start`, `/onboarding`, `/app`, `/api` and `/brand` are excluded in `robots.txt` and served with `X-Robots-Tag: noindex` by `proxy.ts`.
 
+## Demo market data service (paid, testnet)
+
+A small x402 seller we run ourselves, so the payment flow can be demonstrated end to end without depending on anybody else's uptime or pricing. It charges test USDC on Base Sepolia: no real money moves.
+
+| Path | What |
+| --- | --- |
+| `/api/demo` | Free self-description: endpoint, parameters, price, network, asset and the address that is paid. |
+| `/api/demo/market?asset=BTC\|ETH` | The service. Validates the request first (a bad asset is a 400 that costs nothing), then answers 402 with its terms in the `PAYMENT-REQUIRED` header and body. With a `PAYMENT-SIGNATURE` header it checks the credential against those terms, has a public facilitator verify and settle the transfer, and only then answers 200 with the price and a `PAYMENT-RESPONSE` receipt. |
+| `lib/demoService.ts` | The terms both routes quote: one network (Base Sepolia, `eip155:84532`), one asset (test USDC), one price. |
+
+Facilitators are the public Base Sepolia ones, tried in order (`facilitator.x402.rs`, `facilitator.payai.network`, `x402.org/facilitator`): one that cannot be reached is skipped, one that answers "no" has decided. Prices come from Coinbase's keyless spot endpoints with a 5s timeout; if they are down a paid call still answers, with `price_usd: null`, `source: "unavailable"` and a note, because the payment settled either way. CORS is open for GET and both payment headers are exposed.
+
+| Env var | Required | What |
+| --- | --- | --- |
+| `SUPERSTABLES_DEMO_PAY_TO` | yes | The Base Sepolia address the test USDC is paid to. While it is unset the endpoint answers 503 and charges nothing. |
+| `SUPERSTABLES_DEMO_PRICE` | no | Price per call in decimal USDC. Default `0.01`. |
+
 ## Database
 
 Neon Postgres via the Vercel Marketplace; `DATABASE_URL` is injected by Vercel. Drizzle ORM over the Neon HTTP driver (`lib/db/`). Migrations live in `drizzle/` and are applied by `scripts/migrate.mjs` at the start of every build.
