@@ -58,11 +58,13 @@ const handler = createMcpHandler((server) => {
     "get_stats",
     {
       title: "Index census",
-      description: "Census counts for the whole index: total services, how many are verified live, dual-rail count, rails covered.",
+      description: "Census counts for the whole index, or for one rail: total services, how many are verified live, dual-rail count, rails covered.",
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-      inputSchema: z.object({}),
+      inputSchema: z.object({
+        rail: z.enum(["x402", "mpp", "acp"]).optional().describe("Restrict the counts to services listed on this rail; omit for the whole index"),
+      }),
     },
-    async () => ({ content: [{ type: "text", text: JSON.stringify(await stats(), null, 2) }] })
+    async ({ rail }) => ({ content: [{ type: "text", text: JSON.stringify(await stats(rail), null, 2) }] })
   );
 }, { serverInfo: { name: "superstables", version: "1.0.0" }, instructions: INSTRUCTIONS });
 

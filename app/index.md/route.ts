@@ -3,10 +3,17 @@ export const dynamic = "force-static";
 
 /**
  * Markdown twin of the homepage: /index.md, and what "/" serves when a client asks for
- * Accept: text/markdown (rewrite in proxy.ts). Starts with the H1, no frontmatter,
- * so it reads as a plain document for the simplest clients.
+ * Accept: text/markdown (rewrite in proxy.ts). Opens with frontmatter (title, description,
+ * canonical, last-updated) so agents get the metadata without scraping.
  */
-const BODY = `# Superstables
+const BODY = `---
+title: Superstables
+description: The neutral, liveness-probed index of services AI agents can pay with stablecoins across x402, MPP and ACP. Free web directory, JSON API, MCP server and natural-language endpoint.
+canonical: ${SITE}/
+last-updated: 2026-09-18
+---
+
+# Superstables
 
 > The neutral index of payable services for AI agents: every service an agent can pay
 > with stablecoins, across every payment rail (x402, MPP, ACP), merged into one

@@ -74,20 +74,24 @@ export async function getServicesByIds(ids: string[]) {
   return withSources(ordered);
 }
 
-export async function stats() {
+/** Census counts for the whole index, or for the services listed on one rail when `rail` is given. */
+export async function stats(rail?: string) {
   const t = schema.services;
+  const scope = rail ? and(isNull(t.delistedAt), sql`${rail} = any(${t.rails})`) : isNull(t.delistedAt);
   const [row] = await db
     .select({
       total: sql<number>`count(*)::int`,
       live: sql<number>`count(*) filter (where live)::int`,
       probed: sql<number>`count(*) filter (where live is not null)::int`,
       dualRail: sql<number>`count(*) filter (where array_length(rails, 1) > 1)::int`,
-      rails: sql<number>`(select count(distinct rail)::int from services, unnest(rails) rail where delisted_at is null)`,
+      rails: rail
+        ? sql<number>`count(*) filter (where ${rail} = any(rails))::int`
+        : sql<number>`(select count(distinct rail)::int from services, unnest(rails) rail where delisted_at is null)`,
     })
     .from(t)
-    .where(isNull(t.delistedAt));
+    .where(scope);
   const [probeAgg] = await db.select({ lastProbe: sql<string | null>`max(probed_at)::text` }).from(schema.probes);
-  return { total: row.total, live: row.live, probed: row.probed, dual_rail: row.dualRail, rails: row.rails, last_probe_at: probeAgg?.lastProbe ?? null };
+  return { total: row.total, live: row.live, probed: row.probed, dual_rail: row.dualRail, rails: rail ? (row.total > 0 ? 1 : 0) : row.rails, last_probe_at: probeAgg?.lastProbe ?? null };
 }
 
 export async function getService(id: string) {

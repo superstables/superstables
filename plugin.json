@@ -1,0 +1,16 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "superstables",
+  "version": "1.0.0",
+  "description": "The Superstables index of services AI agents can pay with stablecoins (x402, MPP, ACP): a skill for using the index and the read-only MCP server. Never executes payments.",
+  "homepage": "https://www.superstables.com",
+  "repository": "https://github.com/superstables/superstables",
+  "keywords": [
+    "x402",
+    "mpp",
+    "acp",
+    "stablecoins",
+    "agent-payments",
+    "mcp"
+  ]
+}

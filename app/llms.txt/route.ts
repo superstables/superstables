@@ -40,6 +40,7 @@ Do not use it to execute payments; Superstables indexes and probes, it does not 
 - [ARD catalog](${SITE}/.well-known/ard.json): every agentic resource we publish
 - [API catalog (RFC 9727)](${SITE}/.well-known/api-catalog)
 - [Agent skills index](${SITE}/.well-known/agent-skills/index.json)
+- [Source repository](https://github.com/superstables/superstables): plugin.json and mcp.json (Agent Plugins layout), the skill under skills/
 - [Whole index as JSONL](${SITE}/feeds/services.jsonl): one schema.org Service per line ([schema map](${SITE}/schemamap.xml))
 - Scoped indexes: [/docs/llms.txt](${SITE}/docs/llms.txt), [/api/llms.txt](${SITE}/api/llms.txt)
 

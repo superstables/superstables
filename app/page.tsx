@@ -66,6 +66,10 @@ const jsonLd = {
       isAccessibleForFree: true,
     },
     {
+      "@type": "BreadcrumbList",
+      itemListElement: [{ "@type": "ListItem", position: 1, name: "Home", item: `${SITE}/` }],
+    },
+    {
       "@type": "FAQPage",
       "@id": `${SITE}/#faq`,
       mainEntity: (ABOUT.faq ?? []).map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })),

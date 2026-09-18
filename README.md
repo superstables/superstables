@@ -48,6 +48,7 @@ The JSON API and read-only MCP server expose discovery data. They do not initiat
 | `/llms.txt`, `/docs/llms.txt`, `/api/llms.txt` | Markdown link index for AI crawlers, plus scoped indexes. |
 | `/index.md`, `/docs.md`, `/discover.md`, `/submit.md`, `/pricing.md`, `/about.md`, `/privacy.md`, `/contact.md`, `/auth.md` | Markdown twins of the content pages. `proxy.ts` redirects (303) to the twin when `Accept` prefers `text/markdown` (`lib/negotiate.ts`), so the HTML answer for a page URL never varies and stays CDN-cacheable; `/?mode=agent` selects the markdown homepage. Unmatched paths return a markdown 404 to non-browser clients (`/404.md`). |
 | `/feeds/services.jsonl`, `/schemamap.xml` | Whole index as schema.org Service objects, one per line; schema map referenced from `robots.txt` (a route handler, so it can carry the `schemamap:` directive). |
+| `plugin.json`, `mcp.json`, `skills/` | Agent Plugins layout: the skill served at `/skills/superstables-index/SKILL.md` is read from `skills/`. |
 | `/.well-known/*` | `ard.json`, `api-catalog` (RFC 9727), `mcp` and `mcp.json` (same manifest), `mcp/server-card.json`, `agent-skills/index.json` (digest of `/skills/superstables-index/SKILL.md`). |
 
 ## Product preview (review build)
