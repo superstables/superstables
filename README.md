@@ -38,11 +38,15 @@ The JSON API and read-only MCP server expose discovery data. They do not initiat
 | `lib/directory/probe.ts` | HTTP GET with a crawler User-Agent and an 8s timeout. A successful probe detects HTTP 402, a payment-challenge header or a matching body. Non-HTTP endpoints, including `acp://`, are not probed. |
 | `lib/directory/pipeline.ts` | crawl(): ingest -> dedupe -> chunked upserts -> delist-after-7-days. probeBatch(): stalest N, bounded concurrency, probe history rows. |
 | `/api/cron/crawl` | Full pipeline; `?probe=only&batch=N&conc=N` for probe-only runs. Auth: `CRON_SECRET` (Vercel env + GH secret). Vercel cron runs it twice daily; `.github/workflows/crawl.yml` pings it every 6 hours. |
-| `/api/v1/services`, `/api/v1/services/:id`, `/api/v1/stats`, `/api/v1/submit` | Public JSON, CORS *, no auth. Field names are a contract; spec at `/openapi.json`. |
+| `/api/v1/services`, `/api/v1/services/:id`, `/api/v1/services/batch`, `/api/v1/stats`, `/api/v1/submit` | Public JSON, CORS *, no auth. Field names are a contract; spec at `/openapi.json`. List responses carry `page.next_offset`; batch looks up 1-100 ids. Errors are always `{ error: { code, message } }`. |
 | `/api/mcp` | Read-only MCP server: `find_services`, `get_service`, `get_stats`. |
 | `/ask` | Natural-language queries (NLWeb style), JSON or SSE. |
 | `/discover`, `/s/[id]`, `/submit` | Census hero + filterable table (ISR 300s), service detail with probe history + JSON-LD, vendor self-submit into `submissions` (approve by setting approved=true; joins next crawl). |
-| `/llms.txt`, `/docs.md`, `/auth.md`, `/pricing.md`, `/.well-known/*` | Plain-text and machine-readable surfaces for AI crawlers and agents. |
+| `/about`, `/privacy` | Trust pages rendered from `content/trust.ts`, also served as markdown twins. |
+| `/llms.txt`, `/docs/llms.txt`, `/api/llms.txt` | Markdown link index for AI crawlers, plus scoped indexes. |
+| `/index.md`, `/docs.md`, `/discover.md`, `/submit.md`, `/pricing.md`, `/about.md`, `/privacy.md`, `/auth.md` | Markdown twins of the content pages. `proxy.ts` serves the twin when `Accept` prefers `text/markdown` (`lib/negotiate.ts`); `/?mode=agent` selects the markdown homepage. Unmatched paths return a markdown 404 to non-browser clients (`/404.md`). |
+| `/feeds/services.jsonl`, `/schemamap.xml` | Whole index as schema.org Service objects, one per line; schema map referenced from `robots.txt` (a route handler, so it can carry the `schemamap:` directive). |
+| `/.well-known/*` | `ard.json`, `api-catalog` (RFC 9727), `mcp.json`, `mcp/server-card.json`, `agent-skills/index.json` (digest of `/skills/superstables-index/SKILL.md`). |
 
 ## Product preview (review build)
 

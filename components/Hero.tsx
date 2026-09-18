@@ -50,7 +50,7 @@ export default function Hero() {
           <Reveal className="features">
             {FEATURES.map((f) => (
               <div key={f.title} className="feature">
-                <h3>{f.title}</h3>
+                <h2>{f.title}</h2>
                 <p>{f.body}</p>
               </div>
             ))}
