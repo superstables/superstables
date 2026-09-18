@@ -7,7 +7,7 @@ export { SITE };
 export const SKILL_NAME = "superstables-index";
 export const SKILL_PATH = `/skills/${SKILL_NAME}/SKILL.md`;
 export const SKILL_DESCRIPTION =
-  "Find services an AI agent can pay with stablecoins (x402, MPP, ACP) and check they are live before calling them, using the free Superstables index over REST or MCP.";
+  "Use when an agent needs to find a service it can pay with stablecoins (x402, MPP, ACP), check that a payable endpoint is live before calling it, compare rails, chains or prices, or get census numbers on agent payments. Free Superstables index over REST or MCP; not for executing payments.";
 
 export const SKILL_MD = `---
 name: ${SKILL_NAME}

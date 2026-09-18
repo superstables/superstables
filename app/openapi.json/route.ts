@@ -50,11 +50,17 @@ const RATE_LIMIT_HEADERS = {
   "RateLimit-Policy": { $ref: "#/components/headers/RateLimit-Policy" },
 } as const;
 
+/** Every error response inlines the Error schema, so any reader sees the typed body without resolving component responses. */
+const errorResponse = (description: string, headers?: Record<string, unknown>) =>
+  ({ description, ...(headers ? { headers } : {}), content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } }) as const;
+
 const ERROR_RESPONSES = {
-  "429": { $ref: "#/components/responses/TooManyRequests" },
-  "500": { $ref: "#/components/responses/InternalError" },
-  default: { $ref: "#/components/responses/Error" },
+  "429": errorResponse("Rate limited (code: rate_limited); wait Retry-After seconds", { "Retry-After": { $ref: "#/components/headers/Retry-After" }, ...RATE_LIMIT_HEADERS }),
+  "500": errorResponse("Unexpected failure (code: internal_error); safe to retry with backoff"),
+  default: errorResponse("Any other error; body follows the Error schema"),
 } as const;
+const BAD_REQUEST = errorResponse("Invalid request (codes: invalid_json, invalid_endpoint, invalid_ids, missing_query)");
+const NOT_FOUND = errorResponse("Unknown id or path (code: not_found)");
 
 const SPEC = {
   openapi: "3.1.0",
@@ -126,7 +132,7 @@ const SPEC = {
             headers: RATE_LIMIT_HEADERS,
             content: { "application/json": { schema: { $ref: "#/components/schemas/BatchResult" } } },
           },
-          "400": { $ref: "#/components/responses/BadRequest" },
+          "400": BAD_REQUEST,
           ...ERROR_RESPONSES,
         },
       },
@@ -136,7 +142,7 @@ const SPEC = {
         parameters: [{ name: "ids", in: "query", required: true, schema: { type: "string" }, description: "Comma-separated service ids, 1 to 100", example: "10x402.com,example.invalid" }],
         responses: {
           "200": { description: "Records found and ids missing", headers: RATE_LIMIT_HEADERS, content: { "application/json": { schema: { $ref: "#/components/schemas/BatchResult" } } } },
-          "400": { $ref: "#/components/responses/BadRequest" },
+          "400": BAD_REQUEST,
           ...ERROR_RESPONSES,
         },
       },
@@ -152,7 +158,7 @@ const SPEC = {
             headers: RATE_LIMIT_HEADERS,
             content: { "application/json": { schema: { $ref: "#/components/schemas/ServiceDetail" } } },
           },
-          "404": { $ref: "#/components/responses/NotFound" },
+          "404": NOT_FOUND,
           ...ERROR_RESPONSES,
         },
       },
@@ -186,7 +192,7 @@ const SPEC = {
             description: "Accepted into the moderation queue (deduplicated: true when a recent identical submission exists)",
             content: { "application/json": { schema: { $ref: "#/components/schemas/SubmitResult" } } },
           },
-          "400": { $ref: "#/components/responses/BadRequest" },
+          "400": BAD_REQUEST,
           ...ERROR_RESPONSES,
         },
       },

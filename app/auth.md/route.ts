@@ -2,7 +2,14 @@ import { SITE } from "@/lib/site";
 export const dynamic = "force-static";
 
 /** auth.md (workos/auth.md convention): how agents authenticate. Here: they don't have to. */
-const BODY = `# Authentication
+const BODY = `---
+title: Authentication
+description: How agents authenticate to the Superstables Index API and MCP server. They do not have to; both are public and read-only.
+canonical: ${SITE}/auth.md
+last-updated: 2026-09-18
+---
+
+# Authentication
 
 ## Overview
 

@@ -7,6 +7,7 @@ export const dynamic = "force-static";
 const MANIFEST = {
   name: "superstables",
   displayName: "Superstables",
+  icon: `${SITE}/icon.svg`,
   iconUrl: `${SITE}/icon.svg`,
   description: "The neutral index of services an AI agent can pay with stablecoins (x402, MPP, ACP), deduplicated and independently probed for liveness. Read-only, no auth.",
   version: "1.0.0",

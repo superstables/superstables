@@ -25,6 +25,7 @@ const jsonLd = {
       url: `${SITE}`,
       logo: `${SITE}/icon.svg`,
       sameAs: ["https://x.com/superstables", "https://github.com/superstables/superstables"],
+      contactPoint: { "@type": "ContactPoint", contactType: "customer support", url: `${SITE}/contact`, availableLanguage: "en" },
       description: "The neutral, liveness-probed index of services AI agents can pay with stablecoins across x402, MPP and ACP.",
     },
     {

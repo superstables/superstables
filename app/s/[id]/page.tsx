@@ -30,11 +30,23 @@ export default async function ServicePage({ params }: Props) {
 
   const jsonLd = {
     "@context": "https://schema.org",
-    "@type": "Service",
-    name: s.name,
-    url: `${SITE}/s/${s.id}`,
-    category: s.category ?? "AI agent payable service",
-    offers: s.price.usd != null ? { "@type": "Offer", price: s.price.usd, priceCurrency: "USD" } : undefined,
+    "@graph": [
+      {
+        "@type": "Service",
+        name: s.name,
+        url: `${SITE}/s/${s.id}`,
+        category: s.category ?? "AI agent payable service",
+        offers: s.price.usd != null ? { "@type": "Offer", price: s.price.usd, priceCurrency: "USD" } : undefined,
+      },
+      {
+        // Mirrors the visible crumb: Discover / service id.
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Discover", item: `${SITE}/discover` },
+          { "@type": "ListItem", position: 2, name: s.name, item: `${SITE}/s/${s.id}` },
+        ],
+      },
+    ],
   };
 
   return (

@@ -6,7 +6,8 @@ import { SITE } from "@/lib/site";
  */
 
 export type TrustSection = { heading: string; paragraphs: string[]; bullets?: string[] };
-export type TrustDoc = { slug: "about" | "privacy" | "contact"; title: string; description: string; lede: string; sections: TrustSection[]; updated: string };
+export type TrustFaq = { q: string; a: string };
+export type TrustDoc = { slug: "about" | "privacy" | "contact"; title: string; description: string; lede: string; sections: TrustSection[]; faq?: TrustFaq[]; updated: string };
 
 export const ABOUT: TrustDoc = {
   slug: "about",
@@ -52,6 +53,13 @@ export const ABOUT: TrustDoc = {
         `[Privacy](${SITE}/privacy): what we store and why`,
       ],
     },
+  ],
+  faq: [
+    { q: "What is Superstables?", a: "A free, neutral index of services an AI agent can pay with stablecoins over x402, MPP or ACP, with every HTTP endpoint independently probed for liveness. It is the map for the payment router described on the homepage." },
+    { q: "Is it free?", a: "Yes. The web directory, the JSON API, the MCP server and the natural-language endpoint need no key, no account and no payment, and listing a service is free. There is no paid placement." },
+    { q: "What does live mean?", a: "The endpoint answered a valid payment challenge on our last probe: an HTTP 402 status, a payment-challenge response header, or an x402 or MPP challenge body. Probe history is shown on every service page." },
+    { q: "Does Superstables execute payments?", a: "No. It indexes and probes. It does not route, execute or settle payments and never holds funds." },
+    { q: "How do I get a service listed or corrected?", a: "Submit the endpoint through the form or POST /api/v1/submit. It is probed before it appears, and submitting the same endpoint again updates it. To remove a listing, contact us with the service id." },
   ],
 };
 
@@ -166,6 +174,10 @@ export function trustMarkdown(doc: TrustDoc): string {
       lines.push("");
       for (const b of s.bullets) lines.push(`- ${b}`);
     }
+  }
+  if (doc.faq) {
+    lines.push("", "## Questions and answers");
+    for (const f of doc.faq) lines.push("", `### ${f.q}`, "", f.a);
   }
   lines.push("", `Last updated: ${doc.updated}`, "");
   return lines.join("\n");
