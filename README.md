@@ -15,6 +15,8 @@ npm run build    # production build (also applies pending DB migrations)
 npm run lint
 ```
 
+The build applies pending migrations against `DATABASE_URL` (Neon over HTTP by default). Set `DATABASE_DRIVER=postgres` to run the site and the migrator against an ordinary PostgreSQL instead; the switch is explicit and never inferred from the URL.
+
 ## Where things live
 
 | Path | What |
@@ -42,9 +44,9 @@ The JSON API and read-only MCP server expose discovery data. They do not initiat
 | `/api/mcp` | Read-only MCP server: `find_services`, `get_service`, `get_stats`. |
 | `/ask` | Natural-language queries (NLWeb style), JSON or SSE. |
 | `/discover`, `/s/[id]`, `/submit` | Census hero + filterable table (ISR 300s), service detail with probe history + JSON-LD, vendor self-submit into `submissions` (approve by setting approved=true; joins next crawl). |
-| `/about`, `/privacy` | Trust pages rendered from `content/trust.ts`, also served as markdown twins. |
+| `/about`, `/privacy`, `/contact` | Trust pages rendered from `content/trust.ts`, also served as markdown twins. |
 | `/llms.txt`, `/docs/llms.txt`, `/api/llms.txt` | Markdown link index for AI crawlers, plus scoped indexes. |
-| `/index.md`, `/docs.md`, `/discover.md`, `/submit.md`, `/pricing.md`, `/about.md`, `/privacy.md`, `/auth.md` | Markdown twins of the content pages. `proxy.ts` redirects (303) to the twin when `Accept` prefers `text/markdown` (`lib/negotiate.ts`), so the HTML answer for a page URL never varies and stays CDN-cacheable; `/?mode=agent` selects the markdown homepage. Unmatched paths return a markdown 404 to non-browser clients (`/404.md`). |
+| `/index.md`, `/docs.md`, `/discover.md`, `/submit.md`, `/pricing.md`, `/about.md`, `/privacy.md`, `/contact.md`, `/auth.md` | Markdown twins of the content pages. `proxy.ts` redirects (303) to the twin when `Accept` prefers `text/markdown` (`lib/negotiate.ts`), so the HTML answer for a page URL never varies and stays CDN-cacheable; `/?mode=agent` selects the markdown homepage. Unmatched paths return a markdown 404 to non-browser clients (`/404.md`). |
 | `/feeds/services.jsonl`, `/schemamap.xml` | Whole index as schema.org Service objects, one per line; schema map referenced from `robots.txt` (a route handler, so it can carry the `schemamap:` directive). |
 | `/.well-known/*` | `ard.json`, `api-catalog` (RFC 9727), `mcp.json`, `mcp/server-card.json`, `agent-skills/index.json` (digest of `/skills/superstables-index/SKILL.md`). |
 
