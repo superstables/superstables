@@ -27,7 +27,7 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return {
       // Markdown negotiation (Accept quality values and /?mode=agent) is decided in proxy.ts, which
-      // rewrites to the .md twin; a header regex here cannot honour q=0 or a lower preference.
+      // redirects to the .md twin; a header regex here cannot honour q=0 or a lower preference.
       beforeFiles: [],
       afterFiles: [],
       fallback: [

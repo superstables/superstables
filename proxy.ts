@@ -15,22 +15,27 @@ const MARKDOWN_TWINS: Record<string, string> = {
   "/submit": "/submit.md",
 };
 
-// Next replaces Vary on HTML, so negotiated HTML must not enter shared caches.
-// Markdown handlers set Vary: Accept on their own responses; proxy headers alone
-// do not survive static route handling. Direct .md routes keep their cache policy.
+// A client that prefers text/markdown is redirected (303) to the twin URL rather than
+// served markdown in place: the HTML answer for a page URL then never varies, so it keeps
+// its normal CDN caching (Next replaces Vary on HTML, which would make an in-place
+// rewrite unsafe in shared caches). The redirect itself is never cached. /?mode=agent is
+// a distinct URL and is rewritten to the markdown homepage directly.
 function negotiate(request: NextRequest, twin: string) {
-  const agentMode = request.nextUrl.pathname === "/" && request.nextUrl.searchParams.get("mode") === "agent";
-  if (agentMode || prefersMarkdown(request.headers.get("accept"))) {
-    const url = request.nextUrl.clone();
-    url.pathname = twin;
+  const url = request.nextUrl.clone();
+  url.pathname = twin;
+  url.search = "";
+  if (request.nextUrl.pathname === "/" && request.nextUrl.searchParams.get("mode") === "agent") {
     const res = NextResponse.rewrite(url);
     res.headers.set("Vary", "Accept");
     return res;
   }
-  const res = NextResponse.next();
-  res.headers.set("Vary", "Accept");
-  res.headers.set("Cache-Control", "no-store");
-  return res;
+  if (prefersMarkdown(request.headers.get("accept"))) {
+    const res = NextResponse.redirect(url, 303);
+    res.headers.set("Vary", "Accept");
+    res.headers.set("Cache-Control", "no-store");
+    return res;
+  }
+  return NextResponse.next();
 }
 
 /** /start is public (it is the door) but must never be indexed; everything behind it needs the review cookie. */
