@@ -5,6 +5,7 @@ import { themeInitScript } from "@/components/ThemeToggle";
 import Analytics from "@/components/Analytics";
 import WebMcp from "@/components/WebMcp";
 import Script from "next/script";
+import { SITE } from "@/lib/site";
 
 const display = Bricolage_Grotesque({
   subsets: ["latin"],
@@ -35,13 +36,13 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://www.superstables.com"),
+  metadataBase: new URL(`${SITE}`),
   title: "Superstables, the payment router for AI agents",
   description: "Superstables is the OpenRouter for agentic payments: one call lets an AI agent pay on any rail, chain or stablecoin. Non-custodial and open source.",
   openGraph: {
     title: "Superstables, the payment router for AI agents",
     description: "Superstables is the OpenRouter for agentic payments.",
-    url: "https://www.superstables.com",
+    url: `${SITE}`,
     siteName: "Superstables",
     type: "website",
   },

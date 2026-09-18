@@ -1,3 +1,4 @@
+import { SITE } from "@/lib/site";
 /**
  * Trust pages (About, Privacy) as data, rendered both as HTML pages and as markdown twins.
  * Everything here describes what the code in this repository actually does; nothing about
@@ -5,9 +6,7 @@
  */
 
 export type TrustSection = { heading: string; paragraphs: string[]; bullets?: string[] };
-export type TrustDoc = { slug: "about" | "privacy"; title: string; description: string; lede: string; sections: TrustSection[]; updated: string };
-
-const SITE = "https://www.superstables.com";
+export type TrustDoc = { slug: "about" | "privacy" | "contact"; title: string; description: string; lede: string; sections: TrustSection[]; updated: string };
 
 export const ABOUT: TrustDoc = {
   slug: "about",
@@ -104,6 +103,43 @@ export const PRIVACY: TrustDoc = {
       heading: "Your choices",
       paragraphs: [
         "You can ask us to delete your early-access application, your service submission, or a listed service record, or to tell you what we hold about you. Use the contact links in the footer of any page. Standard AI crawler directives for this site are published in robots.txt, and machine-readable guidance in llms.txt.",
+      ],
+    },
+  ],
+};
+
+export const CONTACT: TrustDoc = {
+  slug: "contact",
+  title: "Contact",
+  description: "How to reach Superstables about the index, a listing, a correction or your data, and what to expect when you do.",
+  lede: "Superstables is a small project. The channels below are the ones we actually read; none of them requires an account with us.",
+  updated: "2026-09-18",
+  sections: [
+    {
+      heading: "Listings and corrections",
+      paragraphs: [
+        "To list a service, use the form or the API; every submission is probed before it appears, and repeated submissions of the same endpoint within 24 hours are deduplicated. To correct a listing, submit the same endpoint again with the corrected details. To have a listed service removed, or a record about it corrected, tell us the service id shown on its page (the host slug) and what should change.",
+      ],
+      bullets: [`[List a service](${SITE}/submit): the form`, `[POST /api/v1/submit](${SITE}/submit.md): the same thing for agents and scripts`],
+    },
+    {
+      heading: "Questions, demos and problems",
+      paragraphs: [
+        "Questions about the index, the API, the MCP server, the roadmap or a demo go to the public profile on X; direct messages are open. Bugs and feature requests for the site are welcome as issues on the GitHub repository linked in the footer. Please do not put payment details, keys or other secrets in any message.",
+      ],
+      bullets: [`[X / @superstables](https://x.com/superstables): questions, demos, direct messages`, `[Documentation](${SITE}/docs): the API reference, with a [markdown version](${SITE}/docs.md) for agents`],
+    },
+    {
+      heading: "Your data",
+      paragraphs: [
+        "You can ask us to delete your early-access application or your service submission, or to tell you what we hold about you. Send the request through either channel above and mention the email address or share code you used, so we can find the record. The Privacy page explains what is stored and why.",
+      ],
+      bullets: [`[Privacy](${SITE}/privacy): what we store and why`],
+    },
+    {
+      heading: "Security",
+      paragraphs: [
+        "If you believe you have found a security problem in the site or the API, send the details as a direct message rather than a public post, and give us time to look before publishing anything. The index holds no funds and moves no money, so the main risks are data accuracy and availability; we still want to hear about them.",
       ],
     },
   ],

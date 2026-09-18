@@ -1,3 +1,4 @@
+import { SITE } from "@/lib/site";
 export const dynamic = "force-dynamic";
 
 /**
@@ -5,8 +6,6 @@ export const dynamic = "force-dynamic";
  * unmatched path here when the Accept header does not ask for text/html; browsers keep the
  * normal HTML not-found page. The original path arrives as ?path= from the rewrite.
  */
-const SITE = "https://www.superstables.com";
-
 export function GET(req: Request) {
   const url = new URL(req.url);
   // After a rewrite the handler may see the original URL (pathname) or the destination (?path=).

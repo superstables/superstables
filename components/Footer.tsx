@@ -26,6 +26,7 @@ export default function Footer() {
         <div className="col">
           <b>Company</b>
           <Link href="/about">About</Link>
+          <Link href="/contact">Contact</Link>
           <Link href="/privacy">Privacy</Link>
           <a href={site.links.x} target="_blank" rel="noopener noreferrer">
             X / @superstables

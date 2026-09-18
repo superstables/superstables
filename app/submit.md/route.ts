@@ -1,10 +1,11 @@
+import { SITE } from "@/lib/site";
 export const dynamic = "force-static";
 
 /** Markdown twin of /submit: how to list a service, for people and for agents. */
 const BODY = `---
 title: List your service
 description: Add a service that accepts agent payments over x402, MPP or ACP to the Superstables index. We probe before listing.
-canonical: https://www.superstables.com/submit
+canonical: ${SITE}/submit
 last-updated: 2026-09-18
 ---
 
@@ -15,11 +16,11 @@ if it answers, it appears in the index and stays there as long as it keeps answe
 
 ## Submit with the form
 
-https://www.superstables.com/submit
+${SITE}/submit
 
 ## Submit with the API
 
-    curl -X POST https://www.superstables.com/api/v1/submit \\
+    curl -X POST ${SITE}/api/v1/submit \\
       -H "Content-Type: application/json" \\
       -d '{"endpoint":"https://api.example.com/v1/priced","name":"Example API","contact":"ops@example.com"}'
 
@@ -29,7 +30,7 @@ https://www.superstables.com/submit
 - Idempotency-Key header (optional): repeated submissions of the same endpoint within 24 hours are deduplicated.
 
 Responses: 200 { ok: true } (or { ok: true, deduplicated: true }); 400 with { error: { code, message } } for
-invalid_json or invalid_endpoint. Spec: https://www.superstables.com/openapi.json
+invalid_json or invalid_endpoint. Spec: ${SITE}/openapi.json
 
 ## What happens next
 

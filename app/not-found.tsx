@@ -2,6 +2,7 @@ import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import "./app.css";
+import { SITE } from "@/lib/site";
 
 /** Real 404 with recovery pointers, for people and for agents. */
 export default function NotFound() {
@@ -14,8 +15,8 @@ export default function NotFound() {
         <p className="lede" style={{ marginTop: 14 }}>
           Places that do: the <Link className="link" href="/discover">service index</Link>, the{" "}
           <Link className="link" href="/docs">API reference</Link>, the{" "}
-          <a className="link" href="https://www.superstables.com/llms.txt">llms.txt</a> overview, or the{" "}
-          <a className="link" href="https://www.superstables.com/sitemap.xml">sitemap</a>.
+          <a className="link" href={`${SITE}/llms.txt`}>llms.txt</a> overview, or the{" "}
+          <a className="link" href={`${SITE}/sitemap.xml`}>sitemap</a>.
         </p>
       </main>
       <Footer />

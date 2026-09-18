@@ -1,3 +1,4 @@
+import { SITE } from "@/lib/site";
 export const dynamic = "force-static";
 
 /** Machine-readable pricing. Honest version: the index is free. */
@@ -7,11 +8,11 @@ const BODY = `# Pricing
 
 The Superstables index is free to use, for humans and for agents.
 
-- Web directory: https://www.superstables.com/discover - free, no account
-- JSON API: https://www.superstables.com/api/v1/services - free, no key, CORS open
-- MCP server: https://www.superstables.com/api/mcp - free, no auth
-- Natural-language endpoint: https://www.superstables.com/ask - free
-- Listing a service: https://www.superstables.com/submit - free; we probe before listing
+- Web directory: ${SITE}/discover - free, no account
+- JSON API: ${SITE}/api/v1/services - free, no key, CORS open
+- MCP server: ${SITE}/api/mcp - free, no auth
+- Natural-language endpoint: ${SITE}/ask - free
+- Listing a service: ${SITE}/submit - free; we probe before listing
 
 ## Limits
 

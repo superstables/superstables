@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { SITE } from "@/lib/site";
 
 export const dynamic = "force-static";
 
@@ -6,10 +7,10 @@ export const dynamic = "force-static";
 const MANIFEST = {
   name: "superstables",
   displayName: "Superstables",
-  iconUrl: "https://www.superstables.com/icon.svg",
+  iconUrl: `${SITE}/icon.svg`,
   description: "The neutral index of services an AI agent can pay with stablecoins (x402, MPP, ACP), deduplicated and independently probed for liveness. Read-only, no auth.",
   version: "1.0.0",
-  endpoint: "https://www.superstables.com/api/mcp",
+  endpoint: `${SITE}/api/mcp`,
   transport: "streamable-http",
   authentication: { type: "none" },
   capabilities: { tools: true },
@@ -19,7 +20,7 @@ const MANIFEST = {
     { name: "get_stats", description: "Census counts: total, live, probed, dual-rail, rails." },
   ],
   contact: "https://x.com/superstables",
-  documentation: "https://www.superstables.com/docs",
+  documentation: `${SITE}/docs`,
 };
 
 export function GET() {

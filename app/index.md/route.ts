@@ -1,3 +1,4 @@
+import { SITE } from "@/lib/site";
 export const dynamic = "force-static";
 
 /**
@@ -23,15 +24,15 @@ settle payments.
 
 ## Where to start
 
-- [Browse the index](https://www.superstables.com/discover)
-- [API reference](https://www.superstables.com/docs) and its [markdown twin](https://www.superstables.com/docs.md)
-- [OpenAPI 3.1 spec](https://www.superstables.com/openapi.json)
-- [llms.txt](https://www.superstables.com/llms.txt): the agent-facing index of this site
-- [Authentication](https://www.superstables.com/auth.md): none required
-- [Pricing](https://www.superstables.com/pricing.md): free
-- [MCP server card](https://www.superstables.com/.well-known/mcp/server-card.json)
-- [List a service](https://www.superstables.com/submit)
-- [About](https://www.superstables.com/about.md) and [Privacy](https://www.superstables.com/privacy.md)
+- [Browse the index](${SITE}/discover)
+- [API reference](${SITE}/docs) and its [markdown twin](${SITE}/docs.md)
+- [OpenAPI 3.1 spec](${SITE}/openapi.json)
+- [llms.txt](${SITE}/llms.txt): the agent-facing index of this site
+- [Authentication](${SITE}/auth.md): none required
+- [Pricing](${SITE}/pricing.md): free
+- [MCP server card](${SITE}/.well-known/mcp/server-card.json)
+- [List a service](${SITE}/submit)
+- [About](${SITE}/about.md) and [Privacy](${SITE}/privacy.md)
 
 ## Endpoints
 
@@ -60,7 +61,7 @@ export function GET() {
       "Content-Type": "text/markdown; charset=utf-8",
       "Cache-Control": "s-maxage=3600",
       Vary: "Accept",
-      Link: '<https://www.superstables.com/>; rel="canonical", <https://www.superstables.com/>; rel="alternate"; type="text/html"',
+      Link: '<${SITE}/>; rel="canonical`, <${SITE}/>; rel=`alternate"; type="text/html"',
     },
   });
 }

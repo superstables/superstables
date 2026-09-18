@@ -1,9 +1,9 @@
 import { listServices } from "@/lib/directory/query";
+import { SITE } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-const SITE = "https://www.superstables.com";
 const PAGE = 500;
 
 /** One indexed service as a schema.org Service object (the shape /ask already returns per result). */

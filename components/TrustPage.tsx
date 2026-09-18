@@ -1,6 +1,7 @@
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import type { TrustDoc } from "@/content/trust";
+import { SITE } from "@/lib/site";
 
 /** Renders every markdown link `[text](url)` inside a bullet as an anchor; the rest stays plain text. */
 function Bullet({ text }: { text: string }) {
@@ -38,7 +39,7 @@ export default function TrustPage({ doc, eyebrow }: { doc: TrustDoc; eyebrow: st
           </section>
         ))}
         <p style={{ marginTop: 32, fontSize: 14, color: "var(--ink-2)" }}>
-          Last updated {doc.updated}. Also available as <a className="link" href={`https://www.superstables.com/${doc.slug}.md`}>markdown</a>.
+          Last updated {doc.updated}. Also available as <a className="link" href={`${SITE}/${doc.slug}.md`}>markdown</a>.
         </p>
       </main>
       <Footer />

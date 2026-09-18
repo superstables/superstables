@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
+import { SITE } from "@/lib/site";
 
 export const dynamic = "force-static";
 
 /** OpenAPI 3.1 description of the public index API. Field names are a stable contract. */
-const SITE = "https://www.superstables.com";
-
 const SERVICE = {
   type: "object",
   properties: {

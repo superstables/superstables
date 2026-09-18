@@ -3,11 +3,12 @@ import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import "../app.css";
+import { SITE } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "Pricing",
   description: "The Superstables index is free: web directory, JSON API, MCP server and natural-language endpoint. No key, no account, no paid tiers.",
-  alternates: { canonical: "https://www.superstables.com/pricing", types: { "text/markdown": "https://www.superstables.com/pricing.md" } },
+  alternates: { canonical: `${SITE}/pricing`, types: { "text/markdown": `${SITE}/pricing.md` } },
 };
 
 /** Service, not Product/Offer: the index is free and there is no checkout, so no commerce signal. */
@@ -17,8 +18,8 @@ const jsonLd = {
   name: "Superstables index",
   serviceType: "Index of services payable by AI agents with stablecoins",
   description: "Liveness-probed index of services AI agents can pay with stablecoins over x402, MPP and ACP. Free to use: web directory, JSON API, MCP server and natural-language endpoint, with no key, account or paid tier.",
-  url: "https://www.superstables.com/pricing",
-  provider: { "@type": "Organization", name: "Superstables", url: "https://www.superstables.com" },
+  url: `${SITE}/pricing`,
+  provider: { "@type": "Organization", name: "Superstables", url: `${SITE}` },
   audience: { "@type": "Audience", audienceType: "AI agents and their developers" },
 };
 
@@ -43,7 +44,7 @@ export default function Pricing() {
           <div className="settings-row"><span><b>Listing your service</b><p>Submitted endpoints are probed before they appear.</p></span><span className="pill ok">Free</span></div>
         </div>
         <p style={{ marginTop: 24, fontSize: 14, color: "var(--ink-2)" }}>
-          If paid tiers ever exist, <a className="link" href="https://www.superstables.com/pricing.md">pricing.md</a> changes first. Questions:{" "}
+          If paid tiers ever exist, <a className="link" href={`${SITE}/pricing.md`}>pricing.md</a> changes first. Questions:{" "}
           <a className="link" href="https://x.com/superstables" target="_blank" rel="noopener noreferrer">@superstables</a>.
         </p>
       </main>

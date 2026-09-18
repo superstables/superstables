@@ -1,8 +1,8 @@
 import { listServices, stats } from "@/lib/directory/query";
+import { SITE } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
 
-const SITE = "https://www.superstables.com";
 const ROWS = 100;
 
 const esc = (s: string) => s.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();

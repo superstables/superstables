@@ -11,6 +11,7 @@ const MARKDOWN_TWINS: Record<string, string> = {
   "/pricing": "/pricing.md",
   "/about": "/about.md",
   "/privacy": "/privacy.md",
+  "/contact": "/contact.md",
   "/discover": "/discover.md",
   "/submit": "/submit.md",
 };
@@ -62,5 +63,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/docs", "/pricing", "/about", "/privacy", "/discover", "/submit", "/start/:path*", "/app/:path*", "/onboarding/:path*"],
+  matcher: ["/", "/docs", "/pricing", "/about", "/privacy", "/contact", "/discover", "/submit", "/start/:path*", "/app/:path*", "/onboarding/:path*"],
 };

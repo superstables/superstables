@@ -14,7 +14,7 @@ const INSTRUCTIONS = [
 
 /**
  * MCP server over streamable HTTP: the index as native agent tools.
- * Connect with: { "url": "https://www.superstables.com/api/mcp" } - no auth.
+ * Connect with: { "url": "<site origin>/api/mcp" } - no auth.
  */
 const handler = createMcpHandler((server) => {
   server.registerTool(

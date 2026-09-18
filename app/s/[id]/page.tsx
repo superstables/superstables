@@ -6,6 +6,7 @@ import Footer from "@/components/Footer";
 import { CopyBtn } from "@/components/app/ui";
 import { getService } from "@/lib/directory/query";
 import "../../app.css";
+import { SITE } from "@/lib/site";
 
 export const revalidate = 300;
 
@@ -18,7 +19,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return {
     title: `${s.name} · payable service`,
     description: `${s.name} accepts agent payments over ${s.rails.join(" and ")} on ${s.chains.join(", ") || "unknown chains"} in ${s.assets.join(", ") || "stablecoins"}. Liveness independently probed by Superstables.`,
-    alternates: { canonical: `https://www.superstables.com/s/${s.id}` },
+    alternates: { canonical: `${SITE}/s/${s.id}` },
   };
 }
 
@@ -31,7 +32,7 @@ export default async function ServicePage({ params }: Props) {
     "@context": "https://schema.org",
     "@type": "Service",
     name: s.name,
-    url: `https://www.superstables.com/s/${s.id}`,
+    url: `${SITE}/s/${s.id}`,
     category: s.category ?? "AI agent payable service",
     offers: s.price.usd != null ? { "@type": "Offer", price: s.price.usd, priceCurrency: "USD" } : undefined,
   };

@@ -3,11 +3,12 @@ import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import SubmitForm from "@/components/directory/SubmitForm";
 import "../app.css";
+import { SITE } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "List your service",
   description: "Add a service that accepts agent payments over x402, MPP or ACP to the Superstables index. We probe before listing.",
-  alternates: { canonical: "https://www.superstables.com/submit", types: { "text/markdown": "https://www.superstables.com/submit.md" } },
+  alternates: { canonical: `${SITE}/submit`, types: { "text/markdown": `${SITE}/submit.md` } },
 };
 
 export default function SubmitPage() {

@@ -1,11 +1,10 @@
+import { SITE } from "@/lib/site";
 export const dynamic = "force-static";
 
 /**
  * Schema map (NLWeb Schema Feeds): the structured-data feeds this site publishes, so agents can take
  * the whole index as schema.org data instead of scraping pages. Referenced from robots.txt.
  */
-const SITE = "https://www.superstables.com";
-
 const BODY = `<?xml version="1.0" encoding="UTF-8"?>
 <schemamap>
   <feed>

@@ -5,13 +5,14 @@ import Census from "@/components/directory/Census";
 import DirectoryTable, { type ServiceRow } from "@/components/directory/Table";
 import { listServices, stats } from "@/lib/directory/query";
 import "../app.css";
+import { SITE } from "@/lib/site";
 
 export const revalidate = 300;
 
 export const metadata: Metadata = {
   title: "Discover payable services",
   description: "The neutral, liveness-probed index of every service an AI agent can pay with stablecoins, across x402, MPP and ACP. Public JSON API, no key needed.",
-  alternates: { canonical: "https://www.superstables.com/discover", types: { "text/markdown": "https://www.superstables.com/discover.md" } },
+  alternates: { canonical: `${SITE}/discover`, types: { "text/markdown": `${SITE}/discover.md` } },
 };
 
 export default async function DiscoverPage() {
@@ -21,11 +22,11 @@ export default async function DiscoverPage() {
     "@type": "Dataset",
     name: "Superstables index of payable services for AI agents",
     description: `Liveness-probed index of ${counts.total} services payable with stablecoins over x402, MPP and ACP. ${counts.live} answered a valid payment challenge on the last probe.`,
-    url: "https://www.superstables.com/discover",
+    url: `${SITE}/discover`,
     license: "https://creativecommons.org/licenses/by/4.0/",
-    creator: { "@type": "Organization", name: "Superstables", url: "https://www.superstables.com" },
+    creator: { "@type": "Organization", name: "Superstables", url: `${SITE}` },
     distribution: [
-      { "@type": "DataDownload", encodingFormat: "application/json", contentUrl: "https://www.superstables.com/api/v1/services" },
+      { "@type": "DataDownload", encodingFormat: "application/json", contentUrl: `${SITE}/api/v1/services` },
     ],
   };
   return (

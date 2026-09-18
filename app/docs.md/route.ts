@@ -1,18 +1,19 @@
+import { SITE } from "@/lib/site";
 export const dynamic = "force-static";
 
 /** Markdown mirror of /docs for agents that prefer text over HTML. Opens with frontmatter (title, description, canonical, last-updated). */
 const BODY = `---
 title: Superstables Index API
 description: Public JSON API and MCP server for the neutral, liveness-probed index of services AI agents can pay with stablecoins (x402, MPP, ACP). No key, CORS open.
-canonical: https://www.superstables.com/docs
+canonical: ${SITE}/docs
 last-updated: 2026-09-18
 ---
 
 # Superstables Index API
 
-Everything on https://www.superstables.com/discover is served by a public JSON API.
+Everything on ${SITE}/discover is served by a public JSON API.
 No key, no account, CORS open, cached five minutes. Field names are a stable contract.
-Machine-readable spec: https://www.superstables.com/openapi.json
+Machine-readable spec: ${SITE}/openapi.json
 
 ## Endpoints
 
@@ -24,7 +25,7 @@ Machine-readable spec: https://www.superstables.com/openapi.json
 
 ## Example
 
-    curl "https://www.superstables.com/api/v1/services?rail=x402&live=true&q=compute&limit=20"
+    curl "${SITE}/api/v1/services?rail=x402&live=true&q=compute&limit=20"
 
 Returns { generated_at, counts: { total, live, dual_rail }, page: { limit, offset, next_offset }, services: [...] }
 where each service has id, name, description, rails, chains, assets, price {display, usd},
@@ -32,7 +33,7 @@ endpoint, facilitator, live, last_seen_live, sources.
 
 ## Batch lookup
 
-    curl -X POST https://www.superstables.com/api/v1/services/batch \\
+    curl -X POST ${SITE}/api/v1/services/batch \\
       -H "Content-Type: application/json" -d '{"ids":["10x402.com","example.invalid"]}'
 
 Read-only. Up to 100 ids per request; ids are case-insensitive and duplicates are ignored.
@@ -41,11 +42,11 @@ and the ids that are not in the index, so a list of endpoints reconciles in one 
 
 ## Whole index as a feed
 
-    curl https://www.superstables.com/feeds/services.jsonl
+    curl ${SITE}/feeds/services.jsonl
 
 Newline-delimited JSON, one schema.org Service object per line for every indexed service
 (payment rails, chains, assets, liveness and price in additionalProperty). Listed in the
-schema map at https://www.superstables.com/schemamap.xml, referenced from robots.txt.
+schema map at ${SITE}/schemamap.xml, referenced from robots.txt.
 
 ## Pagination
 
@@ -81,19 +82,19 @@ renamed or removed. Nothing is deprecated today.
 
 ## Ask in natural language
 
-    curl "https://www.superstables.com/ask?query=live%20gpu%20compute%20on%20solana"
+    curl "${SITE}/ask?query=live%20gpu%20compute%20on%20solana"
 
 NLWeb-style: returns { query, interpreted, summary, results[] } with schema.org
 objects. Add streaming=true for server-sent events.
 
 ## MCP server
 
-Streamable HTTP, no auth: https://www.superstables.com/api/mcp
+Streamable HTTP, no auth: ${SITE}/api/mcp
 For POST requests, use \`Accept: application/json, text/event-stream\` and handle either response
 format. An absent Accept header or \`*/*\` permits both formats. JSON-only clients are not supported;
 unsupported Accept headers receive HTTP 406.
 Tools: find_services, get_service, get_stats.
-Server card: https://www.superstables.com/.well-known/mcp/server-card.json
+Server card: ${SITE}/.well-known/mcp/server-card.json
 
 ## What "live" means
 
@@ -103,7 +104,7 @@ Non-HTTP entries (acp://) are listed but never marked dead. Probe history is kep
 
 ## Authentication
 
-None required. See https://www.superstables.com/auth.md
+None required. See ${SITE}/auth.md
 
 Contact: https://x.com/superstables
 `;

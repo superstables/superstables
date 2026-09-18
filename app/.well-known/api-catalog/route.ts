@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
+import { SITE } from "@/lib/site";
 
 export const dynamic = "force-static";
-
-const SITE = "https://www.superstables.com";
 
 /**
  * RFC 9727 api-catalog: a linkset whose first context lists every API as an "item", and one

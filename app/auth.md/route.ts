@@ -1,3 +1,4 @@
+import { SITE } from "@/lib/site";
 export const dynamic = "force-static";
 
 /** auth.md (workos/auth.md convention): how agents authenticate. Here: they don't have to. */
@@ -10,8 +11,8 @@ no API key, no OAuth. CORS is open.
 
 ## Endpoints
 
-- REST: https://www.superstables.com/api/v1/services (spec: https://www.superstables.com/openapi.json)
-- MCP (streamable HTTP): https://www.superstables.com/api/mcp
+- REST: ${SITE}/api/v1/services (spec: ${SITE}/openapi.json)
+- MCP (streamable HTTP): ${SITE}/api/mcp
 
 ## Rate limits
 

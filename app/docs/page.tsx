@@ -4,14 +4,15 @@ import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { Code } from "@/components/app/ui";
 import "../app.css";
+import { SITE } from "@/lib/site";
 
 export const metadata: Metadata = {
-  alternates: { canonical: "https://www.superstables.com/docs", types: { "text/markdown": "https://www.superstables.com/docs.md" } },
+  alternates: { canonical: `${SITE}/docs`, types: { "text/markdown": `${SITE}/docs.md` } },
   title: "Index API reference",
   description: "Query the Superstables index of payable services as JSON or over MCP. Free, no key, CORS open. OpenAPI spec at /openapi.json.",
 };
 
-const CURL = `curl "https://www.superstables.com/api/v1/services?rail=x402&live=true&q=compute&limit=20"`;
+const CURL = `curl "${SITE}/api/v1/services?rail=x402&live=true&q=compute&limit=20"`;
 const RESPONSE = `{
   "generated_at": "2026-09-04T12:00:00.000Z",
   "counts": { "total": 1913, "live": 390, "dual_rail": 10 },
@@ -34,7 +35,7 @@ const RESPONSE = `{
 const MCP = `{
   "mcpServers": {
     "superstables": {
-      "url": "https://www.superstables.com/api/mcp"
+      "url": "${SITE}/api/mcp"
     }
   }
 }`;
@@ -57,7 +58,7 @@ export default function ApiDocs() {
         <h1 style={{ fontSize: "clamp(32px, 4vw, 44px)", marginTop: 10 }}>The index, as data</h1>
         <p className="lede" style={{ marginTop: 12 }}>
           Everything on the <Link className="link" href="/discover">Discover</Link> page is served by a public JSON API. No key, no account, CORS open, cached five minutes. Field names are a stable contract. Machine-readable spec:{" "}
-          <a className="link" href="https://www.superstables.com/openapi.json">openapi.json</a>.
+          <a className="link" href={`${SITE}/openapi.json`}>openapi.json</a>.
         </p>
 
         <div className="sub-head" style={{ marginTop: 40 }}><h2>Endpoints</h2></div>

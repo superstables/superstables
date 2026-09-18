@@ -2,7 +2,8 @@
  * The one agent skill we publish: how to use the index. Served at SKILL_PATH as text/markdown
  * and listed in /.well-known/agent-skills/index.json, whose digest is computed from these exact bytes.
  */
-export const SITE = "https://www.superstables.com";
+import { SITE } from "@/lib/site";
+export { SITE };
 export const SKILL_NAME = "superstables-index";
 export const SKILL_PATH = `/skills/${SKILL_NAME}/SKILL.md`;
 export const SKILL_DESCRIPTION =

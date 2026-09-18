@@ -1,3 +1,4 @@
+import { SITE } from "@/lib/site";
 export const dynamic = "force-static";
 
 /**
@@ -5,8 +6,6 @@ export const dynamic = "force-static";
  * Same policy as before: answer/search crawlers allowed, training-only crawlers blocked, private
  * areas disallowed for everyone; plus the sitemap and the schema map of structured-data feeds.
  */
-const SITE = "https://www.superstables.com";
-
 const BODY = `User-Agent: *
 Allow: /
 Disallow: /start

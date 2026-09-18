@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { SITE } from "@/lib/site";
 
 export const dynamic = "force-static";
 
@@ -7,8 +8,8 @@ const ARD = {
   specVersion: "1.0",
   name: "Superstables",
   description: "The neutral, liveness-probed index of services AI agents can pay with stablecoins across x402, MPP and ACP.",
-  url: "https://www.superstables.com",
-  publisher: { name: "Superstables", url: "https://www.superstables.com", contact: "https://x.com/superstables" },
+  url: `${SITE}`,
+  publisher: { name: "Superstables", url: `${SITE}`, contact: "https://x.com/superstables" },
   entries: [
     {
       identifier: "urn:air:superstables.com:mcp:superstables",
@@ -16,7 +17,7 @@ const ARD = {
       type: "mcp-server",
       description: "Query the index as native tools: find_services, get_service, get_stats. Read-only, no auth. Streamable HTTP.",
       mediaType: "application/json",
-      url: "https://www.superstables.com/api/mcp",
+      url: `${SITE}/api/mcp`,
     },
     {
       identifier: "urn:air:superstables.com:api:index",
@@ -24,7 +25,7 @@ const ARD = {
       type: "api",
       description: "Public JSON API for the index. No key, CORS open. OpenAPI 3.1 at /openapi.json.",
       mediaType: "application/openapi+json",
-      url: "https://www.superstables.com/openapi.json",
+      url: `${SITE}/openapi.json`,
     },
     {
       identifier: "urn:air:superstables.com:nlweb:ask",
@@ -32,7 +33,7 @@ const ARD = {
       type: "nlweb",
       description: "Natural-language queries over the index. GET /ask?query=... ; streaming=true for SSE.",
       mediaType: "application/json",
-      url: "https://www.superstables.com/ask",
+      url: `${SITE}/ask`,
     },
     {
       identifier: "urn:air:superstables.com:dataset:services-feed",
@@ -40,7 +41,7 @@ const ARD = {
       type: "dataset",
       description: "The whole index as newline-delimited JSON, one schema.org Service per line. Schema map at /schemamap.xml.",
       mediaType: "application/x-ndjson",
-      url: "https://www.superstables.com/feeds/services.jsonl",
+      url: `${SITE}/feeds/services.jsonl`,
     },
     {
       identifier: "urn:air:superstables.com:document:llms-txt",
@@ -48,7 +49,7 @@ const ARD = {
       type: "document",
       description: "Plain-text overview with when-to-use guidance for agents.",
       mediaType: "text/plain",
-      url: "https://www.superstables.com/llms.txt",
+      url: `${SITE}/llms.txt`,
     },
   ],
 };

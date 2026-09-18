@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 import TrustPage from "@/components/TrustPage";
 import { ABOUT } from "@/content/trust";
 import "../app.css";
+import { SITE } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: ABOUT.title,
   description: ABOUT.description,
-  alternates: { canonical: "https://www.superstables.com/about", types: { "text/markdown": "https://www.superstables.com/about.md" } },
+  alternates: { canonical: `${SITE}/about`, types: { "text/markdown": `${SITE}/about.md` } },
 };
 
 export default function AboutPage() {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { listServices, stats } from "@/lib/directory/query";
+import { SITE } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -42,7 +43,7 @@ async function answer(query: string) {
     interpreted: { q: q ?? null, rail: rail ?? null, chain: chain ?? null, asset: asset?.toUpperCase() ?? null, live_only: live ?? false },
     summary: `${counts.live} of ${counts.total} indexed services currently answer a valid payment challenge. ${services.length} match this query.`,
     results: services.map((s, i) => ({
-      url: `https://www.superstables.com/s/${s.id}`,
+      url: `${SITE}/s/${s.id}`,
       name: s.name,
       site: "superstables.com",
       score: Math.max(0, 1 - i * 0.05),
@@ -51,7 +52,7 @@ async function answer(query: string) {
         "@context": "https://schema.org",
         "@type": "Service",
         name: s.name,
-        url: `https://www.superstables.com/s/${s.id}`,
+        url: `${SITE}/s/${s.id}`,
         description: s.description ?? undefined,
         offers: s.price.usd != null ? { "@type": "Offer", price: s.price.usd, priceCurrency: "USD" } : undefined,
       },
