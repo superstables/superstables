@@ -1,9 +1,8 @@
-// Applies pending SQL migrations from ./drizzle to DATABASE_URL.
-// Run locally with `npm run db:migrate` (reads .env.local) or in CI with the env var set.
+// Applies pending SQL migrations from ./drizzle to the database.
+// Run locally with `npm run db:migrate` (reads .env.local) or in CI with the env vars set.
+// Driver: Neon over HTTP by default; DATABASE_DRIVER=postgres uses ordinary PostgreSQL via node-postgres.
+// DATABASE_URL_UNPOOLED takes precedence over DATABASE_URL for migrations (direct connection).
 import { readFileSync, existsSync } from "node:fs";
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
-import { migrate } from "drizzle-orm/neon-http/migrator";
 
 for (const f of [".env.local", ".env"]) {
   if (!existsSync(f)) continue;
@@ -17,6 +16,22 @@ if (!url) {
   console.error("DATABASE_URL is not set");
   process.exit(1);
 }
-const db = drizzle(neon(url));
-await migrate(db, { migrationsFolder: "./drizzle" });
-console.log("migrations applied");
+
+if (process.env.DATABASE_DRIVER === "postgres") {
+  const { default: pg } = await import("pg");
+  const { drizzle } = await import("drizzle-orm/node-postgres");
+  const { migrate } = await import("drizzle-orm/node-postgres/migrator");
+  const pool = new pg.Pool({ connectionString: url, max: 1 });
+  try {
+    await migrate(drizzle(pool), { migrationsFolder: "./drizzle" });
+  } finally {
+    await pool.end();
+  }
+  console.log("migrations applied (postgres)");
+} else {
+  const { neon } = await import("@neondatabase/serverless");
+  const { drizzle } = await import("drizzle-orm/neon-http");
+  const { migrate } = await import("drizzle-orm/neon-http/migrator");
+  await migrate(drizzle(neon(url)), { migrationsFolder: "./drizzle" });
+  console.log("migrations applied (neon)");
+}

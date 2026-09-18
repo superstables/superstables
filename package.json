@@ -19,6 +19,7 @@
     "drizzle-orm": "^0.45.2",
     "mcp-handler": "^2.1.1",
     "next": "16.3.2",
+    "pg": "8.23.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "resend": "^6.22.0",
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/pg": "8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "dotenv": "^17.4.2",
