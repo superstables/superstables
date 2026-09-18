@@ -35,6 +35,14 @@ const ARD = {
       url: "https://www.superstables.com/ask",
     },
     {
+      identifier: "urn:air:superstables.com:dataset:services-feed",
+      displayName: "Superstables index feed",
+      type: "dataset",
+      description: "The whole index as newline-delimited JSON, one schema.org Service per line. Schema map at /schemamap.xml.",
+      mediaType: "application/x-ndjson",
+      url: "https://www.superstables.com/feeds/services.jsonl",
+    },
+    {
       identifier: "urn:air:superstables.com:document:llms-txt",
       displayName: "llms.txt",
       type: "document",
