@@ -4,8 +4,10 @@ import Hero from "@/components/Hero";
 import Rails from "@/components/Rails";
 import Api from "@/components/Api";
 import Roadmap from "@/components/Roadmap";
+import Faq from "@/components/Faq";
 import Cta from "@/components/Cta";
 import Footer from "@/components/Footer";
+import { ABOUT } from "@/content/trust";
 import { SITE } from "@/lib/site";
 
 export const metadata: Metadata = {
@@ -64,6 +66,11 @@ const jsonLd = {
       isAccessibleForFree: true,
     },
     {
+      "@type": "FAQPage",
+      "@id": `${SITE}/#faq`,
+      mainEntity: (ABOUT.faq ?? []).map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })),
+    },
+    {
       "@type": "WebAPI",
       name: "Superstables Index API",
       url: `${SITE}/docs`,
@@ -85,6 +92,7 @@ export default function Home() {
         <Rails />
         <Api />
         <Roadmap />
+        <Faq />
         <Cta />
       </main>
       <Footer />

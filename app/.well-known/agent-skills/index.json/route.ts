@@ -11,7 +11,7 @@ const INDEX = {
   $schema: "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
   name: "Superstables",
   description:
-    "The neutral, liveness-probed index of services AI agents can pay with stablecoins across x402, MPP and ACP. Use it when an agent needs to find something it can pay for, check that a payable endpoint is live, or compare rails, chains and prices; do not use it to execute payments.",
+    "The neutral, liveness-probed index of services AI agents can pay with stablecoins across x402, MPP and ACP. When to use: an agent needs to find something it can pay for, check that a payable endpoint is live, or compare rails, chains and prices; do not use it to execute payments.",
   url: SITE,
   skills: [
     {
