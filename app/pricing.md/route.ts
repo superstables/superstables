@@ -22,5 +22,5 @@ Contact: https://x.com/superstables
 `;
 
 export function GET() {
-  return new Response(BODY, { headers: { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": "s-maxage=3600" } });
+  return new Response(BODY, { headers: { "Content-Type": "text/markdown; charset=utf-8", Vary: "Accept", "Cache-Control": "s-maxage=3600" } });
 }

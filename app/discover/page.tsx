@@ -11,6 +11,7 @@ export const revalidate = 300;
 export const metadata: Metadata = {
   title: "Discover payable services",
   description: "The neutral, liveness-probed index of every service an AI agent can pay with stablecoins, across x402, MPP and ACP. Public JSON API, no key needed.",
+  alternates: { canonical: "https://www.superstables.com/discover", types: { "text/markdown": "https://www.superstables.com/discover.md" } },
 };
 
 export default async function DiscoverPage() {

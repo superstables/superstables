@@ -7,6 +7,7 @@ import "../app.css";
 export const metadata: Metadata = {
   title: "List your service",
   description: "Add a service that accepts agent payments over x402, MPP or ACP to the Superstables index. We probe before listing.",
+  alternates: { canonical: "https://www.superstables.com/submit", types: { "text/markdown": "https://www.superstables.com/submit.md" } },
 };
 
 export default function SubmitPage() {

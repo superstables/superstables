@@ -18,6 +18,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return {
     title: `${s.name} · payable service`,
     description: `${s.name} accepts agent payments over ${s.rails.join(" and ")} on ${s.chains.join(", ") || "unknown chains"} in ${s.assets.join(", ") || "stablecoins"}. Liveness independently probed by Superstables.`,
+    alternates: { canonical: `https://www.superstables.com/s/${s.id}` },
   };
 }
 

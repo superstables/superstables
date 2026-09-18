@@ -7,15 +7,19 @@ import "../app.css";
 export const metadata: Metadata = {
   title: "Pricing",
   description: "The Superstables index is free: web directory, JSON API, MCP server and natural-language endpoint. No key, no account, no paid tiers.",
-  alternates: { types: { "text/markdown": "https://www.superstables.com/pricing.md" } },
+  alternates: { canonical: "https://www.superstables.com/pricing", types: { "text/markdown": "https://www.superstables.com/pricing.md" } },
 };
 
+/** Service, not Product/Offer: the index is free and there is no checkout, so no commerce signal. */
 const jsonLd = {
   "@context": "https://schema.org",
-  "@type": "Product",
+  "@type": "Service",
   name: "Superstables index",
-  description: "Liveness-probed index of services AI agents can pay with stablecoins.",
-  offers: { "@type": "Offer", price: 0, priceCurrency: "USD", availability: "https://schema.org/InStock" },
+  serviceType: "Index of services payable by AI agents with stablecoins",
+  description: "Liveness-probed index of services AI agents can pay with stablecoins over x402, MPP and ACP. Free to use: web directory, JSON API, MCP server and natural-language endpoint, with no key, account or paid tier.",
+  url: "https://www.superstables.com/pricing",
+  provider: { "@type": "Organization", name: "Superstables", url: "https://www.superstables.com" },
+  audience: { "@type": "Audience", audienceType: "AI agents and their developers" },
 };
 
 export default function Pricing() {

@@ -6,7 +6,7 @@ import { Code } from "@/components/app/ui";
 import "../app.css";
 
 export const metadata: Metadata = {
-  alternates: { types: { "text/markdown": "https://www.superstables.com/docs.md" } },
+  alternates: { canonical: "https://www.superstables.com/docs", types: { "text/markdown": "https://www.superstables.com/docs.md" } },
   title: "Index API reference",
   description: "Query the Superstables index of payable services as JSON or over MCP. Free, no key, CORS open. OpenAPI spec at /openapi.json.",
 };
