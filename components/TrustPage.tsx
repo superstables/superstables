@@ -2,14 +2,15 @@ import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import type { TrustDoc } from "@/content/trust";
 
-/** Renders a markdown link `[text](url)` inside a bullet as an anchor; plain text otherwise. */
+/** Renders every markdown link `[text](url)` inside a bullet as an anchor; the rest stays plain text. */
 function Bullet({ text }: { text: string }) {
-  const m = text.match(/^\[([^\]]+)\]\(([^)]+)\)(.*)$/);
-  if (!m) return <li>{text}</li>;
+  const parts = text.split(/(\[[^\]]+\]\([^)]+\))/g);
   return (
     <li>
-      <a className="link" href={m[2]}>{m[1]}</a>
-      {m[3]}
+      {parts.map((part, i) => {
+        const m = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+        return m ? <a key={i} className="link" href={m[2]}>{m[1]}</a> : <span key={i}>{part}</span>;
+      })}
     </li>
   );
 }
@@ -24,7 +25,7 @@ export default function TrustPage({ doc, eyebrow }: { doc: TrustDoc; eyebrow: st
         <h1 style={{ fontSize: "clamp(32px, 4vw, 44px)", marginTop: 10 }}>{doc.title}</h1>
         <p className="lede" style={{ marginTop: 12 }}>{doc.lede}</p>
         {doc.sections.map((s) => (
-          <section key={s.heading} style={{ marginTop: 36 }}>
+          <section key={s.heading} style={{ marginTop: 36, padding: 0, border: 0 }}>
             <div className="sub-head"><h2>{s.heading}</h2></div>
             {s.paragraphs.map((p) => (
               <p key={p.slice(0, 40)} style={{ color: "var(--ink-2)", marginTop: 12, lineHeight: 1.6 }}>{p}</p>
