@@ -1,8 +1,16 @@
 import { createMcpHandler } from "mcp-handler";
 import { z } from "zod";
+import { acceptsMediaType } from "@/lib/negotiate";
 import { getService, listServices, stats } from "@/lib/directory/query";
 
 export const maxDuration = 60;
+
+const INSTRUCTIONS = [
+  "Superstables is the neutral, read-only index of services an AI agent can pay with stablecoins over x402, MPP or ACP.",
+  "Use find_services to search by free text, rail, chain, asset or liveness; get_service for one record with its last 20 liveness probes; get_stats for census counts.",
+  "live=true means the endpoint answered a valid payment challenge on our last probe; null means not yet probed (for example acp://).",
+  "This server never executes payments and requires no authentication. Soft advisory limit: 300 requests per minute per client.",
+].join(" ");
 
 /**
  * MCP server over streamable HTTP: the index as native agent tools.
@@ -56,6 +64,21 @@ const handler = createMcpHandler((server) => {
     },
     async () => ({ content: [{ type: "text", text: JSON.stringify(await stats(), null, 2) }] })
   );
-}, { serverInfo: { name: "superstables", version: "1.0.0" } });
+}, { serverInfo: { name: "superstables", version: "1.0.0" }, instructions: INSTRUCTIONS });
 
-export { handler as GET, handler as POST, handler as DELETE };
+export const GET = handler;
+export const POST = async (req: Request) => {
+  const accept = req.headers.get("accept");
+  if (!acceptsMediaType(accept, "application", "json") || !acceptsMediaType(accept, "text", "event-stream")) {
+    return Response.json(
+      { jsonrpc: "2.0", id: null, error: { code: -32000, message: "Not Acceptable: client must accept application/json and text/event-stream." } },
+      { status: 406, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
+  // The SDK expects literal media types; expand only formats the client permits.
+  const headers = new Headers(req.headers);
+  headers.set("accept", "application/json, text/event-stream");
+  return handler(new Request(req.url, { method: "POST", headers, body: await req.text(), signal: req.signal }));
+};
+export const DELETE = handler;

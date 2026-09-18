@@ -5,6 +5,8 @@ export const dynamic = "force-static";
 /** Standard MCP manifest: same content as the server card, at the conventional path. */
 const MANIFEST = {
   name: "superstables",
+  displayName: "Superstables",
+  iconUrl: "https://www.superstables.com/icon.svg",
   description: "The neutral index of services an AI agent can pay with stablecoins (x402, MPP, ACP), deduplicated and independently probed for liveness. Read-only, no auth.",
   version: "1.0.0",
   endpoint: "https://www.superstables.com/api/mcp",
