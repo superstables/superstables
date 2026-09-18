@@ -1,6 +1,12 @@
 # Superstables
 
-Superstables is the payment router for AI agents. This repo is the site at [superstables.com](https://www.superstables.com): the marketing pages, the live index of payable services (Phase 0), and a password-gated product preview. Next.js (App Router) + TypeScript, no CSS framework.
+Superstables connects service discovery and payments for AI agents. This repository contains the website at [superstables.com](https://www.superstables.com), the service index and its APIs, and an x402 market-data demo.
+
+The index helps developers and agents find services and inspect their payment terms. The demo shows the seller side of a paid request using test USDC on Base Sepolia. A separate, password-gated product preview illustrates planned workflows; it is not a working payment router.
+
+Built with Next.js App Router and TypeScript, without a CSS framework.
+
+## Development
 
 ```bash
 npm install
@@ -19,15 +25,17 @@ npm run lint
 | `components/` | One component per section; `Logo` exports `LogoMark` (dark / light / auto) |
 | `content/site.ts` | Editable copy and data: rails, roadmap phases, stats, links |
 
-## The index (Phase 0, live)
+## Service index
 
-`/discover` is a liveness-probed index of every service an AI agent can pay with stablecoins, across x402, MPP and ACP.
+`/discover` collects service listings across x402, MPP and ACP sources. HTTP probes check for payment challenges and record the results. A listing or successful probe does not establish that a service can be paid through the Superstables client.
+
+The JSON API and read-only MCP server expose discovery data. They do not initiate payments.
 
 | Path | What |
 | --- | --- |
 | `lib/directory/sources.ts` | One fetcher per source: x402 Bazaar (CDP, offset-paginated), x402-list.com, mpp.dev, MPPScan (no feed yet), Binance B402 (no feed yet). Raw blobs always kept in `service_sources.raw`. |
 | `lib/directory/normalize.ts` | Chain aliases (CAIP-2), asset map by contract address, price from atomic units, host-level dedupe (dual-rail count comes from this). |
-| `lib/directory/probe.ts` | GET with honest UA, 8s timeout. Live = HTTP 402 OR payment-challenge header (x402 v2) OR challenge body. acp:// never marked dead. |
+| `lib/directory/probe.ts` | HTTP GET with a crawler User-Agent and an 8s timeout. A successful probe detects HTTP 402, a payment-challenge header or a matching body. Non-HTTP endpoints, including `acp://`, are not probed. |
 | `lib/directory/pipeline.ts` | crawl(): ingest -> dedupe -> chunked upserts -> delist-after-7-days. probeBatch(): stalest N, bounded concurrency, probe history rows. |
 | `/api/cron/crawl` | Full pipeline; `?probe=only&batch=N&conc=N` for probe-only runs. Auth: `CRON_SECRET` (Vercel env + GH secret). Vercel cron runs it twice daily; `.github/workflows/crawl.yml` pings it every 6 hours. |
 | `/api/v1/services`, `/api/v1/services/:id`, `/api/v1/stats`, `/api/v1/submit` | Public JSON, CORS *, no auth. Field names are a contract; spec at `/openapi.json`. |
@@ -45,7 +53,7 @@ npm run lint
 | `/app/*` | Dashboard: overview, API keys, policies, wallets, routing, discovery, earn, settings and the rest. |
 | `lib/store.tsx` | Client state persisted to `localStorage`; "Load sample activity" seeds demo transactions. |
 
-Nothing in the review build moves money or talks to a backend; every action is local to the browser.
+The payment workflows in this preview use browser-local state and sample activity. They do not move money. Early-access submissions and the applicants view use a database.
 
 ## Early access
 
@@ -56,31 +64,17 @@ Nothing in the review build moves money or talks to a backend; every action is l
 
 ## Demo market data service (paid, testnet)
 
-A small x402 seller we run ourselves, so the payment flow can be demonstrated end to end without depending on anybody else's uptime or pricing. It charges test USDC on Base Sepolia: no real money moves.
+This repository includes a market-data service operated by Superstables for the x402 payment demo. It charges test USDC on Base Sepolia and supports BTC and ETH queries. Settlement uses a public facilitator; market prices come from Coinbase. This is a testnet demonstration.
 
 | Path | What |
 | --- | --- |
 | `/api/demo` | Free self-description: endpoint, parameters, price, network, asset and the address that is paid. |
-| `/api/demo/market?asset=BTC\|ETH` | The service. Validates the request first (a bad asset is a 400 that costs nothing), then answers 402 with its terms in the `PAYMENT-REQUIRED` header and body. With a `PAYMENT-SIGNATURE` header it checks the credential against those terms, has a public facilitator verify and settle the transfer, and only then answers 200 with the price and a `PAYMENT-RESPONSE` receipt. |
+| `/api/demo/market?asset=BTC\|ETH` | The service. Validates the request first (a bad asset is a 400 that costs nothing), then answers 402 with its terms in the `PAYMENT-REQUIRED` header and body. With a `PAYMENT-SIGNATURE` header it checks the credential against those terms, has a public facilitator verify and settle the transfer, and only then answers 200 with the market-data result and a `PAYMENT-RESPONSE` receipt. The price can be unavailable, as described below. |
 | `lib/demoService.ts` | The terms both routes quote: one network (Base Sepolia, `eip155:84532`), one asset (test USDC), one price. |
 
-Facilitators are the public Base Sepolia ones, tried in order (`facilitator.x402.rs`, `facilitator.payai.network`, `x402.org/facilitator`): one that cannot be reached is skipped, one that answers "no" has decided. Prices come from Coinbase's keyless spot endpoints with a 5s timeout; if they are down a paid call still answers, with `price_usd: null`, `source: "unavailable"` and a note, because the payment settled either way. CORS is open for GET and both payment headers are exposed.
+Facilitators are the public Base Sepolia ones, tried in order (`facilitator.x402.rs`, `facilitator.payai.network`, `x402.org/facilitator`): connection failures trigger a retry with the next facilitator; a rejection is returned without trying another facilitator. Prices come from Coinbase's keyless spot endpoints with a 5s timeout; if they are down a paid call still answers, with `price_usd: null`, `source: "unavailable"` and a note, because the payment settled either way. CORS is open for GET and both payment headers are exposed.
 
 | Env var | Required | What |
 | --- | --- | --- |
 | `SUPERSTABLES_DEMO_PAY_TO` | yes | The Base Sepolia address the test USDC is paid to. While it is unset the endpoint answers 503 and charges nothing. |
 | `SUPERSTABLES_DEMO_PRICE` | no | Price per call in decimal USDC. Default `0.01`. |
-
-## Database
-
-Neon Postgres via the Vercel Marketplace; `DATABASE_URL` is injected by Vercel. Drizzle ORM over the Neon HTTP driver (`lib/db/`). Migrations live in `drizzle/` and are applied by `scripts/migrate.mjs` at the start of every build.
-
-Workflow: edit `lib/db/schema.ts`, `npm run db:generate`, commit the new file in `drizzle/`, push. `vercel env pull .env.local` gives you the local connection string; `npm run db:studio` opens a browser for the data.
-
-## Analytics
-
-Google Analytics 4 via `@next/third-parties`, loaded only on public pages (`components/Analytics.tsx`). Set `NEXT_PUBLIC_GA_ID` in Vercel env.
-
-## Brand
-
-Social card is generated by `app/opengraph-image.tsx` (brand fonts bundled in `assets/fonts/`, all SIL Open Font License). Favicon is `app/icon.svg`; brand assets live in `public/brand/` and are previewed at `/brand`.
