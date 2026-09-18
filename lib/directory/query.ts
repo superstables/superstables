@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 
 import { db, schema } from "@/lib/db";
 
@@ -26,6 +26,13 @@ export function serviceToJson(s: typeof schema.services.$inferSelect, sources?: 
   };
 }
 
+/** The page bounds actually applied: limit clamped to 1-500 (default 100), offset >= 0, non-numbers fall back to defaults. */
+export function pageBounds(f: Pick<ServiceFilters, "limit" | "offset">) {
+  const limit = Number.isFinite(f.limit) ? Math.min(Math.max(f.limit as number, 1), 500) : 100;
+  const offset = Number.isFinite(f.offset) ? Math.max(f.offset as number, 0) : 0;
+  return { limit, offset };
+}
+
 export async function listServices(f: ServiceFilters) {
   const t = schema.services;
   const conds: SQL[] = [isNull(t.delistedAt)];
@@ -38,16 +45,33 @@ export async function listServices(f: ServiceFilters) {
     conds.push(or(ilike(t.name, like), ilike(t.category, like), ilike(t.description, like), ilike(t.endpoint, like))!);
   }
   const where = and(...conds);
-  const limit = Math.min(Math.max(f.limit ?? 100, 1), 500);
-  const offset = Math.max(f.offset ?? 0, 0);
+  const { limit, offset } = pageBounds(f);
 
   const rows = await db.select().from(t).where(where).orderBy(sql`${t.live} desc nulls last`, sql`${t.lastSeenLive} desc nulls last`, t.name).limit(limit).offset(offset);
-  const srcRows = rows.length
-    ? await db.select({ serviceId: schema.serviceSources.serviceId, source: schema.serviceSources.source }).from(schema.serviceSources)
-    : [];
+  return withSources(rows);
+}
+
+/** Attach source labels to a page of rows with one query scoped to those ids (not the whole table). */
+async function withSources(rows: (typeof schema.services.$inferSelect)[]) {
+  if (rows.length === 0) return [];
+  const ids = rows.map((r) => r.id);
+  const srcRows = await db
+    .select({ serviceId: schema.serviceSources.serviceId, source: schema.serviceSources.source })
+    .from(schema.serviceSources)
+    .where(inArray(schema.serviceSources.serviceId, ids));
   const srcMap = new Map<string, string[]>();
   for (const r of srcRows) srcMap.set(r.serviceId, [...(srcMap.get(r.serviceId) ?? []), r.source]);
   return rows.map((s) => serviceToJson(s, srcMap.get(s.id) ?? []));
+}
+
+/** Bulk lookup by id (read-only). Returns the records found, in the order requested; callers compute what is missing. */
+export async function getServicesByIds(ids: string[]) {
+  if (ids.length === 0) return [];
+  const t = schema.services;
+  const rows = await db.select().from(t).where(and(isNull(t.delistedAt), inArray(t.id, ids)));
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const ordered = ids.map((id) => byId.get(id)).filter((r): r is typeof schema.services.$inferSelect => r !== undefined);
+  return withSources(ordered);
 }
 
 export async function stats() {

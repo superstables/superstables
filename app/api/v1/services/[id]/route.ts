@@ -13,7 +13,12 @@ const CORS = {
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const service = await getService(id);
+  let service;
+  try {
+    service = await getService(id);
+  } catch {
+    return NextResponse.json({ error: { code: "internal_error", message: "The index is temporarily unavailable. Retry with backoff." } }, { status: 500, headers: { ...CORS, "Cache-Control": "no-store" } });
+  }
   if (!service) return NextResponse.json({ error: { code: "not_found", message: `No service with id "${id}". List ids via /api/v1/services.` } }, { status: 404, headers: CORS });
   return NextResponse.json(service, { headers: CORS });
 }

@@ -7,7 +7,7 @@ const body = {
   error: {
     code: "not_found",
     message: "Unknown API path. See https://www.superstables.com/openapi.json for the available endpoints.",
-    endpoints: ["/api/v1/services", "/api/v1/services/{id}", "/api/v1/stats", "/api/v1/submit", "/api/mcp"],
+    endpoints: ["/api/v1/services", "/api/v1/services/{id}", "/api/v1/services/batch", "/api/v1/stats", "/api/v1/submit", "/api/mcp"],
   },
 };
 const headers = { "Access-Control-Allow-Origin": "*" };

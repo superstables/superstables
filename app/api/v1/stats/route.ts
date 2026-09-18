@@ -12,7 +12,11 @@ const CORS = {
 };
 
 export async function GET() {
-  return NextResponse.json({ generated_at: new Date().toISOString(), ...(await stats()) }, { headers: CORS });
+  try {
+    return NextResponse.json({ generated_at: new Date().toISOString(), ...(await stats()) }, { headers: CORS });
+  } catch {
+    return NextResponse.json({ error: { code: "internal_error", message: "The index is temporarily unavailable. Retry with backoff." } }, { status: 500, headers: { ...CORS, "Cache-Control": "no-store" } });
+  }
 }
 
 export function OPTIONS() {

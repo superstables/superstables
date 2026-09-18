@@ -4,7 +4,13 @@ import { listServices, stats } from "@/lib/directory/query";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" };
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "RateLimit-Policy": "300;w=60",
+  "RateLimit-Limit": "300",
+};
 
 const RAILS = ["x402", "mpp", "acp"];
 const CHAINS = ["base", "solana", "tempo", "ethereum", "polygon", "arbitrum", "optimism", "avalanche", "robinhood"];
@@ -57,7 +63,12 @@ async function handle(query: string | null, wantsStream: boolean) {
   if (!query?.trim()) {
     return NextResponse.json({ error: { code: "missing_query", message: "Pass ?query=<natural language question> (e.g. /ask?query=live gpu compute on solana)." } }, { status: 400, headers: CORS });
   }
-  const data = await answer(query.trim().slice(0, 500));
+  let data: Awaited<ReturnType<typeof answer>>;
+  try {
+    data = await answer(query.trim().slice(0, 500));
+  } catch {
+    return NextResponse.json({ error: { code: "internal_error", message: "The index is temporarily unavailable. Retry with backoff." } }, { status: 500, headers: { ...CORS, "Cache-Control": "no-store" } });
+  }
 
   if (wantsStream) {
     const enc = new TextEncoder();
