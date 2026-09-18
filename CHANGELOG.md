@@ -38,7 +38,8 @@ documents its errors and limits, and the index is discoverable through the stand
   API response, including 404s. The OpenAPI document describes all of this inline.
 - The MCP server returns `instructions`, tolerates absent or wildcard `Accept` headers,
   answers 406 to JSON-only clients, and its manifest and server card carry a display name
-  and icon.
+  and icon. The manifest is also served at `/.well-known/mcp`, the extensionless path
+  agents probe first.
 - `robots.txt` is a route handler with the same rules plus the `schemamap:` directive.
 - `llms.txt` is a markdown link index; the homepage feature titles are `h2` so the heading
   order is sequential; the pricing page's structured data is a `Service` without an `Offer`.
