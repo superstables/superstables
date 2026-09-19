@@ -69,6 +69,26 @@ The payment workflows in this preview use browser-local state and sample activit
 - `/app/applicants` (behind the review gate) lists every submission and exports CSV.
 - `/start`, `/onboarding`, `/app`, `/api` and `/brand` are excluded in `robots.txt` and served with `X-Robots-Tag: noindex` by `proxy.ts`.
 
+## Demo feedback intake
+
+`POST /api/demo-feedback/tally` accepts signed submissions from the demo form and
+creates a Triage issue with `Tally Demo Feedback`, without a project. Set
+`DEMO_FEEDBACK_LINEAR_API_KEY`, `DEMO_FEEDBACK_TALLY_SIGNING_SECRET`,
+`DEMO_FEEDBACK_LINEAR_LABEL_ID`, and `DEMO_FEEDBACK_LINEAR_TRIAGE_ID` server-side.
+The key needs Read and Create issues for Superstables only. Label name, state type,
+and team are verified; missing configuration returns 503.
+
+Maps exactly one `TEXTAREA` report, at most one `INPUT_TEXT` / `INPUT_EMAIL`
+contact, and at most one `FILE_UPLOAD`
+field. Duplicate candidate fields are rejected; labels can change.
+Limits: 64 KiB body, 50,000-character report, 1,000-character contact, 10 files,
+eight-second processing budget. File links must use `https://storage.tally.so`.
+Stable submission-derived UUIDs deduplicate retries, including archived issues.
+Errors return non-2xx for [Tally retries](https://tally.so/help/webhooks); monitor
+failed deliveries. [Linear schema](https://github.com/linear/linear/blob/master/packages/sdk/src/schema.graphql)
+confirms caller-supplied IDs. Validate delivery/replay and switch off only this
+form's native Linear integration at cutover to prevent two issue creators.
+
 ## Demo market data service (paid, testnet)
 
 This repository includes a market-data service operated by Superstables for the x402 payment demo. It charges test USDC on Base Sepolia and supports BTC and ETH queries. Settlement uses a public facilitator; market prices come from Coinbase. This is a testnet demonstration.
