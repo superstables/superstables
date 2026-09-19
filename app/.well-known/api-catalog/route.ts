@@ -15,6 +15,7 @@ const LINKSET = {
         { href: `${SITE}/api/v1/services`, title: "Superstables Index API v1 (REST, JSON)" },
         { href: `${SITE}/api/mcp`, title: "Superstables MCP server (streamable HTTP)" },
         { href: `${SITE}/ask`, title: "Superstables NLWeb ask endpoint" },
+        { href: `${SITE}/api/demo/market`, title: "Superstables demo market data (paid, x402, Base Sepolia testnet)" },
       ],
     },
     {
@@ -40,6 +41,14 @@ const LINKSET = {
       anchor: `${SITE}/ask`,
       "service-doc": [{ href: `${SITE}/docs.md`, type: "text/markdown" }],
       "service-meta": [{ href: `${SITE}/.well-known/ard.json`, type: "application/json" }],
+    },
+    {
+      anchor: `${SITE}/api/demo/market`,
+      "service-desc": [{ href: `${SITE}/api/demo`, type: "application/json" }],
+      "service-doc": [
+        { href: `${SITE}/demo`, type: "text/html" },
+        { href: `${SITE}/demo.md`, type: "text/markdown" },
+      ],
     },
   ],
 };

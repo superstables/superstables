@@ -96,6 +96,12 @@ export const PRIVACY: TrustDoc = {
       ],
     },
     {
+      heading: "Demo feedback",
+      paragraphs: [
+        "The demo feedback form is hosted by Tally. A submission stores your written report, any screenshots you attach, and a contact if you choose to give one, together with the fixed context of the form (which page it was on, testnet). Each submission is copied into our issue tracker so the team can act on it. Nothing from the form is written to the index database, and the page forwards nothing from your browser's address bar to the form.",
+      ],
+    },
+    {
       heading: "Review build",
       paragraphs: [
         "The password-gated product preview keeps everything you do in it (sample keys, policies, wallets, activity) in your browser's local storage. It sends nothing to a backend and moves no money. A small operator-editable settings store on the server holds site settings such as a published contract address; it contains no personal data.",
@@ -104,13 +110,13 @@ export const PRIVACY: TrustDoc = {
     {
       heading: "Where data lives",
       paragraphs: [
-        "The site is served from Vercel and the database is Neon Postgres. Transactional email, when configured, is sent through Resend. These providers process data on our behalf under their own terms.",
+        "The site is served from Vercel and the database is Neon Postgres. Transactional email, when configured, is sent through Resend. Demo feedback is collected by Tally and copied into Linear, our issue tracker. These providers process data on our behalf under their own terms.",
       ],
     },
     {
       heading: "Your choices",
       paragraphs: [
-        "You can ask us to delete your early-access application, your service submission, or a listed service record, or to tell you what we hold about you. Use the contact links in the footer of any page. Standard AI crawler directives for this site are published in robots.txt, and machine-readable guidance in llms.txt.",
+        "You can ask us to delete your early-access application, your service submission, your demo feedback, or a listed service record, or to tell you what we hold about you. Use the contact links in the footer of any page. Standard AI crawler directives for this site are published in robots.txt, and machine-readable guidance in llms.txt.",
       ],
     },
   ],

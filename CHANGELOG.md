@@ -16,6 +16,10 @@ documents its errors and limits, and the index is discoverable through the stand
 - Signed Tally webhook for demo feedback: creates a Triage candidate without a
   project, with the exact feedback label, deterministic retry deduplication,
   bounded processing, and no database writes. Requires server-side configuration.
+- `/demo-feedback.md`, the markdown twin of the feedback page, with the same `Accept`
+  negotiation and `Link` alternate as the other content pages; `GET` on the feedback webhook
+  answers a JSON 405; the Privacy page describes demo feedback; `llms.txt` and the API
+  catalog list the paid demo endpoint.
 - `/demo-feedback`: a feedback form for the testnet payment demo, embedded from Tally with
   an explicit form URL (the page's own query string is never forwarded). Configured in
   `content/demoFeedback.ts`; linked from the footer.

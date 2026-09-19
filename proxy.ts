@@ -15,6 +15,7 @@ const MARKDOWN_TWINS: Record<string, string> = {
   "/discover": "/discover.md",
   "/submit": "/submit.md",
   "/demo": "/demo.md",
+  "/demo-feedback": "/demo-feedback.md",
 };
 
 // A client that prefers text/markdown is redirected (303) to the twin URL rather than
@@ -64,5 +65,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/docs", "/pricing", "/about", "/privacy", "/contact", "/discover", "/submit", "/demo", "/start/:path*", "/app/:path*", "/onboarding/:path*"],
+  matcher: ["/", "/docs", "/pricing", "/about", "/privacy", "/contact", "/discover", "/submit", "/demo", "/demo-feedback", "/start/:path*", "/app/:path*", "/onboarding/:path*"],
 };
