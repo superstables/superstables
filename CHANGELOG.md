@@ -13,8 +13,8 @@ documents its errors and limits, and the index is discoverable through the stand
 ### Added
 
 - `/demo-feedback`: a feedback form for the testnet payment demo, embedded from Tally with
-  an explicit form URL (the page's own query string is never forwarded) and a direct link to
-  the form. Configured in `content/demoFeedback.ts`; linked from the footer.
+  an explicit form URL (the page's own query string is never forwarded). Configured in
+  `content/demoFeedback.ts`; linked from the footer.
 - Markdown twins of the content pages (`/index.md`, `/docs.md`, `/discover.md`, `/submit.md`,
   `/pricing.md`, `/about.md`, `/privacy.md`, `/contact.md`). A client whose `Accept` header
   prefers `text/markdown` is redirected to the twin; `/?mode=agent` serves the markdown

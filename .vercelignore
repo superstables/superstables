@@ -1,0 +1,6 @@
+AGENTS.md
+CLAUDE.md
+.agents/
+.claude/
+*.tsbuildinfo
+.env*

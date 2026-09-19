@@ -1,6 +1,6 @@
 /**
- * URLs for a Tally form, built from fixed values only. Tally fills hidden fields from the
- * query string of the embed URL (tally.so/embed/ID) and the public URL (tally.so/r/ID).
+ * The embed URL for a Tally form, built from fixed values only. Tally fills hidden fields
+ * from the query string of the embed URL (tally.so/embed/ID).
  * Only the keys below are forwarded, with short plain values; the host page's own query
  * string never is (the embed sets `src` explicitly, so the widget leaves the URL alone).
  */
@@ -32,10 +32,4 @@ export function tallyEmbedUrl(formId: string, context: TallyContext): string {
   const params = new URLSearchParams(EMBED_OPTIONS);
   tallyContextParams(context).forEach((value, key) => params.set(key, value));
   return `${TALLY_ORIGIN}/embed/${encodeURIComponent(formId)}?${params.toString()}`;
-}
-
-/** The public form URL with the same context, for opening the form outside the page. */
-export function tallyFormUrl(formId: string, context: TallyContext): string {
-  const query = tallyContextParams(context).toString();
-  return `${TALLY_ORIGIN}/r/${encodeURIComponent(formId)}${query ? `?${query}` : ""}`;
 }

@@ -9,7 +9,7 @@ import "../app.css";
 
 export const metadata: Metadata = {
   title: "Demo feedback | Superstables",
-  description: "Found a snag in the Superstables testnet payment demo? Say what happened in a sentence or two; a screenshot or log and a way to reach you are optional.",
+  description: "Try the Superstables demo and share your feedback. Tell us what happened. Screenshots and contact details are optional.",
   alternates: { canonical: `${SITE}/demo-feedback` },
 };
 
@@ -23,8 +23,7 @@ export default function DemoFeedbackPage() {
         </Link>
       </header>
       <main className="wrap" style={{ paddingTop: 56, paddingBottom: 96, maxWidth: 760 }}>
-        <span className="eyebrow plain">Demo</span>
-        <h1 style={{ fontSize: "clamp(32px, 4vw, 44px)", marginTop: 10 }}>Demo feedback</h1>
+        <h1 style={{ fontSize: "clamp(32px, 4vw, 44px)" }}>Demo feedback</h1>
         <DemoFeedbackForm formId={demoFeedback.formId} context={demoFeedback.context} title="Demo feedback form" />
       </main>
       <Footer />
