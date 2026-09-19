@@ -294,3 +294,17 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14.5px; }
 .dir-sort .arrow { font-size: 11px; color: var(--ink-3); }
 th[aria-sort="ascending"] .dir-sort, th[aria-sort="descending"] .dir-sort { color: var(--ink); }
 th[aria-sort="ascending"] .arrow, th[aria-sort="descending"] .arrow { color: var(--accent-text); }
+
+/* ---------- demo feedback ----------
+   A compact header replaces the shared nav on this page: the logo and one way back. */
+.feedback-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; padding: 0 var(--gutter); border-bottom: 1px solid var(--line); }
+.feedback-back { display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 3px; font-size: 14px; font-weight: 600; color: var(--ink); white-space: nowrap; flex-shrink: 0; }
+.feedback-back:hover { border-color: var(--ink-3); background: var(--bg-2); }
+.feedback-back .short { display: none; }
+@media (max-width: 480px) { .feedback-back .long { display: none; } .feedback-back .short { display: inline; } }
+
+/* The embedded form is styled dark on Tally's side (charcoal ground, light text, lime accents) and
+   rendered transparent, so its surface here stays dark in both themes, like the code surfaces. */
+.feedback-form { margin-top: 28px; border: 1px solid var(--line-2); border-radius: 6px; background: #0A0C0E; color-scheme: dark; --ink: #E9EDE6; --ink-2: #98A39A; --ink-3: #5E6862; --line: #1F252B; --line-2: #2B333A; --accent-text: #CBFF00; color: var(--ink); padding: clamp(12px, 2.5vw, 24px) clamp(8px, 2vw, 20px) 8px; }
+.feedback-form iframe { display: block; width: 100%; max-width: 100%; border: 0; min-height: 320px; }
+.feedback-alt { padding: 12px 8px 8px; border-top: 1px solid var(--line); font-size: 13.5px; color: var(--ink-2); }

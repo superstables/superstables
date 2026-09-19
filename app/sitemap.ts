@@ -19,6 +19,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${base}/about`, changeFrequency: "monthly", priority: 0.5 },
     { url: `${base}/privacy`, changeFrequency: "monthly", priority: 0.3 },
     { url: `${base}/contact`, changeFrequency: "monthly", priority: 0.4 },
+    { url: `${base}/demo-feedback`, changeFrequency: "monthly", priority: 0.4 },
   ];
   try {
     const rows = await db.select({ id: schema.services.id, updatedAt: schema.services.updatedAt }).from(schema.services).where(isNull(schema.services.delistedAt)).limit(5000);
