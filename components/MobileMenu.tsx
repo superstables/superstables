@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 const LINKS = [
+  { href: "/demo", label: "Demo" },
   { href: "/docs", label: "API" },
   { href: "/#roadmap", label: "Roadmap" },
   { href: "/contract", label: "Contract" },

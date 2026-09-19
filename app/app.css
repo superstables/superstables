@@ -295,13 +295,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14.5px; }
 th[aria-sort="ascending"] .dir-sort, th[aria-sort="descending"] .dir-sort { color: var(--ink); }
 th[aria-sort="ascending"] .arrow, th[aria-sort="descending"] .arrow { color: var(--accent-text); }
 
-/* ---------- demo feedback ----------
-   A compact header replaces the shared nav on this page: the logo and one way back. */
-.feedback-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; padding: 0 var(--gutter); border-bottom: 1px solid var(--line); }
-.feedback-back { display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 3px; font-size: 14px; font-weight: 600; color: var(--ink); white-space: nowrap; flex-shrink: 0; }
-.feedback-back:hover { border-color: var(--ink-3); background: var(--bg-2); }
-.feedback-back .short { display: none; }
-@media (max-width: 480px) { .feedback-back .long { display: none; } .feedback-back .short { display: inline; } }
+/* ---------- demo feedback ---------- */
 
 /* The embedded form is styled dark on Tally's side (charcoal ground, light text, lime accents) and
    rendered transparent, so its surface here stays dark in both themes, like the code surfaces. */

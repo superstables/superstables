@@ -24,6 +24,7 @@ Do not use it to execute payments; Superstables indexes and probes, it does not 
 ## For humans
 
 - [Browse the index](${SITE}/discover): every indexed service, filterable (also as [markdown](${SITE}/discover.md))
+- [Try the demo](${SITE}/demo): watch an agent pay a testnet service with the user's approval in MetaMask, then set it up in Claude Desktop, Codex, Claude Code, Cursor or VS Code (also as [markdown](${SITE}/demo.md))
 - [List a service](${SITE}/submit.md): form or POST /api/v1/submit; we probe before listing
 - [API reference](${SITE}/docs) (also as [markdown](${SITE}/docs.md))
 - [Pricing](${SITE}/pricing.md): free, no key, no account

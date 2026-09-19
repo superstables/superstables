@@ -65,7 +65,7 @@
   .logo { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 600; font-size: 19px; letter-spacing: -0.02em; }
   .logo svg { width: 22px; height: 22px; }
   .nav-links { display: flex; gap: 28px; font-size: 14.5px; color: var(--ink-2); }
-  .nav-links a:hover { color: var(--ink); }
+  .nav-links a:hover, .nav-links a[aria-current="page"] { color: var(--ink); }
   .nav-cta { display: flex; align-items: center; gap: 12px; }
   .btn { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; font-size: 14px; font-weight: 600; border: 1px solid var(--line-2); border-radius: 3px; color: var(--ink); background: transparent; cursor: pointer; font-family: var(--body); transition: border-color .15s, background .15s, color .15s; white-space: nowrap; }
   .btn:hover { border-color: var(--ink-3); background: var(--bg-2); }
@@ -80,6 +80,11 @@
   .burger-panel { position: absolute; top: 100%; left: 0; right: 0; display: flex; flex-direction: column; background: var(--bg); border-bottom: 1px solid var(--line); padding: 8px 0 12px; }
   .burger-panel a { padding: 12px var(--gutter); font-size: 15.5px; color: var(--ink); }
   .burger-panel a:hover { background: var(--bg-2); }
+  @media (max-width: 1080px) {
+    .nav-links { gap: 20px; }
+    .nav-cta .icon-link { display: none; }
+    .nav-cta a.btn:not(.primary) { display: none; }
+  }
   @media (max-width: 860px) {
     .nav { position: sticky; }
     .nav .wrap { position: relative; }
@@ -92,6 +97,10 @@
     .nav-cta a.btn:not(.primary) { display: none; }
     .nav-cta .btn.primary { padding: 0 12px; font-size: 13.5px; }
     .logo { font-size: 17px; }
+  }
+  @media (max-width: 480px) {
+    /* Logo, theme toggle and burger only: the Discover button stays in the menu. */
+    .nav-cta .btn.primary { display: none; }
   }
 
   /* ---------- hero ---------- */

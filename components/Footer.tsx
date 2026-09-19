@@ -14,6 +14,7 @@ export default function Footer() {
         </div>
         <div className="col">
           <b>Product</b>
+          <Link href="/demo">Demo</Link>
           <Link href="/discover">Discover</Link>
           <Link href="/submit">New listing</Link>
           <Link href="/docs">API docs</Link>

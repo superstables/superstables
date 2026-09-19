@@ -21,7 +21,7 @@ const nextConfig: NextConfig = {
       // Vary / Cache-Control it needs, live in proxy.ts: a header set here is replaced by the
       // production page writer before the HTML goes out, so it is not enough on its own.
       { source: "/", headers: [{ key: "Link", value: [...help, markdownTwin("/index.md")].join(", ") }] },
-      ...["discover", "submit", "docs", "pricing", "about", "privacy", "contact"].map((p) => ({
+      ...["discover", "submit", "docs", "pricing", "about", "privacy", "contact", "demo"].map((p) => ({
         source: `/${p}`,
         headers: [{ key: "Link", value: [...help, markdownTwin(`/${p}.md`)].join(", ") }],
       })),

@@ -4,16 +4,26 @@ import MobileMenu from "./MobileMenu";
 import { site } from "@/content/site";
 import ThemeToggle from "./ThemeToggle";
 
-export default function Nav() {
+const LINKS = [
+  { href: "/demo", label: "Demo" },
+  { href: "/docs", label: "API" },
+  { href: "/#roadmap", label: "Roadmap" },
+  { href: "/contract", label: "Contract" },
+  { href: "/treasury", label: "Treasury" },
+];
+
+/** `current` is the pathname of the page rendering the nav; its link is marked aria-current. */
+export default function Nav({ current }: { current?: string } = {}) {
   return (
     <nav className="nav">
       <div className="wrap">
         <Logo />
         <div className="nav-links">
-          <Link href="/docs">API</Link>
-          <Link href="/#roadmap">Roadmap</Link>
-          <Link href="/contract">Contract</Link>
-          <Link href="/treasury">Treasury</Link>
+          {LINKS.map((l) => (
+            <Link key={l.href} href={l.href} aria-current={l.href === current ? "page" : undefined}>
+              {l.label}
+            </Link>
+          ))}
         </div>
         <div className="nav-cta">
           <a className="icon-link" href={site.links.github} target="_blank" rel="noopener noreferrer" aria-label="Superstables on GitHub">
