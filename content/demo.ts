@@ -23,17 +23,17 @@ export const demoPage = {
   },
 
   video: {
-    src: "/demo/superstables-demo-tight-leve-EN.mp4",
+    src: "/demo/superstables-demo-voiceover-EN.mp4",
     poster: "/demo/approval-poster-EN.jpg",
     type: "video/mp4",
-    width: 3126,
-    height: 1744,
-    /** Seconds; the recording has no audio track. */
-    durationSeconds: 28.183333,
+    width: 1934,
+    height: 1080,
+    /** Seconds; the recording has a voiceover audio track. */
+    durationSeconds: 30.433333,
     label: "Superstables demo: quote, MetaMask approval, result and receipt",
     disclosure: "Read the video description",
     description:
-      "In Claude Desktop, a user asks for a paid BTC price service and reviews a quote. The user opens the payment request, checks 0.01 test USDC on Base Sepolia, and confirms the signature in MetaMask. Back in the conversation, Claude displays the BTC result and a receipt link. The recording ends on the Base Sepolia explorer showing a successful transaction and a 0.01 USDC transfer. The amount and market data belong to this recorded example.",
+      "A voiceover narrates each step. In Claude Desktop, a user asks for a paid BTC price service and reviews a quote. The user opens the payment request, checks 0.01 test USDC on Base Sepolia, and confirms the signature in MetaMask. Back in the conversation, Claude displays the BTC result and a receipt link. The recording ends on the Base Sepolia explorer showing a successful transaction and a 0.01 USDC transfer. The amount and market data belong to this recorded example.",
     unavailable: "Video unavailable. Read the description below, or",
     openFile: "open the video file",
     unsupported: "Your browser cannot play this recording.",

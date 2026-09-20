@@ -30,7 +30,7 @@ const BODY = `---
 title: ${p.title}
 description: ${p.description}
 canonical: ${SITE}/demo
-last-updated: 2026-09-19
+last-updated: 2026-09-20
 ---
 
 # ${p.hero.headingLine1} ${p.hero.headingLine2}
@@ -39,7 +39,7 @@ ${p.hero.lede}
 
 ## Video
 
-[Demo recording](${SITE}${p.video.src}) (MP4, ${p.video.width}x${p.video.height}, ${Math.round(p.video.durationSeconds)} seconds, no audio track; poster: ${SITE}${p.video.poster})
+[Demo recording](${SITE}${p.video.src}) (MP4, ${p.video.width}x${p.video.height}, ${Math.round(p.video.durationSeconds)} seconds, with voiceover; poster: ${SITE}${p.video.poster})
 
 ${p.video.description}
 
