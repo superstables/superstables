@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1080" viewBox="0 0 1080 1080" role="img" aria-labelledby="title desc">
+  <title id="title">Sample Co. social card</title>
+  <desc id="desc">A cream square card with a grid of plum squares and mint circles and the headline Meet the new plan.</desc>
+  <rect width="1080" height="1080" fill="#FAF6EE"/>
+  <g transform="translate(120 120)">
+    <rect width="200" height="200" rx="24" fill="#5B2A86"/>
+    <circle cx="340" cy="100" r="100" fill="#7FD1B9"/>
+    <circle cx="100" cy="340" r="100" fill="#7FD1B9"/>
+    <rect x="240" y="240" width="200" height="200" rx="24" fill="#5B2A86"/>
+  </g>
+  <text x="120" y="760" font-family="system-ui, sans-serif" font-size="88" font-weight="700" fill="#5B2A86">Meet the</text>
+  <text x="120" y="860" font-family="system-ui, sans-serif" font-size="88" font-weight="700" fill="#5B2A86">new plan</text>
+  <text x="120" y="960" font-family="system-ui, sans-serif" font-size="36" fill="#5B2A86">Sample Co.</text>
+  <text x="960" y="1000" text-anchor="end" font-family="system-ui, sans-serif" font-size="20" fill="#5B2A86" opacity="0.7">sample</text>
+</svg>

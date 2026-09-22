@@ -44,7 +44,8 @@ Do not use it to execute payments; Superstables indexes and probes, it does not 
 - [Agent skills index](${SITE}/.well-known/agent-skills/index.json)
 - [Source repository](https://github.com/superstables/superstables): plugin.json and mcp.json (Agent Plugins layout), the skill under skills/
 - [Whole index as JSONL](${SITE}/feeds/services.jsonl): one schema.org Service per line ([schema map](${SITE}/schemamap.xml))
-- [Demo market data, paid (x402, Base Sepolia testnet)](${SITE}/api/demo): self-description of the one paid endpoint operated for the demo; GET /api/demo/market?asset=BTC answers 402 with its terms and settles test USDC only
+- [Demo market data, paid (x402, Base Sepolia testnet)](${SITE}/api/demo): self-description of the paid market data endpoint operated for the demo; GET /api/demo/market?asset=BTC answers 402 with its terms and settles test USDC only
+- [Demo catalogue](${SITE}/api/demo/catalogue): every paid demo endpoint operated for the demo, with request parameters and prices; ten prepared services under /api/demo/services/<slug> return simulated output, marked as such, and settle test USDC only
 - Scoped indexes: [/docs/llms.txt](${SITE}/docs/llms.txt), [/api/llms.txt](${SITE}/api/llms.txt)
 
 The full index is public JSON. No auth, no key, CORS open:

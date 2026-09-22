@@ -8,6 +8,7 @@
 
 const CLIENT_REPO = "https://github.com/superstables/superstables-client";
 const CLIENT_TAG = "v0.1.0";
+const CLIENT_BUNDLE = "superstables-0.1.0.mcpb";
 
 export const demoPage = {
   title: "Try the Superstables demo | Agent payments with your approval",
@@ -49,7 +50,7 @@ export const demoPage = {
     heading: "Use our MCP with your favorite harness",
     intro: "Superstables connects to apps that support local MCP servers over stdio. Choose yours for setup instructions.",
     legend: "Choose your app",
-    note: "Claude Desktop is the guided flow shown in this demo. These apps document MCP support.",
+    note: "Claude Desktop is the guided flow shown in this demo. These apps document MCP support. The demo services switch in each snippet adds Superstables' prepared demo services, whose answers are simulated, to what your agent can find; leave it out to see only real sellers.",
     /** Read aloud by the polite live region after a choice. */
     announce: (appName: string) => `Showing setup instructions for ${appName}.`,
   },
@@ -57,14 +58,14 @@ export const demoPage = {
   setup: {
     headingLine1: "Make your first",
     headingLine2: "test payment.",
-    intro: "You will need Node.js 20+, MetaMask, and test USDC on Base Sepolia. The wallet setup and first request are the same whichever app you choose.",
+    intro: "You will need MetaMask and test USDC on Base Sepolia. Every app except Claude Desktop also needs Node.js 20+ to run the client. The wallet setup and first request are the same whichever app you choose.",
     guideLabel: "Superstables setup guide",
     guideUrl: `${CLIENT_REPO}/blob/${CLIENT_TAG}/docs/install.md`,
     releaseLabel: "View release & download",
     releaseUrl: `${CLIENT_REPO}/releases/tag/${CLIENT_TAG}`,
     build: {
-      summary: "First, install the local client",
-      intro: "With Git and Node.js 20+ installed, run these commands once. If you already have this release built and configured, use its folder.",
+      summary: "First, install the local client (not needed for Claude Desktop)",
+      intro: "Claude Desktop users can skip this: the extension already contains the built client. For the other apps, with Git and Node.js 20+ installed, run these commands once. If you already have this release built and configured, use its folder.",
       code: `git clone --branch ${CLIENT_TAG} ${CLIENT_REPO}.git\ncd superstables-client\nnpm install\nnpm run build\nnpx superstables setup`,
       label: "Install Superstables client",
       after:
@@ -138,7 +139,7 @@ export const demoApps: readonly DemoApp[] = [
     id: "claude-desktop",
     name: "Claude Desktop",
     title: "Install the Claude Desktop extension",
-    intro: "Download the .mcpb bundle from the release. In Claude Desktop, go to Settings → Extensions → Advanced → Install Extension and choose the file.",
+    intro: `Download ${CLIENT_BUNDLE} from the release page. It contains the built client, so there is nothing to clone or compile. In Claude Desktop, go to Settings → Extensions → Advanced → Install Extension and choose the file.`,
     code: null,
     codeLang: null,
     after: "Enable Superstables in a new conversation. This is the path shown in the demo.",
@@ -149,7 +150,7 @@ export const demoApps: readonly DemoApp[] = [
     name: "Codex",
     title: "Connect Superstables to Codex",
     intro: "After building the client below, add this server to ~/.codex/config.toml. Keep any existing settings and replace the example path with your client folder.",
-    code: '[mcp_servers.superstables]\ncommand = "node"\nargs = ["/absolute/path/superstables-client/dist/mcp/main.js"]',
+    code: '[mcp_servers.superstables]\ncommand = "node"\nargs = ["/absolute/path/superstables-client/dist/mcp/main.js"]\nenv = { SUPERSTABLES_DEMO_SERVICES = "on" }',
     codeLang: "toml",
     after: "Restart your local Codex session and check that Superstables appears in the MCP server list.",
     url: "https://learn.chatgpt.com/docs/extend/mcp",
@@ -159,7 +160,7 @@ export const demoApps: readonly DemoApp[] = [
     name: "Claude Code",
     title: "Connect Superstables to Claude Code",
     intro: "After building the client below, run this command from the project where you want to use Superstables. Replace the example path with your client folder.",
-    code: 'claude mcp add --transport stdio superstables -- node "/absolute/path/superstables-client/dist/mcp/main.js"',
+    code: 'claude mcp add --transport stdio -e SUPERSTABLES_DEMO_SERVICES=on superstables -- node "/absolute/path/superstables-client/dist/mcp/main.js"',
     codeLang: "sh",
     after: "Open Claude Code in that project and run /mcp to check the connection.",
     url: "https://code.claude.com/docs/en/mcp#option-3-add-a-local-stdio-server",
@@ -169,7 +170,7 @@ export const demoApps: readonly DemoApp[] = [
     name: "Cursor",
     title: "Connect Superstables to Cursor",
     intro: "After building the client below, add this entry to .cursor/mcp.json in your project. Keep any existing servers and replace the example path with your client folder.",
-    code: '{\n  "mcpServers": {\n    "superstables": {\n      "type": "stdio",\n      "command": "node",\n      "args": [\n        "/absolute/path/superstables-client/dist/mcp/main.js"\n      ]\n    }\n  }\n}',
+    code: '{\n  "mcpServers": {\n    "superstables": {\n      "type": "stdio",\n      "command": "node",\n      "args": [\n        "/absolute/path/superstables-client/dist/mcp/main.js"\n      ],\n      "env": { "SUPERSTABLES_DEMO_SERVICES": "on" }\n    }\n  }\n}',
     codeLang: "json",
     after: "Save the file, then enable Superstables in Cursor’s MCP settings. Use a local Agent conversation.",
     url: "https://cursor.com/docs/mcp#stdio-server-configuration",
@@ -179,7 +180,7 @@ export const demoApps: readonly DemoApp[] = [
     name: "VS Code with GitHub Copilot",
     title: "Connect Superstables to VS Code",
     intro: "After building the client below, add this entry to .vscode/mcp.json in your local workspace. Keep any existing servers and replace the example path with your client folder.",
-    code: '{\n  "servers": {\n    "superstables": {\n      "type": "stdio",\n      "command": "node",\n      "args": [\n        "/absolute/path/superstables-client/dist/mcp/main.js"\n      ]\n    }\n  }\n}',
+    code: '{\n  "servers": {\n    "superstables": {\n      "type": "stdio",\n      "command": "node",\n      "args": [\n        "/absolute/path/superstables-client/dist/mcp/main.js"\n      ],\n      "env": { "SUPERSTABLES_DEMO_SERVICES": "on" }\n    }\n  }\n}',
     codeLang: "json",
     after: "Save the file, start the server from the MCP controls, and enable its tools in GitHub Copilot’s Agent chat.",
     url: "https://code.visualstudio.com/docs/agent-customization/mcp-servers",

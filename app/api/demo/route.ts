@@ -52,6 +52,8 @@ export function GET(req: Request): Response {
       as_of: "ISO 8601",
       source: "string",
     },
+    // Every paid demo endpoint this deployment operates, this one included, with parameters.
+    catalogue: `${origin}/api/demo/catalogue`,
   };
 
   return new Response(JSON.stringify(body, null, 2), {

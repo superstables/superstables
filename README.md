@@ -107,3 +107,62 @@ Facilitators are the public Base Sepolia ones, tried in order (`facilitator.x402
 | --- | --- | --- |
 | `SUPERSTABLES_DEMO_PAY_TO` | yes | The Base Sepolia address the test USDC is paid to. While it is unset the endpoint answers 503 and charges nothing. |
 | `SUPERSTABLES_DEMO_PRICE` | no | Price per call in decimal USDC. Default `0.01`. |
+| `SUPERSTABLES_DEMO_FACILITATORS` | no | Comma-separated facilitator URLs, replacing the public ones. For tests that run their own facilitator on loopback; leave unset in production. |
+
+## Prepared demo services (paid, testnet, simulated output)
+
+Ten more paid endpoints, operated by Superstables for the demo, that sell prepared answers so a user can ask an agent for information, processing or an asset, approve one testnet payment and get a useful result with a payment record. Every input is a closed set published in the catalogue; every output is marked as simulated. The payment mechanics are the shared seller code in `lib/demoSeller.ts`, so a purchase here is the same purchase as at `/api/demo/market`: validate, 402, credential check, verify, settle, then answer.
+
+| Path | What |
+| --- | --- |
+| `/api/demo/catalogue` | Free: every paid demo endpoint this deployment operates (the market data service and the ten below), in the shape the Superstables client's discovery reads, parameters and prices included. The client fetches it when its demo services switch is on (`SUPERSTABLES_DEMO_SERVICES=on`), so a service added here reaches demo users without a client release, and nobody else. |
+| `/api/demo/services/<slug>?…` | One route for all ten. A wrong or unknown parameter, a repeated one or an unknown slug is a 400 or 404 that costs nothing; a valid unpaid request is a 402 with the terms; a settled payment answers 200 with the envelope below and a `PAYMENT-RESPONSE` receipt. |
+| `lib/demoServices/registry.ts` | The ten definitions, the disclosure, parameter validation, exact decimal-to-atomic pricing and the response envelope. |
+| `lib/demoServices/services/*.ts` | One module per service: parameters, prepared results with a fixed `as_of`, example prompts. Longer sample documents and images live under `public/demo/services/`. |
+| `test/demo-services/` | `npm test`. Every service, every parameter combination: closed sets, fixed timestamps, bodies under 3,500 characters (the client truncates at 4,000), prices matching the brief; the route on loopback with a fake facilitator, including the paid path. |
+
+| Slug | Sells | Parameters | Test USDC |
+| --- | --- | --- | --- |
+| `wallet-briefing` | Balances, activity and positions of a sample wallet | `sample_wallet`, `period?` | 0.003 |
+| `contract-screening` | Risk findings and a verdict for a sample token contract | `token_id` | 0.005 |
+| `web-search` | Ranked results and an answer for a prepared query | `query_id`, `max_results?` | 0.003 |
+| `whitepaper-extraction` | Key points, figures and quotes from a sample whitepaper section | `document_id`, `section?` | 0.005 |
+| `specialist-research` | A prepared research brief on an agent-payments topic | `topic_id`, `depth?` | 0.020 |
+| `image-creation` | A prepared SVG asset for a brief, returned as a URL and metadata | `brief_id`, `style?` | 0.020 |
+| `audio-transcription` | A timestamped transcript of a sample clip | `clip_id`, `format?` | 0.010 |
+| `product-search` | A prepared product comparison under a price ceiling | `query_id`, `max_eur?` | 0.003 |
+| `job-search` | Prepared listings for a role in a region | `role_id`, `region?` | 0.003 |
+| `website-performance` | A prepared performance report for a sample page | `page_id`, `device?` | 0.005 |
+
+One call of each is 0.077 test USDC. The accepted values of every parameter are in the catalogue; a value outside them is refused before any payment. Each paid answer is:
+
+```json
+{
+  "service_id": "superstables-demo-wallet-briefing",
+  "provider": "Superstables demo service",
+  "mock": true,
+  "notice": "Simulated service output. Payment uses test USDC on Base Sepolia.",
+  "scenario_id": "demo-active",
+  "fixture_version": "1",
+  "as_of": "2026-09-21T09:00:00Z",
+  "summary": "…",
+  "data": {},
+  "sources": [],
+  "paid": { "amount": "0.003", "asset": "USDC", "network": "eip155:84532", "transaction": "0x…" }
+}
+```
+
+Example prompts, one per service, as a user would type them:
+
+- "Buy me a briefing on the sample wallet demo-active for the last 7 days."
+- "Screen the sample token sample-meme-token before I consider buying it."
+- "Search the web for x402-facilitators and summarise the top results."
+- "Extract the tokenomics section of the sample-stablecoin whitepaper."
+- "Get me a research brief on agent-payment-rails."
+- "Create the launch-poster image for Sample Co."
+- "Transcribe the clip customer-call-excerpt and list the action items."
+- "Find a usb-c-hub under 50 EUR."
+- "Find developer-advocate jobs in the EU."
+- "Run a performance check on sample-checkout for mobile."
+
+The payout address is the same `SUPERSTABLES_DEMO_PAY_TO`; the services are told apart by id, not by recipient, and are not independent vendors.

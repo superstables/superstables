@@ -12,6 +12,15 @@ documents its errors and limits, and the index is discoverable through the stand
 
 ### Added
 
+- Ten prepared demo services, paid over x402 with test USDC on Base Sepolia, that sell
+  simulated answers (wallet briefing, contract screening, web search, whitepaper extraction,
+  specialist research, image creation, audio transcription, product lookup, job search, website
+  performance) through one route, `/api/demo/services/<slug>`, on the seller code now shared
+  with the market data service (`lib/demoSeller.ts`). Every input is a closed set, every
+  output is marked simulated, and a bad request is refused before any payment. The hosted
+  catalogue at `/api/demo/catalogue` publishes every paid demo endpoint with its parameters
+  for the client's discovery. `npm test` (vitest) covers each service and the route on
+  loopback with a fake facilitator.
 - Simplified demo feedback presentation with an unframed embedded form.
 - Signed Tally webhook for demo feedback: creates a Triage candidate without a
   project, with the exact feedback label, deterministic retry deduplication,

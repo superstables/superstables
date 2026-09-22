@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Sample Co. product icon</title>
+  <desc id="desc">A teal rounded-square icon with a white ring, an amber dot and the wordmark Sample Co.</desc>
+  <rect width="512" height="512" rx="112" fill="#0F766E"/>
+  <circle cx="256" cy="228" r="112" fill="none" stroke="#FFFFFF" stroke-width="40"/>
+  <circle cx="348" cy="136" r="44" fill="#F59E0B"/>
+  <text x="256" y="428" text-anchor="middle" font-family="system-ui, sans-serif" font-size="40" font-weight="700" fill="#FFFFFF">Sample Co.</text>
+  <text x="256" y="470" text-anchor="middle" font-family="system-ui, sans-serif" font-size="20" fill="#FFFFFF" opacity="0.7">sample</text>
+</svg>

@@ -16,6 +16,7 @@ const LINKSET = {
         { href: `${SITE}/api/mcp`, title: "Superstables MCP server (streamable HTTP)" },
         { href: `${SITE}/ask`, title: "Superstables NLWeb ask endpoint" },
         { href: `${SITE}/api/demo/market`, title: "Superstables demo market data (paid, x402, Base Sepolia testnet)" },
+        { href: `${SITE}/api/demo/services`, title: "Superstables prepared demo services (paid, x402, Base Sepolia testnet, simulated output)" },
       ],
     },
     {
@@ -45,6 +46,14 @@ const LINKSET = {
     {
       anchor: `${SITE}/api/demo/market`,
       "service-desc": [{ href: `${SITE}/api/demo`, type: "application/json" }],
+      "service-doc": [
+        { href: `${SITE}/demo`, type: "text/html" },
+        { href: `${SITE}/demo.md`, type: "text/markdown" },
+      ],
+    },
+    {
+      anchor: `${SITE}/api/demo/services`,
+      "service-desc": [{ href: `${SITE}/api/demo/catalogue`, type: "application/json" }],
       "service-doc": [
         { href: `${SITE}/demo`, type: "text/html" },
         { href: `${SITE}/demo.md`, type: "text/markdown" },
