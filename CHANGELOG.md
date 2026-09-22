@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Agent readiness of the site: every content page has a machine-readable twin, the API
+## [0.2.0] - 2026-09-22
+
+Ten prepared demo services paid over x402 on the Base Sepolia testnet, and agent readiness
+of the site: every content page has a machine-readable twin, the API
 documents its errors and limits, and the index is discoverable through the standard files.
 
 ### Added
