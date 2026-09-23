@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-23
+
+### Fixed
+
+- `/demo` installs client v0.2.0 instead of v0.1.0. v0.1.0 ignores the demo services switch,
+  so the ten prepared demo services never appeared.
+- The Claude Code command on `/demo` names the server before `-e`. Current Claude Code read
+  the name as another environment variable and refused the command.
+
 ## [0.2.0] - 2026-09-22
 
 Ten prepared demo services paid over x402 on the Base Sepolia testnet, and agent readiness
