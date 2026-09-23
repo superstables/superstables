@@ -2,13 +2,13 @@
  * Copy and data for the /demo landing page. Everything the page says lives here so the
  * components stay structural; the markdown twin at /demo.md renders the same content.
  *
- * Written against the public client v0.1.0 release. The setup commands and configuration
+ * Written against the public client v0.2.0 release. The setup commands and configuration
  * snippets are displayed for the reader to copy; the site never runs them.
  */
 
 const CLIENT_REPO = "https://github.com/superstables/superstables-client";
-const CLIENT_TAG = "v0.1.0";
-const CLIENT_BUNDLE = "superstables-0.1.0.mcpb";
+const CLIENT_TAG = "v0.2.0";
+const CLIENT_BUNDLE = "superstables-0.2.0.mcpb";
 
 export const demoPage = {
   title: "Try the Superstables demo | Agent payments with your approval",
@@ -160,7 +160,7 @@ export const demoApps: readonly DemoApp[] = [
     name: "Claude Code",
     title: "Connect Superstables to Claude Code",
     intro: "After building the client below, run this command from the project where you want to use Superstables. Replace the example path with your client folder.",
-    code: 'claude mcp add --transport stdio -e SUPERSTABLES_DEMO_SERVICES=on superstables -- node "/absolute/path/superstables-client/dist/mcp/main.js"',
+    code: 'claude mcp add --transport stdio superstables -e SUPERSTABLES_DEMO_SERVICES=on -- node "/absolute/path/superstables-client/dist/mcp/main.js"',
     codeLang: "sh",
     after: "Open Claude Code in that project and run /mcp to check the connection.",
     url: "https://code.claude.com/docs/en/mcp#option-3-add-a-local-stdio-server",
