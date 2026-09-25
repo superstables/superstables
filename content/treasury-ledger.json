@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "syncedAt": "2026-09-25T22:20:02.387Z",
+  "fees": {
+    "total": 233.255747,
+    "pending": 44.960662,
+    "price": 224.35,
+    "updatedAt": "2026-09-25T20:55:40.078Z"
+  },
+  "expenses": [
+    {
+      "date": "2026-09-12",
+      "category": "Operacional / infra",
+      "description": "Página X automatizada Github - a pedido do dev.",
+      "usd": 527
+    },
+    {
+      "date": "2026-09-12",
+      "category": "Liquidez / market making",
+      "description": "Bought more 0.7% dev supply + locked for 1y",
+      "usd": 3640
+    },
+    {
+      "date": "2026-09-10",
+      "category": "Liquidez / market making",
+      "description": "Buyback with 0x0b 0.9% (~441kmcap avg)",
+      "usd": 5476
+    },
+    {
+      "date": "2026-09-13",
+      "category": "Operacional / infra",
+      "description": "Devs monthly payment (2 devs)",
+      "usd": 10000
+    },
+    {
+      "date": "2026-09-11",
+      "category": "Marketing",
+      "description": "Dex Boosts (dexscreener)",
+      "usd": 100
+    },
+    {
+      "date": "2026-09-18",
+      "category": "Marketing",
+      "description": "",
+      "usd": 5000
+    },
+    {
+      "date": "2026-09-25",
+      "category": "Marketing",
+      "description": "X Ads - Boost",
+      "usd": 180
+    }
+  ]
+}

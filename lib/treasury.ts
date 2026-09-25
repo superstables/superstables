@@ -1,5 +1,7 @@
 import "server-only";
 import { z } from "zod";
+import { unstable_cache } from "next/cache";
+import initialLedger from "@/content/treasury-ledger.json";
 import { treasury } from "@/content/treasury";
 
 const source = "https://script.google.com/macros/s/AKfycbx1c_PoQdJA61z6cVwwUSQ6UKx_eB0u4Aziiz16MdsMtJOZbj0iv7WbVjSNNOgQBeAF-g/exec?format=json";
@@ -30,10 +32,17 @@ const categoryNames: Record<string, string> = {
   "Outro": "Other",
 };
 
+const getLedger = unstable_cache(async () => {
+  const response = await fetch(source, { cache: "no-store", signal: AbortSignal.timeout(20000) });
+  if (!response.ok) throw new Error(`Treasury source unavailable (${response.status})`);
+  return ledgerSchema.parse(await response.json());
+}, ["treasury-ledger-v1"], { revalidate: 300 });
+
 export async function getTreasury() {
-  const response = await fetch(source, { next: { revalidate: 300 }, signal: AbortSignal.timeout(20000) });
-  if (!response.ok) throw new Error("Treasury source unavailable");
-  const ledger = ledgerSchema.parse(await response.json());
+  const ledger = await getLedger().catch((error: unknown) => {
+    console.error(JSON.stringify({ event: "treasury_sync_unavailable", message: error instanceof Error ? error.message : "Unknown error" }));
+    return ledgerSchema.parse(initialLedger);
+  });
   const expenses = ledger.expenses.map((expense) => ({
     ...expense,
     category: categoryNames[expense.category] ?? expense.category,
