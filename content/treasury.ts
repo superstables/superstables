@@ -1,26 +1,4 @@
-/**
- * Treasury page data. Updated by hand: edit the numbers and rows below,
- * bump lastUpdated, push. Mirrors the internal treasury sheet.
- */
-
 export const treasury = {
-  lastUpdated: "2026-09-14",
-  nvdaPriceUsd: 218.29,
-
-  /** Fee state on the pons pair (STBL/NVDA), in tokenized NVDA. */
-  fees: {
-    generatedNvda: 172.298292,
-    pendingClaimNvda: 8.2,
-    claimedNvda: 164.098292,
-  },
-
-  /** Cash position, USD. */
-  cash: {
-    claimedUsd: 35821.02,
-    spentUsd: 19743.0,
-    availableUsd: 16078.02,
-  },
-
   wallets: [
     {
       label: "Token contract (STBL)",
@@ -40,18 +18,4 @@ export const treasury = {
     },
   ],
 
-  categories: [
-    { name: "Operational / infra", usd: 10527.0 },
-    { name: "Liquidity / market making", usd: 9116.0 },
-    { name: "Marketing", usd: 100.0 },
-  ],
-
-  /** Newest first. */
-  expenses: [
-    { date: "2026-09-13", category: "Operational / infra", description: "Devs monthly payment (2 devs)", usd: 10000.0 },
-    { date: "2026-09-12", category: "Liquidity / market making", description: "Bought 0.7% more of dev supply, locked for one year", usd: 3640.0 },
-    { date: "2026-09-12", category: "Operational / infra", description: "Automated X posting (GitHub), at the dev's request", usd: 527.0 },
-    { date: "2026-09-11", category: "Marketing", description: "DEX boosts (Dexscreener)", usd: 100.0 },
-    { date: "2026-09-10", category: "Liquidity / market making", description: "Buyback from the 0x0bbe wallet, 0.9% of supply, at about $441k average market cap", usd: 5476.0 },
-  ],
 };
