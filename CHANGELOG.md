@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-25
+
+### Added
+
+- The X (Twitter) conversion tracking pixel loads on public pages, next to Google Analytics,
+  so visits can be measured and reached with X ads. Like Google Analytics, it never loads in
+  the private review area. The privacy page says so.
 ## [0.2.1] - 2026-09-23
 
 ### Fixed

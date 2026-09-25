@@ -68,13 +68,13 @@ export const PRIVACY: TrustDoc = {
   title: "Privacy",
   description: "What data Superstables stores about services, submitters, early-access applicants and visitors, where it is kept, and how to have it removed.",
   lede: "Most of what Superstables stores is about services, not people. This page lists exactly what the site records, why, and how to reach us about it.",
-  updated: "2026-09-18",
+  updated: "2026-09-25",
   sections: [
     {
       heading: "Reading the index",
       paragraphs: [
         "Browsing the directory, calling the JSON API, using the MCP server or the natural-language endpoint requires no account, key or login. We do not set cookies for these. Requests pass through our hosting provider, which keeps standard request logs (IP address, user agent, path, time) for a limited period as part of operating the service; we do not build profiles from them.",
-        "On public pages, Google Analytics 4 may load when a measurement ID is configured. It is never loaded in the private review area. Events recorded are limited to page views and the start and completion of the early-access form. Your theme preference is kept in your browser's local storage only.",
+        "On public pages, Google Analytics 4 may load when a measurement ID is configured, and the X (Twitter) conversion tracking pixel loads so we can measure and reach visitors with X ads. Neither is ever loaded in the private review area. Events recorded are limited to page views and the start and completion of the early-access form. Your theme preference is kept in your browser's local storage only.",
       ],
     },
     {
