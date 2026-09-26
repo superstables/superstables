@@ -28,13 +28,13 @@ export default async function TreasuryPage() {
         <p className="lede" style={{ marginTop: 12 }}>
           Every STBL/NVDA trade pays a 1% fee in tokenized NVDA. This page is the public ledger of what those fees have
           generated and where the money goes, itemized down to single expenses. This page syncs automatically from
-          the treasury ledger. Updates may take a few minutes to appear. Fees and expenses are entered by the team.
+          the treasury ledger when the team saves a change. Fees and expenses are entered by the team.
           NVDA is valued at {usd(t.nvdaPriceUsd)}, using the price entered on {date(t.feesUpdatedAt.slice(0, 10))}.
         </p>
 
         <p style={{ marginTop: 12, fontSize: 14, color: "var(--ink-2)" }}>
           Last successful sync: {new Date(t.syncedAt).toLocaleString("en-GB", { timeZone: "UTC" })} UTC.
-          If the source is unavailable, the last successfully generated page remains visible.
+          The last successfully synced figures remain visible if an update is delayed.
         </p>
 
         <div className="panel" style={{ marginTop: 28 }}>

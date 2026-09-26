@@ -1,27 +1,10 @@
 import "server-only";
-import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { db, schema } from "@/lib/db";
+import { ledgerSchema, TREASURY_LEDGER_KEY } from "@/lib/treasury-ledger";
 import { unstable_cache } from "next/cache";
 import initialLedger from "@/content/treasury-ledger.json";
 import { treasury } from "@/content/treasury";
-
-const source = "https://script.google.com/macros/s/AKfycbx1c_PoQdJA61z6cVwwUSQ6UKx_eB0u4Aziiz16MdsMtJOZbj0iv7WbVjSNNOgQBeAF-g/exec?format=json";
-const amount = z.number().finite().nonnegative();
-const ledgerSchema = z.object({
-  version: z.literal(1),
-  syncedAt: z.iso.datetime(),
-  fees: z.object({
-    total: amount,
-    pending: amount,
-    price: amount.positive(),
-    updatedAt: z.iso.datetime(),
-  }).refine((fees) => fees.pending <= fees.total, "Pending fees exceed generated fees"),
-  expenses: z.array(z.object({
-    date: z.iso.date(),
-    category: z.string().trim().min(1),
-    description: z.string(),
-    usd: amount,
-  })),
-});
 
 const categoryNames: Record<string, string> = {
   "Desenvolvimento": "Development",
@@ -33,10 +16,11 @@ const categoryNames: Record<string, string> = {
 };
 
 const getLedger = unstable_cache(async () => {
-  const response = await fetch(source, { cache: "no-store", signal: AbortSignal.timeout(20000) });
-  if (!response.ok) throw new Error(`Treasury source unavailable (${response.status})`);
-  return ledgerSchema.parse(await response.json());
-}, ["treasury-ledger-v1"], { revalidate: 300 });
+  const rows = await db.select({ value: schema.settings.value }).from(schema.settings)
+    .where(eq(schema.settings.key, TREASURY_LEDGER_KEY)).limit(1);
+  if (!rows[0]) throw new Error("Treasury synchronization has not completed yet");
+  return ledgerSchema.parse(JSON.parse(rows[0].value));
+}, ["treasury-pushed-ledger-v1"], { revalidate: 300, tags: [TREASURY_LEDGER_KEY] });
 
 export async function getTreasury() {
   const ledger = await getLedger().catch((error: unknown) => {
