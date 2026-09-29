@@ -72,7 +72,7 @@ export function checkOffer(requirement, { maxBase, payTo }) {
   return { ok: reasons.length === 0, reasons, amountBase, payTo: to };
 }
 
-// `account` is the owner's USDC token account as read from the chain (spl-token getAccount shape:
+// `account` is the owner's USDC token account as read from the chain (token.mjs getAccount shape:
 // { delegate: PublicKey|null, delegatedAmount: bigint, amount: bigint, isFrozen: boolean }), or
 // null when it does not exist. Returns { ok, reasons }.
 export function checkDelegation(account, { agent, amountBase }) {

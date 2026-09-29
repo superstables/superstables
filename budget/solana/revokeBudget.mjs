@@ -6,7 +6,7 @@
 // before or after, and even if the agent key was stolen. Exposure after it lands: none. Before it lands:
 // up to the delegated amount. Opens only solana-owner.env.
 import { Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
-import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
+import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount } from "./token.mjs";
 import { connection, loadOwner, explorerTx, USDC_MINT, fromBaseUnits, parseStrict } from "./lib.mjs";
 
 const USAGE = `Usage: node budget/solana/revokeBudget.mjs

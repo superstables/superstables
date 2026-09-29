@@ -42,7 +42,7 @@ import {
   getAccount,
   getMint,
   TokenAccountNotFoundError,
-} from "@solana/spl-token";
+} from "./token.mjs";
 import bs58 from "bs58";
 import {
   connection,

@@ -24,7 +24,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@solana/spl-token": "^0.4.15",
     "@solana/web3.js": "^1.99.0",
     "@x402/core": "^2.25.0",
     "@x402/evm": "^2.25.0",
@@ -35,6 +34,9 @@
     "viem": "^2.56.3",
     "yaml": "^2.6.0",
     "zod": "^4.6.1"
+  },
+  "overrides": {
+    "jayson": "^5.0.0"
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "^2.1.2",

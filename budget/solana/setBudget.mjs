@@ -10,7 +10,7 @@
 // this script refuses while a delegation with a remaining amount, or a different delegate, exists, unless
 // --replace is given. The output states the true maximum.
 import { Transaction, PublicKey, sendAndConfirmTransaction } from "@solana/web3.js";
-import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
+import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount } from "./token.mjs";
 import {
   connection,
   loadOwner,

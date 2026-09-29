@@ -5,7 +5,7 @@
 // (both on chain). An SPL delegate has NO expiry and NO seller list on chain, so none is shown: the
 // budget lasts until it is spent or the owner revokes it. The maximum the agent can still move is
 // min(delegatedAmount, the account's real balance).
-import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getAccount } from "./token.mjs";
 import {
   connection,
   readPublic,

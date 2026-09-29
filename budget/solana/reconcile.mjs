@@ -15,7 +15,7 @@
 // Exit: 0 when the chain gave an answer (settled, failed or not_found; read the RESULT state),
 // 1 for a missing journal, 2 bad flags, 4 unknown (still pending).
 import { connection, parseStrict, formatUnits, retryRead, EXIT } from "./lib.mjs";
-import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getAccount } from "./token.mjs";
 import { PublicKey } from "@solana/web3.js";
 import { OP_ID_RE, readOp, updateOp, assessOp, readTransfer } from "./ops.mjs";
 import { USDC_MINT, explorerTx } from "./lib.mjs";
