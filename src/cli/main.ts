@@ -7,6 +7,7 @@
 // signs anything: `pay` asks the owner's wallet and reports what the owner decided, which is
 // why it can end with "denied" and still be a command that worked.
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -452,6 +453,27 @@ program
     const service = await startDemoService({ port: options.port, payTo, priceDecimal: options.price });
     console.log("Leave this running. Press Ctrl-C to stop.");
     await untilStopped(() => service.close());
+  });
+
+// ── budget ───────────────────────────────────────────────────────────────────────────────
+
+// budget/ is its own program with its own flags, exit codes and RESULT line, so everything
+// after `budget` goes to it untouched, --help included.
+program
+  .command("budget")
+  .description("on-chain agent budgets on testnets: grant once, the agent buys, revoke")
+  .helpOption(false)
+  .allowUnknownOption()
+  .allowExcessArguments()
+  .passThroughOptions()
+  .argument("[args...]")
+  .action((args: string[]) => {
+    const cli = fileURLToPath(new URL("../../budget/cli.mjs", import.meta.url));
+    if (!existsSync(cli)) {
+      throw new Error("superstables budget runs from a checkout of the client repo for now; this install has no budget/cli.mjs.");
+    }
+    const run = spawnSync(process.execPath, [cli, ...args], { stdio: "inherit" });
+    process.exitCode = run.status ?? 1;
   });
 
 // ── doctor ───────────────────────────────────────────────────────────────────────────────

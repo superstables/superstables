@@ -134,6 +134,7 @@ anywhere. Two options go before the command: `--home <dir>` puts all state somew
 | `mcp` | Run the MCP server on stdio, the same one Claude talks to |
 | `demo-service` | Run the paid service yourself (`--port`, `--pay-to`, `--price`) |
 | `wallet init` / `wallet serve` / `wallet status` | The local wallet, for `--wallet local` only |
+| `budget …` | On-chain agent budgets, a separate testnet tool. See [On-chain budgets](#on-chain-budgets-superstables-budget) |
 
 ## The MCP tools
 
@@ -158,6 +159,8 @@ can open the correct payment request.
   records/               quotes, attempts, receipts and approvals, append-only JSONL, 0600
   browser-wallet.json    which MetaMask account last connected. A name, not a secret
   wallet/                only with --wallet local: key, agent token, owner secret, audit log
+  keys/budget/           only with superstables budget: owner and agent key files, 0600
+  budget/                only with superstables budget: public addresses and purchase journals
 ```
 
 `SUPERSTABLES_HOME` changes the base directory for this state.
@@ -194,7 +197,9 @@ local policy and what a compromised agent or client process could do.
 - In browser mode, an approval link opens one payment request and expires after five minutes.
   The page is served on `127.0.0.1`, and signing still requires MetaMask. Treat the link as
   access to that request.
-- Each payment requires approval. Delegated budgets and unattended payments are not supported.
+- Each payment through the MCP tools and `pay` requires approval. There is no unattended mode
+  in that flow. On-chain budgets for an agent that buys on its own are a separate testnet tool,
+  [`superstables budget`](#on-chain-budgets-superstables-budget).
 - With `--wallet local`, the signing key is stored in a file that any process running as your
   user can read. This mode is intended for machines without a browser.
 - Public-index listings without the required request parameters can be displayed but cannot be
@@ -240,6 +245,26 @@ Set `SUPERSTABLES_WALLET=local` when starting the MCP server to select this mode
 The agent requests a payment, you approve it through the wallet's approval page, and the client
 writes the same types of payment records. The signing key is stored on the local machine
 rather than in MetaMask, so processes running as your user can read it.
+
+## On-chain budgets: `superstables budget`
+
+`superstables budget` is a separate testnet tool with its own keys. The owner grants an agent
+key a budget on chain once. The agent then buys from x402 sellers on its own, with no approval
+per payment, until the budget runs out or the owner revokes it. The chain enforces the cap; no
+Superstables server is in the path. This release has one rail, `evm`: a USDC `approve` on Base
+Sepolia or Arc Testnet.
+
+```bash
+npx superstables budget doctor --rail evm
+npx superstables budget grant  --rail evm --amount 0.01 --yes    # the owner signs
+npx superstables budget buy    --rail evm --url <seller url> --max 0.002
+npx superstables budget revoke --rail evm --yes                  # the kill switch
+```
+
+It runs from a checkout of this repository, after `npm ci` and `npm run build`. Keys go in
+`~/.superstables/keys/budget/`, separate from the MetaMask flow. Every command ends with one
+`RESULT {json}` line and a fixed exit code, so an agent can act on it. Setup, faucets, the
+safety model and the agent skill are in [budget/README.md](budget/README.md).
 
 ## Development
 
