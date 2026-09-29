@@ -5,18 +5,21 @@ One command for the budget rails. Simple on purpose: `superstables budget` is a 
 | `--rail` | Path | Chains (`--chain`) | Implementation |
 | --- | --- | --- | --- |
 | `evm` | plain approve, pull then pay | `base-sepolia` (default), `arc-testnet` | `evm/` |
+| `tempo` | access key, MPP charge | `moderato` | `tempo/` |
 
 ## Commands
 
 | Command | Role | Does |
 | --- | --- | --- |
 | `superstables budget doctor --rail R [--chain C]` | anyone | Key files (mode 600, owner and agent split), public file, RPC, balances. Prints what to top up at which address. No transactions. |
-| `superstables budget grant --rail R --amount A [--yes]` | owner | Prints the terms (cap, true maximum, what the chain enforces and what it doesn't). Only sends with `--yes`. Refuses constraints the rail can't enforce (`--expiry`, `--period`, `--sellers`). |
+| `superstables budget grant --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b] [--yes]` | owner | Prints the terms (cap, true maximum, what the chain enforces and what it doesn't). Only sends with `--yes`. Refuses constraints the rail can't enforce (`evm`: `--expiry`, `--period`, `--sellers`). |
 | `superstables budget status --rail R` | anyone | Remaining budget, expiry, revoked, funds at risk. No secrets. |
-| `superstables budget buy --rail R --url U --max M [--pay-to ADDR] [--op ID]` | agent | One purchase under the budget. |
+| `superstables budget buy --rail R --url U --max M [--pay-to ADDR] [--op ID] [--method M --body JSON]` | agent | One purchase under the budget. `--method` and `--body` are for tempo. |
 | `superstables budget reconcile --rail R --op ID` | anyone | Reads the chain for an operation. **Never signs or sends.** |
 | `superstables budget recover --rail evm [--op ID] [--yes]` | owner | EVM only: revoke first, then return stranded funds. Prints the plan; sends only with `--yes`. |
 | `superstables budget revoke --rail R [--yes]` | owner | Ends the budget on chain. Prints the plan; sends only with `--yes`. |
+
+On tempo, `--agent LABEL` picks the access key for `doctor`, `grant`, `status`, `buy` and `revoke`.
 
 Every command: `--help` exits 0 and bad input exits 2 before any secret is read. `--mainnet` or a mainnet chain id is refused.
 

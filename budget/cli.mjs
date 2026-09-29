@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// superstables budget: one command for the budget rails. A thin dispatcher over the rail scripts in evm/.
-// It validates input, spawns the rail script, and prints one normalized `RESULT {...}` line last on
+// superstables budget: one command for the budget rails. A thin dispatcher over the rail scripts in evm/ and
+// tempo/. It validates input, spawns the rail script, and prints one normalized `RESULT {...}` line last on
 // stdout. Logs go to stderr. Contract: CLI.md. Testnet only.
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeSync } from "node:fs";
@@ -16,27 +16,28 @@ const TSX = join(REPO, "node_modules", ".bin", "tsx");
 // ---- rails ------------------------------------------------------------------------------------------
 const RAILS = {
   evm: { chains: ["base-sepolia", "arc-testnet"], chain: "base-sepolia", addr: /^0x[0-9a-fA-F]{40}$/, unit: "USDC" },
+  tempo: { chains: ["moderato"], chain: "moderato", addr: /^0x[0-9a-fA-F]{40}$/, unit: "pathUSD" },
 };
 // Rails that are planned but not in this version: refused with exit 2 before anything runs.
-const LATER = ["tempo", "solana"];
+const LATER = ["solana"];
 
 // ---- commands: flags ('v' takes a value, 'b' is a switch), required flags, help text ----------------
 const COMMANDS = {
   doctor: {
-    flags: {}, required: [],
-    help: "superstables budget doctor --rail evm [--chain C]\n  Key files, public file, RPC and balances. Prints what to top up at which address. No transactions, no signatures.",
+    flags: { agent: "v" }, required: [],
+    help: "superstables budget doctor --rail evm|tempo [--chain C] [--agent LABEL]\n  Key files, public file, RPC and balances. Prints what to top up at which address. No transactions, no signatures.",
   },
   grant: {
-    flags: { amount: "v", expiry: "v", period: "v", sellers: "v", yes: "b" }, required: ["amount"],
-    help: "superstables budget grant --rail R --amount A [--yes]\n  Owner command. Prints the terms and what the chain enforces; sends only with --yes.\n  Refuses constraints the rail cannot enforce (evm: no --expiry, --period, --sellers).",
+    flags: { amount: "v", expiry: "v", period: "v", sellers: "v", yes: "b", agent: "v" }, required: ["amount"],
+    help: "superstables budget grant --rail R --amount A [--expiry ISO] [--period SECONDS] [--sellers a,b] [--agent LABEL] [--yes]\n  Owner command. Prints the terms and what the chain enforces; sends only with --yes.\n  Refuses constraints the rail cannot enforce (evm: no --expiry, --period, --sellers).\n  Tempo: --expiry defaults to 24h from now. --agent LABEL picks the access key (a revoked key can never be granted again).",
   },
   status: {
-    flags: {}, required: [],
-    help: "superstables budget status --rail R [--chain C]\n  Remaining budget, expiry, revoked, funds at risk. Reads the chain only.",
+    flags: { agent: "v" }, required: [],
+    help: "superstables budget status --rail R [--chain C] [--agent LABEL]\n  Remaining budget, expiry, revoked, funds at risk. Reads the chain only.",
   },
   buy: {
-    flags: { url: "v", max: "v", "pay-to": "v", op: "v", method: "v", body: "v" }, required: ["url", "max"],
-    help: "superstables budget buy --rail R --url U --max M [--pay-to ADDR] [--op ID]\n  One purchase under the budget. --max is required. --op defaults to a generated id.\n  Exit 0 delivered, 1 failed, 3 refused before signing, 4 paid but not delivered, 5 unknown (superstables budget reconcile).",
+    flags: { url: "v", max: "v", "pay-to": "v", op: "v", method: "v", body: "v", agent: "v" }, required: ["url", "max"],
+    help: "superstables budget buy --rail R --url U --max M [--pay-to ADDR] [--op ID] [--method GET|POST|...] [--body JSON] [--agent LABEL]\n  One purchase under the budget. --max is required. --op defaults to a generated id.\n  Exit 0 delivered, 1 failed, 3 refused before signing, 4 paid but not delivered, 5 unknown (superstables budget reconcile).",
   },
   reconcile: {
     flags: { op: "v" }, required: ["op"],
@@ -47,16 +48,16 @@ const COMMANDS = {
     help: "superstables budget recover --rail evm [--chain C] [--op ID] [--yes]\n  EVM only. Owner command: revoke first, then return stranded funds. Prints the plan; sends only with --yes.",
   },
   revoke: {
-    flags: { yes: "b" }, required: [],
-    help: "superstables budget revoke --rail R [--chain C] [--yes]\n  Owner command. Ends the budget on chain. Prints the plan; sends only with --yes.",
+    flags: { yes: "b", agent: "v" }, required: [],
+    help: "superstables budget revoke --rail R [--chain C] [--agent LABEL] [--yes]\n  Owner command. Ends the budget on chain. Prints the plan; sends only with --yes.",
   },
 };
-const TOP_HELP = `superstables budget: on-chain agent budgets. This version has one rail, evm (Base Sepolia, Arc Testnet). Testnet only.
+const TOP_HELP = `superstables budget: on-chain agent budgets on evm (Base Sepolia, Arc Testnet) and tempo (Moderato). Testnet only.
 
 Commands (each takes --help):
   superstables budget doctor    --rail R [--chain C]
   superstables budget status    --rail R
-  superstables budget grant     --rail R --amount A [--yes]                                                 owner
+  superstables budget grant     --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b] [--yes]   owner
   superstables budget buy       --rail R --url U --max M [--pay-to ADDR] [--op ID]                          agent
   superstables budget reconcile --rail R --op ID
   superstables budget revoke    --rail R [--yes]                                                            owner
@@ -112,10 +113,10 @@ function parse(argv) {
     f[name] = v;
   }
   const ctx = { command: cmd, rail: f.rail };
-  if (!f.rail) return badInput(ctx, "--rail is required (evm)");
-  if (LATER.includes(f.rail)) return badInput(ctx, `--rail ${f.rail} is not in this version yet: it has evm only`);
+  if (!f.rail) return badInput(ctx, "--rail is required (evm or tempo)");
+  if (LATER.includes(f.rail)) return badInput(ctx, `--rail ${f.rail} is not in this version yet: it has evm and tempo`);
   const rail = RAILS[f.rail];
-  if (!rail) return badInput(ctx, `--rail must be evm (got "${f.rail}")`);
+  if (!rail) return badInput(ctx, `--rail must be evm or tempo (got "${f.rail}")`);
   if (f.chain !== undefined && !rail.chains.includes(f.chain)) {
     if (/mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|arbitrum)$|^\d+$|^eip155:/i.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet: superstables budget is testnet only`);
     return badInput(ctx, `--chain for ${f.rail} must be one of: ${rail.chains.join(", ")}`);
@@ -136,6 +137,10 @@ function parse(argv) {
   if (f.op !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(f.op)) badInput(ctx, "--op must be 1 to 64 characters: letters, digits, '.', '_' or '-'");
   if (f["pay-to"] !== undefined && !rail.addr.test(f["pay-to"])) badInput(ctx, `--pay-to is not a valid ${f.rail} address`);
   if (f.method !== undefined && !/^(GET|POST|PUT|PATCH|DELETE)$/.test(f.method.toUpperCase())) badInput(ctx, "--method must be GET, POST, PUT, PATCH or DELETE");
+  if (f.agent !== undefined) {
+    if (f.rail !== "tempo") badInput(ctx, "--agent is for tempo only (it picks the access key)");
+    if (!/^[A-Za-z0-9]{1,32}$/.test(f.agent)) badInput(ctx, "--agent must be 1 to 32 letters or digits");
+  }
   if (f.period !== undefined && !/^[1-9]\d*$/.test(f.period)) badInput(ctx, "--period must be a whole number of seconds");
   if (f.sellers !== undefined && !f.sellers.split(",").every((s) => rail.addr.test(s))) badInput(ctx, `--sellers must be a comma list of ${f.rail} addresses`);
   if (f.expiry !== undefined && !(Date.parse(f.expiry) > Date.now())) badInput(ctx, "--expiry must be an ISO date in the future (for example 2026-10-01T12:00:00Z)");
@@ -145,6 +150,7 @@ function parse(argv) {
   if (cmd === "buy" && f.rail === "evm") {
     for (const k of ["method", "body"]) if (f[k] !== undefined && !(k === "method" && f.method.toUpperCase() === "GET")) badInput(ctx, `evm buy is GET only (no --${k})`);
   }
+  if (cmd === "recover" && f.rail !== "evm") badInput(ctx, "recover is EVM only (tempo has no stranded funds: the agent never holds the budget)");
   return { cmd, f, ctx };
 }
 
@@ -153,6 +159,17 @@ const tsx = (dir, script, args) => ({ cwd: join(ROOT, dir), cmd: TSX, args: [scr
 const opt = (name, v) => (v === undefined ? [] : [`--${name}`, v]);
 
 function railCommand(verb, f, extra = {}) {
+  const agent = opt("agent", f.agent);
+  if (f.rail === "tempo") {
+    const T = (s, a) => tsx("tempo", `${s}.ts`, a);
+    switch (verb) {
+      case "buy": return T("buy", ["--url", f.url, "--max", f.max, "--op", f.op, ...opt("pay-to", f["pay-to"]), ...opt("method", f.method), ...opt("body", f.body), ...agent]);
+      case "reconcile": return T("reconcile", ["--op", f.op]);
+      case "read": return T("readBudget", agent);
+      case "grant": return T("setBudget", ["--amount", f.amount, "--expiry-seconds", String(extra.expirySeconds), ...opt("period-seconds", f.period), ...opt("sellers", f.sellers), ...agent]);
+      case "revoke": return T("revokeBudget", agent);
+    }
+  }
   return evmCommand(verb, f, extra);
 }
 
@@ -191,6 +208,8 @@ const railResult = (stdout) => {
 };
 
 // ---- helpers for amounts and reads ------------------------------------------------------------------
+const micro = (s) => { const [i, d = ""] = s.split("."); return BigInt(i) * 1000000n + BigInt(d.padEnd(6, "0")); };
+const decimal = (n) => { const s = n.toString().padStart(7, "0"); return (s.slice(0, -6) + "." + s.slice(-6)).replace(/\.?0+$/, "") || "0"; };
 const ago = (iso) => (iso ? iso : "none");
 
 // Reads the budget through the rail's read script (no key file, no signature) and parses its text.
@@ -198,6 +217,15 @@ async function readBudget(f) {
   const r = await run(railCommand("read", f));
   if (r.code !== 0) return { ok: false, code: r.code };
   const t = r.stdout;
+  const pick = (re) => re.exec(t)?.[1];
+  if (f.rail === "tempo") {
+    const remaining = pick(/remaining:\s+\d+ base units \(([\d.]+) pathUSD\)/);
+    const exp = Number(pick(/expiry:\s+(\d+)/) ?? 0);
+    const revoked = pick(/isRevoked:\s+(true|false)/) === "true";
+    const expiry = exp ? new Date(exp * 1000).toISOString() : null;
+    const live = !revoked && !(exp && exp * 1000 < Date.now());
+    return { ok: true, remaining: remaining ?? null, expiry, revoked, atRisk: remaining === undefined ? null : live ? remaining : "0" };
+  }
   const rr = railResult(t); // evm: the read script ends with a RESULT line
   return rr ? evmReadFromResult(rr) : { ok: false, code: 2 };
 }
@@ -283,7 +311,7 @@ async function reconcile({ f, ctx }) {
   emit(n.code, n.fields);
 }
 
-// Owner commands: a rail that prints no RESULT line says through its exit code whether it sent. The evm scripts end
+// Owner commands: tempo prints no RESULT line, so the rail's exit code says whether it sent. The evm scripts end
 // with a RESULT line whose state is a rail word (set, revoked, ok, planned, mismatch, not_revoked); those map to the CLI states.
 const OWNER_STATES = { set: "settled", revoked: "settled", ok: "settled", planned: "planned", refused_precheck: "refused_precheck", mismatch: "refused_precheck", not_revoked: "failed", failed: "failed", unknown: "unknown" };
 function ownerOutcome(code, rr = null) {
@@ -296,16 +324,28 @@ function ownerOutcome(code, rr = null) {
 const ownerTx = (rr, stdout) => (typeof rr?.tx === "string" ? rr.tx : rr?.tx && typeof rr.tx === "object" ? rr.tx : txOf(stdout));
 
 async function grant({ f, ctx }) {
+  const secs = f.expiry ? Math.ceil((Date.parse(f.expiry) - Date.now()) / 1000) : 86400;
   const now = await readBudget(f);
+  const unit = RAILS[f.rail].unit;
   log(`\nPLAN grant on ${f.rail} (${f.chain}). Nothing is sent without --yes.`);
-  log(`  cap:       ${f.amount} USDC: USDC.approve(agent, ${f.amount}) from the owner, in total (no reset)`);
-  log(`  TRUE MAXIMUM: min(${f.amount}, the owner's USDC balance). It does not expire.`);
-  log(`  enforced by the chain: the total allowance. NOT enforced: expiry, period, seller list (a stolen agent key can pay any address).`);
-  log(`  a live allowance is never overwritten silently: the script refuses until it is revoked.`);
+  if (f.rail === "tempo") {
+    const windows = f.period ? Math.ceil(secs / Number(f.period)) : 1;
+    log(`  cap:       ${f.amount} ${unit}${f.period ? ` per ${f.period}s` : " in total (one-time)"} to access key ${f.agent ? `AGENT${f.agent}` : "primary agent"}`);
+    log(`  expiry:    ${f.expiry ?? "24h from now (default)"} (${secs}s from now)`);
+    log(`  sellers:   ${f.sellers ?? "any"}`);
+    log(`  TRUE MAXIMUM by expiry: ${decimal(micro(f.amount) * BigInt(windows))} ${unit} (${windows} window${windows === 1 ? "" : "s"})`);
+    log(`  enforced by the chain: cap, expiry, period reset, seller list (AccountKeychain). Not enforced: a per-payment maximum. Fees come out of the same limit.`);
+    log(`  a revoked or expired key can never be granted again: use a fresh --agent label (npx tsx budget/tempo/setup.ts --extra-agent LABEL).`);
+  } else {
+    log(`  cap:       ${f.amount} USDC: USDC.approve(agent, ${f.amount}) from the owner, in total (no reset)`);
+    log(`  TRUE MAXIMUM: min(${f.amount}, the owner's USDC balance). It does not expire.`);
+    log(`  enforced by the chain: the total allowance. NOT enforced: expiry, period, seller list (a stolen agent key can pay any address).`);
+    log(`  a live allowance is never overwritten silently: the script refuses until it is revoked.`);
+  }
   if (now.ok) log(`  current:   remaining ${ago(now.remaining)}, expiry ${ago(now.expiry)}, revoked ${now.revoked}`);
   if (!f.yes) return emit(0, { ...ctx, state: "planned", amount: f.amount, remaining: now.ok ? now.remaining : null, tx: {}, next: "rerun the same command with --yes to send (owner signs)" });
 
-  const r = await run(railCommand("grant", f));
+  const r = await run(railCommand("grant", f, { expirySeconds: secs }));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
   if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, tx: {}, next: o.state === "refused_precheck" ? "nothing was sent; revoke the live budget first, or fix what the reason says" : `superstables budget status --rail ${f.rail}: the chain may or may not have changed`, reason: o.reason ?? `the rail script exited ${r.code}` });
@@ -317,7 +357,10 @@ async function revoke({ f, ctx }) {
   const now = await readBudget(f);
   log(`\nPLAN revoke on ${f.rail} (${f.chain}). Nothing is sent without --yes.`);
   if (now.ok) log(`  now: remaining ${ago(now.remaining)}, expiry ${ago(now.expiry)}, revoked ${now.revoked}, funds at risk ${ago(now.atRisk)}`);
-  log("  effect: USDC.approve(agent, 0). From the block it lands the agent can pull nothing more. USDC already pulled into the agent key is not covered: superstables budget recover returns it.");
+  log({
+    tempo: "  effect: AccountKeychain.revokeKey. From the block it lands in every payment by this key is refused, even one signed earlier. Open payment sessions are not covered.",
+    evm: "  effect: USDC.approve(agent, 0). From the block it lands the agent can pull nothing more. USDC already pulled into the agent key is not covered: superstables budget recover returns it.",
+  }[f.rail]);
   if (now.ok && now.revoked) return emit(0, { ...ctx, state: "ok", remaining: now.remaining, revoked: true, tx: {}, next: "none", reason: "already revoked; nothing to send" });
   if (!f.yes) return emit(0, { ...ctx, state: "planned", remaining: now.ok ? now.remaining : null, revoked: false, tx: {}, next: "rerun the same command with --yes to send (owner signs)" });
   const r = await run(railCommand("revoke", f));

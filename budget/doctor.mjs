@@ -4,11 +4,13 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
 
-// Must match evm/chains.ts (RPC, USDC). Minimums in whole tokens.
+// Must match evm/chains.ts and tempo/lib/constants.mjs (RPC, token). Minimums in whole tokens.
 const EVM = {
   "base-sepolia": { rpc: "https://sepolia.base.org", chainId: 84532, usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", gas: "ETH", minOwnerUsdc: 0.01, minOwnerGas: 0.00003, minAgentGas: 0.00003, fundAgent: "0.0001" },
   "arc-testnet": { rpc: "https://rpc.testnet.arc.network", chainId: 5042002, usdc: "0x3600000000000000000000000000000000000000", gas: "USDC", minOwnerUsdc: 0.2, minOwnerGas: 0.2, minAgentGas: 0.01, fundAgent: "0.1" },
 };
+
+const TEMPO = { rpc: "https://rpc.moderato.tempo.xyz", chainId: 42431, pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
 
 async function rpc(url, method, params = []) {
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(15_000) });
@@ -39,6 +41,17 @@ const RAILS = {
       ],
     };
   },
+  tempo: ({ agent = "" }) => ({
+    ownerVars: ["OWNER_PRIVATE_KEY", "OWNER_ADDRESS"], agentVars: [`AGENT${agent}_PRIVATE_KEY`, "OWNER_ADDRESS"], ownerSecrets: ["OWNER_PRIVATE_KEY"],
+    pub: publicFile("tempo", "moderato"), ownerAddr: "OWNER_ADDRESS", agentAddr: `AGENT${agent}_ADDRESS`,
+    setup: agent ? `npx tsx budget/tempo/setup.ts --extra-agent ${agent}` : "npx tsx budget/tempo/setup.ts",
+    keyAddress: evmKeyAddress,
+    rpc: async () => { const id = Number(await rpc(TEMPO.rpc, "eth_chainId")); if (id !== TEMPO.chainId) throw new Error(`chain id ${id}, expected ${TEMPO.chainId}`); return `chain id ${id}`; },
+    // The agent's access key spends the owner's pathUSD and fees come from the owner, so only the owner needs funds.
+    balances: async (owner) => [
+      { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(TEMPO.rpc, TEMPO.pathUsd, owner), need: TEMPO.minOwner, hint: "npx tsx budget/tempo/setup.ts --fund-only" },
+    ],
+  }),
 };
 
 function readEnv(path) {

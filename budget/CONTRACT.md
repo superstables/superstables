@@ -5,13 +5,14 @@ Every rail's main path follows these rules.
 | Rail | Main path | Scripts |
 | --- | --- | --- |
 | EVM | Plain approve, pull then pay | `evm/` (`--chain base-sepolia|arc-testnet`) |
+| Tempo | Keychain access key, MPP charge | `tempo/` |
 
 ## 1. Owner and agent keys are separate
 
 - Keys are split per rail into `$SUPERSTABLES_HOME/keys/budget/<rail>-owner.env` and `<rail>-agent.env` (mode 600). Public addresses go in both or in a public state file under `$SUPERSTABLES_HOME/budget/public/`.
 - Agent commands (`buy`, `reconcile`) open only the agent file. They must work with the owner file absent.
-- Owner commands (`setBudget`/`grant`, `revoke`, `recover`) open only the owner file.
-- Read commands (`read`/`status`) need no secret file.
+- Owner commands (`setBudget`/`grant`, `revoke`/`revokeBudget`, `recover`) open only the owner file.
+- Read commands (`read`/`readBudget`/`status`) need no secret file.
 - Never print, log or copy key material.
 
 ## 2. A budget never allows more than it says
@@ -28,7 +29,7 @@ The README says which owner action stops the agent even if the agent key is stol
 
 `buy` must refuse, before any signature, pull or transaction, when:
 - the price exceeds `--max <amount>` (required; no default);
-- the token is not the rail's expected token (the chain's USDC) or decimals don't match;
+- the token is not the rail's expected token (the chain's USDC, Tempo pathUSD) or decimals don't match;
 - the recipient is not the one in `--pay-to <address>`, when given;
 - the amount has more precision than the token allows.
 

@@ -226,9 +226,10 @@ code running as your user can. Run that mode with a key that holds testnet funds
 
 - **Budgets.** Approval per payment is the only mode of the MCP tools and `pay`. A budget,
   approved once and spent down, now exists as a separate testnet tool, `superstables budget`
-  ([budget/README.md](../budget/README.md)): the owner grants an agent key a USDC allowance on
+  ([budget/README.md](../budget/README.md)): the owner grants an agent key a spending limit on
   chain and revokes it with one transaction. It has its own keys and its own boundary. The
-  chain enforces only the total cap, and a stolen agent key can spend all of it. Bringing
+  chain enforces the total cap, and on Tempo also an expiry and a seller list. A stolen agent
+  key can spend all of it. Bringing
   budgets into the approval flow, with terms a person can read in the wallet, is the next step.
 - **A signing surface that reads like money.** MetaMask shows an EIP-712 authorization in atomic
   units; a person should see "0.01 USDC to this seller" in the wallet, not only on our page.

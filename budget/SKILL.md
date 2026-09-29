@@ -1,22 +1,23 @@
 ---
 name: superstables-budget
-description: Buy from x402 sellers with USDC under a budget the owner granted once, using the `superstables budget` CLI on testnets (Base Sepolia, Arc Testnet). Use when asked to buy from a seller under a cap, check or reconcile a purchase, or, as the owner, to grant, revoke or recover a budget. Testnet only, never mainnet.
+description: Buy from x402 or MPP sellers with USDC (pathUSD on Tempo) under a budget the owner granted once, using the `superstables budget` CLI on testnets (Base Sepolia, Arc Testnet, Tempo Moderato). Use when asked to buy from a seller under a cap, check or reconcile a purchase, or, as the owner, to grant, revoke or recover a budget. Testnet only, never mainnet.
 disable-model-invocation: true
 ---
 
 # Superstables budget
 
-The owner authorizes an agent once. The agent then pays sellers from the owner's funds until the budget runs out or is revoked. The chain enforces the budget; no Superstables service is in the path. The owner signs only grant and revoke. Every purchase is signed by the agent alone.
+The owner authorizes an agent once. The agent then pays sellers from the owner's funds until the budget runs out, expires or is revoked. The chain enforces the budget; no Superstables service is in the path. The owner signs only grant and revoke. Every purchase is signed by the agent alone.
 
 `superstables budget` is `npx superstables budget` from a checkout of the client repo (after `npm ci` and `npm run build` at its root), or `node budget/cli.mjs` there. It needs Node 20+. It is a thin dispatcher over the rail scripts in `budget/`. Testnet only: `--mainnet` or a mainnet chain is refused.
 
-## The rail
+## The rails
 
 | `--rail` | Path | `--chain` | The chain enforces | It does not enforce |
 | --- | --- | --- | --- | --- |
 | `evm` | plain ERC-20 approve, pull then pay | `base-sepolia` (default), `arc-testnet` | total cap | expiry, period, seller list |
+| `tempo` | keychain access key, MPP charge | `moderato` | cap, expiry, period, seller list | per-payment maximum |
 
-"Does not enforce" means a stolen agent key can pay any address, and the budget never expires by itself. Do not promise an expiry or seller list; `superstables budget grant` refuses them. Details: `references/paths.md`.
+"Does not enforce" means a stolen agent key can pay any address, and the budget never expires by itself. Do not promise an expiry or seller list on `evm`; `superstables budget grant` refuses them. Details: `references/paths.md`.
 
 ## Rules
 
@@ -33,11 +34,11 @@ The owner authorizes an agent once. The agent then pays sellers from the owner's
 ```
 superstables budget doctor    --rail R [--chain C]                     # key files, balances, RPC; no transactions
 superstables budget status    --rail R                                 # remaining, expiry, revoked, funds at risk
-superstables budget buy       --rail R --url U --max M [--pay-to ADDR] [--op ID]
+superstables budget buy       --rail R --url U --max M [--pay-to ADDR] [--op ID] [--method POST --body JSON]
 superstables budget reconcile --rail R --op ID                         # reads the chain; never signs or sends
-superstables budget grant     --rail R --amount A [--yes]              # owner
-superstables budget revoke    --rail R [--yes]                         # owner
-superstables budget recover   --rail evm [--op ID] [--yes]             # owner
+superstables budget grant     --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b] [--yes]   # owner
+superstables budget revoke    --rail R [--yes]                                                          # owner
+superstables budget recover   --rail evm [--op ID] [--yes]                                              # owner
 ```
 
 `grant`, `revoke` and `recover` print the plan (terms, true maximum, what the chain enforces) and send only with `--yes`. Every command has `--help`; bad input exits 2 before anything is read or spawned.
@@ -60,15 +61,16 @@ Owner granting: `superstables budget doctor`, `superstables budget grant ...` (r
 | 5 | Unknown | `superstables budget reconcile --op ID`; never pay again |
 
 ```
-RESULT {"ok":true,"command":"buy","rail":"evm","chain":"base-sepolia","op":"rb-20260929-a1b2","state":"settled","paid":true,"delivered":true,"amount":"0.001","remaining":"0.009","tx":{"pull":"0x...","settle":"0x..."},"next":"none"}
+RESULT {"ok":true,"command":"buy","rail":"tempo","chain":"moderato","op":"rb-20260929-a1b2","state":"settled","paid":true,"delivered":true,"amount":"0.001","remaining":"0.049","tx":{"settle":"0x..."},"next":"none"}
 ```
 
 `state` is one of `planned`, `sent`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `unknown`, `not_found`, `ok`. Unknown amounts are `null`, never `"0"`. `settled` means your own transaction succeeded on chain; `delivered` is the seller's answer, recorded separately.
 
 ## Gotchas
 
+- Tempo: a revoked or expired access key can never be granted again. Use a fresh key: `npx tsx budget/tempo/setup.ts --extra-agent LABEL`, then `--agent LABEL` on `grant`, `status`, `buy`, `revoke`.
 - EVM: `buy` is GET only. The agent pulls the exact price, then pays; a failed purchase returns the price. Pulled funds left in the agent key are returned by `superstables budget recover` (owner).
-- After a revoke, a payment already broadcast still settles.
+- After a revoke, a payment already broadcast still settles. On Tempo, payment sessions opened elsewhere are not covered by a revoke.
 - Two purchases for the last of the budget: the chain lets exactly one settle. Do not run two `buy`s on one agent key at once.
 - Something looks off (missing key, empty balance): run `superstables budget doctor` before anything else.
 

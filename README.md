@@ -251,8 +251,9 @@ rather than in MetaMask, so processes running as your user can read it.
 `superstables budget` is a separate testnet tool with its own keys. The owner grants an agent
 key a budget on chain once. The agent then buys from x402 sellers on its own, with no approval
 per payment, until the budget runs out or the owner revokes it. The chain enforces the cap; no
-Superstables server is in the path. This release has one rail, `evm`: a USDC `approve` on Base
-Sepolia or Arc Testnet.
+Superstables server is in the path. This release has two rails: `evm`, a USDC `approve` on Base
+Sepolia or Arc Testnet, and `tempo`, an access key on Tempo Moderato whose cap, expiry and
+seller list the chain enforces.
 
 ```bash
 npx superstables budget doctor --rail evm

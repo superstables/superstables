@@ -1,5 +1,5 @@
 interface:
   display_name: "Superstables budget"
-  short_description: "Buy from x402 sellers under an owner-set testnet budget with the superstables budget CLI"
+  short_description: "Buy from x402 and MPP sellers under an owner-set testnet budget with the superstables budget CLI"
 policy:
   allow_implicit_invocation: false
