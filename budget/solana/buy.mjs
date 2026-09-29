@@ -18,8 +18,11 @@
 //   3. Prechecks on the challenge (price <= --max, devnet USDC mint, 6 decimals, precision,
 //      recipient == --pay-to when given). A refusal exits 3 with state refused_precheck. The
 //      agent key file is not opened on a refusal.
-//   4. Only then the agent key is loaded and the payment signed.
-//   5. Settled means OUR transaction (found by the agent's signature) succeeded on chain. The
+//   4. Only then the agent key is loaded, the owner's USDC account read, and the budget checked
+//      (the agent is the delegate, the delegated amount and the balance cover the price). A
+//      refusal exits 3 with state refused_precheck.
+//   5. Only then the payment is signed.
+//   6. Settled means OUR transaction (found by the agent's signature) succeeded on chain. The
 //      seller's HTTP status is recorded separately as `delivered`. A delivery failure never
 //      triggers a new payment, and an uncertain outcome is never retried: read it with reconcile.
 //
@@ -38,6 +41,7 @@ import {
   createAssociatedTokenAccountIdempotentInstruction,
   getAccount,
   getMint,
+  TokenAccountNotFoundError,
 } from "@solana/spl-token";
 import bs58 from "bs58";
 import {
@@ -58,7 +62,7 @@ import {
   USDC_DECIMALS,
 } from "./lib.mjs";
 import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer } from "./ops.mjs";
-import { selectRequirement, checkOffer } from "./precheck.mjs";
+import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
 
@@ -229,11 +233,36 @@ if (mintInfo.decimals !== USDC_DECIMALS) {
 
 const ownerAta = getAssociatedTokenAddressSync(USDC_MINT, ownerPk);
 const sellerAta = getAssociatedTokenAddressSync(USDC_MINT, payToPk);
-const ownerAtaBefore = await retryRead(() => getAccount(conn, ownerAta)).catch(() => null);
+let ownerAtaBefore;
+try {
+  ownerAtaBefore = await retryRead(() => getAccount(conn, ownerAta));
+} catch (e) {
+  if (!(e instanceof TokenAccountNotFoundError)) {
+    const why = `could not read the owner's USDC account ${ownerAta.toBase58()}: ${e?.message ?? e}`;
+    updateOp(opId, { state: "refused_precheck", reasons: [why] });
+    refuse(why, { next: "retry later; nothing was signed or paid" });
+  }
+  ownerAtaBefore = null;
+}
 console.log(
   `\nOwner ATA before: delegate=${ownerAtaBefore?.delegate?.toBase58() ?? "none"} ` +
     `remaining=${ownerAtaBefore ? formatUnits(ownerAtaBefore.delegatedAmount) : 0} USDC`
 );
+// The budget itself, before anything is signed: the Token program would refuse this transfer, but
+// a signed transfer handed to the seller could still land if the owner re-granted the same agent
+// before its blockhash expired.
+const delegation = checkDelegation(ownerAtaBefore, { agent: agent.publicKey, amountBase });
+if (!delegation.ok) {
+  const remainingNow = ownerAtaBefore?.delegate?.equals(agent.publicKey) ? formatUnits(ownerAtaBefore.delegatedAmount) : "0";
+  updateOp(opId, {
+    rail: "solana", kind: "buy", state: "refused_precheck", url, method, reasons: delegation.reasons,
+    amount: amountBase.toString(), payTo: payToPk.toBase58(), token: USDC_MINT.toBase58(),
+    owner: ownerPk.toBase58(), agent: agent.publicKey.toBase58(), remaining: remainingNow,
+    createdAt: readOp(opId)?.createdAt ?? new Date().toISOString(),
+  });
+  refuse(delegation.reasons, { remaining: remainingNow, next: "the owner must grant a budget to this agent that covers the price; nothing was signed or paid" });
+}
+console.log(`Budget precheck passed: the agent is the delegate and ${formatUnits(ownerAtaBefore.delegatedAmount)} USDC >= price ${amountUi} USDC.`);
 const sellerAtaBefore = await retryRead(() => getAccount(conn, sellerAta)).catch(() => null);
 console.log(
   `Seller ATA (${sellerAta.toBase58()}) before: ` +

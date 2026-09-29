@@ -4,6 +4,10 @@
 //   - the price exceeds --max;
 //   - the offered token is not the devnet USDC mint, or the offered decimals are not 6;
 //   - the recipient is not a valid address, or is not the --pay-to address when one is given.
+// and, once the owner's USDC token account has been read (checkDelegation), when
+//   - the account does not exist or is frozen;
+//   - the agent is not its delegate (revoked, never granted, or granted to another key);
+//   - the delegated amount left, or the account's balance, is below the price.
 import { PublicKey } from "@solana/web3.js";
 import { USDC_MINT, USDC_DECIMALS, formatUnits } from "./lib.mjs";
 
@@ -66,4 +70,24 @@ export function checkOffer(requirement, { maxBase, payTo }) {
   if (fp !== undefined && !validKey(fp)) reasons.push(`fee payer '${fp}' is not a valid address`);
 
   return { ok: reasons.length === 0, reasons, amountBase, payTo: to };
+}
+
+// `account` is the owner's USDC token account as read from the chain (spl-token getAccount shape:
+// { delegate: PublicKey|null, delegatedAmount: bigint, amount: bigint, isFrozen: boolean }), or
+// null when it does not exist. Returns { ok, reasons }.
+export function checkDelegation(account, { agent, amountBase }) {
+  if (!account) return { ok: false, reasons: ["the owner has no USDC token account on devnet"] };
+  const reasons = [];
+  if (account.isFrozen) reasons.push("the owner's USDC token account is frozen");
+  if (!account.delegate) {
+    reasons.push("the owner's USDC account has no delegate: the budget is revoked or was never granted");
+  } else if (!account.delegate.equals(agent)) {
+    reasons.push(`the delegate is ${account.delegate.toBase58()}, not this agent ${agent.toBase58()}`);
+  } else if (account.delegatedAmount < amountBase) {
+    reasons.push(`price ${formatUnits(amountBase)} USDC exceeds the remaining budget ${formatUnits(account.delegatedAmount)} USDC`);
+  }
+  if (account.amount < amountBase) {
+    reasons.push(`price ${formatUnits(amountBase)} USDC exceeds the owner's USDC balance ${formatUnits(account.amount)} USDC`);
+  }
+  return { ok: reasons.length === 0, reasons };
 }
