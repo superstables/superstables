@@ -6,6 +6,7 @@ Every rail's main path follows these rules.
 | --- | --- | --- |
 | EVM | Plain approve, pull then pay | `evm/` (`--chain base-sepolia|arc-testnet`) |
 | Tempo | Keychain access key, MPP charge | `tempo/` |
+| Solana | SPL delegate, x402 exact | `solana/` |
 
 ## 1. Owner and agent keys are separate
 
@@ -29,7 +30,7 @@ The README says which owner action stops the agent even if the agent key is stol
 
 `buy` must refuse, before any signature, pull or transaction, when:
 - the price exceeds `--max <amount>` (required; no default);
-- the token is not the rail's expected token (the chain's USDC, Tempo pathUSD) or decimals don't match;
+- the token is not the rail's expected token (the chain's USDC, Tempo pathUSD, the Solana devnet USDC mint) or decimals don't match;
 - the recipient is not the one in `--pay-to <address>`, when given;
 - the amount has more precision than the token allows.
 

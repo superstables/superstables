@@ -6,15 +6,16 @@ One command for the budget rails. Simple on purpose: `superstables budget` is a 
 | --- | --- | --- | --- |
 | `evm` | plain approve, pull then pay | `base-sepolia` (default), `arc-testnet` | `evm/` |
 | `tempo` | access key, MPP charge | `moderato` | `tempo/` |
+| `solana` | SPL delegate, x402 | `devnet` | `solana/` |
 
 ## Commands
 
 | Command | Role | Does |
 | --- | --- | --- |
 | `superstables budget doctor --rail R [--chain C]` | anyone | Key files (mode 600, owner and agent split), public file, RPC, balances. Prints what to top up at which address. No transactions. |
-| `superstables budget grant --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b] [--yes]` | owner | Prints the terms (cap, true maximum, what the chain enforces and what it doesn't). Only sends with `--yes`. Refuses constraints the rail can't enforce (`evm`: `--expiry`, `--period`, `--sellers`). |
+| `superstables budget grant --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b] [--yes]` | owner | Prints the terms (cap, true maximum, what the chain enforces and what it doesn't). Only sends with `--yes`. Refuses constraints the rail can't enforce (`evm` and `solana`: `--expiry`, `--period`, `--sellers`). |
 | `superstables budget status --rail R` | anyone | Remaining budget, expiry, revoked, funds at risk. No secrets. |
-| `superstables budget buy --rail R --url U --max M [--pay-to ADDR] [--op ID] [--method M --body JSON]` | agent | One purchase under the budget. `--method` and `--body` are for tempo. |
+| `superstables budget buy --rail R --url U --max M [--pay-to ADDR] [--op ID] [--method M --body JSON]` | agent | One purchase under the budget. `--method` and `--body` are for tempo and solana. |
 | `superstables budget reconcile --rail R --op ID` | anyone | Reads the chain for an operation. **Never signs or sends.** |
 | `superstables budget recover --rail evm [--op ID] [--yes]` | owner | EVM only: revoke first, then return stranded funds. Prints the plan; sends only with `--yes`. |
 | `superstables budget revoke --rail R [--yes]` | owner | Ends the budget on chain. Prints the plan; sends only with `--yes`. |

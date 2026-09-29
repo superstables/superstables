@@ -1,6 +1,6 @@
 ---
 name: superstables-budget
-description: Buy from x402 or MPP sellers with USDC (pathUSD on Tempo) under a budget the owner granted once, using the `superstables budget` CLI on testnets (Base Sepolia, Arc Testnet, Tempo Moderato). Use when asked to buy from a seller under a cap, check or reconcile a purchase, or, as the owner, to grant, revoke or recover a budget. Testnet only, never mainnet.
+description: Buy from x402 or MPP sellers with USDC (pathUSD on Tempo) under a budget the owner granted once, using the `superstables budget` CLI on testnets (Base Sepolia, Arc Testnet, Tempo Moderato, Solana devnet). Use when asked to buy from a seller under a cap, check or reconcile a purchase, or, as the owner, to grant, revoke or recover a budget. Testnet only, never mainnet.
 disable-model-invocation: true
 ---
 
@@ -16,8 +16,9 @@ The owner authorizes an agent once. The agent then pays sellers from the owner's
 | --- | --- | --- | --- | --- |
 | `evm` | plain ERC-20 approve, pull then pay | `base-sepolia` (default), `arc-testnet` | total cap | expiry, period, seller list |
 | `tempo` | keychain access key, MPP charge | `moderato` | cap, expiry, period, seller list | per-payment maximum |
+| `solana` | SPL delegate, x402 | `devnet` | total cap | expiry, period, seller list |
 
-"Does not enforce" means a stolen agent key can pay any address, and the budget never expires by itself. Do not promise an expiry or seller list on `evm`; `superstables budget grant` refuses them. Details: `references/paths.md`.
+"Does not enforce" means a stolen agent key can pay any address, and the budget never expires by itself. Do not promise an expiry or seller list on `evm` or `solana`; `superstables budget grant` refuses them. Details: `references/paths.md`.
 
 ## Rules
 
@@ -69,6 +70,7 @@ RESULT {"ok":true,"command":"buy","rail":"tempo","chain":"moderato","op":"rb-202
 ## Gotchas
 
 - Tempo: a revoked or expired access key can never be granted again. Use a fresh key: `npx tsx budget/tempo/setup.ts --extra-agent LABEL`, then `--agent LABEL` on `grant`, `status`, `buy`, `revoke`.
+- Solana: one delegate slot per token account. A new grant overwrites the old one, so the rail refuses while one is live.
 - EVM: `buy` is GET only. The agent pulls the exact price, then pays; a failed purchase returns the price. Pulled funds left in the agent key are returned by `superstables budget recover` (owner).
 - After a revoke, a payment already broadcast still settles. On Tempo, payment sessions opened elsewhere are not covered by a revoke.
 - Two purchases for the last of the budget: the chain lets exactly one settle. Do not run two `buy`s on one agent key at once.
