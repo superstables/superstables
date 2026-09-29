@@ -39,7 +39,7 @@ function run(command, args, cwd = root) {
 
 // Dependencies that only `superstables budget` loads. budget/ runs from a checkout and is not in
 // dist/, so the MCP server never imports these; they stay out of the bundle. Each rail adds its own.
-const BUDGET_ONLY_DEPENDENCIES = ["@x402/fetch"];
+const BUDGET_ONLY_DEPENDENCIES = ["@x402/fetch", "mppx"];
 
 // 1. Compile. The bundle ships JavaScript; tsc is the only thing that produces it.
 run("npm", ["run", "build"]);
