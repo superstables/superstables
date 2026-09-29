@@ -15,7 +15,7 @@
 // lockfile stay behind.
 
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { devVersion, revisionOf } from "./dev-version.mjs";
@@ -37,8 +37,26 @@ function run(command, args, cwd = root) {
   execFileSync(command, args, { cwd, stdio: "inherit", shell: process.platform === "win32" });
 }
 
+// Dependencies that only `superstables budget` loads. budget/ runs from a checkout and is not in
+// dist/, so the MCP server never imports these; they stay out of the bundle. Each rail adds its own.
+const BUDGET_ONLY_DEPENDENCIES = ["@x402/fetch", "mppx"];
+
 // 1. Compile. The bundle ships JavaScript; tsc is the only thing that produces it.
 run("npm", ["run", "build"]);
+
+// A package left out of the bundle must not be imported by anything that ships: that bundle would
+// pack and validate, then fail on the user's machine at the first import.
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const excludedImport = new RegExp(
+  `(?:\\bfrom\\s*|\\bimport\\s*\\(?\\s*|\\brequire\\s*\\(\\s*)["'](${BUDGET_ONLY_DEPENDENCIES.map(escapeRe).join("|")})(?:/[^"']*)?["']`,
+);
+for (const file of readdirSync(join(root, "dist"), { recursive: true })) {
+  if (!/\.[cm]?js$/.test(file)) continue;
+  const hit = readFileSync(join(root, "dist", file), "utf8").match(excludedImport);
+  if (hit) {
+    throw new Error(`dist/${file} imports ${hit[1]}, which the bundle leaves out (BUDGET_ONLY_DEPENDENCIES in scripts/bundle.mjs)`);
+  }
+}
 
 const entryPoint = join(root, "dist", "mcp", "main.js");
 if (!existsSync(entryPoint)) {
@@ -57,7 +75,8 @@ manifest.version = version;
 writeFileSync(join(stageDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 
 // A package.json with dependencies and nothing else: this copy exists so `npm install` can
-// resolve the server's runtime imports, not so anyone can build or test from it.
+// resolve the server's runtime imports, not so anyone can build or test from it. The
+// budget-only dependencies are left out.
 writeFileSync(
   join(stageDir, "package.json"),
   `${JSON.stringify(
@@ -71,7 +90,9 @@ writeFileSync(
       type: pkg.type,
       main: "dist/mcp/main.js",
       engines: pkg.engines,
-      dependencies: pkg.dependencies,
+      dependencies: Object.fromEntries(
+        Object.entries(pkg.dependencies).filter(([name]) => !BUDGET_ONLY_DEPENDENCIES.includes(name)),
+      ),
     },
     null,
     2,
