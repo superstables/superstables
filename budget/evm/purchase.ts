@@ -15,8 +15,9 @@ import { encodeFunctionData, isAddress, parseUnits, type Address } from "viem";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme } from "@x402/evm";
+import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import {
-  SYM,
+  SYM, oneLine,
   sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, nativeBalance, gasFmt, chainReason, publicClient, sleep,
   type AgentCtx, type Wallet,
 } from "./lib.ts";
@@ -26,6 +27,34 @@ import {
 } from "./ops.ts";
 
 const MAX_AUTH_LIFETIME_S = 3600; // an authorization that can be settled later than this is refused
+/** The most of the seller's answer that is kept (buy saves it next to the journal). A longer answer is cut here and flagged. */
+export const MAX_RESPONSE_BYTES = 1_000_000;
+
+/** Reads at most `cap` bytes of a response body and stops reading after that, so a huge answer never sits in memory. */
+async function readCapped(r: Response, cap: number): Promise<{ bytes: Buffer; truncated: boolean }> {
+  if (!r.body) return { bytes: Buffer.alloc(0), truncated: false };
+  const reader = r.body.getReader();
+  const parts: Buffer[] = [];
+  let size = 0;
+  let truncated = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      if (size + chunk.length > cap) {
+        parts.push(chunk.subarray(0, cap - size));
+        size = cap;
+        truncated = true;
+        break;
+      }
+      parts.push(chunk);
+      size += chunk.length;
+    }
+  } catch {}
+  if (truncated) reader.cancel().catch(() => {});
+  return { bytes: Buffer.concat(parts, size), truncated };
+}
 
 /** The rule 4 checks on one payment option. Returns the reason to refuse, or null. Pure. */
 export function checkAccept(a: any, o: { max: bigint; payTo?: string }): string | null {
@@ -85,7 +114,8 @@ export type PurchaseResult = {
   settle?: any;
   settleTx?: string;
   sellerError?: string;
-  body?: string;
+  body?: string; // a one-line preview for the log
+  response?: { bytes: Buffer; truncated: boolean; contentType?: string }; // what the seller answered (up to MAX_RESPONSE_BYTES): buy saves it
   error?: string;
   exitCode: number; // ops.ts exitCodeFor: 0 settled and delivered (or quoted); 1 failed / refused by the chain; 3 refused before signing; 4 paid, not delivered; 5 unknown
 };
@@ -98,7 +128,8 @@ export { exitCodeFor };
 
 export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
   const { c, url, max } = o;
-  const log = (s: string) => console.log(o.tag ? `[${o.tag}] ${s}` : s);
+  // one line per call: reasons can quote the seller's 402 (asset, payTo, domain name)
+  const log = (s: string) => console.log(oneLine(o.tag ? `[${o.tag}] ${s}` : s, 2000));
   const agent = o.agent ?? c.wallet;
   const precheck = o.precheck ?? true;
   const httpTimeoutMs = o.httpTimeoutMs ?? 60_000;
@@ -107,8 +138,8 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
   const res: PurchaseResult = { state: "quoted", ok: false, journal: j, pulled: 0n, signedPayment: false, exitCode: 0 };
   const finish = (state: OpState, reason?: string, next?: string): PurchaseResult => {
     j.state = state;
-    if (reason) j.reason = reason;
-    if (next) j.next = next;
+    if (reason) j.reason = oneLine(reason, 1000);
+    if (next) j.next = oneLine(next, 1000);
     writeJournal(j);
     res.state = state;
     res.ok = state === "settled" && j.delivered === true;
@@ -166,14 +197,17 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
       return agent.account.signTypedData(m);
     },
   };
-  const core = new x402Client().register(NETWORK, new ExactEvmScheme(signer as any));
-  for (const legacy of CFG.legacyNetworks) core.register(legacy as any, new ExactEvmScheme(signer as any), 1);
+  const core = new x402Client().register(NETWORK as `${string}:${string}`, new ExactEvmScheme(signer as any));
+  // x402 v1 sellers name the chain the old way ("base-sepolia") and have their own table and scheme class. register() takes
+  // no version argument: a v1 name registered there is never matched, and every v1 seller was refused.
+  for (const legacy of CFG.legacyNetworks) core.registerV1(legacy, new ExactEvmSchemeV1(signer as any));
   // only the option that passed the prechecks can be selected
   core.registerPolicy((_v: number, reqs: any[]) => (chosen ? reqs.filter((r) => r.asset === chosen.asset && r.payTo === chosen.payTo && String(r.amount ?? r.maxAmountRequired) === String(chosen.amount ?? chosen.maxAmountRequired) && r.network === chosen.network && r.scheme === chosen.scheme) : []));
   // CHAIN: the SDK signs only "default assets" (a table inside @x402/evm 2.27.0 that does not list Arc's USDC yet) or assets named in
   // spendControls.allowedAssets. Without this entry the client refuses Arc AFTER the pull has landed (seen on Arc Testnet: the pull was
   // returned, gas wasted). So the chain's USDC is allowed explicitly, capped at --max. The same call is dry-run before the pull below.
-  core.setSpendControls({ allowedAssets: [{ network: NETWORK, asset: USDC, maxAmountPerPayment: String(max) }] });
+  // The v1 names get the same entry and the same --max cap.
+  core.setSpendControls({ allowedAssets: [NETWORK, ...CFG.legacyNetworks].map((network) => ({ network: network as `${string}:${string}`, asset: USDC, maxAmountPerPayment: String(max) })) });
   const http = new x402HTTPClient(core);
 
   let hookCalls = 0;
@@ -316,11 +350,15 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
   const hdr = r.headers.get("payment-response") ?? r.headers.get("x-payment-response");
   if (hdr) try { res.settle = decodePaymentResponseHeader(hdr); } catch {}
   res.status = r.status;
-  res.body = (await r.text().catch(() => "")).slice(0, 160).replace(/\s+/g, " ");
+  const got = await readCapped(r, MAX_RESPONSE_BYTES);
+  res.response = { ...got, contentType: r.headers.get("content-type") ?? undefined };
+  res.body = oneLine(got.bytes.subarray(0, 4096).toString("utf8").replace(/\s+/g, " "), 160);
   res.settleTx = res.settle?.transaction;
   if (!res.settle && r.status === 402) {
     const pr = r.headers.get("payment-required");
-    if (pr) try { res.sellerError = JSON.parse(Buffer.from(pr, "base64").toString()).error; } catch {}
+    if (pr) try { res.sellerError = oneLine(JSON.parse(Buffer.from(pr, "base64").toString()).error); } catch {}
+    // a v1 seller says why in its 402 body
+    else try { const b = JSON.parse(got.bytes.toString("utf8")); if (b?.x402Version === 1 && typeof b.error === "string") res.sellerError = oneLine(b.error); } catch {}
   }
   j.httpStatus = r.status;
   j.delivered = r.ok;

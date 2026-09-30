@@ -4,15 +4,18 @@ import "./cli-guard.mjs";
 //   2. The USDC contract answers name(), version(), decimals(); the EIP-712 domain separator recomputed from
 //      (name, version, chainId, token) equals DOMAIN_SEPARATOR(); all equal chains.ts.
 //   3. Native vs ERC-20 balance of owner and agent (Arc: native = ERC-20 * 1e12, one balance in two units).
-//   4. With --url: fetch the seller's 402, decode it, list every option with the verdict of buy's precheck, and name the chosen one.
+//   4. With --url: fetch the seller's 402 (x402 v2: the payment-required header; v1: the JSON body), list every option with the
+//      verdict of buy's precheck, and name the chosen one: price, token, payTo, network, scheme, x402 version. Its RESULT carries
+//      the price (`price`) and the recipient (`payTo`) for buy's --max and --pay-to.
 // npx tsx budget/evm/preflight.ts --chain <name> [--url <seller url>] [--max <usdc>] [--pay-to <address>]
 import { domainSeparator, parseAbi, formatUnits, type Address } from "viem";
-import { SYM, CFG, GAS, emit, USDC, NETWORK, usdc, gasFmt, publicClient, nativeBalance, usdcBalance, arg, toUsdc, publicEnv, usageError, cmd } from "./lib.ts";
+import { SYM, CFG, GAS, emit, oneLine, USDC, NETWORK, usdc, gasFmt, publicClient, nativeBalance, usdcBalance, arg, toUsdc, publicEnv, usageError, cmd } from "./lib.ts";
 import { checkAccept } from "./purchase.ts";
+import { EVM_CHAINS } from "./chains.mjs";
 import { isAddress } from "viem";
 
 let bad = 0, good = 0;
-const ok = (c: boolean, m: string) => { console.log(`${c ? "PASS" : "FAIL"} -- ${m}`); if (c) good++; else bad++; };
+const ok = (c: boolean, m: string) => { console.log(`${c ? "PASS" : "FAIL"} -- ${oneLine(m, 2000)}`); if (c) good++; else bad++; };
 const abi = parseAbi(["function name() view returns (string)", "function version() view returns (string)", "function decimals() view returns (uint8)", "function DOMAIN_SEPARATOR() view returns (bytes32)"]);
 const max = arg("max") ? toUsdc(arg("max")!) : undefined;
 const payTo = arg("pay-to");
@@ -41,31 +44,59 @@ for (const [who, addr] of [["owner", p.B4_OWNER_ADDRESS], ["agent", p.B4_AGENT_A
   if (GAS.isUsdc) ok(n / 10n ** 12n === e, `${who}: native balance ${n} / 1e12 (rounded down) = ERC-20 balance ${e} (one balance, two units; the native one also holds sub-micro dust of 18-decimal fees: ${n % 10n ** 12n} wei)`);
 }
 
+// v1 names the price maxAmountRequired, v2 amount
+const amountOf = (x: any): string => String(x.amount ?? x.maxAmountRequired ?? "");
+const priceOf = (x: any): string => (/^\d+$/.test(amountOf(x)) ? usdc(BigInt(amountOf(x))) : `"${amountOf(x)}" (not base units)`);
+// Our chain keys for the networks a seller offers (v2 eip155:<id>, v1 names), so a failed match can name the --chain to use.
+const chainKeysFor = (networks: string[]) => Object.entries(EVM_CHAINS).filter(([, c]: [string, any]) => networks.some((n) => n === `eip155:${c.chainId}` || c.legacy.includes(n))).map(([k]) => k);
+
+type Offer = { price: string; token: string; payTo: string; network: string; scheme: string; x402Version: number };
+let offer: Offer | null = null;
+let offered: string[] = [];
 if (url) {
-  const r = await fetch(url, { signal: AbortSignal.timeout(20_000) });
-  console.log(`GET ${url} -> HTTP ${r.status}`);
-  const h = r.headers.get("payment-required");
-  ok(r.status === 402 && !!h, "seller answers 402 with a payment-required header");
-  if (h) {
-    const pr = JSON.parse(Buffer.from(h, "base64").toString());
-    const all: any[] = pr.accepts ?? [];
-    console.log(`resource: ${pr.resource?.url ?? "?"}; ${all.length} option(s); networks: ${[...new Set(all.map((x) => x.network))].join(", ")}`);
-    const mine = all.filter((x) => x.network === NETWORK || CFG.legacyNetworks.includes(x.network));
-    console.log(`${mine.length} option(s) on ${NETWORK}; the rest are other networks and are ignored`);
+  let r: Response | null = null;
+  try { r = await fetch(url, { signal: AbortSignal.timeout(20_000) }); } catch (e: any) { ok(false, `GET ${url}: ${String(e?.message ?? e).split("\n")[0]}`); }
+  let pr: any = null;
+  if (r) {
+    console.log(`GET ${url} -> HTTP ${r.status}`);
+    const h = r.headers.get("payment-required");
+    if (h) {
+      try { pr = JSON.parse(Buffer.from(h, "base64").toString()); } catch {}
+    } else if (r.status === 402) {
+      // x402 v1: the requirements are the JSON body. Read at most 64 KB of it.
+      const text = (await r.text().catch(() => "")).slice(0, 65_536);
+      try { const b = JSON.parse(text); if (b?.x402Version === 1) pr = b; } catch {}
+    }
+    ok(r.status === 402 && !!pr && Array.isArray(pr.accepts), "seller answers 402 with x402 payment requirements (v2: payment-required header, v1: JSON body)");
+  }
+  if (pr && Array.isArray(pr.accepts)) {
+    const version = Number(pr.x402Version ?? (r?.headers.get("payment-required") ? 2 : 1));
+    const all: any[] = pr.accepts;
+    offered = [...new Set(all.map((x) => String(x.network)))];
+    console.log(oneLine(`x402 v${version}; resource: ${pr.resource?.url ?? pr.accepts[0]?.resource ?? "?"}; ${all.length} option(s); networks: ${offered.join(", ")}`, 2000));
+    // the same filter as buy: this chain's names, scheme exact
+    const mine = all.filter((x) => (x.network === NETWORK || CFG.legacyNetworks.includes(x.network)) && x.scheme === "exact");
+    console.log(`${mine.length} exact option(s) on ${CFG.label} (${[NETWORK, ...CFG.legacyNetworks].join(", ")}); the rest are other networks or schemes and are ignored`);
     let picked: any = null;
     for (const x of mine) {
       const why = checkAccept(x, { max: max ?? 10n ** 12n, payTo });
-      console.log(`  ${x.scheme} amount ${x.amount} asset ${x.asset} payTo ${x.payTo} timeout ${x.maxTimeoutSeconds}s extra ${JSON.stringify(x.extra)} -> ${why ? `SKIP: ${why}` : "USABLE"}`);
+      console.log("  " + oneLine(`${x.scheme} price ${priceOf(x)} ${SYM} asset ${x.asset} payTo ${x.payTo} timeout ${x.maxTimeoutSeconds}s extra ${JSON.stringify(x.extra)} -> ${why ? `SKIP: ${why}` : "USABLE"}`, 2000));
       if (!why && !picked) picked = x;
     }
     ok(!!picked, `a usable ${CFG.label} ${SYM} exact option exists`);
     if (picked) {
-      console.log(`chosen: ${usdc(BigInt(picked.amount))} ${SYM} to ${picked.payTo}, EIP-712 domain ${picked.extra.name}/${picked.extra.version} (from the 402, checked against the token), method ${picked.extra.assetTransferMethod ?? "eip3009 (default)"}`);
-      if (max !== undefined) ok(BigInt(picked.amount) <= max, `price ${usdc(BigInt(picked.amount))} <= --max ${usdc(max)}`);
+      offer = { price: usdc(BigInt(amountOf(picked))), token: picked.asset, payTo: picked.payTo, network: picked.network, scheme: picked.scheme, x402Version: version };
+      console.log(oneLine(`offer: ${offer.price} ${SYM} (token ${offer.token}) to ${offer.payTo}, network ${offer.network}, scheme ${offer.scheme}, x402 v${version}, EIP-712 domain ${picked.extra.name}/${picked.extra.version} (from the 402, checked against the token), method ${picked.extra.assetTransferMethod ?? "eip3009 (default)"}`, 2000));
+      if (max !== undefined) ok(BigInt(amountOf(picked)) <= max, `price ${offer.price} <= --max ${usdc(max)}`);
       if (payTo) ok(picked.payTo.toLowerCase() === payTo.toLowerCase(), `payTo equals --pay-to ${payTo}`);
     }
   }
 }
+const elsewhere = url && !offer ? chainKeysFor(offered).filter((k) => k !== CFG.key) : [];
 console.log(bad ? `\n${bad} check(s) FAILED` : "\nPREFLIGHT OK");
-process.exit(emit("preflight", bad ? 1 : 0, { state: bad ? "failed" : "ok", checks: { passed: good, failed: bad }, next: bad ? "fix the failed checks above" : "none" }));
+process.exit(emit("preflight", bad ? 1 : 0, {
+  state: bad ? "failed" : "ok", checks: { passed: good, failed: bad },
+  ...(url ? { url, price: offer?.price ?? null, payTo: offer?.payTo ?? null, offer, sellerChains: chainKeysFor(offered) } : {}),
+  next: bad ? (elsewhere.length ? `the seller offers ${elsewhere.join(", ")}, not ${CFG.key}: use --chain ${elsewhere[0]}` : "fix the failed checks above") : "none",
+}));
 void formatUnits;

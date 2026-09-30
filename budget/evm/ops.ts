@@ -144,7 +144,10 @@ export function exitCodeFor(state: OpState, delivered: boolean | null): number {
  * the settlement is on chain, null while it is undecided. `debit` is the owner's NET debit (pulled minus returned); amounts that
  * are not known are null, never "0". `ok` is true only when the exit code is 0.
  */
-export async function resultLine(j: Journal, command: "buy" | "reconcile", extra: { remaining?: string } = {}): Promise<string> {
+/** The seller's saved answer to a paid request (buy.ts): the file, its content type, its size, and whether it was cut. */
+export type ResponseInfo = { responseFile: string; responseType: string | null; responseBytes: number; responseTruncated: boolean };
+
+export async function resultLine(j: Journal, command: "buy" | "reconcile", extra: { remaining?: string } & Partial<ResponseInfo> = {}): Promise<string> {
   let rem = extra.remaining;
   if (rem === undefined) {
     try { rem = usdc(await allowanceOf(j.owner, j.agent)); } catch {}
@@ -168,6 +171,7 @@ export async function resultLine(j: Journal, command: "buy" | "reconcile", extra
     debit: pulledKnown ? usdc(pulled - returned) : null,
     pulled: pulledKnown ? (j.pulled ?? "0") : null,
     returned: j.returned ?? "0",
+    ...(extra.responseFile ? { responseFile: extra.responseFile, responseType: extra.responseType ?? null, responseBytes: extra.responseBytes, responseTruncated: extra.responseTruncated } : {}),
     next: j.next ?? "none",
   };
   if (j.agentFeeWei) line.agentFeeWei = j.agentFeeWei;

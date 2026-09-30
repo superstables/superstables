@@ -37,6 +37,11 @@ export function emit(command: string, exit: number, o: Record<string, unknown>):
   console.log(`RESULT ${JSON.stringify({ ok: exit === 0, command, rail: RAIL, chain: CFG.key, ...o })}`);
   return exit;
 }
+/**
+ * Seller text (its 402, its answer, its errors) on one log line: control characters, newlines included, become spaces. A seller
+ * must not be able to start a line of its own on stdout, where the dispatcher reads APPROVE and RESULT lines.
+ */
+export const oneLine = (s: unknown, max = 300): string => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim().slice(0, max);
 /** A command line for a next step, with this chain selected. */
 export const cmd = (script: string, rest = "") => `npx tsx budget/evm/${script}${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}${rest ? ` ${rest}` : ""}`;
 

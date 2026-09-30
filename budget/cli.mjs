@@ -46,6 +46,10 @@ const COMMANDS = {
     flags: { agent: "v" }, required: [],
     help: "superstables budget doctor --rail evm|tempo|solana [--chain C] [--agent LABEL]\n  Key files, public file, RPC and balances. Prints what to top up at which address. No transactions, no signatures.",
   },
+  preflight: {
+    flags: { url: "v" }, required: ["url"],
+    help: "superstables budget preflight --rail evm --url U [--chain C]\n  Read only, signs nothing. Reads the seller's 402 (x402 v2 or v1) and prints its offer on this chain: price, token, payTo,\n  network, scheme, x402 version. RESULT carries amount (the price) and payTo, for buy --max and --pay-to. It also checks the\n  chain's RPC and token. A seller on another chain fails; next names the --chain it offers.",
+  },
   grant: {
     flags: { amount: "v", expiry: "v", period: "v", sellers: "v", yes: "b", agent: "v", ...OWNER_FLAGS }, required: ["amount"],
     help: "superstables budget grant --rail R --amount A [--expiry ISO] [--period SECONDS] [--sellers a,b] [--agent LABEL] [--yes]\n  Owner command. Prints the terms and what the chain enforces.\n" + OWNER_HELP + "\n  tempo and solana: sends only with --yes (they sign with the owner key file for now).\n  Refuses constraints the rail cannot enforce (evm and solana: no --expiry, --period, --sellers).\n  Tempo: --expiry defaults to 24h from now. --agent LABEL picks the access key (a revoked key can never be granted again).",
@@ -81,6 +85,7 @@ Commands (each takes --help):
   superstables budget setup      --rail evm [--chain C]                                                    owner connects a wallet
   superstables budget fund-agent --rail evm [--amount GAS]                                                 owner
   superstables budget doctor     --rail R [--chain C]
+  superstables budget preflight  --rail evm --url U [--chain C]                                            read only
   superstables budget status     --rail R
   superstables budget grant      --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b]          owner
   superstables budget buy        --rail R --url U --max M [--pay-to ADDR] [--op ID]                         agent
@@ -112,7 +117,7 @@ const WORKER_ID = workerRecord && !workerRecord.final ? workerRecord.id : undefi
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 // A worker also stores it (and the exit code) in its approval record, for every later `wait`.
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "paid", "delivered", "amount", "remaining", "tx", "expiry", "revoked", "atRisk", "owner", "agent", "id", "action", "url", "expires", "terms", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "expiry", "revoked", "atRisk", "owner", "agent", "id", "action", "url", "expires", "terms", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   const out = { ok: code === 0 };
   for (const k of order) if (fields[k] !== undefined) out[k] = k === "reason" ? clean(fields[k]) : fields[k];
@@ -201,6 +206,7 @@ function parse(argv) {
   if (cmd === "buy" && f.rail === "evm") {
     for (const k of ["method", "body"]) if (f[k] !== undefined && !(k === "method" && f.method.toUpperCase() === "GET")) badInput(ctx, `evm buy is GET only (no --${k})`);
   }
+  if (cmd === "preflight" && f.rail !== "evm") badInput(ctx, "preflight is evm only for now");
   if (cmd === "recover" && f.rail !== "evm") badInput(ctx, "recover is EVM only (tempo and solana have no stranded funds: the agent never holds the budget)");
   if ((cmd === "setup" || cmd === "fund-agent") && f.rail !== "evm") badInput(ctx, `${cmd} is evm only for now: tempo uses npx tsx budget/tempo/setup.ts, solana node budget/solana/generate-keys.mjs and node budget/solana/fund.mjs`);
   if (cmd === "fund-agent" && f.amount !== undefined && !/^\d+(\.\d{1,18})?$/.test(f.amount)) badInput(ctx, "--amount must be a decimal amount of the chain's gas token");
@@ -254,6 +260,7 @@ function evmCommand(verb, f, extra = {}) {
     case "buy": return E("buy", ["--url", f.url, "--max", f.max, "--op", f.op, ...opt("pay-to", f["pay-to"])]); // GET only
     case "reconcile": return E("reconcile", ["--op", f.op]);
     case "read": return E("read", []);
+    case "preflight": return E("preflight", ["--url", f.url]);
     case "grant": return E("setBudget", ["--cap", f.amount, ...ownerOpts(f)]);
     case "revoke": return E("revoke", ownerOpts(f));
     case "recover": return E("recover", [...opt("op", f.op), ...(extra.plan ? ["--plan"] : ownerOpts(f))]);
@@ -268,8 +275,11 @@ const evmReadFromResult = (r) => ({ ok: true, remaining: r.allowance ?? null, ex
 // Rail logs are forwarded to stderr as they arrive. Returns { code, stdout } (stdout is kept to find RESULT).
 // An `APPROVE {...}` line from an evm owner script is passed on to this process's stdout at once: it carries the link the
 // owner opens, and the command then waits for the owner.
+// Only an owner command has an approval link. A buy, preflight or reconcile never forwards one, whatever its rail printed (a
+// seller's text in the rail's log must not become a link the agent shows the owner).
 let approvalUrl;
 function passApproval(line) {
+  if (!OWNER_COMMANDS.has(process.argv[2])) return;
   if (!/^APPROVE \{/.test(line)) return;
   let approve;
   try { approve = JSON.parse(line.slice(8)); } catch { return; }
@@ -359,6 +369,9 @@ const nextFor = (state, delivered, f, cmd) => {
   return "none";
 };
 
+// evm buy: the seller's answer, saved next to the journal (a path, its content type, its size in bytes, whether it was cut).
+const responseOf = (rail) => (typeof rail.responseFile === "string" ? { responseFile: rail.responseFile, responseType: rail.responseType ?? null, responseBytes: rail.responseBytes ?? null, responseTruncated: rail.responseTruncated === true } : {});
+
 // Turn the rail's RESULT (or its absence) into the CLI's normalized fields.
 function normalize(cmd, f, rail, code) {
   const base = { command: cmd, rail: f.rail, chain: f.chain, op: f.op };
@@ -378,7 +391,7 @@ function normalize(cmd, f, rail, code) {
   return {
     code: exitFor(cmd, state, delivered),
     // a refusal whose fix is the owner's recover (a refund or stranded funds in the agent key) keeps the rail's own next step
-    fields: { ...base, state, paid, delivered, amount, remaining: rail.remaining ?? null, tx, next: state === "refused_precheck" && /superstables budget recover/.test(rail.next ?? "") ? rail.next : nextFor(state, delivered, f, cmd), reason: rail.reason },
+    fields: { ...base, state, paid, delivered, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" && /superstables budget recover/.test(rail.next ?? "") ? rail.next : nextFor(state, delivered, f, cmd), reason: rail.reason },
   };
 }
 
@@ -387,6 +400,23 @@ async function doctor({ f, ctx }) {
   const { runDoctor } = await import("./doctor.mjs");
   const failed = await runDoctor(f);
   emit(failed ? 1 : 0, { ...ctx, state: failed ? "failed" : "ok", next: failed ? "fix what the output marks FAIL (top-up lines name the address), then rerun superstables budget doctor" : "none", reason: failed ? `${failed} doctor check${failed === 1 ? "" : "s"} failed` : undefined });
+}
+
+// Read only: the seller's offer on this chain, for buy --max and --pay-to. The rail script signs nothing and opens no key file.
+async function preflight({ f, ctx }) {
+  const r = await run(railCommand("preflight", f));
+  const rr = railResult(r.stdout);
+  if (!rr) return emit(r.code === 2 ? 2 : 1, { ...ctx, state: "failed", url: f.url, next: "read the output above", reason: `the preflight script exited ${r.code} without a RESULT line` });
+  const ok = r.code === 0 && rr.state === "ok" && !!rr.price;
+  const o = rr.offer ?? {};
+  const offer = ok ? { price: rr.price, token: o.token, payTo: rr.payTo, network: o.network, scheme: o.scheme, x402Version: o.x402Version } : undefined;
+  // --max stays the caller's own ceiling: the seller's price is shown, never filled in as --max
+  const buy = `superstables budget buy --rail evm --chain ${f.chain} --url '${f.url.replace(/'/g, "'\\''")}' --max <your ceiling> --pay-to ${rr.payTo} --op <new id>`;
+  emit(ok ? 0 : r.code === 2 ? 2 : 1, {
+    ...ctx, state: ok ? "ok" : "failed", amount: ok ? rr.price : null, payTo: ok ? rr.payTo : null, offer, url: f.url,
+    next: ok ? `the seller asks ${rr.price} ${EVM_CHAINS[f.chain].token.symbol}. Buy only if that is within what the owner accepts: ${buy}` : rr.next && rr.next !== "none" ? rr.next : "read the failed checks above",
+    reason: ok ? undefined : `${rr.checks?.failed ?? "some"} preflight check(s) failed`,
+  });
 }
 
 async function status({ f, ctx }) {
@@ -586,7 +616,7 @@ async function wait({ f }) {
 }
 
 // ---- main -------------------------------------------------------------------------------------------
-const HANDLERS = { setup, "fund-agent": fundAgent, doctor, status, buy, reconcile, grant, revoke, recover, wait };
+const HANDLERS = { setup, "fund-agent": fundAgent, doctor, preflight, status, buy, reconcile, grant, revoke, recover, wait };
 const parsed = parse(process.argv.slice(2));
 if (WORKER_ID) {
   // the worker's backstop: nothing it runs may outlive the link, the send grace and the chain reads
