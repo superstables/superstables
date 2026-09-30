@@ -48,7 +48,7 @@ export function emit(command: string, exit: number, o: Record<string, unknown>):
 export const agentFlag = (label: string) => (label ? ` --agent ${label}` : '')
 export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   chain: TEMPO_OWNER_CHAIN,
-  walletWords: 'MetaMask or another EVM wallet',
+  walletWords: 'any EVM browser wallet that can add a custom network',
   statusCommand: 'superstables budget status --rail tempo',
   emit,
 })

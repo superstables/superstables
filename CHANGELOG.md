@@ -15,9 +15,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   plain ERC-20 approve on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy and SKALE
   Base Sepolia; `tempo`, an access key on Tempo Moderato with a cap, expiry and optional period and seller list
   enforced on chain; and `solana`, an SPL token delegate on devnet. On every rail the owner
-  approves grant, revoke and their other steps in their own wallet (MetaMask on `evm` and
-  `tempo`, Phantom on `solana`), on a page on `127.0.0.1`, and the default flow stores only
-  the agent key. EVM and Solana budgets have no automatic expiry or seller restriction. Run by an agent, an owner command returns with the approval link, and
+  approves grant, revoke and their other steps in their own browser wallet, on a page on
+  `127.0.0.1`: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) on `evm`, any EVM
+  browser wallet that can add a custom network on `tempo`, and any Solana wallet (Phantom,
+  Solflare, Backpack, ...) on `solana`. With more than one wallet installed, the page asks which
+  one to use. The default flow stores only the agent key. EVM and Solana budgets have no automatic expiry or seller restriction. Run by an agent, an owner command returns with the approval link, and
   `superstables budget wait --id` reports the outcome. Before it signs, `buy`
   checks the price against `--max`, the token and, with `--pay-to`, the recipient. Every command
   ends with one `RESULT` line and a fixed exit code, and `reconcile` reads the chain after an

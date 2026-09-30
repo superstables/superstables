@@ -39,7 +39,7 @@ export function emit(command: string, exit: number, o: Record<string, unknown>):
 
 export const { askConnect, askSolanaTransaction, endUnapproved } = ownerPageFor({
   chain: SOLANA_OWNER_CHAIN,
-  walletWords: "Phantom or another Solana wallet",
+  walletWords: "any Solana wallet, such as Phantom, Solflare or Backpack",
   statusCommand: "superstables budget status --rail solana",
   emit,
 });

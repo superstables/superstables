@@ -264,9 +264,10 @@ npx superstables budget buy    --rail evm --url <seller url> --max 0.002
 npx superstables budget revoke --rail evm                        # the kill switch, approved in the wallet
 ```
 
-It runs from a checkout of this repository, after `npm ci` and `npm run build`. Owner actions use a local page on `127.0.0.1`:
-MetaMask or another EVM wallet on `evm` and `tempo`, and a Wallet Standard wallet such as
-Phantom on `solana`. Setup records your address; grants, revokes and funding require wallet
+It runs from a checkout of this repository, after `npm ci` and `npm run build`. Owner actions use a local page on `127.0.0.1` and a
+browser extension wallet on the same computer: any EVM browser wallet (MetaMask, Rabby, Coinbase
+Wallet, ...) on `evm`, any EVM browser wallet that can add a custom network on `tempo`, and any
+Solana wallet (Phantom, Solflare, Backpack, ...) on `solana`. Setup records your address; grants, revokes and funding require wallet
 approval. The default flow stores only the agent key in `~/.superstables/keys/budget/`. Run by an agent, an owner
 command returns at once with the link and an approval id, and the agent polls `superstables budget wait --id <id>`
 until the command has a final result. `waiting_owner` is not approval or settlement. Every command ends with one

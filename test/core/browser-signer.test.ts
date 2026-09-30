@@ -849,20 +849,20 @@ describe("the owner approval page with a Solana wallet", () => {
     expect(await handle.settled).toMatchObject({ status: "expired", sending: true });
   });
 
-  it("names Phantom and devnet on the page, and links the explorer to the right cluster", async () => {
+  it("asks for a Solana wallet on devnet, and links the explorer to the right cluster", async () => {
     const { port } = fakePort();
     const server = await ownerServer();
     const handle = server.request(solanaAction(port));
     const html = await (await fetch(handle.url)).text();
-    expect(html).toContain("Phantom (or another Solana wallet) is needed here");
+    expect(html).toContain("A Solana wallet is needed in this browser (Phantom, Solflare, Backpack, ...)");
     expect(html).toContain("Testnet Mode");
     expect(html).toContain("Solana devnet");
     expect(html).toContain('"walletChain":"solana:devnet"');
     expect(html).toContain('"explorerQuery":"?cluster=devnet"');
     expect(html).not.toMatch(/<script[^>]+src=/i);
-    // an EVM page keeps naming MetaMask and has no devnet hint
+    // an EVM page asks for an EVM wallet and has no devnet hint
     const evm = ownerApprovalPage({ id: "0".repeat(32), kind: "evm-transaction", chain: ownerAction().chain, chainIdHex: "0x14a34", expiresAt: Date.now() + 1000 }, ownerAction().terms);
-    expect(evm).toContain("MetaMask (or another browser wallet) is needed here");
+    expect(evm).toContain("An EVM wallet is needed in this browser (MetaMask, Rabby, Coinbase Wallet, ...)");
     expect(evm).not.toContain("Testnet Mode");
     // the page talks the Wallet Standard: it announces itself and listens for wallets
     expect(OWNER_PAGE_SCRIPT).toContain("wallet-standard:app-ready");

@@ -3,8 +3,8 @@
 // and solana/. It validates input, spawns the rail script, and prints one normalized `RESULT {...}` line last on
 // stdout. Logs go to stderr. Contract: CLI.md. Testnet only.
 // Owner commands on every rail (setup, fund-agent, grant, revoke, and on evm the owner's part of recover) never sign here: the
-// rail opens a page on 127.0.0.1 where the owner approves in their own wallet (MetaMask or another on evm and tempo, Phantom or
-// another Wallet Standard wallet on solana), and this dispatcher passes the link on as one stdout line,
+// rail opens a page on 127.0.0.1 where the owner approves in their own wallet (any EVM browser wallet on evm, one that can add a
+// custom network on tempo, any Wallet Standard wallet on solana), and this dispatcher passes the link on as one stdout line,
 // `APPROVE {"action","url","expires","terms"}`, as soon as it exists. The owner key file is a test and automation option only
 // (--owner-key-file PATH --yes).
 // Detached owner approvals (approvals.mjs): when stdout is not a terminal (an agent's shell tool, which shows output only
@@ -111,8 +111,8 @@ Commands (each takes --help; superstables budget --version names this build):
   superstables budget recover    --rail evm [--op ID]                                                      owner and agent
   superstables budget wait       --id ID [--timeout S]                                                     after an owner command
 
-Owner commands open an approval page on 127.0.0.1: the owner approves in their own wallet (MetaMask or another on evm and
-tempo, Phantom or another Solana wallet on solana). The link comes as a line
+Owner commands open an approval page on 127.0.0.1: the owner approves in their own browser wallet (any EVM browser
+wallet on evm, one that can add a custom network on tempo, any Solana wallet on solana). The link comes as a line
   APPROVE {"action","url","expires","terms"}
 as soon as it exists (and on stderr). Not in a terminal (an agent), or with --detach, the command then returns at once:
   RESULT {"state":"waiting_owner","id","url","expires","terms","next"}

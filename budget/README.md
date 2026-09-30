@@ -12,7 +12,7 @@ Three ideas hold it together:
 
 ## How it works
 
-The **owner** grants a budget from their own wallet: MetaMask (or another browser wallet) on `evm` and `tempo`, Phantom (or another Solana wallet) on `solana`. The **agent** buys within it using a separate key. The default flow stores only the agent key in the CLI home. Owner transactions require the owner's wallet signature. Keep owner key files out of the agent's environment.
+The **owner** grants a budget from their own wallet: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) on `evm`, any EVM browser wallet that can add a custom network on `tempo`, and any Solana wallet (Phantom, Solflare, Backpack, ...) on `solana`. The **agent** buys within it using a separate key. The default flow stores only the agent key in the CLI home. Owner transactions require the owner's wallet signature. Keep owner key files out of the agent's environment.
 
 Below, command names are shorthand for `npx superstables budget <command> --rail evm`. Add `--chain arc-testnet` for Arc Testnet; the default is Base Sepolia.
 
@@ -30,7 +30,7 @@ The steps use the `evm` rail. On `tempo` (access key) and `solana` (SPL delegate
 Owner actions use the same approval page on every rail. Setup asks for a free message signature; grants, revokes and funding ask for transactions with network fees. The command builds the transaction and the terms, starts a page on `127.0.0.1` on a random port, and prints the link. The link holds a one-time random id and expires after 10 minutes (`--timeout SECONDS` changes it). In a terminal, the command opens the link in the default browser unless you pass `--no-open`. In detached mode, the agent shows you the link. The owner:
 
 1. Opens the link in the browser that has their wallet. The page shows the terms, written by the command from its own plan. The plan uses the command arguments, including the amount and recipients. Check them against what you intended to authorize.
-2. Presses **Connect wallet**. For transactions on `evm` and `tempo`, the page asks the wallet to switch to the selected testnet or add it. Setup only records your address.
+2. Presses **Connect wallet**. If more than one wallet is installed, the page asks which one to use, and then uses only that one. For transactions on `evm` and `tempo`, the page asks the wallet to switch to the selected testnet or add it. Setup only records your address.
 3. Presses **Review in wallet** and checks the amount, recipient, network and fee before confirming in the wallet. Or presses **Reject**. For setup, connecting asks for a message signature instead.
 
 A transaction approval is followed by a chain check. In detached mode, the first `RESULT` only says the request is pending; poll `wait` for the final result. Exit 3 can also mean a submitted transaction did not match the requested terms. Read `reason` and `tx`. If the outcome is unknown, check wallet activity and `status` before retrying. An expired link or closed page does not cancel a transaction in your wallet.
@@ -39,7 +39,7 @@ What differs per rail:
 
 - `evm`: the wallet sends the transaction. The command reads the sender, the contract, the exact data, the receipt, the `Approval` event and the allowance.
 - `tempo`: the wallet sends a plain transaction to Tempo's keychain contract (`0xaAAA...0000`). The page adds Tempo Testnet (Moderato) to the wallet if needed. You pay a network fee in your configured fee token, or pathUSD by default. Check the wallet estimate. The wallet may show "Interacting with 0xaAAA..." without decoding the budget. Review the page terms and reject if you cannot verify the request. The command reads the key back: its limit, expiry, period and seller list.
-- `solana`: the page finds Phantom (or another Solana wallet) through the Wallet Standard. The page cannot switch Phantom's network: turn on Testnet Mode and pick Solana Devnet in Phantom's settings first. The command builds the transaction when you press **Review in wallet**, and the wallet only signs it. The command sends it only if it is exactly the transaction it built. If the wallet changed it, nothing is sent and the page says so. If Phantom cannot simulate the transaction, its effects have not been checked by the wallet. Reject if you cannot verify them. The command reads the delegate and its amount back from the chain.
+- `solana`: the page finds Solana wallets through the Wallet Standard. The page cannot switch the wallet's network: switch it to devnet first (for example, in Phantom: Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet). The command builds the transaction when you press **Review in wallet**, and the wallet only signs it. The command sends it only if it is exactly the transaction it built. If the wallet changed it, nothing is sent and the page says so. If the wallet cannot simulate the transaction, its effects have not been checked by the wallet. Reject if you cannot verify them. The command reads the delegate and its amount back from the chain.
 
 The link works on the computer running the command. Use a browser with your wallet on that computer. Remote access is not set up by this tool. Treat the link as private access to the request.
 
@@ -71,7 +71,7 @@ PayAI's Echo sellers refund each payment to the payer, which is the agent key. T
 
 ## Quickstart
 
-You need Node 20 or newer and a browser wallet: MetaMask (or another) for `evm` and `tempo`, Phantom (or another Solana wallet) for `solana`.
+You need Node 20 or newer and a browser wallet: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) for `evm`, any EVM browser wallet that can add a custom network for `tempo`, and any Solana wallet (Phantom, Solflare, Backpack, ...) for `solana`. The approval page runs on `127.0.0.1`, so the wallet must be a browser extension on the computer that runs the command. Phone wallets (WalletConnect) are not supported yet.
 
 Install. Pick one; both run the same commands on the same keys and state.
 
@@ -162,7 +162,7 @@ A revoked or expired Tempo key can never be granted again. For the next budget m
 
 ### solana (devnet)
 
-1. Set up. In Phantom, turn on Testnet Mode and pick Solana Devnet (Settings, Developer Settings). Then run `setup`: it creates the agent key file and opens the approval page. Connect Phantom there and sign the short message. It sends nothing and costs nothing.
+1. Set up. Switch your wallet to Solana devnet (for example, in Phantom: Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet). Then run `setup`: it creates the agent key file and opens the approval page. Connect your wallet there and sign the short message. It sends nothing and costs nothing.
 
    ```sh
    npx superstables budget setup --rail solana
@@ -231,13 +231,13 @@ Always pass `--max`, and `--pay-to` when you know the seller's address. It comes
   - `solana`: the SPL `Revoke`. Once it takes effect, this delegate can no longer spend from the selected USDC account.
 - Revocation does not reverse confirmed payments. For a pending transaction, ordering on chain matters. An EVM payment can still settle from funds already pulled; revoke stops new pulls.
 
-Development runs have exercised these flows with wallet harnesses and chain readbacks. They do not verify the real MetaMask or Phantom approval experience. Those wallet checks remain necessary.
+Development runs have exercised these flows with wallet harnesses and chain readbacks. They do not verify the approval experience in real wallets, for example MetaMask or Phantom. Those wallet checks remain necessary.
 
 ## Not supported yet
 
 - Faucets are manual, except on `tempo`, where `setup` tops up the owner from the Moderato faucet. `doctor` reports missing setup and funds.
-- Tempo Wallet (a passkey account at wallet.tempo.xyz) as the owner on `tempo`: not yet. Use MetaMask or another EIP-1193 wallet.
-- Phantom's network: the page cannot switch it. Turn on Testnet Mode and pick Solana Devnet in Phantom yourself.
+- Tempo Wallet (a passkey account at wallet.tempo.xyz) as the owner on `tempo`: not yet. Use an EVM browser wallet that can add a custom network.
+- A Solana wallet's network: the page cannot switch it. Switch the wallet to devnet yourself (for example, in Phantom: turn on Testnet Mode and pick Solana Devnet).
 - A Solana wallet that adds instructions of its own (Phantom may add Lighthouse checks; not seen yet): the command sends only the exact transaction it built, so it refuses that signature and sends nothing.
 - The approval page runs on the computer that runs the command, on `127.0.0.1`. Use the owner's wallet browser on that computer. Remote access requires separate configuration.
 - Supply the seller URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.

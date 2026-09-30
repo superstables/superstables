@@ -81,7 +81,7 @@ function openBrowser(url: string) {
 /** What a rail tells the shared page helpers. */
 export interface OwnerRail {
   chain: OwnerChain;
-  /** Named in the stderr sentence: "MetaMask or another" or "Phantom or another Solana wallet". */
+  /** Named in the stderr sentence, e.g. "any Solana wallet, such as Phantom, Solflare or Backpack". */
   walletWords: string;
   /** The read-only command that shows whether something landed, for an unknown outcome. */
   statusCommand: string;

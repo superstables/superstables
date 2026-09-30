@@ -626,16 +626,16 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms): str
   const solana = facts.chain.family === "solana";
   const primary = facts.kind === "connect" ? "" : `<button id="send" class="primary" data-act="send" hidden>Review in wallet</button>`;
   const noWallet = solana
-    ? `Phantom (or another Solana wallet) is needed here. Install one at
+    ? `A Solana wallet is needed in this browser (Phantom, Solflare, Backpack, ...). For example, install Phantom from
     <a href="${PHANTOM_DOWNLOAD_URL}" rel="noreferrer noopener">${PHANTOM_DOWNLOAD_URL}</a>, then reload this page.
     You can still reject without one.`
-    : `MetaMask (or another browser wallet) is needed here. Install one at
+    : `An EVM wallet is needed in this browser (MetaMask, Rabby, Coinbase Wallet, ...). For example, install MetaMask from
     <a href="${WALLET_DOWNLOAD_URL}" rel="noreferrer noopener">${WALLET_DOWNLOAD_URL}</a>, then reload this page.
     You can still reject without one.`;
-  // Phantom cannot be switched to devnet by a page: the owner does it once in the wallet.
+  // A Solana wallet cannot be switched to devnet by a page: the owner does it once in the wallet.
   const networkHint =
     solana && facts.kind !== "connect" && facts.chain.testnet
-      ? `<div id="network-hint" class="note">Before you approve: in Phantom, open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet. If Phantom cannot simulate the transaction, its effects have not been checked by the wallet. Reject if you cannot verify what you are signing.</div>`
+      ? `<div id="network-hint" class="note">Before you approve: switch your wallet to Solana devnet. For example, in Phantom: open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet. If the wallet cannot simulate the transaction, its effects have not been checked by the wallet. Reject if you cannot verify what you are signing.</div>`
       : "";
   // Who this page acts for. Setup proves control of an address, not who the person is, so the
   // recorded owner is shown on every page: a person who is not that owner should stop here.

@@ -21,7 +21,7 @@ export const REVOKE_HINT = `superstables budget revoke --rail evm${chainFlag}. Y
 
 export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   chain: OWNER_CHAIN,
-  walletWords: "MetaMask or another EVM wallet",
+  walletWords: "any EVM browser wallet, such as MetaMask, Rabby or Coinbase Wallet",
   statusCommand: `superstables budget status --rail evm${chainFlag}`,
   emit,
 });

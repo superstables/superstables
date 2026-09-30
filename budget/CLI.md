@@ -34,9 +34,11 @@ Every command: `--help` exits 0 and bad input exits 2 before any secret is read.
 
 | Rail | Wallet | What the wallet does | What the command reads back |
 | --- | --- | --- | --- |
-| `evm` | EIP-1193, for example MetaMask | Sends `{to, data, value}` | Sender, target, exact data, receipt, the `Approval` event, the allowance |
-| `tempo` | EIP-1193, for example MetaMask | Is asked to send a call to the AccountKeychain precompile (`authorizeKey` or `revokeKey`) with the owner paying the fee in their configured fee token, or pathUSD by default. The page adds Tempo Testnet (Moderato) with 18 decimals. | Sender, target, exact data, fee payer, receipt; then the key: type, expiry, limit, period, seller list, not an admin key; or revoked |
-| `solana` | Wallet Standard, for example Phantom | Only signs. The command builds the transaction when the owner presses Review in wallet, checks that the signed message is byte for byte its own and signed by the owner, then sends it. | No error, signer the owner; then the token account: owner, mint, delegate and delegated amount (or no delegate); or the agent's SOL |
+| `evm` | Any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...), found through EIP-6963 or `window.ethereum` | Sends `{to, data, value}` | Sender, target, exact data, receipt, the `Approval` event, the allowance |
+| `tempo` | Any EVM browser wallet that can add a custom network, found the same way | Is asked to send a call to the AccountKeychain precompile (`authorizeKey` or `revokeKey`) with the owner paying the fee in their configured fee token, or pathUSD by default. The page adds Tempo Testnet (Moderato) with 18 decimals. | Sender, target, exact data, fee payer, receipt; then the key: type, expiry, limit, period, seller list, not an admin key; or revoked |
+| `solana` | Any Solana wallet (Phantom, Solflare, Backpack, ...), found through the Wallet Standard | Only signs. The command builds the transaction when the owner presses Review in wallet, checks that the signed message is byte for byte its own and signed by the owner, then sends it. | No error, signer the owner; then the token account: owner, mint, delegate and delegated amount (or no delegate); or the agent's SOL |
+
+With more than one wallet installed, the page lists them and the owner chooses one. The page then uses only that wallet.
 
 - As soon as the link exists, stdout gets one line `APPROVE {"action","url","expires","terms"}`. `terms` holds the page's plain words: `title`, `amount`, `unit`, `summary`, `enforced`, `notEnforced`. The same link goes to stderr. The final `RESULT` is still the last line, and carries `url`.
 - `--timeout SECONDS` (10 to 3600, default 600): how long the link stays open. `--no-open`: do not open it in the default browser.
