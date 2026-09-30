@@ -563,8 +563,19 @@ describe("the owner approval page", () => {
     await postJson(`${inWallet.url}/sending`, { address: OWNER.address });
     await postJson(`${inWallet.url}/reject`, { by: "wallet" });
     const outcome = await inWallet.settled;
-    expect(outcome).toMatchObject({ status: "rejected", sending: true });
+    // the wallet said no (code 4001): it sent nothing, even though it had been asked
+    expect(outcome).toMatchObject({ status: "rejected", sending: false });
     expect(outcome.status === "rejected" && outcome.reason).toContain("in the wallet");
+  });
+
+  it("says a link that expired while the wallet was sending may have sent something", async () => {
+    const server = new OwnerApprovalServer({ port: 0, sendingGraceMs: 100 });
+    await server.start();
+    ownerServers.push(server);
+    const handle = server.request(ownerAction({ timeoutMs: 300 }));
+    await postJson(`${handle.url}/account`, { address: OWNER.address });
+    await postJson(`${handle.url}/sending`, { address: OWNER.address });
+    expect(await handle.settled).toMatchObject({ status: "expired", sending: true });
   });
 
   it("expires a link nobody answers, with nothing sent", async () => {

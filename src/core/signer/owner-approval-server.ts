@@ -35,7 +35,7 @@ export type { OwnerChain, OwnerTerms, OwnerTermRow } from "./owner-approval-page
 const MAX_BODY_BYTES = 16 * 1024;
 const SWEEP_MS = 500;
 /** Once the wallet was asked to send, the link stays open this much longer for the hash to come back. */
-const SENDING_GRACE_MS = 120_000;
+const DEFAULT_SENDING_GRACE_MS = 120_000;
 
 export type OwnerActionStatus =
   | "pending" // waiting for the owner
@@ -93,6 +93,8 @@ export interface OwnerApprovalServerOptions {
   port?: number;
   /** Append one JSON line per state change here. Never a signature. */
   auditPath?: string;
+  /** How long a link stays open after the wallet was asked to send, for the hash to come back. */
+  sendingGraceMs?: number;
 }
 
 /** The text a connect asks the wallet to sign. */
@@ -212,7 +214,7 @@ export class OwnerApprovalServer {
     for (const record of this.records.values()) {
       if (record.status === "pending" || record.status === "ready") {
         if (record.expiresAt <= now) this.end(record, "expired", `nobody approved this within ${Math.round(record.timeoutMs / 1000)} s. Nothing was sent.`);
-      } else if (record.status === "sending" && record.expiresAt + SENDING_GRACE_MS <= now) {
+      } else if (record.status === "sending" && record.expiresAt + (this.options.sendingGraceMs ?? DEFAULT_SENDING_GRACE_MS) <= now) {
         this.end(record, "expired", "the wallet was asked to send, but no transaction came back to this page");
       }
     }
@@ -335,6 +337,8 @@ export class OwnerApprovalServer {
         return this.json(res, 409, { error: `this is already ${record.status}`, status: record.status });
       }
       const reason = body.by === "wallet" ? "the owner rejected it in the wallet. Nothing was sent." : "the owner rejected it on the page. Nothing was sent.";
+      // A wallet's rejection (EIP-1193 code 4001) means it sent nothing, even after it was asked to.
+      if (body.by === "wallet") record.sending = false;
       this.end(record, "rejected", reason);
       return this.json(res, 200, { status: record.status, reason: record.reason });
     }

@@ -151,9 +151,9 @@ export const capWords = (cap: bigint) => `${usdc(cap)} ${SYM}`;
 export function revokeTerms(owner: Address, agent: Address, allowance: bigint, held: bigint, title = "end your agent's budget") {
   return {
     title,
-    amount: "0",
+    amount: usdc(allowance),
     unit: SYM,
-    summary: `This sets your agent's allowance to 0. From the block it lands in, the agent can pull nothing more from your wallet. It has ${usdc(allowance)} ${SYM} left now.`,
+    summary: `This ends your agent's budget: the ${usdc(allowance)} ${SYM} it has left goes to 0. From the block it lands in, the agent can pull nothing more from your wallet.`,
     rows: [
       { label: "Agent", value: agent, mono: true },
       { label: "From your wallet", value: owner, mono: true },

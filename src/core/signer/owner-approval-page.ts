@@ -100,7 +100,8 @@ export const OWNER_PAGE_SCRIPT = `
       a.href = link;
       a.rel = "noreferrer noopener";
       a.target = "_blank";
-      a.textContent = " View it on the explorer.";
+      a.textContent = "View it on the explorer.";
+      box.appendChild(document.createTextNode(" "));
       box.appendChild(a);
     }
   }
@@ -134,11 +135,12 @@ export const OWNER_PAGE_SCRIPT = `
     show("reject", false);
     show("expiry-row", false);
     show("expiry-val", false);
+    show("fineprint", false);
     document.body.setAttribute("data-state", state.status);
     if (state.status === "confirmed") say(state.message || "Done. You can go back to the agent.", "good", state.hash ? txLink(state.hash) : null);
     else if (state.status === "failed") say(state.message || "The command could not confirm this on chain.", "bad", state.hash ? txLink(state.hash) : null);
-    else if (state.status === "expired") say(state.reason || "This link expired. Nothing was sent. Ask the agent to run the command again.", "bad");
-    else say(state.reason || "You rejected this. Nothing was sent.", "bad");
+    else if (state.status === "expired") say("This link expired. Nothing was sent. Ask the agent to run the command again if you still want this.", "bad");
+    else say(state.mine || "This was rejected. Nothing was sent.", "bad");
   }
 
   function post(path, body) {
@@ -277,8 +279,8 @@ export const OWNER_PAGE_SCRIPT = `
       })
       .catch(function (err) {
         if (err && err.code === 4001) {
-          post("/reject", { by: "wallet" }).then(function (answer) {
-            ended({ status: "rejected", reason: (answer.data && answer.data.reason) || "You rejected this in your wallet. Nothing was sent." });
+          post("/reject", { by: "wallet" }).then(function () {
+            ended({ status: "rejected", mine: "You rejected this in your wallet. Nothing was sent. The agent can do nothing more with this link." });
           });
           return;
         }
@@ -290,7 +292,7 @@ export const OWNER_PAGE_SCRIPT = `
   function reject() {
     setBusy(true);
     post("/reject", { by: "page" })
-      .then(function (answer) { ended({ status: "rejected", reason: (answer.data && answer.data.reason) || "You rejected this. Nothing was sent." }); })
+      .then(function () { ended({ status: "rejected", mine: "You rejected this. Nothing was sent. The agent can do nothing more with this link." }); })
       .catch(function () { setBusy(false); say("The command is not answering. Is it still running?", "bad"); });
   }
 
@@ -393,7 +395,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms): str
       ${primary}
       <button id="reject" data-act="reject">Reject</button>
     </div>
-    <div class="fineprint">${terms.notes.map((note) => `<p>${esc(note)}</p>`).join("")}</div>
+    <div id="fineprint" class="fineprint">${terms.notes.map((note) => `<p>${esc(note)}</p>`).join("")}</div>
   </div>
 
 <script id="owner-facts" type="application/json">${inlineJson(facts)}</script>
