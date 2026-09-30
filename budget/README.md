@@ -117,7 +117,7 @@ In each block, run `doctor` first: it lists what is missing and which address to
    - Arc Testnet: gas is USDC, so there is no second token. Your wallet needs at least 0.2 USDC after funding the agent, and the agent at least 0.01 USDC. Get 0.4 USDC from [faucet.circle.com](https://faucet.circle.com) (pick Arc Testnet), then `npx superstables budget fund-agent --rail evm --chain arc-testnet` sends 0.1. Network fees vary; check the wallet estimate.
    - Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia: `npx superstables budget doctor --rail evm --chain <key>` prints the minimums and where to get each token. Then `npx superstables budget fund-agent --rail evm --chain <key>`.
 
-   You can also send the agent gas from any wallet: `doctor` prints its address and the amount.
+   Gas prices move. `doctor` also asks the agent for twice what one purchase plus the cleanup of a failed one (pull, cancel, return) costs at the current fee, and prints that cost. `buy` checks the same thing before it signs. You can also send the agent gas from any wallet: `doctor` prints its address and the amount.
 3. Then:
 
    ```sh

@@ -1791,6 +1791,51 @@ describe("the agent's gas, checked before it signs anything", () => {
   });
 });
 
+describe("doctor on an evm chain", () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  /** doctor for polygon-amoy against the fake node; returns what it printed. */
+  async function doctorAmoy(f: FakeAmoy): Promise<string> {
+    const keys = join(budgetHome, "keys", "budget");
+    const pub = join(budgetHome, "budget", "public");
+    for (const dir of [keys, pub]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const agentFile = join(keys, "evm-agent.env");
+    if (!existsSync(agentFile)) {
+      const key = generatePrivateKey();
+      writeFileSync(agentFile, `B4_AGENT_KEY=${key}\nB4_AGENT_ADDRESS=${privateKeyToAccount(key).address}\n`, { mode: 0o600 });
+    }
+    const agent = /B4_AGENT_ADDRESS=(\S+)/.exec(readFileSync(agentFile, "utf8"))![1];
+    writeFileSync(join(pub, "evm-polygon-amoy.env"), `B4_OWNER_ADDRESS=${f.owner}\nB4_AGENT_ADDRESS=${agent}\n`);
+    vi.stubGlobal("fetch", amoyNode(f));
+    let out = "";
+    vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => { out += String(chunk); return true; }) as typeof process.stderr.write);
+    const { runDoctor } = await import(join(REPO, "budget", "doctor.mjs"));
+    await runDoctor({ rail: "evm", chain: "polygon-amoy" });
+    vi.restoreAllMocks();
+    return out;
+  }
+
+  it("names the chain in the new-owner hint", async () => {
+    const out = await doctorAmoy({ balance: POL, tips: [30n * GWEI], owner: OWNER.address, agent: AGENT, calls: [] });
+    expect(out).toContain(`OWNER (recorded): ${OWNER.address}`);
+    expect(out).toContain("superstables budget setup --rail evm --chain polygon-amoy --new-owner replaces it");
+  });
+
+  it("asks the agent for twice what one purchase and a failure's cleanup cost at the current fee, and says what that is", async () => {
+    // 0.02 POL was "ok" before the Amoy run that could not afford its pull
+    const spike = await doctorAmoy({ balance: POL / 50n, tips: [348n * GWEI], owner: OWNER.address, agent: AGENT, calls: [] });
+    const agentLine = spike.split("\n").find((l) => l.includes("agent POL (gas) balance"))!;
+    expect(agentLine).toMatch(/^\s+FAIL/);
+    expect(agentLine).toContain("need at least 0.2; one purchase plus the cleanup a failed one needs (pull, cancel, return: 280000 gas) costs about 0.098 POL now at 348 gwei");
+    expect(spike).toContain("superstables budget fund-agent --rail evm --chain polygon-amoy --amount 0.18");
+    // at the usual 30 gwei the chain's own minimum (0.05 POL) is the larger
+    const usual = await doctorAmoy({ balance: POL / 50n, tips: [30n * GWEI], owner: OWNER.address, agent: AGENT, calls: [] });
+    expect(usual.split("\n").find((l) => l.includes("agent POL (gas) balance"))).toContain("need at least 0.05; one purchase plus the cleanup a failed one needs (pull, cancel, return: 280000 gas) costs about 0.0085 POL now at 30 gwei");
+    const funded = await doctorAmoy({ balance: POL / 10n, tips: [30n * GWEI], owner: OWNER.address, agent: AGENT, calls: [] });
+    expect(funded.split("\n").find((l) => l.includes("agent POL (gas) balance"))).toMatch(/^\s+ok/);
+  });
+});
+
 /** Poll a condition on loopback. Everything here is local, so this is milliseconds. */
 async function waitFor(ready: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
