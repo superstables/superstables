@@ -23,8 +23,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   interrupted purchase without paying again. Mainnet is refused. It runs from a checkout of this
   repository.
 - **`superstables budget preflight --rail evm --url <seller>`** reads the seller's price and
-  address from its 402, for x402 v2 and v1 sellers, and signs nothing. `buy` on `evm` pays v1
-  sellers too, under the same `--max` checks.
+  address from its 402 and signs nothing.
 - **Purchases on `evm` keep what was bought.** `buy` saves the seller's answer next to the
   purchase journal, at most 1 MB and readable only by the user, and names the file in `RESULT`
   as `responseFile`, with its content type, its size and whether it was cut.
