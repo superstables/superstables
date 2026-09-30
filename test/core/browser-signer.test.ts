@@ -13,10 +13,12 @@
 //   a rejection must leave nothing signed, and a request nobody answers must expire.
 
 import { spawn, spawnSync } from "node:child_process";
-import { generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
+import { generateKeyPairSync, randomUUID, sign as ed25519Sign } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
+import { transformSync } from "esbuild";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { usdcRequirement } from "../../src/core/chain.js";
@@ -688,6 +690,8 @@ describe("the owner approval page", () => {
     });
     expect(checked.stderr).toBe("");
     expect(checked.code).toBe(0);
+    // Nothing newer than ES2017: lowering it to ES2017 changes nothing.
+    expect(transformSync(OWNER_PAGE_SCRIPT, { loader: "js", target: "es2017" }).code).toBe(transformSync(OWNER_PAGE_SCRIPT, { loader: "js", target: "esnext" }).code);
     expect(OWNER_PAGE_SCRIPT).toContain("eth_sendTransaction");
     expect(OWNER_PAGE_SCRIPT).toContain("wallet_addEthereumChain");
   });
@@ -873,6 +877,250 @@ describe("the owner approval page with a Solana wallet", () => {
     expect(() => server.request(solanaAction(undefined as unknown as SolanaTransactionPort, { solana: undefined }))).toThrow();
     expect(() => server.request(solanaAction(fakePort().port, { chain: ownerAction().chain }))).toThrow();
     expect(() => server.request(ownerAction({ chain: SOLANA_CHAIN }))).toThrow();
+  });
+});
+
+// ── Choosing a wallet on the owner page ──────────────────────────────────────────────────
+//
+// With several wallets installed, the page asks which one to use, shows each wallet's name as
+// text and its icon only as an image, and then talks to that wallet alone: connect, network and
+// send. The page's own script runs here in node:vm against a small stand-in for the DOM, and the
+// wallets are fakes that record what they were asked.
+
+class FakeNode {
+  hidden = false;
+  className = "";
+  disabled = false;
+  readonly attrs = new Map<string, string>();
+  readonly children: FakeNode[] = [];
+  private text: string;
+  constructor(readonly tag: string, text = "") {
+    this.text = text;
+  }
+  get textContent(): string {
+    return this.text + this.children.map((c) => c.textContent).join("");
+  }
+  set textContent(value: string) {
+    this.text = String(value);
+    this.children.length = 0;
+  }
+  set src(value: string) {
+    this.attrs.set("src", value);
+  }
+  setAttribute(name: string, value: string) {
+    this.attrs.set(name, String(value));
+  }
+  getAttribute(name: string) {
+    return this.attrs.get(name) ?? null;
+  }
+  appendChild(child: FakeNode) {
+    this.children.push(child);
+    return child;
+  }
+  closest(selector: string) {
+    return selector === "button[data-act]" && this.tag === "button" && this.attrs.has("data-act") ? this : null;
+  }
+}
+
+type PageWindow = EventTarget & { ethereum?: unknown };
+
+/** The owner page's script, loaded in a stand-in browser with the given wallets installed first. */
+function ownerPageInBrowser(facts: Record<string, unknown>, install: (window: PageWindow) => void) {
+  const nodes = new Map<string, FakeNode>();
+  const node = (id: string) => {
+    let n = nodes.get(id);
+    if (!n) nodes.set(id, (n = new FakeNode("div")));
+    return n;
+  };
+  node("owner-facts").textContent = JSON.stringify(facts);
+  for (const act of ["connect", "send", "reject"]) {
+    const button = new FakeNode("button");
+    button.setAttribute("data-act", act);
+    nodes.set(act, button);
+  }
+  for (const id of ["wallet-list", "no-wallet", "send", "say"]) node(id).hidden = true;
+  let onClick: (event: { target: FakeNode }) => void = () => {};
+  const timers: (() => void)[] = [];
+  const posted: string[] = [];
+  const document = {
+    body: new FakeNode("body"),
+    getElementById: node,
+    createElement: (tag: string) => new FakeNode(tag),
+    createTextNode: (text: string) => new FakeNode("#text", text),
+    querySelectorAll: () => [node("connect"), node("send"), node("reject"), ...node("wallet-list").children],
+    addEventListener: (type: string, fn: typeof onClick) => {
+      if (type === "click") onClick = fn;
+    },
+  };
+  const fetch = async (url: string, init?: { method?: string }) => {
+    if (init?.method === "POST") posted.push(url.split("/").pop()!);
+    return { ok: true, status: 200, json: async () => (url.endsWith("/state") ? { status: "pending" } : { transaction: "dHg=" }) };
+  };
+  const window = new EventTarget() as PageWindow;
+  install(window);
+  runInNewContext(OWNER_PAGE_SCRIPT, { window, document, fetch, setTimeout: (fn: () => void) => timers.push(fn), setInterval: () => 0, CustomEvent, Event, TextEncoder, btoa, atob });
+  const settle = () => new Promise((done) => setTimeout(done, 20));
+  return {
+    window,
+    node,
+    posted,
+    click: async (button: FakeNode) => {
+      onClick({ target: button });
+      await settle();
+    },
+    /** What the page does once slower wallets had their moment. */
+    later: async () => {
+      for (const fn of timers.splice(0)) fn();
+      await settle();
+    },
+  };
+}
+
+const BASE_SEPOLIA_HEX = "0x14a34";
+const SVG_ICON = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
+
+/** An EIP-1193 wallet that records every method it is asked for. */
+function fakeProvider() {
+  const calls: string[] = [];
+  const provider = {
+    calls,
+    on() {},
+    async request({ method }: { method: string }) {
+      calls.push(method);
+      if (method === "eth_requestAccounts") return [OWNER.address];
+      if (method === "eth_chainId") return BASE_SEPOLIA_HEX;
+      if (method === "eth_sendTransaction") return HASH;
+      return null;
+    },
+  };
+  return provider;
+}
+
+/** An EIP-6963 wallet: it answers every requestProvider with its announcement, as extensions do. */
+function eip6963Wallet(name: string, icon: string) {
+  const provider = fakeProvider();
+  const info = { uuid: randomUUID(), name, icon, rdns: "test.wallet" };
+  const announce = (window: PageWindow) => window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail: Object.freeze({ info, provider }) }));
+  return {
+    provider,
+    announce,
+    install(window: PageWindow) {
+      window.addEventListener("eip6963:requestProvider", () => announce(window));
+      announce(window);
+    },
+  };
+}
+
+function evmFacts() {
+  const action = ownerAction();
+  return { id: "0".repeat(32), kind: "evm-transaction", chain: action.chain, chainIdHex: BASE_SEPOLIA_HEX, account: OWNER.address, transaction: action.transaction, expiresAt: Date.now() + 60_000 };
+}
+
+describe("choosing a wallet on the owner page", () => {
+  it("asks which EVM wallet to use when several announce, shows names as text and only image icons, and then uses that wallet alone", async () => {
+    const hostile = eip6963Wallet('<img src=x onerror="alert(1)">Rabby', SVG_ICON);
+    const other = eip6963Wallet("Other Wallet", "javascript:alert(1)");
+    const injected = fakeProvider();
+    const page = ownerPageInBrowser(evmFacts(), (window) => {
+      window.ethereum = injected;
+      hostile.install(window);
+      other.install(window);
+    });
+    expect(page.node("connect").hidden).toBe(false);
+    expect(page.node("connect").textContent).toBe("Connect wallet");
+
+    await page.click(page.node("connect"));
+    const list = page.node("wallet-list");
+    expect(list.hidden).toBe(false);
+    expect(list.children).toHaveLength(2);
+    const [first, second] = list.children;
+    // the icon is an <img> with its src and nothing else; the name is a text node, as given
+    expect(first.children.map((c) => c.tag)).toEqual(["img", "#text"]);
+    expect([...first.children[0].attrs]).toEqual([["src", SVG_ICON]]);
+    expect(first.children[1].textContent).toBe('<img src=x onerror="alert(1)">Rabby');
+    // an icon that is not an image data URI is not shown at all
+    expect(second.children.map((c) => c.tag)).toEqual(["#text"]);
+    expect(second.textContent).toBe("Other Wallet");
+    expect(hostile.provider.calls).toEqual([]);
+
+    await page.click(second);
+    expect(list.hidden).toBe(true);
+    expect(other.provider.calls).toEqual(["eth_requestAccounts", "wallet_switchEthereumChain", "eth_chainId"]);
+    expect(page.posted).toEqual(["account"]);
+    expect(page.node("send").hidden).toBe(false);
+
+    await page.click(page.node("send"));
+    expect(other.provider.calls.at(-1)).toBe("eth_sendTransaction");
+    expect(page.posted).toEqual(["account", "sending", "sent"]);
+    expect(hostile.provider.calls).toEqual([]);
+    expect(injected.calls).toEqual([]);
+  });
+
+  it("uses one announced wallet directly, falls back to window.ethereum, and says to install one when there is none", async () => {
+    const solo = eip6963Wallet("Solo", SVG_ICON);
+    const injected = fakeProvider();
+    const one = ownerPageInBrowser(evmFacts(), (window) => {
+      window.ethereum = injected;
+      solo.install(window);
+    });
+    expect(one.node("connect").textContent).toBe("Connect Solo");
+    await one.click(one.node("connect"));
+    expect(one.node("wallet-list").hidden).toBe(true);
+    expect(solo.provider.calls[0]).toBe("eth_requestAccounts");
+    expect(injected.calls).toEqual([]);
+
+    const legacy = fakeProvider();
+    const fallback = ownerPageInBrowser(evmFacts(), (window) => {
+      window.ethereum = legacy;
+    });
+    expect(fallback.node("connect").textContent).toBe("Connect wallet");
+    await fallback.click(fallback.node("connect"));
+    expect(legacy.calls[0]).toBe("eth_requestAccounts");
+
+    const none = ownerPageInBrowser(evmFacts(), () => {});
+    expect(none.node("connect").hidden).toBe(true);
+    await none.later();
+    expect(none.node("no-wallet").hidden).toBe(false);
+    expect(none.node("connect").hidden).toBe(true);
+    // a wallet that loads after the page still gets its turn
+    const late = eip6963Wallet("Late", SVG_ICON);
+    late.announce(none.window);
+    expect(none.node("no-wallet").hidden).toBe(true);
+    expect(none.node("connect").textContent).toBe("Connect Late");
+  });
+
+  it("asks which Solana wallet to use when several register, and connects only that one", async () => {
+    const made = (name: string) => {
+      const calls: string[] = [];
+      const wallet = {
+        name,
+        icon: SVG_ICON,
+        version: "1.0.0",
+        chains: ["solana:devnet"],
+        accounts: [],
+        features: {
+          "standard:connect": { connect: async () => (calls.push("connect"), { accounts: [{ address: SOL_OWNER.address }] }) },
+          "solana:signTransaction": { signTransaction: async () => (calls.push("signTransaction"), []) },
+        },
+      };
+      return { wallet, calls };
+    };
+    const a = made("Phantom");
+    const b = made("Solflare");
+    const facts = { id: "0".repeat(32), kind: "solana-transaction", chain: SOLANA_CHAIN, chainIdHex: "", account: SOL_OWNER.address, expiresAt: Date.now() + 60_000 };
+    const page = ownerPageInBrowser(facts, (window) => {
+      window.addEventListener("wallet-standard:app-ready", (event) => (event as CustomEvent).detail.register(a.wallet, b.wallet));
+    });
+    expect(page.node("connect").textContent).toBe("Connect wallet");
+    await page.click(page.node("connect"));
+    const list = page.node("wallet-list");
+    expect(list.hidden).toBe(false);
+    expect(list.children.map((button) => button.textContent)).toEqual(["Phantom", "Solflare"]);
+    expect([...list.children[0].children[0].attrs]).toEqual([["src", SVG_ICON]]);
+    await page.click(list.children[1]);
+    expect(b.calls).toEqual(["connect"]);
+    expect(a.calls).toEqual([]);
+    expect(page.posted).toEqual(["account"]);
   });
 });
 

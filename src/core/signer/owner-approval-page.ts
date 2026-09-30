@@ -3,9 +3,10 @@
 // command built. It is the sibling of the payment approval page (approval-page.ts): same look,
 // same rules, served by the owner approval server on 127.0.0.1.
 //
-// Two wallet families. evm (and Tempo): window.ethereum (MetaMask or any EIP-1193 wallet), which
-// sends the transaction itself. solana: a Wallet Standard wallet (Phantom and others), which only
-// signs; the command checks the signed bytes and sends them.
+// Two wallet families. evm (and Tempo): an EIP-1193 wallet found through EIP-6963, or
+// window.ethereum when none announces itself, which sends the transaction itself. solana: a
+// Wallet Standard wallet, which only signs; the command checks the signed bytes and sends them.
+// With several wallets installed the owner chooses one, and the page uses only that one.
 //
 //  1. The terms are rendered into the HTML by the server, escaped, from the command's own plan.
 //     Nothing an agent typed reaches this page.
@@ -88,6 +89,9 @@ const OWNER_STYLE = `
   .fineprint p { margin: 0 0 6px; }
   .owner-box { font-size: 14px; }
   .owner-box .mono { display: block; margin: 4px 0; font-size: 15px; font-weight: 600; word-break: break-all; }
+  [hidden] { display: none !important; }
+  #wallet-list button { display: inline-flex; align-items: center; gap: 8px; }
+  #wallet-list img { width: 20px; height: 20px; border-radius: 4px; }
 `;
 
 /**
@@ -99,9 +103,14 @@ export const OWNER_PAGE_SCRIPT = `
   var facts = JSON.parse(document.getElementById("owner-facts").textContent);
   var base = "/owner/" + encodeURIComponent(facts.id);
   var solana = facts.chain.family === "solana";
-  var provider = solana ? null : window.ethereum;
+  // Wallets found on this page: { name, icon, provider } (evm, EIP-6963) or { name, icon, wallet } (solana, Wallet Standard).
+  var choices = [];
+  // The one the owner chose. Once it has shared an account it is used for everything on this page.
+  var chosen = null;
+  var kept = false;
+  var provider = null;
+  var watched = [];
   var account = null;
-  var wallets = [];
   var wallet = null;
   var walletAccount = null;
   var busy = false;
@@ -247,6 +256,7 @@ export const OWNER_PAGE_SCRIPT = `
       .then(function (accounts) {
         if (!accounts || accounts.length === 0) throw new Error("no account was shared");
         account = accounts[0];
+        kept = true;
         el("account").textContent = account;
         show("account-row", true);
         show("account", true);
@@ -335,16 +345,57 @@ export const OWNER_PAGE_SCRIPT = `
     return facts.kind === "connect" ? !!f["solana:signMessage"] : !!f["solana:signTransaction"];
   }
 
+  // ── choosing a wallet: the same list for both families ──────────────────────────────────
+
+  function label(c) {
+    var name = String((c && c.name) || "").replace(/\\s+/g, " ").trim().slice(0, 40);
+    return name || "Unnamed wallet";
+  }
+
+  // An icon comes from the wallet itself: only an image data URI is shown, and only as an image.
+  function iconOf(c) {
+    var icon = c && c.icon;
+    return typeof icon === "string" && icon.slice(0, 11).toLowerCase() === "data:image/" ? icon : null;
+  }
+
+  function fallback() { return !solana && window.ethereum && typeof window.ethereum.request === "function"; }
+
   function showWallets() {
-    show("no-wallet", wallets.length === 0);
-    show("connect", wallets.length > 0 && !account && !done);
-    el("connect").textContent = wallets.length === 1 ? "Connect " + wallets[0].name : "Connect wallet";
+    var any = choices.length > 0 || !!fallback();
+    show("no-wallet", !any);
+    show("connect", any && !account && !done);
+    el("connect").textContent = choices.length === 1 ? "Connect " + label(choices[0]) : "Connect wallet";
+  }
+
+  function renderChoices() {
+    var list = el("wallet-list");
+    list.textContent = "";
+    for (var i = 0; i < choices.length; i += 1) {
+      var b = document.createElement("button");
+      b.setAttribute("data-act", "pick");
+      b.setAttribute("data-wallet", String(i));
+      var icon = iconOf(choices[i]);
+      if (icon) {
+        var img = document.createElement("img");
+        img.src = icon;
+        b.appendChild(img);
+      }
+      b.appendChild(document.createTextNode(label(choices[i])));
+      list.appendChild(b);
+    }
+  }
+
+  function addChoice(c) {
+    choices.push(c);
+    if (account || done || busy) return;
+    showWallets();
+    if (!el("wallet-list").hidden) renderChoices();
   }
 
   function addWallet(w) {
-    if (!usable(w) || wallets.indexOf(w) >= 0) return;
-    wallets.push(w);
-    if (!account) showWallets();
+    if (!usable(w)) return;
+    for (var i = 0; i < choices.length; i += 1) if (choices[i].wallet === w) return;
+    addChoice({ name: w.name, icon: w.icon, wallet: w });
   }
 
   // Wallet Standard discovery: wallets that loaded first answer app-ready, later ones announce themselves.
@@ -361,18 +412,52 @@ export const OWNER_PAGE_SCRIPT = `
     try { window.dispatchEvent(new CustomEvent("wallet-standard:app-ready", { detail: api })); } catch (e) { /* no wallets */ }
   }
 
+  // EIP-6963 discovery: every installed EVM wallet announces itself, not only the one holding window.ethereum.
+  function discoverEvm() {
+    window.addEventListener("eip6963:announceProvider", function (event) {
+      var d = event && event.detail;
+      if (!d || !d.info || typeof d.info.name !== "string" || !d.provider || typeof d.provider.request !== "function") return;
+      for (var i = 0; i < choices.length; i += 1) {
+        if (choices[i].provider === d.provider || (d.info.uuid && choices[i].uuid === d.info.uuid)) return;
+      }
+      addChoice({ name: d.info.name, icon: d.info.icon, uuid: d.info.uuid, provider: d.provider });
+    });
+    try { window.dispatchEvent(new Event("eip6963:requestProvider")); } catch (e) { /* no wallets */ }
+  }
+
+  function watch(p) {
+    if (!p.on || watched.indexOf(p) >= 0) return;
+    watched.push(p);
+    p.on("accountsChanged", function (accounts) {
+      if (p !== provider || done || sentHash || !accounts || accounts.length === 0) return;
+      if (account && String(accounts[0]).toLowerCase() === account.toLowerCase()) return;
+      account = null;
+      show("send", false);
+      show("connect", true);
+      say("You switched accounts. Connect again.");
+    });
+  }
+
+  function use(c) {
+    if (!c) return;
+    chosen = c;
+    show("wallet-list", false);
+    if (solana) return connectSolana(c.wallet);
+    provider = c.provider;
+    watch(provider);
+    connect();
+  }
+
   function pickWallet() {
-    if (wallets.length === 1) return connectSolana(wallets[0]);
-    var list = el("wallet-list");
-    list.textContent = "";
-    for (var i = 0; i < wallets.length; i += 1) {
-      var b = document.createElement("button");
-      b.setAttribute("data-act", "pick");
-      b.setAttribute("data-wallet", String(i));
-      b.textContent = wallets[i].name;
-      list.appendChild(b);
+    if (kept && chosen) return use(chosen);
+    if (choices.length === 1) return use(choices[0]);
+    if (choices.length === 0) {
+      if (fallback()) return use({ name: "", provider: window.ethereum });
+      return showWallets();
     }
+    renderChoices();
     show("wallet-list", true);
+    say("More than one wallet is installed. Choose the one to use.");
   }
 
   function connectSolana(w) {
@@ -386,6 +471,7 @@ export const OWNER_PAGE_SCRIPT = `
         if (!accounts.length) throw new Error("no account was shared");
         walletAccount = accounts[0];
         account = walletAccount.address;
+        kept = true;
         el("account").textContent = account;
         show("account-row", true);
         show("account", true);
@@ -475,32 +561,18 @@ export const OWNER_PAGE_SCRIPT = `
     var button = event.target && event.target.closest ? event.target.closest("button[data-act]") : null;
     if (!button || button.disabled || busy) return;
     var act = button.getAttribute("data-act");
-    if (act === "connect") { if (solana) pickWallet(); else connect(); }
-    else if (act === "pick") connectSolana(wallets[Number(button.getAttribute("data-wallet"))]);
+    if (act === "connect") pickWallet();
+    else if (act === "pick") use(choices[Number(button.getAttribute("data-wallet"))]);
     else if (act === "send") { if (solana) sendSolana(); else send(); }
     else if (act === "reject") reject();
   });
 
-  if (solana) {
-    show("connect", false);
-    discover();
-    // wallets injected before this script have answered app-ready by now; give slower ones a moment
-    setTimeout(function () { if (!account && !done) showWallets(); }, 1200);
-  } else if (!provider) {
-    show("no-wallet", true);
-    show("connect", false);
-  }
-
-  if (provider && provider.on) {
-    provider.on("accountsChanged", function (accounts) {
-      if (done || sentHash || !accounts || accounts.length === 0) return;
-      if (account && accounts[0].toLowerCase() === account.toLowerCase()) return;
-      account = null;
-      show("send", false);
-      show("connect", true);
-      say("You switched accounts. Connect again.");
-    });
-  }
+  show("connect", false);
+  if (solana) discover();
+  else discoverEvm();
+  if (choices.length || fallback()) showWallets();
+  // wallets injected before this script have answered by now; give slower ones a moment
+  setTimeout(function () { if (!account && !done && !busy) showWallets(); }, 1200);
 
   document.body.setAttribute("data-state", "connect");
   refresh();
