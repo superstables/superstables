@@ -1,9 +1,13 @@
 // The owner's side of the evm rail: every owner action goes through the owner's own browser wallet, on the shared owner page
 // (../owner-page.ts). This file binds that page to the evm chain and holds the evm reads: readSent, findApproval, the terms.
+// A chain set up with --hosted (APPROVALS=hosted and SITE in its public file) asks through that site instead (../hosted.ts):
+// the agent key signs each request, and the site must act for the owner recorded here.
 import { encodeFunctionData, parseEventLogs, type Address, type Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { DEFAULT_SITE } from "../site.mjs";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
-import { CFG, GAS, SYM, USDC, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil } from "./lib.ts";
+import { CFG, GAS, SYM, USDC, USDC_DECIMALS, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentEnv, need } from "./lib.ts";
 
 export { closeOwnerPage };
 export const OWNER_CHAIN: OwnerChain = {
@@ -19,11 +23,38 @@ export const chainFlag = CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`
 /** How the owner revokes, in words the page and the logs share. */
 export const REVOKE_HINT = `superstables budget revoke --rail evm${chainFlag}. You approve that in your wallet too.`;
 
+/** undefined: read the public file. setup decides for itself (--hosted), before the file says anything. */
+let chosenSite: string | null | undefined;
+/** setup: hosted on `site`, or null for the page on this computer, whatever the public file says. */
+export function useApprovalSite(site: string | null) {
+  chosenSite = site;
+}
+/** The site that hosts this chain's owner approvals, or null for the page on this computer. */
+export function approvalSite(): string | null {
+  if (chosenSite !== undefined) return chosenSite;
+  const p = publicEnv();
+  return p.APPROVALS === "hosted" ? p.SITE || DEFAULT_SITE : null;
+}
+
 export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   chain: OWNER_CHAIN,
   walletWords: "any EVM browser wallet, such as MetaMask, Rabby or Coinbase Wallet",
   statusCommand: `superstables budget status --rail evm${chainFlag}`,
   emit,
+  hosted: () => {
+    const site = approvalSite();
+    if (!site) return undefined;
+    // the agent key signs each request to the site; it must be the agent this chain's public file names
+    const agentKey = need(agentEnv(), "B4_AGENT_KEY", AGENT_ENV) as Hex;
+    const agent = privateKeyToAccount(agentKey).address;
+    const recorded = publicEnv().B4_AGENT_ADDRESS;
+    if (recorded && recorded.toLowerCase() !== agent.toLowerCase()) {
+      const reason = `the agent key in ${AGENT_ENV} is ${agent}, not the agent ${recorded} this chain was set up with`;
+      console.log(`REFUSED: ${reason}. Nothing was requested.`);
+      process.exit(emit("owner", 3, { state: "refused_precheck", reason, next: "restore the agent key file, or set this chain up again" }));
+    }
+    return { site, rail: "evm" as const, chain: CFG.key, agentKey };
+  },
 });
 
 export type Sent = { hash: Hex; status: "success" | "reverted"; blockNumber: bigint; logs: any[]; problems: string[] };
@@ -154,10 +185,26 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
   return sent.hash;
 }
 
+/**
+ * How the owner sends the agent `value` of the gas token. A plain transfer, except where the gas token is the budget token
+ * (Arc) and the approval is hosted: there the site takes the token's own transfer(agent, amount), so the command sends that.
+ * It moves the same balance: Arc's native balance is the ERC-20 balance in 18 decimals.
+ */
+export function fundingTx(agent: Address, value: bigint, hosted: boolean): { to: Address; data?: Hex; value?: bigint; words: string } {
+  if (!(hosted && GAS.isUsdc)) return { to: agent, value, words: "" };
+  const scale = 10n ** BigInt(GAS.decimals - USDC_DECIMALS);
+  if (value % scale !== 0n) throw new Error(`on ${CFG.label} a hosted fund-agent sends ${SYM} with at most ${USDC_DECIMALS} decimals`);
+  const atomic = value / scale;
+  return { to: USDC, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [agent, atomic] }), words: `${SYM}.transfer(${agent}, ${atomic})` };
+}
+
 /** Owner sends the agent `value` of the gas token through the wallet page. Returns the verified hash, or exits with a RESULT. */
 export async function fundInWallet(command: string, owner: Address, agent: Address, value: bigint, amt: string, agentHas: bigint): Promise<Hex> {
   const startBlock = await publicClient.getBlockNumber();
-  const { handle, outcome } = await askTransaction(command === "recover" ? "recover-gas" : "fund-agent", owner, { to: agent, value }, {
+  const action = command === "recover" ? "recover-gas" : "fund-agent";
+  // recover's owner steps stay on this computer, so only fund-agent can be hosted
+  const t = fundingTx(agent, value, action === "fund-agent" && approvalSite() !== null);
+  const { handle, outcome } = await askTransaction(action, owner, { to: t.to, data: t.data, value: t.value }, {
     title: "Send funds for network fees",
     amount: amt,
     unit: GAS.symbol,
@@ -168,7 +215,7 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
       { label: "To your agent", value: agent, mono: true },
       { label: "From your wallet", value: owner, mono: true },
       { label: "Agent has now", value: `${gasFmt(agentHas)} ${GAS.symbol}` },
-      { label: "Transaction", value: `a plain transfer of ${amt} ${GAS.symbol}` },
+      { label: "Transaction", value: t.words || `a plain transfer of ${amt} ${GAS.symbol}`, mono: !!t.words },
     ],
     enforced: [],
     notEnforced: [],
@@ -180,7 +227,7 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved(command, outcome);
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`);
-  const sent = await readSent(outcome.hash as Hex, { from: owner, to: agent, value, afterBlock: startBlock });
+  const sent = await readSent(outcome.hash as Hex, { from: owner, to: t.to, data: t.data, value: t.value ?? 0n, afterBlock: startBlock });
   if (!sent) {
     handle.finish({ ok: false, message: "The transaction did not show up on chain. Check your wallet's activity.", hash: outcome.hash });
     await closeOwnerPage();

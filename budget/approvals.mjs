@@ -8,8 +8,13 @@
 //   waitFor                  `superstables budget wait`: the current state, within a timeout. It never signs or sends.
 //   findPending, claim       one owner approval at a time on a rail and chain.
 //
+// Hosted approvals (evm, `setup --hosted`): the request lives on superstables.com. The rail script stores the site's request
+// id and the agent's access token for it in the record (recordHosted); `wait` reads the request's state from the site, and
+// `--replace` asks the site to cancel it. The token is removed from the record once the approval is final.
+//
 // Files, under $SUPERSTABLES_HOME/budget/approvals/ (paths.mjs), no key material in any of them:
-//   <id>.json               the record (mode 600): command, rail, chain, pid, link, terms, and the final RESULT once known
+//   <id>.json               the record (mode 600): command, rail, chain, pid, link, terms, and the final RESULT once known;
+//                           for a hosted approval also the site, its request id and, until final, the access token
 //   <id>.log                the worker's stdout and stderr: the plan, the page, the chain reads
 //   active-<rail>-<chain>   the lock: {id, pid, createdAt} of the approval (or blocking command) that holds that chain,
 //                           created in one exclusive step (a temp file hard-linked to this name), never half written
@@ -27,6 +32,7 @@ import { randomBytes } from "node:crypto";
 import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
+import { cancelSiteRequest, readSiteRequest } from "./site.mjs";
 
 /** A lock younger than this is never taken over, whatever its processes look like (startup: the record is being written). */
 export const STARTUP_GRACE_MS = 30_000;
@@ -35,6 +41,8 @@ const BREAK_STALE_MS = 10_000;
 
 /** Set in the worker's environment: the id of the approval it runs. */
 export const WORKER_ENV = "SUPERSTABLES_BUDGET_APPROVAL_ID";
+/** Set in an owner command's rail script environment: the id of the approval record it may add a hosted request to. */
+export const HOLDER_ENV = "SUPERSTABLES_BUDGET_HOLDER";
 /** How long the owner page keeps a link open after the wallet was asked to send (owner-approval-server.ts). */
 const SENDING_GRACE_S = 120;
 /** Reading the chain after the wallet sent: readSent waits up to 180 s, then the allowance reads. */
@@ -247,6 +255,8 @@ export function adoptWorker(id) {
 export function recordLink(id, approve) {
   const record = readApproval(id);
   if (!record) return null;
+  // a later local link (recover on a hosted chain) is not the hosted request any more
+  const hosted = record.hosted && approve.matchCode ? record.hosted : undefined;
   return writeApproval({
     ...record,
     state: "waiting_owner",
@@ -254,13 +264,26 @@ export function recordLink(id, approve) {
     url: approve.url,
     expires: approve.expires,
     terms: approve.terms,
+    matchCode: typeof approve.matchCode === "string" ? approve.matchCode : undefined,
+    hosted,
     links: (record.links ?? 0) + 1,
   });
 }
 
-/** The command ended: store its RESULT and exit code for every later `wait`, and free the chain. */
+/**
+ * A hosted request exists for this approval (the rail script, before it prints the link): the site, the request id, the
+ * match code and the agent's access token. Mode 600, like every record; the token never goes to a log.
+ */
+export function recordHosted(id, hosted) {
+  if (!isApprovalId(id)) return null;
+  return update(id, { hosted: { site: hosted.site, requestId: hosted.requestId, kind: hosted.kind, matchCode: hosted.matchCode, token: hosted.token } });
+}
+
+/** The command ended: store its RESULT and exit code for every later `wait`, and free the chain. The access token goes. */
 export function recordFinal(id, code, result) {
-  const record = update(id, { state: "final", endedAt: new Date().toISOString(), final: { code, result } });
+  const before = readApproval(id);
+  const hosted = before?.hosted ? { ...before.hosted, token: undefined } : undefined;
+  const record = update(id, { state: "final", endedAt: new Date().toISOString(), final: { code, result }, ...(hosted ? { hosted } : {}) });
   if (record) release(record.rail, record.chain, id);
   return record;
 }
@@ -346,6 +369,16 @@ export function forget(id) {
   }
 }
 
+/** The approval's page state for words: the site's request state when hosted, else the loopback page's own view. */
+export async function pageStateOf(record) {
+  const h = record?.hosted;
+  if (h?.token) {
+    const r = await readSiteRequest({ site: h.site, id: h.requestId, token: h.token, wait: 0 });
+    return r.ok ? { status: `hosted:${r.view.state}`, walletAsked: r.view.wallet_asked === true || typeof r.view.tx_hash === "string" } : { status: "hosted:unreachable" };
+  }
+  return pageState(record?.url);
+}
+
 /** The owner page's own view (loopback), or null. Only for words; nothing is decided from it except --replace. */
 export async function pageState(url) {
   if (!url) return null;
@@ -365,14 +398,22 @@ export function pageWords(page, rail) {
     case "sending": return rail === "solana" ? "the owner signed in the wallet; the command is sending it" : "a wallet transaction was requested; submission is not confirmed yet";
     case "sent": return "a transaction id is available; the command is checking it on chain";
     case "connected": return "the owner connected and signed; the command is finishing";
+    case "hosted:awaiting_owner": return page.walletAsked ? "the owner's wallet was asked to send; no transaction is reported yet" : "waiting for the owner to open the link on superstables.com, signed in with their wallet, and pick the match code";
+    case "hosted:sending": return "the owner's wallet was asked to send; no transaction is reported yet";
+    case "hosted:linked": return "the owner linked this agent; the command is finishing";
+    case "hosted:sent": case "hosted:confirmed": case "hosted:failed": return "a transaction hash was reported; the command is checking it on chain";
+    case "hosted:unreachable": return "waiting for the owner (superstables.com did not answer just now)";
     case undefined: case null: return "waiting for the owner";
     default: return "the owner page has ended; the command is finishing";
   }
 }
 
+/** The page id in a link: the loopback page's 32 hex digits, or a hosted request id (bl_..., ba_...). */
+const pageIdOf = (url) => /\/owner\/([0-9a-f]{32})/.exec(url ?? "")?.[1] ?? /\/approve\/budget\/(b[la]_[A-Za-z0-9_-]+)/.exec(url ?? "")?.[1];
+
 /** The last state the owner page logged for the page id in `url` (owner-approvals.jsonl), and whether the wallet was ever asked. */
 function lastPageStatus(url) {
-  const pageId = /\/owner\/([0-9a-f]{32})/.exec(url ?? "")?.[1];
+  const pageId = pageIdOf(url);
   if (!pageId || !existsSync(ownerApprovalsLog())) return { status: null, sending: false };
   let status = null;
   let sending = false;
@@ -388,11 +429,19 @@ function lastPageStatus(url) {
   return { status, sending };
 }
 
-/** Every process is gone without a RESULT (killed, crashed, machine restarted): say what can be known, from the chain next. */
-function abandoned(record) {
+/**
+ * Every process is gone without a RESULT (killed, crashed, machine restarted): say what can be known, from the chain next.
+ * A hosted request outlives the command on the site, so it counts as sent unless the site confirms it cancelled it
+ * (`hostedCancelled`) or it was a link, which moves no funds.
+ */
+function abandoned(record, hostedCancelled = false) {
   const page = lastPageStatus(record.url);
   const base = { command: record.command, rail: record.rail, chain: record.chain };
   const status = `superstables budget status --rail ${record.rail}${record.chain ? ` --chain ${record.chain}` : ""}`;
+  const hostedOpen = Boolean(record.hosted && record.hosted.kind !== "link" && !hostedCancelled);
+  if (hostedOpen && !page.sending) {
+    return { code: 5, result: { ok: false, ...base, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason: "the background approval stopped while its request may still be open on superstables.com; the owner may still approve it there" } };
+  }
   if (page.sending) {
     return { code: 5, result: { ok: false, ...base, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason: `the background approval stopped after the wallet was asked to send (last page state: ${page.status})` } };
   }
@@ -425,13 +474,16 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
       record = readApproval(id);
       if (record.final) return { final: true, code: record.final.code, result: record.final.result, record };
       if (processesAlive(record)) continue;
-      const final = abandoned(record);
+      // a hosted request is still on the site: ask it to cancel first (refused once the wallet was asked)
+      const h = record.hosted?.token ? record.hosted : null;
+      const cancelled = h ? (await cancelSiteRequest({ site: h.site, id: h.requestId, token: h.token }))?.cancelled === true : false;
+      const final = abandoned(record, cancelled);
       recordFinal(id, final.code, final.result);
       return { final: true, ...final, record: readApproval(id) };
     }
     const orphaned = !alive(record.pid);
-    if (record.url && record.url !== first.url) return { final: false, record, page: await pageState(record.url), orphaned };
-    if (Date.now() >= until) return { final: false, record, page: await pageState(record.url), orphaned };
+    if (record.url && record.url !== first.url) return { final: false, record, page: await pageStateOf(record), orphaned };
+    if (Date.now() >= until) return { final: false, record, page: await pageStateOf(record), orphaned };
     await sleep(Math.min(poll, Math.max(0, until - Date.now())));
   }
 }
@@ -461,9 +513,13 @@ export async function cancelPage(url, byId) {
  * is, uncertain until its own result. Returns { ok: true } or { ok: false, reason }.
  */
 export async function replacePending(record, byId) {
-  const answer = await cancelPage(record.url, byId);
+  // hosted: the site cancels only while the wallet was not asked, in one step, like the loopback page
+  const h = record.hosted?.token ? record.hosted : null;
+  const answer = h
+    ? await cancelSiteRequest({ site: h.site, id: h.requestId, token: h.token }).then((c) => c && { cancelled: c.cancelled, status: c.state, sending: c.walletAsked === true })
+    : await cancelPage(record.url, byId);
   if (!answer?.cancelled) {
-    const why = !record.url ? "has no page yet" : !answer ? "is not answering" : answer.sending ? "already asked the wallet to send" : `is ${answer.status}`;
+    const why = !record.url ? "has no page yet" : !answer ? (h ? `is not answering on ${h.site}` : "is not answering") : answer.sending ? "already asked the wallet to send" : `is ${answer.status}`;
     return { ok: false, reason: `the pending approval ${record.id} ${why}: the wallet may be sending it, so it is not replaced` };
   }
   // cancelled: the command behind the page ends on its own with a refusal; give it a moment, then stop what is left

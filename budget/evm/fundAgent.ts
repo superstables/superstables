@@ -8,12 +8,15 @@ import "./cli-guard.mjs";
 import { parseUnits, type Hex } from "viem";
 import { EVM_CHAINS } from "./chains.mjs";
 import { SYM, CFG, GAS, emit, arg, gasFmt, OWNER_KEY_FILE, ownerCtx, readCtx, nativeBalance, usdcBalance, usdc, readUntil, sendNative, usageError, assertRpcChain, tx } from "./lib.ts";
-import { fundInWallet } from "./owner.ts";
+import { fundInWallet, fundingTx, approvalSite } from "./owner.ts";
 
 const amt = arg("amount") ?? (EVM_CHAINS as Record<string, any>)[CFG.key].doctor.fundAgent;
 if (!/^\d+(\.\d{1,18})?$/.test(amt)) usageError(`--amount "${amt}" is not a decimal amount of ${GAS.symbol}`);
 const value = parseUnits(amt, GAS.decimals);
 if (value === 0n || value > parseUnits("5", GAS.decimals)) usageError(`--amount must be above 0 and at most 5 ${GAS.symbol}`);
+if (!OWNER_KEY_FILE && approvalSite() !== null) {
+  try { fundingTx("0x0000000000000000000000000000000000000001", value, true); } catch (e) { usageError((e as Error).message); }
+}
 const p = readCtx();
 await assertRpcChain();
 const ob = await nativeBalance(p.owner), ab = await nativeBalance(p.agent);
