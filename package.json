@@ -3,34 +3,17 @@
   "version": "0.2.0",
   "description": "Superstables client: discover paid services, quote them, and pay from an owner-controlled wallet. CLI, local MCP server and SDK.",
   "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/superstables/superstables-client.git"
-  },
+  "repository": { "type": "git", "url": "https://github.com/superstables/superstables-client.git" },
   "homepage": "https://www.superstables.com",
   "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
-  "bin": {
-    "superstables": "./dist/cli/main.js"
-  },
+  "engines": { "node": ">=20" },
+  "bin": { "superstables": "./dist/cli/main.js" },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
   },
-  "files": [
-    "dist",
-    "policy.example.yaml",
-    "README.md",
-    "CHANGELOG.md",
-    "LICENSE",
-    "!dist/budget"
-  ],
+  "files": ["dist", "!dist/budget", "policy.example.yaml", "README.md", "CHANGELOG.md", "LICENSE"],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/budget-build.mjs",
     "typecheck": "tsc --noEmit",
