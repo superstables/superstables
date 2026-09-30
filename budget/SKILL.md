@@ -8,7 +8,9 @@ disable-model-invocation: true
 
 The owner authorizes an agent once. The agent then pays sellers from the owner's funds until the budget runs out, expires or is revoked. The chain enforces the budget; no Superstables service is in the path. The owner approves only grant and revoke, in their own wallet, on every rail. Every purchase is signed by the agent alone. You hold only the agent key: you cannot approve anything for the owner.
 
+<!-- run: scripts/skill.mjs puts the standalone skill's own paragraph here -->
 `superstables budget` is `npx superstables budget` from a checkout of the client repo (after `npm ci` and `npm run build` at its root), or `node budget/cli.mjs` there. It needs Node 20+. It is a thin dispatcher over the rail scripts in `budget/`. Testnet only: `--mainnet` or a mainnet chain is refused.
+<!-- /run -->
 
 ## The rails
 

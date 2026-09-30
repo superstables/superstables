@@ -18,6 +18,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkSelfContained } from "./budget-build.mjs";
 import { devVersion, revisionOf } from "./dev-version.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -37,21 +38,29 @@ function run(command, args, cwd = root) {
   execFileSync(command, args, { cwd, stdio: "inherit", shell: process.platform === "win32" });
 }
 
-// Dependencies that only `superstables budget` loads. budget/ runs from a checkout and is not in
-// dist/, so the MCP server never imports these; they stay out of the bundle. Each rail adds its own.
+// Dependencies that only `superstables budget` loads. The MCP server never imports these; they stay
+// out of the bundle. Each rail adds its own. `npm run build` also writes dist/budget/, the standalone
+// budget build with these packages bundled in; it is for the skill zip (scripts/skill.mjs) and stays
+// out of this bundle too.
+const BUDGET_BUILD = "budget";
 const BUDGET_ONLY_DEPENDENCIES = ["@x402/fetch", "mppx", "@solana/web3.js", "bs58"];
 
 // 1. Compile. The bundle ships JavaScript; tsc is the only thing that produces it.
 run("npm", ["run", "build"]);
 
+// dist/budget must import only node: built-ins and its own files (it does not ship here, but the
+// skill zip carries it with no node_modules).
+checkSelfContained(join(root, "dist", BUDGET_BUILD));
+
 // A package left out of the bundle must not be imported by anything that ships: that bundle would
 // pack and validate, then fail on the user's machine at the first import.
+const shipsInBundle = (file) => file.split(/[\\/]/)[0] !== BUDGET_BUILD;
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const excludedImport = new RegExp(
   `(?:\\bfrom\\s*|\\bimport\\s*\\(?\\s*|\\brequire\\s*\\(\\s*)["'](${BUDGET_ONLY_DEPENDENCIES.map(escapeRe).join("|")})(?:/[^"']*)?["']`,
 );
 for (const file of readdirSync(join(root, "dist"), { recursive: true })) {
-  if (!/\.[cm]?js$/.test(file)) continue;
+  if (!/\.[cm]?js$/.test(file) || !shipsInBundle(file)) continue;
   const hit = readFileSync(join(root, "dist", file), "utf8").match(excludedImport);
   if (hit) {
     throw new Error(`dist/${file} imports ${hit[1]}, which the bundle leaves out (BUDGET_ONLY_DEPENDENCIES in scripts/bundle.mjs)`);
@@ -99,7 +108,11 @@ writeFileSync(
   )}\n`,
 );
 
-cpSync(join(root, "dist"), join(stageDir, "dist"), { recursive: true });
+cpSync(join(root, "dist"), join(stageDir, "dist"), {
+  recursive: true,
+  filter: (from) => shipsInBundle(relative(join(root, "dist"), from) || "."),
+});
+if (existsSync(join(stageDir, "dist", BUDGET_BUILD))) throw new Error(`dist/${BUDGET_BUILD} was staged into the bundle`);
 for (const file of ["README.md", "LICENSE", "policy.example.yaml"]) {
   if (existsSync(join(root, file))) cpSync(join(root, file), join(stageDir, file));
 }
