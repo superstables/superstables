@@ -4,7 +4,7 @@ import "./cli-guard.mjs";
 // Prints the owner's native balance before and after and the fee, so the cost is exact.
 // npx tsx budget/evm/fundAgent.ts --chain <name> --amount <decimal>
 import { parseUnits } from "viem";
-import { CFG, GAS, emit, arg, gasFmt, ownerCtx, nativeBalance, usdcBalance, usdc, readUntil, sendNative, usageError, publicClient, tx } from "./lib.ts";
+import { SYM, CFG, GAS, emit, arg, gasFmt, ownerCtx, nativeBalance, usdcBalance, usdc, readUntil, sendNative, usageError, publicClient, tx } from "./lib.ts";
 
 const amt = arg("amount")!;
 if (!/^\d+(\.\d{1,18})?$/.test(amt)) usageError(`--amount "${amt}" is not a decimal amount of ${GAS.symbol}`);
@@ -17,6 +17,6 @@ if (ob < value) { console.log(`REFUSED: the owner has less than ${amt} ${GAS.sym
 const sent = await sendNative(c.wallet, c.agent, value, `fund agent ${amt} ${GAS.symbol} (owner -> agent, plain transfer)`);
 const oa = await readUntil(() => nativeBalance(c.owner), (v) => v < ob), aa = await readUntil(() => nativeBalance(c.agent), (v) => v >= ab + value);
 console.log(`owner ${gasFmt(oa)} (paid ${gasFmt(ob - oa)} = ${gasFmt(value)} sent + ${gasFmt(sent.feeWei)} fee), agent ${gasFmt(aa)} ${GAS.symbol}`);
-if (GAS.isUsdc) console.log(`agent ERC-20 USDC balance: ${usdc(await usdcBalance(c.agent))} (native / 1e12)`);
+if (GAS.isUsdc) console.log(`agent ERC-20 ${SYM} balance: ${usdc(await usdcBalance(c.agent))} (native / 1e12)`);
 process.exit(emit("fundAgent", 0, { state: "ok", tx: sent.hash, explorer: tx(sent.hash), sent: gasFmt(value), ownerFee: gasFmt(sent.feeWei), ownerNativeBefore: gasFmt(ob), ownerNativeAfter: gasFmt(oa), agentNativeAfter: gasFmt(aa), next: "none" }));
 void publicClient;

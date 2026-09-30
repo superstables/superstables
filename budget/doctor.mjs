@@ -3,12 +3,9 @@
 // Minimum balances are what one grant, a few purchases and a revoke need on each chain.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
+import { EVM_CHAINS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 
-// Must match evm/chains.ts, tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
-const EVM = {
-  "base-sepolia": { rpc: "https://sepolia.base.org", chainId: 84532, usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", gas: "ETH", minOwnerUsdc: 0.01, minOwnerGas: 0.00003, minAgentGas: 0.00003, fundAgent: "0.0001" },
-  "arc-testnet": { rpc: "https://rpc.testnet.arc.network", chainId: 5042002, usdc: "0x3600000000000000000000000000000000000000", gas: "USDC", minOwnerUsdc: 0.2, minOwnerGas: 0.2, minAgentGas: 0.01, fundAgent: "0.1" },
-};
+// EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
 
 const SOLANA = { rpc: "https://api.devnet.solana.com", usdcMint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", minOwnerSol: 0.01, minOwnerUsdc: 0.05, minAgentSol: 0.005 };
 const TEMPO = { rpc: "https://rpc.moderato.tempo.xyz", chainId: 42431, pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
@@ -19,7 +16,7 @@ async function rpc(url, method, params = []) {
   if (j.error) throw new Error(j.error.message ?? JSON.stringify(j.error));
   return j.result;
 }
-const erc20Balance = async (url, token, addr) => Number(BigInt(await rpc(url, "eth_call", [{ to: token, data: "0x70a08231" + addr.slice(2).toLowerCase().padStart(64, "0") }, "latest"]))) / 1e6;
+const erc20Balance = async (url, token, addr, decimals = 6) => Number(BigInt(await rpc(url, "eth_call", [{ to: token, data: "0x70a08231" + addr.slice(2).toLowerCase().padStart(64, "0") }, "latest"]))) / 10 ** decimals;
 const nativeBalance = async (url, addr) => Number(BigInt(await rpc(url, "eth_getBalance", [addr, "latest"]))) / 1e18;
 const evmKeyAddress = async (v) => (/^0x[0-9a-fA-F]{64}$/.test(v) ? (await import("viem/accounts")).privateKeyToAddress(v) : null);
 // A Solana secret key is 64 bytes: the seed, then the public key.
@@ -38,8 +35,8 @@ const splBalance = async (addr) => {
 // from a key-shaped value, how to check the RPC, and the balances to check.
 const RAILS = {
   evm: ({ chain }) => {
-    const c = EVM[chain];
-    const flag = chain === "base-sepolia" ? "" : ` --chain ${chain}`;
+    const c = EVM_CHAINS[chain], d = c.doctor, tok = c.token;
+    const flag = chain === EVM_DEFAULT_CHAIN ? "" : ` --chain ${chain}`;
     return {
       ownerVars: ["B4_OWNER_KEY", "B4_AGENT_KEY_ESCROW"], agentVars: ["B4_AGENT_KEY"], ownerSecrets: ["B4_OWNER_KEY"],
       pub: publicFile("evm", chain), ownerAddr: "B4_OWNER_ADDRESS", agentAddr: "B4_AGENT_ADDRESS",
@@ -47,9 +44,9 @@ const RAILS = {
       keyAddress: evmKeyAddress, caseSensitive: false,
       rpc: async () => { const id = Number(await rpc(c.rpc, "eth_chainId")); if (id !== c.chainId) throw new Error(`chain id ${id}, expected ${c.chainId}`); return `chain id ${id}`; },
       balances: async (owner, agent) => [
-        { who: "owner", addr: owner, token: "USDC", have: await erc20Balance(c.rpc, c.usdc, owner), need: c.minOwnerUsdc, hint: "faucet.circle.com" },
-        ...(c.gas === "USDC" ? [] : [{ who: "owner", addr: owner, token: c.gas, have: await nativeBalance(c.rpc, owner), need: c.minOwnerGas, hint: "a Base Sepolia ETH faucet" }]),
-        { who: "agent", addr: agent, token: `${c.gas} (gas)`, have: await nativeBalance(c.rpc, agent), need: c.minAgentGas, hint: `npx tsx budget/evm/fundAgent.ts${flag} --amount ${c.fundAgent}` },
+        { who: "owner", addr: owner, token: tok.symbol, have: await erc20Balance(c.rpc, tok.address, owner, tok.decimals), need: Number(d.minOwnerToken), hint: d.tokenFaucet },
+        ...(c.gas.isToken ? [] : [{ who: "owner", addr: owner, token: c.gas.symbol, have: await nativeBalance(c.rpc, owner), need: Number(d.minOwnerGas), hint: d.gasFaucet }]),
+        { who: "agent", addr: agent, token: `${c.gas.symbol} (gas)`, have: await nativeBalance(c.rpc, agent), need: Number(d.minAgentGas), hint: `npx tsx budget/evm/fundAgent.ts${flag} --amount ${d.fundAgent}` },
       ],
     };
   },

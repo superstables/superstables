@@ -16,7 +16,7 @@ import "./cli-guard.mjs";
 // Exit codes: 0 recovered (or planned), 1 incomplete or failed, 3 refused before anything was sent (unknown --op), 5 an operation is still unknown.
 import { encodeFunctionData } from "viem";
 import { pendingJournalsFor, makeSafe, readJournal, checkOpId, type Journal } from "./ops.ts";
-import { CFG, GAS, arg, flag, cmd, emit, escrowCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, usdc, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC } from "./lib.ts";
+import { SYM, CFG, GAS, arg, flag, cmd, emit, escrowCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, usdc, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC } from "./lib.ts";
 
 const plan = flag("plan");
 const opId = arg("op") ? checkOpId(arg("op")!) : undefined;
@@ -30,7 +30,7 @@ const held = await usdcBalance(pub.agent);
 const allowance = await allowanceOf(pub.owner, pub.agent);
 const agentNativeBefore = await nativeBalance(pub.agent);
 const ownerNativeBefore = await nativeBalance(pub.owner);
-console.log(`${CFG.label}: agent key holds ${usdc(held)} USDC and ${gasFmt(agentNativeBefore)} ${GAS.symbol} (native); allowance ${usdc(allowance)} USDC`);
+console.log(`${CFG.label}: agent key holds ${usdc(held)} ${SYM} and ${gasFmt(agentNativeBefore)} ${GAS.symbol} (native); allowance ${usdc(allowance)} ${SYM}`);
 
 let pending: Journal[];
 if (opId) {
@@ -40,17 +40,17 @@ if (opId) {
     process.exit(emit("recover", 3, { op: opId, state: "refused_precheck", reason: `no journal for operation ${opId} of this agent on ${CFG.key}`, next: "check --op and --chain (reconcile.ts --op reads a journal)" }));
   }
   pending = pendingJournalsFor(pub.agent).filter((p) => p.op === opId);
-  if (!pending.length) console.log(`operation ${opId} is ${j.state}${j.returned ? ` (returned ${j.returned} USDC)` : ""}: nothing stranded for it`);
+  if (!pending.length) console.log(`operation ${opId} is ${j.state}${j.returned ? ` (returned ${j.returned} ${SYM})` : ""}: nothing stranded for it`);
 } else pending = pendingJournalsFor(pub.agent);
 
 const needsGas = (held > 0n || allowance > 0n || pending.length > 0) && agentNativeBefore < MIN_GAS;
 if (plan) {
   console.log("PLAN (nothing is sent):");
   if (needsGas) console.log(`  0. the agent key has too little gas: the owner sends ${gasFmt(GAS_TOPUP)} ${GAS.symbol}`);
-  console.log(allowance > 0n ? `  1. stop authority: lower the allowance ${usdc(allowance)} USDC to 0 (selfRevoke with the escrowed key; owner approve 0 for any rest)` : "  1. stop authority: the allowance is already 0");
-  if (pending.length) for (const j of pending) console.log(`  2. operation ${j.op} (${j.state}, pulled ${j.pulled ?? "unknown"} USDC, returned ${j.returned ?? "0"}): cancel the open authorization if any, return the price to the owner`);
+  console.log(allowance > 0n ? `  1. stop authority: lower the allowance ${usdc(allowance)} ${SYM} to 0 (selfRevoke with the escrowed key; owner approve 0 for any rest)` : "  1. stop authority: the allowance is already 0");
+  if (pending.length) for (const j of pending) console.log(`  2. operation ${j.op} (${j.state}, pulled ${j.pulled ?? "unknown"} ${SYM}, returned ${j.returned ?? "0"}): cancel the open authorization if any, return the price to the owner`);
   else console.log("  2. no journaled operation has funds stranded");
-  console.log(opId ? "  3. sweep: skipped (--op)" : `  3. sweep: whatever the agent key holds above ${usdc(KEEP)} USDC after step 2 goes to the owner (now ${usdc(held)} USDC)`);
+  console.log(opId ? "  3. sweep: skipped (--op)" : `  3. sweep: whatever the agent key holds above ${usdc(KEEP)} ${SYM} after step 2 goes to the owner (now ${usdc(held)} ${SYM})`);
   process.exit(emit("recover", 0, { state: "planned", op: opId ?? null, plan: { gasTopUp: needsGas ? gasFmt(GAS_TOPUP) : null, allowance: usdc(allowance), pendingOps: pending.map((j) => ({ op: j.op, state: j.state, pulled: j.pulled ?? null, returned: j.returned ?? "0" })), agentHolds: usdc(held), sweep: opId ? false : true }, next: `run ${cmd("recover.ts", `${opId ? `--op ${opId}` : ""}`.trim())} to send these steps` }));
 }
 
@@ -75,7 +75,7 @@ if (allowanceAfter > 0n) {
   allowanceAfter = await readUntil(() => allowanceOf(c.owner, c.agent), (v) => v === 0n);
 }
 if (allowanceAfter !== 0n) {
-  console.log(`the allowance still reads ${usdc(allowanceAfter)} USDC; stopping before any funds are moved`);
+  console.log(`the allowance still reads ${usdc(allowanceAfter)} ${SYM}; stopping before any funds are moved`);
   process.exit(emit("recover", 1, { state: "failed", op: opId ?? null, allowance: usdc(allowanceAfter), selfRevokeTx: sr.tx ?? null, ownerRevokeTx, reason: "the allowance could not be lowered to 0", next: `run ${cmd("recover.ts")} again, or the owner's revoke.ts` }));
 }
 writePublic({ B4_REVOKED_AT: String(Math.floor(Date.now() / 1000)) }, ["B4_CAP", "B4_EXPIRY", "B4_SET_AT"]);
@@ -90,7 +90,7 @@ for (const j of pending) {
   const after = await makeSafe(j, c.escrow);
   returnedNow += micro(after.returned) - had;
   madeSafe.push({ op: after.op, state: after.state, returned: after.returned ?? null, returnTx: after.returnTx ?? null });
-  console.log(`  -> ${after.state}${after.returned ? `, returned ${after.returned} USDC (${after.returnTx})` : ""}${after.state === "failed" || after.state === "unknown" ? ` -- ${after.reason ?? ""}` : ""}`);
+  console.log(`  -> ${after.state}${after.returned ? `, returned ${after.returned} ${SYM} (${after.returnTx})` : ""}${after.state === "failed" || after.state === "unknown" ? ` -- ${after.reason ?? ""}` : ""}`);
 }
 const heldNow = returnedNow > 0n ? await readUntil(() => usdcBalance(c.agent), (v) => v <= held - returnedNow) : await usdcBalance(c.agent);
 
@@ -102,12 +102,12 @@ if (!opId) {
   if (heldNow > KEEP) {
     const sweep = heldNow - KEEP;
     sweptNow = sweep;
-    const sent = await send(c.escrow, USDC, encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [c.owner, sweep] }), `recover: transfer ${usdc(sweep)} USDC agent -> owner (escrowed key)`);
+    const sent = await send(c.escrow, USDC, encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [c.owner, sweep] }), `recover: transfer ${usdc(sweep)} ${SYM} agent -> owner (escrowed key)`);
     sweepTx = sent.hash;
-  } else console.log(`nothing above ${usdc(KEEP)} USDC to sweep`);
+  } else console.log(`nothing above ${usdc(KEEP)} ${SYM} to sweep`);
 }
 const heldAfter = await readUntil(() => usdcBalance(c.agent), (v) => !!opId || v <= KEEP);
-console.log(`agent key USDC ${usdc(heldAfter)}, allowance ${usdc(allowanceAfter)}; owner gas spent ${gasFmt(ownerNativeBefore - (await nativeBalance(c.owner)))} ${GAS.symbol} (incl. ${gasFmt(topUp)} sent to the agent), agent gas spent ${gasFmt(agentNativeBefore + topUp - (await nativeBalance(c.agent)))} ${GAS.symbol}`);
+console.log(`agent key ${SYM} ${usdc(heldAfter)}, allowance ${usdc(allowanceAfter)}; owner gas spent ${gasFmt(ownerNativeBefore - (await nativeBalance(c.owner)))} ${GAS.symbol} (incl. ${gasFmt(topUp)} sent to the agent), agent gas spent ${gasFmt(agentNativeBefore + topUp - (await nativeBalance(c.agent)))} ${GAS.symbol}`);
 
 const unknownOp = madeSafe.some((m) => m.state === "unknown" || m.state === "submitted");
 const unreturned = madeSafe.some((m) => m.state === "failed" && !m.returned);

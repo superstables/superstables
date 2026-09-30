@@ -7,7 +7,7 @@ import "./cli-guard.mjs";
 //   4. With --url: fetch the seller's 402, decode it, list every option with the verdict of buy's precheck, and name the chosen one.
 // npx tsx budget/evm/preflight.ts --chain <name> [--url <seller url>] [--max <usdc>] [--pay-to <address>]
 import { domainSeparator, parseAbi, formatUnits, type Address } from "viem";
-import { CFG, GAS, emit, USDC, NETWORK, usdc, gasFmt, publicClient, nativeBalance, usdcBalance, arg, toUsdc, publicEnv, usageError, cmd } from "./lib.ts";
+import { SYM, CFG, GAS, emit, USDC, NETWORK, usdc, gasFmt, publicClient, nativeBalance, usdcBalance, arg, toUsdc, publicEnv, usageError, cmd } from "./lib.ts";
 import { checkAccept } from "./purchase.ts";
 import { isAddress } from "viem";
 
@@ -19,15 +19,17 @@ const payTo = arg("pay-to");
 if (payTo && !isAddress(payTo)) usageError(`--pay-to "${payTo}" is not an address`);
 const url = arg("url");
 
-console.log(`chain ${CFG.key}: ${CFG.label}, rpc ${CFG.rpc}, USDC ${USDC}`);
+console.log(`chain ${CFG.key}: ${CFG.label}, rpc ${CFG.rpc}, ${SYM} ${USDC}`);
 const id = await publicClient.request({ method: "eth_chainId" });
 ok(Number(id) === CFG.chainId, `eth_chainId ${id} = ${Number(id)} (expected ${CFG.chainId}); block ${await publicClient.getBlockNumber()}`);
 const rd = (fn: string) => publicClient.readContract({ address: USDC, abi, functionName: fn as any }) as Promise<any>;
-const [name, version, decimals, ds] = await Promise.all([rd("name"), rd("version"), rd("decimals"), rd("DOMAIN_SEPARATOR")]);
-ok(name === CFG.domain.name && version === CFG.domain.version, `token name()/version() = ${name}/${version}; chains.ts says ${CFG.domain.name}/${CFG.domain.version}`);
+// Some EIP-3009 tokens have no version() (the call reverts). Then the table's version is checked through DOMAIN_SEPARATOR() alone.
+const [name, onchainVersion, decimals, ds] = await Promise.all([rd("name"), rd("version").catch(() => null), rd("decimals"), rd("DOMAIN_SEPARATOR")]);
+const version: string = onchainVersion ?? CFG.domain.version;
+ok(name === CFG.domain.name && version === CFG.domain.version, `token name()/version() = ${name}/${onchainVersion ?? "(no version(): reverts)"}; chains.mjs says ${CFG.domain.name}/${CFG.domain.version}`);
 ok(Number(decimals) === CFG.decimals, `token decimals() = ${decimals}`);
 const calc = domainSeparator({ domain: { name, version, chainId: CFG.chainId, verifyingContract: USDC } });
-ok(calc === ds, `DOMAIN_SEPARATOR() ${ds.slice(0, 18)}... equals the one recomputed from (${name}, ${version}, ${CFG.chainId}, token)`);
+ok(calc === ds, `DOMAIN_SEPARATOR() ${ds.slice(0, 18)}... equals the one recomputed from (${name}, ${version}${onchainVersion === null ? " from chains.mjs" : ""}, ${CFG.chainId}, token)`);
 const fees = await publicClient.estimateFeesPerGas().catch(() => null);
 console.log(`gas: token ${GAS.symbol}${GAS.isUsdc ? " (native, 18 decimals; the same balance the ERC-20 shows in 6)" : ""}, gasPrice ${await publicClient.getGasPrice()} wei${fees?.maxFeePerGas ? `, maxFeePerGas ${fees.maxFeePerGas}` : ""}`);
 
@@ -35,7 +37,7 @@ const p = publicEnv();
 for (const [who, addr] of [["owner", p.B4_OWNER_ADDRESS], ["agent", p.B4_AGENT_ADDRESS]] as const) {
   if (!addr || !isAddress(addr)) { console.log(`note: no ${who} address in the public file (run ${cmd("setup.ts", "--from-keys")})`); continue; }
   const [n, e] = [await nativeBalance(addr as Address), await usdcBalance(addr as Address)];
-  console.log(`${who} ${addr}: native ${gasFmt(n)} ${GAS.symbol}, ERC-20 USDC ${usdc(e)}`);
+  console.log(`${who} ${addr}: native ${gasFmt(n)} ${GAS.symbol}, ERC-20 ${SYM} ${usdc(e)}`);
   if (GAS.isUsdc) ok(n / 10n ** 12n === e, `${who}: native balance ${n} / 1e12 (rounded down) = ERC-20 balance ${e} (one balance, two units; the native one also holds sub-micro dust of 18-decimal fees: ${n % 10n ** 12n} wei)`);
 }
 
@@ -56,9 +58,9 @@ if (url) {
       console.log(`  ${x.scheme} amount ${x.amount} asset ${x.asset} payTo ${x.payTo} timeout ${x.maxTimeoutSeconds}s extra ${JSON.stringify(x.extra)} -> ${why ? `SKIP: ${why}` : "USABLE"}`);
       if (!why && !picked) picked = x;
     }
-    ok(!!picked, `a usable ${CFG.label} USDC exact option exists`);
+    ok(!!picked, `a usable ${CFG.label} ${SYM} exact option exists`);
     if (picked) {
-      console.log(`chosen: ${usdc(BigInt(picked.amount))} USDC to ${picked.payTo}, EIP-712 domain ${picked.extra.name}/${picked.extra.version} (from the 402, checked against the token), method ${picked.extra.assetTransferMethod ?? "eip3009 (default)"}`);
+      console.log(`chosen: ${usdc(BigInt(picked.amount))} ${SYM} to ${picked.payTo}, EIP-712 domain ${picked.extra.name}/${picked.extra.version} (from the 402, checked against the token), method ${picked.extra.assetTransferMethod ?? "eip3009 (default)"}`);
       if (max !== undefined) ok(BigInt(picked.amount) <= max, `price ${usdc(BigInt(picked.amount))} <= --max ${usdc(max)}`);
       if (payTo) ok(picked.payTo.toLowerCase() === payTo.toLowerCase(), `payTo equals --pay-to ${payTo}`);
     }

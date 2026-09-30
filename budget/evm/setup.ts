@@ -6,7 +6,7 @@ import "./cli-guard.mjs";
 // npx tsx budget/evm/setup.ts --chain <name> --from-keys
 import { privateKeyToAccount } from "viem/accounts";
 import type { Hex } from "viem";
-import { CFG, emit, OWNER_ENV, AGENT_ENV, PUBLIC_ENV, ownerEnv, agentEnv, publicEnv, writePublic, need, usdcBalance, nativeBalance, usdc, gasFmt, GAS } from "./lib.ts";
+import { SYM, CFG, emit, OWNER_ENV, AGENT_ENV, PUBLIC_ENV, ownerEnv, agentEnv, publicEnv, writePublic, need, usdcBalance, nativeBalance, usdc, gasFmt, GAS } from "./lib.ts";
 
 const o = ownerEnv(), a = agentEnv();
 const ownerAddr = privateKeyToAccount(need(o, "B4_OWNER_KEY", OWNER_ENV) as Hex).address;
@@ -21,6 +21,6 @@ if ((p.B4_OWNER_ADDRESS && !same(p.B4_OWNER_ADDRESS, ownerAddr)) || (p.B4_AGENT_
 }
 writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr });
 console.log(`${CFG.label}: wrote ${PUBLIC_ENV} (no secret).`);
-console.log(`owner ${ownerAddr}: USDC ${usdc(await usdcBalance(ownerAddr))}, native ${GAS.symbol} ${gasFmt(await nativeBalance(ownerAddr))}`);
-console.log(`agent ${agentAddr}: USDC ${usdc(await usdcBalance(agentAddr))}, native ${GAS.symbol} ${gasFmt(await nativeBalance(agentAddr))}`);
+console.log(`owner ${ownerAddr}: ${SYM} ${usdc(await usdcBalance(ownerAddr))}, native ${GAS.symbol} ${gasFmt(await nativeBalance(ownerAddr))}`);
+console.log(`agent ${agentAddr}: ${SYM} ${usdc(await usdcBalance(agentAddr))}, native ${GAS.symbol} ${gasFmt(await nativeBalance(agentAddr))}`);
 process.exit(emit("setup", 0, { state: "ok", owner: ownerAddr, agent: agentAddr, publicFile: PUBLIC_ENV, next: "none" }));

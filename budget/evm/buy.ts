@@ -1,5 +1,5 @@
 import "./cli-guard.mjs";
-// buy (B4): the agent pays a real x402 `exact` (EIP-3009) seller under a plain ERC-20 approve. Agent command: opens the agent key file only. Chain from --chain / B4_CHAIN (chains.ts): base-sepolia (default) or arc-testnet.
+// buy (B4): the agent pays a real x402 `exact` (EIP-3009) seller under a plain ERC-20 approve. Agent command: opens the agent key file only. Chain from --chain / B4_CHAIN (chains.mjs; base-sepolia by default).
 //   1. GET the seller (free) -> 402 with the price.
 //   2. Prechecks before anything is signed or sent (rule 4): --max, token = the chain's USDC (6 decimals) and its EIP-712 domain, no Circle Gateway option, precision,
 //      --pay-to, budget expiry (public file), allowance and owner balance cover the price, agent holds 0 USDC and has gas.
@@ -14,7 +14,7 @@ import "./cli-guard.mjs";
 // Exit codes (same on every rail): 0 settled and delivered (or quoted), 1 failed or refused by the chain, 2 bad usage,
 // 3 refused before anything was signed, 4 paid but not delivered, 5 outcome unknown (reconcile; never pay again).
 import { isAddress } from "viem";
-import { arg, flag, agentCtx, toUsdc, usdc, usdcBalance, nativeBalance, gasFmt, tx, usageError, posInt, CFG, GAS } from "./lib.ts";
+import { SYM, arg, flag, agentCtx, toUsdc, usdc, usdcBalance, nativeBalance, gasFmt, tx, usageError, posInt, CFG, GAS } from "./lib.ts";
 import { purchase } from "./purchase.ts";
 import { checkOpId, newOpId, resultLine } from "./ops.ts";
 
@@ -30,17 +30,17 @@ const httpTimeoutMs = posInt("http-timeout", "60", 600) * 1000;
 
 const sym = GAS.symbol;
 const c = await agentCtx();
-console.log(`chain: ${CFG.label} (${CFG.chainId}), USDC ${CFG.usdc}`);
+console.log(`chain: ${CFG.label} (${CFG.chainId}), ${SYM} ${CFG.usdc}`);
 const bal = async () => ({ owner: await usdcBalance(c.owner), agent: await usdcBalance(c.agent), agentEth: await nativeBalance(c.agent) });
 const before = await bal();
 console.log(`operation: ${op}`);
-console.log(`before: owner ${usdc(before.owner)} USDC, agent ${usdc(before.agent)} USDC, agent native ${GAS.symbol} ${gasFmt(before.agentEth)}`);
+console.log(`before: owner ${usdc(before.owner)} ${SYM}, agent ${usdc(before.agent)} ${SYM}, agent native ${GAS.symbol} ${gasFmt(before.agentEth)}`);
 const r = await purchase({ url, c, op, max, payTo, quoteOnly: flag("quote-only"), httpTimeoutMs });
 const j = r.journal;
 
 await new Promise((res) => setTimeout(res, 3000)); // let the public RPC catch up before the closing balance read
 const after = await bal();
-console.log(`after:  owner ${usdc(after.owner)} USDC (net debit ${usdc(before.owner - after.owner)}), agent ${usdc(after.agent)} USDC (${GAS.isUsdc ? "was " + usdc(before.agent) + ", the difference is the gas it spent" : "held 0 before and after"}), agent gas spent ${gasFmt(before.agentEth - after.agentEth)} ${sym} (native balance, before minus after)`);
+console.log(`after:  owner ${usdc(after.owner)} ${SYM} (net debit ${usdc(before.owner - after.owner)}), agent ${usdc(after.agent)} ${SYM} (${GAS.isUsdc ? "was " + usdc(before.agent) + ", the difference is the gas it spent" : after.agent === 0n ? "held 0 before and after" : "not 0 after: a seller refund or stranded funds; the owner runs recover"}), agent gas spent ${gasFmt(before.agentEth - after.agentEth)} ${sym} (native balance, before minus after)`);
 if (r.status !== undefined) console.log(`final HTTP status: ${r.status}${r.settle ? `, seller reports success=${r.settle.success}` : ""}`);
 if (j.pullTx) console.log(`pull:        ${tx(j.pullTx)}`);
 if (j.settleTx) console.log(`settlement:  ${tx(j.settleTx)}`);
@@ -54,7 +54,7 @@ if (j.state === "settled" && j.delivered) console.log("PURCHASE OK.");
 else if (j.state === "settled") console.log("PURCHASE SETTLED ON CHAIN BUT THE SELLER DID NOT DELIVER. Not paying again.");
 else if (j.state === "quoted") console.log("QUOTE OK. Nothing was signed or sent.");
 else if (j.state === "refused_precheck" || j.state === "refused_chain") console.log("PURCHASE REFUSED. Nothing was paid.");
-else if (j.state === "failed" && j.returned) console.log(`PURCHASE DID NOT SETTLE. The pulled ${j.returned} USDC was returned to the owner. Never re-paid.`);
+else if (j.state === "failed" && j.returned) console.log(`PURCHASE DID NOT SETTLE. The pulled ${j.returned} ${SYM} was returned to the owner. Never re-paid.`);
 else console.log("PURCHASE OUTCOME NOT CONFIRMED (or it failed). Not retrying. Read the RESULT line, then reconcile.ts.");
 if (j.next && j.next !== "none") console.log(`next: ${j.next}`);
 console.log(await resultLine(j, "buy"));

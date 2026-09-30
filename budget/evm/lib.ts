@@ -20,6 +20,8 @@ export const RPC = CFG.rpc;
 export const EXPLORER = CFG.explorer;
 export const USDC: Address = CFG.usdc;
 export const USDC_DECIMALS = CFG.decimals;
+/** Symbol of the budget token in messages (per chain in chains.mjs). The code calls it USDC throughout. */
+export const SYM = CFG.symbol;
 export const NETWORK = CFG.network;
 export const GAS = CFG.gas;
 const chain = CFG.chain;
@@ -58,7 +60,7 @@ export function usageError(msg: string): never {
 }
 /** USDC has 6 decimals on both chains: refuse anything with more precision instead of rounding it. */
 export function toUsdc(s: string): bigint {
-  if (!new RegExp(`^\\d+(\\.\\d{1,${USDC_DECIMALS}})?$`).test(s)) usageError(`"${s}" is not a USDC amount with at most ${USDC_DECIMALS} decimals`);
+  if (!new RegExp(`^\\d+(\\.\\d{1,${USDC_DECIMALS}})?$`).test(s)) usageError(`"${s}" is not a ${SYM} amount with at most ${USDC_DECIMALS} decimals`);
   return parseUnits(s, USDC_DECIMALS);
 }
 export function arg(name: string, def?: string): string | undefined {
@@ -303,13 +305,13 @@ export async function selfRevokeCore(w: Wallet, owner: Address, log: (s: string)
   const ownerBalance = await usdcBalance(owner);
   if (before === 0n) return { state: "nothing", before, after: 0n, used: 0n, ownerBalance, note: "allowance is already 0" };
   const n = before < ownerBalance ? before : ownerBalance;
-  if (n === 0n) return { state: "blocked", before, after: before, used: 0n, ownerBalance, note: `owner USDC balance is 0, so transferFrom cannot lower the allowance (${usdc(before)} USDC stays). The owner must run revoke.ts` };
-  log(`selfRevoke: transferFrom(owner, owner, ${usdc(n)} USDC) by the agent (allowance ${usdc(before)}, owner balance ${usdc(ownerBalance)})`);
+  if (n === 0n) return { state: "blocked", before, after: before, used: 0n, ownerBalance, note: `owner ${SYM} balance is 0, so transferFrom cannot lower the allowance (${usdc(before)} ${SYM} stays). The owner must run revoke.ts` };
+  log(`selfRevoke: transferFrom(owner, owner, ${usdc(n)} ${SYM}) by the agent (allowance ${usdc(before)}, owner balance ${usdc(ownerBalance)})`);
   const data = encodeFunctionData({ abi: erc20Abi, functionName: "transferFrom", args: [owner, owner, n] });
   const sent = await send(w, USDC, data, "selfRevoke transferFrom(owner, owner)");
   const after = await readUntil(() => allowanceOf(owner, agent), (v) => v === before - n);
   return {
     state: after === 0n ? "revoked" : "partial", before, after, used: n, ownerBalance, tx: sent.hash,
-    note: after === 0n ? "allowance is 0" : `owner balance covered only ${usdc(n)} USDC; ${usdc(after)} USDC of allowance remains. Owner: run revoke.ts, or refill the owner and run recover.ts again`,
+    note: after === 0n ? "allowance is 0" : `owner balance covered only ${usdc(n)} ${SYM}; ${usdc(after)} ${SYM} of allowance remains. Owner: run revoke.ts, or refill the owner and run recover.ts again`,
   };
 }

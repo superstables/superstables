@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { opsDir } from "./paths.mjs";
+import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // The rails run on the client repo's own install: its tsx and its node_modules.
@@ -15,7 +16,7 @@ const TSX = join(REPO, "node_modules", ".bin", "tsx");
 
 // ---- rails ------------------------------------------------------------------------------------------
 const RAILS = {
-  evm: { chains: ["base-sepolia", "arc-testnet"], chain: "base-sepolia", addr: /^0x[0-9a-fA-F]{40}$/, unit: "USDC" },
+  evm: { chains: EVM_CHAIN_KEYS, chain: EVM_DEFAULT_CHAIN, addr: /^0x[0-9a-fA-F]{40}$/, unit: "USDC" },
   tempo: { chains: ["moderato"], chain: "moderato", addr: /^0x[0-9a-fA-F]{40}$/, unit: "pathUSD" },
   solana: { chains: ["devnet"], chain: "devnet", addr: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/, unit: "USDC" },
 };
@@ -51,7 +52,7 @@ const COMMANDS = {
     help: "superstables budget revoke --rail R [--chain C] [--agent LABEL] [--yes]\n  Owner command. Ends the budget on chain. Prints the plan; sends only with --yes.",
   },
 };
-const TOP_HELP = `superstables budget: on-chain agent budgets on evm (Base Sepolia, Arc Testnet), tempo (Moderato) and solana (devnet). Testnet only.
+const TOP_HELP = `superstables budget: on-chain agent budgets on evm (${Object.values(EVM_CHAINS).map((c) => c.label).join(", ")}), tempo (Moderato) and solana (devnet). Testnet only.
 
 Commands (each takes --help):
   superstables budget doctor    --rail R [--chain C]
@@ -116,7 +117,7 @@ function parse(argv) {
   const rail = RAILS[f.rail];
   if (!rail) return badInput(ctx, `--rail must be evm, tempo or solana (got "${f.rail}")`);
   if (f.chain !== undefined && !rail.chains.includes(f.chain)) {
-    if (/mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|arbitrum)$|^\d+$|^eip155:/i.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet: superstables budget is testnet only`);
+    if (/mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet: superstables budget is testnet only`);
     return badInput(ctx, `--chain for ${f.rail} must be one of: ${rail.chains.join(", ")}`);
   }
   f.chain ??= rail.chain;
@@ -223,6 +224,8 @@ const railResult = (stdout) => {
 const micro = (s) => { const [i, d = ""] = s.split("."); return BigInt(i) * 1000000n + BigInt(d.padEnd(6, "0")); };
 const decimal = (n) => { const s = n.toString().padStart(7, "0"); return (s.slice(0, -6) + "." + s.slice(-6)).replace(/\.?0+$/, "") || "0"; };
 const ago = (iso) => (iso ? iso : "none");
+// The budget token's symbol: per chain on evm (chains.mjs), per rail elsewhere.
+const unitOf = (f) => (f.rail === "evm" ? EVM_CHAINS[f.chain].token.symbol : RAILS[f.rail].unit);
 
 // Reads the budget through the rail's read script (no key file, no signature) and parses its text.
 async function readBudget(f) {
@@ -343,7 +346,7 @@ const ownerTx = (rr, stdout) => (typeof rr?.tx === "string" ? rr.tx : rr?.tx && 
 async function grant({ f, ctx }) {
   const secs = f.expiry ? Math.ceil((Date.parse(f.expiry) - Date.now()) / 1000) : 86400;
   const now = await readBudget(f);
-  const unit = RAILS[f.rail].unit;
+  const unit = unitOf(f);
   log(`\nPLAN grant on ${f.rail} (${f.chain}). Nothing is sent without --yes.`);
   if (f.rail === "tempo") {
     const windows = f.period ? Math.ceil(secs / Number(f.period)) : 1;
@@ -359,8 +362,8 @@ async function grant({ f, ctx }) {
     log(`  enforced by the chain: the total cap. NOT enforced: expiry, period, seller list (a stolen agent key can pay any address).`);
     log(`  a new approval overwrites the current delegate and its remaining amount; the script refuses that unless you replace it by hand.`);
   } else {
-    log(`  cap:       ${f.amount} USDC: USDC.approve(agent, ${f.amount}) from the owner, in total (no reset)`);
-    log(`  TRUE MAXIMUM: min(${f.amount}, the owner's USDC balance). It does not expire.`);
+    log(`  cap:       ${f.amount} ${unit}: ${unit}.approve(agent, ${f.amount}) from the owner, in total (no reset)`);
+    log(`  TRUE MAXIMUM: min(${f.amount}, the owner's ${unit} balance). It does not expire.`);
     log(`  enforced by the chain: the total allowance. NOT enforced: expiry, period, seller list (a stolen agent key can pay any address).`);
     log(`  a live allowance is never overwritten silently: the script refuses until it is revoked.`);
   }
@@ -382,7 +385,7 @@ async function revoke({ f, ctx }) {
   log({
     tempo: "  effect: AccountKeychain.revokeKey. From the block it lands in every payment by this key is refused, even one signed earlier. Open payment sessions are not covered.",
     solana: "  effect: the owner's Revoke clears the delegate. From the slot it lands every payment by the agent fails, even one signed earlier.",
-    evm: "  effect: USDC.approve(agent, 0). From the block it lands the agent can pull nothing more. USDC already pulled into the agent key is not covered: superstables budget recover returns it.",
+    evm: `  effect: ${unitOf(f)}.approve(agent, 0). From the block it lands the agent can pull nothing more. ${unitOf(f)} already pulled into the agent key is not covered: superstables budget recover returns it.`,
   }[f.rail]);
   if (now.ok && now.revoked) return emit(0, { ...ctx, state: "ok", remaining: now.remaining, revoked: true, tx: {}, next: "none", reason: "already revoked; nothing to send" });
   if (!f.yes) return emit(0, { ...ctx, state: "planned", remaining: now.ok ? now.remaining : null, revoked: false, tx: {}, next: "rerun the same command with --yes to send (owner signs)" });

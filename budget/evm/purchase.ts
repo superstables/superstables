@@ -16,6 +16,7 @@ import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme } from "@x402/evm";
 import {
+  SYM,
   sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, nativeBalance, gasFmt, chainReason, publicClient, sleep,
   type AgentCtx, type Wallet,
 } from "./lib.ts";
@@ -29,22 +30,22 @@ const MAX_AUTH_LIFETIME_S = 3600; // an authorization that can be settled later 
 /** The rule 4 checks on one payment option. Returns the reason to refuse, or null. Pure. */
 export function checkAccept(a: any, o: { max: bigint; payTo?: string }): string | null {
   const asset = String(a.asset ?? "");
-  if (asset.toLowerCase() !== USDC.toLowerCase()) return `token ${asset || "(none)"} is not ${CFG.label} USDC ${USDC}`;
+  if (asset.toLowerCase() !== USDC.toLowerCase()) return `token ${asset || "(none)"} is not ${CFG.label} ${SYM} ${USDC}`;
   const dec = a.extra?.decimals;
-  if (dec !== undefined && Number(dec) !== USDC_DECIMALS) return `seller says the token has ${dec} decimals; ${CFG.label} USDC has ${USDC_DECIMALS}`;
+  if (dec !== undefined && Number(dec) !== USDC_DECIMALS) return `seller says the token has ${dec} decimals; ${CFG.label} ${SYM} has ${USDC_DECIMALS}`;
   // CHAIN: the EIP-712 domain differs per chain ("USD Coin" on Base mainnet, "USDC" on Base Sepolia and Arc). The signature is built
   // from the seller's extra.name / extra.version, so refuse an option whose domain is not the token's own. This also skips Circle
   // Gateway entries (extra.name "GatewayWalletBatched": a batched payment that needs a Gateway deposit, not EIP-3009).
   const nm = a.extra?.name, ver = a.extra?.version;
   if (nm === "GatewayWalletBatched") return `option is a Circle Gateway batched payment (extra.name GatewayWalletBatched), not a plain EIP-3009 payment`;
-  if (nm !== CFG.domain.name || String(ver) !== CFG.domain.version) return `seller's EIP-712 domain (${nm}/${ver}) is not ${CFG.label} USDC's (${CFG.domain.name}/${CFG.domain.version}); the signature would not verify`;
+  if (nm !== CFG.domain.name || String(ver) !== CFG.domain.version) return `seller's EIP-712 domain (${nm}/${ver}) is not ${CFG.label} ${SYM}'s (${CFG.domain.name}/${CFG.domain.version}); the signature would not verify`;
   const method = a.extra?.assetTransferMethod;
   if (method !== undefined && method !== "eip3009") return `seller wants assetTransferMethod ${method}; only eip3009 is supported`;
   const raw = String(a.amount ?? a.maxAmountRequired ?? "");
-  if (!/^\d+$/.test(raw)) return `amount "${raw}" is not a whole number of USDC base units (more precision than ${USDC_DECIMALS} decimals, or not a number)`;
+  if (!/^\d+$/.test(raw)) return `amount "${raw}" is not a whole number of ${SYM} base units (more precision than ${USDC_DECIMALS} decimals, or not a number)`;
   const price = BigInt(raw);
   if (price === 0n) return "price is zero";
-  if (price > o.max) return `price ${usdc(price)} USDC exceeds --max ${usdc(o.max)} USDC`;
+  if (price > o.max) return `price ${usdc(price)} ${SYM} exceeds --max ${usdc(o.max)} ${SYM}`;
   if (!isAddress(String(a.payTo ?? ""))) return `recipient "${a.payTo}" is not an address`;
   if (o.payTo && String(a.payTo).toLowerCase() !== o.payTo.toLowerCase()) return `recipient ${a.payTo} is not the expected --pay-to ${o.payTo}`;
   const timeout = Number(a.maxTimeoutSeconds ?? 0);
@@ -147,7 +148,7 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
       const bad =
         !chosen ? "no validated quote" :
         Number(m.domain?.chainId ?? 0) !== CFG.chainId ? `signing domain chainId is not ${CFG.chainId}` :
-        String(m.domain?.verifyingContract ?? "").toLowerCase() !== USDC.toLowerCase() ? "signing domain is not " + CFG.label + " USDC" :
+        String(m.domain?.verifyingContract ?? "").toLowerCase() !== USDC.toLowerCase() ? "signing domain is not " + CFG.label + ` ${SYM}` :
         String(msg.from ?? "").toLowerCase() !== agent.account.address.toLowerCase() ? "payer is not the agent" :
         String(msg.to ?? "").toLowerCase() !== String(chosen.payTo).toLowerCase() ? "authorization recipient differs from the validated quote" :
         BigInt(msg.value ?? -1) !== BigInt(chosen.amount ?? chosen.maxAmountRequired) ? "authorization amount differs from the validated quote" :
@@ -194,9 +195,9 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
       res.payTo = pick.payTo;
       j.price = usdc(price);
       j.payTo = pick.payTo;
-      log(`seller asks ${usdc(price)} USDC, payTo ${pick.payTo}`);
+      log(`seller asks ${usdc(price)} ${SYM}, payTo ${pick.payTo}`);
       const onchainDecimals = await publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: "decimals" }).catch(() => null);
-      if (onchainDecimals !== USDC_DECIMALS) throw new Stop("precheck", `could not confirm USDC has ${USDC_DECIMALS} decimals on chain (read ${onchainDecimals})`);
+      if (onchainDecimals !== USDC_DECIMALS) throw new Stop("precheck", `could not confirm ${SYM} has ${USDC_DECIMALS} decimals on chain (read ${onchainDecimals})`);
       chosen = pick;
       // Ask the x402 client itself, BEFORE the pull, whether it will sign this exact option (spend controls, registered scheme, policy).
       // Its refusal after a landed pull would cost gas and force a return.
@@ -206,20 +207,20 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
       } catch (e: any) {
         throw new Stop("precheck", `the x402 client would not sign this option (${String(e?.message ?? e).split("\n")[0]}); nothing was pulled`);
       }
-      if (o.quoteOnly) throw new Stop("quote", `quote only: ${usdc(price)} USDC to ${pick.payTo}`);
+      if (o.quoteOnly) throw new Stop("quote", `quote only: ${usdc(price)} ${SYM} to ${pick.payTo}`);
       if (precheck) {
         const now = Math.floor(Date.now() / 1000);
         if (c.expiry && now > c.expiry) throw new Stop("precheck", `REFUSED: the budget expired at ${new Date(c.expiry * 1000).toISOString()} (public state file; the chain does not enforce it). The owner should revoke. No pull was made.`);
         const allowance = await allowanceOf(c.owner, agent.account.address);
-        log(`allowance ${usdc(allowance)} USDC`);
+        log(`allowance ${usdc(allowance)} ${SYM}`);
         if (allowance === 0n) throw new Stop("precheck", "REFUSED AT THE PULL: the allowance is 0 (revoked, spent or never set). No transferFrom was sent.");
         if (price > allowance) throw new Stop("precheck", `REFUSED AT THE PULL: price ${usdc(price)} exceeds the allowance ${usdc(allowance)}. No transferFrom was sent.`);
         const ownerBal = await usdcBalance(c.owner);
-        if (price > ownerBal) throw new Stop("precheck", `REFUSED AT THE PULL: price ${usdc(price)} exceeds the owner's USDC balance ${usdc(ownerBal)} (the allowance is ${usdc(allowance)}). No transferFrom was sent.`);
+        if (price > ownerBal) throw new Stop("precheck", `REFUSED AT THE PULL: price ${usdc(price)} exceeds the owner's ${SYM} balance ${usdc(ownerBal)} (the allowance is ${usdc(allowance)}). No transferFrom was sent.`);
         const held = await usdcBalance(agent.account.address);
         // CHAIN: where USDC is also the gas token (Arc) the agent always holds its gas reserve, so 0 is the wrong test. It may hold
         // up to reserveMax; more than that is treated as stranded funds.
-        if (GAS.isUsdc ? held > GAS.reserveMax! : held > 0n) throw new Stop("precheck", `REFUSED: the agent key already holds ${usdc(held)} USDC${GAS.isUsdc ? ` (more than the ${usdc(GAS.reserveMax!)} USDC gas reserve it should hold)` : ""}, stranded by an earlier operation. Owner: run ${cmd("recover.ts", "--op <id>")} (or ${cmd("recover.ts")}) first.`);
+        if (GAS.isUsdc ? held > GAS.reserveMax! : held > 0n) throw new Stop("precheck", `REFUSED: the agent key already holds ${usdc(held)} ${SYM}${GAS.isUsdc ? ` (more than the ${usdc(GAS.reserveMax!)} ${SYM} gas reserve it should hold)` : ""}, stranded by an earlier operation. Owner: run ${cmd("recover.ts", "--op <id>")} (or ${cmd("recover.ts")}) first.`);
         const gas = await nativeBalance(agent.account.address);
         if (gas < GAS.minAgent) throw new Stop("precheck", `REFUSED: the agent key has ${gasFmt(gas)} ${GAS.symbol}, not enough for the pull's gas (needs ${gasFmt(GAS.minAgent)}). Top it up first.`);
       }
@@ -230,7 +231,7 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
       writeJournal(j);
       const data = encodeFunctionData({ abi: erc20Abi, functionName: "transferFrom", args: [c.owner, agent.account.address, price] });
       try {
-        const sent = await sendJournaled(agent, USDC, data, `${o.tag ? `[${o.tag}] ` : ""}pull ${usdc(price)} USDC owner -> agent (transferFrom)`, ({ hash, nonce }) => {
+        const sent = await sendJournaled(agent, USDC, data, `${o.tag ? `[${o.tag}] ` : ""}pull ${usdc(price)} ${SYM} owner -> agent (transferFrom)`, ({ hash, nonce }) => {
           j.pullTx = hash;
           j.pullNonce = nonce;
           writeJournal(j);
@@ -271,7 +272,7 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
       // The pull is only good if the chain shows exactly the price leaving the owner.
       const seen = await readPull(j);
       if (!seen.found || seen.moved !== price) {
-        throw (stop = new Stop("reconciled", `the pull landed but the chain shows ${seen.found ? usdc(seen.moved ?? 0n) : "no"} USDC moving from the owner instead of ${usdc(price)}; not paying`));
+        throw (stop = new Stop("reconciled", `the pull landed but the chain shows ${seen.found ? usdc(seen.moved ?? 0n) : "no"} ${SYM} moving from the owner instead of ${usdc(price)}; not paying`));
       }
       res.pulled = price; // set only after the pull landed: this purchase may now pay
       res.pullTx = j.pullTx;

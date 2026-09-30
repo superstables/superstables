@@ -7,7 +7,7 @@ import "./cli-guard.mjs";
 //   not_found  nothing can land: no pull was signed, or the agent's nonce at the pull's position was used by a different transaction
 // npx tsx budget/evm/reconcile.ts [--chain <name>] --op <id>
 // Exit codes: 0 settled and delivered, 1 failed or not_found, 4 settled on chain but delivery not confirmed, 5 unknown.
-import { CFG, tx, usdc, usdcBalance, emit } from "./lib.ts";
+import { SYM, CFG, tx, usdc, usdcBalance, emit } from "./lib.ts";
 import { checkOpId, readJournal, reconcileJournal, resultLine, exitCodeFor, journalPath } from "./ops.ts";
 
 const op = checkOpId(process.argv[process.argv.indexOf("--op") + 1]);
@@ -22,7 +22,7 @@ console.log(`pull:        ${after.pullTx ? `${after.pullStatus ?? "?"} ${tx(afte
 console.log(`settlement:  ${after.settleTx ? `${after.settleStatus} ${tx(after.settleTx)}` : "none on chain"}`);
 if (after.cancelTx) console.log(`cancel auth: ${after.cancelStatus ?? "?"} ${tx(after.cancelTx)}`);
 if (after.returnTx) console.log(`return:      ${after.returnStatus ?? "?"} ${tx(after.returnTx)}`);
-console.log(`pulled from the owner: ${after.pulled ?? "unknown"} USDC, returned: ${after.returned ?? "0"} USDC, agent key holds now: ${usdc(await usdcBalance(after.agent))} USDC`);
+console.log(`pulled from the owner: ${after.pulled ?? "unknown"} ${SYM}, returned: ${after.returned ?? "0"} ${SYM}, agent key holds now: ${usdc(await usdcBalance(after.agent))} ${SYM}`);
 console.log(`verdict: ${verdict}${after.reason ? ` -- ${after.reason}` : ""}`);
 if (after.next && after.next !== "none") console.log(`next: ${after.next}`);
 console.log(await resultLine(after, "reconcile"));

@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { parseEventLogs, encodeFunctionData, parseSignature, type Address, type Hex } from "viem";
 import {
+  SYM,
   OPS_DIR, USDC, CFG, RAIL, cmd, erc20Abi, publicClient, usdc, sleep, tx, retry, allowanceOf, usdcBalance, readUntil, feeOf, sendJournaled, receiptOf,
   type Wallet,
 } from "./lib.ts";
@@ -217,14 +218,32 @@ export async function readSettlement(j: Journal): Promise<Settlement> {
   const latest = await publicClient.getBlockNumber();
   const fromBlock = j.pullBlock ? BigInt(j.pullBlock) : latest > 3000n ? latest - 3000n : 0n;
   const ev = (name: string) => erc20Abi.find((x: any) => x.name === name) as any;
+  // CHAIN: public RPCs cap eth_getLogs to a block range, and the caps differ (Base Sepolia 1,000, SKALE Base Sepolia 2,000,
+  // Amoy 10,000, Arc "range too large"). The search walks forward from the pull in windows: chains.mjs `logRange` when set, else the
+  // whole range; a refused window shrinks (10,000, then tenfold down to 100) before the error counts. It stops at the first hit.
+  const firstLog = async (name: string): Promise<Hex | undefined> => {
+    const head = await publicClient.getBlockNumber();
+    let step = CFG.logRange ? BigInt(CFG.logRange) : head - fromBlock + 1n;
+    for (let from = fromBlock; from <= head; ) {
+      const to = from + step - 1n < head ? from + step - 1n : head;
+      const query = () => publicClient.getLogs({ address: USDC, event: ev(name), args: { authorizer: j.agent, nonce: j.auth!.nonce }, fromBlock: from, toBlock: to });
+      let logs: any[];
+      try { logs = (await (step > 100n ? query() : retry(query))) as any[]; } catch (e) {
+        if (step <= 100n) throw e;
+        step = step > 10_000n ? 10_000n : step / 10n;
+        continue;
+      }
+      if (logs.length) return logs[0].transactionHash;
+      from = to + 1n;
+    }
+    return undefined;
+  };
   let usedTx: Hex | undefined, canceledTx: Hex | undefined;
   for (let i = 0; i < 5 && !usedTx && !canceledTx; i++) {
     if (i) await sleep(2000);
-    const used = await retry(() => publicClient.getLogs({ address: USDC, event: ev("AuthorizationUsed"), args: { authorizer: j.agent, nonce: j.auth!.nonce }, fromBlock, toBlock: "latest" }));
-    usedTx = (used as any[])[0]?.transactionHash;
+    usedTx = await firstLog("AuthorizationUsed");
     if (usedTx) break;
-    const canc = await retry(() => publicClient.getLogs({ address: USDC, event: ev("AuthorizationCanceled"), args: { authorizer: j.agent, nonce: j.auth!.nonce }, fromBlock, toBlock: "latest" }));
-    canceledTx = (canc as any[])[0]?.transactionHash;
+    canceledTx = await firstLog("AuthorizationCanceled");
   }
   if (canceledTx) return { used: false, canceled: true };
   if (!usedTx) return { used: true, canceled: false };
@@ -315,7 +334,7 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
       save("settled", undefined, "none", `settled (pull ${j.pullTx}, settlement ${j.settleTx})`);
       return { j, verdict: "settled" };
     }
-    save("unknown", "the authorization was used but the settlement transfer does not match the recorded recipient and amount", `read ${s.settleTx ? tx(s.settleTx) : "the USDC AuthorizationUsed log"} by hand. Do not pay again.`, "unknown (authorization used, transfer mismatch)");
+    save("unknown", "the authorization was used but the settlement transfer does not match the recorded recipient and amount", `read ${s.settleTx ? tx(s.settleTx) : `the ${SYM} AuthorizationUsed log`} by hand. Do not pay again.`, "unknown (authorization used, transfer mismatch)");
     return { j, verdict: "unknown" };
   }
 
@@ -332,13 +351,13 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   const why = !j.auth ? "the pull landed but no payment was ever signed" : s.canceled ? "the pull landed; the payment authorization was cancelled on chain before it settled" : "the pull landed; the payment authorization is expired on chain (block time past validBefore) and was never used";
   if (await authDead(j, s)) {
     if (returned) {
-      save("failed", `${why}; the price ${j.pulled} USDC was returned to the owner (${tx(j.returnTx!)})`, "none", "failed (funds returned)");
+      save("failed", `${why}; the price ${j.pulled} ${SYM} was returned to the owner (${tx(j.returnTx!)})`, "none", "failed (funds returned)");
       return { j, verdict: "failed" };
     }
     const held = await usdcBalance(j.agent);
     const next = held > 0n
-      ? `${usdc(held)} USDC is in the agent key (on a gas-in-USDC chain that includes its gas reserve). Owner: "${cmd("recover.ts", `--op ${j.op}`)}" (stops the allowance first, cancels the authorization if it is still open, then returns the price to the owner). Never pay again for this op.`
-      : `the agent key holds 0 USDC; check the owner balance by hand. Never pay again for this op.`;
+      ? `${usdc(held)} ${SYM} is in the agent key (on a gas-in-${SYM} chain that includes its gas reserve). Owner: "${cmd("recover.ts", `--op ${j.op}`)}" (stops the allowance first, cancels the authorization if it is still open, then returns the price to the owner). Never pay again for this op.`
+      : `the agent key holds 0 ${SYM}; check the owner balance by hand. Never pay again for this op.`;
     save("failed", why, next, "failed (pull landed, not settled, not returned)");
     return { j, verdict: "failed" };
   }
@@ -422,7 +441,7 @@ export async function makeSafe(j: Journal, w: Wallet, o: { log?: (s: string) => 
       return (await reconcileJournal(j, { quiet: true })).j;
     }
   }
-  log(`returning ${usdc(amount)} USDC from the agent to the owner ${j.owner}`);
+  log(`returning ${usdc(amount)} ${SYM} from the agent to the owner ${j.owner}`);
   const data = encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [j.owner, amount] });
   try {
     const sent = await sendJournaled(w, USDC, data, "return price to owner (agent)", ({ hash, nonce }) => { j.returnTx = hash; j.returnNonce = nonce; writeJournal(j); });

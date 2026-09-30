@@ -1,5 +1,5 @@
 // CLI guard for every runnable script in budget/evm/ (contract rule 6).
-// Every script also takes --chain <name> (value flag, added below): base-sepolia (default) or arc-testnet. Testnet only.
+// Every script also takes --chain <name> (value flag, added below): a key of chains.mjs, base-sepolia by default. Testnet only.
 //
 // Each script imports this file FIRST (`import "./cli-guard.mjs"`). ES modules evaluate imports in order, so the
 // checks below run before any other module of the script is loaded: before a secret file is read, before an RPC
@@ -15,9 +15,10 @@
 //   unknown chain name   exit 2 (chains.ts, also before any secret is read)
 //
 // The table is the single list of runnable scripts. A script that is not in it exits 2 (fail closed).
-// Only Node built-ins are used here.
+// Only Node built-ins and the plain chain table (chains.mjs, no imports) are used here.
 import { relative, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EVM_CHAIN_KEYS } from "./chains.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -36,7 +37,7 @@ const SPEC = {
 };
 
 // every script may take --chain <name> (chains.ts picks the chain; an unknown name exits 2 there)
-for (const s of Object.values(SPEC)) { s.v = [...s.v, "chain"]; s.u = `${s.u} [--chain base-sepolia|arc-testnet]`.trim(); }
+for (const s of Object.values(SPEC)) { s.v = [...s.v, "chain"]; s.u = `${s.u} [--chain ${EVM_CHAIN_KEYS.join("|")}]`.trim(); }
 
 export const SPEC_TABLE = SPEC;
 
@@ -62,8 +63,8 @@ if (argv.includes("--help") || argv.includes("-h")) {
 }
 
 // Testnet only. A mainnet named by --mainnet, --chain or B4_CHAIN (by name or chain id) is refused here, before anything else runs.
-const MAINNET_IDS = new Set(["1", "10", "56", "130", "137", "146", "480", "999", "1329", "5042", "8453", "42161", "43114"]);
-const MAINNET_NAMES = new Set(["base", "arc", "ethereum", "eth", "optimism", "op", "polygon", "arbitrum", "avalanche", "bsc"]);
+const MAINNET_IDS = new Set(["1", "10", "56", "130", "137", "143", "146", "480", "999", "1329", "4663", "5042", "8453", "42161", "42220", "43114", "1187947933"]);
+const MAINNET_NAMES = new Set(["base", "arc", "ethereum", "eth", "optimism", "op", "polygon", "arbitrum", "avalanche", "bsc", "monad", "sei", "celo", "robinhood", "skale-base"]);
 const looksMainnet = (v) => {
   const x = String(v).toLowerCase();
   return MAINNET_IDS.has(x.replace(/^eip155:/, "")) || MAINNET_NAMES.has(x) || x.includes("mainnet");
@@ -72,8 +73,8 @@ const ci = argv.indexOf("--chain");
 const chainValue = ci >= 0 ? argv[ci + 1] : process.env.B4_CHAIN;
 if (argv.includes("--mainnet") || (chainValue && !String(chainValue).startsWith("--") && looksMainnet(chainValue))) {
   const shown = argv.includes("--mainnet") ? "--mainnet" : String(chainValue);
-  process.stderr.write(`REFUSED: "${shown}" is a mainnet. superstables budget is testnet only (--chain base-sepolia or arc-testnet). Nothing was signed or sent.\n`);
-  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: shown, state: "refused_precheck", reason: "mainnet is refused: testnet only", next: "use --chain base-sepolia or --chain arc-testnet" })}\n`);
+  process.stderr.write(`REFUSED: "${shown}" is a mainnet. superstables budget is testnet only (--chain ${EVM_CHAIN_KEYS.join(", ")}). Nothing was signed or sent.\n`);
+  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: shown, state: "refused_precheck", reason: "mainnet is refused: testnet only", next: `use --chain ${EVM_CHAIN_KEYS.join(" or --chain ")}` })}\n`);
   process.exit(3);
 }
 
