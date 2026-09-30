@@ -634,6 +634,211 @@ describe("the owner approval page", () => {
   });
 });
 
+// ── detached owner approvals ─────────────────────────────────────────────────────────────
+//
+// An agent's shell tool shows a command's output only when it exits, so an owner command run
+// by an agent returns at once with its link and an approval id, while the page waits in a
+// detached background process; `superstables budget wait --id` reports the state. The worker
+// here stands in for the rail script and the dispatcher around it: it runs the real owner page
+// in its own detached process and records its link and its outcome through the same functions
+// the dispatcher uses. `wait` and the refusal of a second approval run through the real CLI.
+
+const REPO = join(import.meta.dirname, "..", "..");
+const CLI = join(REPO, "budget", "cli.mjs");
+const TSX = join(REPO, "node_modules", ".bin", "tsx");
+type Approvals = typeof import("../../budget/approvals.mjs");
+let approvals: Approvals;
+let budgetHome: string;
+let workerFile: string;
+const workers: number[] = [];
+
+beforeAll(async () => {
+  budgetHome = mkdtempSync(join(tmpdir(), "superstables-detached-test-"));
+  // paths.mjs reads the home once, when it is first imported
+  process.env.SUPERSTABLES_HOME = budgetHome;
+  approvals = await import("../../budget/approvals.mjs");
+  workerFile = join(budgetHome, "worker.mts");
+  writeFileSync(
+    workerFile,
+    `import { OwnerApprovalServer } from ${JSON.stringify(join(REPO, "src/core/signer/owner-approval-server.ts"))};
+import { WORKER_ENV, recordLink, recordFinal } from ${JSON.stringify(join(REPO, "budget/approvals.mjs"))};
+import { ownerApprovalsLog } from ${JSON.stringify(join(REPO, "budget/paths.mjs"))};
+const id = process.env[WORKER_ENV]!;
+const input = JSON.parse(process.env.OWNER_ACTION!);
+const server = new OwnerApprovalServer({ auditPath: ownerApprovalsLog() });
+await server.start();
+const handle = server.request(input);
+const t = input.terms;
+recordLink(id, { action: "grant", url: handle.url, expires: new Date(handle.expiresAt).toISOString(), terms: { title: t.title, amount: t.amount, unit: t.unit, summary: t.summary } });
+const outcome = await handle.settled;
+if (outcome.status === "sent") handle.finish({ ok: true, message: "Done.", hash: outcome.hash });
+await server.close();
+const base = { command: "grant", rail: "evm", chain: "base-sepolia" };
+const code = outcome.status === "sent" ? 0 : 3;
+recordFinal(id, code, outcome.status === "sent"
+  ? { ok: true, ...base, state: "settled", tx: { grant: outcome.hash }, id, url: handle.url, next: "none" }
+  : { ok: false, ...base, state: "refused_precheck", id, url: handle.url, reason: outcome.reason });
+process.exit(code);
+`,
+  );
+});
+
+afterEach(() => {
+  while (workers.length > 0) {
+    const pid = workers.pop()!;
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+});
+
+afterAll(() => {
+  rmSync(budgetHome, { recursive: true, force: true });
+});
+
+/** Start one detached approval on base-sepolia, as the dispatcher does. */
+async function detach(timeoutMs = 20_000) {
+  const id = approvals.newApprovalId();
+  expect(approvals.claim("evm", "base-sepolia", id).ok).toBe(true);
+  const started = await approvals.startDetached({
+    id, command: "grant", rail: "evm", chain: "base-sepolia", cmd: TSX, args: [workerFile], cwd: REPO,
+    env: { ...process.env, OWNER_ACTION: JSON.stringify(ownerAction({ timeoutMs })) }, timeoutS: Math.ceil(timeoutMs / 1000),
+  });
+  expect(started.kind).toBe("waiting");
+  const record = started.record!;
+  workers.push(record.pid);
+  return record;
+}
+
+/** Run the real budget CLI with the test's home. stdout is a pipe, as it is for an agent. */
+function budget(args: string[]): Promise<{ code: number; stdout: string; result: Record<string, any> }> {
+  return new Promise((done, fail) => {
+    const child = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, SUPERSTABLES_HOME: budgetHome } });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => (stdout += String(chunk)));
+    child.stderr.resume();
+    child.once("error", fail);
+    child.once("close", (code) => {
+      const line = stdout.trim().split("\n").reverse().find((l) => l.startsWith("RESULT "));
+      done({ code: code ?? 1, stdout, result: line ? JSON.parse(line.slice(7)) : {} });
+    });
+  });
+}
+
+async function gone(pid: number): Promise<boolean> {
+  for (let i = 0; i < 50 && approvals.alive(pid); i++) await new Promise((r) => setTimeout(r, 100));
+  return !approvals.alive(pid);
+}
+
+async function unreachable(url: string): Promise<boolean> {
+  try {
+    await fetch(`${url}/state`, { signal: AbortSignal.timeout(1000) });
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+describe("a detached owner approval", () => {
+  it("returns with the link at once; wait says waiting_owner, then the final result, the same every time", async () => {
+    const record = await detach();
+    expect(record.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/owner\/[0-9a-f]{32}$/);
+    expect(record.terms.title).toBe("give your agent a budget");
+    expect(approvals.alive(record.pid)).toBe(true);
+
+    const pending = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    expect(pending.code).toBe(0);
+    expect(pending.result).toMatchObject({ command: "grant", state: "waiting_owner", id: record.id, url: record.url, expires: record.expires });
+    expect(pending.result.terms.amount).toBe("0.01");
+    expect(pending.result.reason).toContain("waiting for the owner");
+    expect(pending.result.next).toContain(`superstables budget wait --id ${record.id}`);
+
+    // the owner approves in the wallet
+    await postJson(`${record.url}/account`, { address: OWNER.address });
+    const connected = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    expect(connected.result.reason).toContain("connected their wallet");
+    await postJson(`${record.url}/sending`, { address: OWNER.address });
+    await postJson(`${record.url}/sent`, { address: OWNER.address, hash: HASH });
+
+    const settled = await budget(["wait", "--id", record.id, "--timeout", "10"]);
+    expect(settled.code).toBe(0);
+    expect(settled.result).toMatchObject({ command: "grant", state: "settled", id: record.id, tx: { grant: HASH } });
+    const again = await budget(["wait", "--id", record.id]);
+    expect(again.code).toBe(0);
+    expect(again.stdout).toBe(settled.stdout);
+
+    // the worker ended, its page is closed, and the chain is free for the next owner command
+    expect(await gone(record.pid)).toBe(true);
+    expect(await unreachable(record.url)).toBe(true);
+    expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
+  });
+
+  it("ends a link nobody answers as expired, and its process exits and frees the chain", async () => {
+    const record = await detach(1_500);
+    const outcome = await approvals.waitFor(record.id, 10_000);
+    expect(outcome).toMatchObject({ final: true, code: 3 });
+    expect(outcome!.final && outcome!.result).toMatchObject({ state: "refused_precheck" });
+    expect(String(outcome!.final && outcome!.result.reason)).toContain("Nothing was sent");
+    expect(await gone(record.pid)).toBe(true);
+    expect(await unreachable(record.url)).toBe(true);
+    expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
+    // and a later wait still says the same
+    const later = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    expect(later.code).toBe(3);
+    expect(later.result.state).toBe("refused_precheck");
+  });
+
+  it("refuses a second owner command on the chain while one is pending, and points to it", async () => {
+    const record = await detach();
+    const second = await budget(["grant", "--rail", "evm", "--amount", "0.001"]);
+    expect(second.code).toBe(3);
+    expect(second.result).toMatchObject({ command: "grant", state: "refused_precheck", id: record.id, url: record.url });
+    expect(second.result.next).toContain(`superstables budget wait --id ${record.id}`);
+    expect(second.result.next).toContain("--replace");
+    expect(approvals.findPending("evm", "base-sepolia")?.id).toBe(record.id);
+
+    // the owner rejects on the page: the chain is free again, and wait says it was rejected
+    await postJson(`${record.url}/reject`, { by: "page" });
+    const rejected = await budget(["wait", "--id", record.id, "--timeout", "10"]);
+    expect(rejected.code).toBe(3);
+    expect(rejected.result.reason).toContain("rejected it on the page");
+    expect(await gone(record.pid)).toBe(true);
+    expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
+  });
+
+  it("replaces a pending approval only while the wallet has not been asked to send", async () => {
+    const asked = await detach();
+    await postJson(`${asked.url}/account`, { address: OWNER.address });
+    await postJson(`${asked.url}/sending`, { address: OWNER.address });
+    const kept = await approvals.replacePending(asked, "oa-20260930000000-00000000");
+    expect(kept.ok).toBe(false);
+    expect(approvals.alive(asked.pid)).toBe(true);
+    await postJson(`${asked.url}/reject`, { by: "wallet" });
+    await approvals.waitFor(asked.id, 10_000);
+
+    const idle = await detach();
+    expect((await approvals.replacePending(idle, "oa-20260930000000-00000000")).ok).toBe(true);
+    expect(await gone(idle.pid)).toBe(true);
+    const replaced = await budget(["wait", "--id", idle.id]);
+    expect(replaced.code).toBe(3);
+    expect(replaced.result.reason).toContain("replaced by oa-20260930000000-00000000");
+    expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
+  });
+
+  it("reports a worker that died without a result from what its page last logged", async () => {
+    const record = await detach();
+    process.kill(-record.pid, "SIGKILL");
+    expect(await gone(record.pid)).toBe(true);
+    const outcome = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    expect(outcome.code).toBe(3);
+    expect(outcome.result).toMatchObject({ state: "refused_precheck", id: record.id });
+    expect(outcome.result.reason).toContain("stopped before anything was sent");
+    expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
+  });
+});
+
 /** Poll a condition on loopback. Everything here is local, so this is milliseconds. */
 async function waitFor(ready: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

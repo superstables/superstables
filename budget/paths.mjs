@@ -8,6 +8,7 @@
 //   $SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env   public addresses and budget terms, no secret.
 //   $SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/<id>.json   one journal per purchase.
 //   $SUPERSTABLES_HOME/budget/owner-approvals.jsonl          one line per owner page state change (no signatures).
+//   $SUPERSTABLES_HOME/budget/approvals/<id>.json and .log  one detached owner approval: its record and its process log.
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -27,3 +28,4 @@ export const agentKeyFile = (rail) => join(KEYS_DIR, `${rail}-agent.env`);
 export const publicFile = (rail, chain) => join(STATE_DIR, "public", `${rail}-${chain}.env`);
 export const opsDir = (rail, chain) => join(STATE_DIR, "ops", `${rail}-${chain}`);
 export const ownerApprovalsLog = () => join(STATE_DIR, "owner-approvals.jsonl");
+export const approvalsDir = () => join(STATE_DIR, "approvals");

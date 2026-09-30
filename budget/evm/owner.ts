@@ -4,7 +4,7 @@
 // asks the wallet to send exactly that transaction. The command then reads the chain itself: the hash
 // the page reports is only a pointer. The agent's machine never holds the owner key.
 //
-// The link is printed as one stdout line `APPROVE {"action","url","expires"}` (cli.mjs passes it on)
+// The link is printed as one stdout line `APPROVE {"action","url","expires","terms"}` (cli.mjs passes it on)
 // and as a sentence on stderr. The default browser opens it too, unless --no-open.
 // --timeout <seconds> sets how long the link stays open (default 600).
 import { spawn } from "node:child_process";
@@ -52,9 +52,11 @@ function openBrowser(url: string) {
   } catch {}
 }
 
-function announce(action: string, h: OwnerActionHandle) {
+function announce(action: string, h: OwnerActionHandle, t: OwnerTerms) {
   const minutes = Math.round((h.expiresAt - Date.now()) / 60000);
-  console.log(`APPROVE ${JSON.stringify({ action, url: h.url, expires: new Date(h.expiresAt).toISOString() })}`);
+  // The plain terms travel with the link, so a caller that is not watching stderr can show them next to it.
+  const terms = { title: t.title, amount: t.amount, unit: t.unit, summary: t.summary, enforced: t.enforced, notEnforced: t.notEnforced };
+  console.log(`APPROVE ${JSON.stringify({ action, url: h.url, expires: new Date(h.expiresAt).toISOString(), terms })}`);
   console.error(`\nThe owner approves this in their own wallet. Open this link in the browser where the wallet is (MetaMask or another):\n\n  ${h.url}\n\nThe link works on this computer only and expires in ${minutes >= 1 ? `${minutes} minute${minutes === 1 ? "" : "s"}` : `${Math.round((h.expiresAt - Date.now()) / 1000)} seconds`}. Nothing is sent until the owner approves in the wallet. Waiting...\n`);
   if (!flag("no-open")) openBrowser(h.url);
 }
@@ -63,7 +65,7 @@ function announce(action: string, h: OwnerActionHandle) {
 export async function askConnect(action: string, terms: OwnerTerms, signIn: string) {
   const s = await page();
   const handle = s.request({ kind: "connect", chain: OWNER_CHAIN, terms, signIn, timeoutMs: TIMEOUT_MS });
-  announce(action, handle);
+  announce(action, handle, terms);
   return { handle, outcome: await handle.settled };
 }
 
@@ -74,7 +76,7 @@ export async function askTransaction(action: string, owner: Address, t: { to: Ad
     kind: "evm-transaction", chain: OWNER_CHAIN, terms, account: owner, timeoutMs: TIMEOUT_MS,
     transaction: { to: t.to, data: t.data ?? "0x", value: `0x${(t.value ?? 0n).toString(16)}` },
   });
-  announce(action, handle);
+  announce(action, handle, terms);
   return { handle, outcome: await handle.settled };
 }
 
