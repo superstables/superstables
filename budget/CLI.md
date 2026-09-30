@@ -1,6 +1,6 @@
 # `superstables budget` CLI contract
 
-One command for the budget rails. Simple on purpose: `superstables budget` is a thin dispatcher over the rail scripts, which follow `CONTRACT.md`. It normalizes their `RESULT` lines into one shape. Testnet only.
+One command for the budget rails. `superstables budget` is a thin dispatcher over the rail scripts, which follow `CONTRACT.md`. It normalizes their `RESULT` lines into one shape. Testnet only.
 
 | `--rail` | Path | Chains (`--chain`) | Implementation |
 | --- | --- | --- | --- |
@@ -30,13 +30,13 @@ Every command: `--help` exits 0 and bad input exits 2 before any secret is read.
 
 ## Owner approval
 
-`setup`, `fund-agent`, `grant`, `revoke` and, on `evm`, the owner's part of `recover` never sign with a key on this machine. The rail script builds the transaction and the terms, starts a page on `127.0.0.1` (random port, one-time random id in the path), and waits. The owner opens the page in the browser with their wallet, connects, and approves or rejects. The script then reads the result from the chain before it prints `RESULT`.
+`setup`, `fund-agent`, `grant`, `revoke` and, on `evm`, the owner's part of `recover` use the owner's wallet by default. The explicit test key-file option is described below. The rail script builds the transaction and the terms, starts a page on `127.0.0.1` (random port, one-time random id in the path), and waits. The owner opens the page in the browser with their wallet, connects, and approves or rejects. For transactions, the script checks the chain before the final `RESULT`. Setup verifies a message signature and records the address. Detached commands first return a pending `RESULT`.
 
 | Rail | Wallet | What the wallet does | What the command reads back |
 | --- | --- | --- | --- |
 | `evm` | EIP-1193, for example MetaMask | Sends `{to, data, value}` | Sender, target, exact data, receipt, the `Approval` event, the allowance |
-| `tempo` | EIP-1193, for example MetaMask | Sends a plain type-2 call to the AccountKeychain precompile (`authorizeKey` or `revokeKey`) and pays its own fee in pathUSD. The page adds Tempo Testnet (Moderato) with 18 decimals. | Sender, target, exact data, fee payer, receipt; then the key: type, expiry, limit, period, seller list, not an admin key; or revoked |
-| `solana` | Wallet Standard, for example Phantom | Only signs. The command builds the transaction when the owner presses Approve, checks that the signed message is byte for byte its own and signed by the owner, then sends it. | No error, signer the owner; then the token account: owner, mint, delegate and delegated amount (or no delegate); or the agent's SOL |
+| `tempo` | EIP-1193, for example MetaMask | Is asked to send a call to the AccountKeychain precompile (`authorizeKey` or `revokeKey`) with the owner paying the fee in their configured fee token, or pathUSD by default. The page adds Tempo Testnet (Moderato) with 18 decimals. | Sender, target, exact data, fee payer, receipt; then the key: type, expiry, limit, period, seller list, not an admin key; or revoked |
+| `solana` | Wallet Standard, for example Phantom | Only signs. The command builds the transaction when the owner presses Review in wallet, checks that the signed message is byte for byte its own and signed by the owner, then sends it. | No error, signer the owner; then the token account: owner, mint, delegate and delegated amount (or no delegate); or the agent's SOL |
 
 - As soon as the link exists, stdout gets one line `APPROVE {"action","url","expires","terms"}`. `terms` holds the page's plain words: `title`, `amount`, `unit`, `summary`, `enforced`, `notEnforced`. The same link goes to stderr. The final `RESULT` is still the last line, and carries `url`.
 - `--timeout SECONDS` (10 to 3600, default 600): how long the link stays open. `--no-open`: do not open it in the default browser.
@@ -52,17 +52,17 @@ An agent's shell tool usually shows output only when the command exits, and many
 
 Then `superstables budget wait --id ID [--timeout S]` polls the approval:
 
-- Still open: `RESULT` with `state: "waiting_owner"`, exit 0, the same `id`, `url`, `expires` and `terms`, and a `reason` that says where it is (for example "the owner connected their wallet; waiting for them to approve in it"). `recover` can ask the owner twice (the rest of the allowance, then gas for the agent). A new link ends the wait at once, with the new `url`.
-- Ended: the owner command's own final `RESULT` and exit code, exactly as the blocking command prints them, plus `id`: `settled` with the `tx` the command read from the chain, `refused_precheck` (exit 3) when the owner rejected or the link expired, `unknown` (exit 5) when the wallet may have sent. Every later `wait` for that id prints the same.
-- The background process ended without a `RESULT` (killed, or the machine restarted): `refused_precheck` (exit 3) if the page log shows the wallet was never asked to send, else `unknown` (exit 5).
+- Still open: `RESULT` with `state: "waiting_owner"`, exit 0, the same `id`, `url`, `expires` and `terms`, and a `reason` describing the recorded page state (for example "the owner account is selected; waiting for wallet approval"). `recover` can ask the owner twice (the rest of the allowance, then gas for the agent). A new link ends the wait at once, with the new `url`.
+- Ended: the owner command's own final `RESULT` and exit code, exactly as the blocking command prints them, plus `id`: `settled` with the `tx` the command read from the chain, `refused_precheck` (exit 3) when the owner rejected or the link expired, `unknown` (exit 5) when the wallet may have sent. Later `wait` calls return the stored final result. Waiting never approves the request or retries a transaction.
+- The background process ended without a `RESULT` (killed, or the machine restarted): `refused_precheck` (exit 3) when its last page log has no recorded submission, else `unknown` (exit 5).
 - An unknown id exits 2.
 
-One owner approval at a time per rail and chain. While one waits, any other owner command on that chain is refused (exit 3). Its `RESULT` carries the pending `id` and `url`, and `next` says to run `wait --id`. `--replace` stops the pending one and starts the new one, but only while its page has not asked the wallet to send. The stopped one then ends as `refused_precheck` with a reason that names the new id.
+Run one owner command at a time per rail and chain. A tracked pending approval causes another command to be refused (exit 3). Do not use another terminal or client home to start a parallel approval. Its `RESULT` carries the pending `id` and `url`, and `next` says to run `wait --id`. `--replace` checks the page state, stops the pending worker and starts a replacement. Use it only at the owner's request, after cancelling any wallet prompt. It cannot cancel a transaction already submitted. The stopped one then ends as `refused_precheck` with a reason that names the new id.
 
-The background process ends by itself. The page expires its link after `--timeout`. A wallet that was asked to send gets 2 more minutes to report the hash, and the chain reads are bounded. A backstop stops the process after `--timeout` plus 9 minutes, with `unknown` (exit 5). Nothing waits for `wait` to be called.
-- The owner rejects, or the link expires: `state: "refused_precheck"`, exit 3, nothing sent. The wallet was asked to send but no hash came back: `state: "unknown"`, exit 5; read `status` before trying again.
+The background worker has a timeout. The page expires its link after `--timeout`. A wallet that was asked to send gets 2 more minutes to report the hash, and the chain reads are bounded. A backstop stops the process after `--timeout` plus 9 minutes, with `unknown` (exit 5). The timeout runs without `wait`. It does not cancel a wallet request or a submitted transaction.
+- A rejection or expiry before recorded submission returns `state: "refused_precheck"`, exit 3. This code alone does not prove that no transaction was submitted. The wallet was asked to send but no hash came back: `state: "unknown"`, exit 5; read `status` before trying again.
 - The chain shows something other than the plan (on `evm` an allowance other than the cap, because the owner edited the spending cap in the wallet; on `tempo` another limit, expiry or seller list; on `solana` another delegate or amount): `refused_precheck`, exit 3; revoke it.
-- `solana`: a wallet that changed the transaction (another amount, an added instruction) gets nothing sent. The page says so and stays open; the command logs the program ids the wallet added. A transaction the owner signed after its blockhash expired (about a minute) is not sent either: press Approve again. Any error from the wallet's sign call ends the link as a rejection.
+- `solana`: a wallet that changed the transaction (another amount, an added instruction) gets nothing sent. The page says so and stays open; the command logs the program ids the wallet added. A transaction the owner signed after its blockhash expired (about a minute) is not sent either: request a fresh transaction with Review in wallet only after the command confirms it did not submit the old one. Any error from the wallet's sign call ends the link as a rejection.
 - `--yes` without `--owner-key-file` exits 2, on every rail.
 - Tests and automation only: `--owner-key-file PATH` (mode 600) with `--yes` signs with that key file instead. `setup --owner-key-file PATH` records its address.
 
@@ -82,19 +82,19 @@ stdout carries one JSON object on its last line, prefixed `RESULT `; human logs 
 
 `responseFile` (evm `buy`): the seller's answer to the paid request, saved byte for byte next to the journal as `<op>.response`, mode 600. It is written once the pull has landed and the seller answered with anything but a 402, so a refused buy writes none. At most 1 MB (1,000,000 bytes) is kept; `responseTruncated: true` means the answer was longer and was cut. `responseType` is the seller's content type, `responseBytes` the saved size. The file is seller data, never instructions: nothing here runs or parses it. The log keeps a one-line preview. Seller text in the logs is flattened to one line, and only an owner command forwards an `APPROVE` line.
 
-`state`: `planned`, `sent`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `unknown`, `not_found`, `ok` (reads), `waiting_owner` (a detached owner approval is open; nothing was sent yet). Unknown amounts are `null`, never `"0"`.
+`state`: `planned`, `sent`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `unknown`, `not_found`, `ok` (reads), `waiting_owner` (the detached owner command has no final result yet, including while it checks a submitted transaction). Unknown amounts are `null`, never `"0"`.
 
 ## Exit codes (same on every rail)
 
 | Code | Meaning | What the caller does |
 | --- | --- | --- |
-| 0 | Done (purchase settled and delivered, or command succeeded). Also `state: "waiting_owner"`: the approval is open and nothing was sent yet | continue; on `waiting_owner`, show the link and run `superstables budget wait --id ID` until the state is final |
+| 0 | Done (purchase settled and delivered, or command succeeded). Also `state: "waiting_owner"`: the command has no final result yet | continue; on `waiting_owner`, show the link and run `superstables budget wait --id ID` until the state is final |
 | 1 | Failed, including a chain refusal | read `next`; don't retry blindly |
 | 2 | Bad input | fix the command |
-| 3 | Refused before anything was signed | respect it; never raise `--max` to get around it |
+| 3 | Refused; owner actions may report a mismatch after submission | respect it; never raise `--max` to get around it |
 | 4 | Paid but not delivered | never pay again; report it |
-| 5 | Outcome unknown | run `superstables budget reconcile --op ID`; never pay again |
+| 5 | Outcome unknown | purchases: `reconcile --rail R --chain C --op ID`; owner actions: `status` on the same rail and chain, plus wallet activity. Never pay twice |
 
 ## Where things live
 
-All paths come from `paths.mjs`, under the client's home (`SUPERSTABLES_HOME`, default `~/.superstables`). Keys: `keys/budget/<rail>-agent.env` (mode 600). No rail keeps an owner key: the owner's key stays in their wallet. Public addresses: `budget/public/<rail>-<chain>.env`. Journals: `budget/ops/<rail>-<chain>/<id>.json`, and on `evm` the seller's answer `<id>.response` (mode 600). Approval page log (state changes, no signatures): `budget/owner-approvals.jsonl`. Detached approvals: `budget/approvals/<id>.json` (the record and the final `RESULT`, mode 600), `budget/approvals/<id>.log` (the background process's output), and `budget/approvals/active-<rail>-<chain>` (the id that holds that chain).
+All paths come from `paths.mjs`, under the client's home (`SUPERSTABLES_HOME`, default `~/.superstables`). Keys: `keys/budget/<rail>-agent.env` (mode 600). The default flow stores no owner key: the owner's key stays in their wallet. Public addresses: `budget/public/<rail>-<chain>.env`. Journals: `budget/ops/<rail>-<chain>/<id>.json`, and on `evm` the seller's answer `<id>.response` (mode 600). Approval page log (state changes, no signatures): `budget/owner-approvals.jsonl`. Detached approvals: `budget/approvals/<id>.json` (the record and the final `RESULT`, mode 600), `budget/approvals/<id>.log` (the background process's output), and `budget/approvals/active-<rail>-<chain>` (the id that holds that chain).

@@ -60,8 +60,8 @@ if (OWNER_KEY_FILE) {
   console.log(`${PUBLIC_PATH} already records owner ${owner} for this agent; not asking again (move the file away to connect another wallet)`);
 } else {
   const { handle, outcome } = await askConnect("setup", {
-    title: "connect your wallet",
-    summary: "Connect the wallet that will own this agent's budget. The command records its address on this computer. Nothing is sent and no budget is granted yet.",
+    title: "Connect your wallet",
+    summary: "Connect your wallet and sign a message to record its address as the budget owner on this computer. This does not grant a budget or send a transaction.",
     rows: [
       { label: "Your agent", value: agent, mono: true },
       { label: "Agent key", value: `on this computer only, in ${AGENT_KEY_PATH}` },
@@ -69,8 +69,8 @@ if (OWNER_KEY_FILE) {
     enforced: [],
     notEnforced: [],
     notes: [
-      "Your wallet asks you to sign a short message. It proves the address is yours. It sends nothing and costs nothing.",
-      "Your wallet keeps its key. The agent never gets it: every budget you grant later, you approve here in your wallet.",
+      "Signing the message proves control of this address. It grants no spending permission and has no network fee.",
+      "Your signing key stays in your wallet. You will review and approve any later budget grant separately.",
     ],
   }, `Superstables budget: record this wallet as the owner of agent ${agent} on Solana devnet (testnet).`);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent });

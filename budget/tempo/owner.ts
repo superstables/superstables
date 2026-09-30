@@ -48,7 +48,7 @@ export function emit(command: string, exit: number, o: Record<string, unknown>):
 export const agentFlag = (label: string) => (label ? ` --agent ${label}` : '')
 export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   chain: TEMPO_OWNER_CHAIN,
-  walletWords: 'MetaMask or another',
+  walletWords: 'MetaMask or another EVM wallet',
   statusCommand: 'superstables budget status --rail tempo',
   emit,
 })
@@ -242,12 +242,12 @@ export function grantTerms(p: GrantPlan & { owner: Address; expirySeconds: numbe
   const { windows, max } = maxByExpiry(p.limit, p.expirySeconds, p.period)
   const most = `${fromBaseUnits(max)} ${TOKEN_LABEL}`
   return {
-    title: 'give your agent a budget',
+    title: 'Grant a spending budget',
     amount: fromBaseUnits(p.limit),
     unit: TOKEN_LABEL,
     summary: p.period
-      ? `Your agent may spend up to ${amt} every ${every(p.period)} from your account, until ${iso(p.expiry)}. That is at most ${most} in total by then.`
-      : `Your agent may spend up to ${amt} from your account, in total, until ${iso(p.expiry)}.`,
+      ? `Allow the agent key to spend up to ${amt} every ${every(p.period)} until ${iso(p.expiry)}. The planned maximum is ${most} by expiry. Purchases need no further approval.`
+      : `Allow the agent key to spend up to ${amt} from your account in total until ${iso(p.expiry)}. Purchases need no further approval.`,
     rows: [
       { label: 'Agent key', value: p.agent, mono: true },
       { label: 'Your account', value: p.owner, mono: true },
@@ -255,23 +255,23 @@ export function grantTerms(p: GrantPlan & { owner: Address; expirySeconds: numbe
       { label: 'Limit', value: p.period ? `${amt} every ${every(p.period)} (the limit refills each period)` : `${amt} in total (no refill)` },
       { label: 'Expires', value: `${iso(p.expiry)} (in about ${about(p.expirySeconds)})` },
       { label: 'Sellers', value: p.sellers ? p.sellers.join(', ') : 'any address' },
-      { label: 'Most by expiry', value: `${most}${windows > 1 ? ` (${windows} periods of ${amt})` : ''}` },
+      { label: 'Planned maximum by expiry', value: `${most}${windows > 1 ? ` (${windows} periods of ${amt})` : ''}` },
       { label: 'You hold', value: `${fromBaseUnits(p.held)} ${TOKEN_LABEL}` },
       { label: 'Transaction', value: `AccountKeychain.authorizeKey(${p.agent}, ...) at ${KEYCHAIN}`, mono: true },
     ],
     enforced: [
-      p.period ? `A limit of ${amt} per period, and ${most} at most by expiry.` : `A total limit of ${amt}. Once the agent has used it, it can spend nothing more.`,
+      p.period ? `A limit of ${amt} per period until expiry.` : `A total limit of ${amt}. Once the agent has used it, it can spend nothing more.`,
       `The expiry. After ${iso(p.expiry)} every payment the key signs is refused.`,
-      ...(p.sellers ? [`The seller list. The key can pay only ${p.sellers.length === 1 ? 'that address' : 'those addresses'}.`] : []),
-      'The chain checks every payment the key signs, even with a stolen key.',
+      ...(p.sellers ? [`The seller list. The key can call only token transfers to ${p.sellers.length === 1 ? 'that address' : 'those addresses'}.`] : []),
+      'These limits apply to transactions using this access key, even if the key is stolen.',
     ],
     notEnforced: [
-      ...(p.sellers ? [] : ['No seller list. Whoever holds the agent key can pay any address, up to the limit.']),
-      "No per-payment limit. The agent's command checks each price against a maximum, but a stolen key skips that check.",
+      ...(p.sellers ? [] : ['No call or seller restriction. Whoever holds the key can make other calls as your account, subject to the keychain limits.']),
+      "No per-payment limit. The CLI checks --max, but anyone using the key outside the CLI can skip it.",
     ],
     notes: [
-      `Your wallet shows "Interacting with ${KEYCHAIN.slice(0, 7)}...${KEYCHAIN.slice(-5)}" and no amounts. The terms above are what this transaction sets; the command reads them back from the chain.`,
-      `Your wallet may first ask to add Tempo Testnet (Moderato). You pay a small network fee in ${p.feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : `your fee token ${p.feeToken}`}; it moves no money to the agent now.`,
+      `Your wallet may show "Interacting with ${KEYCHAIN.slice(0, 7)}...${KEYCHAIN.slice(-5)}" without decoding the limit. Review the terms above. Do not change the transaction; the command checks the resulting key on chain.`,
+      `Your wallet may first ask to add Tempo Testnet (Moderato). The expected fee token is ${p.feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : p.feeToken}. Check both the token and fee in your wallet. No budget funds transfer now. Later agent fees paid from your pathUSD count against its limit.`,
       `To end the budget at any time: superstables budget revoke --rail tempo${agentFlag(p.label)}. You approve that in your wallet too.`,
       'A revoked or expired key can never be granted again: the next budget needs a new agent key (superstables budget setup --rail tempo --agent LABEL).',
     ],
@@ -280,23 +280,23 @@ export function grantTerms(p: GrantPlan & { owner: Address; expirySeconds: numbe
 
 export function revokeTerms(p: { owner: Address; agent: Address; remaining: bigint; expiry: number; feeToken: Address; label: string }): OwnerTerms {
   return {
-    title: "end your agent's budget",
+    title: "Revoke spending permission",
     amount: fromBaseUnits(p.remaining),
     unit: TOKEN_LABEL,
-    summary: `This ends your agent's key for good: the ${fromBaseUnits(p.remaining)} ${TOKEN_LABEL} it has left can no longer be spent. From the block it lands in, every payment the key signs is refused.`,
+    summary: `Permanently revoke this access key, which has ${fromBaseUnits(p.remaining)} ${TOKEN_LABEL} remaining. Once confirmed on chain, the key can no longer submit transactions as your account.`,
     rows: [
       { label: 'Agent key', value: p.agent, mono: true },
       { label: 'Your account', value: p.owner, mono: true },
       { label: 'Key would expire', value: iso(p.expiry) },
       { label: 'Transaction', value: `AccountKeychain.revokeKey(${p.agent}) at ${KEYCHAIN}`, mono: true },
     ],
-    enforced: ['From that block on, every payment by this key fails, even one signed earlier, even with a stolen key.'],
+    enforced: ['Once this revoke takes effect, transactions using this access key fail, including ones signed earlier. The key remains revoked even if stolen.'],
     notEnforced: [
-      'A payment session the key opened elsewhere. superstables budget never opens one; the command lists any it finds after the revoke.',
-      'A payment mined before this transaction.',
+      'No closure of payment sessions opened elsewhere. Existing vouchers may still settle. This CLI never opens sessions; its scan reports only those it can find.',
+      'No reversal of payments confirmed before this revoke.',
     ],
     notes: [
-      `This costs a small network fee in ${p.feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : 'your fee token'} and moves no money.`,
+      `This revokes permission; it does not return funds. The expected fee token is ${p.feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : p.feeToken}. Check both the token and fee in your wallet.`,
       'This key can never be granted again. For a new budget, make a new agent key: superstables budget setup --rail tempo --agent LABEL.',
     ],
   }

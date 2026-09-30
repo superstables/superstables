@@ -1,18 +1,18 @@
 # superstables budget
 
-An owner gives an AI agent a spending budget once. The agent then buys from paid APIs (x402 and MPP sellers) with USDC (pathUSD on Tempo) until the budget runs out or the owner revokes it. The budget lives on the blockchain. Every purchase runs through a small command line tool, `superstables budget`, so the agent never moves money with its own code.
+An owner gives an AI agent a spending budget once. The agent then buys from paid APIs (x402 and MPP sellers) with USDC (pathUSD on Tempo) until the budget runs out, expires on Tempo, or the owner revokes it. The budget lives on the blockchain. The agent uses `superstables budget` to check and journal purchases. The agent key can also be used outside the CLI, so only the limits enforced on chain constrain a compromised key.
 
 **Testnet only.** `superstables budget` refuses mainnet chains. Do not point it at real money.
 
 Three ideas hold it together:
 
-- **The chain enforces the budget.** The owner approves two things in their own wallet: grant and revoke. The agent signs each purchase with its own key. No Superstables server is in the path.
-- **Money movement is code, not the agent's judgment.** Before it signs anything, `superstables budget buy` checks the price against `--max`, the token, and the seller's address. The agent only reads the result and the exit code.
+- **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes, funding transfers and any owner steps in recovery. The agent signs each purchase with its own key. No Superstables server is in the path.
+- **The CLI checks each purchase.** Before it signs anything, `superstables budget buy` checks the price against `--max`, the token and, when `--pay-to` is supplied, the expected recipient. The agent must read the result and the exit code.
 - **Every purchase has an ID and a journal.** If a run dies half way, `superstables budget reconcile` reads the chain and says what happened. It never pays.
 
 ## How it works
 
-The **owner** grants a budget from their own wallet: MetaMask (or another browser wallet) on `evm` and `tempo`, Phantom (or another Solana wallet) on `solana`. The **agent** buys within it using a separate key. The agent's machine holds only the agent key: it never holds the owner key, and it cannot approve anything for the owner.
+The **owner** grants a budget from their own wallet: MetaMask (or another browser wallet) on `evm` and `tempo`, Phantom (or another Solana wallet) on `solana`. The **agent** buys within it using a separate key. The default flow stores only the agent key in the CLI home. Owner transactions require the owner's wallet signature. Keep owner key files out of the agent's environment.
 
 Below, command names are shorthand for `npx superstables budget <command> --rail evm`. Add `--chain arc-testnet` for Arc Testnet; the default is Base Sepolia.
 
@@ -20,26 +20,26 @@ The steps use the `evm` rail. On `tempo` (access key) and `solana` (SPL delegate
 
 1. **Set up.** `setup` creates the agent key and opens a page where the owner connects their wallet. Then fund the owner with test tokens and give the agent gas (`fund-agent`). `doctor` checks the agent key, the owner's address, balances and the RPC.
 2. **Grant.** `grant --amount <cap>` prints the plan and opens an approval page on this computer. The page shows the cap, the agent, the chain, and what the chain enforces and does not: a total cap, but no expiry and no seller list. The owner approves one transaction in their wallet. The command then reads the chain itself and prints the result.
-3. **Buy.** `preflight --url <seller>` reads the seller's price and address without signing anything. `buy --url <seller> --max <price> --op <id>` checks the price and token. Add `--pay-to <address>` to check the expected recipient. It journals the purchase, pulls the price from the owner, then signs a payment authorization for the seller's facilitator to settle. Read `RESULT` and the exit code; settlement and delivery are reported separately. What the seller sent back is saved next to the journal, and `RESULT` names the file (`responseFile`).
-4. **Stay in control.** `status` reads the remaining allowance. `revoke` opens the approval page again: once the owner approves it, no more pulls work, even with a stolen agent key. It does not stop payments from funds already pulled. `recover` returns stranded USDC: the agent key sends it back, and the owner approves in the wallet only what the agent cannot do. It keeps Arc's gas reserve.
+3. **Buy.** `preflight --url <seller>` reads the seller's price and address without signing anything. `buy --url <seller> --max <your-ceiling> --op <id>` checks the price and token. Add `--pay-to <address>` to check the expected recipient. It journals the purchase, pulls the price from the owner, then signs a payment authorization for the seller's facilitator to settle. Read `RESULT` and the exit code; settlement and delivery are reported separately. What the seller sent back is saved next to the journal, and `RESULT` names the file (`responseFile`).
+4. **Stay in control.** `status` reads the remaining allowance. `revoke` opens the approval page again: once the revoke takes effect on chain, this allowance no longer permits withdrawals, even with a stolen agent key. It does not stop payments from funds already pulled. `recover` attempts to return recoverable USDC: the agent key sends it back, and the owner approves in the wallet only what the agent cannot do. It keeps Arc's gas reserve.
 
 ### The approval page
 
-Every owner action works the same way, on every rail. The command builds the transaction and the terms, starts a page on `127.0.0.1` on a random port, and prints the link. The link holds a one-time random id and expires after 10 minutes (`--timeout SECONDS` changes it). The command also opens the link in the default browser; `--no-open` stops that. The owner:
+Owner actions use the same approval page on every rail. Setup asks for a free message signature; grants, revokes and funding ask for transactions with network fees. The command builds the transaction and the terms, starts a page on `127.0.0.1` on a random port, and prints the link. The link holds a one-time random id and expires after 10 minutes (`--timeout SECONDS` changes it). In a terminal, the command opens the link in the default browser unless you pass `--no-open`. In detached mode, the agent shows you the link. The owner:
 
-1. Opens the link in the browser that has their wallet. The page shows the terms, written by the command from its own plan. Nothing the agent types reaches the page.
-2. Presses **Connect wallet**. On `evm` and `tempo` the page asks the wallet to switch to the right testnet, or to add it.
-3. Presses **Approve in wallet** and checks the transaction in the wallet popup. Or presses **Reject**.
+1. Opens the link in the browser that has their wallet. The page shows the terms, written by the command from its own plan. The plan uses the command arguments, including the amount and recipients. Check them against what you intended to authorize.
+2. Presses **Connect wallet**. For transactions on `evm` and `tempo`, the page asks the wallet to switch to the selected testnet or add it. Setup only records your address.
+3. Presses **Review in wallet** and checks the amount, recipient, network and fee before confirming in the wallet. Or presses **Reject**. For setup, connecting asks for a message signature instead.
 
-The command waits, then reads the result from the chain itself. Only then does it print `RESULT`. If the owner rejects, or the link expires, `RESULT` says `refused_precheck` (exit 3) and nothing was sent.
+A transaction approval is followed by a chain check. In detached mode, the first `RESULT` only says the request is pending; poll `wait` for the final result. Exit 3 can also mean a submitted transaction did not match the requested terms. Read `reason` and `tx`. If the outcome is unknown, check wallet activity and `status` before retrying. An expired link or closed page does not cancel a transaction in your wallet.
 
 What differs per rail:
 
 - `evm`: the wallet sends the transaction. The command reads the sender, the contract, the exact data, the receipt, the `Approval` event and the allowance.
-- `tempo`: the wallet sends a plain transaction to Tempo's keychain contract (`0xaAAA...0000`). The page adds Tempo Testnet (Moderato) to the wallet if needed. You pay the network fee in pathUSD, a fraction of a cent. The wallet shows "Interacting with 0xaAAA..." and no amounts, so the terms on the page are the readable ones. The command reads the key back: its limit, expiry, period and seller list.
-- `solana`: the page finds Phantom (or another Solana wallet) through the Wallet Standard. The page cannot switch Phantom's network: turn on Testnet Mode and pick Solana Devnet in Phantom's settings first. The command builds the transaction when you press **Approve in wallet**, and the wallet only signs it. The command sends it only if it is exactly the transaction it built. If the wallet changed it, nothing is sent and the page says so. Phantom may say it cannot simulate the transaction on devnet; check the terms on the page. The command reads the delegate and its amount back from the chain.
+- `tempo`: the wallet sends a plain transaction to Tempo's keychain contract (`0xaAAA...0000`). The page adds Tempo Testnet (Moderato) to the wallet if needed. You pay a network fee in your configured fee token, or pathUSD by default. Check the wallet estimate. The wallet may show "Interacting with 0xaAAA..." without decoding the budget. Review the page terms and reject if you cannot verify the request. The command reads the key back: its limit, expiry, period and seller list.
+- `solana`: the page finds Phantom (or another Solana wallet) through the Wallet Standard. The page cannot switch Phantom's network: turn on Testnet Mode and pick Solana Devnet in Phantom's settings first. The command builds the transaction when you press **Review in wallet**, and the wallet only signs it. The command sends it only if it is exactly the transaction it built. If the wallet changed it, nothing is sent and the page says so. If Phantom cannot simulate the transaction, its effects have not been checked by the wallet. Reject if you cannot verify them. The command reads the delegate and its amount back from the chain.
 
-The page runs on the computer that runs the command. If the agent runs somewhere else, the owner needs a browser on that computer, or a forwarded port.
+The link works on the computer running the command. Use a browser with your wallet on that computer. Remote access is not set up by this tool. Treat the link as private access to the request.
 
 In a terminal the command waits for you, as above. Run by an agent (stdout is not a terminal), it returns as soon as the link exists, with `state: "waiting_owner"` and an approval id. The page keeps waiting in a background process, and `superstables budget wait --id <id>` reports how it ended. `--wait` and `--detach` force either mode. See [Use it from an agent](#use-it-from-an-agent).
 
@@ -87,7 +87,7 @@ Where things live. `SUPERSTABLES_HOME` is the client's home, `~/.superstables` u
 | Purchase journals, and on `evm` the seller's answer to each purchase (`<op>.response`, mode 600, at most 1 MB) | `$SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/` |
 | Approval page log (no signatures) | `$SUPERSTABLES_HOME/budget/owner-approvals.jsonl` |
 
-No rail has an owner key file: the owner's key stays in their wallet. Every `evm` chain uses the same agent key file; each chain has its own public file.
+The default flow creates no owner key file: the owner's key stays in their wallet. Every `evm` chain uses the same agent key file; each chain has its own public file.
 
 In each block, run `doctor` first: it lists what is missing and which address to top up.
 
@@ -103,8 +103,8 @@ In each block, run `doctor` first: it lists what is missing and which address to
    Run `setup` once per chain you use; without it, `doctor --chain <key>` fails on the public file. It prints the next steps.
 
 2. Fund your wallet with faucets, then give the agent gas. `fund-agent` opens the approval page for one plain transfer from your wallet. `doctor` checks these minimums:
-   - Base Sepolia: your wallet needs at least 0.01 USDC ([faucet.circle.com](https://faucet.circle.com), pick Base Sepolia) and 0.00003 ETH (any Base Sepolia ETH faucet; 0.0003 is a comfortable amount). The agent needs at least 0.00003 ETH: `npx superstables budget fund-agent --rail evm` sends 0.0001. A transaction here costs well under 0.000001 ETH.
-   - Arc Testnet: gas is USDC, so there is no second token. Your wallet needs at least 0.2 USDC after funding the agent, and the agent at least 0.01 USDC. Get 0.4 USDC from [faucet.circle.com](https://faucet.circle.com) (pick Arc Testnet), then `npx superstables budget fund-agent --rail evm --chain arc-testnet` sends 0.1. A transaction here costs about 0.0005 to 0.0015 USDC.
+   - Base Sepolia: your wallet needs at least 0.01 USDC ([faucet.circle.com](https://faucet.circle.com), pick Base Sepolia) and 0.00003 ETH (any Base Sepolia ETH faucet; 0.0003 is a comfortable amount). The agent needs at least 0.00003 ETH: `npx superstables budget fund-agent --rail evm` sends 0.0001. Network fees vary; check the wallet estimate.
+   - Arc Testnet: gas is USDC, so there is no second token. Your wallet needs at least 0.2 USDC after funding the agent, and the agent at least 0.01 USDC. Get 0.4 USDC from [faucet.circle.com](https://faucet.circle.com) (pick Arc Testnet), then `npx superstables budget fund-agent --rail evm --chain arc-testnet` sends 0.1. Network fees vary; check the wallet estimate.
    - Arbitrum Sepolia, Polygon Amoy and SKALE Base Sepolia: `npx superstables budget doctor --rail evm --chain <key>` prints the minimums and where to get each token. Then `npx superstables budget fund-agent --rail evm --chain <key>`.
 
    You can also send the agent gas from any wallet: `doctor` prints its address and the amount.
@@ -122,11 +122,11 @@ In each block, run `doctor` first: it lists what is missing and which address to
 
    In a terminal, `grant` and `revoke` wait until you approve or reject in your wallet. Run by an agent, they return at once with the link and an approval id, and the agent polls `npx superstables budget wait --id <id>`.
 
-   Your wallet may offer to change the spending cap on the grant. Keep it as it is: if the chain shows another amount, `grant` refuses to record the budget and tells you to revoke.
+   Your wallet may offer to change the spending cap on the grant. Keep the requested cap. A changed cap may take effect on chain even if `grant` refuses to record it locally. If that happens, revoke the allowance before granting again.
 
    On Arc use `--chain arc-testnet` on every command, `--url "https://www.watchevelive.com/print?q=gold" --max 0.06 --pay-to 0x0e56d191219fa7a4a8a50d17d4ce838e80bf566e`, and `grant --amount 0.06`.
 
-   `superstables budget recover` returns USDC only. The gas you sent with `fund-agent` stays in the agent key, and on Arc `recover` also leaves up to 2 USDC there as the agent's gas reserve. Send the agent only what it needs.
+   `superstables budget recover` returns USDC only. The gas you sent with `fund-agent` stays in the agent key, and on Arc `recover` leaves up to 2 USDC there as the agent's gas reserve. Send the agent only what it needs.
 
 ### tempo (Moderato)
 
@@ -188,11 +188,11 @@ An SPL token account has one delegate slot. A new grant would overwrite a live o
 2. Give the agent a shell in the installed checkout, its agent key file and the public address file for the selected chain. That is all it holds, on every rail: no owner key.
 3. Invoke `/superstables-budget` in Claude Code or `$superstables-budget` in Codex. Supply the testnet, seller URL, price ceiling and, when known, seller address.
 
-The agent chooses the purchase and price ceiling. The CLI checks them before signing; these checks do not constrain a stolen key.
+Give the agent a purchase scope and price ceiling. The agent chooses purchases within that authorization. The CLI checks them before signing; these checks do not constrain a stolen key.
 
-When you ask the agent to grant or revoke, it runs the command and shows you the approval link and the plan. It cannot approve anything: only your wallet can.
+When you ask the agent to grant or revoke, it runs the command and shows you the approval link and the plan. It must not operate the approval page or sign for you. Check the requested account and terms in your own wallet.
 
-An agent's shell tool usually shows output only when a command ends, and often stops a command after a minute or two. So when stdout is not a terminal, an owner command does not wait for you. It returns in seconds with the link and a `RESULT` whose `state` is `waiting_owner`, with an approval `id` and the plain terms. The page stays open in a background process until you decide or the link expires. The agent shows you the link, then polls `superstables budget wait --id <id>`: each call waits up to 30 seconds and prints the state, and the last one prints the result the command read from the chain. While one approval is pending, the agent cannot start another on the same chain. If you reject it or let it expire, the agent tells you and starts a new one only if you ask.
+An agent's shell tool usually shows output only when a command ends, and often stops a command after a minute or two. So when stdout is not a terminal, an owner command does not wait for you. It returns in seconds with the link and a `RESULT` whose `state` is `waiting_owner`, with an approval `id` and the plain terms. The page stays open in a background process until you decide or the link expires. The agent shows you the link, then polls `superstables budget wait --id <id>`: each call waits up to 30 seconds and prints the state, and the last one prints the result the command read from the chain. Keep one owner command active per rail and chain. Wait for its final result before starting another. If you reject it or let it expire, the agent tells you and starts a new one only if you ask.
 
 ### Tests and automation
 
@@ -204,27 +204,27 @@ The last line of stdout is always `RESULT {json}` (fields: `ok`, `command`, `rai
 
 | Exit | Meaning | What the agent must do |
 | --- | --- | --- |
-| 0 | Done. Or `state: "waiting_owner"`: the owner has not decided yet | Continue. On `waiting_owner`, show the link and poll `superstables budget wait --id ID` until the state is final. |
+| 0 | Done. Or `state: "waiting_owner"`: the command has no final result yet | Continue. On `waiting_owner`, show the link and poll `superstables budget wait --id ID` until the state is final. |
 | 1 | Failed, including a refusal by the chain | Read `reason` and `next`. Do not retry blindly. |
 | 2 | Bad input | Fix the command. Nothing was signed. |
-| 3 | Refused before anything was signed, including an owner who rejected the approval or let the link expire | Respect it. Never raise `--max` or drop `--pay-to` to get past it. Tell the owner. |
+| 3 | Refused. Owner commands can also report this after a transaction changed the on-chain terms | Respect it. Never raise `--max` or drop `--pay-to` to get past it. Tell the owner. |
 | 4 | Paid, seller did not deliver | Never pay again. Report the `tx` hash. |
-| 5 | Outcome unknown | Run `superstables budget reconcile --rail R --op ID`. Never pay again and never start a new `--op` for the same purchase. |
+| 5 | Outcome unknown | For a purchase, run `superstables budget reconcile --rail R --op ID` on the same chain. Never pay again for that purchase. For an owner action, check `status` and wallet activity. |
 
-Always pass `--max`, and `--pay-to` when you know the seller's address. It comes from the seller's own 402 answer. For `evm`, `superstables budget preflight --rail evm --url URL` prints the seller's price (`amount`) and address (`payTo`), for x402 v2 and v1 sellers, and signs nothing. On Arc add `--chain arc-testnet`: a seller on another chain fails, and `next` names the chain it offers. The price is what the seller asks, not a ceiling: set `--max` to what you accept. `--pay-to` from the same 402 catches a seller that changes its address before the buy; it does not prove who the seller is. Use one new `--op ID` per purchase; repeating an ID never pays twice.
+Always pass `--max`, and `--pay-to` when you know the seller's address. It comes from the seller's own 402 answer. For `evm`, `superstables budget preflight --rail evm --url URL` prints the seller's price (`amount`) and address (`payTo`), for x402 v2 and v1 sellers, and signs nothing. On Arc add `--chain arc-testnet`: a seller on another chain fails, and `next` names the chain it offers. The price is what the seller asks, not a ceiling: set `--max` to what you accept. `--pay-to` from the same 402 catches a seller that changes its address before the buy; it does not prove who the seller is. Use one new `--op ID` per purchase; keep that ID for reconciliation. Do not use a new ID to retry an uncertain or already paid purchase.
 
 ## Safety model
 
-- **Two keys.** On every rail the owner's key stays in the owner's wallet: the owner approves `setup`, `grant`, `revoke`, `fund-agent` and, on `evm`, the owner's part of `recover` on the approval page. The agent key signs purchases, and on `evm` the agent's own part of `recover` (lowering its allowance, returning funds to the owner). `doctor` fails if the agent file holds an owner key.
-- **The chain enforces** the budget: the total cap on every rail, plus expiry, period and seller list on Tempo. Nothing else. Two purchases for the last of the budget: the chain lets exactly one settle.
+- **Two keys by default.** On every rail the owner's key stays in the owner's wallet: the owner approves `setup`, `grant`, `revoke`, `fund-agent` and, on `evm`, the owner's part of `recover` on the approval page. The agent key signs purchases, and on `evm` the agent's own part of `recover` (lowering its allowance, returning funds to the owner). `doctor` fails if the agent file holds an owner key.
+- **The chain enforces** the remaining allowance on EVM and Solana. On Tempo it enforces the total or per-period limit, expiry and any granted seller list. The allowance or keychain limit constrains spending. It does not make parallel CLI purchases safe; run purchases sequentially.
 - **Our code enforces** what the chain cannot: the `--max` ceiling, the expected token, the `--pay-to` recipient, precision, one journal per `--op`, refusing to overwrite a live budget. A stolen agent key skips all of these, so keep budgets small.
 - **The kill switch is the owner's `superstables budget revoke`** (approved in the owner's wallet), and it works even if the agent key is stolen:
   - `evm`: `USDC.approve(agent, 0)`. The next pull reverts. Not covered: a pull already mined, and USDC sitting in the agent key (0 between purchases). `superstables budget recover` returns it.
   - `tempo`: `AccountKeychain.revokeKey`. Every payment by that key is refused from the block it lands in. Not covered: payment sessions the key opened elsewhere (`superstables budget` never opens one; the revoke lists any it finds).
-  - `solana`: the SPL `Revoke`. Every payment by the agent fails from the slot it lands in.
-- A payment already broadcast before the revoke still settles.
+  - `solana`: the SPL `Revoke`. Once it takes effect, this delegate can no longer spend from the selected USDC account.
+- Revocation does not reverse confirmed payments. For a pending transaction, ordering on chain matters. An EVM payment can still settle from funds already pulled; revoke stops new pulls.
 
-Each release is verified on chain with an internal harness: every command, the refusals and the kill switch, read back from the chain.
+Development runs have exercised these flows with wallet harnesses and chain readbacks. They do not verify the real MetaMask or Phantom approval experience. Those wallet checks remain necessary.
 
 ## Not supported yet
 
@@ -232,7 +232,7 @@ Each release is verified on chain with an internal harness: every command, the r
 - Tempo Wallet (a passkey account at wallet.tempo.xyz) as the owner on `tempo`: not yet. Use MetaMask or another EIP-1193 wallet.
 - Phantom's network: the page cannot switch it. Turn on Testnet Mode and pick Solana Devnet in Phantom yourself.
 - A Solana wallet that adds instructions of its own (Phantom may add Lighthouse checks; not seen yet): the command sends only the exact transaction it built, so it refuses that signature and sends nothing.
-- The approval page runs on the computer that runs the command, on `127.0.0.1`. An agent on another machine needs a forwarded port, or the owner's browser on that machine.
+- The approval page runs on the computer that runs the command, on `127.0.0.1`. Use the owner's wallet browser on that computer. Remote access requires separate configuration.
 - Supply the seller URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
 - Budget commands need a shell and repository checkout. The npm package omits `budget/`, and the MCP server has no budget tools.
 - Mainnet: refused everywhere.

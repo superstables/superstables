@@ -21,7 +21,7 @@ export const REVOKE_HINT = `superstables budget revoke --rail evm${chainFlag}. Y
 
 export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   chain: OWNER_CHAIN,
-  walletWords: "MetaMask or another",
+  walletWords: "MetaMask or another EVM wallet",
   statusCommand: `superstables budget status --rail evm${chainFlag}`,
   emit,
 });
@@ -85,24 +85,24 @@ export const approveRow = (agent: Address, atomic: bigint) => ({ label: "Transac
 export const capWords = (cap: bigint) => `${usdc(cap)} ${SYM}`;
 
 /** The owner page terms for approve(agent, 0), shared with recover. */
-export function revokeTerms(owner: Address, agent: Address, allowance: bigint, held: bigint, title = "end your agent's budget") {
+export function revokeTerms(owner: Address, agent: Address, allowance: bigint, held: bigint, title = "Revoke spending permission") {
   return {
     title,
     amount: usdc(allowance),
     unit: SYM,
-    summary: `This ends your agent's budget: the ${usdc(allowance)} ${SYM} it has left goes to 0. From the block it lands in, the agent can pull nothing more from your wallet.`,
+    summary: `Set this allowance to 0. It currently permits another ${usdc(allowance)} ${SYM} in withdrawals. Once confirmed on chain, this agent can no longer withdraw using this allowance.`,
     rows: [
       { label: "Agent", value: agent, mono: true },
       { label: "From your wallet", value: owner, mono: true },
       tokenRow(),
       approveRow(agent, 0n),
     ],
-    enforced: ["From that block on, every pull by the agent key fails, even with a stolen key."],
+    enforced: ["Once this revoke takes effect, the agent cannot withdraw more under this allowance, even if its key is stolen."],
     notEnforced: [
-      `${SYM} the agent already pulled and still holds (${usdc(held)} ${SYM} now). superstables budget recover --rail evm${chainFlag} returns it.`,
-      "A pull that was mined before this transaction.",
+      `No return of ${SYM} already withdrawn (${usdc(held)} ${SYM} held by the agent when this request was created). superstables budget recover --rail evm${chainFlag} attempts to return recoverable funds.`,
+      "No reversal of withdrawals confirmed before this revoke.",
     ],
-    notes: ["This costs a small network fee and moves no money. You can grant a new budget later."],
+    notes: ["This changes spending permission; it does not return funds. You pay the network fee shown in your wallet. You can grant a new budget later."],
   };
 }
 
@@ -120,7 +120,7 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
   const { handle, outcome } = await askTransaction(command === "recover" ? "recover-revoke" : "revoke", owner, { to: USDC, data }, revokeTerms(owner, agent, before, held, title));
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved(command, outcome, { allowance: usdc(before) });
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
-  console.log(`the wallet sent ${outcome.hash}; reading it from the chain`);
+  console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`);
   let sent = await readSent(outcome.hash as Hex, { from: owner, to: USDC, data, afterBlock: startBlock });
   if (!sent) {
     const alt = await findApproval(owner, agent, startBlock);
@@ -140,7 +140,7 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     await closeOwnerPage();
     process.exit(emit(command, 1, { state: "not_revoked", tx: sent.hash, allowance: usdc(after), reason: sent.status !== "success" ? "the revoke reverted on chain" : "the allowance still reads above 0", next: "run revoke again" }));
   }
-  handle.finish({ ok: true, message: `Done. The chain shows an allowance of 0: your agent can pull nothing more. You can close this page.`, hash: sent.hash });
+  handle.finish({ ok: true, message: `Confirmed. This allowance is 0. Funds already withdrawn remain under the agent key. You can close this page.`, hash: sent.hash });
   await closeOwnerPage();
   return sent.hash;
 }
@@ -149,12 +149,12 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
 export async function fundInWallet(command: string, owner: Address, agent: Address, value: bigint, amt: string, agentHas: bigint): Promise<Hex> {
   const startBlock = await publicClient.getBlockNumber();
   const { handle, outcome } = await askTransaction(command === "recover" ? "recover-gas" : "fund-agent", owner, { to: agent, value }, {
-    title: "send your agent gas",
+    title: "Send funds for network fees",
     amount: amt,
     unit: GAS.symbol,
     summary: command === "recover"
-      ? `Your agent needs a little ${GAS.symbol} to send your ${SYM} back to you. This sends it ${amt} ${GAS.symbol} from your wallet.`
-      : `Your agent pays a small ${GAS.symbol} network fee for each purchase. This sends it ${amt} ${GAS.symbol} from your wallet, once.`,
+      ? `Send ${amt} ${GAS.symbol} to the agent so it can pay the network fee to return recoverable ${SYM}. This step does not itself return those funds.`
+      : `Send ${amt} ${GAS.symbol} from your wallet to the agent for network fees. You also pay the fee for this transfer, shown in your wallet.`,
     rows: [
       { label: "To your agent", value: agent, mono: true },
       { label: "From your wallet", value: owner, mono: true },
@@ -164,13 +164,13 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
     enforced: [],
     notEnforced: [],
     notes: [
-      "This is a plain transfer. It gives the agent no budget: you grant that separately, and approve it in your wallet too.",
-      `superstables budget recover returns ${SYM} only, not gas. Send the agent only what it needs.`,
+      "The agent controls the transferred funds and can send them elsewhere. This does not grant permission to withdraw more from your wallet.",
+      `superstables budget recover returns recoverable ${SYM}. It leaves a gas reserve on Arc and does not return other gas tokens. Revoking a budget does not undo this transfer.`,
     ],
   });
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved(command, outcome);
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
-  console.log(`the wallet sent ${outcome.hash}; reading it from the chain`);
+  console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`);
   const sent = await readSent(outcome.hash as Hex, { from: owner, to: agent, value, afterBlock: startBlock });
   if (!sent) {
     handle.finish({ ok: false, message: "The transaction did not show up on chain. Check your wallet's activity.", hash: outcome.hash });

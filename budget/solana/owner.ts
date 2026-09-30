@@ -161,15 +161,15 @@ export async function confirmSent(conn: Connection, s: Issued, waitMs = 120_000)
 // ── terms ────────────────────────────────────────────────────────────────────────────────────────────────
 
 const walletNote =
-  "Phantom may show no amount and no delegate, and on devnet it may say it cannot simulate this. The terms on this page are what the transaction does: the command sends only the exact transaction it built, and then reads the result from the chain.";
+  "Check the terms before signing. The command submits only an unchanged transaction with your signature, then checks the chain. If the wallet cannot show or simulate the effects, reject if you cannot verify them.";
 
 export function grantTerms(p: { owner: string; agent: string; ata: string; cap: bigint; held: bigint }): OwnerTerms {
   const amt = `${formatUnits(p.cap)} USDC`;
   return {
-    title: "give your agent a budget",
+    title: "Grant a spending budget",
     amount: formatUnits(p.cap),
     unit: "USDC",
-    summary: `Your agent may move up to ${amt} from your wallet, in total, to pay for what it buys.`,
+    summary: `Allow the agent to transfer up to ${amt} from your USDC account in total. Purchases within this allowance will not ask you to approve again.`,
     rows: [
       { label: "Agent", value: p.agent, mono: true },
       { label: "Your wallet", value: p.owner, mono: true },
@@ -179,47 +179,47 @@ export function grantTerms(p: { owner: string; agent: string; ata: string; cap: 
       { label: "Transaction", value: `SPL Token ApproveChecked: delegate ${p.agent}, ${p.cap} (${amt})`, mono: true },
     ],
     enforced: [
-      `A total cap of ${amt}. Once the agent has used it, it can move nothing more.`,
-      "The agent can never move more than your USDC account holds.",
+      `Transfers or burns under this delegation total at most ${amt}. Once used, this delegation permits no more.`,
+      "Each transfer is limited by your USDC account balance at that time. Later deposits can also be spent while allowance remains.",
     ],
     notEnforced: [
       "No expiry. The budget stays until it is spent or you revoke it.",
-      "No seller list. Whoever holds the agent's key can pay any address, up to the cap.",
-      "No per-payment limit. The agent's command checks each price against a maximum, but a stolen key skips that check.",
+      "No seller list or purchase requirement. Whoever holds the agent key can transfer to any address or burn tokens, up to the cap.",
+      "No per-payment limit. The CLI checks --max, but anyone using the key outside the CLI can skip it.",
     ],
     notes: [
       walletNote,
-      "Your USDC account has one delegate slot: this budget replaces nothing, because the command refuses while another delegate is live.",
+      "A delegate is a key allowed to spend from your token account. There is one delegate slot. Revoke a live delegation before granting another.",
       "To end the budget at any time: superstables budget revoke --rail solana. You approve that in your wallet too.",
-      "Grant only what you are willing to lose. This costs a network fee of about 0.000005 SOL and moves no money now.",
+      "This grants permission; it does not transfer USDC now. You pay a network fee, typically 0.000005 SOL for this transaction. Check the wallet fee and grant only an amount you accept putting at risk.",
     ],
   };
 }
 
 export function revokeTerms(p: { owner: string; agent: string | null; ata: string; remaining: bigint }): OwnerTerms {
   return {
-    title: "end your agent's budget",
+    title: "Revoke spending permission",
     amount: formatUnits(p.remaining),
     unit: "USDC",
-    summary: `This ends your agent's budget: the ${formatUnits(p.remaining)} USDC it has left goes to 0. From the slot it lands in, the agent can move nothing more from your wallet.`,
+    summary: `Remove the delegate from your USDC account. Its remaining allowance is ${formatUnits(p.remaining)} USDC. Once confirmed on chain, that key can no longer spend from this account as its delegate.`,
     rows: [
       { label: "Agent", value: p.agent ?? "none", mono: true },
       { label: "Your wallet", value: p.owner, mono: true },
       { label: "Your USDC account", value: p.ata, mono: true },
       { label: "Transaction", value: "SPL Token Revoke: clears the delegate", mono: true },
     ],
-    enforced: ["From that slot on, every payment by the agent key fails, even one signed earlier, even with a stolen key."],
-    notEnforced: ["A payment that landed before this transaction."],
-    notes: [walletNote, "This costs a network fee of about 0.000005 SOL and moves no money. You can grant a new budget later."],
+    enforced: ["Once this revoke takes effect, transactions using this delegation fail, including ones signed earlier. The key cannot use this delegation even if stolen."],
+    notEnforced: ["No reversal of transfers confirmed before this revoke. It does not recover tokens already moved or stop the key spending its own funds."],
+    notes: [walletNote, "This removes spending permission; it does not return funds. You pay a network fee, typically 0.000005 SOL. Check the wallet fee. You can grant a new budget later."],
   };
 }
 
 export function fundTerms(p: { owner: string; agent: string; lamports: bigint; agentHas: bigint }): OwnerTerms {
   return {
-    title: "send your agent SOL for fees",
+    title: "Send funds for network fees",
     amount: sol(p.lamports),
     unit: "SOL",
-    summary: `Your agent pays a small SOL network fee when a seller does not pay it. This sends it ${sol(p.lamports)} SOL from your wallet, once.`,
+    summary: `Send ${sol(p.lamports)} SOL from your wallet to the agent for fees when the seller does not pay them. You also pay the fee for this transfer, shown in your wallet.`,
     rows: [
       { label: "To your agent", value: p.agent, mono: true },
       { label: "From your wallet", value: p.owner, mono: true },
@@ -230,8 +230,8 @@ export function fundTerms(p: { owner: string; agent: string; lamports: bigint; a
     notEnforced: [],
     notes: [
       walletNote,
-      "This is a plain transfer. It gives the agent no budget: you grant that separately, and approve it in your wallet too.",
-      "Send the agent only what it needs. What it does not spend stays in its key.",
+      "The agent controls the transferred SOL and can send it elsewhere. This does not grant permission to spend your USDC.",
+      "Revoking the budget does not undo this transfer. Unspent SOL stays in the agent account. This tool has no Solana recovery command.",
     ],
   };
 }

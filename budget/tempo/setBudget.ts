@@ -136,7 +136,7 @@ async function main() {
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setBudget', outcome, { requested: amount })
     if (outcome.status !== 'sent') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     finish = handle.finish
-    console.log(`the wallet sent ${outcome.hash}; reading it from the chain`)
+    console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`)
     let sent = await readSent(outcome.hash as Hex, { from: owner, data, afterBlock: head.number })
     if (!sent) {
       // replaced ("speed up") or dropped: look for the keychain's own event for this key
@@ -155,7 +155,7 @@ async function main() {
     console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a'}`)
     if (sent.problems.length) console.log(`note: ${sent.problems.join('; ')}`)
     if (sent.status !== 'success') {
-      handle.finish({ ok: false, message: 'The transaction reverted on chain. Nothing changed.', hash })
+      handle.finish({ ok: false, message: 'The transaction reverted. No access key was granted by it, but a network fee may have been charged.', hash })
       await closeOwnerPage()
       process.exit(result(1, { state: 'failed', tx: hash, reason: 'the authorizeKey transaction reverted on chain', next: `superstables budget status --rail tempo${agentFlag(label)}` }))
     }
@@ -181,7 +181,7 @@ async function main() {
   console.log(`readback maximum by expiry: ${fromBaseUnits(trueMax)} ${TOKEN_LABEL} (${trueWindows} window${trueWindows === 1 ? '' : 's'})`)
   console.log(`explorer: ${explorerTx(hash)}`)
   const expiryIso = iso(key.expiry)
-  finish?.({ ok: true, message: `Done. The chain shows your agent's key with a limit of ${fromBaseUnits(limit)} ${TOKEN_LABEL}${period ? ` per period (at most ${fromBaseUnits(trueMax)} by expiry)` : ''}, until ${expiryIso}${sellers ? ', for the listed sellers only' : ''}. You can close this page.`, hash })
+  finish?.({ ok: true, message: `Done. The chain shows your agent's key with a limit of ${fromBaseUnits(limit)} ${TOKEN_LABEL}${period ? ` per period (planned maximum ${fromBaseUnits(trueMax)} by expiry)` : ''}, until ${expiryIso}${sellers ? ', for the listed sellers only' : ''}. You can close this page.`, hash })
   await closeOwnerPage()
   process.exit(result(0, {
     state: 'set', tx: hash, limit: fromBaseUnits(limit), remaining: fromBaseUnits(key.remaining), expiry: expiryIso, periodSeconds: period ?? null,

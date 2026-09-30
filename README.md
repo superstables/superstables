@@ -249,11 +249,11 @@ rather than in MetaMask, so processes running as your user can read it.
 ## On-chain budgets: `superstables budget`
 
 `superstables budget` is a separate testnet tool with its own agent key. The owner grants an
-agent key a budget on chain once, from their own wallet. The agent then buys from x402 sellers on its own, with no approval
-per payment, until the budget runs out or the owner revokes it. The chain enforces the cap; no
-Superstables server is in the path. This release has three rails: `evm`, a USDC `approve` on
-Base Sepolia or Arc Testnet; `tempo`, an access key on Tempo Moderato whose cap, expiry and
-seller list the chain enforces; and `solana`, an SPL token delegate on Solana devnet.
+agent key a budget on chain once, from their own wallet. The agent then buys from x402 or MPP sellers with no approval
+per payment, until the budget runs out, expires on Tempo, or the owner revokes it. The chain enforces the cap; no
+Superstables server is in the path. The tool has three rails: `evm`, a USDC `approve` on
+Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy or SKALE Base Sepolia; `tempo`, an access key on Tempo Moderato with a cap, expiry and
+optional period and seller list enforced on chain; and `solana`, an SPL token delegate on Solana devnet.
 
 ```bash
 npx superstables budget setup  --rail evm                        # agent key; the owner connects a wallet
@@ -264,13 +264,15 @@ npx superstables budget buy    --rail evm --url <seller url> --max 0.002
 npx superstables budget revoke --rail evm                        # the kill switch, approved in the wallet
 ```
 
-It runs from a checkout of this repository, after `npm ci` and `npm run build`. On `evm` the
-owner approves grant and revoke on a page on 127.0.0.1, in MetaMask or another browser wallet;
-the agent's machine holds only the agent key, in `~/.superstables/keys/budget/`. Run by an agent, an owner
+It runs from a checkout of this repository, after `npm ci` and `npm run build`. Owner actions use a local page on `127.0.0.1`:
+MetaMask or another EVM wallet on `evm` and `tempo`, and a Wallet Standard wallet such as
+Phantom on `solana`. Setup records your address; grants, revokes and funding require wallet
+approval. The default flow stores only the agent key in `~/.superstables/keys/budget/`. Run by an agent, an owner
 command returns at once with the link and an approval id, and the agent polls `superstables budget wait --id <id>`
-until the owner has decided. Every command ends with one
-`RESULT {json}` line and a fixed exit code, so an agent can act on it. Setup, faucets, the
-safety model and the agent skill are in [budget/README.md](budget/README.md).
+until the command has a final result. `waiting_owner` is not approval or settlement. Every command ends with one
+`RESULT {json}` line and a fixed exit code, so an agent can act on it. EVM and Solana allowances have no automatic expiry or seller restriction. Revoke stops
+further use of the permission once it takes effect on chain; it does not reverse confirmed
+transfers. Setup, funding, wallet verification limits, the safety model and the agent skill are in [budget/README.md](budget/README.md).
 
 ## Development
 

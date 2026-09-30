@@ -111,7 +111,7 @@ async function main() {
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('revokeBudget', outcome, { remaining: fromBaseUnits(before.remaining) })
     if (outcome.status !== 'sent') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     finish = handle.finish
-    console.log(`the wallet sent ${outcome.hash}; reading it from the chain`)
+    console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`)
     let sent = await readSent(outcome.hash as Hex, { from: owner, data, afterBlock: headStart.number })
     if (!sent) {
       const alt = await findKeyEvent('revoked', owner, agentAddress, headStart.number).catch(() => null)

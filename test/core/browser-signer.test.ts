@@ -568,7 +568,7 @@ describe("the owner approval page", () => {
     const outcome = await inWallet.settled;
     // the wallet said no (code 4001): it sent nothing, even though it had been asked
     expect(outcome).toMatchObject({ status: "rejected", sending: false });
-    expect(outcome.status === "rejected" && outcome.reason).toContain("in the wallet");
+    expect(outcome.status === "rejected" && outcome.reason).toContain("the wallet reported a rejection");
   });
 
   it("says a link that expired while the wallet was sending may have sent something", async () => {
@@ -617,7 +617,7 @@ describe("the owner approval page", () => {
     expect(status).toBe(421);
     const unknown = await fetch(`${server.url}/owner/${"0".repeat(32)}`);
     expect(unknown.status).toBe(404);
-    expect(await unknown.text()).toContain("Nothing is waiting under this link");
+    expect(await unknown.text()).toContain("This approval link is unavailable");
   });
 
   it("is plain ES2017 that a browser can run without a build step", async () => {
@@ -775,7 +775,7 @@ describe("the owner approval page with a Solana wallet", () => {
     await postJson(`${handle.url}/reject`, { by: "wallet" });
     const outcome = await handle.settled;
     expect(outcome).toMatchObject({ status: "rejected", sending: false });
-    expect(outcome.status === "rejected" && outcome.reason).toContain("in the wallet");
+    expect(outcome.status === "rejected" && outcome.reason).toContain("the wallet reported a rejection");
   });
 
   it("says it may have sent something when the command lost track after the broadcast", async () => {
@@ -991,7 +991,7 @@ describe("a detached owner approval", () => {
     // the owner approves in the wallet
     await postJson(`${record.url}/account`, { address: OWNER.address });
     const connected = await budget(["wait", "--id", record.id, "--timeout", "0"]);
-    expect(connected.result.reason).toContain("connected their wallet");
+    expect(connected.result.reason).toContain("the owner account is selected");
     await postJson(`${record.url}/sending`, { address: OWNER.address });
     await postJson(`${record.url}/sent`, { address: OWNER.address, hash: HASH });
 
@@ -1013,7 +1013,7 @@ describe("a detached owner approval", () => {
     const outcome = await approvals.waitFor(record.id, 10_000);
     expect(outcome).toMatchObject({ final: true, code: 3 });
     expect(outcome!.final && outcome!.result).toMatchObject({ state: "refused_precheck" });
-    expect(String(outcome!.final && outcome!.result.reason)).toContain("Nothing was sent");
+    expect(String(outcome!.final && outcome!.result.reason)).toContain("without a completed approval");
     expect(await gone(record.pid)).toBe(true);
     expect(await unreachable(record.url)).toBe(true);
     expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
@@ -1036,7 +1036,7 @@ describe("a detached owner approval", () => {
     await postJson(`${record.url}/reject`, { by: "page" });
     const rejected = await budget(["wait", "--id", record.id, "--timeout", "10"]);
     expect(rejected.code).toBe(3);
-    expect(rejected.result.reason).toContain("rejected it on the page");
+    expect(rejected.result.reason).toContain("rejected on the page");
     expect(await gone(record.pid)).toBe(true);
     expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
   });
@@ -1065,7 +1065,7 @@ describe("a detached owner approval", () => {
       // --yes only goes with a test owner key file; nothing is spawned
       const yes = await budget(["grant", "--rail", rail, "--amount", "0.01", "--yes"]);
       expect(yes.code).toBe(2);
-      expect(yes.result.reason).toContain("the owner approves in their own wallet");
+      expect(yes.result.reason).toContain("show the approval link to the owner and poll wait");
       const record = await detach(20_000, rail, chain);
       const second = await budget(["revoke", "--rail", rail]);
       expect(second.code).toBe(3);
@@ -1091,7 +1091,7 @@ describe("a detached owner approval", () => {
     const outcome = await budget(["wait", "--id", record.id, "--timeout", "0"]);
     expect(outcome.code).toBe(3);
     expect(outcome.result).toMatchObject({ state: "refused_precheck", id: record.id });
-    expect(outcome.result.reason).toContain("stopped before anything was sent");
+    expect(outcome.result.reason).toContain("stopped without a recorded submission");
     expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
   });
 });

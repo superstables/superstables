@@ -93,7 +93,7 @@ if (after.delegate || after.delegatedAmount !== 0n) {
   await closeOwnerPage();
   process.exit(result(1, { state: "not_revoked", tx: sig, remaining: formatUnits(after.delegatedAmount), reason: "a delegate still reads on chain", next: "run revoke again" }));
 }
-console.log("Exposure left: none. A payment signed earlier and submitted now is refused by the Token program.");
-finish?.({ ok: true, message: "Done. The chain shows no delegate on your USDC account: your agent can move nothing more. You can close this page.", hash: sig });
+console.log("This delegation is cleared. Transactions that still require it will fail. Previously transferred funds are not recovered.");
+finish?.({ ok: true, message: "Confirmed. Your USDC account has no delegate. This does not recover tokens already transferred. You can close this page.", hash: sig });
 await closeOwnerPage();
 process.exit(result(0, { state: "revoked", tx: sig, remaining: "0", next: "none" }));

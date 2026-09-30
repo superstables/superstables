@@ -67,10 +67,10 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   }
   const startBlock = await publicClient.getBlockNumber();
   const { handle, outcome } = await askTransaction("grant", pub.owner, { to: USDC, data }, {
-    title: "give your agent a budget",
+    title: "Grant a spending budget",
     amount: usdc(cap),
     unit: SYM,
-    summary: `Your agent may move up to ${capWords(cap)} from your wallet, in total, to pay for what it buys.`,
+    summary: `Allow the agent to withdraw up to ${capWords(cap)} from your wallet in total. Purchases within this allowance will not ask you to approve again.`,
     rows: [
       { label: "Agent", value: pub.agent, mono: true },
       { label: "From your wallet", value: pub.owner, mono: true },
@@ -79,24 +79,24 @@ if (!verifyOnly && OWNER_KEY_FILE) {
       approveRow(pub.agent, cap),
     ],
     enforced: [
-      `A total cap of ${capWords(cap)}. Once the agent has used it, it can move nothing more.`,
-      "The agent can never move more than your wallet holds.",
+      `Withdrawals under this allowance total at most ${capWords(cap)}. Spending the allowance does not recover funds already withdrawn.`,
+      "Each withdrawal is limited by your token balance at that time. Later deposits can also be withdrawn while allowance remains.",
     ],
     notEnforced: [
       "No expiry. The budget stays until it is spent or you revoke it.",
-      "No seller list. Whoever holds the agent's key can pay any address, up to the cap.",
-      "No per-payment limit. The agent's command checks each price against a maximum, but a stolen key skips that check.",
+      "No seller list or purchase requirement. Whoever holds the agent key can withdraw the allowance to any address.",
+      "No per-payment limit. The CLI checks --max, but anyone using the key outside the CLI can skip it.",
     ],
     notes: [
-      `Your wallet shows the spending cap as ${cap} (the token's smallest unit), which is ${capWords(cap)}. Keep it as it is: if you change it, the command refuses to record the budget.`,
+      `Check the spending cap: ${capWords(cap)}, or ${cap} in the token's smallest units. Do not choose unlimited. A changed cap can take effect on chain even if the command refuses to record it.`,
       `To end the budget at any time: ${REVOKE_HINT}`,
-      "Grant only what you are willing to lose. This costs a small network fee and moves no money now.",
+      "This grants permission; it does not transfer the budget now. You pay a network fee shown in your wallet. Grant only an amount you accept putting at risk.",
     ],
   });
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setBudget", outcome, { requested: usdc(cap) });
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   finishPage = handle.finish;
-  console.log(`the wallet sent ${outcome.hash}; reading it from the chain`);
+  console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`);
   let sent = await readSent(outcome.hash as Hex, { from: pub.owner, to: USDC, data, afterBlock: startBlock });
   if (!sent) {
     // replaced ("speed up") or dropped: look for the approval itself
@@ -116,7 +116,7 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   if (sent.problems.length) console.log(`note: ${sent.problems.join("; ")}`);
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, Approval events: ${events.map((v) => usdc(v)).join(", ") || "none"} ${SYM}`);
   if (sent.status !== "success") {
-    handle.finish({ ok: false, message: "The transaction reverted on chain. Nothing changed.", hash: sent.hash });
+    handle.finish({ ok: false, message: "The transaction reverted. No allowance was granted by it, but a network fee may have been charged.", hash: sent.hash });
     await closeOwnerPage();
     process.exit(result(1, { state: "failed", tx: sent.hash, reason: "the approve reverted on chain", next: "superstables budget status --rail evm" }));
   }

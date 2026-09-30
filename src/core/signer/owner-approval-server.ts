@@ -130,7 +130,7 @@ export interface OwnerApprovalServerOptions {
 
 /** The text a connect asks the wallet to sign. */
 export function signInMessage(signIn: string, id: string): string {
-  return `${signIn}\n\nApproval id: ${id}\nThis signature sends nothing and costs nothing.`;
+  return `${signIn}\n\nApproval id: ${id}\nThis signature grants no spending permission and has no network fee.`;
 }
 
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -268,7 +268,7 @@ export class OwnerApprovalServer {
     this.sweeper = undefined;
     for (const record of this.records.values()) {
       if (!["pending", "ready", "sending"].includes(record.status)) continue;
-      this.end(record, "rejected", "the command stopped before this was approved");
+      this.end(record, "rejected", "the command stopped before this approval completed; check wallet activity before retrying");
     }
     const server = this.server;
     this.server = undefined;
@@ -290,7 +290,7 @@ export class OwnerApprovalServer {
     const now = Date.now();
     for (const record of this.records.values()) {
       if (record.status === "pending" || record.status === "ready") {
-        if (record.expiresAt <= now) this.end(record, "expired", `nobody approved this within ${Math.round(record.timeoutMs / 1000)} s. Nothing was sent.`);
+        if (record.expiresAt <= now) this.end(record, "expired", `the approval link expired after ${Math.round(record.timeoutMs / 1000)} seconds without a completed approval`);
       } else if (record.status === "sending" && record.expiresAt + (this.options.sendingGraceMs ?? DEFAULT_SENDING_GRACE_MS) <= now) {
         this.end(record, "expired", "the wallet was asked to send, but no transaction came back to this page");
       }
@@ -417,7 +417,7 @@ export class OwnerApprovalServer {
       if (record.kind === "solana-transaction" && (record.status === "sending" || record.submitting)) {
         return this.json(res, 409, { error: "this is being sent already", status: record.status });
       }
-      const reason = body.by === "wallet" ? "the owner rejected it in the wallet. Nothing was sent." : "the owner rejected it on the page. Nothing was sent.";
+      const reason = body.by === "wallet" ? "the wallet reported a rejection; check wallet activity if a transaction was already submitted" : "the request was rejected on the page; cancel any open wallet request and check wallet activity";
       // A wallet's rejection (EIP-1193 code 4001) means it sent nothing, even after it was asked to.
       if (body.by === "wallet") record.sending = false;
       this.end(record, "rejected", reason);
@@ -525,7 +525,7 @@ export class OwnerApprovalServer {
       if (record.sending) {
         // it may have gone out: the caller must read the chain before anything is tried again
         this.end(record, "expired", `the command stopped tracking the transaction after sending it (${(err as Error).message})`);
-        return this.json(res, 502, { error: "the transaction may have been sent; the command reads the chain", status: record.status });
+        return this.json(res, 502, { error: "the transaction may have been submitted; check the command result and chain before retrying", status: record.status });
       }
       result = { status: "refused", reason: `the command could not check it: ${(err as Error).message}.` };
     } finally {

@@ -78,7 +78,7 @@ if (OWNER_KEY_FILE) {
     process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget doctor --rail solana: read the agent's SOL" }));
   }
   if (c.status !== "success") {
-    handle.finish({ ok: false, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. Nothing was sent.`, hash: sig });
+    handle.finish({ ok: false, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The transfer is not confirmed. Check the command result and wallet activity before retrying.`, hash: sig });
     await closeOwnerPage();
     process.exit(result(1, { state: "failed", tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget doctor --rail solana" }));
   }

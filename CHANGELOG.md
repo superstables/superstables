@@ -11,13 +11,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **On-chain agent budgets: `superstables budget`, a separate testnet tool.** The owner grants
   an agent key a budget once. The agent then buys from x402 and MPP sellers with no approval per
-  payment, until the budget runs out or the owner revokes it. There are three rails: `evm`, a
+  payment, until the budget runs out, expires on Tempo, or the owner revokes it. There are three rails: `evm`, a
   plain ERC-20 approve on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy and SKALE
-  Base Sepolia; `tempo`, an access key on Tempo Moderato whose cap, expiry and seller list the
-  chain enforces; and `solana`, an SPL token delegate on devnet. On every rail the owner
+  Base Sepolia; `tempo`, an access key on Tempo Moderato with a cap, expiry and optional period and seller list
+  enforced on chain; and `solana`, an SPL token delegate on devnet. On every rail the owner
   approves grant, revoke and their other steps in their own wallet (MetaMask on `evm` and
-  `tempo`, Phantom on `solana`), on a page on `127.0.0.1`, and the agent's machine holds only
-  the agent key. Run by an agent, an owner command returns with the approval link, and
+  `tempo`, Phantom on `solana`), on a page on `127.0.0.1`, and the default flow stores only
+  the agent key. EVM and Solana budgets have no automatic expiry or seller restriction. Run by an agent, an owner command returns with the approval link, and
   `superstables budget wait --id` reports the outcome. Before it signs, `buy`
   checks the price against `--max`, the token and, with `--pay-to`, the recipient. Every command
   ends with one `RESULT` line and a fixed exit code, and `reconcile` reads the chain after an
@@ -25,9 +25,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository.
 - **`superstables budget preflight --rail evm --url <seller>`** reads the seller's price and
   address from its 402 and signs nothing.
-- **Purchases on `evm` keep what was bought.** `buy` saves the seller's answer next to the
-  purchase journal, at most 1 MB and readable only by the user, and names the file in `RESULT`
-  as `responseFile`, with its content type, its size and whether it was cut.
+- **Saved seller responses on `evm`.** `buy` saves the seller's answer next to the
+  purchase journal, at most 1 MB with owner-only file permissions (mode 600), and names the file in `RESULT`
+  as `responseFile`, with its content type, size and truncation status. The response is seller
+  data, not proof of settlement.
+
+### Fixed
+
+- EVM budget purchases register x402 v1 sellers with the v1 payment scheme. Previously,
+  their legacy network names were not matched and the client refused those purchases.
 
 ## [0.2.0] - 2026-09-22
 

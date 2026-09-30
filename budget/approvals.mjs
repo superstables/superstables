@@ -213,7 +213,7 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
     if (Date.now() > until) {
       try { process.kill(-child.pid, "SIGTERM"); } catch {}
       release(rail, chain, id);
-      update(id, { state: "final", final: { code: 1, result: { ok: false, command, rail, chain, state: "failed", id, next: "nothing was sent; try again later", reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s` } } });
+      update(id, { state: "final", final: { code: 1, result: { ok: false, command, rail, chain, state: "failed", id, next: "check wallet activity and budget status before retrying", reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s` } } });
       return { kind: "failed", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s; the background approval was stopped` };
     }
     await sleep(150);
@@ -242,9 +242,9 @@ export async function pageState(url) {
 export function pageWords(page, rail) {
   switch (page?.status) {
     case "pending": return "waiting for the owner to open the link and connect their wallet";
-    case "ready": return "the owner connected their wallet; waiting for them to approve in it";
-    case "sending": return rail === "solana" ? "the owner signed in the wallet; the command is sending it" : "the wallet was asked to send; waiting for the owner to confirm in it";
-    case "sent": return "the wallet sent the transaction; the command is reading it from the chain";
+    case "ready": return "the owner account is selected; waiting for wallet approval";
+    case "sending": return rail === "solana" ? "the owner signed in the wallet; the command is sending it" : "a wallet transaction was requested; submission is not confirmed yet";
+    case "sent": return "a transaction id is available; the command is checking it on chain";
     case "connected": return "the owner connected and signed; the command is finishing";
     case undefined: case null: return "waiting for the owner";
     default: return "the owner page has ended; the command is finishing";
@@ -275,7 +275,7 @@ function abandoned(record) {
   if (mayHaveSent) {
     return { code: 5, result: { ok: false, ...base, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason: `the background approval stopped after the wallet was asked to send (last page state: ${page})` } };
   }
-  return { code: 3, result: { ok: false, ...base, state: "refused_precheck", id: record.id, url: record.url, next: "nothing was sent. Run the command again only if the owner asks", reason: `the background approval stopped before anything was sent (last page state: ${page ?? "none"})` } };
+  return { code: 3, result: { ok: false, ...base, state: "refused_precheck", id: record.id, url: record.url, next: "no submission is recorded. Check wallet activity and budget status; retry only at the owner's request", reason: `the background approval stopped without a recorded submission (last page state: ${page ?? "none"})` } };
 }
 
 /**
@@ -318,7 +318,7 @@ export async function replacePending(record, byId) {
   if (alive(record.pid)) { try { process.kill(-record.pid, "SIGKILL"); } catch {} }
   const result = {
     ok: false, command: record.command, rail: record.rail, chain: record.chain, state: "refused_precheck", id: record.id, url: record.url,
-    next: `nothing was sent. The new approval is ${byId}`, reason: `replaced by ${byId} before the owner approved; nothing was sent`,
+    next: `the previous worker was stopped. Check wallet activity before using the new approval ${byId}`, reason: `replaced by ${byId} after the page reported it was waiting for approval`,
   };
   recordFinal(record.id, 3, result);
   return { ok: true };

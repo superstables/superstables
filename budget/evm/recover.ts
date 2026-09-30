@@ -87,7 +87,7 @@ let ownerRevokeTx: string | null = null;
 if (allowanceAfter > 0n) {
   console.log(`the allowance still reads ${usdc(allowanceAfter)} ${SYM}: the owner closes it (approve 0)`);
   if (ownerKey) ownerRevokeTx = (await send(ownerKey.wallet, USDC, encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [pub.agent, 0n] }), "recover: owner approve(agent, 0) for the rest")).hash;
-  else ownerRevokeTx = await revokeInWallet("recover", pub.owner, pub.agent, "stop your agent's allowance");
+  else ownerRevokeTx = await revokeInWallet("recover", pub.owner, pub.agent, "Revoke before recovering funds");
   allowanceAfter = await readUntil(() => allowanceOf(pub.owner, pub.agent), (v) => v === 0n);
 }
 if (allowanceAfter !== 0n) {

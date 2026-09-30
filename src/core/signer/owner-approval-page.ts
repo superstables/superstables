@@ -117,7 +117,7 @@ export const OWNER_PAGE_SCRIPT = `
       a.href = link;
       a.rel = "noreferrer noopener";
       a.target = "_blank";
-      a.textContent = "View it on the explorer.";
+      a.textContent = "View transaction on explorer.";
       box.appendChild(document.createTextNode(" "));
       box.appendChild(a);
     }
@@ -156,10 +156,10 @@ export const OWNER_PAGE_SCRIPT = `
     show("expiry-val", false);
     show("fineprint", false);
     document.body.setAttribute("data-state", state.status);
-    if (state.status === "confirmed") say(state.message || "Done. You can go back to the agent.", "good", state.hash ? txLink(state.hash) : null);
-    else if (state.status === "failed") say(state.message || "The command could not confirm this on chain.", "bad", state.hash ? txLink(state.hash) : null);
-    else if (state.status === "expired") say("This link expired. Nothing was sent. Ask the agent to run the command again if you still want this.", "bad");
-    else say(state.mine || "This was rejected. Nothing was sent.", "bad");
+    if (state.status === "confirmed") say(state.message || "Confirmed. You can return to the agent.", "good", state.hash ? txLink(state.hash) : null);
+    else if (state.status === "failed") say(state.message || "Not confirmed. Check the command result and wallet activity before trying again.", "bad", state.hash ? txLink(state.hash) : null);
+    else if (state.status === "expired") say("This link expired. If your wallet still has a request open, cancel it. Check the command result and wallet activity before requesting a new link.", "bad");
+    else say(state.mine || "This request was rejected. Check the command result. Rejecting this page does not cancel a transaction already submitted in your wallet.", "bad");
   }
 
   function post(path, body) {
@@ -189,7 +189,7 @@ export const OWNER_PAGE_SCRIPT = `
         if (["confirmed", "failed", "rejected", "expired"].indexOf(state.status) >= 0) ended(state);
       })
       .catch(function () {
-        if (!done) say("The command that opened this page is not answering. If it stopped, nothing more happens here.", "bad");
+        if (!done) say("The command is not answering. Cancel any open wallet request. Check wallet activity and the budget status before trying again.", "bad");
       });
   }
 
@@ -200,7 +200,7 @@ export const OWNER_PAGE_SCRIPT = `
     show("reject", false);
     show("expiry-row", false);
     show("expiry-val", false);
-    say("Sent. Waiting for the chain to confirm it. The command checks the result on chain itself; keep this page open.", null, hash ? txLink(hash) : null);
+    say("Transaction submitted. The command is checking the result on chain. Keep this page open. Do not submit it again.", null, hash ? txLink(hash) : null);
   }
 
   function ensureChain() {
@@ -247,7 +247,7 @@ export const OWNER_PAGE_SCRIPT = `
         show("account-row", true);
         show("account", true);
         if (facts.kind === "connect") {
-          say("Check your wallet: sign the message to prove this address is yours. It sends nothing and costs nothing.");
+          say("Check your wallet: sign the message to prove this address is yours. It grants no spending permission and has no network fee.");
           return provider.request({ method: "personal_sign", params: [hexOf(facts.message), account] })
             .then(function (signature) { return post("/connect", { address: account, signature: signature }); })
             .then(function (answer) {
@@ -267,7 +267,7 @@ export const OWNER_PAGE_SCRIPT = `
             show("connect", false);
             show("send", true);
             setBusy(false);
-            say("Ready. Press \\u201cApprove in wallet\\u201d and check the transaction in the wallet popup.");
+            say("Review the terms above. Press \\u201cReview in wallet\\u201d and check the transaction in the wallet popup.");
           });
       })
       .catch(function (err) {
@@ -280,7 +280,7 @@ export const OWNER_PAGE_SCRIPT = `
   function send() {
     if (!account || !facts.transaction) return;
     setBusy(true);
-    say("Check your wallet: it is asking you to approve this transaction.");
+    say("Review the transaction and network fee in your wallet. Confirm only if they match your intent.");
     post("/sending", { address: account })
       .then(function (answer) {
         if (!answer.ok) throw new Error(answer.data.error || "the command will not take this transaction any more");
@@ -295,17 +295,17 @@ export const OWNER_PAGE_SCRIPT = `
         return post("/sent", { address: account, hash: hash });
       })
       .then(function (answer) {
-        if (answer && !answer.ok) say(answer.data.error || "The command did not take the transaction hash; it still reads the chain.", "bad");
+        if (answer && !answer.ok) say(answer.data.error || "The command did not accept the transaction hash. Check wallet activity and the budget status before trying again.", "bad");
       })
       .catch(function (err) {
         if (err && err.code === 4001) {
           post("/reject", { by: "wallet" }).then(function () {
-            ended({ status: "rejected", mine: "You rejected this in your wallet. Nothing was sent. The agent can do nothing more with this link." });
+            ended({ status: "rejected", mine: "You rejected this wallet request. This link is closed. Any existing budget stays in effect." });
           });
           return;
         }
         setBusy(false);
-        say("The wallet could not send this: " + reason(err), "bad");
+        say("The wallet returned an error. The transaction may have been submitted. Check wallet activity before trying again: " + reason(err), "bad");
       });
   }
 
@@ -386,7 +386,7 @@ export const OWNER_PAGE_SCRIPT = `
         show("account-row", true);
         show("account", true);
         if (facts.kind === "connect") {
-          say("Check " + w.name + ": sign the message to prove this address is yours. It sends nothing and costs nothing.");
+          say("Check " + w.name + ": sign the message to prove this address is yours. It grants no spending permission and has no network fee.");
           return Promise.resolve(w.features["solana:signMessage"].signMessage({ account: walletAccount, message: new TextEncoder().encode(facts.message) }))
             .then(function (outputs) {
               var o = outputs[0];
@@ -408,14 +408,14 @@ export const OWNER_PAGE_SCRIPT = `
             show("connect", false);
             show("send", true);
             setBusy(false);
-            say("Ready. Press \\u201cApprove in wallet\\u201d and check the transaction in " + w.name + ".");
+            say("Review the terms above. Press \\u201cReview in wallet\\u201d and check the transaction in " + w.name + ".");
           });
       })
       .catch(function (err) {
         account = null;
         setBusy(false);
         show("connect", true);
-        say("Your wallet did not connect: " + reason(err) + ". Nothing was sent. You can connect again, or reject.", "bad");
+        say("Could not finish connecting: " + reason(err) + ". Nothing was sent. You can connect again, or reject.", "bad");
       });
   }
 
@@ -426,7 +426,7 @@ export const OWNER_PAGE_SCRIPT = `
     post("/prepare", { address: account })
       .then(function (answer) {
         if (!answer.ok) throw new Error(answer.data.error || "the command could not build the transaction");
-        say("Check " + wallet.name + ": it is asking you to approve this transaction.");
+        say("Check " + wallet.name + ": review the transaction and fee before signing. The command will submit the signed transaction.");
         return Promise.resolve(wallet.features["solana:signTransaction"].signTransaction({ account: walletAccount, chain: facts.chain.walletChain, transaction: unb64(answer.data.transaction) }))
           .then(function (outputs) { return outputs[0].signedTransaction; }, function (err) {
             // the wallet did not sign, whatever its reason: nothing can be sent
@@ -436,7 +436,7 @@ export const OWNER_PAGE_SCRIPT = `
           });
       })
       .then(function (signedTransaction) {
-        say("Signed. The command checks it is the transaction it built, then sends it.");
+        say("Signed. The command checks that the transaction is unchanged before submitting it. Do not submit it again.");
         return post("/signed", { address: account, signedTransaction: b64(signedTransaction) });
       })
       .then(function (answer) {
@@ -451,20 +451,20 @@ export const OWNER_PAGE_SCRIPT = `
       .catch(function (err) {
         if (err && err.walletSaidNo) {
           post("/reject", { by: "wallet" }).then(function () {
-            ended({ status: "rejected", mine: "You rejected this in your wallet (" + String(err.message).replace(/[.\\s]+$/, "") + "). Nothing was sent. The agent can do nothing more with this link." });
+            ended({ status: "rejected", mine: "Your wallet did not return a signed transaction (" + String(err.message).replace(/[.\\s]+$/, "") + "). The command did not submit it. Any existing budget stays in effect." });
           });
           return;
         }
         setBusy(false);
-        say((err && err.refused ? "" : "Could not send this: ") + reason(err) + " You can press \\u201cApprove in wallet\\u201d again, or reject.", "bad");
+        say((err && err.refused ? "" : "Could not send this: ") + reason(err) + " Retry only if the command confirms nothing was submitted. Otherwise, check wallet activity and the budget status first.", "bad");
       });
   }
 
   function reject() {
     setBusy(true);
     post("/reject", { by: "page" })
-      .then(function () { ended({ status: "rejected", mine: "You rejected this. Nothing was sent. The agent can do nothing more with this link." }); })
-      .catch(function () { setBusy(false); say("The command is not answering. Is it still running?", "bad"); });
+      .then(function () { ended({ status: "rejected", mine: "This request is closed. Cancel any open wallet request too. A transaction already submitted can still take effect. Any existing budget stays in effect." }); })
+      .catch(function () { setBusy(false); say("The command is not answering. Cancel any open wallet request and check the budget status.", "bad"); });
   }
 
   document.addEventListener("click", function (event) {
@@ -523,7 +523,7 @@ function page(title: string, body: string): string {
 <div class="wrap">
   <header>
     <h1>Superstables &middot; ${esc(title)}</h1>
-    <p>Your browser wallet holds the key &middot; the agent can ask, only you can approve.</p>
+    <p>Review the terms here, then confirm in your own wallet. Your wallet keeps its signing key.</p>
   </header>
 ${body}
 </div>
@@ -548,7 +548,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms): str
     </div>`
       : "";
   const solana = facts.chain.family === "solana";
-  const primary = facts.kind === "connect" ? "" : `<button id="send" class="primary" data-act="send" hidden>Approve in wallet</button>`;
+  const primary = facts.kind === "connect" ? "" : `<button id="send" class="primary" data-act="send" hidden>Review in wallet</button>`;
   const noWallet = solana
     ? `Phantom (or another Solana wallet) is needed here. Install one at
     <a href="${PHANTOM_DOWNLOAD_URL}" rel="noreferrer noopener">${PHANTOM_DOWNLOAD_URL}</a>, then reload this page.
@@ -559,7 +559,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms): str
   // Phantom cannot be switched to devnet by a page: the owner does it once in the wallet.
   const networkHint =
     solana && facts.kind !== "connect" && facts.chain.testnet
-      ? `<div id="network-hint" class="note">Before you approve: in Phantom, open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet. Phantom may still say it cannot simulate this; that is expected on devnet. Check the terms on this page.</div>`
+      ? `<div id="network-hint" class="note">Before you approve: in Phantom, open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet. If Phantom cannot simulate the transaction, its effects have not been checked by the wallet. Reject if you cannot verify what you are signing.</div>`
       : "";
   const body = `
   <div id="say" class="note" hidden></div>
@@ -573,8 +573,8 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms): str
     <p class="summary">${esc(terms.summary)}</p>
     <dl class="rows">
       ${rows}
-      <dt>On</dt><dd>${chainCell}</dd>
-      <dt id="account-row" hidden>Your wallet</dt><dd id="account" class="mono" hidden></dd>
+      <dt>Network</dt><dd>${chainCell}</dd>
+      <dt id="account-row" hidden>Connected wallet</dt><dd id="account" class="mono" hidden></dd>
       <dt id="expiry-row">Link expires in</dt><dd id="expiry-val"><span id="expiry">${clock}</span></dd>
     </dl>
     ${limits}
@@ -599,8 +599,8 @@ export function ownerNotFoundPage(): string {
     "approve in your wallet",
     `
   <div class="note bad">
-    Nothing is waiting under this link. It may have been approved, rejected or expired already,
-    or the command that opened it has stopped. Nothing was sent. Ask the agent to run the command again.
+    This approval link is unavailable. The request may have ended or the command may have stopped.
+    Cancel any open wallet request. Check the command result and wallet activity before asking for a new link.
   </div>`,
   );
 }
