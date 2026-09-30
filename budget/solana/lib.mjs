@@ -1,10 +1,12 @@
 // Shared helpers for the Solana superstables budget scripts.
 // Never logs a secret key or seed phrase.
 //
-// Key files (paths from ../paths.mjs):
-//   solana-owner.env   owner secret. Only owner commands open it (setBudget, revokeBudget, fund).
-//   solana-agent.env   agent secret. buy opens only this.
-//   public file        public addresses only. Read commands (readBudget, reconcile) need nothing else.
+// Keys (paths from ../paths.mjs):
+//   the owner's wallet  holds the owner key. setup, grant, revoke and fund-agent ask it on the owner page (owner.ts).
+//   solana-agent.env    agent secret. buy opens only this; setup creates it.
+//   public file         public addresses only. Read commands (readBudget, reconcile) and owner commands use it.
+//   an owner key file   tests and automation only, named with --owner-key-file <path> (mode 600):
+//                       SOLANA_OWNER_SECRET_BASE58. The default path ownerKeyFile("solana") is never read.
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
@@ -119,10 +121,10 @@ function loadKeypair(path, secretName, addressName, what) {
 
 const pk = (env, name) => (env[name] ? new PublicKey(env[name]) : null);
 
-// Owner commands only. Opens solana-owner.env.
-export function loadOwner() {
-  const { keypair, env } = loadKeypair(OWNER_KEY_PATH, "SOLANA_OWNER_SECRET_BASE58", "SOLANA_OWNER_ADDRESS", "Owner key file");
-  return { keypair, agent: pk(env, "SOLANA_AGENT_ADDRESS") };
+// Tests and automation only: the owner key file named with --owner-key-file (the caller checks its mode).
+export function loadOwner(path) {
+  const { keypair } = loadKeypair(path, "SOLANA_OWNER_SECRET_BASE58", "SOLANA_OWNER_ADDRESS", "Owner key file");
+  return { keypair };
 }
 
 // Agent commands only. Opens solana-agent.env, never the owner file.

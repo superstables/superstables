@@ -31,7 +31,7 @@ const conn = connection();
 
 const ownerPk = ownerFlag ?? readPublic().owner;
 if (!ownerPk) {
-  console.error(`Owner address unknown: pass --owner <address> or create ${PUBLIC_PATH} (generate-keys.mjs writes it).`);
+  console.error(`Owner address unknown: pass --owner <address> or create ${PUBLIC_PATH} (superstables budget setup --rail solana writes it).`);
   process.exit(1);
 }
 const ownerAta = getAssociatedTokenAddressSync(USDC_MINT, ownerPk);

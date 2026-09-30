@@ -149,6 +149,7 @@ export const OWNER_PAGE_SCRIPT = `
     setBusy(false);
     show("connect", false);
     show("wallet-list", false);
+    show("network-hint", false);
     show("send", false);
     show("reject", false);
     show("expiry-row", false);
@@ -194,6 +195,7 @@ export const OWNER_PAGE_SCRIPT = `
 
   function waiting(hash) {
     document.body.setAttribute("data-state", "sent");
+    show("network-hint", false);
     show("send", false);
     show("reject", false);
     show("expiry-row", false);
@@ -449,7 +451,7 @@ export const OWNER_PAGE_SCRIPT = `
       .catch(function (err) {
         if (err && err.walletSaidNo) {
           post("/reject", { by: "wallet" }).then(function () {
-            ended({ status: "rejected", mine: "You rejected this in your wallet (" + err.message + "). Nothing was sent. The agent can do nothing more with this link." });
+            ended({ status: "rejected", mine: "You rejected this in your wallet (" + String(err.message).replace(/[.\\s]+$/, "") + "). Nothing was sent. The agent can do nothing more with this link." });
           });
           return;
         }
@@ -557,7 +559,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms): str
   // Phantom cannot be switched to devnet by a page: the owner does it once in the wallet.
   const networkHint =
     solana && facts.kind !== "connect" && facts.chain.testnet
-      ? `<p class="summary">Before you approve: in Phantom, open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet. Phantom may still say it cannot simulate this; that is expected on devnet. Check the terms on this page.</p>`
+      ? `<div id="network-hint" class="note">Before you approve: in Phantom, open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet. Phantom may still say it cannot simulate this; that is expected on devnet. Check the terms on this page.</div>`
       : "";
   const body = `
   <div id="say" class="note" hidden></div>

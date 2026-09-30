@@ -220,7 +220,7 @@ const pub = readPublic();
 const ownerPk = ownerFlag ?? pub.owner ?? agentInfo.owner;
 if (!ownerPk) {
   updateOp(opId, { state: "refused_precheck", reasons: ["owner address unknown"] });
-  refuse("owner address unknown: pass --owner or run generate-keys.mjs");
+  refuse("owner address unknown: pass --owner or run superstables budget setup --rail solana");
 }
 console.log(`Owner (source of funds): ${ownerPk.toBase58()}`);
 console.log(`Agent (delegate authority, signs the payment): ${agent.publicKey.toBase58()}`);
