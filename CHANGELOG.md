@@ -12,8 +12,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **On-chain agent budgets: `superstables budget`, a separate testnet tool.** The owner grants
   an agent key a budget once. The agent then buys from x402 and MPP sellers with no approval per
   payment, until the budget runs out, expires on Tempo, or the owner revokes it. There are three rails: `evm`, a
-  plain ERC-20 approve on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy and SKALE
-  Base Sepolia; `tempo`, an access key on Tempo Moderato with a cap, expiry and optional period and seller list
+  plain ERC-20 approve on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE
+  Base Sepolia and Ethereum Sepolia; `tempo`, an access key on Tempo Moderato with a cap, expiry and optional period and seller list
   enforced on chain; and `solana`, an SPL token delegate on devnet. On every rail the owner
   approves grant, revoke and their other steps in their own browser wallet, on a page on
   `127.0.0.1`: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) on `evm`, any EVM

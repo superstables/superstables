@@ -66,6 +66,9 @@ Each chain below passed grant, buy (settled and delivered), reconcile, revoke an
 | `arbitrum-sepolia` | USDC (`USD Coin`/2) | ETH | PayAI Echo, PayAI facilitator |
 | `polygon-amoy` | USDC (`USDC`/2) | POL | PayAI Echo, PayAI facilitator |
 | `skale-base-sepolia` | bridged USDC (`Bridged USDC (SKALE Bridge)`/2) | CREDIT | PayAI Echo, PayAI facilitator |
+| `ethereum-sepolia` | USDC (`USDC`/2) | ETH | Brickken sandbox, api.sandbox.brickken.com/get-agents |
+
+Brickken's `/get-agents` asks for `ownerWalletAddress`, and it must be the payer, which is the agent key: with any other address the seller answers HTTP 400 after the payment is signed, and `buy` cancels the authorization on chain and returns the price to the owner.
 
 PayAI's Echo sellers refund each payment to the payer, which is the agent key. The next `buy` then refuses (exit 3) and its RESULT `next` names the fix: the owner runs `superstables budget recover --rail evm --chain <key>`. The agent key sends the refund back to the owner.
 
@@ -112,7 +115,7 @@ In each block, run `doctor` first: it lists what is missing and which address to
 2. Fund your wallet with faucets, then give the agent gas. `fund-agent` opens the approval page for one plain transfer from your wallet. `doctor` checks these minimums:
    - Base Sepolia: your wallet needs at least 0.01 USDC ([faucet.circle.com](https://faucet.circle.com), pick Base Sepolia) and 0.00003 ETH (any Base Sepolia ETH faucet; 0.0003 is a comfortable amount). The agent needs at least 0.00003 ETH: `npx superstables budget fund-agent --rail evm` sends 0.0001. Network fees vary; check the wallet estimate.
    - Arc Testnet: gas is USDC, so there is no second token. Your wallet needs at least 0.2 USDC after funding the agent, and the agent at least 0.01 USDC. Get 0.4 USDC from [faucet.circle.com](https://faucet.circle.com) (pick Arc Testnet), then `npx superstables budget fund-agent --rail evm --chain arc-testnet` sends 0.1. Network fees vary; check the wallet estimate.
-   - Arbitrum Sepolia, Polygon Amoy and SKALE Base Sepolia: `npx superstables budget doctor --rail evm --chain <key>` prints the minimums and where to get each token. Then `npx superstables budget fund-agent --rail evm --chain <key>`.
+   - Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia: `npx superstables budget doctor --rail evm --chain <key>` prints the minimums and where to get each token. Then `npx superstables budget fund-agent --rail evm --chain <key>`.
 
    You can also send the agent gas from any wallet: `doctor` prints its address and the amount.
 3. Then:

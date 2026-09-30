@@ -1,6 +1,6 @@
 # The rails, in detail
 
-Load this file when you choose a rail, explain what a budget allows, or compare rails. `superstables budget --rail evm` is a plain ERC-20 approve with pull then pay (`evm/`, Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy and SKALE Base Sepolia; the chain table is `evm/chains.mjs`). `--rail tempo` is a Tempo keychain access key (`tempo/`, Moderato). `--rail solana` is an SPL token delegate (`solana/`, devnet).
+Load this file when you choose a rail, explain what a budget allows, or compare rails. `superstables budget --rail evm` is a plain ERC-20 approve with pull then pay (`evm/`, Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia; the chain table is `evm/chains.mjs`). `--rail tempo` is a Tempo keychain access key (`tempo/`, Moderato). `--rail solana` is an SPL token delegate (`solana/`, devnet).
 
 ## Methods
 
@@ -39,10 +39,10 @@ A payment signed before the revoke and submitted after it is refused on all thre
 
 | Rail | Seller protocol | How the agent pays | Fees on a purchase |
 | --- | --- | --- | --- |
-| evm | x402 `exact`, EIP-3009 | **Pull then pay.** Per purchase the agent pulls the exact price from the owner, then pays as a standard EIP-3009 payment it signs itself. A failed purchase returns the price. `recover` uses the agent key to lower its allowance and return funds; the owner approves in the wallet only what the agent cannot do. | The agent pays gas for the pull (about 0.0000004 ETH on Base Sepolia; USDC on Arc). The seller's facilitator pays for settlement. |
+| evm | x402 `exact`, EIP-3009 | **Pull then pay.** Per purchase the agent pulls the exact price from the owner, then pays as a standard EIP-3009 payment it signs itself. A failed purchase returns the price. `recover` uses the agent key to lower its allowance and return funds; the owner approves in the wallet only what the agent cannot do. | The agent pays gas for the pull (about 0.0000004 ETH on Base Sepolia, about 0.00009 ETH on Ethereum Sepolia at 1.3 gwei; USDC on Arc). The seller's facilitator pays for settlement. |
 | tempo | MPP `tempo` charge (`transferWithMemo`) | **Direct.** The agent's access key signs the payment from the owner's account. | Paid by the seller's fee payer with the sellers we tested. A fee the owner's account pays counts against the limit. |
 | solana | x402 `exact` | **Direct.** The agent signs `TransferChecked` as SPL delegate of the owner's USDC account; the facilitator reports the agent as payer. | Paid by the seller's facilitator. |
 
-Trade-offs on `evm`: two transactions per purchase; after the pull the chain no longer binds the seller; the price sits in the agent key for a few seconds. On Arc a chain's USDC may need allowing in the x402 client's spend controls, and gas is paid in USDC.
+Trade-offs on `evm`: two transactions per purchase; after the pull the chain no longer binds the seller; the price sits in the agent key for a few seconds. On Arc a chain's USDC may need allowing in the x402 client's spend controls, and gas is paid in USDC. On Ethereum Sepolia gas is L1 ETH: a purchase that fails after the pull adds two agent transactions (cancel the authorization, return the price), about 0.00023 ETH with the pull at 1.3 gwei. The seller proven there is the Brickken sandbox (`api.sandbox.brickken.com/get-agents`), whose `ownerWalletAddress` must be the payer, the agent key.
 
 Command on every rail: `buy --url <seller url> --max <amount> [--pay-to <address>] [--op <id>]`. It refuses before signing if the price is over `--max`, the token or chain is wrong, or the recipient doesn't match (exit 3). On `evm` and `solana` it also reads the budget on chain first and refuses (exit 3) when the agent is not approved or the price is over what is left; on `tempo` the chain refuses that payment at estimation (exit 1, nothing signed). After a crash or an unclear result, run `reconcile --op <id>`: it reads the chain and never pays. A seller error after payment is `settled` with `delivered: false`, never a retry.

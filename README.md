@@ -252,7 +252,7 @@ rather than in MetaMask, so processes running as your user can read it.
 agent key a budget on chain once, from their own wallet. The agent then buys from x402 or MPP sellers with no approval
 per payment, until the budget runs out, expires on Tempo, or the owner revokes it. The chain enforces the cap; no
 Superstables server is in the path. The tool has three rails: `evm`, a USDC `approve` on
-Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy or SKALE Base Sepolia; `tempo`, an access key on Tempo Moderato with a cap, expiry and
+Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia or Ethereum Sepolia; `tempo`, an access key on Tempo Moderato with a cap, expiry and
 optional period and seller list enforced on chain; and `solana`, an SPL token delegate on Solana devnet.
 
 ```bash

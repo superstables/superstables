@@ -4,7 +4,7 @@ One command for the budget rails. `superstables budget` is a thin dispatcher ove
 
 | `--rail` | Path | Chains (`--chain`) | Implementation |
 | --- | --- | --- | --- |
-| `evm` | plain approve, pull then pay | `base-sepolia` (default), `arc-testnet`, `arbitrum-sepolia`, `polygon-amoy`, `skale-base-sepolia` | `evm/` |
+| `evm` | plain approve, pull then pay | `base-sepolia` (default), `arc-testnet`, `arbitrum-sepolia`, `polygon-amoy`, `skale-base-sepolia`, `ethereum-sepolia` | `evm/` |
 | `tempo` | access key, MPP charge | `moderato` | `tempo/` |
 | `solana` | SPL delegate, x402 | `devnet` | `solana/` |
 
