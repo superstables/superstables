@@ -2,8 +2,8 @@
 // The home is the client's: SUPERSTABLES_HOME (a leading ~, $HOME or ${HOME} is expanded; blank means the default),
 // else ~/.superstables. Same rule as src/core/home.ts.
 //
-//   $SUPERSTABLES_HOME/keys/budget/<rail>-owner.env    owner key (mode 600). Tempo and Solana owner commands. The evm rail
-//                                                       has no owner key file: the owner approves in their own wallet.
+//   No owner key file on any rail: the owner approves in their own wallet. (ownerKeyFile names the old path, which doctor
+//   only notes when it finds one; owner commands read an owner key only from --owner-key-file, in tests.)
 //   $SUPERSTABLES_HOME/keys/budget/<rail>-agent.env    agent key (mode 600). Agent commands only.
 //   $SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env   public addresses and budget terms, no secret.
 //   $SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/<id>.json   one journal per purchase.

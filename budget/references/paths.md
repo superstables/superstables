@@ -8,12 +8,12 @@ Every rail implements the same four methods.
 
 | Method | Signer | Effect |
 | --- | --- | --- |
-| `setBudget(amount, expiry?, sellers?)` (`grant`) | owner | Lets one agent key spend up to `amount` USDC (pathUSD on Tempo), until `expiry` and only to the listed sellers where the rail supports them. A rail refuses a constraint it can't enforce on chain. It prints the true maximum that can move. On `evm` the owner approves it in their own wallet. |
+| `setBudget(amount, expiry?, sellers?)` (`grant`) | owner | Lets one agent key spend up to `amount` USDC (pathUSD on Tempo), until `expiry` and only to the listed sellers where the rail supports them. A rail refuses a constraint it can't enforce on chain. It prints the true maximum that can move. The owner approves it in their own wallet. |
 | `pay(seller, amount)` (`buy`) | agent | Moves the token from the owner to the seller under the budget. |
 | `revokeBudget()` (`revoke`) | owner | Ends the authorization on chain. |
 | `readBudget()` (`status`) | anyone | Reads the remaining amount, expiry and revoked state from the chain. |
 
-The agent key lives in `$SUPERSTABLES_HOME/keys/budget/<rail>-agent.env` (mode 600). On `evm` there is no owner key file: owner actions go through the owner's own wallet on an approval page on `127.0.0.1`. On `tempo` and `solana` the owner key is in `<rail>-owner.env` for now, and agent commands never open it. Reads need no secret file (public addresses in `$SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env`). Safety rules: [CONTRACT.md](../CONTRACT.md).
+The agent key lives in `$SUPERSTABLES_HOME/keys/budget/<rail>-agent.env` (mode 600). No rail has an owner key file: owner actions go through the owner's own wallet on an approval page on `127.0.0.1` (MetaMask or another on `evm` and `tempo`, Phantom or another Solana wallet on `solana`). Reads need no secret file (public addresses in `$SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env`). Safety rules: [CONTRACT.md](../CONTRACT.md).
 
 ## What each rail enforces
 

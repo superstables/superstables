@@ -14,10 +14,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   payment, until the budget runs out or the owner revokes it. There are three rails: `evm`, a
   plain ERC-20 approve on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy and SKALE
   Base Sepolia; `tempo`, an access key on Tempo Moderato whose cap, expiry and seller list the
-  chain enforces; and `solana`, an SPL token delegate on devnet. On `evm` the owner approves
-  grant, revoke and their other steps in their own wallet, on a page on `127.0.0.1`, and the
-  agent's machine holds only the agent key. Run by an agent, an owner command returns with the
-  approval link, and `superstables budget wait --id` reports the outcome. Before it signs, `buy`
+  chain enforces; and `solana`, an SPL token delegate on devnet. On every rail the owner
+  approves grant, revoke and their other steps in their own wallet (MetaMask on `evm` and
+  `tempo`, Phantom on `solana`), on a page on `127.0.0.1`, and the agent's machine holds only
+  the agent key. Run by an agent, an owner command returns with the approval link, and
+  `superstables budget wait --id` reports the outcome. Before it signs, `buy`
   checks the price against `--max`, the token and, with `--pay-to`, the recipient. Every command
   ends with one `RESULT` line and a fixed exit code, and `reconcile` reads the chain after an
   interrupted purchase without paying again. Mainnet is refused. It runs from a checkout of this

@@ -159,7 +159,7 @@ can open the correct payment request.
   records/               quotes, attempts, receipts and approvals, append-only JSONL, 0600
   browser-wallet.json    which MetaMask account last connected. A name, not a secret
   wallet/                only with --wallet local: key, agent token, owner secret, audit log
-  keys/budget/           only with superstables budget: the agent key file (and tempo/solana owner keys), 0600
+  keys/budget/           only with superstables budget: the agent key file, 0600
   budget/                only with superstables budget: public addresses, purchase journals, approval log
 ```
 

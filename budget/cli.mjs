@@ -37,7 +37,7 @@ const OWNER_HELP = "  The owner approves in their own wallet on a page this comm
 const COMMANDS = {
   setup: {
     flags: { agent: "v", ...OWNER_FLAGS }, required: [],
-    help: "superstables budget setup --rail R [--chain C] [--timeout S] [--no-open]\n  Creates the agent key file if it is missing (never overwrites it), asks the owner to connect their own wallet and sign a free\n  sign-in message (no transaction), and writes the public file with both addresses. Prints the next steps. No owner key is created.\n  tempo: also tops up the owner from the Moderato faucet if it holds less than 1 pathUSD. --agent LABEL adds a new agent key for\n  the next budget (a revoked or expired key can never be granted again); it needs no page.\n  Tests and automation only: --owner-key-file PATH records that key's address instead of asking the wallet.",
+    help: "superstables budget setup --rail R [--chain C] [--agent LABEL] [--timeout S] [--no-open]\n  Creates the agent key file if it is missing (never overwrites it), asks the owner to connect their own wallet and sign a free\n  sign-in message (no transaction), and writes the public file with both addresses. Prints the next steps. No owner key is created.\n  tempo: also tops up the owner from the Moderato faucet if it holds less than 1 pathUSD. --agent LABEL adds a new agent key for\n  the next budget (a revoked or expired key can never be granted again); it needs no page.\n  Tests and automation only: --owner-key-file PATH records that key's address instead of asking the wallet.",
   },
   "fund-agent": {
     flags: { amount: "v", yes: "b", ...OWNER_FLAGS }, required: [],
@@ -53,7 +53,7 @@ const COMMANDS = {
   },
   grant: {
     flags: { amount: "v", expiry: "v", period: "v", sellers: "v", yes: "b", agent: "v", ...OWNER_FLAGS }, required: ["amount"],
-    help: "superstables budget grant --rail R --amount A [--expiry ISO] [--period SECONDS] [--sellers a,b] [--agent LABEL] [--yes]\n  Owner command. Prints the terms and what the chain enforces.\n" + OWNER_HELP + "\n  Refuses constraints the rail cannot enforce (evm and solana: no --expiry, --period, --sellers).\n  Tempo: --expiry defaults to 24h from now. --agent LABEL picks the access key (a revoked key can never be granted again).",
+    help: "superstables budget grant --rail R --amount A [--expiry ISO] [--period SECONDS] [--sellers a,b] [--agent LABEL] [--timeout S] [--no-open]\n  Owner command. Prints the terms and what the chain enforces.\n" + OWNER_HELP + "\n  Refuses constraints the rail cannot enforce (evm and solana: no --expiry, --period, --sellers).\n  Tempo: --expiry defaults to 24h from now. --agent LABEL picks the access key (a revoked key can never be granted again).",
   },
   status: {
     flags: { agent: "v" }, required: [],
@@ -77,7 +77,7 @@ const COMMANDS = {
   },
   revoke: {
     flags: { yes: "b", agent: "v", ...OWNER_FLAGS }, required: [],
-    help: "superstables budget revoke --rail R [--chain C] [--agent LABEL] [--yes]\n  Owner command. Ends the budget on chain. Prints the plan.\n" + OWNER_HELP,
+    help: "superstables budget revoke --rail R [--chain C] [--agent LABEL] [--timeout S] [--no-open]\n  Owner command. Ends the budget on chain. Prints the plan.\n" + OWNER_HELP,
   },
 };
 const TOP_HELP = `superstables budget: on-chain agent budgets on evm (${Object.values(EVM_CHAINS).map((c) => c.label).join(", ")}), tempo (Moderato) and solana (devnet). Testnet only.

@@ -11,8 +11,9 @@ Every rail's main path follows these rules.
 ## 1. Owner and agent keys are separate
 
 - The agent key lives in `$SUPERSTABLES_HOME/keys/budget/<rail>-agent.env` (mode 600). Public addresses go in a public state file under `$SUPERSTABLES_HOME/budget/public/`.
-- EVM: the owner's key stays in the owner's wallet. Owner commands (`setup`, `fundAgent`, `setBudget`/`grant`, `revoke`, the owner's part of `recover`) build the transaction and ask the owner's browser wallet to send it through the owner approval page on `127.0.0.1`. The terms on that page come from the command's own plan, never from agent text. The command then verifies on chain. An owner key file is used only when a test names it with `--owner-key-file`.
-- Tempo and Solana (for now): the owner key lives in `<rail>-owner.env` (mode 600), and owner commands open only that file.
+- Every rail: the owner's key stays in the owner's wallet. Owner commands (`setup`, `fundAgent`, `setBudget`/`grant`, `revoke`, the owner's part of `recover` on EVM) build the transaction and ask the owner's wallet to approve it through the owner approval page on `127.0.0.1`. The terms on that page come from the command's own plan, never from agent text. The command then verifies on chain. An owner key file is used only when a test names it with `--owner-key-file`.
+  - EVM and Tempo: an EIP-1193 wallet (MetaMask) sends exactly the transaction the command built. On Tempo that is a plain type-2 call to the AccountKeychain precompile, and the owner pays its own fee.
+  - Solana: a Wallet Standard wallet (Phantom) only signs. The command builds the transaction when the owner presses Approve and sends it itself, only if the signed message is byte for byte the one it built and the signature is the owner's.
 - Agent commands (`buy`, `reconcile`) open only the agent file. They must work with no owner key file anywhere.
 - Read commands (`read`/`readBudget`/`status`) need no secret file.
 - Never print, log or copy key material.
