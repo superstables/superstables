@@ -104,6 +104,52 @@ describe("hosted approvals", () => {
     expect(readFileSync(join(dir, "audit.jsonl"), "utf8")).not.toContain("ssbt_");
   });
 
+  it("an agent already linked on this chain: no link, no wait, the site's owner as the outcome", async () => {
+    site.reply = (path) => path.endsWith("/links") ? { status: 200, body: { id: "bl_test0042", access_token: "ssbt_test_bl_test0042secret", state: "linked", final: true, owner: OWNER, approval: null, next_action: { type: "none" } } } : undefined;
+    const h = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
+    expect(h).toMatchObject({ id: "bl_test0042", url: "", matchCode: "", alreadyLinked: true });
+    expect(await h.settled).toEqual({ status: "connected", address: OWNER });
+    expect(site.posts[0]).toMatchObject({ path: "/api/v1/budget/links", ok: true });
+    // nothing to poll, nothing stored
+    expect(site.requests).toEqual([]);
+    expect(records).toEqual([]);
+  });
+
+  it("an already-linked answer without an owner is refused", async () => {
+    site.reply = () => ({ status: 200, body: { id: "bl_test0042", state: "linked", final: true, owner: null, approval: null } });
+    const err = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 }).catch((e) => e);
+    expect(err).toBeInstanceOf(HostedRefusal);
+    expect(err.message).toMatch(/no owner address/);
+  });
+
+  it("409 is a refusal with the site's message", async () => {
+    site.reply = () => ({ status: 409, body: { error: "this agent is linked to another account", reason_code: "linked_elsewhere" } });
+    const err = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 }).catch((e) => e);
+    expect(err).toBeInstanceOf(HostedRefusal);
+    expect(err.message).toMatch(/HTTP 409 linked_elsewhere: this agent is linked to another account.*nothing was sent/);
+  });
+
+  it("409 duplicate_request for a request this client does not hold: the conflict is reported, nothing sent", async () => {
+    site.owner = OWNER;
+    site.reply = () => ({ status: 409, body: { error: "a request with this key exists", reason_code: "duplicate_request", id: "ba_test0999" } });
+    const err = await grant(client()).catch((e) => e);
+    expect(err).toBeInstanceOf(HostedRefusal);
+    expect(err.message).toMatch(/already has request ba_test0999 from an earlier attempt.*nothing was sent/);
+  });
+
+  it("409 duplicate_request for a request this client holds: it keeps polling that request", async () => {
+    site.owner = OWNER;
+    const c = client();
+    const first = await grant(c);
+    const held = site.requests[0];
+    site.reply = () => ({ status: 409, body: { reason_code: "duplicate_request", id: held.id } });
+    const again = await grant(c);
+    expect(again.id).toBe(held.id);
+    expect(again.url).toBe(first.url);
+    held.state = "rejected";
+    expect(await again.settled).toMatchObject({ status: "rejected", sending: false });
+  });
+
   it("asks for the exact transaction and settles as sent, then confirmed, with the hash", async () => {
     site.owner = OWNER;
     site.onPoll = (r) => {

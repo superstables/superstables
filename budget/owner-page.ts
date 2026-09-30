@@ -173,7 +173,9 @@ export function ownerPageFor(rail: OwnerRail) {
       const hosted = hostedSettings(action, "connect");
       if (hosted) {
         const handle = await hostedFor(hosted).request({ kind: "connect", terms, timeoutMs: OWNER_TIMEOUT_MS }).catch((e) => refusedBySite(action, e));
-        announce(action, handle, terms, hosted.site);
+        // already linked on this chain: no link to show and nothing to wait for
+        if (handle.alreadyLinked) console.error(`\nThis agent is already linked on ${hosted.site}; no link is needed.\n`);
+        else announce(action, handle, terms, hosted.site);
         return { handle, outcome: await handle.settled };
       }
       const s = await page();

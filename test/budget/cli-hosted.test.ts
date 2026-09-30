@@ -95,6 +95,26 @@ describe("setup --hosted", () => {
     expect(r.stdout + r.stderr).not.toContain("ssbt_");
   }, 60_000);
 
+  it("run again for an agent already linked: no link, no wait; the owner is recorded, or checked against the one recorded", async () => {
+    const linked = (owner: string) => () => ({ status: 200, body: { id: "bl_test0042", access_token: "ssbt_test_bl_test0042secret", state: "linked", final: true, owner, approval: null, next_action: { type: "none" } } });
+    site.reply = linked(OWNER);
+    // detached (stdout is not a terminal): it ends at once with the final result, not waiting_owner
+    const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.result).toMatchObject({ state: "ok", owner: OWNER, approvals: "hosted", site: site.url });
+    expect(r.approve).toBeNull();
+    expect(r.stderr).toMatch(/already linked/);
+    expect(publicFile()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
+    expect(publicFile()).toMatch(/^APPROVALS=hosted$/m);
+
+    // the site now says another account: refused, the recorded owner stays
+    site.reply = linked(OTHER);
+    const other = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"]);
+    expect(other.code).toBe(3);
+    expect(other.result.reason).toMatch(new RegExp(`linked this agent to ${OTHER}, but this computer records the owner ${OWNER}`));
+    expect(publicFile()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
+  }, 60_000);
+
   it("a later setup without --hosted keeps the recorded owner and the hosted mode", async () => {
     site.onPoll = (r) => {
       if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER });

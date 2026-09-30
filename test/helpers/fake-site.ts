@@ -30,6 +30,8 @@ export interface FakeSite extends TestServer {
   onPoll?: (r: FakeRequest) => void;
   /** Answer POSTs with this status and error instead (a refusal). */
   refuse?: { status: number; error: string };
+  /** Answer the next POST that checks out with this status and body instead of creating a request. */
+  reply?: (path: string) => { status: number; body: unknown } | undefined;
   services?: unknown;
 }
 
@@ -55,6 +57,8 @@ export async function startFakeSite(): Promise<FakeSite> {
       site.posts.push({ path: url.pathname, ok: !why, why });
       if (why) return json(res, 401, { error: why });
       if (site.refuse) return json(res, site.refuse.status, { error: site.refuse.error });
+      const custom = site.reply?.(url.pathname);
+      if (custom) return json(res, custom.status, custom.body);
       const body = JSON.parse(raw);
       const link = url.pathname.endsWith("/links");
       const id = `${link ? "bl" : "ba"}_test${String(++n).padStart(4, "0")}`;
@@ -102,14 +106,17 @@ async function checkProof(req: IncomingMessage, path: string, raw: string): Prom
   return undefined;
 }
 
-/** A JSON-RPC stand-in for an EVM testnet: every token balance and allowance is 0; every account holds 1 of the gas token. */
-export async function startFakeRpc(chainId: number): Promise<TestServer> {
+/**
+ * A JSON-RPC stand-in for an EVM testnet: every token balance and allowance is 0; every account holds 1 of the gas token.
+ * `extra` answers a method first (for example a transaction and its receipt); undefined falls through to the defaults.
+ */
+export async function startFakeRpc(chainId: number, extra?: (method: string, params: any[]) => unknown): Promise<TestServer> {
   return startServer(async (req, res) => {
     const body = JSON.parse(await readBody(req));
-    const answer = (c: { id: number; method: string }) => ({
+    const answer = (c: { id: number; method: string; params?: any[] }) => ({
       jsonrpc: "2.0",
       id: c.id,
-      result: c.method === "eth_chainId" ? `0x${chainId.toString(16)}` : c.method === "eth_call" ? `0x${"0".repeat(64)}` : c.method === "eth_blockNumber" ? "0x1" : c.method === "eth_getBalance" ? "0xde0b6b3a7640000" : "0x0",
+      result: extra?.(c.method, c.params ?? []) ?? (c.method === "eth_chainId" ? `0x${chainId.toString(16)}` : c.method === "eth_call" ? `0x${"0".repeat(64)}` : c.method === "eth_blockNumber" ? "0x1" : c.method === "eth_getBalance" ? "0xde0b6b3a7640000" : "0x0"),
     });
     json(res, 200, Array.isArray(body) ? body.map(answer) : answer(body));
   });

@@ -93,6 +93,8 @@ export interface HostedHandle {
   url: string;
   expiresAt: number;
   matchCode: string;
+  /** The agent was already linked on this chain: no link, no match code, `settled` is already connected. */
+  alreadyLinked?: boolean;
   settled: Promise<OwnerActionOutcome>;
   finish(verdict: { ok: boolean; message: string; hash?: string }): void;
 }
@@ -114,6 +116,8 @@ export class HostedApprovals {
   private stopped = false;
   /** Requests created here without a final answer yet: close() cancels them. */
   private readonly open = new Map<string, { id: string; token: string }>();
+  /** Every request this client created, by id: an idempotent retry answered with duplicate_request keeps polling it. */
+  private readonly held = new Map<string, { linked: false; id: string; token: string; url: string; matchCode: string; expiresAt: number }>();
 
   constructor(settings: HostedSettings) {
     this.s = settings;
@@ -140,7 +144,13 @@ export class HostedApprovals {
       kind = k;
       body = { kind: k, rail: this.s.rail, chain: this.s.chain, agent, transaction: input.transaction };
     }
-    const created = await this.create(path, body, kind === "link" ? "bl_" : "ba_");
+    const answer = await this.create(path, body, kind === "link" ? "bl_" : "ba_");
+    if (answer.linked) {
+      // already linked on this chain: nothing to show the owner and nothing to wait for; setup checks the owner as usual
+      this.audit({ id: answer.id, kind, title: input.terms.title, status: "linked", address: answer.owner });
+      return { id: answer.id, url: "", expiresAt: Date.now(), matchCode: "", alreadyLinked: true, settled: Promise.resolve({ status: "connected", address: answer.owner }), finish: () => {} };
+    }
+    const created = answer;
     const record: HostedRecord = { site: this.s.site, requestId: created.id, token: created.token, kind, matchCode: created.matchCode };
     const expected = input.kind === "evm-transaction" ? getAddress(input.account) : undefined;
 
@@ -224,7 +234,25 @@ export class HostedApprovals {
     try {
       json = await res.json();
     } catch {}
+    const code = typeof json?.reason_code === "string" ? json.reason_code : typeof json?.code === "string" ? json.code : typeof json?.error?.code === "string" ? json.error.code : "";
+    if (res.status === 409 && code === "duplicate_request") {
+      // an idempotent retry of a request the site already created: keep polling it if this client holds it
+      const held = typeof json?.id === "string" ? this.held.get(json.id) : undefined;
+      if (held) return held;
+      throw new HostedRefusal(
+        `${this.s.site} already has request ${siteText(json?.id ?? "(no id)", 80)} from an earlier attempt whose answer never arrived here (${siteError(res.status, json)}). Without its link nobody can approve it, and it expires by itself; nothing was sent`,
+        "run the same command again after that request expires (10 minutes)",
+      );
+    }
     if (!res.ok) throw new HostedRefusal(`${this.s.site} did not take the request (${siteError(res.status, json)}); nothing was sent`, res.status >= 500 ? "try again later" : "read reason; fix what it names before trying again");
+    // a link that already exists for this agent on this chain: an already-final request, with no link to show
+    if (res.status === 200 && prefix === "bl_" && json?.state === "linked" && json?.final === true && !json?.approval) {
+      const owner = typeof json.owner === "string" && isAddress(json.owner) ? getAddress(json.owner) : null;
+      if (!isSiteRequestId(json.id) || !String(json.id).startsWith(prefix) || !owner) {
+        throw new HostedRefusal(`${this.s.site} says this agent is already linked, but its answer has no ${owner ? "request id" : "owner address"}; nothing was recorded or sent`, "try again later");
+      }
+      return { linked: true as const, id: json.id as string, owner };
+    }
     const id = json?.id;
     const token = json?.access_token;
     const url = json?.approval?.url;
@@ -241,7 +269,9 @@ export class HostedApprovals {
       : !Number.isFinite(expires) || expires <= Date.now() ? "no expiry in the future"
       : "";
     if (problem) throw new HostedRefusal(`${this.s.site} answered with ${problem}; the request is not used and nothing was sent`, "try again later");
-    return { id: id as string, token: token as string, url: url as string, matchCode: matchCode as string, expiresAt: expires };
+    const created = { linked: false as const, id: id as string, token: token as string, url: url as string, matchCode: matchCode as string, expiresAt: expires };
+    this.held.set(created.id, created);
+    return created;
   }
 
   private async poll(p: Poll) {
