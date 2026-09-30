@@ -134,7 +134,49 @@ describe("hosted approvals", () => {
     site.reply = () => ({ status: 409, body: { error: "a request with this key exists", reason_code: "duplicate_request", id: "ba_test0999" } });
     const err = await grant(client()).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
-    expect(err.message).toMatch(/already has request ba_test0999 from an earlier attempt.*nothing was sent/);
+    expect(err.message).toMatch(/already has request ba_test0999, created with the same request key by an earlier attempt.*Nothing was sent/);
+  });
+
+  it("a lost answer, then 409 proof_reused on the retry of the same proof: refused with guidance, nothing sent", async () => {
+    site.owner = OWNER;
+    const sent: Record<string, string>[] = [];
+    let calls = 0;
+    // the first POST reaches the site and creates the request, but its answer is lost on the way back
+    const lossy: typeof fetch = async (input, init) => {
+      if (init?.method === "POST" && String(input).endsWith("/approvals")) {
+        sent.push({ ...(init.headers as Record<string, string>) });
+        calls++;
+        const res = await fetch(input, init);
+        if (calls === 1) {
+          site.reply = () => ({ status: 409, body: { error: "this proof was used", reason_code: "proof_reused", id: site.requests[0].id, kind: "grant", state: "awaiting_owner" } });
+          throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+        }
+        return res;
+      }
+      return fetch(input, init);
+    };
+    const err = await grant(client({ fetchImpl: lossy })).catch((e) => e);
+    expect(err).toBeInstanceOf(HostedRefusal);
+    expect(err.message).toMatch(/already has request ba_test0001 \(awaiting_owner\), created with the same signed proof by an earlier attempt/);
+    expect(err.message).toMatch(/cannot be approved without its link.*expires by itself in 10 minutes.*account page\. Nothing was sent/);
+    expect(err.next).toMatch(/after that request expires/);
+    // the retry re-sent the very same proof and key
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+    expect(records).toEqual([]);
+  });
+
+  it("409 proof_reused for a request this client holds: it keeps polling that request", async () => {
+    site.owner = OWNER;
+    const c = client();
+    const first = await grant(c);
+    const held = site.requests[0];
+    site.reply = () => ({ status: 409, body: { reason_code: "proof_reused", id: held.id, kind: "grant", state: "awaiting_owner" } });
+    const again = await grant(c);
+    expect(again.id).toBe(held.id);
+    expect(again.url).toBe(first.url);
+    held.state = "rejected";
+    expect(await again.settled).toMatchObject({ status: "rejected", sending: false });
   });
 
   it("409 duplicate_request for a request this client holds: it keeps polling that request", async () => {
@@ -280,7 +322,7 @@ describe("hosted approvals", () => {
     await closed.close();
     const err = await grant(client({ site: url })).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
-    expect(err.message).toMatch(new RegExp(`could not reach ${url}.*nothing was requested or sent`));
+    expect(err.message).toMatch(new RegExp(`could not reach ${url}.*nothing was sent`));
   });
 
   it("a request the site refuses (over the account's limit): nothing sent, the site's reason kept", async () => {

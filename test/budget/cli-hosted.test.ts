@@ -245,7 +245,7 @@ describe("owner commands on a hosted chain", () => {
     site = await startFakeSite(); // for afterEach; the recorded site stays closed
     const g = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"]);
     expect(g.code).toBe(3);
-    expect(g.result.reason).toMatch(new RegExp(`could not reach ${url}.*nothing was requested or sent`));
+    expect(g.result.reason).toMatch(new RegExp(`could not reach ${url}.*nothing was sent`));
   }, 60_000);
 });
 

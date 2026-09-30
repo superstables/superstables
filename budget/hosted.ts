@@ -116,7 +116,7 @@ export class HostedApprovals {
   private stopped = false;
   /** Requests created here without a final answer yet: close() cancels them. */
   private readonly open = new Map<string, { id: string; token: string }>();
-  /** Every request this client created, by id: an idempotent retry answered with duplicate_request keeps polling it. */
+  /** Every request this client created, by id: a retry answered with duplicate_request or proof_reused keeps polling it. */
   private readonly held = new Map<string, { linked: false; id: string; token: string; url: string; matchCode: string; expiresAt: number }>();
 
   constructor(settings: HostedSettings) {
@@ -214,7 +214,9 @@ export class HostedApprovals {
     const f = this.s.fetchImpl ?? fetch;
     let res: Response | undefined;
     let network = "";
-    // one retry on a network error: the idempotency key makes it the same request
+    // One retry on a network error, with the same proof, key and body: if the first attempt reached the site, the site
+    // answers 409 proof_reused (or duplicate_request) with its id instead of creating a second request. Both are handled
+    // below: this client holds no token for a request whose answer it never received, so it refuses with guidance.
     for (let attempt = 0; attempt < 2 && !res; attempt++) {
       try {
         res = await f(`${this.s.site}${path}`, {
@@ -229,18 +231,20 @@ export class HostedApprovals {
         if (attempt === 0) await sleep(1000);
       }
     }
-    if (!res) throw new HostedRefusal(`could not reach ${this.s.site} (${network}); nothing was requested or sent`, `check the network and ${this.s.site}, then run the same command again`);
+    if (!res) throw new HostedRefusal(`could not reach ${this.s.site} (${network}); nothing was sent. If an attempt did reach it, that request cannot be approved without its link and expires by itself in 10 minutes`, `check the network and ${this.s.site}, then run the same command again`);
     let json: any = null;
     try {
       json = await res.json();
     } catch {}
     const code = typeof json?.reason_code === "string" ? json.reason_code : typeof json?.code === "string" ? json.code : typeof json?.error?.code === "string" ? json.error.code : "";
-    if (res.status === 409 && code === "duplicate_request") {
-      // an idempotent retry of a request the site already created: keep polling it if this client holds it
+    if (res.status === 409 && (code === "duplicate_request" || code === "proof_reused")) {
+      // a retry of a request the site already created (same key and body, or the same signed proof): keep polling it
+      // if this client holds it; otherwise nobody here has its link or token
       const held = typeof json?.id === "string" ? this.held.get(json.id) : undefined;
       if (held) return held;
+      const what = code === "proof_reused" ? "with the same signed proof" : "with the same request key";
       throw new HostedRefusal(
-        `${this.s.site} already has request ${siteText(json?.id ?? "(no id)", 80)} from an earlier attempt whose answer never arrived here (${siteError(res.status, json)}). Without its link nobody can approve it, and it expires by itself; nothing was sent`,
+        `${this.s.site} already has request ${siteText(json?.id ?? "(no id)", 80)}${typeof json?.state === "string" ? ` (${siteText(json.state, 30)})` : ""}, created ${what} by an earlier attempt whose answer never arrived here (${siteError(res.status, json)}). It cannot be approved without its link, which only that answer carried; it expires by itself in 10 minutes, and the owner can see it on their superstables.com account page. Nothing was sent`,
         "run the same command again after that request expires (10 minutes)",
       );
     }
