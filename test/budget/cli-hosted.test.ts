@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { encodeFunctionData, parseAbi } from "viem";
 import { startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import type { TestServer } from "../helpers/servers.js";
 
@@ -209,6 +210,32 @@ describe("owner commands on a hosted chain", () => {
     expect(r.result.state).toBe("unknown");
     expect(r.result.next).toMatch(/superstables budget status --rail evm/);
     expect(r.approve).toMatchObject({ action: "grant", matchCode: "ABC-DEF" });
+  }, 60_000);
+
+  it("a confirmed transaction mined before the request started is refused, even when the site confirms it", async () => {
+    hostedChain();
+    const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+    const AGENT = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A";
+    const HASH = `0x${"cd".repeat(32)}`;
+    // exactly the planned approve(agent, 0.01 USDC), from the owner, but in block 50 while the chain is at block 100
+    const data = encodeFunctionData({ abi: parseAbi(["function approve(address spender, uint256 value) returns (bool)"]), functionName: "approve", args: [AGENT, 10000n] });
+    const blockHash = `0x${"ef".repeat(32)}`;
+    await rpc.close();
+    rpc = await startFakeRpc(84532, (method) => {
+      if (method === "eth_blockNumber") return "0x64";
+      if (method === "eth_getTransactionByHash") return { hash: HASH, blockHash, blockNumber: "0x32", from: OWNER, to: USDC, input: data, value: "0x0", gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
+      if (method === "eth_getTransactionReceipt") return { transactionHash: HASH, blockHash, blockNumber: "0x32", from: OWNER, to: USDC, status: "0x1", logs: [], gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+      return undefined;
+    });
+    site.owner = OWNER;
+    site.onPoll = (r) => {
+      if (r.polls >= 2) Object.assign(r, { state: "confirmed", tx_hash: HASH });
+    };
+    const r = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result.state).toBe("refused_precheck");
+    expect(r.result.reason).toBe("the transaction on chain is not the one planned: it was mined in block 50, before this request started (block 100). The budget was not recorded.");
+    expect(publicFile()).not.toMatch(/^B4_CAP=/m);
   }, 60_000);
 
   it("a site that cannot be reached: a clear refusal, nothing sent", async () => {
