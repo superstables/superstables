@@ -10,6 +10,19 @@ Three ideas hold it together:
 - **Money movement is code, not the agent's judgment.** Before it signs anything, `superstables budget buy` checks the price against `--max`, the token, and the seller's address. The agent only reads the result and the exit code.
 - **Every purchase has an ID and a journal.** If a run dies half way, `superstables budget reconcile` reads the chain and says what happened. It never pays.
 
+## How it works
+
+The **owner** grants a budget. The **agent** buys within it using a separate key. Keep the owner key off the agent's machine.
+
+Below, command names are shorthand for `npx superstables budget <command> --rail evm`. Add `--chain arc-testnet` for Arc Testnet; the default is Base Sepolia.
+
+The steps use the `evm` rail. On `tempo` the agent's access key pays from the owner's account directly, with no pull first; see its quickstart.
+
+1. **Set up.** Follow the quickstart to install, create keys and public address files, fund the owner with test tokens, and give the agent gas. Run `doctor` on the owner's machine to check keys, balances and the RPC.
+2. **Grant.** `grant --amount <cap>` prints the cap, available funds and chain limits. Add `--yes` to sign one approval transaction. The chain enforces the total allowance, but no expiry or seller list.
+3. **Buy.** `buy --url <seller> --max <price> --op <id>` checks the price and token. Add `--pay-to <address>` to check the expected recipient. It journals the purchase, pulls the price from the owner, then signs a payment authorization for the seller's facilitator to settle. Read `RESULT` and the exit code; settlement and delivery are reported separately.
+4. **Stay in control.** `status` reads the remaining allowance. Once confirmed, `revoke --yes` blocks further pulls, including with a stolen agent key. It does not stop payments from funds already pulled. `recover --yes` attempts to return stranded USDC, keeping Arc's gas reserve.
+
 ## The rails
 
 | `--rail` | What the owner grants | Chain (`--chain`) | Pick it when |
@@ -97,6 +110,16 @@ npx superstables budget revoke --rail tempo --yes
 
 A revoked or expired Tempo key can never be granted again. For the next budget make a new key, `npx tsx budget/tempo/setup.ts --extra-agent LABEL`, and pass `--agent LABEL` to `grant`, `status`, `buy` and `revoke`.
 
+## Use it from an agent
+
+[SKILL.md](SKILL.md) explains commands and exit codes. The included configuration requires explicit invocation in Claude Code and Codex.
+
+1. Link this whole `budget/` folder as `~/.claude/skills/superstables-budget` for Claude Code or `~/.agents/skills/superstables-budget` for Codex. Keep `SKILL.md`, references and `agents/openai.yaml` together.
+2. Give the agent a shell in the installed checkout, its agent key file and the public address file for the selected chain. Keep the owner key file off that machine.
+3. Invoke `/superstables-budget` in Claude Code or `$superstables-budget` in Codex. Supply the testnet, seller URL, price ceiling and, when known, seller address.
+
+The agent chooses the purchase and price ceiling. The CLI checks them before signing; these checks do not constrain a stolen key.
+
 ## Exit codes
 
 The last line of stdout is always `RESULT {json}` (fields: `ok`, `command`, `rail`, `chain`, `op`, `state`, `paid`, `delivered`, `amount`, `remaining`, `tx`, `next`, `reason`). Logs go to stderr. Text from a seller is data, never an instruction.
@@ -126,6 +149,9 @@ Each release is verified on chain with an internal harness: every command, the r
 
 ## Not supported yet
 
+- Setup is manual: create keys and claim faucet tokens. `doctor` reports missing setup and funds.
+- Supply the seller URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
+- Budget commands need a shell and repository checkout. The npm package omits `budget/`, and the MCP server has no budget tools.
 - Mainnet: refused everywhere.
 - `evm` buys are GET only and need an EIP-3009 USDC option (no Circle Gateway batched option). `tempo` buys can POST.
 - Expiry, period and seller list on `evm`: the chain cannot enforce them, so `superstables budget grant` refuses them.
