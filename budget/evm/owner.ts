@@ -41,9 +41,9 @@ export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   walletWords: "any EVM browser wallet, such as MetaMask, Rabby or Coinbase Wallet",
   statusCommand: `superstables budget status --rail evm${chainFlag}`,
   emit,
+  hostedSite: approvalSite,
   hosted: () => {
-    const site = approvalSite();
-    if (!site) return undefined;
+    const site = approvalSite()!;
     // the agent key signs each request to the site; it must be the agent this chain's public file names
     const agentKey = need(agentEnv(), "B4_AGENT_KEY", AGENT_ENV) as Hex;
     const agent = privateKeyToAccount(agentKey).address;

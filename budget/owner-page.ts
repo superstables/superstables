@@ -113,8 +113,10 @@ export interface OwnerRail {
   statusCommand: string;
   /** The rail's RESULT line printer: returns the exit code. */
   emit: (command: string, exit: number, fields: Record<string, unknown>) => number;
-  /** Hosted approvals for this chain (read when an owner action starts), or undefined for the page on this computer. */
-  hosted?: () => Omit<HostedSettings, "auditPath" | "onRecord"> | undefined;
+  /** The site that hosts this chain's owner approvals, or null for the page on this computer. */
+  hostedSite?: () => string | null;
+  /** The settings for a hosted request (read only when one is made: it opens the agent key). */
+  hosted?: () => Omit<HostedSettings, "auditPath" | "onRecord">;
 }
 
 export type Unapproved = Extract<OwnerActionOutcome, { status: "rejected" | "expired" }>;
@@ -140,9 +142,9 @@ export function ownerPageFor(rail: OwnerRail) {
 
   /** The hosted settings for this action, or undefined for the page on this computer. */
   function hostedSettings(action: string, kind: "connect" | "evm-transaction") {
-    const settings = rail.hosted?.();
-    if (!settings) return undefined;
-    const site = siteOrigin(settings.site);
+    const recorded = rail.hostedSite?.();
+    if (!recorded || !rail.hosted) return undefined;
+    const site = siteOrigin(recorded);
     if (site.error) {
       console.log(`REFUSED: the recorded site is not usable: ${site.error}`);
       process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: `the recorded site is not usable: ${site.error}`, next: "run superstables budget setup --rail evm --hosted again, with --site if you use another site" }));
@@ -151,7 +153,7 @@ export function ownerPageFor(rail: OwnerRail) {
       console.error(`${action}: the owner's steps of recover use the approval page on this computer (127.0.0.1), not ${site.origin}. Hosted approvals cover setup, grant, revoke and fund-agent.`);
       return undefined;
     }
-    return { ...settings, site: site.origin as string };
+    return { ...rail.hosted(), site: site.origin as string };
   }
 
   /** A request the site did not take: nothing was requested, so nothing was sent. One RESULT, then exit. */
