@@ -1854,9 +1854,15 @@ function answer(method, params) {
     case "eth_chainId": return { result: "0x13882" };
     case "eth_blockNumber": return { result: "0x100" };
     case "eth_getBlockByNumber": return { result: { number: "0x100", hash: "0x" + "11".repeat(32), parentHash: "0x" + "22".repeat(32), timestamp: "0x66fb0000", baseFeePerGas: "0x3f", gasLimit: "0x1c9c380", gasUsed: "0x0", transactions: [] } };
-    case "eth_maxPriorityFeePerGas": case "eth_gasPrice": return { result: hex(30e9) };
+    case "eth_maxPriorityFeePerGas": case "eth_gasPrice": return { result: hex((cfg.tipGwei ?? 30) * 1e9) };
     case "eth_getBalance": return { result: hex(lc(params[0]) === lc(cfg.agent) ? (receiptServed ? cfg.agentAfter : cfg.agentBefore) : cfg.ownerBalance) };
-    case "eth_call": return { result: word(0) }; // allowance and balances: 0
+    case "eth_call": {
+      const data = String(params[0].data);
+      if (data.startsWith("0x313ce567")) return { result: word(6) }; // decimals()
+      if (data.startsWith("0xdd62ed3e")) return { result: word(cfg.allowance ?? 0) }; // allowance
+      if (data.startsWith("0x70a08231")) return { result: word(lc(data).includes(lc(cfg.owner).slice(2)) ? (cfg.ownerUsdc ?? 0) : 0) }; // balanceOf
+      return { result: word(0) };
+    }
     case "eth_getTransactionByHash": return { result: tx(params[0]) };
     case "eth_getTransactionReceipt": receiptServed = true; return { result: { transactionHash: params[0], transactionIndex: "0x0", blockHash: "0x" + "33".repeat(32), blockNumber: "0x101",
       from: cfg.owner, to: cfg.agent, status: "0x1", gasUsed: "0x5208", cumulativeGasUsed: "0x5208", effectiveGasPrice: hex(30e9), logs: [], logsBloom: "0x" + "0".repeat(512), type: "0x2", contractAddress: null } };
@@ -1875,7 +1881,7 @@ globalThis.fetch = async (input, init) => {
 
 describe("the owner commands' words on an evm chain", () => {
   /** A fresh owner and agent for polygon-amoy in the test home, and the fake node's settings. */
-  function amoyBudget(agentBefore: bigint, agentAfter: bigint, value: bigint) {
+  function amoyBudget(agentBefore: bigint, agentAfter: bigint, value: bigint, chain: Record<string, number> = {}) {
     const keys = join(budgetHome, "keys", "budget");
     const pub = join(budgetHome, "budget", "public");
     for (const dir of [keys, pub]) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -1888,7 +1894,7 @@ describe("the owner commands' words on an evm chain", () => {
     writeFileSync(join(pub, "evm-polygon-amoy.env"), `B4_OWNER_ADDRESS=${OWNER.address}\nB4_AGENT_ADDRESS=${agent}\n`);
     const preload = join(budgetHome, "fake-amoy-node.mjs");
     writeFileSync(preload, FAKE_NODE_SOURCE);
-    const fake = { owner: OWNER.address, agent, agentBefore: String(agentBefore), agentAfter: String(agentAfter), value: String(value), ownerBalance: String(POL) };
+    const fake = { owner: OWNER.address, agent, agentBefore: String(agentBefore), agentAfter: String(agentAfter), value: String(value), ownerBalance: String(POL), ...chain };
     return { agent, env: { ...process.env, SUPERSTABLES_HOME: budgetHome, FAKE_AMOY: JSON.stringify(fake), NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${preload}`.trim() } };
   }
 
@@ -1922,6 +1928,21 @@ describe("the owner commands' words on an evm chain", () => {
       expect(r.stderr).not.toContain("opens a page");
       expect(r.stderr).not.toContain("runs in the background");
       expect(r.stdout).not.toContain("APPROVE ");
+    }
+  });
+
+  it("buy short on gas: exit 3, and the RESULT's next is the owner's fund-agent", async () => {
+    // the live Amoy case: 0.006 POL in the agent, the tip at 242 gwei
+    const { env } = amoyBudget(POL * 6n / 1000n, POL * 6n / 1000n, 0n, { tipGwei: 242, allowance: 20_000, ownerUsdc: 100_000 });
+    const seller = await amoySeller(privateKeyToAccount(generatePrivateKey()).address);
+    try {
+      const r = await cli(["buy", "--rail", "evm", "--chain", "polygon-amoy", "--url", seller.url, "--max", "0.01", "--op", `cli-gas-${randomUUID().slice(0, 8)}`], env);
+      expect(r.code).toBe(3);
+      expect(r.result).toMatchObject({ command: "buy", state: "refused_precheck", paid: false });
+      expect(r.result.reason).toBe("REFUSED: the agent key has 0.006 POL; this purchase needs about 0.068 POL at the current fee (242 gwei), including what a refund would cost. Nothing was signed or pulled.");
+      expect(r.result.next).toBe("owner: superstables budget fund-agent --rail evm --chain polygon-amoy --amount 0.062 (the owner approves it in their wallet), then buy again");
+    } finally {
+      await seller.close();
     }
   });
 

@@ -436,8 +436,9 @@ function normalize(cmd, f, rail, code) {
   const amount = state === "unknown" ? null : nothingMoved ? "0" : rail.debit == null ? null : String(rail.debit);
   return {
     code: exitFor(cmd, state, delivered),
-    // a refusal whose fix is the owner's recover (a refund or stranded funds in the agent key) keeps the rail's own next step
-    fields: { ...base, state, paid, delivered, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" && /superstables budget recover/.test(rail.next ?? "") ? rail.next : nextFor(state, delivered, f, cmd), reason: rail.reason },
+    // a refusal whose fix is the owner's (recover: a refund or stranded funds in the agent key; fund-agent: the agent is short on
+    // gas) keeps the rail's own next step
+    fields: { ...base, state, paid, delivered, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" && /superstables budget (?:recover|fund-agent)/.test(rail.next ?? "") ? rail.next : nextFor(state, delivered, f, cmd), reason: rail.reason },
   };
 }
 
