@@ -278,7 +278,10 @@ export async function buildBudget(outdir = join(root, "dist", "budget")) {
   });
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const rev = revisionOf(root);
-  const version = { name: "superstables-budget", version: pkg.version, commit: rev.sha ?? null, commits: rev.count === undefined ? null : Number(rev.count), dirty: rev.sha ? gitDirty() : null, builtAt: new Date().toISOString().replace(/\.\d+Z$/, "Z") };
+  // A release builds from `git archive`, which has no .git: the release script names the commit instead.
+  const pinned = process.env.SUPERSTABLES_BUILD_COMMIT;
+  if (pinned !== undefined && !/^[0-9a-f]{7,40}$/.test(pinned)) throw new Error(`SUPERSTABLES_BUILD_COMMIT must be a commit hash (got "${pinned}")`);
+  const version = { name: "superstables-budget", version: pkg.version, commit: pinned ? pinned.slice(0, 7) : rev.sha ?? null, commits: rev.count === undefined ? null : Number(rev.count), dirty: rev.sha ? gitDirty() : null, builtAt: new Date().toISOString().replace(/\.\d+Z$/, "Z") };
   writeFileSync(join(outdir, "VERSION.json"), JSON.stringify(version, null, 2) + "\n");
   const { list, copyleft } = writeNotices(outdir, result.metafile, version);
   const files = checkSelfContained(outdir, result.metafile);
