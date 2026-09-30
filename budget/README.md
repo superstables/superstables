@@ -69,14 +69,19 @@ PayAI's Echo sellers refund each payment to the payer, which is the agent key. T
 
 ## Quickstart
 
-You need Node 20 or newer, a checkout of this repository, and a browser wallet: MetaMask (or another) for `evm` and `tempo`, Phantom (or another Solana wallet) for `solana`. Install once at the repository root:
+You need Node 20 or newer and a browser wallet: MetaMask (or another) for `evm` and `tempo`, Phantom (or another Solana wallet) for `solana`.
 
-```sh
-npm ci
-npm run build
-```
+Install. Pick one; both run the same commands on the same keys and state.
 
-Then `npx superstables budget ...` runs the tool. `node budget/cli.mjs ...` does the same without the build. Every command below runs from the repository root.
+- **From a checkout of this repository.** At the repository root:
+
+  ```sh
+  npm ci
+  npm run build
+  ```
+
+  Then `npx superstables budget ...` runs the tool from its TypeScript sources. `node budget/cli.mjs ...` does the same without the build. Every command below is written this way and runs from the repository root.
+- **The standalone skill zip.** `npm run skill` in a checkout builds `build/superstables-budget-skill-<version>.zip`. Unzip it into your agent's skills folder, `~/.claude/skills/` for Claude Code or `~/.agents/skills/` for Codex: it unpacks to `superstables-budget/`. Then `node ~/.claude/skills/superstables-budget/scripts/cli.mjs ...` (or the `~/.agents` path) runs the tool with Node alone, with no checkout and no `npm install`. Use it in place of `npx superstables budget` below. `--version` names the build, and `scripts/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 
 Where things live. `SUPERSTABLES_HOME` is the client's home, `~/.superstables` unless you set it:
 
@@ -184,8 +189,8 @@ An SPL token account has one delegate slot. A new grant would overwrite a live o
 
 [SKILL.md](SKILL.md) explains commands and exit codes. The included configuration requires explicit invocation in Claude Code and Codex.
 
-1. Link this whole `budget/` folder as `~/.claude/skills/superstables-budget` for Claude Code or `~/.agents/skills/superstables-budget` for Codex. Keep `SKILL.md`, references and `agents/openai.yaml` together.
-2. Give the agent a shell in the installed checkout, its agent key file and the public address file for the selected chain. That is all it holds, on every rail: no owner key.
+1. Install the skill as `~/.claude/skills/superstables-budget` for Claude Code or `~/.agents/skills/superstables-budget` for Codex: unzip the standalone skill zip into that skills folder (see Install), or link this whole `budget/` folder there from a checkout. Keep `SKILL.md`, references and `agents/openai.yaml` together.
+2. Give the agent a shell (in the checkout, if you linked the folder), its agent key file and the public address file for the selected chain. That is all it holds, on every rail: no owner key.
 3. Invoke `/superstables-budget` in Claude Code or `$superstables-budget` in Codex. Supply the testnet, seller URL, price ceiling and, when known, seller address.
 
 The agent chooses the purchase and price ceiling. The CLI checks them before signing; these checks do not constrain a stolen key.
@@ -234,7 +239,7 @@ Each release is verified on chain with an internal harness: every command, the r
 - A Solana wallet that adds instructions of its own (Phantom may add Lighthouse checks; not seen yet): the command sends only the exact transaction it built, so it refuses that signature and sends nothing.
 - The approval page runs on the computer that runs the command, on `127.0.0.1`. An agent on another machine needs a forwarded port, or the owner's browser on that machine.
 - Supply the seller URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
-- Budget commands need a shell and repository checkout. The npm package omits `budget/`, and the MCP server has no budget tools.
+- Budget commands need a shell, and a checkout or the standalone skill zip. The npm package omits `budget/`, and the MCP server has no budget tools.
 - Mainnet: refused everywhere.
 - `evm` buys are GET only and need an EIP-3009 USDC option (no Circle Gateway batched option). `tempo` and `solana` buys can POST.
 - Expiry, period and seller list on `evm` and `solana`: the chain cannot enforce them, so `superstables budget grant` refuses them.

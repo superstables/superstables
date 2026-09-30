@@ -28,6 +28,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Purchases on `evm` keep what was bought.** `buy` saves the seller's answer next to the
   purchase journal, at most 1 MB and readable only by the user, and names the file in `RESULT`
   as `responseFile`, with its content type, its size and whether it was cut.
+- **`superstables budget` as a standalone skill zip.** `npm run skill` builds
+  `superstables-budget-skill-<version>.zip`: the skill and the whole tool bundled into plain
+  JavaScript that needs Node 20 or newer and nothing else. `superstables budget --version` names
+  the build, and `THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 
 ## [0.2.0] - 2026-09-22
 

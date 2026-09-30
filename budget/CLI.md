@@ -98,3 +98,9 @@ stdout carries one JSON object on its last line, prefixed `RESULT `; human logs 
 ## Where things live
 
 All paths come from `paths.mjs`, under the client's home (`SUPERSTABLES_HOME`, default `~/.superstables`). Keys: `keys/budget/<rail>-agent.env` (mode 600). No rail keeps an owner key: the owner's key stays in their wallet. Public addresses: `budget/public/<rail>-<chain>.env`. Journals: `budget/ops/<rail>-<chain>/<id>.json`, and on `evm` the seller's answer `<id>.response` (mode 600). Approval page log (state changes, no signatures): `budget/owner-approvals.jsonl`. Detached approvals: `budget/approvals/<id>.json` (the record and the final `RESULT`, mode 600), `budget/approvals/<id>.log` (the background process's output), and `budget/approvals/active-<rail>-<chain>` (the id that holds that chain).
+
+## Checkout or standalone build
+
+In a checkout, `budget/cli.mjs` always runs the rail scripts from their TypeScript sources with the checkout's tsx (`npm ci` first), never a build in `dist/`, so an edit takes effect on the next run. `npm run build` also writes `dist/budget/`: the dispatcher and every rail script bundled into plain JavaScript that imports only Node built-ins and its own files. Only a copy without the sources runs those `.mjs` files: `dist/budget/` itself, or `scripts/` in the skill zip that `npm run skill` builds. The commands, flags, `RESULT` lines, exit codes and paths are the same.
+
+`superstables budget --version` names the build: for a standalone copy, the version, commit and build time from its `VERSION.json`; in a checkout, the version and commit. `doctor` prints the same line first. `THIRD_PARTY_NOTICES.txt` in a standalone copy lists every bundled package with its version and licence text.
