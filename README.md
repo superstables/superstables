@@ -265,7 +265,9 @@ npx superstables budget revoke --rail evm                        # the kill swit
 
 It runs from a checkout of this repository, after `npm ci` and `npm run build`. On `evm` the
 owner approves grant and revoke on a page on 127.0.0.1, in MetaMask or another browser wallet;
-the agent's machine holds only the agent key, in `~/.superstables/keys/budget/`. Every command ends with one
+the agent's machine holds only the agent key, in `~/.superstables/keys/budget/`. Run by an agent, an owner
+command returns at once with the link and an approval id, and the agent polls `superstables budget wait --id <id>`
+until the owner has decided. Every command ends with one
 `RESULT {json}` line and a fixed exit code, so an agent can act on it. Setup, faucets, the
 safety model and the agent skill are in [budget/README.md](budget/README.md).
 

@@ -28,7 +28,7 @@ The owner authorizes an agent once. The agent then pays sellers from the owner's
 4. **Exit 3: respect the refusal.** Nothing was signed. Do not retry with a bigger `--max` or another `--pay-to` to get past it. Tell the owner.
 5. **Exit 4: paid, not delivered.** Never pay again. Report the `tx` hash.
 6. **Exit 5: outcome unknown.** Run `superstables budget reconcile --op ID`. Never pay again, never start a new `--op` for the same purchase, never retry a `buy` whose outcome is uncertain.
-7. **Owner commands:** `setup`, `fund-agent`, `grant`, `revoke`, `recover`. Run them only when the owner asks in this session. On `evm` you cannot approve them: the command opens an approval page and waits for the owner's wallet. Your job is to run the command, show the owner the approval link and the plan, and wait for `RESULT`. On `tempo` and `solana` show the plan first and add `--yes` only after the owner confirms. Never read `*-owner.env`, never pass `--owner-key-file`, never print or ask for a key, never run the owner's steps yourself to unblock a purchase.
+7. **Owner commands:** `setup`, `fund-agent`, `grant`, `revoke`, `recover`. Run them only when the owner asks in this session. On `evm` you cannot approve them: the command opens an approval page for the owner's wallet and returns with `state: "waiting_owner"`. Your job is to show the owner the link and the terms, then poll `superstables budget wait --id ID` until the state is final (see Owner actions on evm). On `tempo` and `solana` show the plan first and add `--yes` only after the owner confirms. Never read `*-owner.env`, never pass `--owner-key-file`, never print or ask for a key, never run the owner's steps yourself to unblock a purchase.
 
 ## Commands
 
@@ -42,17 +42,21 @@ superstables budget fund-agent --rail evm [--amount GAS]                        
 superstables budget grant      --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b]   # owner
 superstables budget revoke     --rail R                                                          # owner
 superstables budget recover    --rail evm [--op ID]                                              # owner
+superstables budget wait       --id ID [--timeout S]           # after an owner command on evm; never signs or sends
 ```
 
-On `evm`, the owner commands print the plan, then open an approval page on `127.0.0.1` and wait (10 minutes by default). On `tempo` and `solana`, `grant` and `revoke` print the plan and send only with `--yes`. Every command has `--help`; bad input exits 2 before anything is read or spawned.
+On `evm`, the owner commands print the plan, open an approval page on `127.0.0.1` (open for 10 minutes by default) and return with an approval id. On `tempo` and `solana`, `grant` and `revoke` print the plan and send only with `--yes`. Every command has `--help`; bad input exits 2 before anything is read or spawned.
 
 ## Owner actions on evm
 
-1. Run the command in the background, or with a tool timeout longer than the link's (`--timeout`, default 600 seconds). It blocks until the owner decides.
-2. As soon as stdout (or stderr) shows `APPROVE {"action","url","expires"}`, give the owner the `url` and the plan from stderr (cap, agent, chain, what the chain does and does not enforce). Say it must be opened in the browser that has their wallet, on this computer. The command also tries to open it in the default browser.
-3. Wait for the final `RESULT`. `settled` (or `ok` for `setup`) with a `tx`: done, the command checked the chain. `refused_precheck` (exit 3): the owner rejected or the link expired, and nothing was sent. Do not run it again unless the owner asks.
+1. Run the command normally. It returns in seconds with `RESULT {"state":"waiting_owner","id","url","expires","terms","next"}` and exit 0. Nothing is sent yet.
+2. Show the owner the `url` and the plain terms from `terms`: `title`, `amount` and `unit`, `summary`, and what the chain does and does not enforce (`enforced`, `notEnforced`). Say it opens in the browser that has their wallet, on this computer, and when it expires (`expires`).
+3. Poll: `superstables budget wait --id ID`. It waits up to 30 seconds (`--timeout S`, at most 300) and prints the state. Repeat while the state is `waiting_owner`. Its `reason` says where the owner is. If the `url` changes (`recover` can ask twice), show the new link.
+4. Stop when the state is final. `settled` (or `ok` for `setup`) with a `tx`: done, the command checked the chain. `refused_precheck` (exit 3): the owner rejected or the link expired, and nothing was sent. Tell the owner. Create a new approval only if they ask. `unknown` (exit 5): the wallet may have sent; run `superstables budget status` before anything else.
 
-Never try to approve the page yourself, and never use `--owner-key-file` or `--yes` on `evm`: `--yes` without `--owner-key-file` exits 2.
+Never start a new owner command while one is pending: it is refused (exit 3) and points to the pending `id`. Keep polling that id instead. Use `--replace` only when the owner asks to drop the pending approval.
+
+Never try to approve the page yourself, and never use `--owner-key-file` or `--yes` on `evm`: `--yes` without `--owner-key-file` exits 2. `--wait` makes the command block until the owner decides; use it only if your tool shows output while a command runs and has no short timeout.
 
 ## Typical flows
 
@@ -64,7 +68,7 @@ Owner granting on `evm`: `superstables budget setup` (the owner connects a walle
 
 | Exit | Meaning | You do |
 | --- | --- | --- |
-| 0 | Done (settled and delivered, or the command worked) | continue |
+| 0 | Done (settled and delivered, or the command worked). Or `state: "waiting_owner"`: the owner has not decided yet | continue; on `waiting_owner`, show the link and poll `wait --id` |
 | 1 | Failed, including a chain refusal | read `reason` and `next`; do not retry blindly |
 | 2 | Bad input | fix the command |
 | 3 | Refused before anything was signed, or the owner rejected the approval or let it expire | respect it |
@@ -75,7 +79,7 @@ Owner granting on `evm`: `superstables budget setup` (the owner connects a walle
 RESULT {"ok":true,"command":"buy","rail":"tempo","chain":"moderato","op":"rb-20260929-a1b2","state":"settled","paid":true,"delivered":true,"amount":"0.001","remaining":"0.049","tx":{"settle":"0x..."},"next":"none"}
 ```
 
-`state` is one of `planned`, `sent`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `unknown`, `not_found`, `ok`. Unknown amounts are `null`, never `"0"`. `settled` means your own transaction succeeded on chain; `delivered` is the seller's answer, recorded separately.
+`state` is one of `planned`, `sent`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `unknown`, `not_found`, `ok`, `waiting_owner`. Unknown amounts are `null`, never `"0"`. `settled` means your own transaction succeeded on chain; `delivered` is the seller's answer, recorded separately.
 
 ## Gotchas
 
