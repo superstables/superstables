@@ -6,7 +6,7 @@ An owner gives an AI agent a spending budget once. The agent then buys from paid
 
 Three ideas hold it together:
 
-- **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes, funding transfers and any owner steps in recovery. The agent signs each purchase with its own key. No Superstables server is in the path.
+- **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes, funding transfers and any owner steps in recovery, on a page on their own computer or, with hosted approvals, on superstables.com. The agent signs each purchase with its own key. No Superstables server is in the path of a purchase.
 - **The CLI checks each purchase.** Before it signs anything, `superstables budget buy` checks the price against `--max`, the token and, when `--pay-to` is supplied, the expected recipient. The agent must read the result and the exit code.
 - **Every purchase has an ID and a journal.** If a run dies half way, `superstables budget reconcile` reads the chain and says what happened. It never pays.
 
@@ -25,9 +25,25 @@ The steps use the `evm` rail. On `tempo` (access key) and `solana` (SPL delegate
 3. **Buy.** `preflight --url <seller>` reads the seller's price and address without signing anything. `buy --url <seller> --max <your-ceiling> --op <id>` checks the price and token. Add `--pay-to <address>` to check the expected recipient. It journals the purchase, pulls the price from the owner, then signs a payment authorization for the seller's facilitator to settle. Read `RESULT` and the exit code; settlement and delivery are reported separately. What the seller sent back is saved next to the journal, and `RESULT` names the file (`responseFile`).
 4. **Stay in control.** `status` reads the remaining allowance. `revoke` opens the approval page again: once the revoke takes effect on chain, this allowance no longer permits withdrawals, even with a stolen agent key. It does not stop payments from funds already pulled. `recover` attempts to return recoverable USDC: the agent key sends it back, and the owner approves in the wallet only what the agent cannot do. It keeps Arc's gas reserve.
 
+### Local or hosted approvals
+
+The owner approves in one of two places. Local approvals are the default and need nothing but a wallet. Hosted approvals are for owners who want to approve from another device, and need a superstables.com account.
+
+| | Local (default) | Hosted (`setup --rail evm --hosted`) |
+| --- | --- | --- |
+| Where the owner approves | A page on `127.0.0.1`, in the browser with their wallet on the computer that runs the command | superstables.com, on any device where they are signed in with their wallet |
+| Account | None | A superstables.com account (Sign-In with Ethereum) |
+| Rails | `evm`, `tempo`, `solana` | `evm` only, for now |
+| Owner on record | The wallet that signs the setup message | The superstables.com account that links the agent |
+| What the agent shows the owner | The link and the terms | The link, the terms and a match code, which the owner picks on the page |
+
+In both modes the agent key stays on this computer, the owner's key stays in their wallet, and the command reads the chain itself before it reports success. Purchases never contact the site.
+
+With hosted approvals, `setup` links the agent to the owner's account and records `APPROVALS=hosted` and the site in the chain's public file. From then on `grant`, `revoke` and `fund-agent` on that chain ask through the site. A request is refused before the owner sees a link if the site would ask another account than the owner on record. `recover` still uses the page on this computer. `setup --new-owner` without `--hosted` moves a chain back to local approvals (refused while a budget is live).
+
 ### The approval page
 
-Owner actions use the same approval page on every rail. Setup asks for a free message signature; grants, revokes and funding ask for transactions with network fees. The command builds the transaction and the terms, starts a page on `127.0.0.1` on a random port, and prints the link. The link holds a one-time random id and expires after 10 minutes (`--timeout SECONDS` changes it). In a terminal, the command opens the link in the default browser unless you pass `--no-open`. In detached mode, the agent shows you the link. The owner:
+Owner actions use the same approval page on every rail. The rest of this section describes local approvals; with hosted approvals the page is on superstables.com. Setup asks for a free message signature; grants, revokes and funding ask for transactions with network fees. The command builds the transaction and the terms, starts a page on `127.0.0.1` on a random port, and prints the link. The link holds a one-time random id and expires after 10 minutes (`--timeout SECONDS` changes it). In a terminal, the command opens the link in the default browser unless you pass `--no-open`. In detached mode, the agent shows you the link. The owner:
 
 1. Opens the link in the browser that has their wallet. The page shows the terms, written by the command from its own plan. The plan uses the command arguments, including the amount and recipients. Check them against what you intended to authorize.
 2. Presses **Connect wallet**. If more than one wallet is installed, the page asks which one to use, and then uses only that one. For transactions on `evm` and `tempo`, the page asks the wallet to switch to the selected testnet or add it. Setup only records your address.
@@ -71,7 +87,7 @@ PayAI's Echo sellers refund each payment to the payer, which is the agent key. T
 
 ## Quickstart
 
-You need Node 20 or newer and a browser wallet: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) for `evm`, any EVM browser wallet that can add a custom network for `tempo`, and any Solana wallet (Phantom, Solflare, Backpack, ...) for `solana`. The approval page runs on `127.0.0.1`, so the wallet must be a browser extension on the computer that runs the command. Phone wallets (WalletConnect) are not supported yet.
+You need Node 20 or newer and a browser wallet: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) for `evm`, any EVM browser wallet that can add a custom network for `tempo`, and any Solana wallet (Phantom, Solflare, Backpack, ...) for `solana`. With local approvals the page runs on `127.0.0.1`, so the wallet must be a browser extension on the computer that runs the command. Phone wallets (WalletConnect) are not supported on that page. With hosted approvals on `evm`, you approve on superstables.com in the browser where you are signed in with your wallet.
 
 Install. Pick one; both run the same commands on the same keys and state.
 
@@ -108,6 +124,12 @@ In each block, run `doctor` first: it lists what is missing and which address to
    ```
 
    Run `setup` once per chain you use; without it, `doctor --chain <key>` fails on the public file. It prints the next steps.
+
+   To approve on superstables.com instead, from any device where you are signed in with your wallet, add `--hosted`. The command prints a link and a match code. Open the link, check that the page shows the same code, and link the agent to your account. Later owner commands on this chain then ask there too.
+
+   ```sh
+   npx superstables budget setup --rail evm --hosted              # needs a superstables.com account
+   ```
 
 2. Fund your wallet with faucets, then give the agent gas. `fund-agent` opens the approval page for one plain transfer from your wallet. `doctor` checks these minimums:
    - Base Sepolia: your wallet needs at least 0.01 USDC ([faucet.circle.com](https://faucet.circle.com), pick Base Sepolia) and 0.00003 ETH (any Base Sepolia ETH faucet; 0.0003 is a comfortable amount). The agent needs at least 0.00003 ETH: `npx superstables budget fund-agent --rail evm` sends 0.0001. Network fees vary; check the wallet estimate.
@@ -197,7 +219,7 @@ An SPL token account has one delegate slot. A new grant would overwrite a live o
 
 Give the agent a purchase scope and price ceiling. The agent chooses purchases within that authorization. The CLI checks them before signing; these checks do not constrain a stolen key.
 
-When you ask the agent to grant or revoke, it runs the command and shows you the approval link and the plan. It must not operate the approval page or sign for you. Check the requested account and terms in your own wallet.
+When you ask the agent to grant or revoke, it runs the command and shows you the approval link and the plan. It must not operate the approval page or sign for you. Check the requested account and terms in your own wallet. With hosted approvals it also writes a match code in its message: pick the same code on the page, and stop if the page shows a different one.
 
 An agent's shell tool usually shows output only when a command ends, and often stops a command after a minute or two. So when stdout is not a terminal, an owner command does not wait for you. It returns in seconds with the link and a `RESULT` whose `state` is `waiting_owner`, with an approval `id` and the plain terms. The page stays open in a background process until you decide or the link expires. The agent shows you the link, then polls `superstables budget wait --id <id>`: each call waits up to 30 seconds and prints the state, and the last one prints the result the command read from the chain. Keep one owner command active per rail and chain. Wait for its final result before starting another. If you reject it or let it expire, the agent tells you and starts a new one only if you ask.
 
@@ -239,8 +261,9 @@ Development runs have exercised these flows with wallet harnesses and chain read
 - Tempo Wallet (a passkey account at wallet.tempo.xyz) as the owner on `tempo`: not yet. Use an EVM browser wallet that can add a custom network.
 - A Solana wallet's network: the page cannot switch it. Switch the wallet to devnet yourself (for example, in Phantom: turn on Testnet Mode and pick Solana Devnet).
 - A Solana wallet that adds instructions of its own (Phantom may add Lighthouse checks; not seen yet): the command sends only the exact transaction it built, so it refuses that signature and sends nothing.
-- The approval page runs on the computer that runs the command, on `127.0.0.1`. Use the owner's wallet browser on that computer. Remote access requires separate configuration.
-- Supply the seller URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
+- Local approvals run on the computer that runs the command, on `127.0.0.1`. Use the owner's wallet browser on that computer. To approve from another device, use hosted approvals (`evm` only; needs a superstables.com account).
+- Hosted approvals on `tempo` and `solana`, and for `recover`'s owner steps.
+- `superstables budget find` lists the services superstables.com says a budget can pay. Any other seller works too: supply its URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
 - Budget commands need a shell, and a checkout or the standalone skill zip. The npm package omits `budget/`, and the MCP server has no budget tools.
 - Mainnet: refused everywhere.
 - `evm` buys are GET only and need an EIP-3009 USDC option (no Circle Gateway batched option). `tempo` and `solana` buys can POST.

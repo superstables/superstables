@@ -13,7 +13,7 @@ Every rail implements the same four methods.
 | `revokeBudget()` (`revoke`) | owner | Ends the authorization on chain. |
 | `readBudget()` (`status`) | anyone | Reads the remaining amount, expiry and revoked state from the chain. |
 
-The agent key lives in `$SUPERSTABLES_HOME/keys/budget/<rail>-agent.env` (mode 600). No rail has an owner key file: owner actions go through the owner's own wallet on an approval page on `127.0.0.1` (any EVM browser wallet on `evm`, one that can add a custom network on `tempo`, any Solana wallet on `solana`). Reads need no secret file (public addresses in `$SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env`). Safety rules: [CONTRACT.md](../CONTRACT.md).
+The agent key lives in `$SUPERSTABLES_HOME/keys/budget/<rail>-agent.env` (mode 600). No rail has an owner key file: owner actions go through the owner's own wallet on an approval page on `127.0.0.1` (any EVM browser wallet on `evm`, one that can add a custom network on `tempo`, any Solana wallet on `solana`), or, on an `evm` chain set up with `--hosted`, on superstables.com. Reads need no secret file (public addresses in `$SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env`). Safety rules: [CONTRACT.md](../CONTRACT.md).
 
 ## What each rail enforces
 

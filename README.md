@@ -4,18 +4,22 @@
 
 **Payments belong in the agent workflow.**
 
-Superstables connects service discovery, pricing and payment for AI agents. The client lets an
-agent find a paid service, retrieve its payment terms and request your approval. Once you sign
-in MetaMask, the client sends the signed request and records the payment outcome and the
-service's response.
+Superstables connects service discovery, pricing and payment for AI agents. The client offers
+two ways to pay:
 
-This is a testnet demo using [x402](https://x402.org) with the `exact` scheme and test USDC on
-Base Sepolia. The client is available through MCP, a CLI and a TypeScript SDK. Each payment
-requires your approval. There is no mainnet support or unattended mode.
+- **Approve each payment.** Through MCP, a CLI or a TypeScript SDK, an agent finds a paid
+  service, retrieves its payment terms and requests your approval. Once you sign in MetaMask,
+  the client sends the signed request and records the payment outcome and the service's
+  response. The agent can request a payment, but it cannot approve one.
+- **Grant a budget once.** With [`superstables budget`](#on-chain-budgets-superstables-budget),
+  a separate tool, you give an agent key a spending budget on chain from your own wallet. The
+  agent then buys within it without asking you again, until the budget runs out, expires on
+  Tempo, or you revoke it. The chain enforces the cap.
 
-After setup, the agent starts the client and its local approval page. In the default MetaMask
-flow, your signing key remains in your wallet. The agent can request a payment, but it cannot
-approve one.
+Both are testnet only. Per-payment approval uses [x402](https://x402.org) with the `exact`
+scheme and test USDC on Base Sepolia. Budgets run on Base Sepolia and four other EVM testnets,
+Tempo Moderato and Solana devnet. There is no mainnet support. In the default MetaMask flow and
+in budgets, your signing key remains in your wallet.
 
 ## What the demo shows
 
@@ -51,7 +55,8 @@ with the transaction on the explorer.
 | Rail | x402, `exact` scheme |
 | Network | Base Sepolia testnet (`eip155:84532`) |
 | Asset | Test USDC (`0x036CbD53842c5426634e7929541eC2318f3dCF7e`, 6 decimals) |
-| Approval | MetaMask signs each payment, on an approval page the client serves on `127.0.0.1`. There is no unattended mode |
+| Approval | MetaMask signs each payment, on an approval page the client serves on `127.0.0.1`. This flow has no unattended mode |
+| Budgets | `superstables budget`: the owner approves a grant once in their own wallet, and the agent pays within it without further approval. EVM testnets, Tempo Moderato and Solana devnet. See [On-chain budgets](#on-chain-budgets-superstables-budget) |
 | Alternative | A local wallet process that holds a key in a file, for a browser-free machine: `--wallet local` |
 | Clients | Claude Code and Claude Desktop, tested end to end with the MetaMask flow. The server uses MCP over stdio |
 | Also usable as | a CLI (`superstables`) and a TypeScript SDK |
@@ -251,7 +256,7 @@ rather than in MetaMask, so processes running as your user can read it.
 `superstables budget` is a separate testnet tool with its own agent key. The owner grants an
 agent key a budget on chain once, from their own wallet. The agent then buys from x402 or MPP sellers with no approval
 per payment, until the budget runs out, expires on Tempo, or the owner revokes it. The chain enforces the cap; no
-Superstables server is in the path. The tool has three rails: `evm`, a USDC `approve` on
+Superstables server is in the path of a purchase. The tool has three rails: `evm`, a USDC `approve` on
 Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy or SKALE Base Sepolia; `tempo`, an access key on Tempo Moderato with a cap, expiry and
 optional period and seller list enforced on chain; and `solana`, an SPL token delegate on Solana devnet.
 
@@ -264,11 +269,13 @@ npx superstables budget buy    --rail evm --url <seller url> --max 0.002
 npx superstables budget revoke --rail evm                        # the kill switch, approved in the wallet
 ```
 
-It runs from a checkout of this repository, after `npm ci` and `npm run build`. Owner actions use a local page on `127.0.0.1` and a
-browser extension wallet on the same computer: any EVM browser wallet (MetaMask, Rabby, Coinbase
+It runs from a checkout of this repository, after `npm ci` and `npm run build`, or from the standalone skill zip. By default,
+owner actions use a local page on `127.0.0.1` and a browser extension wallet on the same computer, with no account: any EVM browser wallet (MetaMask, Rabby, Coinbase
 Wallet, ...) on `evm`, any EVM browser wallet that can add a custom network on `tempo`, and any
-Solana wallet (Phantom, Solflare, Backpack, ...) on `solana`. Setup records your address; grants, revokes and funding require wallet
-approval. The default flow stores only the agent key in `~/.superstables/keys/budget/`. Run by an agent, an owner
+Solana wallet (Phantom, Solflare, Backpack, ...) on `solana`. On `evm`, `setup --hosted` moves them to superstables.com
+instead: you approve from any device where you are signed in with your wallet, after picking the match code the agent shows
+you. That needs a superstables.com account. Setup records your address; grants, revokes and funding require wallet
+approval. `superstables budget find` lists the services superstables.com says a budget can pay. The default flow stores only the agent key in `~/.superstables/keys/budget/`. Run by an agent, an owner
 command returns at once with the link and an approval id, and the agent polls `superstables budget wait --id <id>`
 until the command has a final result. `waiting_owner` is not approval or settlement. Every command ends with one
 `RESULT {json}` line and a fixed exit code, so an agent can act on it. EVM and Solana allowances have no automatic expiry or seller restriction. Revoke stops

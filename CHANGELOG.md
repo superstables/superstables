@@ -15,7 +15,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   plain ERC-20 approve on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy and SKALE
   Base Sepolia; `tempo`, an access key on Tempo Moderato with a cap, expiry and optional period and seller list
   enforced on chain; and `solana`, an SPL token delegate on devnet. On every rail the owner
-  approves grant, revoke and their other steps in their own browser wallet, on a page on
+  approves grant, revoke and their other steps in their own browser wallet, by default on a page on
   `127.0.0.1`: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) on `evm`, any EVM
   browser wallet that can add a custom network on `tempo`, and any Solana wallet (Phantom,
   Solflare, Backpack, ...) on `solana`. With more than one wallet installed, the page asks which
@@ -31,6 +31,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   purchase journal, at most 1 MB with owner-only file permissions (mode 600), and names the file in `RESULT`
   as `responseFile`, with its content type, size and truncation status. The response is seller
   data, not proof of settlement.
+- **Hosted owner approvals for `superstables budget` on EVM chains.** `setup --rail evm --hosted`
+  links the agent to your superstables.com account (Sign-In with Ethereum), and records your
+  account's address as the owner. Grants, revokes and gas transfers on that chain are then
+  approved on superstables.com, in your wallet, from any device where you are signed in, after
+  you pick the match code the agent shows you. Each request is signed by the agent key, which
+  stays on your computer, and the command still reads the chain before it reports success. A
+  request the site would put to another account than the recorded owner is refused. Local
+  approvals on `127.0.0.1` remain the default and need no account. Tempo, Solana and `recover`
+  use local approvals only.
+- **`superstables budget find`** lists the services superstables.com says a budget can pay,
+  with price, chain and URL. Any other seller URL still works.
 - **`superstables budget` as a standalone skill zip.** `npm run skill` builds
   `superstables-budget-skill-<version>.zip`: the skill and the whole tool bundled into plain
   JavaScript that needs Node 20 or newer and nothing else. `superstables budget --version` names
