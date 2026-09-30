@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Superstables budget
 
-The owner authorizes an agent once. The agent then pays sellers from the owner's funds until the budget runs out, expires or is revoked. The chain enforces the budget; no Superstables service is in the path. The owner signs only grant and revoke. Every purchase is signed by the agent alone.
+The owner authorizes an agent once. The agent then pays sellers from the owner's funds until the budget runs out, expires or is revoked. The chain enforces the budget; no Superstables service is in the path. The owner approves only grant and revoke, in their own wallet on `evm`. Every purchase is signed by the agent alone. You hold only the agent key: you cannot approve anything for the owner.
 
 `superstables budget` is `npx superstables budget` from a checkout of the client repo (after `npm ci` and `npm run build` at its root), or `node budget/cli.mjs` there. It needs Node 20+. It is a thin dispatcher over the rail scripts in `budget/`. Testnet only: `--mainnet` or a mainnet chain is refused.
 
@@ -28,27 +28,37 @@ The owner authorizes an agent once. The agent then pays sellers from the owner's
 4. **Exit 3: respect the refusal.** Nothing was signed. Do not retry with a bigger `--max` or another `--pay-to` to get past it. Tell the owner.
 5. **Exit 4: paid, not delivered.** Never pay again. Report the `tx` hash.
 6. **Exit 5: outcome unknown.** Run `superstables budget reconcile --op ID`. Never pay again, never start a new `--op` for the same purchase, never retry a `buy` whose outcome is uncertain.
-7. **Owner-only commands:** `grant`, `revoke`, `recover`. Run them only when the owner asks in this session, show the plan first, and add `--yes` only after the owner confirms. Never read `*-owner.env`, never print or ask for a key, never run the owner's steps yourself to unblock a purchase.
+7. **Owner commands:** `setup`, `fund-agent`, `grant`, `revoke`, `recover`. Run them only when the owner asks in this session. On `evm` you cannot approve them: the command opens an approval page and waits for the owner's wallet. Your job is to run the command, show the owner the approval link and the plan, and wait for `RESULT`. On `tempo` and `solana` show the plan first and add `--yes` only after the owner confirms. Never read `*-owner.env`, never pass `--owner-key-file`, never print or ask for a key, never run the owner's steps yourself to unblock a purchase.
 
 ## Commands
 
 ```
-superstables budget doctor    --rail R [--chain C]                     # key files, balances, RPC; no transactions
-superstables budget status    --rail R                                 # remaining, expiry, revoked, funds at risk
-superstables budget buy       --rail R --url U --max M [--pay-to ADDR] [--op ID] [--method POST --body JSON]
-superstables budget reconcile --rail R --op ID                         # reads the chain; never signs or sends
-superstables budget grant     --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b] [--yes]   # owner
-superstables budget revoke    --rail R [--yes]                                                          # owner
-superstables budget recover   --rail evm [--op ID] [--yes]                                              # owner
+superstables budget doctor     --rail R [--chain C]                    # key files, balances, RPC; no transactions
+superstables budget status     --rail R                                # remaining, expiry, revoked, funds at risk
+superstables budget buy        --rail R --url U --max M [--pay-to ADDR] [--op ID] [--method POST --body JSON]
+superstables budget reconcile  --rail R --op ID                        # reads the chain; never signs or sends
+superstables budget setup      --rail evm [--chain C]                                         # owner connects a wallet
+superstables budget fund-agent --rail evm [--amount GAS]                                      # owner
+superstables budget grant      --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b]   # owner
+superstables budget revoke     --rail R                                                          # owner
+superstables budget recover    --rail evm [--op ID]                                              # owner
 ```
 
-`grant`, `revoke` and `recover` print the plan (terms, true maximum, what the chain enforces) and send only with `--yes`. Every command has `--help`; bad input exits 2 before anything is read or spawned.
+On `evm`, the owner commands print the plan, then open an approval page on `127.0.0.1` and wait (10 minutes by default). On `tempo` and `solana`, `grant` and `revoke` print the plan and send only with `--yes`. Every command has `--help`; bad input exits 2 before anything is read or spawned.
+
+## Owner actions on evm
+
+1. Run the command in the background, or with a tool timeout longer than the link's (`--timeout`, default 600 seconds). It blocks until the owner decides.
+2. As soon as stdout (or stderr) shows `APPROVE {"action","url","expires"}`, give the owner the `url` and the plan from stderr (cap, agent, chain, what the chain does and does not enforce). Say it must be opened in the browser that has their wallet, on this computer. The command also tries to open it in the default browser.
+3. Wait for the final `RESULT`. `settled` (or `ok` for `setup`) with a `tx`: done, the command checked the chain. `refused_precheck` (exit 3): the owner rejected or the link expired, and nothing was sent. Do not run it again unless the owner asks.
+
+Never try to approve the page yourself, and never use `--owner-key-file` or `--yes` on `evm`: `--yes` without `--owner-key-file` exits 2.
 
 ## Typical flows
 
 Agent buying: `superstables budget status --rail R` (is there budget?), then `superstables budget buy ... --max M --op ID`, read `RESULT`, and on exit 5 `superstables budget reconcile`.
 
-Owner granting: `superstables budget doctor`, `superstables budget grant ...` (read the plan and the true maximum), `superstables budget grant ... --yes`, later `superstables budget revoke --yes`. Grant only what the owner is willing to lose.
+Owner granting on `evm`: `superstables budget setup` (the owner connects a wallet), `superstables budget fund-agent`, `superstables budget doctor`, `superstables budget grant --amount A` (the owner approves in the wallet), later `superstables budget revoke` (the same). On `tempo` and `solana`: `grant ...` to read the plan, then `grant ... --yes` once the owner confirms. Grant only what the owner is willing to lose.
 
 ## Exit codes and RESULT
 
@@ -57,7 +67,7 @@ Owner granting: `superstables budget doctor`, `superstables budget grant ...` (r
 | 0 | Done (settled and delivered, or the command worked) | continue |
 | 1 | Failed, including a chain refusal | read `reason` and `next`; do not retry blindly |
 | 2 | Bad input | fix the command |
-| 3 | Refused before anything was signed | respect it |
+| 3 | Refused before anything was signed, or the owner rejected the approval or let it expire | respect it |
 | 4 | Paid, not delivered | never pay again; report |
 | 5 | Unknown | `superstables budget reconcile --op ID`; never pay again |
 
@@ -71,7 +81,7 @@ RESULT {"ok":true,"command":"buy","rail":"tempo","chain":"moderato","op":"rb-202
 
 - Tempo: a revoked or expired access key can never be granted again. Use a fresh key: `npx tsx budget/tempo/setup.ts --extra-agent LABEL`, then `--agent LABEL` on `grant`, `status`, `buy`, `revoke`.
 - Solana: one delegate slot per token account. A new grant overwrites the old one, so the rail refuses while one is live.
-- EVM: `buy` is GET only. The agent pulls the exact price, then pays; a failed purchase returns the price. Pulled funds left in the agent key are returned by `superstables budget recover` (owner).
+- EVM: `buy` is GET only. The agent pulls the exact price, then pays; a failed purchase returns the price. Pulled funds left in the agent key are returned by `superstables budget recover` (when the owner asks; the agent key sends them back to the owner).
 - After a revoke, a payment already broadcast still settles. On Tempo, payment sessions opened elsewhere are not covered by a revoke.
 - Two purchases for the last of the budget: the chain lets exactly one settle. Do not run two `buy`s on one agent key at once.
 - Something looks off (missing key, empty balance): run `superstables budget doctor` before anything else.

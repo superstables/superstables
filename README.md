@@ -159,8 +159,8 @@ can open the correct payment request.
   records/               quotes, attempts, receipts and approvals, append-only JSONL, 0600
   browser-wallet.json    which MetaMask account last connected. A name, not a secret
   wallet/                only with --wallet local: key, agent token, owner secret, audit log
-  keys/budget/           only with superstables budget: owner and agent key files, 0600
-  budget/                only with superstables budget: public addresses and purchase journals
+  keys/budget/           only with superstables budget: the agent key file (and tempo/solana owner keys), 0600
+  budget/                only with superstables budget: public addresses, purchase journals, approval log
 ```
 
 `SUPERSTABLES_HOME` changes the base directory for this state.
@@ -248,22 +248,24 @@ rather than in MetaMask, so processes running as your user can read it.
 
 ## On-chain budgets: `superstables budget`
 
-`superstables budget` is a separate testnet tool with its own keys. The owner grants an agent
-key a budget on chain once. The agent then buys from x402 sellers on its own, with no approval
+`superstables budget` is a separate testnet tool with its own agent key. The owner grants an
+agent key a budget on chain once, from their own wallet. The agent then buys from x402 sellers on its own, with no approval
 per payment, until the budget runs out or the owner revokes it. The chain enforces the cap; no
 Superstables server is in the path. This release has three rails: `evm`, a USDC `approve` on
 Base Sepolia or Arc Testnet; `tempo`, an access key on Tempo Moderato whose cap, expiry and
 seller list the chain enforces; and `solana`, an SPL token delegate on Solana devnet.
 
 ```bash
+npx superstables budget setup  --rail evm                        # agent key; the owner connects a wallet
 npx superstables budget doctor --rail evm
-npx superstables budget grant  --rail evm --amount 0.01 --yes    # the owner signs
+npx superstables budget grant  --rail evm --amount 0.01          # the owner approves in the wallet
 npx superstables budget buy    --rail evm --url <seller url> --max 0.002
-npx superstables budget revoke --rail evm --yes                  # the kill switch
+npx superstables budget revoke --rail evm                        # the kill switch, approved in the wallet
 ```
 
-It runs from a checkout of this repository, after `npm ci` and `npm run build`. Keys go in
-`~/.superstables/keys/budget/`, separate from the MetaMask flow. Every command ends with one
+It runs from a checkout of this repository, after `npm ci` and `npm run build`. On `evm` the
+owner approves grant and revoke on a page on 127.0.0.1, in MetaMask or another browser wallet;
+the agent's machine holds only the agent key, in `~/.superstables/keys/budget/`. Every command ends with one
 `RESULT {json}` line and a fixed exit code, so an agent can act on it. Setup, faucets, the
 safety model and the agent skill are in [budget/README.md](budget/README.md).
 

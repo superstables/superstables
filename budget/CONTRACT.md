@@ -10,9 +10,10 @@ Every rail's main path follows these rules.
 
 ## 1. Owner and agent keys are separate
 
-- Keys are split per rail into `$SUPERSTABLES_HOME/keys/budget/<rail>-owner.env` and `<rail>-agent.env` (mode 600). Public addresses go in both or in a public state file under `$SUPERSTABLES_HOME/budget/public/`.
-- Agent commands (`buy`, `reconcile`) open only the agent file. They must work with the owner file absent.
-- Owner commands (`setBudget`/`grant`, `revoke`/`revokeBudget`, `recover`) open only the owner file.
+- The agent key lives in `$SUPERSTABLES_HOME/keys/budget/<rail>-agent.env` (mode 600). Public addresses go in a public state file under `$SUPERSTABLES_HOME/budget/public/`.
+- EVM: the owner's key stays in the owner's wallet. Owner commands (`setup`, `fundAgent`, `setBudget`/`grant`, `revoke`, the owner's part of `recover`) build the transaction and ask the owner's browser wallet to send it through the owner approval page on `127.0.0.1`. The terms on that page come from the command's own plan, never from agent text. The command then verifies on chain. An owner key file is used only when a test names it with `--owner-key-file`.
+- Tempo and Solana (for now): the owner key lives in `<rail>-owner.env` (mode 600), and owner commands open only that file.
+- Agent commands (`buy`, `reconcile`) open only the agent file. They must work with no owner key file anywhere.
 - Read commands (`read`/`readBudget`/`status`) need no secret file.
 - Never print, log or copy key material.
 

@@ -8,18 +8,18 @@ Every rail implements the same four methods.
 
 | Method | Signer | Effect |
 | --- | --- | --- |
-| `setBudget(amount, expiry?, sellers?)` (`grant`) | owner | Lets one agent key spend up to `amount` USDC (pathUSD on Tempo), until `expiry` and only to the listed sellers where the rail supports them. A rail refuses a constraint it can't enforce on chain. It prints the true maximum that can move. |
+| `setBudget(amount, expiry?, sellers?)` (`grant`) | owner | Lets one agent key spend up to `amount` USDC (pathUSD on Tempo), until `expiry` and only to the listed sellers where the rail supports them. A rail refuses a constraint it can't enforce on chain. It prints the true maximum that can move. On `evm` the owner approves it in their own wallet. |
 | `pay(seller, amount)` (`buy`) | agent | Moves the token from the owner to the seller under the budget. |
 | `revokeBudget()` (`revoke`) | owner | Ends the authorization on chain. |
 | `readBudget()` (`status`) | anyone | Reads the remaining amount, expiry and revoked state from the chain. |
 
-Keys live in `$SUPERSTABLES_HOME/keys/budget/<rail>-owner.env` and `<rail>-agent.env` (mode 600). Agent commands never open the owner file, and reads need no secret file (public addresses in `$SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env`). Safety rules: [CONTRACT.md](../CONTRACT.md).
+The agent key lives in `$SUPERSTABLES_HOME/keys/budget/<rail>-agent.env` (mode 600). On `evm` there is no owner key file: owner actions go through the owner's own wallet on an approval page on `127.0.0.1`. On `tempo` and `solana` the owner key is in `<rail>-owner.env` for now, and agent commands never open it. Reads need no secret file (public addresses in `$SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env`). Safety rules: [CONTRACT.md](../CONTRACT.md).
 
 ## What each rail enforces
 
 | | evm (ERC-20 `approve`) | tempo (AccountKeychain access key) | solana (SPL delegate) |
 | --- | --- | --- | --- |
-| Grant | Owner transaction `approve(agent, cap)`, from any wallet | Owner transaction `authorizeKey` with limit, expiry and optional seller scopes | Owner transaction `ApproveChecked` |
+| Grant | Owner transaction `approve(agent, cap)`, sent by the owner's own wallet from the approval page | Owner transaction `authorizeKey` with limit, expiry and optional seller scopes | Owner transaction `ApproveChecked` |
 | Pay | Agent `transferFrom(owner, agent, price)`, then a normal EIP-3009 payment it signs itself | The agent's access key signs a `transferWithMemo` from the owner's account | The agent signs `TransferChecked` as delegate |
 | Revoke | Owner transaction `approve(agent, 0)` | Owner transaction `revokeKey`. Permanent for that key | Owner transaction `Revoke` |
 | Total cap | Yes, on chain | Yes, on chain. Fees count against it | Yes, on chain (`delegatedAmount`) |
@@ -39,7 +39,7 @@ A payment signed before the revoke and submitted after it is refused on all thre
 
 | Rail | Seller protocol | How the agent pays | Fees on a purchase |
 | --- | --- | --- | --- |
-| evm | x402 `exact`, EIP-3009 | **Pull then pay.** Per purchase the agent pulls the exact price from the owner, then pays as a standard EIP-3009 payment it signs itself. A failed purchase returns the price. The owner keeps an escrow copy of the agent key so `recover` works without the agent. | The agent pays gas for the pull (about 0.0000004 ETH on Base Sepolia; USDC on Arc). The seller's facilitator pays for settlement. |
+| evm | x402 `exact`, EIP-3009 | **Pull then pay.** Per purchase the agent pulls the exact price from the owner, then pays as a standard EIP-3009 payment it signs itself. A failed purchase returns the price. `recover` uses the agent key to lower its allowance and return funds; the owner approves in the wallet only what the agent cannot do. | The agent pays gas for the pull (about 0.0000004 ETH on Base Sepolia; USDC on Arc). The seller's facilitator pays for settlement. |
 | tempo | MPP `tempo` charge (`transferWithMemo`) | **Direct.** The agent's access key signs the payment from the owner's account. | Paid by the seller's fee payer with the sellers we tested. A fee the owner's account pays counts against the limit. |
 | solana | x402 `exact` | **Direct.** The agent signs `TransferChecked` as SPL delegate of the owner's USDC account; the facilitator reports the agent as payer. | Paid by the seller's facilitator. |
 
