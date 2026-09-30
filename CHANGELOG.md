@@ -7,6 +7,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **On-chain agent budgets: `superstables budget`, a separate testnet tool.** The owner grants
+  an agent key a budget once. The agent then buys from x402 and MPP sellers with no approval per
+  payment, until the budget runs out or the owner revokes it. There are three rails: `evm`, a
+  plain ERC-20 approve on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy and SKALE
+  Base Sepolia; `tempo`, an access key on Tempo Moderato whose cap, expiry and seller list the
+  chain enforces; and `solana`, an SPL token delegate on devnet. On `evm` the owner approves
+  grant, revoke and their other steps in their own wallet, on a page on `127.0.0.1`, and the
+  agent's machine holds only the agent key. Run by an agent, an owner command returns with the
+  approval link, and `superstables budget wait --id` reports the outcome. Before it signs, `buy`
+  checks the price against `--max`, the token and, with `--pay-to`, the recipient. Every command
+  ends with one `RESULT` line and a fixed exit code, and `reconcile` reads the chain after an
+  interrupted purchase without paying again. Mainnet is refused. It runs from a checkout of this
+  repository.
+- **`superstables budget preflight --rail evm --url <seller>`** reads the seller's price and
+  address from its 402, for x402 v2 and v1 sellers, and signs nothing. `buy` on `evm` pays v1
+  sellers too, under the same `--max` checks.
+- **Purchases on `evm` keep what was bought.** `buy` saves the seller's answer next to the
+  purchase journal, at most 1 MB and readable only by the user, and names the file in `RESULT`
+  as `responseFile`, with its content type, its size and whether it was cut.
+
 ## [0.2.0] - 2026-09-22
 
 Discovery reads the hosted catalogue of prepared demo services and ranks matches by
