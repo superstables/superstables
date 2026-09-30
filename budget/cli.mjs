@@ -553,7 +553,14 @@ async function grant({ f, ctx }) {
 }
 
 async function revoke({ f, ctx }) {
-  const now = await readBudget(f);
+  const now = revokeRead ?? (await readBudget(f));
+  if (now.ok && now.revoked) {
+    // nothing live: no plan, no page
+    log(`\nrevoke on ${f.rail} (${f.chain}): nothing to revoke, the budget is already revoked${f.rail === "evm" ? " (the allowance is 0)" : ""}. No page opens and nothing is sent.`);
+    log(ownerLine(recordedOwner(f)));
+    log(`  now: remaining ${ago(now.remaining)}, expiry ${ago(now.expiry)}, revoked ${now.revoked}, funds at risk ${ago(now.atRisk)}`);
+    return emit(0, { ...ctx, state: "ok", remaining: now.remaining, revoked: true, tx: {}, next: "none", reason: "already revoked; nothing to send" });
+  }
   log(`\nPLAN revoke on ${f.rail} (${f.chain}). ${waitLine(f)}`);
   log(ownerLine(recordedOwner(f)));
   if (now.ok) log(`  now: remaining ${ago(now.remaining)}, expiry ${ago(now.expiry)}, revoked ${now.revoked}, funds at risk ${ago(now.atRisk)}`);
@@ -562,7 +569,6 @@ async function revoke({ f, ctx }) {
     solana: "  effect: Revoke clears the delegate on this USDC account. Once it takes effect, transactions using that delegation fail, including ones signed earlier. It does not recover funds already transferred.",
     evm: `  effect: ${unitOf(f)}.approve(agent, 0). From the block it lands the agent can pull nothing more. ${unitOf(f)} already withdrawn is not recovered by revoke. superstables budget recover attempts to return recoverable funds.`,
   }[f.rail]);
-  if (now.ok && now.revoked) return emit(0, { ...ctx, state: "ok", remaining: now.remaining, revoked: true, tx: {}, next: "none", reason: "already revoked; nothing to send" });
   if (!sendsNow(f)) return emit(0, { ...ctx, state: "planned", remaining: now.ok ? now.remaining : null, revoked: false, tx: {}, next: notSentNext(f) });
   const r = await run(railCommand("revoke", f));
   const rr = railResult(r.stdout);
@@ -626,8 +632,14 @@ function refusePending(ctx, pending) {
   });
 }
 
+// A revoke with nothing live opens no page: it needs neither the chain's approval lock nor a background worker.
+let revokeRead;
 // Runs before an owner command: one approval at a time on the chain, and, when detached, starts the worker and exits.
 async function ownerGate({ cmd, f, ctx }) {
+  if (cmd === "revoke") {
+    revokeRead = await readBudget(f);
+    if (revokeRead.ok && revokeRead.revoked) return;
+  }
   const detach = walletFlow(f) && (f.detach === true || (!f.wait && !process.stdout.isTTY));
   const id = newApprovalId();
   const pending = findPending(f.rail, f.chain);

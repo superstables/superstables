@@ -167,7 +167,7 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
     rows: [
       { label: "To your agent", value: agent, mono: true },
       { label: "From your wallet", value: owner, mono: true },
-      { label: "Agent has now", value: `${gasFmt(agentHas)} ${GAS.symbol}` },
+      { label: "Agent has before this transfer", value: `${gasFmt(agentHas)} ${GAS.symbol}` },
       { label: "Transaction", value: `a plain transfer of ${amt} ${GAS.symbol}` },
     ],
     enforced: [],
@@ -194,7 +194,10 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
     await closeOwnerPage();
     process.exit(emit(command, mismatch ? 3 : 1, { state: mismatch ? "mismatch" : "failed", tx: sent.hash, reason: mismatch ? `the transaction on chain is not the one planned: ${why}` : why, next: "check wallet activity, then superstables budget doctor --rail evm" }));
   }
-  handle.finish({ ok: true, message: `Done. Your agent received ${amt} ${GAS.symbol}. You can close this page.`, hash: sent.hash });
+  // the balance after the transfer, read from the chain (a node may lag a moment behind the receipt)
+  const after = await readUntil(() => nativeBalance(agent), (v) => v >= agentHas + value);
+  console.log(`agent balance after the transfer: ${gasFmt(after)} ${GAS.symbol}`);
+  handle.finish({ ok: true, message: `Done. Your agent received ${amt} ${GAS.symbol} and now has ${gasFmt(after)} ${GAS.symbol}. You can close this page.`, hash: sent.hash });
   await closeOwnerPage();
   return sent.hash;
 }

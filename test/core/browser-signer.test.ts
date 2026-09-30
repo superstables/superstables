@@ -1836,6 +1836,126 @@ describe("doctor on an evm chain", () => {
   });
 });
 
+// The owner commands' words, from the real CLI in its own process. Its RPC is a fake Amoy node loaded with --import (it replaces
+// fetch for the chain's RPC URL only), so nothing here reaches a network.
+const FAKE_NODE_SOURCE = `
+const cfg = JSON.parse(process.env.FAKE_AMOY);
+const RPC = ${JSON.stringify(AMOY_RPC)};
+const hex = (v) => "0x" + BigInt(v).toString(16);
+const word = (v) => "0x" + BigInt(v).toString(16).padStart(64, "0");
+let receiptServed = false;
+const lc = (a) => String(a).toLowerCase();
+function tx(hash) {
+  return { hash, from: cfg.owner, to: cfg.agent, value: hex(cfg.value), input: "0x", chainId: "0x13882", blockNumber: "0x101", blockHash: "0x" + "33".repeat(32),
+    transactionIndex: "0x0", nonce: "0x0", gas: "0x5208", type: "0x2", maxFeePerGas: hex(31e9), maxPriorityFeePerGas: hex(30e9), accessList: [], v: "0x0", r: "0x1", s: "0x1", yParity: "0x0" };
+}
+function answer(method, params) {
+  switch (method) {
+    case "eth_chainId": return { result: "0x13882" };
+    case "eth_blockNumber": return { result: "0x100" };
+    case "eth_getBlockByNumber": return { result: { number: "0x100", hash: "0x" + "11".repeat(32), parentHash: "0x" + "22".repeat(32), timestamp: "0x66fb0000", baseFeePerGas: "0x3f", gasLimit: "0x1c9c380", gasUsed: "0x0", transactions: [] } };
+    case "eth_maxPriorityFeePerGas": case "eth_gasPrice": return { result: hex(30e9) };
+    case "eth_getBalance": return { result: hex(lc(params[0]) === lc(cfg.agent) ? (receiptServed ? cfg.agentAfter : cfg.agentBefore) : cfg.ownerBalance) };
+    case "eth_call": return { result: word(0) }; // allowance and balances: 0
+    case "eth_getTransactionByHash": return { result: tx(params[0]) };
+    case "eth_getTransactionReceipt": receiptServed = true; return { result: { transactionHash: params[0], transactionIndex: "0x0", blockHash: "0x" + "33".repeat(32), blockNumber: "0x101",
+      from: cfg.owner, to: cfg.agent, status: "0x1", gasUsed: "0x5208", cumulativeGasUsed: "0x5208", effectiveGasPrice: hex(30e9), logs: [], logsBloom: "0x" + "0".repeat(512), type: "0x2", contractAddress: null } };
+    default: return { error: { code: -32601, message: "the method " + method + " does not exist/is not available" } };
+  }
+}
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = String(input?.url ?? input);
+  if (!url.startsWith(RPC)) return realFetch(input, init);
+  const body = JSON.parse(String(init?.body));
+  const one = (b) => ({ jsonrpc: "2.0", id: b.id, ...answer(b.method, b.params ?? []) });
+  return new Response(JSON.stringify(Array.isArray(body) ? body.map(one) : one(body)), { status: 200, headers: { "content-type": "application/json" } });
+};
+`;
+
+describe("the owner commands' words on an evm chain", () => {
+  /** A fresh owner and agent for polygon-amoy in the test home, and the fake node's settings. */
+  function amoyBudget(agentBefore: bigint, agentAfter: bigint, value: bigint) {
+    const keys = join(budgetHome, "keys", "budget");
+    const pub = join(budgetHome, "budget", "public");
+    for (const dir of [keys, pub]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const agentFile = join(keys, "evm-agent.env");
+    if (!existsSync(agentFile)) {
+      const key = generatePrivateKey();
+      writeFileSync(agentFile, `B4_AGENT_KEY=${key}\nB4_AGENT_ADDRESS=${privateKeyToAccount(key).address}\n`, { mode: 0o600 });
+    }
+    const agent = /B4_AGENT_ADDRESS=(\S+)/.exec(readFileSync(agentFile, "utf8"))![1];
+    writeFileSync(join(pub, "evm-polygon-amoy.env"), `B4_OWNER_ADDRESS=${OWNER.address}\nB4_AGENT_ADDRESS=${agent}\n`);
+    const preload = join(budgetHome, "fake-amoy-node.mjs");
+    writeFileSync(preload, FAKE_NODE_SOURCE);
+    const fake = { owner: OWNER.address, agent, agentBefore: String(agentBefore), agentAfter: String(agentAfter), value: String(value), ownerBalance: String(POL) };
+    return { agent, env: { ...process.env, SUPERSTABLES_HOME: budgetHome, FAKE_AMOY: JSON.stringify(fake), NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${preload}`.trim() } };
+  }
+
+  /** Run the real CLI; hand each stdout line to `onLine` as it arrives. */
+  function cli(args: string[], env: NodeJS.ProcessEnv, onLine: (line: string) => void = () => {}): Promise<{ code: number; stdout: string; stderr: string; result: Record<string, any> }> {
+    return new Promise((done, fail) => {
+      const child = spawn(process.execPath, [CLI, ...args], { env });
+      let stdout = "", stderr = "", partial = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += String(chunk);
+        const lines = (partial + String(chunk)).split("\n");
+        partial = lines.pop()!;
+        for (const l of lines) onLine(l);
+      });
+      child.stderr.on("data", (chunk) => (stderr += String(chunk)));
+      child.once("error", fail);
+      child.once("close", (code) => {
+        const line = stdout.trim().split("\n").reverse().find((l) => l.startsWith("RESULT "));
+        done({ code: code ?? 1, stdout, stderr, result: line ? JSON.parse(line.slice(7)) : {} });
+      });
+    });
+  }
+
+  it("revoke with nothing to revoke says so, and promises no page", async () => {
+    const { env } = amoyBudget(0n, 0n, 0n);
+    for (const mode of ["--wait", "--detach"]) {
+      const r = await cli(["revoke", "--rail", "evm", "--chain", "polygon-amoy", mode, "--no-open"], env);
+      expect(r.code).toBe(0);
+      expect(r.result).toMatchObject({ command: "revoke", state: "ok", revoked: true, reason: "already revoked; nothing to send" });
+      expect(r.stderr).toContain("revoke on evm (polygon-amoy): nothing to revoke, the budget is already revoked (the allowance is 0). No page opens and nothing is sent.");
+      expect(r.stderr).not.toContain("opens a page");
+      expect(r.stderr).not.toContain("runs in the background");
+      expect(r.stdout).not.toContain("APPROVE ");
+    }
+  });
+
+  it("fund-agent's done page shows the agent's balance read after the transfer", async () => {
+    const value = POL / 100n; // 0.01 POL
+    const { env } = amoyBudget(POL / 50n, POL / 50n + value, value);
+    let url = "";
+    let message = "";
+    const hash = `0x${"cd".repeat(32)}`;
+    const drive = async () => {
+      await postJson(`${url}/account`, { address: OWNER.address });
+      await postJson(`${url}/sending`, { address: OWNER.address });
+      await postJson(`${url}/sent`, { address: OWNER.address, hash });
+      for (let i = 0; i < 200 && !message; i++) {
+        const state = await getJson(`${url}/state`).catch(() => null);
+        if (state?.body.status === "confirmed") message = String(state.body.message);
+        else await new Promise((r) => setTimeout(r, 50));
+      }
+    };
+    let driving: Promise<void> | undefined;
+    const r = await cli(["fund-agent", "--rail", "evm", "--chain", "polygon-amoy", "--amount", "0.01", "--wait", "--no-open", "--timeout", "60"], env, (line) => {
+      if (!line.startsWith("APPROVE ") || driving) return;
+      const approve = JSON.parse(line.slice(8));
+      expect(approve.terms.title).toBe("Send funds for network fees");
+      url = approve.url;
+      driving = drive();
+    });
+    await driving;
+    expect(r.code).toBe(0);
+    expect(message).toBe("Done. Your agent received 0.01 POL and now has 0.03 POL. You can close this page.");
+    expect(r.result).toMatchObject({ command: "fund-agent", state: "settled", tx: { fundAgent: hash } });
+  });
+});
+
 /** Poll a condition on loopback. Everything here is local, so this is milliseconds. */
 async function waitFor(ready: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
