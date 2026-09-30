@@ -45,6 +45,8 @@ Each chain below passed grant, buy (settled and delivered), reconcile, revoke an
 | `polygon-amoy` | USDC (`USDC`/2) | POL | PayAI Echo, PayAI facilitator |
 | `skale-base-sepolia` | bridged USDC (`Bridged USDC (SKALE Bridge)`/2) | CREDIT | PayAI Echo, PayAI facilitator |
 
+PayAI's Echo sellers refund each payment to the payer, which is the agent key. The next `buy` then refuses (exit 3) and its RESULT `next` names the fix: the owner runs `superstables budget recover --rail evm --chain <key> --yes`, which returns the refund to the owner.
+
 ## Quickstart
 
 You need Node 20 or newer and a checkout of this repository. Install once at the repository root:

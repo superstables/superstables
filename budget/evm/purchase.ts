@@ -91,7 +91,7 @@ export type PurchaseResult = {
 };
 
 class Stop extends Error {
-  constructor(public kind: "precheck" | "chain" | "quote" | "reconciled", public reason: string) { super(reason); }
+  constructor(public kind: "precheck" | "chain" | "quote" | "reconciled", public reason: string, public next?: string) { super(reason); }
 }
 
 export { exitCodeFor };
@@ -220,7 +220,14 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
         const held = await usdcBalance(agent.account.address);
         // CHAIN: where USDC is also the gas token (Arc) the agent always holds its gas reserve, so 0 is the wrong test. It may hold
         // up to reserveMax; more than that is treated as stranded funds.
-        if (GAS.isUsdc ? held > GAS.reserveMax! : held > 0n) throw new Stop("precheck", `REFUSED: the agent key already holds ${usdc(held)} ${SYM}${GAS.isUsdc ? ` (more than the ${usdc(GAS.reserveMax!)} ${SYM} gas reserve it should hold)` : ""}, stranded by an earlier operation. Owner: run ${cmd("recover.ts", "--op <id>")} (or ${cmd("recover.ts")}) first.`);
+        // Money in the agent key between purchases is a seller refund (PayAI Echo refunds the payer, which is the agent) or funds an
+        // earlier purchase stranded. Refuse, and tell the owner the one command that returns it.
+        if (GAS.isUsdc ? held > GAS.reserveMax! : held > 0n) {
+          const recover = `superstables budget recover --rail evm --chain ${CFG.key} --yes`;
+          throw new Stop("precheck",
+            `REFUSED: the agent key already holds ${usdc(held)} ${SYM}${GAS.isUsdc ? ` (more than the ${usdc(GAS.reserveMax!)} ${SYM} gas reserve it should hold)` : ""}: a seller refund or funds stranded by an earlier purchase arrived there. Nothing was signed or pulled.`,
+            `owner: run "${recover}" to return the ${usdc(held)} ${SYM} to the owner, then buy again with a new --op`);
+        }
         const gas = await nativeBalance(agent.account.address);
         if (gas < GAS.minAgent) throw new Stop("precheck", `REFUSED: the agent key has ${gasFmt(gas)} ${GAS.symbol}, not enough for the pull's gas (needs ${gasFmt(GAS.minAgent)}). Top it up first.`);
       }
@@ -295,7 +302,7 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
     const st = stop as Stop | null;
     res.error = String(e.message ?? e).split("\n")[0];
     if (st?.kind === "quote") { log(st.reason); return finish("quoted", st.reason, "buy again without --quote-only to purchase"); }
-    if (st?.kind === "precheck" && !j.pullTx) { log(st.reason); return finish("refused_precheck", st.reason, "nothing was signed or sent"); }
+    if (st?.kind === "precheck" && !j.pullTx) { log(st.reason); return finish("refused_precheck", st.reason, st.next ?? "nothing was signed or sent"); }
     if (st?.kind === "chain") { log(st.reason); return finish("refused_chain", st.reason, "nothing moved; the chain refused the pull"); }
     if (st?.kind === "reconciled" || j.pullTx) {
       // something went wrong after the pull was sent (or the chain could not confirm it): read the chain, never re-pay
