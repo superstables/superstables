@@ -197,6 +197,20 @@ describe("owner commands on a hosted chain", () => {
     expect(site.requests[0].state).toBe("cancelled");
   }, 60_000);
 
+  it("the site's final unknown ends the grant as unknown (exit 5): read the chain, never nothing sent", async () => {
+    hostedChain();
+    site.owner = OWNER;
+    site.onPoll = (r) => {
+      if (r.polls === 2) r.state = "sending";
+      if (r.polls >= 3) Object.assign(r, { state: "unknown", reason: "the wallet was asked and never answered" });
+    };
+    const r = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(5);
+    expect(r.result.state).toBe("unknown");
+    expect(r.result.next).toMatch(/superstables budget status --rail evm/);
+    expect(r.approve).toMatchObject({ action: "grant", matchCode: "ABC-DEF" });
+  }, 60_000);
+
   it("a site that cannot be reached: a clear refusal, nothing sent", async () => {
     hostedChain();
     const url = site.url;

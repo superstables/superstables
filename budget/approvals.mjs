@@ -400,6 +400,7 @@ export function pageWords(page, rail) {
     case "connected": return "the owner connected and signed; the command is finishing";
     case "hosted:awaiting_owner": return page.walletAsked ? "the owner's wallet was asked to send; no transaction is reported yet" : "waiting for the owner to open the link on superstables.com, signed in with their wallet, and pick the match code";
     case "hosted:sending": return "the owner's wallet was asked to send; no transaction is reported yet";
+    case "hosted:unknown": return "superstables.com cannot tell whether the wallet sent it; the command is finishing and the chain must be checked";
     case "hosted:linked": return "the owner linked this agent; the command is finishing";
     case "hosted:sent": case "hosted:confirmed": case "hosted:failed": return "a transaction hash was reported; the command is checking it on chain";
     case "hosted:unreachable": return "waiting for the owner (superstables.com did not answer just now)";
@@ -423,7 +424,7 @@ function lastPageStatus(url) {
       const entry = JSON.parse(line);
       if (entry.id !== pageId) continue;
       status = entry.status;
-      if (entry.sending || ["sending", "sent", "confirmed", "failed"].includes(entry.status)) sending = true;
+      if (entry.sending || ["sending", "sent", "confirmed", "failed", "unknown"].includes(entry.status)) sending = true;
     } catch {}
   }
   return { status, sending };

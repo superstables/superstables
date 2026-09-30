@@ -193,6 +193,35 @@ describe("hosted approvals", () => {
     expect(o).toMatchObject({ status: "rejected", sending: true });
   });
 
+  it("the site's final unknown (the wallet may have sent): an unknown outcome, never nothing sent", async () => {
+    site.owner = OWNER;
+    site.onPoll = (r) => {
+      if (r.polls === 2) r.state = "sending";
+      if (r.polls >= 3) Object.assign(r, { state: "unknown", reason: "the wallet was asked and never answered" });
+    };
+    const h = await grant(client());
+    expect(await h.settled).toEqual({ status: "expired", reason: "the wallet was asked and never answered", sending: true });
+  });
+
+  it("unknown with a hash: sent, so the command reads the chain", async () => {
+    site.owner = OWNER;
+    site.onPoll = (r) => {
+      if (r.polls >= 2) Object.assign(r, { state: "unknown", tx_hash: HASH });
+    };
+    const h = await grant(client());
+    expect(await h.settled).toEqual({ status: "sent", address: OWNER, hash: HASH });
+  });
+
+  it("a rejection after the site reported sending: never nothing sent", async () => {
+    site.owner = OWNER;
+    site.onPoll = (r) => {
+      if (r.polls === 2) r.state = "sending";
+      if (r.polls >= 3) r.state = "rejected";
+    };
+    const h = await grant(client());
+    expect(await h.settled).toMatchObject({ status: "rejected", sending: true });
+  });
+
   it("an expired link: nothing sent", async () => {
     site.owner = OWNER;
     site.onPoll = (r) => {

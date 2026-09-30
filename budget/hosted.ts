@@ -109,7 +109,7 @@ export class HostedRefusal extends Error {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const same = (a?: string | null, b?: string | null) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 type Poll = { id: string; token: string; kind: HostedRecord["kind"]; title: string; expected?: string; localDeadline: number; siteExpiry: number; resolve: (o: OwnerActionOutcome) => void };
-const FINAL_STATES = new Set(["linked", "confirmed", "failed", "rejected", "expired", "cancelled"]);
+const FINAL_STATES = new Set(["linked", "confirmed", "failed", "rejected", "expired", "cancelled", "unknown"]);
 
 export class HostedApprovals {
   private readonly s: HostedSettings;
@@ -363,6 +363,10 @@ export class HostedApprovals {
           return end("expired", reason || "the approval link expired on superstables.com without a completed approval", tx && walletAsked);
         case "cancelled":
           return end("rejected", reason || "the request was cancelled on superstables.com before the wallet was asked; nothing was sent", tx && walletAsked);
+        case "unknown":
+          // the site cannot tell whether the wallet sent it: never "nothing sent"; the command reads the chain
+          if (hash && tx) return done({ status: "sent", address: owner ?? p.expected!, hash });
+          return end("expired", reason || "superstables.com cannot tell whether the wallet sent the transaction; the chain must be checked", true);
       }
       if (v.final === true) return end("rejected", `superstables.com ended the request in state "${siteText(state, 40)}"${reason ? `: ${reason}` : ""}`, tx);
     }

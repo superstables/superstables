@@ -40,7 +40,7 @@ const json = (res: ServerResponse, status: number, body: unknown) => {
   res.end(JSON.stringify(body));
 };
 
-const FINAL = new Set(["linked", "confirmed", "failed", "rejected", "expired", "cancelled"]);
+const FINAL = new Set(["linked", "confirmed", "failed", "rejected", "expired", "cancelled", "unknown"]);
 
 export async function startFakeSite(): Promise<FakeSite> {
   let n = 0;
