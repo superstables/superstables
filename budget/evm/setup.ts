@@ -6,14 +6,20 @@ import "./cli-guard.mjs";
 //      nothing is sent). With --owner-key-file <path> the owner address comes from that key instead (tests and automation).
 //   3. This chain's public file: owner and agent addresses, no secret. Refuses (exit 3) if it already names another agent.
 // Then it prints what to do next: fund the owner, give the agent gas, doctor, grant. Never prints a key.
-// npx tsx budget/evm/setup.ts [--chain <name>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
+//
+// Setup is a trusted step. The signature proves the connected wallet controls its address, not that it is the intended
+// owner: whoever completes setup becomes the owner on record. The owner runs it, or watches it run; an agent must not
+// complete it. Once recorded, the owner never changes silently: --new-owner replaces it explicitly, and only while no
+// budget is live (allowance 0).
+// npx tsx budget/evm/setup.ts [--chain <name>] [--new-owner] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 import { EVM_CHAINS } from "./chains.mjs";
-import { SYM, CFG, GAS, emit, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, agentEnv, publicEnv, writePublic, need, newKey, ownerKeyEnv, usdcBalance, nativeBalance, usdc, gasFmt } from "./lib.ts";
+import { SYM, CFG, GAS, emit, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, agentEnv, publicEnv, writePublic, need, newKey, ownerKeyEnv, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf } from "./lib.ts";
 import { askConnect, endUnapproved, closeOwnerPage, chainFlag } from "./owner.ts";
+import { NEW_OWNER } from "../owner-page.ts";
 
 const d = (EVM_CHAINS as Record<string, any>)[CFG.key].doctor;
 const same = (x?: string, y?: string) => !!x && !!y && x.toLowerCase() === y.toLowerCase();
@@ -38,14 +44,29 @@ if (p.B4_AGENT_ADDRESS && !same(p.B4_AGENT_ADDRESS, agentAddr)) {
 }
 
 // 2. the owner address
+const recorded = p.B4_OWNER_ADDRESS && same(p.B4_AGENT_ADDRESS, agentAddr) ? (p.B4_OWNER_ADDRESS as Address) : undefined;
+if (NEW_OWNER && recorded) {
+  // never move the owner while the agent can still spend from the old one
+  const live = await allowanceOf(recorded, agentAddr).catch(() => null);
+  if (live === null || live > 0n) {
+    const reason = live === null ? `could not read the allowance of the recorded owner ${recorded}; the owner is not replaced` : `a budget is live: the recorded owner ${recorded} still allows the agent ${usdc(live)} ${SYM}`;
+    console.log(`REFUSED: ${reason}. Nothing was changed.`);
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: live === null ? `superstables budget doctor --rail evm${chainFlag}, then setup --new-owner again` : `revoke first (superstables budget revoke --rail evm${chainFlag}, approved by ${recorded}), then setup --new-owner` }));
+  }
+  console.log(`replacing the recorded owner ${recorded} (no budget is live): the new owner connects on the page`);
+}
 let ownerAddr: Address;
 let finish: ((v: { ok: boolean; message: string }) => void) | null = null;
 if (OWNER_KEY_FILE) {
   ownerAddr = privateKeyToAccount(need(ownerKeyEnv(), "B4_OWNER_KEY", OWNER_KEY_FILE) as Hex).address;
   console.log(`owner address from --owner-key-file: ${ownerAddr}`);
-} else if (p.B4_OWNER_ADDRESS && same(p.B4_AGENT_ADDRESS, agentAddr)) {
-  ownerAddr = p.B4_OWNER_ADDRESS as Address;
-  console.log(`${PUBLIC_ENV} already records owner ${ownerAddr} for this agent; not asking again (move the file away to connect another wallet)`);
+  if (recorded && !same(recorded, ownerAddr) && !NEW_OWNER) {
+    console.log(`REFUSED: ${PUBLIC_ENV} records owner ${recorded}, not ${ownerAddr}. Nothing was changed.`);
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason: `another owner (${recorded}) is recorded`, owner: recorded, next: `superstables budget setup --rail evm${chainFlag} --new-owner replaces it (refused while a budget is live)` }));
+  }
+} else if (recorded && !NEW_OWNER) {
+  ownerAddr = recorded;
+  console.log(`${PUBLIC_ENV} already records owner ${ownerAddr} for this agent; not asking again. If this isn't your wallet, stop: superstables budget setup --rail evm${chainFlag} --new-owner replaces it`);
 } else {
   const { handle, outcome } = await askConnect("setup", {
     title: "Connect your wallet",
@@ -60,7 +81,7 @@ if (OWNER_KEY_FILE) {
       "Signing the message proves control of this address. It grants no spending permission and has no network fee.",
       "Your signing key stays in your wallet. You will review and approve any later budget grant separately.",
     ],
-  }, `Superstables budget: record this wallet as the owner of agent ${agentAddr} on ${CFG.label} (testnet).`);
+  }, `Superstables budget: record this wallet as the owner of agent ${agentAddr} on ${CFG.label} (testnet).`, NEW_OWNER ? recorded : undefined);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent: agentAddr });
   if (outcome.status !== "connected") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   ownerAddr = outcome.address as Address;
@@ -73,8 +94,10 @@ if (same(ownerAddr, agentAddr)) {
   process.exit(emit("setup", 3, { state: "refused_precheck", reason: "the owner address is the agent's address", next: "connect the owner's own wallet" }));
 }
 
-// 3. the public file
-writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr });
+// 3. the public file (a new owner starts with no budget terms)
+const replaced = recorded && !same(recorded, ownerAddr) ? recorded : undefined;
+writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr }, replaced ? ["B4_CAP", "B4_SET_AT", "B4_EXPIRY", "B4_REVOKED_AT"] : []);
+if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${ownerAddr}`);
 console.log(`${CFG.label}: wrote ${PUBLIC_ENV} (no secret).`);
 const [oTok, oGas, aGas] = [await usdcBalance(ownerAddr), await nativeBalance(ownerAddr), await nativeBalance(agentAddr)];
 console.log(`owner ${ownerAddr}: ${SYM} ${usdc(oTok)}, ${GAS.symbol} ${gasFmt(oGas)}`);
@@ -90,4 +113,4 @@ console.log("\nNext:");
 steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
 finish?.({ ok: true, message: `Done. ${ownerAddr} is recorded as the owner of agent ${agentAddr}. You can close this page. Next: fund your wallet with test ${SYM}, give the agent gas, then grant a budget (the terminal lists the commands).` });
 await closeOwnerPage();
-process.exit(emit("setup", 0, { state: "ok", owner: ownerAddr, agent: agentAddr, publicFile: PUBLIC_ENV, agentKeyFile: AGENT_ENV, steps, next: `fund the owner, then superstables budget fund-agent --rail evm${chainFlag}, then superstables budget doctor --rail evm${chainFlag}` }));
+process.exit(emit("setup", 0, { state: "ok", owner: ownerAddr, ...(replaced ? { replacedOwner: replaced } : {}), agent: agentAddr, publicFile: PUBLIC_ENV, agentKeyFile: AGENT_ENV, steps, next: `fund the owner, then superstables budget fund-agent --rail evm${chainFlag}, then superstables budget doctor --rail evm${chainFlag}` }));

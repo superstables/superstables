@@ -29,8 +29,10 @@ export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
 export type Sent = { hash: Hex; status: "success" | "reverted"; blockNumber: bigint; logs: any[]; problems: string[] };
 /**
  * Read a transaction the page reported, from the chain. Every difference from the plan is a problem: another sender,
- * another target, changed data (a wallet that let the owner edit the spending cap), another value, or a transaction
- * mined before this request started. Null when the chain never shows the hash (replaced, dropped or never sent).
+ * another target, changed data (a wallet that let the owner edit the spending cap), another value, another chain, or a
+ * transaction mined before this request started. Any problem makes the command a mismatch (exit 3, next step revoke),
+ * even when the state read afterwards looks right: an edited allowance can be spent down to the planned cap before the
+ * readback. `status` says whether it reverted. Null when the chain never shows the hash (replaced, dropped or never sent).
  */
 export async function readSent(hash: Hex, want: { from: Address; to: Address; data?: Hex; value?: bigint; afterBlock: bigint }, waitMs = 120_000): Promise<Sent | null> {
   const until = Date.now() + waitMs;
@@ -50,8 +52,8 @@ export async function readSent(hash: Hex, want: { from: Address; to: Address; da
   if (!same(t.to, want.to)) problems.push(`it was sent to ${t.to}, not ${want.to}`);
   if (!same(t.input, want.data ?? "0x")) problems.push("the wallet changed the transaction data (for example the spending cap)");
   if (BigInt(t.value) !== (want.value ?? 0n)) problems.push(`it sent a value of ${t.value}, not ${want.value ?? 0n}`);
+  if (t.chainId !== undefined && t.chainId !== null && Number(t.chainId) !== CFG.chainId) problems.push(`it was signed for chain ${t.chainId}, not ${CFG.label} (${CFG.chainId})`);
   if (BigInt(r.blockNumber) <= want.afterBlock) problems.push(`it was mined in block ${r.blockNumber}, before this request started (block ${want.afterBlock})`);
-  if (r.status !== "success") problems.push("it reverted on chain");
   await sleep(2500); // public RPC nodes lag a moment behind a block they just served
   return { hash, status: r.status, blockNumber: BigInt(r.blockNumber), logs: r.logs, problems };
 }
@@ -131,9 +133,16 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     await closeOwnerPage();
     process.exit(emit(command, 5, { state: "unknown", tx: outcome.hash, reason: "the wallet reported a transaction the chain does not show (replaced, dropped or still pending)", next: `superstables budget status --rail evm${chainFlag}` }));
   }
-  if (sent.problems.length) console.log(`note: ${sent.problems.join("; ")}`);
   const events = approvalsIn(sent.logs, owner, agent);
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, Approval events: ${events.map((v) => usdc(v)).join(", ") || "none"} ${SYM}`);
+  if (sent.status === "success" && sent.problems.length) {
+    const reason = `the transaction on chain is not the one planned: ${sent.problems.join("; ")}`;
+    console.log(`MISMATCH: ${reason}`);
+    const now = await allowanceOf(owner, agent).catch(() => null);
+    handle.finish({ ok: false, message: `The chain shows a different transaction than planned (${sent.problems.join("; ")}). Check the allowance and revoke again: ${REVOKE_HINT}`, hash: sent.hash });
+    await closeOwnerPage();
+    process.exit(emit(command, 3, { state: "mismatch", tx: sent.hash, allowance: now === null ? null : usdc(now), reason, next: `revoke again (superstables budget revoke --rail evm${chainFlag}) and check superstables budget status --rail evm${chainFlag}` }));
+  }
   const after = await readUntil(() => allowanceOf(owner, agent), (v) => v === 0n);
   if (sent.status !== "success" || after !== 0n) {
     handle.finish({ ok: false, message: `The chain still shows an allowance of ${usdc(after)} ${SYM}. Run the revoke again.`, hash: sent.hash });
@@ -178,11 +187,12 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
     process.exit(emit(command, 5, { state: "unknown", tx: outcome.hash, reason: "the wallet reported a transaction the chain does not show", next: "superstables budget doctor --rail evm: read the agent's gas" }));
   }
   if (sent.problems.length || sent.status !== "success") {
-    const why = sent.problems.join("; ") || "it reverted on chain";
-    console.log(`FAILED: ${why}`);
+    const why = [...sent.problems, ...(sent.status !== "success" ? ["it reverted on chain"] : [])].join("; ");
+    const mismatch = sent.status === "success";
+    console.log(`${mismatch ? "MISMATCH" : "FAILED"}: ${why}`);
     handle.finish({ ok: false, message: `The chain shows something other than planned: ${why}.`, hash: sent.hash });
     await closeOwnerPage();
-    process.exit(emit(command, 1, { state: "failed", tx: sent.hash, reason: why, next: "superstables budget doctor --rail evm" }));
+    process.exit(emit(command, mismatch ? 3 : 1, { state: mismatch ? "mismatch" : "failed", tx: sent.hash, reason: mismatch ? `the transaction on chain is not the one planned: ${why}` : why, next: "check wallet activity, then superstables budget doctor --rail evm" }));
   }
   handle.finish({ ok: true, message: `Done. Your agent received ${amt} ${GAS.symbol}. You can close this page.`, hash: sent.hash });
   await closeOwnerPage();

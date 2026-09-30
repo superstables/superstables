@@ -6,26 +6,32 @@
 //      --owner-key-file <path> the address comes from that key instead (tests and automation only).
 //   3. The public file: owner and agent addresses, no secret.
 // Then it prints the next steps: fund the owner (devnet SOL and USDC), fund-agent, doctor, grant. Never prints a key.
-// npx tsx budget/solana/setup.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
+//
+// Setup is a trusted step: the signature proves control of the connected address, not that it is the intended owner, so
+// the owner runs it or watches it run, and an agent must not complete it. A recorded owner never changes silently:
+// --new-owner replaces it, refused while the agent is the delegate of the recorded owner's USDC account.
+// npx tsx budget/solana/setup.ts [--new-owner] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, connection, formatUnits, loadOwner, parseEnvFile, parseStrict, readPublic, retryRead, writePublic } from "./lib.mjs";
-import { getAssociatedTokenAddressSync, getAccount } from "./token.mjs";
+import { getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { askConnect, closeOwnerPage, emit, endUnapproved, sol } from "./owner.ts";
 
-const USAGE = `Usage: npx tsx budget/solana/setup.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
+const USAGE = `Usage: npx tsx budget/solana/setup.ts [--new-owner] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
 Create the agent key file (mode 600, never overwritten), let the owner connect their own wallet on the owner page, and write
 the public address file. No owner key is created. Prints addresses only, never a key.
 
+  --new-owner              replace the recorded owner (refused while a budget is live on it)
   --timeout <s>            how long the approval link stays open (default 600)
   --no-open                do not open the link in the default browser
   --owner-key-file <path>  tests and automation only: record this key file's address instead of asking the wallet
   -h, --help               show this help`;
-parseStrict(process.argv.slice(2), { timeout: "value", "no-open": "bool", "owner-key-file": "value" }, { usage: USAGE });
+const cli = parseStrict(process.argv.slice(2), { "new-owner": "bool", timeout: "value", "no-open": "bool", "owner-key-file": "value" }, { usage: USAGE });
+const newOwner = cli["new-owner"] === true;
 const result = (exit: number, o: Record<string, unknown>) => emit("setup", exit, o);
 
 // 1. the agent key
@@ -49,15 +55,29 @@ if (pub.agent && pub.agent.toBase58() !== agent) {
 }
 
 // 2. the owner address
+const bound = existing.SOLANA_OWNER_ADDRESS;
+const recorded: string | undefined = bound ?? (pub.owner && pub.agent?.toBase58() === agent ? pub.owner.toBase58() : undefined);
+if (newOwner && recorded) {
+  // never move the owner while the agent is still the delegate of the recorded owner's USDC account
+  const { PublicKey: Pk } = await import("@solana/web3.js");
+  const acc = await retryRead(() => getAccountOrNull(connection(), getAssociatedTokenAddressSync(USDC_MINT, new Pk(recorded)))).then((a) => ({ ok: true as const, a }), (e) => ({ ok: false as const, e }));
+  const live = !acc.ok ? null : Boolean(acc.a?.delegate && acc.a.delegate.toBase58() === agent && acc.a.delegatedAmount > 0n);
+  if (live !== false) {
+    const reason = live === null ? `could not read the USDC account of the recorded owner ${recorded}; the owner is not replaced` : `a budget is live: the agent is the delegate of ${recorded}'s USDC account with ${formatUnits(acc.ok ? acc.a!.delegatedAmount : 0n)} USDC left`;
+    console.log(`REFUSED: ${reason}. Nothing was changed.`);
+    process.exit(result(3, { state: "refused_precheck", reason, owner: recorded, next: live === null ? "superstables budget doctor --rail solana, then setup --new-owner again" : `revoke first (superstables budget revoke --rail solana, approved by ${recorded}), then setup --new-owner` }));
+  }
+  console.log(`replacing the recorded owner ${recorded} (no budget is live): the new owner connects on the page`);
+}
 let owner: string;
 let finish: ((v: { ok: boolean; message: string }) => void) | null = null;
 if (OWNER_KEY_FILE) {
   checkOwnerKeyFile(OWNER_KEY_FILE);
   owner = loadOwner(OWNER_KEY_FILE).keypair.publicKey.toBase58();
   console.log(`owner address from --owner-key-file: ${owner}`);
-} else if (pub.owner && pub.agent?.toBase58() === agent) {
+} else if (pub.owner && pub.agent?.toBase58() === agent && !newOwner) {
   owner = pub.owner.toBase58();
-  console.log(`${PUBLIC_PATH} already records owner ${owner} for this agent; not asking again (move the file away to connect another wallet)`);
+  console.log(`${PUBLIC_PATH} already records owner ${owner} for this agent; not asking again. If this isn't your wallet, stop: superstables budget setup --rail solana --new-owner replaces it`);
 } else {
   const { handle, outcome } = await askConnect("setup", {
     title: "Connect your wallet",
@@ -72,25 +92,26 @@ if (OWNER_KEY_FILE) {
       "Signing the message proves control of this address. It grants no spending permission and has no network fee.",
       "Your signing key stays in your wallet. You will review and approve any later budget grant separately.",
     ],
-  }, `Superstables budget: record this wallet as the owner of agent ${agent} on Solana devnet (testnet).`);
+  }, `Superstables budget: record this wallet as the owner of agent ${agent} on Solana devnet (testnet).`, newOwner ? recorded : undefined);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent });
   if (outcome.status !== "connected") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   owner = outcome.address;
   finish = handle.finish;
   console.log(`the owner connected ${owner} and signed the sign-in message`);
 }
-const bound = existing.SOLANA_OWNER_ADDRESS;
-if (owner === agent || (bound && bound !== owner)) {
+if (owner === agent || (bound && bound !== owner && !newOwner)) {
   const reason = owner === agent ? "the owner address is the agent's address" : `the agent key file is bound to another owner (${bound})`;
   finish?.({ ok: false, message: owner === agent ? "That is the agent's own address. Connect your own wallet instead." : `This agent is already bound to another owner (${bound}). Nothing was changed.` });
   await closeOwnerPage();
-  process.exit(result(3, { state: "refused_precheck", reason, next: owner === agent ? "connect the owner's own wallet" : `move ${AGENT_KEY_PATH} away if you mean to start over` }));
+  process.exit(result(3, { state: "refused_precheck", reason, ...(owner === agent ? {} : { owner: bound }), next: owner === agent ? "connect the owner's own wallet" : "superstables budget setup --rail solana --new-owner replaces it (refused while a budget is live)" }));
 }
+const replaced = recorded && recorded !== owner ? recorded : undefined;
+if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${owner}`);
 
 // 3. the owner's public address, in the agent file (buy reads it) and the public file
-if (!bound) {
-  const text = readFileSync(AGENT_KEY_PATH, "utf8");
-  writeFileSync(AGENT_KEY_PATH, `${text.endsWith("\n") ? text : `${text}\n`}SOLANA_OWNER_ADDRESS=${owner}\n`, { mode: 0o600 });
+if (bound !== owner) {
+  const lines = readFileSync(AGENT_KEY_PATH, "utf8").split("\n").filter((l) => l !== "" && !l.startsWith("SOLANA_OWNER_ADDRESS="));
+  writeFileSync(AGENT_KEY_PATH, `${[...lines, `SOLANA_OWNER_ADDRESS=${owner}`].join("\n")}\n`, { mode: 0o600 });
   chmodSync(AGENT_KEY_PATH, 0o600);
 }
 writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent });
@@ -114,4 +135,4 @@ console.log("\nNext:");
 steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
 finish?.({ ok: true, message: `Done. ${owner} is recorded as the owner of agent ${agent}. You can close this page. Next: fund your wallet with devnet SOL and USDC, give the agent SOL for fees, then grant a budget (the terminal lists the commands).` });
 await closeOwnerPage();
-process.exit(result(0, { state: "ok", owner, agent, publicFile: PUBLIC_PATH, agentKeyFile: AGENT_KEY_PATH, steps, next: "fund the owner, then superstables budget fund-agent --rail solana, then superstables budget doctor --rail solana" }));
+process.exit(result(0, { state: "ok", owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_PATH, agentKeyFile: AGENT_KEY_PATH, steps, next: "fund the owner, then superstables budget fund-agent --rail solana, then superstables budget doctor --rail solana" }));

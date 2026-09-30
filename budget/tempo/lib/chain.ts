@@ -45,6 +45,8 @@ export type ChainReceipt = {
   feePayer?: Address
   from?: Address
   transfers: { token: Address; from: Address; to: Address; value: bigint }[]
+  /** TIP-20 TransferWithMemo events: the memo binds a payment to one purchase. */
+  memos: { token: Address; from: Address; to: Address; memo: Hex }[]
 }
 
 /** Receipt or null if the chain has none (yet). Throws only when the node cannot be reached. */
@@ -64,6 +66,14 @@ export async function getReceipt(hash: string): Promise<ChainReceipt | null> {
         from: ('0x' + l.topics[1].slice(26)) as Address,
         to: ('0x' + l.topics[2].slice(26)) as Address,
         value: BigInt(l.data.slice(0, 66)),
+      })),
+    memos: (r.logs ?? [])
+      .filter((l: any) => l.topics?.[0] === TRANSFER_WITH_MEMO_TOPIC && l.topics.length === 4)
+      .map((l: any) => ({
+        token: l.address,
+        from: ('0x' + l.topics[1].slice(26)) as Address,
+        to: ('0x' + l.topics[2].slice(26)) as Address,
+        memo: l.topics[3] as Hex,
       })),
   }
 }

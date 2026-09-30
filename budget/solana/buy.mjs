@@ -365,14 +365,23 @@ if (paid) {
 }
 const httpStatus = paid?.res.status ?? null;
 const deliveredHttp = paid ? paid.res.status >= 200 && paid.res.status < 300 : null;
-rec = updateOp(opId, { httpStatus, delivered: deliveredHttp, tx: settlementSig ?? rec.tx, sellerNote: responseNote ?? undefined }, "seller answered");
+// The seller's settlement id is a claim, kept apart from our own tx: findOwnTx accepts it only if that
+// transaction carries the agent's signature for this operation.
+rec = updateOp(opId, { httpStatus, delivered: deliveredHttp, sellerTx: settlementSig ?? undefined, sellerNote: responseNote ?? undefined }, "seller answered");
 
 // --- 7. read the chain: our own transaction decides, not the seller's response -------------------
 console.log("\nVerifying against chain (our own transaction, found by the agent signature)...");
 let own = null;
+let readError = null; // the last chain read failed: nothing below may claim "not on chain"
 const attempts = deliveredHttp ? 10 : 3;
 for (let i = 0; i < attempts && !own; i++) {
-  own = await findOwnTx(conn, rec).catch(() => null);
+  try {
+    own = await findOwnTx(conn, rec);
+    readError = null;
+  } catch (e) {
+    readError = e?.message ?? String(e);
+    console.log(`chain read failed (${String(readError).slice(0, 160)}); trying again`);
+  }
   if (!own) await sleep(3000);
 }
 
@@ -402,7 +411,7 @@ if (own && own.err) {
 // Not found. If the seller did not accept the payment, ask a node what happens if our transaction
 // were submitted now (read-only simulation). A program error means the chain refuses it.
 let sim = null;
-if (!deliveredHttp) {
+if (!deliveredHttp && !readError) {
   sim = await conn
     .simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true })
     .catch((e) => ({ value: { err: `simulation unavailable: ${e?.message ?? e}`, logs: [] } }));
@@ -414,6 +423,6 @@ if (sim?.value?.err && !String(sim.value.err).startsWith("simulation unavailable
   console.log("   Our transaction was not found on chain.");
   finish("refused_chain", EXIT.FAILED, { delivered: false, chainError: sim.value.err, next: `run reconcile before reusing this --op: node budget/solana/reconcile.mjs --op ${opId}` });
 }
-updateOp(opId, { state: "unknown", delivered: deliveredHttp }, "own transaction not found yet");
-console.log("\n=> Our transaction was NOT found on chain yet. Outcome unknown; it may still land. Do not pay again.");
-finish("unknown", EXIT.UNCERTAIN, { next: `node budget/solana/reconcile.mjs --op ${opId}` });
+updateOp(opId, { state: "unknown", delivered: deliveredHttp }, readError ? `could not read the chain: ${readError}` : "own transaction not found yet");
+console.log(readError ? `\n=> Could not read the chain (${readError}). Outcome unknown; it may land. Do not pay again.` : "\n=> Our transaction was NOT found on chain yet. Outcome unknown; it may still land. Do not pay again.");
+finish("unknown", EXIT.UNCERTAIN, { next: `node budget/solana/reconcile.mjs --op ${opId}`, ...(readError ? { reason: `could not read the chain: ${String(readError).slice(0, 160)}` } : {}) });

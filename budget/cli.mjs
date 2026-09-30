@@ -10,13 +10,15 @@
 // Detached owner approvals (approvals.mjs): when stdout is not a terminal (an agent's shell tool, which shows output only
 // when the command exits), or with --detach, an owner command starts itself again in the background, returns as soon
 // as the link exists with `state: "waiting_owner"` and an approval id, and the caller polls `superstables budget wait --id`.
-// In a terminal, or with --wait, it blocks as before. One owner approval at a time per rail and chain.
+// In a terminal, or with --wait, it blocks as before. One owner approval at a time per rail and chain: blocking commands
+// (and --owner-key-file ... --yes) take the same lock as detached ones. Every rail script of an owner command runs in its
+// own process group, recorded with the approval, so the page's process is tracked and stopped with it.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { approvalsDir, opsDir } from "./paths.mjs";
-import { WORKER_ENV, claim, findPending, forget, isApprovalId, logFile, pageWords, readApproval, recordFinal, recordLink, replacePending, startDetached, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { approvalsDir, opsDir, publicFile } from "./paths.mjs";
+import { WORKER_ENV, adoptWorker, claim, findPending, forget, isApprovalId, logFile, pageWords, readApproval, recordFinal, recordLink, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -50,8 +52,8 @@ const OWNER_FLAGS = { timeout: "v", "no-open": "b", "owner-key-file": "v", wait:
 const OWNER_HELP = "  The owner approves in their own wallet on a page this command opens on 127.0.0.1 (link printed as an APPROVE line and on stderr).\n  --timeout SECONDS (default 600) is how long the link stays open.\n  Not in a terminal (an agent), or with --detach: returns when a link is available with state waiting_owner and an approval id; the page waits in the\n  background. Then run superstables budget wait --id ID until the state is final. In a terminal, or with --wait: blocks, and opens the\n  link in the default browser unless --no-open. Keep one owner command active per rail and chain. Wait for a final result before\n  starting another. Use --replace only at the owner's request, after cancelling any open wallet prompt.\n  Unattended tests only: --owner-key-file PATH --yes signs with that key file instead.";
 const COMMANDS = {
   setup: {
-    flags: { agent: "v", ...OWNER_FLAGS }, required: [],
-    help: "superstables budget setup --rail R [--chain C] [--agent LABEL] [--timeout S] [--no-open]\n  Creates the agent key file if it is missing (never overwrites it), asks the owner to connect their own wallet and sign a free\n  sign-in message (no transaction), and writes the public file with both addresses. Prints the next steps. No owner key is created.\n  tempo: also tops up the owner from the Moderato faucet if it holds less than 1 pathUSD. --agent LABEL adds a new agent key for\n  the next budget (a revoked or expired key can never be granted again); it needs no page.\n  Unattended tests only: --owner-key-file PATH records that key's address instead of asking the wallet.",
+    flags: { agent: "v", "new-owner": "b", ...OWNER_FLAGS }, required: [],
+    help: "superstables budget setup --rail R [--chain C] [--agent LABEL] [--new-owner] [--timeout S] [--no-open]\n  Creates the agent key file if it is missing (never overwrites it), asks the owner to connect their own wallet and sign a free\n  sign-in message (no transaction), and writes the public file with both addresses. Prints the next steps. No owner key is created.\n  A trusted step: whoever connects becomes the owner on record. The owner runs it, or watches it run; an agent must not complete it.\n  --new-owner replaces a recorded owner with the wallet that connects; refused while a budget is live (revoke first).\n  tempo: also tops up the owner from the Moderato faucet if it holds less than 1 pathUSD. --agent LABEL adds a new agent key for\n  the next budget (a revoked or expired key can never be granted again); it needs no page.\n  Unattended tests only: --owner-key-file PATH records that key's address instead of asking the wallet.",
   },
   "fund-agent": {
     flags: { amount: "v", yes: "b", ...OWNER_FLAGS }, required: [],
@@ -128,6 +130,10 @@ const log = (...a) => process.stderr.write(a.join(" ") + "\n");
 // A background worker for a detached owner approval (approvals.mjs) has its id in the environment.
 const workerRecord = readApproval(process.env[WORKER_ENV]);
 const WORKER_ID = workerRecord && !workerRecord.final ? workerRecord.id : undefined;
+if (WORKER_ID) adoptWorker(WORKER_ID);
+// The approval this process holds the chain for: the worker's, or a blocking owner command's own (ownerGate).
+let APPROVAL_ID = WORKER_ID;
+let FOREGROUND = false;
 
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 // A worker also stores it (and the exit code) in its approval record, for every later `wait`.
@@ -136,7 +142,8 @@ function emit(code, fields) {
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   const out = { ok: code === 0 };
   for (const k of order) if (fields[k] !== undefined) out[k] = k === "reason" ? clean(fields[k]) : fields[k];
-  if (WORKER_ID) recordFinal(WORKER_ID, code, out);
+  if (APPROVAL_ID) recordFinal(APPROVAL_ID, code, out); // frees the chain
+  if (APPROVAL_ID && FOREGROUND) forget(APPROVAL_ID); // a blocking command's record served only as the lock's holder
   writeSync(1, "RESULT " + JSON.stringify(out) + "\n");
   process.exit(code);
 }
@@ -209,6 +216,7 @@ function parse(argv) {
   if (f.agent !== undefined) {
     if (f.rail !== "tempo") badInput(ctx, "--agent is for tempo only (it picks the access key)");
     if (cmd === "setup" && (f["owner-key-file"] !== undefined)) badInput(ctx, "setup --agent adds a key for an owner already recorded: it takes no --owner-key-file");
+    if (cmd === "setup" && f["new-owner"]) badInput(ctx, "setup --agent adds a key for the recorded owner; --new-owner replaces the owner: run them separately");
     if (!/^[A-Za-z0-9]{1,32}$/.test(f.agent)) badInput(ctx, "--agent must be 1 to 32 letters or digits");
   }
   if (f.period !== undefined && !/^[1-9]\d*$/.test(f.period)) badInput(ctx, "--period must be a whole number of seconds");
@@ -253,7 +261,7 @@ function railCommand(verb, f, extra = {}) {
       case "read": return T("readBudget", agent);
       case "grant": return T("setBudget", ["--amount", f.amount, "--expiry-seconds", String(extra.expirySeconds), ...opt("period-seconds", f.period), ...opt("sellers", f.sellers), ...agent, ...ownerOpts(f)]);
       case "revoke": return T("revokeBudget", [...agent, ...ownerOpts(f)]);
-      case "setup": return T("setup", [...agent, ...ownerOpts(f)]);
+      case "setup": return T("setup", [...agent, ...(f["new-owner"] ? ["--new-owner"] : []), ...ownerOpts(f)]);
     }
   }
   if (f.rail === "solana") {
@@ -266,7 +274,7 @@ function railCommand(verb, f, extra = {}) {
       case "read": return S("readBudget", []);
       case "grant": return O("setBudget", ["--amount", f.amount]);
       case "revoke": return O("revokeBudget", []);
-      case "setup": return O("setup", []);
+      case "setup": return O("setup", f["new-owner"] ? ["--new-owner"] : []);
       case "fund-agent": return O("fundAgent", opt("amount", f.amount));
     }
   }
@@ -284,7 +292,7 @@ function evmCommand(verb, f, extra = {}) {
     case "grant": return E("setBudget", ["--cap", f.amount, ...ownerOpts(f)]);
     case "revoke": return E("revoke", ownerOpts(f));
     case "recover": return E("recover", [...opt("op", f.op), ...(extra.plan ? ["--plan"] : ownerOpts(f))]);
-    case "setup": return E("setup", ownerOpts(f));
+    case "setup": return E("setup", [...(f["new-owner"] ? ["--new-owner"] : []), ...ownerOpts(f)]);
     case "fund-agent": return E("fundAgent", [...opt("amount", f.amount), ...ownerOpts(f)]);
   }
 }
@@ -304,15 +312,21 @@ function passApproval(line) {
   let approve;
   try { approve = JSON.parse(line.slice(8)); } catch { return; }
   approvalUrl = approve.url;
-  if (WORKER_ID) recordLink(WORKER_ID, approve);
+  if (APPROVAL_ID) recordLink(APPROVAL_ID, approve);
   writeSync(1, line + "\n");
 }
 let currentChild;
+/** A signal stopped this command (wait past its deadline, --replace, Ctrl-C): after a link existed, the outcome is uncertain. */
+let interrupted = false;
 function run(spec) {
   return new Promise((resolve) => {
     if (spec.cmd === TSX && !existsSync(TSX)) { log(`superstables budget: dependencies are missing: run npm ci at the repo root (${REPO})`); return resolve({ code: 2, stdout: "", missing: true }); }
-    const p = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    // Under an owner approval the rail script gets its own process group (the page's process runs in it), recorded
+    // with the approval: liveness, the backstop, --replace and wait all act on that group, not on one pid.
+    const own = Boolean(APPROVAL_ID);
+    const p = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env: process.env, detached: own });
     currentChild = p;
+    if (own && p.pid) setRailGroup(APPROVAL_ID, p.pid);
     let stdout = "";
     let partial = "";
     p.stdout.on("data", (d) => {
@@ -323,7 +337,7 @@ function run(spec) {
       for (const l of lines) passApproval(l);
     });
     p.stderr.on("data", (d) => process.stderr.write(d));
-    for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => p.kill(s));
+    for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => { interrupted = true; try { if (own) process.kill(-p.pid, s); else p.kill(s); } catch {} });
     p.on("error", (e) => { log(`superstables budget: could not start ${spec.cmd}: ${e.message}`); resolve({ code: 2, stdout }); });
     p.on("close", (code, sig) => resolve({ code: code ?? (sig ? 130 : 1), stdout }));
   });
@@ -339,6 +353,18 @@ const decimal = (n) => { const s = n.toString().padStart(7, "0"); return (s.slic
 const ago = (iso) => (iso ? iso : "none");
 // The budget token's symbol: per chain on evm (chains.mjs), per rail elsewhere.
 const unitOf = (f) => (f.rail === "evm" ? EVM_CHAINS[f.chain].token.symbol : RAILS[f.rail].unit);
+
+// The owner address on record for this rail and chain (the public file setup wrote), or null.
+const OWNER_VAR = { evm: "B4_OWNER_ADDRESS", tempo: "OWNER_ADDRESS", solana: "SOLANA_OWNER_ADDRESS" };
+function recordedOwner(f) {
+  try {
+    const m = new RegExp(`^${OWNER_VAR[f.rail]}=(.*)$`, "m").exec(readFileSync(publicFile(f.rail, f.chain), "utf8"));
+    return m ? m[1].trim() : null;
+  } catch {
+    return null;
+  }
+}
+const ownerLine = (owner) => owner ? `  owner (recorded): ${owner}. If this isn't your wallet, stop: do not approve anything for this budget.` : "  owner (recorded): none yet (superstables budget setup, run by the owner or with the owner watching)";
 
 // Reads the budget through the rail's read script (no key file, no signature) and parses its text.
 async function readBudget(f) {
@@ -441,9 +467,11 @@ async function preflight({ f, ctx }) {
 }
 
 async function status({ f, ctx }) {
+  const owner = recordedOwner(f);
+  log(ownerLine(owner));
   const s = await readBudget(f);
-  if (!s.ok) return emit(s.code === 2 ? 2 : 1, { ...ctx, state: "failed", next: "check superstables budget doctor", reason: "could not read the budget" });
-  emit(0, { ...ctx, state: "ok", remaining: s.remaining, expiry: s.expiry, revoked: s.revoked, atRisk: s.atRisk, next: "none" });
+  if (!s.ok) return emit(s.code === 2 ? 2 : 1, { ...ctx, state: "failed", owner: owner ?? undefined, next: "check superstables budget doctor", reason: "could not read the budget" });
+  emit(0, { ...ctx, state: "ok", remaining: s.remaining, expiry: s.expiry, revoked: s.revoked, atRisk: s.atRisk, owner: owner ?? undefined, next: "none" });
 }
 
 async function buy({ f, ctx }) {
@@ -470,6 +498,8 @@ async function reconcile({ f, ctx }) {
 // not_revoked); those map to the CLI states. Without a RESULT line, the rail's exit code says how it ended.
 const OWNER_STATES = { set: "settled", revoked: "settled", ok: "settled", planned: "planned", refused_precheck: "refused_precheck", mismatch: "refused_precheck", not_revoked: "failed", failed: "failed", unknown: "unknown" };
 function ownerOutcome(code, rr = null) {
+  // stopped by a signal once the owner had a link: the wallet may have been asked, so never "failed"
+  if (interrupted && approvalUrl && !rr && code !== 0) return { code: 5, state: "unknown", reason: "the command was stopped after its approval link existed; the wallet may have been asked to send" };
   const c = [0, 2, 3, 5].includes(code) ? code : 1;
   const byCode = { 0: "settled", 2: "failed", 3: "refused_precheck", 5: "unknown" }[c] ?? "failed";
   const mapped = OWNER_STATES[rr?.state];
@@ -491,6 +521,7 @@ async function grant({ f, ctx }) {
   const now = await readBudget(f);
   const unit = unitOf(f);
   log(`\nPLAN grant on ${f.rail} (${f.chain}). ${waitLine(f)}`);
+  log(ownerLine(recordedOwner(f)));
   if (f.rail === "tempo") {
     const windows = f.period ? Math.ceil(secs / Number(f.period)) : 1;
     log(`  cap:       ${f.amount} ${unit}${f.period ? ` per ${f.period}s` : " in total (one-time)"} to access key ${f.agent ? `AGENT${f.agent}` : "primary agent"}`);
@@ -524,6 +555,7 @@ async function grant({ f, ctx }) {
 async function revoke({ f, ctx }) {
   const now = await readBudget(f);
   log(`\nPLAN revoke on ${f.rail} (${f.chain}). ${waitLine(f)}`);
+  log(ownerLine(recordedOwner(f)));
   if (now.ok) log(`  now: remaining ${ago(now.remaining)}, expiry ${ago(now.expiry)}, revoked ${now.revoked}, funds at risk ${ago(now.atRisk)}`);
   log({
     tempo: "  effect: AccountKeychain.revokeKey. From the block it lands in every payment by this key is refused, even one signed earlier. Open payment sessions are not covered.",
@@ -560,10 +592,13 @@ async function recover({ f, ctx }) {
 
 async function setup({ f, ctx }) {
   log(`\nsetup on ${f.rail} (${f.chain}): the agent key stays on this computer; the owner connects their own wallet. No owner key is created.`);
+  log("  setup is a trusted step: whoever connects becomes the owner on record. The owner runs it, or watches it run; an agent must not complete it.");
+  log(ownerLine(recordedOwner(f)));
   const r = await run(railCommand("setup", f));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
-  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, agent: rr?.agent, url: approvalUrl, next: ownerNext(o, rr, "read the output above"), reason: o.reason ?? `the setup script exited ${r.code}` });
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, owner: rr?.owner, agent: rr?.agent, url: approvalUrl, next: ownerNext(o, rr, "read the output above"), reason: o.reason ?? `the setup script exited ${r.code}` });
+  if (rr?.replacedOwner) log(`superstables budget: the recorded owner changed from ${rr.replacedOwner} to ${rr.owner}`);
   emit(0, { ...ctx, state: "ok", owner: rr?.owner, agent: rr?.agent, url: approvalUrl, next: rr?.next ?? "none" });
 }
 
@@ -593,18 +628,24 @@ function refusePending(ctx, pending) {
 
 // Runs before an owner command: one approval at a time on the chain, and, when detached, starts the worker and exits.
 async function ownerGate({ cmd, f, ctx }) {
-  const detach = f.detach === true || (!f.wait && !process.stdout.isTTY);
-  const id = detach ? newApprovalId() : undefined;
+  const detach = walletFlow(f) && (f.detach === true || (!f.wait && !process.stdout.isTTY));
+  const id = newApprovalId();
   const pending = findPending(f.rail, f.chain);
   if (pending) {
     if (!f.replace) return refusePending(ctx, pending);
-    const r = await replacePending(pending, id ?? "an approval in a terminal");
+    const r = await replacePending(pending, id);
     if (!r.ok) return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id}`, reason: r.reason });
-    log(`superstables budget: stopped approval ${pending.id}. Check wallet activity before approving its replacement`);
+    log(`superstables budget: cancelled approval ${pending.id} before its wallet was asked. Check wallet activity before approving its replacement`);
   }
-  if (!detach) return;
   const c = claim(f.rail, f.chain, id);
   if (!c.ok) return refusePending(ctx, c.pending);
+  if (!detach) {
+    // blocking: this process holds the chain until its RESULT (emit frees it)
+    startForeground({ id, command: cmd, rail: f.rail, chain: f.chain });
+    APPROVAL_ID = id;
+    FOREGROUND = true;
+    return;
+  }
   const argv = process.argv.slice(2).filter((a) => a !== "--detach" && a !== "--replace");
   const args = [fileURLToPath(import.meta.url), ...argv, "--wait", ...(f["no-open"] ? [] : ["--no-open"])];
   log(`\nsuperstables budget: the owner approval runs in the background (id ${id}); this command returns as soon as its link exists.`);
@@ -632,21 +673,30 @@ async function wait({ f }) {
     process.exit(r.code);
   }
   const rec = r.record;
-  log(`superstables budget: ${rec.id} (${rec.command}) has no final result: ${pageWords(r.page, rec.rail)}. Link: ${rec.url}`);
-  emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: waitNext(rec.id), reason: pageWords(r.page, rec.rail) });
+  const words = r.orphaned
+    ? `the background worker stopped, but its page or chain reads are still running (${pageWords(r.page, rec.rail)}); nothing is final until they stop. Do not start another owner command`
+    : pageWords(r.page, rec.rail);
+  log(`superstables budget: ${rec.id} (${rec.command}) has no final result: ${words}. Link: ${rec.url}`);
+  emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: waitNext(rec.id), reason: words });
 }
 
 // ---- main -------------------------------------------------------------------------------------------
 const HANDLERS = { setup, "fund-agent": fundAgent, doctor, preflight, status, buy, reconcile, grant, revoke, recover, wait };
 const parsed = parse(process.argv.slice(2));
 if (WORKER_ID) {
-  // the worker's backstop: nothing it runs may outlive the link, the send grace and the chain reads
+  // the worker's backstop: nothing it runs may outlive the link, the send grace and the chain reads. It stops the rail
+  // script's whole process group (the page's process too) before it records the result that frees the chain.
   const f = parsed.f;
-  setTimeout(() => {
-    try { currentChild?.kill("SIGKILL"); } catch {}
+  setTimeout(async () => {
+    const pgid = currentChild?.pid;
+    if (pgid && !(await stopGroup(pgid))) {
+      // no result while its page may still run: the chain stays held, and wait keeps trying to stop the group
+      log(`superstables budget: the approval ran past its deadline and process group ${pgid} would not stop; no result is recorded`);
+      process.exit(5);
+    }
     emit(5, { command: parsed.cmd, rail: f.rail, chain: f.chain, state: "unknown", url: approvalUrl, next: `superstables budget status --rail ${f.rail} --chain ${f.chain}: read whether it landed before running this again`, reason: "the background approval ran past its deadline and was stopped" });
   }, workerDeadlineMs(Number(f.timeout ?? 600))).unref();
-} else if (OWNER_COMMANDS.has(parsed.cmd) && walletFlow(parsed.f)) {
+} else if (OWNER_COMMANDS.has(parsed.cmd) && sendsNow(parsed.f)) {
   await ownerGate(parsed);
 }
 await HANDLERS[parsed.cmd](parsed);

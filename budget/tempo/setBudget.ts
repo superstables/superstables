@@ -28,7 +28,7 @@ import { Scopes } from 'viem/tempo'
 import type { Address, Hex } from 'viem'
 import { addressListCheck, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
 import { TOKEN_ADDRESS, TOKEN_LABEL, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, ownerAccount, toBaseUnits } from './lib/common.ts'
-import { chainHead, readKey, sleep } from './lib/chain.ts'
+import { chainHead, readKey, rpcRead, sleep } from './lib/chain.ts'
 import { OWNER_KEY_FILE, OWNER_TIMEOUT_MS, checkOwnerKeyFile } from '../owner-page.ts'
 import {
   KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, grantCalldata,
@@ -57,13 +57,13 @@ function refuse(reason: string, next: string, extra: Record<string, unknown> = {
   process.exit(result(3, { state: 'refused_precheck', reason, next, ...extra }))
 }
 
-async function readUntilMatches(owner: Address, agent: Address, plan: GrantPlan): Promise<{ key: FullKey; problems: string[] }> {
+async function readUntilMatches(owner: Address, agent: Address, plan: GrantPlan, authorizedAt?: number): Promise<{ key: FullKey; problems: string[] }> {
   let key = await readFullKey(owner, agent)
-  let problems = grantProblems(key, plan)
+  let problems = grantProblems(key, plan, authorizedAt)
   for (let i = 0; i < 8 && problems.length; i++) {
     await sleep(2000) // public RPC nodes lag a moment behind a block they just served
     key = await readFullKey(owner, agent)
-    problems = grantProblems(key, plan)
+    problems = grantProblems(key, plan, authorizedAt)
   }
   return { key, problems }
 }
@@ -100,6 +100,7 @@ async function main() {
 
   let hash: Hex
   let plan: GrantPlan
+  let authorizedAt: number | undefined // the grant block's timestamp: the first period window starts there
   let finish: ((v: { ok: boolean; message: string; hash?: string }) => void) | null = null
 
   if (OWNER_KEY_FILE) {
@@ -119,10 +120,12 @@ async function main() {
     hash = receipt.transactionHash
     console.log(`\ntx hash: ${hash}\nexplorer: ${explorerTx(hash)}\nstatus: ${receipt.status}`)
     if (receipt.status !== 'success') process.exit(result(1, { state: 'failed', tx: hash, reason: 'the authorizeKey transaction reverted', next: 'superstables budget status --rail tempo' }))
+    const block = await rpcRead('eth_getBlockByNumber', ['0x' + receipt.blockNumber.toString(16), false]).catch(() => null)
+    authorizedAt = block?.timestamp ? parseInt(block.timestamp, 16) : undefined
   } else {
     // Refuse here, before any link exists, whatever would make the owner's approval fail or pointless.
     if (expirySeconds * 1000 <= OWNER_TIMEOUT_MS + 60_000) refuse(`the key would expire (in ${expirySeconds}s) before the approval link does (${Math.round(OWNER_TIMEOUT_MS / 1000)}s)`, 'grant with a later --expiry, or a shorter --timeout')
-    const feeToken = await feeTokenOf(owner)
+    const feeToken = await feeTokenOf(owner).catch((err) => refuse(`could not read the owner's fee token from the FeeManager (${String(err?.message ?? err).slice(0, 120)})`, 'check the Moderato RPC (superstables budget doctor --rail tempo), then grant again'))
     const feeBalance = await tokenBalance(feeToken, owner)
     if (feeBalance < MIN_FEE_BALANCE) {
       refuse(`the owner ${owner} holds ${fromBaseUnits(feeBalance)} of its fee token ${feeToken}, less than the ${fromBaseUnits(MIN_FEE_BALANCE)} a grant's network fee may need`, 'fund the owner (npx tsx budget/tempo/setup.ts --fund-only uses the Moderato faucet), then grant again')
@@ -152,17 +155,27 @@ async function main() {
       process.exit(result(5, { state: 'unknown', tx: outcome.hash, reason: 'the wallet reported a transaction the chain does not show (replaced, dropped or still pending)', next: `superstables budget status --rail tempo${agentFlag(label)}: read the key before granting again` }))
     }
     hash = sent.hash
-    console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a'}`)
-    if (sent.problems.length) console.log(`note: ${sent.problems.join('; ')}`)
+    authorizedAt = sent.blockTimestamp
+    console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a (the sender)'}, fee token ${sent.feeToken ?? 'n/a'}`)
+    if (sent.feeToken && sent.feeToken.toLowerCase() !== feeToken.toLowerCase()) console.log(`note: the fee was paid in ${sent.feeToken}, not the expected ${feeToken}`)
     if (sent.status !== 'success') {
       handle.finish({ ok: false, message: 'The transaction reverted. No access key was granted by it, but a network fee may have been charged.', hash })
       await closeOwnerPage()
       process.exit(result(1, { state: 'failed', tx: hash, reason: 'the authorizeKey transaction reverted on chain', next: `superstables budget status --rail tempo${agentFlag(label)}` }))
     }
+    // Any difference from the plan is a mismatch, whatever the key reads afterwards: the wallet already sent it.
+    if (sent.problems.length) {
+      const reason = `the transaction on chain is not the one planned: ${sent.problems.join('; ')}`
+      console.log(`MISMATCH: ${reason}`)
+      handle.finish({ ok: false, message: `The chain shows a different transaction than planned (${sent.problems.join('; ')}). Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
+      await closeOwnerPage()
+      process.exit(result(3, { state: 'mismatch', tx: hash, reason, next: `revoke it (superstables budget revoke --rail tempo${agentFlag(label)}), then grant a new key` }))
+    }
   }
 
   // Read back what the chain stored: the key must be exactly the plan.
-  const { key, problems } = await readUntilMatches(owner, agent, plan)
+  if (period && authorizedAt === undefined) console.log('note: the grant block time could not be read, so the period is checked only as present')
+  const { key, problems } = await readUntilMatches(owner, agent, plan, authorizedAt)
   console.log(`readback: type ${key.signatureType}, expiry ${key.expiry}, limits ${key.enforceLimits}, remaining ${fromBaseUnits(key.remaining)}, periodEnd ${key.periodEnd || 'none (one-time)'}, scoped ${key.scoped}, admin ${key.admin}, revoked ${key.revoked}`)
   if (problems.length) {
     const reason = `the key on chain is not the planned one: ${problems.join('; ')}`

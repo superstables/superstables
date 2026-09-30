@@ -57,6 +57,19 @@ export async function getAccount(conn, address) {
   };
 }
 
+/**
+ * The token account, or null when the chain answers that it does not exist. Any other failure (RPC down, rate limit, a
+ * malformed answer) throws: "could not read" is never "no account" or "no delegate".
+ */
+export async function getAccountOrNull(conn, address) {
+  try {
+    return await getAccount(conn, address);
+  } catch (e) {
+    if (e instanceof TokenAccountNotFoundError) return null;
+    throw e;
+  }
+}
+
 export async function getMint(conn, address) {
   const d = await readTokenProgramAccount(conn, address, MINT_SIZE, "mint");
   return { address, supply: d.readBigUInt64LE(36), decimals: d.readUInt8(44), isInitialized: d.readUInt8(45) !== 0 };

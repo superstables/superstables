@@ -13,8 +13,12 @@
 //                                   next budget after a revoke or an expiry. Needs the owner recorded already; no page.
 //   setup.ts --fund-only            fund the recorded owner from the Moderato faucet, change no file
 //
+//   setup.ts --new-owner            replace the recorded owner (refused while any agent key in the agent file is live on it)
+//
+// Setup is a trusted step: the signature proves control of the connected address, not that it is the intended owner, so
+// the owner runs it or watches it run, and an agent must not complete it. A recorded owner never changes silently.
 // Never prints a private key.
-// Usage: npx tsx budget/tempo/setup.ts [--agent <label>] [--fund-only] [--timeout <s>] [--no-open] [--owner-key-file <path>]
+// Usage: npx tsx budget/tempo/setup.ts [--agent <label>] [--fund-only] [--new-owner] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -25,6 +29,7 @@ import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, RPC_URL, TOKEN_ADDRESS, appendExtraAge
 import { readFileSync } from 'node:fs'
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
 import { askConnect, closeOwnerPage, emit, endUnapproved, tokenBalance } from './owner.ts'
+import { readKey } from './lib/chain.ts'
 
 const { values: args } = parseCli({
   name: 'setup.ts',
@@ -32,6 +37,7 @@ const { values: args } = parseCli({
   flags: {
     agent: { type: 'string', metavar: 'label', desc: 'Add a new agent key AGENT<label> (for the next budget after a revoke)', check: labelCheck },
     'fund-only': { type: 'boolean', desc: 'Fund the recorded owner from the Moderato faucet, change no file' },
+    'new-owner': { type: 'boolean', desc: 'Replace the recorded owner with the wallet that connects (refused while a key is live)' },
     timeout: { type: 'string', metavar: 'seconds', desc: 'How long the approval link stays open (default 600)', check: intCheck(1) },
     'no-open': { type: 'boolean', desc: 'Do not open the link in the default browser' },
     'owner-key-file': { type: 'string', metavar: 'path', desc: 'Tests and automation only: record this owner key file\'s address instead of asking the wallet' },
@@ -99,15 +105,32 @@ async function main() {
   }
 
   // 2. the owner address
+  const newOwner = args['new-owner'] === true
+  const recorded = (agentOwner ?? (pub.OWNER_ADDRESS && same(pub.AGENT_ADDRESS, agent) ? pub.OWNER_ADDRESS : undefined)) as Address | undefined
+  if (newOwner && recorded) {
+    // never move the owner while any agent key can still spend from the old one
+    const env = parseEnvFile(readFileSync(AGENT_ENV_PATH, 'utf8'))
+    const keys = Object.entries(env).filter(([k, v]) => /^AGENT\d*[A-Za-z0-9]*_ADDRESS$/.test(k) && /^0x[0-9a-fA-F]{40}$/.test(v)).map(([, v]) => v as Address)
+    for (const key of keys) {
+      const k = await readKey(recorded, key).catch(() => null)
+      const live = k === null ? null : k.exists && k.expiry * 1000 > Date.now()
+      if (live !== false) {
+        const reason = live === null ? `could not read access key ${key} on the recorded owner ${recorded}; the owner is not replaced` : `a budget is live: access key ${key} is authorized on the recorded owner ${recorded} until ${new Date(k!.expiry * 1000).toISOString()}`
+        console.log(`REFUSED: ${reason}. Nothing was changed.`)
+        process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: live === null ? 'superstables budget doctor --rail tempo, then setup --new-owner again' : `revoke it first (superstables budget revoke --rail tempo, approved by ${recorded}), then setup --new-owner` }))
+      }
+    }
+    console.log(`replacing the recorded owner ${recorded} (no key is live on it): the new owner connects on the page`)
+  }
   let owner: Address
   let finish: ((v: { ok: boolean; message: string }) => void) | null = null
   if (OWNER_KEY_FILE) {
     checkOwnerKeyFile(OWNER_KEY_FILE)
     owner = loadOwnerKeyFile(OWNER_KEY_FILE).OWNER_ADDRESS
     console.log(`owner address from --owner-key-file: ${owner}`)
-  } else if (pub.OWNER_ADDRESS && same(pub.AGENT_ADDRESS, agent)) {
+  } else if (pub.OWNER_ADDRESS && same(pub.AGENT_ADDRESS, agent) && !newOwner) {
     owner = pub.OWNER_ADDRESS as Address
-    console.log(`${PUBLIC_ENV_PATH} already records owner ${owner} for this agent; not asking again (move the file away to connect another wallet)`)
+    console.log(`${PUBLIC_ENV_PATH} already records owner ${owner} for this agent; not asking again. If this isn't your wallet, stop: superstables budget setup --rail tempo --new-owner replaces it`)
   } else {
     const { handle, outcome } = await askConnect('setup', {
       title: 'Connect your wallet',
@@ -122,7 +145,7 @@ async function main() {
         'Signing the message proves control of this address. It grants no spending permission and has no network fee.',
         'Your signing key stays in your wallet. You will review and approve any later budget grant separately.',
       ],
-    }, `Superstables budget: record this wallet as the owner of agent ${agent} on Tempo Testnet (Moderato).`)
+    }, `Superstables budget: record this wallet as the owner of agent ${agent} on Tempo Testnet (Moderato).`, newOwner ? recorded : undefined)
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent })
     if (outcome.status !== 'connected') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     owner = outcome.address as Address
@@ -134,11 +157,13 @@ async function main() {
     await closeOwnerPage()
     process.exit(result(3, { state: 'refused_precheck', reason: "the owner address is the agent's address", next: "connect the owner's own wallet" }))
   }
-  if (agentOwner && !same(agentOwner, owner)) {
+  if (agentOwner && !same(agentOwner, owner) && !newOwner) {
     finish?.({ ok: false, message: `This agent is already bound to another owner (${agentOwner}). Nothing was changed.` })
     await closeOwnerPage()
-    process.exit(result(3, { state: 'refused_precheck', reason: `the agent key file is bound to another owner (${agentOwner})`, next: `move ${AGENT_ENV_PATH} away if you mean to start over` }))
+    process.exit(result(3, { state: 'refused_precheck', reason: `the agent key file is bound to another owner (${agentOwner})`, owner: agentOwner, next: 'superstables budget setup --rail tempo --new-owner replaces it (refused while a budget is live)' }))
   }
+  const replaced = recorded && !same(recorded, owner) ? recorded : undefined
+  if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${owner}`)
 
   // 3. the owner's public address, in the agent file (buy binds the access key to it) and the public file
   setAgentPublic({ OWNER_ADDRESS: owner })
@@ -165,7 +190,7 @@ async function main() {
   steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`))
   finish?.({ ok: true, message: `Done. ${owner} is recorded as the owner of agent ${agent}. You can close this page. Next: grant a budget (the terminal lists the command).` })
   await closeOwnerPage()
-  process.exit(result(0, { state: 'ok', owner, agent, publicFile: PUBLIC_ENV_PATH, agentKeyFile: AGENT_ENV_PATH, steps, next: 'superstables budget doctor --rail tempo, then superstables budget grant --rail tempo --amount A' }))
+  process.exit(result(0, { state: 'ok', owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_ENV_PATH, agentKeyFile: AGENT_ENV_PATH, steps, next: 'superstables budget doctor --rail tempo, then superstables budget grant --rail tempo --amount A' }))
 }
 
 main().catch((err) => {

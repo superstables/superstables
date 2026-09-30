@@ -111,6 +111,10 @@ export async function runDoctor(f) {
 
   const ownerAddress = pub[r.ownerAddr] ?? owner[r.ownerAddr] ?? agent[r.ownerAddr];
   const agentAddress = pub[r.agentAddr] ?? agent[r.agentAddr] ?? owner[r.agentAddr];
+  // Setup proves control of an address, not who the person is: show the owner on record so a person who is not it stops.
+  process.stderr.write(ownerAddress
+    ? `\n  OWNER (recorded): ${ownerAddress}\n  If this isn't your wallet, stop: do not approve grants for it. superstables budget setup --rail ${f.rail} --new-owner replaces it (refused while a budget is live).\n\n`
+    : `\n  OWNER (recorded): none yet. Setup records whoever connects: the owner runs it, or watches it run.\n\n`);
   if (existsSync(agentKeyFile(f.rail))) {
     const problems = r.ownerSecrets.filter((n) => agent[n]).map((n) => `defines ${n}`);
     const ownerValues = new Set(r.ownerSecrets.map((n) => owner[n]).filter(Boolean));

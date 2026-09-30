@@ -113,12 +113,21 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   }
   approveTx = sent.hash;
   const events = approvalsIn(sent.logs, pub.owner, pub.agent);
-  if (sent.problems.length) console.log(`note: ${sent.problems.join("; ")}`);
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, Approval events: ${events.map((v) => usdc(v)).join(", ") || "none"} ${SYM}`);
   if (sent.status !== "success") {
     handle.finish({ ok: false, message: "The transaction reverted. No allowance was granted by it, but a network fee may have been charged.", hash: sent.hash });
     await closeOwnerPage();
     process.exit(result(1, { state: "failed", tx: sent.hash, reason: "the approve reverted on chain", next: "superstables budget status --rail evm" }));
+  }
+  // Any difference from the plan is a mismatch, whatever the allowance reads now: an edited higher allowance can be spent
+  // down to the requested cap before the readback. The wallet already sent it, so the owner has to revoke it.
+  if (sent.problems.length) {
+    const reason = `the transaction on chain is not the one planned: ${sent.problems.join("; ")}. The budget was not recorded.`;
+    console.log(`MISMATCH: ${reason}`);
+    const now = await allowanceOf(pub.owner, pub.agent).catch(() => null);
+    handle.finish({ ok: false, message: `The chain shows a different transaction than planned (${sent.problems.join("; ")}). The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: sent.hash });
+    await closeOwnerPage();
+    process.exit(result(3, { state: "mismatch", tx: sent.hash, reason, requested: usdc(cap), allowance: now === null ? null : usdc(now), next: "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" }));
   }
 }
 

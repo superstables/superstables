@@ -12,6 +12,8 @@
 //     the caller as a pointer; the caller reads the chain and then says how it ended.
 //  4. Nothing waits for ever. A link expires, an expiry is a refusal with a reason, and every
 //     state change can be appended to an audit log that never holds a signature.
+//  5. Once the wallet was asked to send, nothing on the page can turn the outcome into "nothing
+//     sent": a later rejection keeps `sending`, and the caller reads the chain.
 //
 // Three kinds of action:
 //   connect              the wallet shares an account and signs a free sign-in message
@@ -87,6 +89,11 @@ export interface OwnerActionInput {
   solana?: SolanaTransactionPort;
   /** connect: the sign-in text. The server adds the approval id and the address to it. */
   signIn?: string;
+  /**
+   * The owner address the command has on record, shown prominently on the page so a person who
+   * is not that owner stops. A transaction defaults to `account`; a first connect has none.
+   */
+  recordedOwner?: string;
   timeoutMs: number;
 }
 
@@ -99,7 +106,7 @@ export interface OwnerActionHandle {
   id: string;
   url: string;
   expiresAt: number;
-  /** Resolves when the owner connected, sent, rejected, or the link expired. */
+  /** Resolves when the owner connected, sent, rejected, or the link expired (or was cancelled). */
   settled: Promise<OwnerActionOutcome>;
   /** The caller's verdict after reading the chain; the page shows it. */
   finish(verdict: { ok: boolean; message: string; hash?: string }): void;
@@ -308,6 +315,8 @@ export class OwnerApprovalServer {
       reason: record.reason,
       address: record.address,
       hash: record.hash,
+      // whether the wallet had been asked to send: a later reader must not call this "nothing sent"
+      sending: record.sending || undefined,
     };
     try {
       mkdirSync(dirname(this.options.auditPath), { recursive: true, mode: 0o700 });
@@ -324,6 +333,7 @@ export class OwnerApprovalServer {
       chain: record.chain,
       chainIdHex: isSolana(record.chain) ? "" : `0x${record.chain.chainId.toString(16)}`,
       account: record.account,
+      recordedOwner: record.recordedOwner ?? record.account,
       transaction: record.transaction,
       message: record.kind === "connect" ? signInMessage(record.signIn!, record.id) : undefined,
       expiresAt: record.expiresAt,
@@ -382,7 +392,7 @@ export class OwnerApprovalServer {
     this.sweep();
     const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname.replace(/\/+$/, "") || "/";
     const method = req.method ?? "GET";
-    const match = /^\/owner\/([0-9a-f]{32})(\/state|\/account|\/connect|\/sending|\/sent|\/prepare|\/signed|\/reject)?$/.exec(path);
+    const match = /^\/owner\/([0-9a-f]{32})(\/state|\/account|\/connect|\/sending|\/sent|\/prepare|\/signed|\/reject|\/cancel)?$/.exec(path);
     const record = match ? this.records.get(match[1]) : undefined;
     const leaf = match?.[2];
     if (!record) {
@@ -401,6 +411,16 @@ export class OwnerApprovalServer {
       });
     }
     if (method !== "POST") return this.json(res, 405, { error: "that route takes a POST" });
+    // CSRF defenses for every state-changing route: the request must come from this page's own
+    // origin (exactly http://<the Host checked above>) and carry a JSON body, which a cross-site
+    // form or a "simple" cross-origin request cannot. These stop other web pages in the owner's
+    // browser. They are not human authentication: any local process that holds the link can set
+    // these headers. Nothing here trusts the page with the outcome: the chain decides that.
+    const origin = String(req.headers.origin ?? "");
+    if (origin !== `http://${host}`) return this.json(res, 403, { error: "this route answers only to the approval page itself" });
+    if (!/^application\/json(\s*;|$)/i.test(String(req.headers["content-type"] ?? ""))) {
+      return this.json(res, 415, { error: "send JSON (content-type: application/json)" });
+    }
     let body: Record<string, unknown>;
     try {
       body = await this.body(req);
@@ -417,11 +437,27 @@ export class OwnerApprovalServer {
       if (record.kind === "solana-transaction" && (record.status === "sending" || record.submitting)) {
         return this.json(res, 409, { error: "this is being sent already", status: record.status });
       }
-      const reason = body.by === "wallet" ? "the wallet reported a rejection; check wallet activity if a transaction was already submitted" : "the request was rejected on the page; cancel any open wallet request and check wallet activity";
-      // A wallet's rejection (EIP-1193 code 4001) means it sent nothing, even after it was asked to.
-      if (body.by === "wallet") record.sending = false;
+      // Once the wallet was asked to send, a rejection reported through this page cannot prove that
+      // nothing was sent: anyone holding the link can post it, and a wallet popup may still be open.
+      // `sending` stays true, so the caller reports the outcome as unknown until the chain says otherwise.
+      const reason = record.sending
+        ? "a rejection was reported after the wallet was asked to send; the page cannot prove nothing was submitted, so the chain must be checked"
+        : body.by === "wallet"
+          ? "the wallet reported a rejection before it was asked to send"
+          : "the request was rejected on the page; cancel any open wallet request and check wallet activity";
       this.end(record, "rejected", reason);
       return this.json(res, 200, { status: record.status, reason: record.reason });
+    }
+
+    if (leaf === "/cancel") {
+      // The command's own replacement (superstables budget ... --replace) asks first. One step,
+      // so it cannot interleave with /sending or /signed: either the wallet was never asked and
+      // this link ends now, or the answer is 409 and the old approval stays as it is.
+      const asked = record.sending || record.submitting || !["pending", "ready"].includes(record.status);
+      if (asked) return this.json(res, 409, { cancelled: false, status: record.status, sending: record.sending, error: "the wallet may already have been asked; this approval is not cancelled" });
+      const by = typeof body.replacedBy === "string" && /^oa-\d{14}-[0-9a-f]{8}$/.test(body.replacedBy) ? body.replacedBy : undefined;
+      this.end(record, "rejected", `${by ? `replaced by ${by}: ` : ""}cancelled by the command before the wallet was asked; nothing was sent`);
+      return this.json(res, 200, { cancelled: true, status: record.status });
     }
 
     if (leaf === "/connect") {

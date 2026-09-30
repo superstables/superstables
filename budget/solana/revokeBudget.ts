@@ -13,7 +13,7 @@
 // Exit codes: 0 revoked (or nothing to revoke), 1 failed on chain, never landed, or a delegate still reads, 3 refused (the
 // owner rejected or the link expired, no SOL for the fee), 5 unknown (read the chain).
 import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
-import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount } from "./token.mjs";
+import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseStrict, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { MIN_FEE_LAMPORTS, askSolanaTransaction, closeOwnerPage, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort } from "./owner.ts";
@@ -40,11 +40,19 @@ const pub = readPublic();
 if (!pub.owner) refuse("the public file names no owner", "superstables budget setup --rail solana");
 const owner: PublicKey = pub.owner;
 const ata = getAssociatedTokenAddressSync(USDC_MINT, owner);
-const before = await retryRead(() => getAccount(conn, ata)).catch(() => null);
-console.log(`Before: delegate=${before?.delegate?.toBase58() ?? "none"} remaining=${before ? formatUnits(before.delegatedAmount) : "0"} USDC`);
+let before: Awaited<ReturnType<typeof getAccountOrNull>>;
+try {
+  before = await retryRead(() => getAccountOrNull(conn, ata));
+} catch (err) {
+  // could not read is not "no delegate": whether a budget is live is unknown
+  const reason = `could not read the owner's USDC account ${ata.toBase58()} (${String((err as Error)?.message ?? err).slice(0, 160)}); whether a delegate is live is unknown`;
+  console.log(`UNKNOWN: ${reason}. Nothing was sent.`);
+  process.exit(result(5, { state: "unknown", tx: null, reason, next: "superstables budget status --rail solana, then run revoke again" }));
+}
+console.log(`Before: ${before ? `delegate=${before.delegate?.toBase58() ?? "none"} remaining=${formatUnits(before.delegatedAmount)} USDC` : "the owner has no USDC account (the chain says it does not exist)"}`);
 if (!before || !before.delegate) {
-  console.log("There is no delegate on the owner's USDC account: nothing to revoke. Nothing was sent.");
-  process.exit(result(0, { state: "revoked", tx: null, remaining: "0", reason: "no delegate is set; nothing to send", next: "none" }));
+  console.log(`${before ? "There is no delegate on the owner's USDC account" : "The owner has no USDC account"}: nothing to revoke. Nothing was sent.`);
+  process.exit(result(0, { state: "revoked", tx: null, remaining: "0", reason: before ? "no delegate is set; nothing to send" : "the owner has no USDC account; nothing to send", next: "none" }));
 }
 const lamports = BigInt(await retryRead(() => conn.getBalance(owner, "confirmed")));
 if (lamports < MIN_FEE_LAMPORTS) refuse(`the owner holds ${sol(lamports)} SOL, too little for the network fee`, "get devnet SOL (faucet.solana.com), then revoke again");

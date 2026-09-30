@@ -11,17 +11,27 @@
 // Files, under $SUPERSTABLES_HOME/budget/approvals/ (paths.mjs), no key material in any of them:
 //   <id>.json               the record (mode 600): command, rail, chain, pid, link, terms, and the final RESULT once known
 //   <id>.log                the worker's stdout and stderr: the plan, the page, the chain reads
-//   active-<rail>-<chain>   the id of the approval that holds that chain
+//   active-<rail>-<chain>   the lock: {id, pid, createdAt} of the approval (or blocking command) that holds that chain,
+//                           created in one exclusive step (a temp file hard-linked to this name), never half written
 //
-// The worker is detached (its own session), so it outlives the caller, and it ends on its own: the owner page expires
-// its link, the command reads the chain for a bounded time, and a backstop in the worker (workerDeadlineMs) stops it
-// if anything hangs. Nothing here kills a process it did not start, except `--replace`, which stops a pending worker
-// whose page has not asked the wallet for anything yet.
+// The worker is detached (its own session and process group: its rail script and the page's process are in that group
+// too), so it outlives the caller, and it ends on its own: the owner page expires its link, the command reads the chain
+// for a bounded time, and a backstop in the worker (workerDeadlineMs) stops the whole group if anything hangs.
+// Liveness is the group's, never one pid's: a dead worker whose page process still runs holds its chain, and `wait` says
+// it has no final result, until every process in the group is gone (or `wait` stops the group after its deadline).
+// A command in a terminal (blocking) holds the same lock, with its own pid and its rail script's process group.
+// Nothing here kills a process group it did not start. `--replace` first asks the running page to cancel
+// (POST /cancel): only a page that confirms the wallet was never asked is stopped.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
+
+/** A lock younger than this is never taken over, whatever its processes look like (startup: the record is being written). */
+export const STARTUP_GRACE_MS = 30_000;
+/** A takeover mutex older than this belongs to a process that died while breaking a stale lock. */
+const BREAK_STALE_MS = 10_000;
 
 /** Set in the worker's environment: the id of the approval it runs. */
 export const WORKER_ENV = "SUPERSTABLES_BUDGET_APPROVAL_ID";
@@ -80,48 +90,155 @@ export function alive(pid) {
   }
 }
 
-/** A record whose worker is still running and has not ended: it holds its chain. */
-export const isLive = (record) => Boolean(record && !record.final && alive(record.pid) && Date.now() < record.deadline);
+/** Whether any process is left in the process group `pgid` (a detached worker is its group's leader: pgid = its pid). */
+export function groupAlive(pgid) {
+  if (!pgid) return false;
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+
+/**
+ * Whether anything this approval started may still run: its worker (or blocking command), the worker's process group
+ * (its rail script and the page's process), and a blocking command's rail group.
+ */
+export const processesAlive = (record) => Boolean(record && (alive(record.pid) || groupAlive(record.pid) || groupAlive(record.railPgid)));
+
+/** A record without a final result whose processes may still run: it holds its chain. */
+export const isLive = (record) => Boolean(record && !record.final && processesAlive(record));
+
+/** Stop a process group this command started: SIGTERM, then SIGKILL. Returns true once no process is left in it. */
+export async function stopGroup(pgid, { graceMs = 3000 } = {}) {
+  if (!groupAlive(pgid)) return true;
+  try { process.kill(-pgid, "SIGTERM"); } catch {}
+  for (let t = 0; t < graceMs && groupAlive(pgid); t += 100) await sleep(100);
+  if (groupAlive(pgid)) { try { process.kill(-pgid, "SIGKILL"); } catch {} }
+  for (let t = 0; t < 2000 && groupAlive(pgid); t += 100) await sleep(100);
+  return !groupAlive(pgid);
+}
 
 // ── one approval at a time per rail and chain ──────────────────────────────────────────────────────────
 
-/** The live approval that holds this rail and chain, or null. */
-export function findPending(rail, chain) {
-  let id;
+function readLock(rail, chain) {
+  let text;
   try {
-    id = readFileSync(activeFile(rail, chain), "utf8").trim();
+    text = readFileSync(activeFile(rail, chain), "utf8");
   } catch {
     return null;
   }
-  const record = readApproval(id);
-  return isLive(record) ? record : null;
-}
-
-/** Take the rail and chain for `id`. { ok: false, pending } when a live approval holds them. */
-export function claim(rail, chain, id) {
-  ensureDir();
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const fd = openSync(activeFile(rail, chain), "wx", 0o600);
-      writeFileSync(fd, id);
-      closeSync(fd);
-      return { ok: true };
-    } catch (err) {
-      if (err.code !== "EEXIST") throw err;
-      const pending = findPending(rail, chain);
-      if (pending) return { ok: false, pending };
-      try {
-        unlinkSync(activeFile(rail, chain)); // the holder ended or its process is gone
-      } catch {}
-    }
-  }
-  return { ok: false, pending: findPending(rail, chain) };
-}
-
-function release(rail, chain, id) {
   try {
-    if (readFileSync(activeFile(rail, chain), "utf8").trim() === id) unlinkSync(activeFile(rail, chain));
+    const lock = JSON.parse(text);
+    if (lock && typeof lock.id === "string") return { ...lock, text };
   } catch {}
+  // an older plain-id lock, or something unreadable: its age comes from the file
+  let createdAt = Date.now();
+  try { createdAt = statSync(activeFile(rail, chain)).mtimeMs; } catch {}
+  return { id: text.trim(), pid: null, createdAt, text };
+}
+
+/**
+ * Whether a lock still holds its chain. The stale rule: the lock is free when its approval has a final result, or when it
+ * is older than STARTUP_GRACE_MS and neither the process that claimed it nor any process of its approval is alive.
+ */
+function lockHeld(lock) {
+  const record = readApproval(lock.id);
+  if (record?.final) return false;
+  if (alive(lock.pid)) return true;
+  if (processesAlive(record)) return true;
+  return Date.now() - Number(lock.createdAt ?? 0) < STARTUP_GRACE_MS;
+}
+
+/** What a refusal can say about the holder: its record, or what the lock alone knows while it starts. */
+const holderOf = (lock, rail, chain) => readApproval(lock.id) ?? { id: lock.id, rail, chain, command: "an owner command (starting)" };
+
+/** The approval that holds this rail and chain, or null. */
+export function findPending(rail, chain) {
+  const lock = readLock(rail, chain);
+  if (!lock || !lockHeld(lock)) return null;
+  return holderOf(lock, rail, chain);
+}
+
+/** Remove a stale lock, but only the one judged stale: a takeover mutex keeps two claimers from removing a fresh lock. */
+function breakStale(rail, chain, stale) {
+  const mutex = `${activeFile(rail, chain)}.break`;
+  let fd;
+  try {
+    fd = openSync(mutex, "wx", 0o600);
+  } catch (err) {
+    if (err.code !== "EEXIST") throw err;
+    try {
+      if (Date.now() - statSync(mutex).mtimeMs > BREAK_STALE_MS) unlinkSync(mutex);
+    } catch {}
+    return false;
+  }
+  try {
+    const now = readLock(rail, chain);
+    if (now && now.text === stale.text && !lockHeld(now)) unlinkSync(activeFile(rail, chain));
+    return true;
+  } finally {
+    closeSync(fd);
+    try { unlinkSync(mutex); } catch {}
+  }
+}
+
+/**
+ * Take the rail and chain for `id`, held by `pid` (the claiming process) until the approval's own processes run. One
+ * exclusive step: the lock is written in full to a private file and hard-linked to its name, so it exists complete or
+ * not at all. { ok: false, pending } when another approval holds them.
+ */
+export function claim(rail, chain, id, { pid = process.pid } = {}) {
+  ensureDir();
+  const path = activeFile(rail, chain);
+  const mine = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(mine, JSON.stringify({ id, pid, createdAt: Date.now() }), { mode: 0o600 });
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        linkSync(mine, path);
+        return { ok: true };
+      } catch (err) {
+        if (err.code !== "EEXIST") throw err;
+      }
+      const lock = readLock(rail, chain);
+      if (!lock) continue; // released meanwhile
+      if (lockHeld(lock)) return { ok: false, pending: holderOf(lock, rail, chain) };
+      if (!breakStale(rail, chain, lock)) return { ok: false, pending: holderOf(lock, rail, chain) };
+    }
+    const lock = readLock(rail, chain);
+    return { ok: false, pending: lock ? holderOf(lock, rail, chain) : { id: "unknown", rail, chain, command: "an owner command" } };
+  } finally {
+    try { unlinkSync(mine); } catch {}
+  }
+}
+
+/** Free the chain if `id` holds it. */
+export function release(rail, chain, id) {
+  const lock = readLock(rail, chain);
+  if (lock?.id === id) {
+    try { unlinkSync(activeFile(rail, chain)); } catch {}
+  }
+}
+
+/**
+ * A command in a terminal (blocking) takes the chain like a worker: a record with its own pid, so a second owner command
+ * is refused and can point at its link. `railPgid` is added when its rail script starts (setRailGroup).
+ */
+export function startForeground({ id, command, rail, chain }) {
+  writeApproval({ id, command, rail, chain, state: "running", foreground: true, createdAt: new Date().toISOString(), pid: process.pid, deadline: null });
+}
+
+/** The process group of a blocking command's rail script (its page and chain reads run there). */
+export function setRailGroup(id, pgid) {
+  return update(id, { railPgid: pgid });
+}
+
+/** The worker records its own pid at start, so its process group is known even if the caller died before writing it. */
+export function adoptWorker(id) {
+  const record = readApproval(id);
+  if (record && !record.final && !record.pid) update(id, { pid: process.pid });
 }
 
 // ── the worker's side ──────────────────────────────────────────────────────────────────────────────────
@@ -207,11 +324,13 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
       forwardLog(id, offset, onLog);
       const last = readApproval(id);
       if (last?.final) return { kind: "final", record: last };
+      // no link was ever shown, so no wallet was asked: stop anything left in its group before freeing the chain
+      if (!(await stopGroup(child.pid))) return { kind: "failed", record: last, reason: `the background approval stopped before it opened a page, but process group ${child.pid} would not stop; the chain stays held` };
       release(rail, chain, id);
       return { kind: "failed", record: last, reason: spawnError ? `the background approval could not start: ${spawnError.message}` : "the background approval stopped before it opened a page" };
     }
     if (Date.now() > until) {
-      try { process.kill(-child.pid, "SIGTERM"); } catch {}
+      if (!(await stopGroup(child.pid))) return { kind: "failed", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s, and process group ${child.pid} would not stop; the chain stays held` };
       release(rail, chain, id);
       update(id, { state: "final", final: { code: 1, result: { ok: false, command, rail, chain, state: "failed", id, next: "check wallet activity and budget status before retrying", reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s` } } });
       return { kind: "failed", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s; the background approval was stopped` };
@@ -251,36 +370,41 @@ export function pageWords(page, rail) {
   }
 }
 
-/** The last state the owner page logged for the page id in `url` (owner-approvals.jsonl). */
+/** The last state the owner page logged for the page id in `url` (owner-approvals.jsonl), and whether the wallet was ever asked. */
 function lastPageStatus(url) {
   const pageId = /\/owner\/([0-9a-f]{32})/.exec(url ?? "")?.[1];
-  if (!pageId || !existsSync(ownerApprovalsLog())) return null;
+  if (!pageId || !existsSync(ownerApprovalsLog())) return { status: null, sending: false };
   let status = null;
+  let sending = false;
   for (const line of readFileSync(ownerApprovalsLog(), "utf8").split("\n")) {
     if (!line.includes(pageId)) continue;
     try {
       const entry = JSON.parse(line);
-      if (entry.id === pageId) status = entry.status;
+      if (entry.id !== pageId) continue;
+      status = entry.status;
+      if (entry.sending || ["sending", "sent", "confirmed", "failed"].includes(entry.status)) sending = true;
     } catch {}
   }
-  return status;
+  return { status, sending };
 }
 
-/** The worker is gone without a RESULT (killed, crashed, machine restarted): say what can be known. */
+/** Every process is gone without a RESULT (killed, crashed, machine restarted): say what can be known, from the chain next. */
 function abandoned(record) {
   const page = lastPageStatus(record.url);
-  const mayHaveSent = ["sending", "sent", "confirmed", "failed"].includes(page);
   const base = { command: record.command, rail: record.rail, chain: record.chain };
   const status = `superstables budget status --rail ${record.rail}${record.chain ? ` --chain ${record.chain}` : ""}`;
-  if (mayHaveSent) {
-    return { code: 5, result: { ok: false, ...base, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason: `the background approval stopped after the wallet was asked to send (last page state: ${page})` } };
+  if (page.sending) {
+    return { code: 5, result: { ok: false, ...base, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason: `the background approval stopped after the wallet was asked to send (last page state: ${page.status})` } };
   }
-  return { code: 3, result: { ok: false, ...base, state: "refused_precheck", id: record.id, url: record.url, next: "no submission is recorded. Check wallet activity and budget status; retry only at the owner's request", reason: `the background approval stopped without a recorded submission (last page state: ${page ?? "none"})` } };
+  return { code: 3, result: { ok: false, ...base, state: "refused_precheck", id: record.id, url: record.url, next: "no submission is recorded. Check wallet activity and budget status; retry only at the owner's request", reason: `the background approval stopped without a recorded submission (last page state: ${page.status ?? "none"})` } };
 }
 
 /**
  * `superstables budget wait`: poll up to `timeoutMs`. Returns null for an unknown id, { final: true, code, result } once
- * the command ended (the same answer every time after that), or { final: false, record, page } while it still waits.
+ * the command ended (the same answer every time after that), or { final: false, record, page, orphaned } while it still
+ * waits. `orphaned`: the worker is gone but a process of its group (the page, a chain read) still runs, so nothing is
+ * final yet. Past the record's deadline, `wait` stops that group itself; only once no process is left does it record
+ * the result from what the page logged, and free the chain.
  * A new link during the wait (recover's second owner step) returns at once, so the caller can show it.
  */
 export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
@@ -290,36 +414,71 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
   for (;;) {
     let record = readApproval(id);
     if (record.final) return { final: true, code: record.final.code, result: record.final.result, record };
-    if (!isLive(record)) {
+    if (record.deadline && Date.now() > record.deadline && processesAlive(record)) {
+      // past the worker's own backstop: this command started that group, so it stops it
+      await stopGroup(record.pid);
+      if (record.railPgid) await stopGroup(record.railPgid);
+      continue;
+    }
+    if (!processesAlive(record)) {
       await sleep(100); // a worker that just wrote its RESULT may still be exiting
       record = readApproval(id);
       if (record.final) return { final: true, code: record.final.code, result: record.final.result, record };
+      if (processesAlive(record)) continue;
       const final = abandoned(record);
       recordFinal(id, final.code, final.result);
       return { final: true, ...final, record: readApproval(id) };
     }
-    if (record.url && record.url !== first.url) return { final: false, record, page: await pageState(record.url) };
-    if (Date.now() >= until) return { final: false, record, page: await pageState(record.url) };
+    const orphaned = !alive(record.pid);
+    if (record.url && record.url !== first.url) return { final: false, record, page: await pageState(record.url), orphaned };
+    if (Date.now() >= until) return { final: false, record, page: await pageState(record.url), orphaned };
     await sleep(Math.min(poll, Math.max(0, until - Date.now())));
   }
 }
 
+/** Ask a running owner page to cancel. { cancelled: true } only when the page confirms the wallet was never asked. */
+export async function cancelPage(url, byId) {
+  if (!url) return null;
+  try {
+    const res = await fetch(`${url}/cancel`, {
+      method: "POST",
+      // the page's own origin and a JSON body: the server's CSRF checks (not authentication) require both
+      headers: { "content-type": "application/json", origin: new URL(url).origin },
+      body: JSON.stringify({ replacedBy: byId }),
+      signal: AbortSignal.timeout(3000),
+    });
+    const body = await res.json().catch(() => ({}));
+    return { cancelled: res.ok && body.cancelled === true, status: body.status ?? null, sending: body.sending === true };
+  } catch {
+    return null;
+  }
+}
+
 /**
- * `--replace`: stop a pending approval whose page has not asked the wallet for anything, and record it as replaced.
- * Returns { ok: true } or { ok: false, reason } (the wallet may be sending: never stop that).
+ * `--replace`: ask the pending approval's page to cancel. The page answers in one step, so this cannot interleave with
+ * the owner pressing send: either it confirms the wallet was never asked (then its command ends with a refusal, and
+ * whatever is left of its process group is stopped), or the replacement is refused and the old approval stays as it
+ * is, uncertain until its own result. Returns { ok: true } or { ok: false, reason }.
  */
 export async function replacePending(record, byId) {
-  const page = await pageState(record.url);
-  if (!page || !["pending", "ready"].includes(page.status)) {
-    return { ok: false, reason: `the pending approval ${record.id} is ${page?.status ?? "not answering"}: the wallet may be sending it, so it is not replaced` };
+  const answer = await cancelPage(record.url, byId);
+  if (!answer?.cancelled) {
+    const why = !record.url ? "has no page yet" : !answer ? "is not answering" : answer.sending ? "already asked the wallet to send" : `is ${answer.status}`;
+    return { ok: false, reason: `the pending approval ${record.id} ${why}: the wallet may be sending it, so it is not replaced` };
   }
-  try { process.kill(-record.pid, "SIGTERM"); } catch {}
-  for (let i = 0; i < 50 && alive(record.pid); i++) await sleep(100);
-  if (alive(record.pid)) { try { process.kill(-record.pid, "SIGKILL"); } catch {} }
-  const result = {
-    ok: false, command: record.command, rail: record.rail, chain: record.chain, state: "refused_precheck", id: record.id, url: record.url,
-    next: `the previous worker was stopped. Check wallet activity before using the new approval ${byId}`, reason: `replaced by ${byId} after the page reported it was waiting for approval`,
-  };
-  recordFinal(record.id, 3, result);
+  // cancelled: the command behind the page ends on its own with a refusal; give it a moment, then stop what is left
+  for (let i = 0; i < 100 && processesAlive(record); i++) await sleep(100);
+  if (processesAlive(record)) {
+    await stopGroup(record.pid);
+    if (record.railPgid) await stopGroup(record.railPgid);
+  }
+  if (processesAlive(record)) return { ok: false, reason: `the pending approval ${record.id} was cancelled on its page, but its processes would not stop` };
+  if (!readApproval(record.id)?.final) {
+    recordFinal(record.id, 3, {
+      ok: false, command: record.command, rail: record.rail, chain: record.chain, state: "refused_precheck", id: record.id, url: record.url,
+      next: `the previous approval was cancelled before the wallet was asked. Check wallet activity before using the new approval ${byId}`, reason: `replaced by ${byId}: cancelled before the wallet was asked; nothing was sent`,
+    });
+  }
+  release(record.rail, record.chain, record.id);
   return { ok: true };
 }

@@ -138,20 +138,28 @@ export type Confirmed = { status: "success" | "failed" | "expired" | "unknown"; 
 
 /**
  * Read a transaction the command sent: confirmed with no error, and signer 0 the owner. "expired" means its blockhash ran out
- * and the chain never shows it: it can no longer land. "unknown": no answer within the wait.
+ * and the chain answered that it has no such signature: it can no longer land. A read that fails is never taken as "not
+ * there": if the last reads failed, or nothing is decided within the wait, the answer is "unknown".
  */
 export async function confirmSent(conn: Connection, s: Issued, waitMs = 120_000): Promise<Confirmed> {
   const until = Date.now() + waitMs;
   while (Date.now() < until) {
-    const tx = await retryRead(() => conn.getTransaction(s.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 })).catch(() => null);
+    let tx: any = null;
+    let txRead = true;
+    try {
+      tx = await retryRead(() => conn.getTransaction(s.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }));
+    } catch {
+      txRead = false;
+    }
     if (tx) {
       const keys = tx.transaction.message.getAccountKeys().staticAccountKeys.map((k) => k.toBase58());
       return { status: tx.meta?.err ? "failed" : "success", slot: tx.slot, err: tx.meta?.err ?? undefined, signer: keys[0], meta: tx.meta, accountKeys: keys };
     }
-    const height = await retryRead(() => conn.getBlockHeight("confirmed")).catch(() => 0);
-    if (height > s.lastValidBlockHeight + 10) {
-      const st = await retryRead(() => conn.getSignatureStatus(s.signature, { searchTransactionHistory: true })).catch(() => null);
-      if (!st?.value) return { status: "expired" };
+    const height = txRead ? await retryRead(() => conn.getBlockHeight("confirmed")).catch(() => null) : null;
+    if (height !== null && height > s.lastValidBlockHeight + 10) {
+      // expired only on a successful answer that the signature is unknown to the chain
+      const st = await retryRead(() => conn.getSignatureStatus(s.signature, { searchTransactionHistory: true })).then((v) => ({ ok: true as const, v }), () => ({ ok: false as const }));
+      if (st.ok && !st.v?.value) return { status: "expired" };
     }
     await sleep(2000);
   }

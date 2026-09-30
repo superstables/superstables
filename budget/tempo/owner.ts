@@ -98,15 +98,15 @@ export function maxByExpiry(limit: bigint, expirySeconds: number, period?: numbe
 
 const word = (a: string) => a.toLowerCase().replace('0x', '').padStart(64, '0')
 
-/** The token the owner pays fees in: its FeeManager preference if it set one, else pathUSD. */
+/**
+ * The token the owner pays fees in: its FeeManager preference if it set one (a zero answer means none, so pathUSD).
+ * A failed read throws: the command refuses before any link rather than guess pathUSD and show the owner wrong terms.
+ */
 export async function feeTokenOf(owner: Address): Promise<Address> {
-  try {
-    const r = await rpcRead('eth_call', [{ to: FEE_MANAGER, data: '0xed498fa8' + word(owner) }, 'latest'])
-    const token = ('0x' + String(r).slice(-40)) as Address
-    return /^0x0{40}$/.test(token) ? TOKEN_ADDRESS : getAddress(token)
-  } catch {
-    return TOKEN_ADDRESS
-  }
+  const r = await rpcRead('eth_call', [{ to: FEE_MANAGER, data: '0xed498fa8' + word(owner) }, 'latest'])
+  if (typeof r !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(r)) throw new Error(`the FeeManager answered ${JSON.stringify(r).slice(0, 80)}, not an address`)
+  const token = ('0x' + r.slice(-40)) as Address
+  return /^0x0{40}$/.test(token) ? TOKEN_ADDRESS : getAddress(token)
 }
 
 export async function tokenBalance(token: Address, holder: Address): Promise<bigint> {
@@ -157,8 +157,12 @@ export async function readFullKey(owner: Address, key: Address): Promise<FullKey
   throw last
 }
 
-/** What the chain must read after a grant. Empty means it matches the plan. */
-export function grantProblems(k: FullKey, p: GrantPlan): string[] {
+/**
+ * What the chain must read after a grant. Empty means it matches the plan. `authorizedAt` is the timestamp of the block the
+ * grant landed in: the first period window starts there, so a planned period must read back as exactly authorizedAt + period
+ * (the keychain has no getter for the period itself). Without it, a planned period is only checked as present.
+ */
+export function grantProblems(k: FullKey, p: GrantPlan, authorizedAt?: number): string[] {
   const out: string[] = []
   const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
   if (k.revoked) out.push('the key reads as revoked')
@@ -168,6 +172,9 @@ export function grantProblems(k: FullKey, p: GrantPlan): string[] {
   if (k.admin) out.push('the key is an admin key')
   if (k.remaining !== p.limit) out.push(`the limit reads ${fromBaseUnits(k.remaining)} ${TOKEN_LABEL}, not ${fromBaseUnits(p.limit)}`)
   if (p.period && !k.periodEnd) out.push('the limit has no period')
+  else if (p.period && authorizedAt !== undefined && k.periodEnd !== authorizedAt + p.period) {
+    out.push(`the first period ends at ${k.periodEnd}, not ${authorizedAt + p.period} (a period of ${p.period}s from the grant's block at ${authorizedAt})`)
+  }
   if (!p.period && k.periodEnd) out.push(`the limit resets (period end ${k.periodEnd}), but no period was planned`)
   if (p.sellers) {
     const want = [...p.sellers].map((s) => s.toLowerCase()).sort().join(',')
@@ -182,11 +189,18 @@ export function grantProblems(k: FullKey, p: GrantPlan): string[] {
   return out
 }
 
-export type Sent = { hash: Hex; status: 'success' | 'reverted'; blockNumber: bigint; type: string; feePayer?: string; problems: string[] }
+export type Sent = { hash: Hex; status: 'success' | 'reverted'; blockNumber: bigint; blockTimestamp?: number; type: string; feePayer?: string; feeToken?: string; problems: string[] }
+
+/** Transaction types the owner's wallet may use: a plain root-signed transaction (the design sends type 2). */
+const OWNER_TX_TYPES = ['0x0', '0x1', '0x2']
 
 /**
- * Read a transaction the page reported, from the chain. Every difference from the plan is a problem: another sender, another
- * target, changed calldata, a value, a block before the request, another fee payer. Null when the chain never shows the hash.
+ * Read a transaction the page reported, from the chain. Every difference from the plan is a problem, and any problem makes the
+ * command a mismatch (exit 3, next step revoke) even when the key reads right afterwards: another sender, another target,
+ * changed calldata, a value, another chain, a block before the request, a transaction type other than a plain root-signed one
+ * (a Tempo 0x76 can carry another fee payer or an access key's signature), or a fee payer other than the owner. A plain
+ * transaction's receipt may name no fee payer: then the sender paid, by definition. `status` says whether it reverted.
+ * Null when the chain never shows the hash.
  */
 export async function readSent(hash: Hex, want: { from: Address; data: Hex; afterBlock: bigint }, waitMs = 120_000): Promise<Sent | null> {
   const until = Date.now() + waitMs
@@ -208,10 +222,17 @@ export async function readSent(hash: Hex, want: { from: Address; data: Hex; afte
   if (!same(t.to, KEYCHAIN)) problems.push(`it was sent to ${t.to}, not the keychain ${KEYCHAIN}`)
   if (!same(t.input, want.data)) problems.push('the wallet changed the transaction data')
   if (BigInt(t.value ?? '0x0') !== 0n) problems.push(`it sent a value of ${t.value}`)
+  if (t.chainId !== undefined && t.chainId !== null && Number(t.chainId) !== CHAIN_ID) problems.push(`it was signed for chain ${Number(t.chainId)}, not ${CHAIN_ID}`)
   if (BigInt(r.blockNumber) <= want.afterBlock) problems.push(`it was mined in block ${BigInt(r.blockNumber)}, before this request started (block ${want.afterBlock})`)
+  const type = String(t.type ?? 'unknown').toLowerCase()
+  if (!OWNER_TX_TYPES.includes(type)) problems.push(`it is a transaction of type ${type}, not a plain owner transaction (type 0x2)`)
+  if (t.signature?.keyId) problems.push(`it was signed by access key ${t.signature.keyId}, not the owner's own key`)
   if (r.feePayer && !same(r.feePayer, want.from)) problems.push(`its fee was paid by ${r.feePayer}, not the owner`)
-  if (r.status !== '0x1') problems.push('it reverted on chain')
-  return { hash, status: r.status === '0x1' ? 'success' : 'reverted', blockNumber: BigInt(r.blockNumber), type: String(t.type), feePayer: r.feePayer, problems }
+  const block = await rpcRead('eth_getBlockByNumber', [r.blockNumber, false]).catch(() => null)
+  return {
+    hash, status: r.status === '0x1' ? 'success' : 'reverted', blockNumber: BigInt(r.blockNumber), blockTimestamp: block?.timestamp ? parseInt(block.timestamp, 16) : undefined,
+    type, feePayer: r.feePayer, feeToken: r.feeToken ?? t.feeToken ?? undefined, problems,
+  }
 }
 
 const KEY_AUTHORIZED = '0x7c46af0758d3eca5e8195833bff1e5153f6249fc0f2968a878fd28544315a03c'

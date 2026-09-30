@@ -99,7 +99,14 @@ async function main() {
       console.log(`\nThe send raised an error (${String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 160)}). Reading the chain to see whether the revoke landed.`)
     }
   } else {
-    const feeToken = await feeTokenOf(owner)
+    let feeToken: Address
+    try {
+      feeToken = await feeTokenOf(owner)
+    } catch (err) {
+      const reason = `could not read the owner's fee token from the FeeManager (${String((err as Error)?.message ?? err).slice(0, 120)})`
+      console.log(`REFUSED: ${reason}. Nothing was sent.`)
+      process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: 'check the Moderato RPC (superstables budget doctor --rail tempo), then revoke again' }))
+    }
     const feeBalance = await tokenBalance(feeToken, owner)
     if (feeBalance < MIN_FEE_BALANCE) {
       const reason = `the owner ${owner} holds ${fromBaseUnits(feeBalance)} of its fee token ${feeToken}, less than the ${fromBaseUnits(MIN_FEE_BALANCE)} the revoke's network fee may need`
@@ -123,9 +130,16 @@ async function main() {
       process.exit(emit('revokeBudget', 5, { state: 'unknown', tx: outcome.hash, reason: 'the wallet reported a transaction the chain does not show (replaced, dropped or still pending)', next: `superstables budget status --rail tempo${agentFlag(agentLabel)}` }))
     }
     hash = sent.hash
-    console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a'}`)
-    if (sent.problems.length) console.log(`note: ${sent.problems.join('; ')}`)
+    console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a (the sender)'}, fee token ${sent.feeToken ?? 'n/a'}`)
     console.log(`explorer: ${explorerTx(hash)}`)
+    if (sent.status === 'success' && sent.problems.length) {
+      const reason = `the transaction on chain is not the one planned: ${sent.problems.join('; ')}`
+      console.log(`MISMATCH: ${reason}`)
+      const now = await readKey(owner, agentAddress).catch(() => null)
+      handle.finish({ ok: false, message: `The chain shows a different transaction than planned (${sent.problems.join('; ')}). Check the key and revoke again.`, hash })
+      await closeOwnerPage()
+      process.exit(emit('revokeBudget', 3, { state: 'mismatch', tx: hash, revoked: now ? now.revoked : null, reason, next: `revoke again (superstables budget revoke --rail tempo${agentFlag(agentLabel)}) and check superstables budget status --rail tempo${agentFlag(agentLabel)}` }))
+    }
   }
 
   let after = await readKey(owner, agentAddress)

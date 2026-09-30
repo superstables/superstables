@@ -35,6 +35,8 @@ function timeoutMs(): number {
 }
 /** How long a link stays open (--timeout, seconds; default 600). */
 export const OWNER_TIMEOUT_MS = timeoutMs();
+/** setup --new-owner: replace the recorded owner (each rail's setup refuses while a budget is live). */
+export const NEW_OWNER = argv.includes("--new-owner");
 /** The owner key file given with --owner-key-file, or undefined (the default: the owner approves in their wallet). */
 export const OWNER_KEY_FILE: string | undefined = argValue("owner-key-file");
 
@@ -101,10 +103,13 @@ export function ownerPageFor(rail: OwnerRail) {
   }
 
   return {
-    /** Ask the owner to connect a wallet and sign the free sign-in message. */
-    async askConnect(action: string, terms: OwnerTerms, signIn: string) {
+    /**
+     * Ask the owner to connect a wallet and sign the free sign-in message. `replacing`: the owner on record that
+     * setup --new-owner replaces, shown on the page.
+     */
+    async askConnect(action: string, terms: OwnerTerms, signIn: string, replacing?: string) {
       const s = await page();
-      const handle = s.request({ kind: "connect", chain: rail.chain, terms, signIn, timeoutMs: OWNER_TIMEOUT_MS });
+      const handle = s.request({ kind: "connect", chain: rail.chain, terms, signIn, recordedOwner: replacing, timeoutMs: OWNER_TIMEOUT_MS });
       announce(action, handle, terms);
       return { handle, outcome: await handle.settled };
     },

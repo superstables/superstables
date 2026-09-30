@@ -69,6 +69,8 @@ export interface OwnerPageFacts {
   chainIdHex: string;
   /** The only account that may act (a transaction), or undefined (a connect: any account). */
   account?: string;
+  /** The owner address on record, shown prominently; undefined on a first setup. */
+  recordedOwner?: string;
   /** Exactly what the wallet is asked to send. */
   transaction?: { to: string; data: string; value: string };
   /** The sign-in message a connect asks the wallet to sign. */
@@ -84,6 +86,8 @@ const OWNER_STYLE = `
   .limits strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
   .limits ul { margin: 0; padding-left: 18px; }
   .fineprint p { margin: 0 0 6px; }
+  .owner-box { font-size: 14px; }
+  .owner-box .mono { display: block; margin: 4px 0; font-size: 15px; font-weight: 600; word-break: break-all; }
 `;
 
 /**
@@ -300,7 +304,7 @@ export const OWNER_PAGE_SCRIPT = `
       .catch(function (err) {
         if (err && err.code === 4001) {
           post("/reject", { by: "wallet" }).then(function () {
-            ended({ status: "rejected", mine: "You rejected this wallet request. This link is closed. Any existing budget stays in effect." });
+            ended({ status: "rejected", mine: "Your wallet reported that you rejected this request. This link is closed. The command cannot prove from this page that nothing was submitted, so it reports the result as unknown until it checks the chain. Any existing budget stays in effect." });
           });
           return;
         }
@@ -561,7 +565,17 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms): str
     solana && facts.kind !== "connect" && facts.chain.testnet
       ? `<div id="network-hint" class="note">Before you approve: in Phantom, open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet. If Phantom cannot simulate the transaction, its effects have not been checked by the wallet. Reject if you cannot verify what you are signing.</div>`
       : "";
+  // Who this page acts for. Setup proves control of an address, not who the person is, so the
+  // recorded owner is shown on every page: a person who is not that owner should stop here.
+  const ownerBox = facts.recordedOwner
+    ? `<div class="note owner-box">Recorded owner wallet${facts.kind === "connect" ? " (setup replaces it with the wallet you connect)" : ""}:
+    <span class="mono">${esc(facts.recordedOwner)}</span>
+    ${facts.kind === "connect" ? "Replace it only if you are its owner and mean to move the budget to another wallet." : "This page acts only for that wallet. If this isn't your wallet, stop: reject and do not connect."}</div>`
+    : facts.kind === "connect"
+      ? `<div class="note owner-box">Setup records the wallet you connect as the budget owner. Only the owner should do this, or someone with the owner watching. If an agent or someone else sent you this link and you are not the owner, stop and reject.</div>`
+      : "";
   const body = `
+  ${ownerBox}
   <div id="say" class="note" hidden></div>
 
   <div id="no-wallet" class="note bad" hidden>

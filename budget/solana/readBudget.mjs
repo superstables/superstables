@@ -5,7 +5,7 @@
 // (both on chain). An SPL delegate has NO expiry and NO seller list on chain, so none is shown: the
 // budget lasts until it is spent or the owner revokes it. The maximum the agent can still move is
 // min(delegatedAmount, the account's real balance).
-import { getAssociatedTokenAddressSync, getAccount } from "./token.mjs";
+import { getAssociatedTokenAddressSync, getAccountOrNull } from "./token.mjs";
 import {
   connection,
   readPublic,
@@ -35,9 +35,18 @@ if (!ownerPk) {
   process.exit(1);
 }
 const ownerAta = getAssociatedTokenAddressSync(USDC_MINT, ownerPk);
-const acc = await getAccount(conn, ownerAta).catch(() => null);
+let acc;
+try {
+  acc = await getAccountOrNull(conn, ownerAta);
+} catch (e) {
+  // could not read is not "no budget": fail, so status says it could not read the budget
+  console.error(`Could not read the owner's USDC account ${ownerAta.toBase58()}: ${e?.message ?? e}`);
+  process.exit(1);
+}
 if (!acc) {
-  console.log("Owner USDC account not found.");
+  console.log("Owner USDC account not found (the chain says it does not exist): no delegate, nothing can move.");
+  console.log("  delegatedAmount (remaining): 0 USDC");
+  console.log("  maximum the delegate can still move: 0 USDC");
   process.exit(0);
 }
 const revoked = acc.delegate === null;

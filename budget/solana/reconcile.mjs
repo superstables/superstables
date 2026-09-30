@@ -61,7 +61,14 @@ const emit = (r, code) => {
   process.exit(code);
 };
 
-const a = await assessOp(conn, rec);
+let a;
+try {
+  a = await assessOp(conn, rec);
+} catch (e) {
+  // a failed read is never "not found": the operation stays unknown
+  console.log(`Could not read the chain: ${e?.message ?? e}. Do not pay again.`);
+  emit(result("unknown", { reason: `could not read the chain: ${String(e?.message ?? e).slice(0, 160)}`, next: `node budget/solana/reconcile.mjs --op ${opId}` }), EXIT.UNCERTAIN);
+}
 console.log(`Chain read: ${a.verdict}${a.tx ? ` ${explorerTx(a.tx)}` : ""}`);
 
 if (a.verdict === "no_tx") {

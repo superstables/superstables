@@ -117,18 +117,25 @@ export function acquireLock(op) {
 // Find OUR transaction: the one whose signature list contains the agent's signature.
 // When the agent pays its own fee the agent signature is the transaction id; when a facilitator
 // pays, its signature is first, so the agent's history is scanned for the agent signature.
+// The seller's claimed settlement (rec.sellerTx, from its payment-response header) is only a hint: a
+// seller can name any old successful transaction. It counts only if that transaction carries the
+// agent's signature for this operation; otherwise it is unrelated and the search goes on.
+// A failed read throws (never "not found"): the caller keeps the outcome unknown.
 export async function findOwnTx(conn, rec) {
-  const known = [...new Set([rec.tx, rec.agentSig].filter(Boolean))];
-  if (known.length) {
-    const st = await retryRead(() => conn.getSignatureStatuses(known, { searchTransactionHistory: true }));
-    for (let i = 0; i < known.length; i++) {
-      const s = st.value[i];
-      if (s && (s.confirmationStatus === "confirmed" || s.confirmationStatus === "finalized" || s.err)) {
-        return { sig: known[i], err: s.err ?? null, slot: s.slot };
-      }
-    }
+  if (!rec.agentSig) return null;
+  const known = [...new Set([rec.agentSig, rec.tx, rec.sellerTx].filter(Boolean))];
+  const st = await retryRead(() => conn.getSignatureStatuses(known, { searchTransactionHistory: true }));
+  for (let i = 0; i < known.length; i++) {
+    const s = st.value[i];
+    if (!(s && (s.confirmationStatus === "confirmed" || s.confirmationStatus === "finalized" || s.err))) continue;
+    if (known[i] === rec.agentSig) return { sig: known[i], err: s.err ?? null, slot: s.slot };
+    const t = await retryRead(() =>
+      conn.getTransaction(known[i], { commitment: "confirmed", maxSupportedTransactionVersion: 0 })
+    );
+    if (t?.transaction.signatures.includes(rec.agentSig)) return { sig: known[i], err: t.meta?.err ?? s.err ?? null, slot: t.slot ?? s.slot };
+    // unrelated to this operation: not our settlement
   }
-  if (!rec.agentSig || !rec.agent) return null;
+  if (!rec.agent) return null;
   const sigs = await retryRead(() =>
     conn.getSignaturesForAddress(new PublicKey(rec.agent), { limit: 40 }, "confirmed")
   );
@@ -137,7 +144,7 @@ export async function findOwnTx(conn, rec) {
     if (s.blockTime && s.blockTime < since) break;
     const t = await retryRead(() =>
       conn.getTransaction(s.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 })
-    ).catch(() => null);
+    );
     if (t?.transaction.signatures.includes(rec.agentSig)) {
       return { sig: s.signature, err: t.meta?.err ?? s.err ?? null, slot: t.slot };
     }

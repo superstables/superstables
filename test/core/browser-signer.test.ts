@@ -12,9 +12,9 @@
 //   Can anything be signed that I did not sign? A signature from another key must be refused,
 //   a rejection must leave nothing signed, and a request nobody answers must expire.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
@@ -93,10 +93,11 @@ async function getJson(url: string): Promise<{ status: number; body: Record<stri
   return { status: res.status, body };
 }
 
-async function postJson(url: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+/** A POST as the page itself makes it: from the page's own origin, with a JSON body (Node's fetch sends no Origin). */
+async function postJson(url: string, body: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", origin: new URL(url).origin, ...headers },
     body: JSON.stringify(body),
   });
   const parsed = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -554,21 +555,76 @@ describe("the owner approval page", () => {
     expect(state.body.message).toContain("0.01 USDC");
   });
 
-  it("ends a rejection with nothing sent, and says whether the wallet had been asked", async () => {
+  it("ends a rejection before the wallet was asked with nothing sent", async () => {
     const server = await ownerServer();
     const onPage = server.request(ownerAction());
     await postJson(`${onPage.url}/reject`, { by: "page" });
     expect(await onPage.settled).toMatchObject({ status: "rejected", sending: false });
     expect((await postJson(`${onPage.url}/account`, { address: OWNER.address })).status).toBe(409);
 
-    const inWallet = server.request(ownerAction());
-    await postJson(`${inWallet.url}/account`, { address: OWNER.address });
-    await postJson(`${inWallet.url}/sending`, { address: OWNER.address });
-    await postJson(`${inWallet.url}/reject`, { by: "wallet" });
-    const outcome = await inWallet.settled;
-    // the wallet said no (code 4001): it sent nothing, even though it had been asked
-    expect(outcome).toMatchObject({ status: "rejected", sending: false });
-    expect(outcome.status === "rejected" && outcome.reason).toContain("the wallet reported a rejection");
+    const connected = server.request(ownerAction());
+    await postJson(`${connected.url}/account`, { address: OWNER.address });
+    await postJson(`${connected.url}/reject`, { by: "wallet" });
+    expect(await connected.settled).toMatchObject({ status: "rejected", sending: false });
+  });
+
+  it("never turns a rejection after the wallet was asked to send into nothing sent", async () => {
+    // anyone holding the link can post /reject {by: "wallet"}, and a wallet popup may still be open: only the chain can
+    // say nothing landed, so the outcome keeps `sending` and the command reports unknown
+    const server = await ownerServer();
+    const handle = server.request(ownerAction());
+    await postJson(`${handle.url}/account`, { address: OWNER.address });
+    await postJson(`${handle.url}/sending`, { address: OWNER.address });
+    await postJson(`${handle.url}/reject`, { by: "wallet" });
+    const outcome = await handle.settled;
+    expect(outcome).toMatchObject({ status: "rejected", sending: true });
+    expect(outcome.status === "rejected" && outcome.reason).toContain("the chain must be checked");
+  });
+
+  it("takes state changes only from its own page's origin, as JSON (CSRF, not authentication)", async () => {
+    const server = await ownerServer();
+    const handle = server.request(ownerAction());
+    await postJson(`${handle.url}/account`, { address: OWNER.address });
+    await postJson(`${handle.url}/sending`, { address: OWNER.address });
+    const foreign = await postJson(`${handle.url}/reject`, { by: "wallet" }, { origin: "https://untrusted.example" });
+    expect(foreign.status).toBe(403);
+    const noOrigin = await fetch(`${handle.url}/reject`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect(noOrigin.status).toBe(403);
+    const plain = await postJson(`${handle.url}/reject`, { by: "wallet" }, { "content-type": "text/plain" });
+    expect(plain.status).toBe(415);
+    expect((await getJson(`${handle.url}/state`)).body.status).toBe("sending");
+  });
+
+  it("cancels for a replacement only while the wallet was never asked, in one step", async () => {
+    const server = await ownerServer();
+    const idle = server.request(ownerAction());
+    await postJson(`${idle.url}/account`, { address: OWNER.address });
+    const cancelled = await postJson(`${idle.url}/cancel`, { replacedBy: "oa-20260930000000-00000000" });
+    expect(cancelled.body).toMatchObject({ cancelled: true, status: "rejected" });
+    expect(await idle.settled).toMatchObject({ status: "rejected", sending: false, reason: expect.stringContaining("replaced by oa-20260930000000-00000000") });
+    // the page can no longer ask the wallet
+    expect((await postJson(`${idle.url}/sending`, { address: OWNER.address })).status).toBe(409);
+
+    const asked = server.request(ownerAction());
+    await postJson(`${asked.url}/account`, { address: OWNER.address });
+    await postJson(`${asked.url}/sending`, { address: OWNER.address });
+    const kept = await postJson(`${asked.url}/cancel`, { replacedBy: "oa-20260930000000-00000000" });
+    expect(kept.status).toBe(409);
+    expect(kept.body).toMatchObject({ cancelled: false, sending: true });
+    expect((await getJson(`${asked.url}/state`)).body.status).toBe("sending");
+  });
+
+  it("names the recorded owner on every owner page, and tells anyone else to stop", async () => {
+    const server = await ownerServer();
+    const grant = await (await fetch(server.request(ownerAction()).url)).text();
+    expect(grant).toContain("Recorded owner wallet");
+    expect(grant).toContain(OWNER.address);
+    expect(grant).toContain("If this isn't your wallet, stop");
+    const setup = await (await fetch(server.request(ownerAction({ kind: "connect", account: undefined, transaction: undefined, signIn: "record this wallet" })).url)).text();
+    expect(setup).toContain("Only the owner should do this, or someone with the owner watching");
+    const replace = await (await fetch(server.request(ownerAction({ kind: "connect", account: undefined, transaction: undefined, signIn: "record this wallet", recordedOwner: OWNER.address })).url)).text();
+    expect(replace).toContain(OWNER.address);
+    expect(replace).toContain("setup replaces it with the wallet you connect");
   });
 
   it("says a link that expired while the wallet was sending may have sent something", async () => {
@@ -864,6 +920,10 @@ describe("the tempo owner calldata", () => {
     expect(tempo.grantProblems({ ...onChain, scoped: false, scopes: [] }, plan).join()).toContain("seller list");
     expect(tempo.grantProblems({ ...onChain, admin: true }, plan).join()).toContain("admin");
     expect(tempo.grantProblems(onChain, { ...plan, sellers: undefined }).join()).toContain("no seller list was planned");
+    // a requested period must be exactly the planned one: the first window ends one period after the grant's block
+    const authorizedAt = onChain.periodEnd - 3600;
+    expect(tempo.grantProblems(onChain, plan, authorizedAt)).toEqual([]);
+    expect(tempo.grantProblems({ ...onChain, periodEnd: authorizedAt + 60 }, plan, authorizedAt).join()).toContain("first period ends");
   });
 });
 
@@ -1084,6 +1144,123 @@ describe("a detached owner approval", () => {
     expect(fund.result.reason).toContain("needs no gas");
   });
 
+  it("keeps the chain and no final result while the page outlives its worker, until the whole group is gone", async () => {
+    const record = await detach();
+    // kill the worker process only (tsx's wrapper): the page's process, in the same group, runs on
+    process.kill(record.pid, "SIGKILL");
+    expect(await gone(record.pid)).toBe(true);
+    expect(await unreachable(record.url)).toBe(false);
+    const pending = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    expect(pending.code).toBe(0);
+    expect(pending.result.state).toBe("waiting_owner");
+    expect(pending.result.reason).toContain("still running");
+    expect(approvals.findPending("evm", "base-sepolia")?.id).toBe(record.id);
+    const second = await budget(["grant", "--rail", "evm", "--amount", "0.001"]);
+    expect(second.code).toBe(3);
+    expect(second.result.id).toBe(record.id);
+    // once nothing of it is left, wait reports from what the page logged, and the chain is free
+    process.kill(-record.pid, "SIGKILL");
+    for (let i = 0; i < 50 && approvals.groupAlive(record.pid); i++) await new Promise((r) => setTimeout(r, 100));
+    const ended = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    expect(ended.code).toBe(3);
+    expect(ended.result.reason).toContain("stopped without a recorded submission");
+    expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
+  });
+
+  it("reports unknown, never nothing sent, when the page had asked the wallet before everything stopped", async () => {
+    const record = await detach();
+    await postJson(`${record.url}/account`, { address: OWNER.address });
+    await postJson(`${record.url}/sending`, { address: OWNER.address });
+    process.kill(-record.pid, "SIGKILL");
+    for (let i = 0; i < 50 && approvals.groupAlive(record.pid); i++) await new Promise((r) => setTimeout(r, 100));
+    const outcome = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    expect(outcome.code).toBe(5);
+    expect(outcome.result.state).toBe("unknown");
+  });
+
+  it("makes a blocking owner command hold the same lock as a detached one", async () => {
+    // setup in a terminal (--wait) blocks on its connect page; a second owner command on the chain is refused meanwhile
+    const child = spawn(process.execPath, [CLI, "setup", "--rail", "evm", "--chain", "arc-testnet", "--wait", "--no-open", "--timeout", "30"], { env: { ...process.env, SUPERSTABLES_HOME: budgetHome } });
+    let out = "";
+    child.stdout.on("data", (chunk) => (out += String(chunk)));
+    child.stderr.resume();
+    const exited = new Promise<number>((done) => child.once("close", (code) => done(code ?? 1)));
+    try {
+      await waitFor(() => /APPROVE \{/.test(out), 30_000);
+      const url = JSON.parse(out.split("\n").find((l) => l.startsWith("APPROVE "))!.slice(8)).url as string;
+      const second = await budget(["grant", "--rail", "evm", "--chain", "arc-testnet", "--amount", "0.001"]);
+      expect(second.code).toBe(3);
+      expect(second.result).toMatchObject({ state: "refused_precheck", url });
+      expect(second.result.reason).toContain("(setup) is still waiting");
+      await postJson(`${url}/reject`, { by: "page" });
+      expect(await exited).toBe(3);
+      expect(approvals.findPending("evm", "arc-testnet")).toBeNull();
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  it("reports an owner command stopped by a signal after its link existed as unknown, never failed", async () => {
+    const child = spawn(process.execPath, [CLI, "setup", "--rail", "evm", "--chain", "arbitrum-sepolia", "--wait", "--no-open", "--timeout", "30"], { env: { ...process.env, SUPERSTABLES_HOME: budgetHome } });
+    let out = "";
+    child.stdout.on("data", (chunk) => (out += String(chunk)));
+    child.stderr.resume();
+    const exited = new Promise<number>((done) => child.once("close", (code) => done(code ?? 1)));
+    try {
+      await waitFor(() => /APPROVE \{/.test(out), 30_000);
+      child.kill("SIGTERM");
+      expect(await exited).toBe(5);
+      const result = JSON.parse(out.trim().split("\n").reverse().find((l) => l.startsWith("RESULT "))!.slice(7));
+      expect(result).toMatchObject({ state: "unknown" });
+      expect(approvals.findPending("evm", "arbitrum-sepolia")).toBeNull();
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  it("never replaces a recorded owner silently: setup names it and points to --new-owner", async () => {
+    const recorded = privateKeyToAccount(generatePrivateKey()).address;
+    const keys = join(budgetHome, "keys", "budget");
+    const pub = join(budgetHome, "budget", "public");
+    for (const dir of [keys, pub]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // the agent key file may exist already (setup made it earlier in this home)
+    const agentFile = join(keys, "evm-agent.env");
+    if (!existsSync(agentFile)) {
+      const key = generatePrivateKey();
+      writeFileSync(agentFile, `B4_AGENT_KEY=${key}\nB4_AGENT_ADDRESS=${privateKeyToAccount(key).address}\n`, { mode: 0o600 });
+    }
+    const agentAddress = /B4_AGENT_ADDRESS=(\S+)/.exec(readFileSync(agentFile, "utf8"))![1];
+    writeFileSync(join(pub, "evm-skale-base-sepolia.env"), `B4_OWNER_ADDRESS=${recorded}\nB4_AGENT_ADDRESS=${agentAddress}\n`);
+    const other = generatePrivateKey();
+    const ownerFile = join(budgetHome, "other-owner.env");
+    writeFileSync(ownerFile, `B4_OWNER_KEY=${other}\n`, { mode: 0o600 });
+    const refused = await budget(["setup", "--rail", "evm", "--chain", "skale-base-sepolia", "--owner-key-file", ownerFile]);
+    expect(refused.code).toBe(3);
+    expect(refused.result).toMatchObject({ state: "refused_precheck", owner: recorded });
+    expect(refused.result.next).toContain("--new-owner");
+    expect(readFileSync(join(pub, "evm-skale-base-sepolia.env"), "utf8")).toContain(`B4_OWNER_ADDRESS=${recorded}`);
+  });
+
+  it("reserves the chain in one exclusive step, and never takes over a fresh lock", () => {
+    const [a, b] = [approvals.newApprovalId(), approvals.newApprovalId()];
+    // two claims before either approval has a record or a worker: the second is refused
+    expect(approvals.claim("evm", "polygon-amoy", a).ok).toBe(true);
+    const second = approvals.claim("evm", "polygon-amoy", b);
+    expect(second.ok).toBe(false);
+    expect(second.pending?.id).toBe(a);
+    approvals.release("evm", "polygon-amoy", a);
+
+    // a lock whose claimer is gone: still held during the startup grace, taken over after it
+    const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+    const lockPath = join(budgetHome, "budget", "approvals", "active-evm-polygon-amoy");
+    writeFileSync(lockPath, JSON.stringify({ id: a, pid: dead, createdAt: Date.now() }));
+    expect(approvals.claim("evm", "polygon-amoy", b).ok).toBe(false);
+    writeFileSync(lockPath, JSON.stringify({ id: a, pid: dead, createdAt: Date.now() - approvals.STARTUP_GRACE_MS - 1000 }));
+    expect(approvals.claim("evm", "polygon-amoy", b).ok).toBe(true);
+    approvals.release("evm", "polygon-amoy", b);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
   it("reports a worker that died without a result from what its page last logged", async () => {
     const record = await detach();
     process.kill(-record.pid, "SIGKILL");
@@ -1093,6 +1270,71 @@ describe("a detached owner approval", () => {
     expect(outcome.result).toMatchObject({ state: "refused_precheck", id: record.id });
     expect(outcome.result.reason).toContain("stopped without a recorded submission");
     expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
+  });
+});
+
+// ── what binds a chain result to this operation ─────────────────────────────────────────
+//
+// A seller's receipt names a transaction, but a seller can name any old one. The rails accept a
+// transaction as this purchase's settlement only when the chain ties it to this operation, and a
+// read that fails is never an answer.
+
+describe("settlement binding and failed reads on the chain", () => {
+  it("solana: settles only on a transaction that carries this operation's agent signature", async () => {
+    const { assessOp } = await import(join(REPO, "budget", "solana", "ops.mjs"));
+    const statuses = new Map<string, unknown>([["old-seller-tx", { confirmationStatus: "finalized", err: null, slot: 10 }]]);
+    const txs = new Map<string, unknown>([["old-seller-tx", { slot: 10, transaction: { signatures: ["old-seller-tx", "someone-elses-sig"] }, meta: { err: null } }]]);
+    const conn = {
+      getSignatureStatuses: async (sigs: string[]) => ({ value: sigs.map((sig) => statuses.get(sig) ?? null) }),
+      getTransaction: async (sig: string) => txs.get(sig) ?? null,
+      getSignaturesForAddress: async () => [],
+      getBlockHeight: async () => 100,
+    };
+    const rec = { agentSig: "our-agent-sig", sellerTx: "old-seller-tx", agent: SOL_OWNER.address, lastValidBlockHeight: 200, submittedAt: new Date().toISOString() };
+    // an unrelated old success is not this purchase: still pending, never settled
+    expect(await assessOp(conn, rec)).toMatchObject({ verdict: "pending" });
+    // the facilitator's transaction that carries our signature is
+    statuses.set("new-settle", { confirmationStatus: "confirmed", err: null, slot: 11 });
+    txs.set("new-settle", { slot: 11, transaction: { signatures: ["facilitator-sig", "our-agent-sig"] }, meta: { err: null } });
+    expect(await assessOp(conn, { ...rec, sellerTx: "new-settle" })).toMatchObject({ verdict: "settled", tx: "new-settle" });
+    // a failed read is not "not found": it throws, and the caller keeps the purchase unknown
+    await expect(assessOp({ ...conn, getSignatureStatuses: async () => { throw new Error("fetch failed"); } }, rec)).rejects.toThrow("fetch failed");
+  });
+
+  it("tempo: an old same-amount payment to the seller never settles a new purchase", async () => {
+    const { judge } = await import(join(REPO, "budget", "tempo", "lib", "resolve.ts"));
+    const pathUsd = "0x20C0000000000000000000000000000000000000";
+    const owner = privateKeyToAccount(generatePrivateKey()).address;
+    const seller = privateKeyToAccount(generatePrivateKey()).address;
+    const memo = `0x${"11".repeat(32)}`;
+    const op = { op: "t-1", intent: { owner, recipient: seller, agent: AGENT, amount: "1000" }, memo, startBlock: "500" };
+    const transfer = { token: pathUsd, from: owner, to: seller, value: 1000n };
+    const old = { kind: "found", hash: `0x${"aa".repeat(32)}`, from: owner, receipt: { status: "success", blockNumber: 400n, transactionHash: `0x${"aa".repeat(32)}`, transfers: [transfer], memos: [] } };
+    const unbound = judge(op, old, 1000n);
+    expect(unbound.state).toBe("unknown");
+    expect(unbound.note).toContain("before this operation started");
+    expect(unbound.note).toContain("memo");
+    expect(unbound.note).toContain("no access key");
+    const ours = { kind: "found", hash: `0x${"bb".repeat(32)}`, from: owner, keyId: AGENT, receipt: { status: "success", blockNumber: 600n, transactionHash: `0x${"bb".repeat(32)}`, transfers: [transfer], memos: [{ token: pathUsd, from: owner, to: seller, memo }] } };
+    expect(judge(op, ours, 1000n)).toMatchObject({ state: "settled", debit: 1000n });
+    const otherKey = privateKeyToAccount(generatePrivateKey()).address;
+    expect(judge(op, { ...ours, keyId: otherKey }, 1000n).state).toBe("unknown");
+    expect(judge(op, { ...ours, from: otherKey }, 1000n).state).toBe("unknown");
+  });
+
+  it("solana: a read that fails is never 'never landed' or 'no account'", async () => {
+    const { confirmSent } = await import(join(REPO, "budget", "solana", "owner.ts"));
+    const { getAccountOrNull } = await import(join(REPO, "budget", "solana", "token.mjs"));
+    const down = async () => { throw new Error("fetch failed"); };
+    const sent = { signature: "sig", blockhash: "hash", lastValidBlockHeight: 10 };
+    expect(await confirmSent({ getTransaction: down, getBlockHeight: async () => 1000, getSignatureStatus: down }, sent, 100)).toEqual({ status: "unknown" });
+    expect(await confirmSent({ getTransaction: async () => null, getBlockHeight: async () => 1000, getSignatureStatus: down }, sent, 100)).toEqual({ status: "unknown" });
+    // only a successful answer that the chain has no such signature, after its blockhash expired, is "expired"
+    expect(await confirmSent({ getTransaction: async () => null, getBlockHeight: async () => 1000, getSignatureStatus: async () => ({ value: null }) }, sent, 100)).toEqual({ status: "expired" });
+    const { PublicKey } = await import("@solana/web3.js");
+    const address = new PublicKey(SOL_OWNER.address);
+    expect(await getAccountOrNull({ getAccountInfo: async () => null }, address)).toBeNull();
+    await expect(getAccountOrNull({ getAccountInfo: down }, address)).rejects.toThrow("fetch failed");
   });
 });
 
