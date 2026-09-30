@@ -29,11 +29,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   purchase journal, at most 1 MB with owner-only file permissions (mode 600), and names the file in `RESULT`
   as `responseFile`, with its content type, size and truncation status. The response is seller
   data, not proof of settlement.
-
-### Fixed
-
-- EVM budget purchases register x402 v1 sellers with the v1 payment scheme. Previously,
-  their legacy network names were not matched and the client refused those purchases.
+- **`superstables budget` as a standalone skill zip.** `npm run skill` builds
+  `superstables-budget-skill-<version>.zip`: the skill and the whole tool bundled into plain
+  JavaScript that needs Node 20 or newer and nothing else. `superstables budget --version` names
+  the build, and `THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 
 ## [0.2.0] - 2026-09-22
 

@@ -16,11 +16,8 @@
 //
 // The table is the single list of runnable scripts. A script that is not in it exits 2 (fail closed).
 // Only Node built-ins and the plain chain table (chains.mjs, no imports) are used here.
-import { relative, dirname, basename } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, basename, resolve } from "node:path";
 import { EVM_CHAIN_KEYS } from "./chains.mjs";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
 
 // v = flags that take a value, b = boolean flags, r = required flags (value or boolean), pos = positional arguments
 // (name list; all required), keys = which secret files the script may open (documentation, printed in --help).
@@ -42,7 +39,7 @@ for (const s of Object.values(SPEC)) { s.v = [...s.v, "chain"]; s.u = `${s.u} [-
 export const SPEC_TABLE = SPEC;
 
 function usageText(rel, s) {
-  return `${rel}\n  ${s.d}\n  usage: npx tsx budget/evm/${rel} ${s.u}\n  secret files opened: ${s.keys}\n`;
+  return `${rel}\n  ${s.d}\n  usage: ${BUILT ? `node evm/${rel.replace(/\.ts$/, ".mjs")}` : `npx tsx budget/evm/${rel}`} ${s.u}\n  secret files opened: ${s.keys}\n`;
 }
 
 function fail(msg, rel, s) {
@@ -50,8 +47,11 @@ function fail(msg, rel, s) {
   process.exit(2);
 }
 
+// The table names the TypeScript sources. The standalone build (scripts/budget-build.mjs) runs the same scripts bundled as
+// evm/<name>.mjs, with this file inlined into a shared chunk, so a script is known by its folder (evm) and its base name.
 const script = process.argv[1] ?? "";
-const rel = relative(HERE, script).split("\\").join("/");
+const BUILT = script.endsWith(".mjs");
+const rel = basename(dirname(resolve(script))) === "evm" ? basename(script).replace(/\.(?:ts|mjs)$/, ".ts") : basename(script);
 const s = SPEC[rel];
 const argv = process.argv.slice(2);
 

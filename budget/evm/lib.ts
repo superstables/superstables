@@ -97,7 +97,7 @@ export const publicEnv = () => parseLines(PUBLIC_ENV);
 export function need(env: Record<string, string>, k: string, file: string): string {
   if (!env[k]) {
     console.error(`error: missing ${k} in ${file} (superstables budget setup --rail evm creates the agent key and the public file)`);
-    process.exit(emit(basename(process.argv[1] ?? "unknown", ".ts"), 1, { state: "failed", reason: `missing ${k} in ${file}`, next: "run superstables budget setup --rail evm" }));
+    process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 1, { state: "failed", reason: `missing ${k} in ${file}`, next: "run superstables budget setup --rail evm" }));
   }
   return env[k];
 }

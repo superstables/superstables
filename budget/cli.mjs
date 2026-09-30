@@ -11,7 +11,7 @@
 // when the command exits), or with --detach, an owner command starts itself again in the background, returns as soon
 // as the link exists with `state: "waiting_owner"` and an approval id, and the caller polls `superstables budget wait --id`.
 // In a terminal, or with --wait, it blocks as before. One owner approval at a time per rail and chain.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,9 +20,23 @@ import { WORKER_ENV, claim, findPending, forget, isApprovalId, logFile, pageWord
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-// The rails run on the client repo's own install: its tsx and its node_modules.
+// Two ways to run. In a checkout the TypeScript sources sit next to this file, and the rails always run from them, on the
+// repo's own install: its tsx and its node_modules (never a dist/budget build, which may be older than the sources). The
+// standalone copy (dist/budget, the skill's scripts/) has no sources: scripts/budget-build.mjs bundled every rail script
+// to <rail>/<name>.mjs, which runs with node alone.
+const SOURCES = existsSync(join(ROOT, "owner-page.ts"));
 const REPO = join(ROOT, "..");
 const TSX = join(REPO, "node_modules", ".bin", "tsx");
+
+// Which build this is: VERSION.json next to a standalone copy, else the checkout's package.json and commit.
+function versionLine() {
+  const read = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } };
+  const v = read(join(ROOT, "VERSION.json"));
+  if (v && !SOURCES) return `superstables budget ${v.version} (standalone build${v.commit ? `, commit ${v.commit}${v.dirty ? " with uncommitted changes" : ""}` : ""}, built ${v.builtAt})`;
+  let commit = null;
+  try { commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch {}
+  return `superstables budget ${read(join(REPO, "package.json"))?.version ?? "unknown"} (checkout: runs the TypeScript sources with tsx${commit ? `, commit ${commit}` : ""})`;
+}
 
 // ---- rails ------------------------------------------------------------------------------------------
 const RAILS = {
@@ -82,7 +96,7 @@ const COMMANDS = {
 };
 const TOP_HELP = `superstables budget: on-chain agent budgets on evm (${Object.values(EVM_CHAINS).map((c) => c.label).join(", ")}), tempo (Moderato) and solana (devnet). Testnet only.
 
-Commands (each takes --help):
+Commands (each takes --help; superstables budget --version names this build):
   superstables budget setup      --rail R [--chain C]                                                      owner connects a wallet
   superstables budget fund-agent --rail evm|solana [--amount A]                                            owner
   superstables budget doctor     --rail R [--chain C]
@@ -140,6 +154,7 @@ function refuse(ctx, reason, next = "respect the refusal; nothing was signed") {
 function parse(argv) {
   const cmd = argv[0];
   if (!cmd || cmd === "--help" || cmd === "-h" || cmd === "help") { console.log(TOP_HELP); process.exit(0); }
+  if (cmd === "--version" || cmd === "-v" || cmd === "version") { console.log(versionLine()); process.exit(0); }
   const spec = COMMANDS[cmd];
   if (!spec) return badInput({}, `unknown command "${cmd}". Commands: ${Object.keys(COMMANDS).join(", ")}`);
   const rest = argv.slice(1);
@@ -222,7 +237,7 @@ function parse(argv) {
 }
 
 // ---- rail command lines: the only place that knows script names and flags ---------------------------
-const tsx = (dir, script, args) => ({ cwd: join(ROOT, dir), cmd: TSX, args: [script, ...args] });
+const tsx = (dir, script, args) => (SOURCES ? { cwd: join(ROOT, dir), cmd: TSX, args: [script, ...args] } : { cwd: join(ROOT, dir), cmd: process.execPath, args: [script.replace(/\.ts$/, ".mjs"), ...args] });
 const mjs = (dir, script, args) => ({ cwd: join(ROOT, dir), cmd: process.execPath, args: [script, ...args] });
 const opt = (name, v) => (v === undefined ? [] : [`--${name}`, v]);
 /** The owner flags every owner script takes: how long the link stays open, whether to open a browser, the test key file. */
@@ -295,7 +310,7 @@ function passApproval(line) {
 let currentChild;
 function run(spec) {
   return new Promise((resolve) => {
-    if (!existsSync(TSX)) { log(`superstables budget: dependencies are missing: run npm ci at the repo root (${REPO})`); return resolve({ code: 2, stdout: "", missing: true }); }
+    if (spec.cmd === TSX && !existsSync(TSX)) { log(`superstables budget: dependencies are missing: run npm ci at the repo root (${REPO})`); return resolve({ code: 2, stdout: "", missing: true }); }
     const p = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env: process.env });
     currentChild = p;
     let stdout = "";
@@ -402,6 +417,7 @@ function normalize(cmd, f, rail, code) {
 
 // ---- commands ---------------------------------------------------------------------------------------
 async function doctor({ f, ctx }) {
+  log(versionLine());
   const { runDoctor } = await import("./doctor.mjs");
   const failed = await runDoctor(f);
   emit(failed ? 1 : 0, { ...ctx, state: failed ? "failed" : "ok", next: failed ? "fix what the output marks FAIL (top-up lines name the address), then rerun superstables budget doctor" : "none", reason: failed ? `${failed} doctor check${failed === 1 ? "" : "s"} failed` : undefined });
