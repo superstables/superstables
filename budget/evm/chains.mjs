@@ -57,6 +57,16 @@ export const EVM_CHAINS = {
     gas: { symbol: "CREDIT", decimals: 18, isToken: false, minAgent: "0.0001", topUp: "0.001" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.001", minAgentGas: "0.001", fundAgent: "0.002", tokenFaucet: "Base Sepolia USDC over the SKALE bridge", gasFaucet: "base-sepolia-faucet.skale.space" },
   },
+  // L1 gas: a pull used 68,368 gas, the owner's approve 55,425 and the revoke 33,501. The minimums below cover a few gwei
+  // (the base fee sat near 1 to 1.4 gwei in late September 2026: a pull cost about 0.00009 ETH).
+  "ethereum-sepolia": {
+    label: "Ethereum Sepolia", chainId: 11155111, viem: "sepolia",
+    rpc: "https://ethereum-sepolia-rpc.publicnode.com", explorer: "https://sepolia.etherscan.io",
+    token: { address: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
+    legacy: ["sepolia"], logRange: 50000,
+    gas: { symbol: "ETH", decimals: 18, isToken: false, minAgent: "0.0003", topUp: "0.0005" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.0005", minAgentGas: "0.0005", fundAgent: "0.001", tokenFaucet: "faucet.circle.com, Ethereum Sepolia", gasFaucet: "a Sepolia ETH faucet" },
+  },
 };
 
 export const EVM_CHAIN_KEYS = Object.keys(EVM_CHAINS);
