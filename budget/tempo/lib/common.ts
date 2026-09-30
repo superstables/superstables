@@ -1,8 +1,9 @@
 // Shared helpers for the Tempo superstables budget scripts.
 //
-// Reads keys from tempo-owner.env or tempo-agent.env (mode 600, paths from ../../paths.mjs),
-// never both in one process (contract rule 1). Never logs a private key. Every script that signs a
-// transaction imports from here instead of touching the env files directly.
+// Reads the agent key from tempo-agent.env (mode 600, paths from ../../paths.mjs). The owner's key
+// stays in the owner's own wallet: owner commands go through the owner page (../owner.ts). An owner
+// key file is read only when a test names it with --owner-key-file (loadOwnerKeyFile), and never
+// in the same process as the agent file (contract rule 1). Never logs a private key.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -26,12 +27,13 @@ export const TOKEN_DECIMALS: number = TOKEN_DECIMALS_
 export const TOKEN_LABEL: string = TOKEN_LABEL_
 
 // Key files (contract rule 1). Owner and agent keys never share a file.
-//   tempo-owner.env  OWNER_PRIVATE_KEY + public addresses. Opened only by owner commands
-//                    (setBudget, revokeBudget, setup).
-//   tempo-agent.env  AGENT*_PRIVATE_KEY (access keys) + public addresses. Opened only by agent
-//                    commands (buy). No owner key in it.
-//   public file      public addresses only. Read commands (readBudget, reconcile) use it, or take
-//                    --owner/--key and need no file at all.
+//   the owner's wallet  holds the owner key. setup, grant and revoke ask it on the owner page.
+//   tempo-agent.env     AGENT*_PRIVATE_KEY (access keys) + public addresses. Opened only by agent
+//                       commands (buy) and by setup, which creates it. No owner key in it.
+//   public file         public addresses only. Read commands (readBudget, reconcile) and the owner
+//                       commands use it, or take --owner/--key and need no file at all.
+//   an owner key file   tests and automation only, named with --owner-key-file <path> (mode 600):
+//                       OWNER_PRIVATE_KEY. The default path ownerKeyFile('tempo') is never read.
 export const OWNER_ENV_PATH = ownerKeyFile('tempo')
 export const AGENT_ENV_PATH = agentKeyFile('tempo')
 export const PUBLIC_ENV_PATH = publicFile('tempo', 'moderato')
@@ -61,19 +63,21 @@ function readEnvFile(path: string, hint: string): Record<string, string> {
 
 const isAddress = (v: unknown) => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v)
 
-/** Owner file: the owner private key and public addresses. For owner commands only. */
-export function loadOwnerEnv(): OwnerEnv {
-  const parsed = readEnvFile(OWNER_ENV_PATH, 'Run "npx tsx budget/tempo/setup.ts" to create the keys.')
-  for (const key of ['OWNER_PRIVATE_KEY', 'OWNER_ADDRESS']) {
-    if (!parsed[key]) throw new Error(`Missing ${key} in ${OWNER_ENV_PATH}`)
-  }
-  if (!isAddress(parsed.OWNER_ADDRESS)) throw new Error(`OWNER_ADDRESS in ${OWNER_ENV_PATH} is not an address`)
-  return parsed as OwnerEnv
+/**
+ * An owner key file named with --owner-key-file (tests and automation only; the caller checks its mode): the owner private key.
+ * OWNER_ADDRESS is derived from the key; if the file also names one, it must match.
+ */
+export function loadOwnerKeyFile(path: string): OwnerEnv {
+  const parsed = readEnvFile(path, 'Pass the path of a test owner key file.')
+  if (!parsed.OWNER_PRIVATE_KEY) throw new Error(`Missing OWNER_PRIVATE_KEY in ${path}`)
+  const derived = privateKeyToAddress(parsed.OWNER_PRIVATE_KEY as Hex)
+  if (parsed.OWNER_ADDRESS && parsed.OWNER_ADDRESS.toLowerCase() !== derived.toLowerCase()) throw new Error(`OWNER_PRIVATE_KEY in ${path} does not match its OWNER_ADDRESS`)
+  return { ...parsed, OWNER_ADDRESS: derived } as OwnerEnv
 }
 
 /** Agent file: access-key private keys and public addresses. It holds no owner key. For agent commands only. */
 export function loadAgentEnv(): AgentEnv {
-  const parsed = readEnvFile(AGENT_ENV_PATH, 'Run "npx tsx budget/tempo/setup.ts" to create the keys.')
+  const parsed = readEnvFile(AGENT_ENV_PATH, 'Run "superstables budget setup --rail tempo" to create the agent key and connect the owner.')
   if (!isAddress(parsed.OWNER_ADDRESS)) throw new Error(`OWNER_ADDRESS (public) missing in ${AGENT_ENV_PATH}`)
   if (parsed.OWNER_PRIVATE_KEY) throw new Error(`${AGENT_ENV_PATH} contains OWNER_PRIVATE_KEY. Remove it: the agent file must not hold the owner key.`)
   return parsed as AgentEnv
@@ -111,31 +115,53 @@ function appendLines(path: string, lines: string) {
 
 /**
  * Creates a fresh agent access key for `label` ("2", "3", "V2609..."): private key + address go to
- * the agent file, the address alone to the owner file and the public file. Returns the address.
- * Owner commands and read commands find the agent by address; only the agent file holds the key.
+ * the agent file, the address alone to the public file. Returns the address (the existing one if the
+ * label is taken). Owner commands and read commands find the agent by address; only the agent file
+ * holds the key.
  */
-export function appendExtraAgent(label: string): Address {
+export function appendExtraAgent(label: string): { address: Address; created: boolean } {
   const agentPath = AGENT_ENV_PATH
-  if (!existsSync(agentPath) || !existsSync(OWNER_ENV_PATH)) throw new Error('Key files not found. Run "npx tsx budget/tempo/setup.ts" first.')
+  if (!existsSync(agentPath)) throw new Error('The agent key file is missing. Run "superstables budget setup --rail tempo" first.')
   const existing = parseEnvFile(readFileSync(agentPath, 'utf8'))
   const addrKey = `AGENT${label}_ADDRESS`
-  if (existing[addrKey]) return existing[addrKey] as Address
+  if (existing[addrKey]) {
+    if (!loadPublicEnv()[addrKey]) writePublicEnv({ [addrKey]: existing[addrKey] })
+    return { address: existing[addrKey] as Address, created: false }
+  }
   const pk = generatePrivateKey()
   const address = privateKeyToAddress(pk)
   appendLines(agentPath, `AGENT${label}_PRIVATE_KEY=${pk}\n${addrKey}=${address}\n`)
   chmodSync(agentPath, 0o600)
-  appendLines(OWNER_ENV_PATH, `${addrKey}=${address}\n`)
-  chmodSync(OWNER_ENV_PATH, 0o600)
-  mkdirSync(dirname(PUBLIC_ENV_PATH), { recursive: true, mode: 0o700 })
-  appendFileSync(PUBLIC_ENV_PATH, `${addrKey}=${address}\n`, { mode: 0o644 })
-  return address
+  writePublicEnv({ [addrKey]: address })
+  return { address, created: true }
 }
 
-/** Root account for the owner (holds the funds, signs setBudget/revokeBudget). Owner commands only. */
+/** Adds or updates public values in the public file (addresses only, never a key). Mode 644. */
+export function writePublicEnv(updates: Record<string, string>) {
+  for (const k of Object.keys(updates)) if (/PRIVATE|MNEMONIC|PASSWORD/i.test(k)) throw new Error(`${k} does not belong in the public file`)
+  const env = { ...loadPublicEnv(), ...updates }
+  mkdirSync(dirname(PUBLIC_ENV_PATH), { recursive: true, mode: 0o700 })
+  writeFileSync(PUBLIC_ENV_PATH, '# Tempo public addresses only. Read commands use this file. No secrets.\n' + Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n') + '\n', { mode: 0o644 })
+}
+
+/** Adds or replaces public (non-secret) lines in the agent file, keeping its keys. Mode stays 600. */
+export function setAgentPublic(updates: Record<string, string>) {
+  const lines = readFileSync(AGENT_ENV_PATH, 'utf8').split('\n').filter((l) => l !== '')
+  for (const [k, v] of Object.entries(updates)) {
+    if (/PRIVATE/i.test(k)) throw new Error(`${k} is not a public value`)
+    const i = lines.findIndex((l) => l.startsWith(`${k}=`))
+    if (i >= 0) lines[i] = `${k}=${v}`
+    else lines.push(`${k}=${v}`)
+  }
+  writeFileSync(AGENT_ENV_PATH, lines.join('\n') + '\n', { mode: 0o600 })
+  chmodSync(AGENT_ENV_PATH, 0o600)
+}
+
+/** Root account for the owner from a test owner key file (--owner-key-file). Tests and automation only. */
 export function ownerAccount(env: OwnerEnv) {
   const account = Account.fromSecp256k1(env.OWNER_PRIVATE_KEY)
   if (account.address.toLowerCase() !== env.OWNER_ADDRESS.toLowerCase()) {
-    throw new Error(`OWNER_PRIVATE_KEY in ${OWNER_ENV_PATH} does not match OWNER_ADDRESS`)
+    throw new Error('the owner key file does not match its OWNER_ADDRESS')
   }
   return account
 }

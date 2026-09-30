@@ -13,11 +13,18 @@
 //  4. Nothing waits for ever. A link expires, an expiry is a refusal with a reason, and every
 //     state change can be appended to an audit log that never holds a signature.
 //
-// Two kinds of action:
-//   connect           the wallet shares an account and signs a free sign-in message
-//   evm-transaction   the wallet sends exactly { to, data, value } from the one allowed account
+// Three kinds of action:
+//   connect              the wallet shares an account and signs a free sign-in message
+//   evm-transaction      the wallet sends exactly { to, data, value } from the one allowed account
+//   solana-transaction   the wallet signs a transaction the caller builds when the owner presses
+//                        Approve; the caller checks the signed bytes and sends them itself
+//
+// Two wallet families: "evm" (MetaMask or any EIP-1193 wallet; also Tempo) and "solana" (a
+// Wallet Standard wallet such as Phantom). This file imports no Solana library: an ed25519
+// sign-in is checked with node:crypto, and building, checking and sending a Solana transaction
+// is the caller's SolanaTransactionPort.
 
-import { randomBytes } from "node:crypto";
+import { createPublicKey, randomBytes, verify as verifySignature } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -32,6 +39,26 @@ import {
 
 export type { OwnerChain, OwnerTerms, OwnerTermRow } from "./owner-approval-page.js";
 
+/**
+ * How a Solana owner action is built, checked and sent. The server never trusts the wallet with
+ * sending: it hands the wallet a transaction the caller built, and gives the caller back what
+ * the wallet signed.
+ */
+export interface SolanaTransactionPort {
+  /**
+   * A fresh unsigned transaction for the wallet to sign, as base64 wire bytes. Called each time
+   * the owner presses Approve, so the blockhash is fresh.
+   */
+  prepare(): Promise<string>;
+  /**
+   * Check what the wallet signed (base64 wire bytes) against the last prepared transaction, then
+   * send it. Call `broadcasting()` right before the send; if it returns false, send nothing and
+   * refuse. "refused" means nothing was sent. "sent" carries the transaction signature, also
+   * when the RPC answered with an error after the broadcast: the caller then reads the chain.
+   */
+  submit(signed: string, broadcasting: () => boolean): Promise<{ status: "sent"; hash: string } | { status: "refused"; reason: string }>;
+}
+
 const MAX_BODY_BYTES = 16 * 1024;
 const SWEEP_MS = 500;
 /** Once the wallet was asked to send, the link stays open this much longer for the hash to come back. */
@@ -39,8 +66,8 @@ const DEFAULT_SENDING_GRACE_MS = 120_000;
 
 export type OwnerActionStatus =
   | "pending" // waiting for the owner
-  | "ready" // an allowed account is connected (evm-transaction)
-  | "sending" // the page asked the wallet to send
+  | "ready" // an allowed account is connected (a transaction)
+  | "sending" // evm: the page asked the wallet to send. solana: the server is sending what the wallet signed
   | "connected" // connect: the address is proven; waiting for the caller
   | "sent" // the page reported a transaction hash; waiting for the caller
   | "confirmed" // the caller checked the chain: done
@@ -49,13 +76,15 @@ export type OwnerActionStatus =
   | "expired";
 
 export interface OwnerActionInput {
-  kind: "connect" | "evm-transaction";
+  kind: "connect" | "evm-transaction" | "solana-transaction";
   chain: OwnerChain;
   terms: OwnerTerms;
-  /** evm-transaction: the only account that may send it. */
+  /** A transaction: the only account that may approve it. */
   account?: string;
   /** evm-transaction: exactly what the wallet is asked to send. value is a hex quantity. */
   transaction?: { to: string; data: string; value: string };
+  /** solana-transaction: builds, checks and sends the transaction. */
+  solana?: SolanaTransactionPort;
   /** connect: the sign-in text. The server adds the approval id and the address to it. */
   signIn?: string;
   timeoutMs: number;
@@ -85,6 +114,8 @@ interface OwnerRecord extends OwnerActionInput {
   address?: string;
   hash?: string;
   sending: boolean;
+  /** solana: a signed transaction is being checked or sent; a second one is refused meanwhile. */
+  submitting?: boolean;
   resolve: (outcome: OwnerActionOutcome) => void;
 }
 
@@ -100,6 +131,49 @@ export interface OwnerApprovalServerOptions {
 /** The text a connect asks the wallet to sign. */
 export function signInMessage(signIn: string, id: string): string {
   return `${signIn}\n\nApproval id: ${id}\nThis signature sends nothing and costs nothing.`;
+}
+
+const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/** Bytes of a base58 string (Solana addresses), or undefined if it is not base58. */
+export function base58Decode(text: string): Uint8Array | undefined {
+  if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(text)) return undefined;
+  let n = 0n;
+  for (const ch of text) n = n * 58n + BigInt(BASE58.indexOf(ch));
+  const bytes: number[] = [];
+  while (n > 0n) {
+    bytes.unshift(Number(n & 0xffn));
+    n >>= 8n;
+  }
+  for (const ch of text) {
+    if (ch !== "1") break;
+    bytes.unshift(0);
+  }
+  return Uint8Array.from(bytes);
+}
+
+/** A Solana address: base58 of 32 bytes. */
+export function isSolanaAddress(text: unknown): text is string {
+  return typeof text === "string" && text.length >= 32 && text.length <= 44 && base58Decode(text)?.length === 32;
+}
+
+/** Whether `signature` (64 bytes) is `address`'s ed25519 signature over `message`. */
+export function verifyEd25519(address: string, message: Uint8Array, signature: Uint8Array): boolean {
+  const key = base58Decode(address);
+  if (key?.length !== 32 || signature.length !== 64) return false;
+  try {
+    const publicKey = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: Buffer.from(key).toString("base64url") }, format: "jwk" });
+    return verifySignature(null, message, publicKey, signature);
+  } catch {
+    return false;
+  }
+}
+
+const isSolana = (chain: OwnerChain) => chain.family === "solana";
+/** The account in its one canonical spelling, or undefined if it is not an account of this family. */
+function accountOf(chain: OwnerChain, value: unknown): string | undefined {
+  if (isSolana(chain)) return isSolanaAddress(value) ? value : undefined;
+  return typeof value === "string" && isAddress(value) ? getAddress(value) : undefined;
 }
 
 export class OwnerApprovalServer {
@@ -146,8 +220,11 @@ export class OwnerApprovalServer {
   /** Register one owner action and hand back its link. start() first. */
   request(input: OwnerActionInput): OwnerActionHandle {
     if (!this.server) throw new Error("start the owner approval server first");
-    if (input.kind === "evm-transaction" && (!input.transaction || !input.account || !isAddress(input.account))) {
-      throw new Error("an evm-transaction needs the transaction and the one account allowed to send it");
+    if (input.kind === "evm-transaction" && (isSolana(input.chain) || !input.transaction || !accountOf(input.chain, input.account))) {
+      throw new Error("an evm-transaction needs an EVM chain, the transaction and the one account allowed to send it");
+    }
+    if (input.kind === "solana-transaction" && (!isSolana(input.chain) || !input.solana || !accountOf(input.chain, input.account))) {
+      throw new Error("a solana-transaction needs a Solana chain, its port and the one account allowed to sign it");
     }
     if (input.kind === "connect" && !input.signIn) throw new Error("a connect needs its sign-in text");
     const id = randomBytes(16).toString("hex");
@@ -162,7 +239,7 @@ export class OwnerApprovalServer {
     });
     const record: OwnerRecord = {
       ...input,
-      account: input.account ? getAddress(input.account) : undefined,
+      account: input.account ? accountOf(input.chain, input.account) : undefined,
       id,
       status: "pending",
       expiresAt: Date.now() + input.timeoutMs,
@@ -245,7 +322,7 @@ export class OwnerApprovalServer {
       id: record.id,
       kind: record.kind,
       chain: record.chain,
-      chainIdHex: `0x${record.chain.chainId.toString(16)}`,
+      chainIdHex: isSolana(record.chain) ? "" : `0x${record.chain.chainId.toString(16)}`,
       account: record.account,
       transaction: record.transaction,
       message: record.kind === "connect" ? signInMessage(record.signIn!, record.id) : undefined,
@@ -305,7 +382,7 @@ export class OwnerApprovalServer {
     this.sweep();
     const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname.replace(/\/+$/, "") || "/";
     const method = req.method ?? "GET";
-    const match = /^\/owner\/([0-9a-f]{32})(\/state|\/account|\/connect|\/sending|\/sent|\/reject)?$/.exec(path);
+    const match = /^\/owner\/([0-9a-f]{32})(\/state|\/account|\/connect|\/sending|\/sent|\/prepare|\/signed|\/reject)?$/.exec(path);
     const record = match ? this.records.get(match[1]) : undefined;
     const leaf = match?.[2];
     if (!record) {
@@ -330,11 +407,15 @@ export class OwnerApprovalServer {
     } catch (err) {
       return this.json(res, 400, { error: (err as Error).message });
     }
-    const address = typeof body.address === "string" && isAddress(body.address) ? getAddress(body.address) : undefined;
+    const address = accountOf(record.chain, body.address);
 
     if (leaf === "/reject") {
       if (!["pending", "ready", "sending"].includes(record.status)) {
         return this.json(res, 409, { error: `this is already ${record.status}`, status: record.status });
+      }
+      // solana: once the server is sending what the wallet signed, there is nothing left to reject
+      if (record.kind === "solana-transaction" && (record.status === "sending" || record.submitting)) {
+        return this.json(res, 409, { error: "this is being sent already", status: record.status });
       }
       const reason = body.by === "wallet" ? "the owner rejected it in the wallet. Nothing was sent." : "the owner rejected it on the page. Nothing was sent.";
       // A wallet's rejection (EIP-1193 code 4001) means it sent nothing, even after it was asked to.
@@ -347,12 +428,21 @@ export class OwnerApprovalServer {
       if (record.kind !== "connect") return this.json(res, 404, { error: "this link is for a transaction, not a connect" });
       if (record.status !== "pending") return this.json(res, 409, { error: `this is already ${record.status}` });
       const signature = typeof body.signature === "string" ? body.signature : "";
-      if (!address || !/^0x[0-9a-fA-F]+$/.test(signature)) return this.json(res, 400, { error: "that is not an address and a signature" });
+      const message = signInMessage(record.signIn!, record.id);
       let valid = false;
-      try {
-        valid = await verifyMessage({ address, message: signInMessage(record.signIn!, record.id), signature: signature as `0x${string}` });
-      } catch {
-        valid = false;
+      if (isSolana(record.chain)) {
+        // Wallet Standard solana:signMessage: base64 of the signed bytes and of the 64-byte signature
+        const signed = typeof body.signedMessage === "string" ? Buffer.from(body.signedMessage, "base64") : Buffer.alloc(0);
+        if (!address || !/^[A-Za-z0-9+/]+={0,2}$/.test(signature)) return this.json(res, 400, { error: "that is not an address and a signature" });
+        if (!signed.equals(Buffer.from(message, "utf8"))) return this.json(res, 400, { error: "the wallet signed a different message; nothing was recorded, and you can sign again" });
+        valid = verifyEd25519(address, signed, Buffer.from(signature, "base64"));
+      } else {
+        if (!address || !/^0x[0-9a-fA-F]+$/.test(signature)) return this.json(res, 400, { error: "that is not an address and a signature" });
+        try {
+          valid = await verifyMessage({ address: address as `0x${string}`, message, signature: signature as `0x${string}` });
+        } catch {
+          valid = false;
+        }
       }
       // a wrong signature is a mistake, not a decision: the link stays open
       if (!valid) return this.json(res, 400, { error: `that signature was not made by ${address}; nothing was recorded, and you can sign again` });
@@ -363,7 +453,7 @@ export class OwnerApprovalServer {
       return this.json(res, 200, { status: record.status });
     }
 
-    if (record.kind !== "evm-transaction") return this.json(res, 404, { error: "no such route for a connect" });
+    if (record.kind === "connect") return this.json(res, 404, { error: "no such route for a connect" });
 
     if (leaf === "/account") {
       if (record.status !== "pending" && record.status !== "ready") return this.json(res, 409, { error: `this is already ${record.status}` });
@@ -377,6 +467,8 @@ export class OwnerApprovalServer {
       this.audit(record);
       return this.json(res, 200, { status: record.status, transaction: record.transaction });
     }
+
+    if (record.kind === "solana-transaction") return this.solanaRoute(record, leaf, address, body, res);
 
     if (leaf === "/sending") {
       if (record.status !== "ready" || address !== record.address) return this.json(res, 409, { error: "connect the owner account first" });
@@ -398,5 +490,59 @@ export class OwnerApprovalServer {
     }
 
     this.json(res, 404, { error: "no such route" });
+  }
+
+  /** /prepare and /signed: the server builds on each Approve, the wallet only signs, the caller checks and sends. */
+  private async solanaRoute(record: OwnerRecord, leaf: string | undefined, address: string | undefined, body: Record<string, unknown>, res: ServerResponse): Promise<void> {
+    const port = record.solana!;
+    if (leaf !== "/prepare" && leaf !== "/signed") return this.json(res, 404, { error: "no such route for a Solana transaction" });
+    if (record.status !== "ready" || address !== record.address) return this.json(res, 409, { error: record.status === "ready" ? "connect the owner account first" : `this is ${record.status}; it takes no transaction now` });
+    if (record.submitting) return this.json(res, 409, { error: "a signed transaction is being checked already" });
+
+    if (leaf === "/prepare") {
+      try {
+        return this.json(res, 200, { status: record.status, transaction: await port.prepare() });
+      } catch (err) {
+        return this.json(res, 502, { error: `the command could not build the transaction: ${(err as Error).message}` });
+      }
+    }
+
+    const signed = typeof body.signedTransaction === "string" ? body.signedTransaction : "";
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(signed)) return this.json(res, 400, { error: "that is not a signed transaction" });
+    record.submitting = true;
+    let result: Awaited<ReturnType<SolanaTransactionPort["submit"]>>;
+    try {
+      result = await port.submit(signed, () => {
+        // the link may have expired while the wallet was signing: then nothing is sent
+        if (record.status !== "ready") return false;
+        record.status = "sending";
+        record.sending = true;
+        this.audit(record);
+        return true;
+      });
+    } catch (err) {
+      record.submitting = false;
+      if (record.sending) {
+        // it may have gone out: the caller must read the chain before anything is tried again
+        this.end(record, "expired", `the command stopped tracking the transaction after sending it (${(err as Error).message})`);
+        return this.json(res, 502, { error: "the transaction may have been sent; the command reads the chain", status: record.status });
+      }
+      result = { status: "refused", reason: `the command could not check it: ${(err as Error).message}.` };
+    } finally {
+      record.submitting = false;
+    }
+    if (result.status === "refused") {
+      // broadcasting() may have moved it to sending; the port says nothing went out, so the owner can try again
+      const wasSending = (record.status as OwnerActionStatus) === "sending";
+      if (wasSending) record.status = "ready";
+      record.sending = false;
+      if (wasSending) this.audit(record);
+      return this.json(res, 409, { error: `${result.reason} Nothing was sent.`, status: record.status });
+    }
+    record.hash = result.hash;
+    record.status = "sent";
+    this.audit(record);
+    record.resolve({ status: "sent", address: record.address!, hash: result.hash });
+    return this.json(res, 200, { status: record.status, hash: result.hash });
   }
 }

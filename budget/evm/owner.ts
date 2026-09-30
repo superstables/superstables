@@ -1,18 +1,11 @@
-// The owner's side of the evm rail: every owner action goes through the owner's own browser wallet.
-// The command builds the transaction and the terms, opens the owner page on 127.0.0.1 (the client's
-// OwnerApprovalServer, src/core/signer/owner-approval-server.ts), prints the link and waits. The page
-// asks the wallet to send exactly that transaction. The command then reads the chain itself: the hash
-// the page reports is only a pointer. The agent's machine never holds the owner key.
-//
-// The link is printed as one stdout line `APPROVE {"action","url","expires","terms"}` (cli.mjs passes it on)
-// and as a sentence on stderr. The default browser opens it too, unless --no-open.
-// --timeout <seconds> sets how long the link stays open (default 600).
-import { spawn } from "node:child_process";
+// The owner's side of the evm rail: every owner action goes through the owner's own browser wallet, on the shared owner page
+// (../owner-page.ts). This file binds that page to the evm chain and holds the evm reads: readSent, findApproval, the terms.
 import { encodeFunctionData, parseEventLogs, type Address, type Hex } from "viem";
-import { OwnerApprovalServer, type OwnerActionHandle, type OwnerActionOutcome, type OwnerChain, type OwnerTerms } from "../../src/core/signer/owner-approval-server.ts";
-import { ownerApprovalsLog } from "../paths.mjs";
-import { CFG, GAS, SYM, USDC, emit, erc20Abi, flag, posInt, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil } from "./lib.ts";
+import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
+import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
+import { CFG, GAS, SYM, USDC, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil } from "./lib.ts";
 
+export { closeOwnerPage };
 export const OWNER_CHAIN: OwnerChain = {
   chainId: CFG.chainId,
   chainName: CFG.label,
@@ -21,75 +14,17 @@ export const OWNER_CHAIN: OwnerChain = {
   nativeCurrency: { name: GAS.symbol, symbol: GAS.symbol, decimals: GAS.decimals },
   testnet: true,
 };
-const TIMEOUT_MS = posInt("timeout", "600", 3600) * 1000;
 /** A flag for next-step commands: nothing on the default chain. */
 export const chainFlag = CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`;
 /** How the owner revokes, in words the page and the logs share. */
 export const REVOKE_HINT = `superstables budget revoke --rail evm${chainFlag}. You approve that in your wallet too.`;
 
-let server: OwnerApprovalServer | undefined;
-async function page(): Promise<OwnerApprovalServer> {
-  if (!server) {
-    server = new OwnerApprovalServer({ auditPath: ownerApprovalsLog() });
-    await server.start();
-  }
-  return server;
-}
-/** Keep the page up a moment so it can show the final state, then stop it. */
-export async function closeOwnerPage(lingerMs = 4000) {
-  if (!server) return;
-  await sleep(lingerMs);
-  await server.close();
-  server = undefined;
-}
-
-function openBrowser(url: string) {
-  const [cmd, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
-  try {
-    const p = spawn(cmd, args as string[], { stdio: "ignore", detached: true });
-    p.on("error", () => {});
-    p.unref();
-  } catch {}
-}
-
-function announce(action: string, h: OwnerActionHandle, t: OwnerTerms) {
-  const minutes = Math.round((h.expiresAt - Date.now()) / 60000);
-  // The plain terms travel with the link, so a caller that is not watching stderr can show them next to it.
-  const terms = { title: t.title, amount: t.amount, unit: t.unit, summary: t.summary, enforced: t.enforced, notEnforced: t.notEnforced };
-  console.log(`APPROVE ${JSON.stringify({ action, url: h.url, expires: new Date(h.expiresAt).toISOString(), terms })}`);
-  console.error(`\nThe owner approves this in their own wallet. Open this link in the browser where the wallet is (MetaMask or another):\n\n  ${h.url}\n\nThe link works on this computer only and expires in ${minutes >= 1 ? `${minutes} minute${minutes === 1 ? "" : "s"}` : `${Math.round((h.expiresAt - Date.now()) / 1000)} seconds`}. Nothing is sent until the owner approves in the wallet. Waiting...\n`);
-  if (!flag("no-open")) openBrowser(h.url);
-}
-
-/** Ask the owner to connect a wallet and sign the free sign-in message. */
-export async function askConnect(action: string, terms: OwnerTerms, signIn: string) {
-  const s = await page();
-  const handle = s.request({ kind: "connect", chain: OWNER_CHAIN, terms, signIn, timeoutMs: TIMEOUT_MS });
-  announce(action, handle, terms);
-  return { handle, outcome: await handle.settled };
-}
-
-/** Ask the owner's wallet to send exactly { to, data, value } from `owner`. */
-export async function askTransaction(action: string, owner: Address, t: { to: Address; data?: Hex; value?: bigint }, terms: OwnerTerms) {
-  const s = await page();
-  const handle = s.request({
-    kind: "evm-transaction", chain: OWNER_CHAIN, terms, account: owner, timeoutMs: TIMEOUT_MS,
-    transaction: { to: t.to, data: t.data ?? "0x", value: `0x${(t.value ?? 0n).toString(16)}` },
-  });
-  announce(action, handle, terms);
-  return { handle, outcome: await handle.settled };
-}
-
-/** The owner rejected, or the link expired: one clear RESULT, then exit. Nothing was sent unless the wallet had been asked. */
-export async function endUnapproved(command: string, outcome: Extract<OwnerActionOutcome, { status: "rejected" | "expired" }>, extra: Record<string, unknown> = {}): Promise<never> {
-  await closeOwnerPage(2000);
-  if (outcome.sending) {
-    console.log(`UNKNOWN: ${outcome.reason}. The wallet may have sent it; read the chain before trying again.`);
-    process.exit(emit(command, 5, { state: "unknown", reason: outcome.reason, ...extra, next: `superstables budget status --rail evm${chainFlag}: read whether it landed before running this again` }));
-  }
-  console.log(`NOT APPROVED: ${outcome.reason}`);
-  process.exit(emit(command, 3, { state: "refused_precheck", reason: outcome.status === "expired" ? `the approval link expired: ${outcome.reason}` : outcome.reason, ...extra, next: "nothing was sent. Run the command again only if the owner asks" }));
-}
+export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
+  chain: OWNER_CHAIN,
+  walletWords: "MetaMask or another",
+  statusCommand: `superstables budget status --rail evm${chainFlag}`,
+  emit,
+});
 
 export type Sent = { hash: Hex; status: "success" | "reverted"; blockNumber: bigint; logs: any[]; problems: string[] };
 /**

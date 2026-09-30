@@ -1,7 +1,8 @@
 // superstables budget doctor: key files, the public file, the RPC and balances for one rail. Reads files and the chain,
 // sends nothing, signs nothing, and never prints a secret (variable names and public addresses only).
-// The evm rail has no owner key file: the owner approves in their own wallet, so doctor checks the agent file, the public
-// file (the owner's address), the RPC and balances. Tempo and Solana still keep an owner key file.
+// No rail has an owner key file: the owner approves in their own wallet, so doctor checks the agent file, the public file
+// (the owner's address), the RPC and balances. An owner key file on this machine is only noted: nothing reads it unless a
+// test passes --owner-key-file.
 // Minimum balances are what one grant, a few purchases and a revoke need on each chain.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
@@ -53,26 +54,26 @@ const RAILS = {
     };
   },
   tempo: ({ agent = "" }) => ({
-    ownerVars: ["OWNER_PRIVATE_KEY", "OWNER_ADDRESS"], agentVars: [`AGENT${agent}_PRIVATE_KEY`, "OWNER_ADDRESS"], ownerSecrets: ["OWNER_PRIVATE_KEY"],
+    ownerVars: null, agentVars: [`AGENT${agent}_PRIVATE_KEY`, "OWNER_ADDRESS"], ownerSecrets: ["OWNER_PRIVATE_KEY"], agentKeyVar: `AGENT${agent}_PRIVATE_KEY`,
     pub: publicFile("tempo", "moderato"), ownerAddr: "OWNER_ADDRESS", agentAddr: `AGENT${agent}_ADDRESS`,
-    setup: agent ? `npx tsx budget/tempo/setup.ts --extra-agent ${agent}` : "npx tsx budget/tempo/setup.ts",
+    setup: agent ? `superstables budget setup --rail tempo --agent ${agent}` : "superstables budget setup --rail tempo",
     keyAddress: evmKeyAddress, caseSensitive: false,
     rpc: async () => { const id = Number(await rpc(TEMPO.rpc, "eth_chainId")); if (id !== TEMPO.chainId) throw new Error(`chain id ${id}, expected ${TEMPO.chainId}`); return `chain id ${id}`; },
     // The agent's access key spends the owner's pathUSD and fees come from the owner, so only the owner needs funds.
     balances: async (owner) => [
-      { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(TEMPO.rpc, TEMPO.pathUsd, owner), need: TEMPO.minOwner, hint: "npx tsx budget/tempo/setup.ts --fund-only" },
+      { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(TEMPO.rpc, TEMPO.pathUsd, owner), need: TEMPO.minOwner, hint: "npx tsx budget/tempo/setup.ts --fund-only uses the Moderato faucet" },
     ],
   }),
   solana: () => ({
-    ownerVars: ["SOLANA_OWNER_SECRET_BASE58", "SOLANA_OWNER_ADDRESS"], agentVars: ["SOLANA_AGENT_SECRET_BASE58", "SOLANA_OWNER_ADDRESS"], ownerSecrets: ["SOLANA_OWNER_SECRET_BASE58"],
+    ownerVars: null, agentVars: ["SOLANA_AGENT_SECRET_BASE58", "SOLANA_OWNER_ADDRESS"], ownerSecrets: ["SOLANA_OWNER_SECRET_BASE58"], agentKeyVar: "SOLANA_AGENT_SECRET_BASE58",
     pub: publicFile("solana", "devnet"), ownerAddr: "SOLANA_OWNER_ADDRESS", agentAddr: "SOLANA_AGENT_ADDRESS",
-    setup: "node budget/solana/generate-keys.mjs",
+    setup: "superstables budget setup --rail solana",
     keyAddress: solanaKeyAddress, caseSensitive: true,
     rpc: async () => `solana ${(await rpc(SOLANA.rpc, "getVersion"))["solana-core"]}`,
     balances: async (owner, agent) => [
       { who: "owner", addr: owner, token: "SOL", have: await solBalance(owner), need: SOLANA.minOwnerSol, hint: "solana airdrop 1 <address> --url devnet, or faucet.solana.com" },
       { who: "owner", addr: owner, token: "USDC", have: await splBalance(owner), need: SOLANA.minOwnerUsdc, hint: "faucet.circle.com, Solana devnet" },
-      { who: "agent", addr: agent, token: "SOL (fees)", have: await solBalance(agent), need: SOLANA.minAgentSol, hint: "node budget/solana/fund.mjs --agent-sol 0.05" },
+      { who: "agent", addr: agent, token: "SOL (fees)", have: await solBalance(agent), need: SOLANA.minAgentSol, hint: `superstables budget fund-agent --rail solana (you approve it in your wallet), or send 0.01 SOL to ${agent}` },
     ],
   }),
 };
@@ -123,7 +124,8 @@ export async function runDoctor(f) {
     line(!problems.length, "agent key file holds no owner key", problems.join("; "));
     if (r.agentKeyVar && agent[r.agentKeyVar] && agentAddress) {
       const a = await r.keyAddress(agent[r.agentKeyVar]).catch(() => null);
-      line(!!a && a.toLowerCase() === agentAddress.toLowerCase(), "agent key matches the agent address in the public file", a ? (a.toLowerCase() === agentAddress.toLowerCase() ? agentAddress : `the key is for ${a}, the public file says ${agentAddress}`) : "the key is not a valid key");
+      const match = !!a && (r.caseSensitive ? a === agentAddress : a.toLowerCase() === agentAddress.toLowerCase());
+      line(match, "agent key matches the agent address in the public file", a ? (match ? agentAddress : `the key is for ${a}, the public file says ${agentAddress}`) : "the key is not a valid key");
     }
   }
 
