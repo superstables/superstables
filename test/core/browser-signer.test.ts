@@ -26,6 +26,9 @@ import { Records } from "../../src/core/records.js";
 import { APPROVAL_PAGE_SCRIPT } from "../../src/core/signer/approval-page.js";
 import { BrowserWalletSigner } from "../../src/core/signer/browser.js";
 import { SignRefused, type SignRequest } from "../../src/core/signer/types.js";
+import { OWNER_PAGE_SCRIPT } from "../../src/core/signer/owner-approval-page.js";
+import { OwnerApprovalServer, signInMessage, type OwnerActionInput } from "../../src/core/signer/owner-approval-server.js";
+import { request as httpRequest } from "node:http";
 import type { Attempt } from "../../src/core/types.js";
 import { startFakeFacilitator, type FakeFacilitator } from "../helpers/fake-facilitator.js";
 import { startPaidEndpoint, type PaidEndpoint } from "../helpers/paid-endpoint.js";
@@ -445,6 +448,178 @@ describe("a whole payment, approved in the browser", () => {
     expect(finished.receiptId).toBeUndefined();
     expect(records.listReceipts()).toHaveLength(0);
     expect(facilitator.calls.settle).toBe(settlesBefore);
+  });
+});
+
+// ── The owner approval page ──────────────────────────────────────────────────────────────
+//
+// The budget's owner actions (connect a wallet, grant, revoke, send the agent gas) happen in the
+// owner's own wallet on a loopback page. The test plays the wallet again: it reports an account,
+// signs the sign-in message, and reports a transaction hash. What matters is what a person at that
+// page relies on: the terms are the command's, only the owner's account can be asked to send, a
+// rejection or an expiry leaves nothing sent, and a hash is only ever a pointer for the command.
+
+const OWNER = privateKeyToAccount(generatePrivateKey());
+const AGENT = privateKeyToAccount(generatePrivateKey()).address;
+const USDC_TOKEN = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+const APPROVE_DATA = `0x095ea7b3${AGENT.slice(2).toLowerCase().padStart(64, "0")}${(10000).toString(16).padStart(64, "0")}`;
+const ownerServers: OwnerApprovalServer[] = [];
+
+afterEach(async () => {
+  while (ownerServers.length > 0) await ownerServers.pop()?.close();
+});
+
+function ownerAction(overrides: Partial<OwnerActionInput> = {}): OwnerActionInput {
+  return {
+    kind: "evm-transaction",
+    chain: { chainId: 84532, chainName: "Base Sepolia", rpcUrl: "https://sepolia.base.org", explorer: "https://sepolia.basescan.org", nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 }, testnet: true },
+    terms: {
+      title: "give your agent a budget",
+      amount: "0.01",
+      unit: "USDC",
+      summary: "Your agent may move up to 0.01 USDC from your wallet, in total.",
+      rows: [{ label: "Agent", value: AGENT, mono: true }],
+      enforced: ["A total cap of 0.01 USDC."],
+      notEnforced: ["No expiry.", "No seller list."],
+      notes: ["To end the budget at any time: superstables budget revoke --rail evm."],
+    },
+    account: OWNER.address,
+    transaction: { to: USDC_TOKEN, data: APPROVE_DATA, value: "0x0" },
+    timeoutMs: 5_000,
+    ...overrides,
+  };
+}
+
+async function ownerServer(): Promise<OwnerApprovalServer> {
+  const server = new OwnerApprovalServer({ port: 0 });
+  await server.start();
+  ownerServers.push(server);
+  return server;
+}
+
+const HASH = `0x${"ab".repeat(32)}`;
+
+describe("the owner approval page", () => {
+  it("shows the command's terms and asks the wallet for exactly the transaction the command built", async () => {
+    const server = await ownerServer();
+    const handle = server.request(ownerAction());
+    const html = await (await fetch(handle.url)).text();
+    expect(html).toContain("give your agent a budget");
+    expect(html).toContain("0.01");
+    expect(html).toContain(AGENT);
+    expect(html).toContain("The chain enforces");
+    expect(html).toContain("The chain does not enforce");
+    expect(html).toContain("No seller list.");
+    expect(html).toContain("Base Sepolia");
+    expect(html).toContain(APPROVE_DATA);
+    expect(html).not.toMatch(/<script[^>]+src=/i);
+    expect(html).not.toMatch(/<link[^>]+href=/i);
+  });
+
+  it("will not prepare the transaction for any account but the owner's", async () => {
+    const server = await ownerServer();
+    const handle = server.request(ownerAction());
+    const stranger = privateKeyToAccount(generatePrivateKey()).address;
+    const wrong = await postJson(`${handle.url}/account`, { address: stranger });
+    expect(wrong.status).toBe(403);
+    expect(String(wrong.body.error)).toContain(OWNER.address);
+    const right = await postJson(`${handle.url}/account`, { address: OWNER.address });
+    expect(right.status).toBe(200);
+    expect(right.body.transaction).toEqual({ to: USDC_TOKEN, data: APPROVE_DATA, value: "0x0" });
+  });
+
+  it("takes no transaction hash before the owner is connected and the wallet was asked", async () => {
+    const server = await ownerServer();
+    const handle = server.request(ownerAction());
+    expect((await postJson(`${handle.url}/sent`, { address: OWNER.address, hash: HASH })).status).toBe(409);
+    await postJson(`${handle.url}/account`, { address: OWNER.address });
+    expect((await postJson(`${handle.url}/sent`, { address: OWNER.address, hash: HASH })).status).toBe(409);
+    expect((await getJson(`${handle.url}/state`)).body.status).toBe("ready");
+  });
+
+  it("hands the reported hash to the command, and shows the command's verdict", async () => {
+    const server = await ownerServer();
+    const handle = server.request(ownerAction());
+    await postJson(`${handle.url}/account`, { address: OWNER.address });
+    expect((await postJson(`${handle.url}/sending`, { address: OWNER.address })).status).toBe(200);
+    expect((await postJson(`${handle.url}/sent`, { address: OWNER.address, hash: HASH })).status).toBe(200);
+    expect(await handle.settled).toEqual({ status: "sent", address: OWNER.address, hash: HASH });
+    expect((await getJson(`${handle.url}/state`)).body.status).toBe("sent");
+    handle.finish({ ok: true, message: "Done. The chain shows a budget of 0.01 USDC.", hash: HASH });
+    const state = await getJson(`${handle.url}/state`);
+    expect(state.body.status).toBe("confirmed");
+    expect(state.body.message).toContain("0.01 USDC");
+  });
+
+  it("ends a rejection with nothing sent, and says whether the wallet had been asked", async () => {
+    const server = await ownerServer();
+    const onPage = server.request(ownerAction());
+    await postJson(`${onPage.url}/reject`, { by: "page" });
+    expect(await onPage.settled).toMatchObject({ status: "rejected", sending: false });
+    expect((await postJson(`${onPage.url}/account`, { address: OWNER.address })).status).toBe(409);
+
+    const inWallet = server.request(ownerAction());
+    await postJson(`${inWallet.url}/account`, { address: OWNER.address });
+    await postJson(`${inWallet.url}/sending`, { address: OWNER.address });
+    await postJson(`${inWallet.url}/reject`, { by: "wallet" });
+    const outcome = await inWallet.settled;
+    expect(outcome).toMatchObject({ status: "rejected", sending: true });
+    expect(outcome.status === "rejected" && outcome.reason).toContain("in the wallet");
+  });
+
+  it("expires a link nobody answers, with nothing sent", async () => {
+    const server = await ownerServer();
+    const handle = server.request(ownerAction({ timeoutMs: 200 }));
+    const outcome = await handle.settled;
+    expect(outcome).toMatchObject({ status: "expired", sending: false });
+    expect((await getJson(`${handle.url}/state`)).body.status).toBe("expired");
+    expect((await postJson(`${handle.url}/account`, { address: OWNER.address })).status).toBe(409);
+  });
+
+  it("believes a connect only with a signature from the address it names", async () => {
+    const server = await ownerServer();
+    const handle = server.request(ownerAction({ kind: "connect", account: undefined, transaction: undefined, signIn: "Superstables budget: record this wallet as the owner." }));
+    const message = signInMessage("Superstables budget: record this wallet as the owner.", handle.id);
+    const impostor = privateKeyToAccount(generatePrivateKey());
+    const forged = await postJson(`${handle.url}/connect`, { address: OWNER.address, signature: await impostor.signMessage({ message }) });
+    expect(forged.status).toBe(400);
+    expect((await getJson(`${handle.url}/state`)).body.status).toBe("pending");
+    const real = await postJson(`${handle.url}/connect`, { address: OWNER.address, signature: await OWNER.signMessage({ message }) });
+    expect(real.status).toBe(200);
+    expect(await handle.settled).toEqual({ status: "connected", address: OWNER.address });
+  });
+
+  it("answers only on 127.0.0.1, and nothing under an unknown link", async () => {
+    const server = await ownerServer();
+    const handle = server.request(ownerAction());
+    const status = await new Promise<number>((done, fail) => {
+      const req = httpRequest(handle.url, { headers: { host: `evil.example:${server.port}` } }, (res) => {
+        res.resume();
+        done(res.statusCode ?? 0);
+      });
+      req.once("error", fail);
+      req.end();
+    });
+    expect(status).toBe(421);
+    const unknown = await fetch(`${server.url}/owner/${"0".repeat(32)}`);
+    expect(unknown.status).toBe(404);
+    expect(await unknown.text()).toContain("Nothing is waiting under this link");
+  });
+
+  it("is plain ES2017 that a browser can run without a build step", async () => {
+    const file = join(home, "owner-page-script.js");
+    writeFileSync(file, OWNER_PAGE_SCRIPT);
+    const checked = await new Promise<{ code: number; stderr: string }>((done, fail) => {
+      const child = spawn(process.execPath, ["--check", file]);
+      let stderr = "";
+      child.stderr.on("data", (chunk) => (stderr += String(chunk)));
+      child.once("error", fail);
+      child.once("close", (code) => done({ code: code ?? 0, stderr }));
+    });
+    expect(checked.stderr).toBe("");
+    expect(checked.code).toBe(0);
+    expect(OWNER_PAGE_SCRIPT).toContain("eth_sendTransaction");
+    expect(OWNER_PAGE_SCRIPT).toContain("wallet_addEthereumChain");
   });
 });
 

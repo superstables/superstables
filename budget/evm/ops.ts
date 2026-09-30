@@ -2,7 +2,7 @@
 // Per-chain journal directory, `rail` from the chain table, the CancelAuthorization domain from the chain table, next-step
 // commands carry --chain, and the journal records the agent's USDC balance before the pull.
 // Reconcile is read only: it reads the chain and the journal file and writes the journal file, nothing else. Returning stranded
-// funds (cancel, return) is `makeSafe`, called by buy (agent key) and by recover.ts (owner, escrowed agent key).
+// funds (cancel, return) is `makeSafe`, called by buy and by recover.ts (both with the agent key).
 //
 // One JSON file per operation under $SUPERSTABLES_HOME/budget/ops/evm-<chain>/<id>.json (../paths.mjs; outside the code folder,
 // mode 600, `path: "approve"`, ids start with "b4-"). Written BEFORE the pull is sent (intent) and again after each step:
@@ -356,13 +356,13 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
     }
     const held = await usdcBalance(j.agent);
     const next = held > 0n
-      ? `${usdc(held)} ${SYM} is in the agent key (on a gas-in-${SYM} chain that includes its gas reserve). Owner: "${cmd("recover.ts", `--op ${j.op}`)}" (stops the allowance first, cancels the authorization if it is still open, then returns the price to the owner). Never pay again for this op.`
+      ? `${usdc(held)} ${SYM} is in the agent key (on a gas-in-${SYM} chain that includes its gas reserve). Owner: "superstables budget recover --rail evm --chain ${CFG.key} --op ${j.op}" (stops the allowance first, cancels the authorization if it is still open, then returns the price to the owner). Never pay again for this op.`
       : `the agent key holds 0 ${SYM}; check the owner balance by hand. Never pay again for this op.`;
     save("failed", why, next, "failed (pull landed, not settled, not returned)");
     return { j, verdict: "failed" };
   }
   const until = new Date(j.auth!.validBefore * 1000).toISOString();
-  save("unknown", `the pull landed and a signed payment may still be settled by the seller until ${until} (chain time)`, `run "${cmd("reconcile.ts", `--op ${j.op}`)}" again after ${until}, or the owner runs "${cmd("recover.ts", `--op ${j.op}`)}" to stop the allowance, cancel the authorization and return the price now. Never pay again for this op.`, "unknown (authorization still valid)");
+  save("unknown", `the pull landed and a signed payment may still be settled by the seller until ${until} (chain time)`, `run "${cmd("reconcile.ts", `--op ${j.op}`)}" again after ${until}, or the owner runs "superstables budget recover --rail evm --chain ${CFG.key} --op ${j.op}" to stop the allowance, cancel the authorization and return the price now. Never pay again for this op.`, "unknown (authorization still valid)");
   return { j, verdict: "unknown" };
 }
 
@@ -386,7 +386,7 @@ async function signCancel(w: Wallet, nonce: Hex) {
  *      cancel reverts because the authorization was used, the purchase settled.
  *   3. Only when the authorization is provably dead (never signed, cancelled, expired) return the price to the owner:
  *      USDC.transfer(owner, price) from the agent key, journaled before broadcast, confirmed from the chain.
- * Never pays a seller. `w` is the agent wallet (agent file, or the escrowed key when the owner runs recover).
+ * Never pays a seller. `w` is the agent wallet (the agent file; an escrowed copy only when recover runs with --owner-key-file and no agent file).
  * Only the states the chain has decided are touched: a pull that is not on chain yet, or an authorization that may still settle and
  * cannot be cancelled, are left as they are.
  */

@@ -35,7 +35,7 @@ console.log(`gas: token ${GAS.symbol}${GAS.isUsdc ? " (native, 18 decimals; the 
 
 const p = publicEnv();
 for (const [who, addr] of [["owner", p.B4_OWNER_ADDRESS], ["agent", p.B4_AGENT_ADDRESS]] as const) {
-  if (!addr || !isAddress(addr)) { console.log(`note: no ${who} address in the public file (run ${cmd("setup.ts", "--from-keys")})`); continue; }
+  if (!addr || !isAddress(addr)) { console.log(`note: no ${who} address in the public file (run superstables budget setup --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`})`); continue; }
   const [n, e] = [await nativeBalance(addr as Address), await usdcBalance(addr as Address)];
   console.log(`${who} ${addr}: native ${gasFmt(n)} ${GAS.symbol}, ERC-20 ${SYM} ${usdc(e)}`);
   if (GAS.isUsdc) ok(n / 10n ** 12n === e, `${who}: native balance ${n} / 1e12 (rounded down) = ERC-20 balance ${e} (one balance, two units; the native one also holds sub-micro dust of 18-decimal fees: ${n % 10n ** 12n} wei)`);

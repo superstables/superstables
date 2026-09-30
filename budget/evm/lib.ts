@@ -4,7 +4,7 @@
 //   owner  approve(agent, cap)               (setBudget), approve(agent, 0) (revokeBudget)
 //   agent  USDC.transferFrom(owner, agent, price), then pays the seller with its own EIP-3009 signature
 //   agent  USDC.transferFrom(owner, owner, n)  (selfRevoke): lowers its own allowance without moving money
-import { readFileSync, appendFileSync, existsSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { readFileSync, appendFileSync, existsSync, writeFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import {
   createPublicClient, createWalletClient, http, parseAbi, encodeFunctionData, formatUnits, parseUnits, keccak256, isAddress,
@@ -12,7 +12,7 @@ import {
 } from "viem";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { CFG } from "./chains.ts";
-import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
+import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 
 export { CFG };
 export const CHAIN_ID = CFG.chainId;
@@ -41,11 +41,14 @@ export function emit(command: string, exit: number, o: Record<string, unknown>):
 export const cmd = (script: string, rest = "") => `npx tsx budget/evm/${script}${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}${rest ? ` ${rest}` : ""}`;
 
 // Key files (contract rule 1), shared by every EVM chain; paths come from ../paths.mjs.
-//   owner file: B4_OWNER_KEY, B4_AGENT_KEY_ESCROW (a copy of the agent key, for `recover`), public addresses
-//   agent file: B4_AGENT_KEY, public addresses
-//   public file (no secret), one per chain: addresses, cap, expiry
-export const OWNER_ENV = ownerKeyFile("evm");
+//   agent file: B4_AGENT_KEY, public addresses. The only key on the agent's machine.
+//   public file (no secret), one per chain: owner and agent addresses, cap, expiry
+//   owner: the owner's own browser wallet, through the owner page (owner.ts). No owner key file by default.
+//   owner key file, for tests and automation only: named with --owner-key-file <path> (B4_OWNER_KEY, and optionally
+//   B4_AGENT_KEY_ESCROW, a copy of the agent key that recover used before the agent file was the default).
 export const AGENT_ENV = agentKeyFile("evm");
+/** The owner key file given with --owner-key-file, or undefined (the default: the owner approves in their wallet). */
+export const OWNER_KEY_FILE: string | undefined = arg("owner-key-file");
 export const PUBLIC_ENV = publicFile("evm", CFG.key);
 export const OPS_DIR = opsDir("evm", CFG.key);
 
@@ -84,13 +87,12 @@ export function parseLines(path: string): Record<string, string> {
   }
   return out;
 }
-export const ownerEnv = () => parseLines(OWNER_ENV);
 export const agentEnv = () => parseLines(AGENT_ENV);
 export const publicEnv = () => parseLines(PUBLIC_ENV);
 export function need(env: Record<string, string>, k: string, file: string): string {
   if (!env[k]) {
-    console.error(`error: missing ${k} in ${file} (run ${cmd("setup.ts")} first)`);
-    process.exit(emit(basename(process.argv[1] ?? "unknown", ".ts"), 1, { state: "failed", reason: `missing ${k} in ${file}`, next: `provide the key file (${cmd("setup.ts", "--from-keys")} writes the public file)` }));
+    console.error(`error: missing ${k} in ${file} (superstables budget setup --rail evm creates the agent key and the public file)`);
+    process.exit(emit(basename(process.argv[1] ?? "unknown", ".ts"), 1, { state: "failed", reason: `missing ${k} in ${file}`, next: "run superstables budget setup --rail evm" }));
   }
   return env[k];
 }
@@ -249,15 +251,15 @@ export async function sendJournaled(
 
 // ---- contexts (contract rule 1) ----
 //   readCtx    no secret file: public addresses and expiry (public file, falling back to nothing else)
-//   agentCtx   the agent key file only (buy)
-//   ownerCtx   the owner key file only (setBudget, revoke)
-//   escrowCtx  the owner file, acting as the agent with the escrowed agent key (recover)
+//   agentCtx   the agent key file only (buy, and the agent's own steps of recover)
+//   ownerCtx   the owner key file named with --owner-key-file (tests and automation only)
+//   escrowCtx  that owner key file, acting as the agent with an escrowed agent key (recover, when no agent file is here)
 export type Pub = { owner: Address; agent: Address; cap?: bigint; expiry?: number; setAt?: number; revokedAt?: number };
 export function readCtx(): Pub {
   const p = publicEnv();
   const owner = p.B4_OWNER_ADDRESS, agent = p.B4_AGENT_ADDRESS;
   if (!owner || !agent || !isAddress(owner) || !isAddress(agent)) {
-    console.error(`error: no B4 addresses in ${PUBLIC_ENV} (run ${cmd("setup.ts")} first)`);
+    console.error(`error: no B4 addresses in ${PUBLIC_ENV} (run superstables budget setup --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`} first)`);
     process.exit(1);
   }
   return {
@@ -278,20 +280,28 @@ export async function agentCtx() {
   return { ...pub, wallet: agent, agentKey: key };
 }
 export type AgentCtx = Awaited<ReturnType<typeof agentCtx>>;
+/** The owner key file given with --owner-key-file (mode 600). Refuses a file others can read. */
+export function ownerKeyEnv(): Record<string, string> {
+  const path = OWNER_KEY_FILE;
+  if (!path) usageError("this step needs the owner: approve it in your wallet (the default), or pass --owner-key-file <path> for tests and automation");
+  if (!existsSync(path)) usageError(`--owner-key-file ${path} does not exist`);
+  if ((statSync(path).mode & 0o077) !== 0) usageError(`--owner-key-file ${path} can be read by other users: chmod 600 ${path}`);
+  return parseLines(path);
+}
 export async function ownerCtx() {
   const pub = readCtx();
-  const key = need(ownerEnv(), "B4_OWNER_KEY", OWNER_ENV) as Hex;
+  const key = need(ownerKeyEnv(), "B4_OWNER_KEY", OWNER_KEY_FILE!) as Hex;
   const owner = walletFor(key);
-  if (owner.account.address.toLowerCase() !== pub.owner.toLowerCase()) throw new Error(`the owner key in ${OWNER_ENV} does not match the B4 owner address ${pub.owner}`);
+  if (owner.account.address.toLowerCase() !== pub.owner.toLowerCase()) throw new Error(`the owner key in ${OWNER_KEY_FILE} does not match the B4 owner address ${pub.owner}`);
   return { ...pub, wallet: owner };
 }
 export type OwnerCtx = Awaited<ReturnType<typeof ownerCtx>>;
-/** Owner file, agent key escrow: the owner acts as the agent (recover). */
+/** The owner key file with an escrowed agent key: the owner acts as the agent (recover without an agent file). */
 export async function escrowCtx() {
   const o = await ownerCtx();
-  const key = need(ownerEnv(), "B4_AGENT_KEY_ESCROW", OWNER_ENV) as Hex;
+  const key = need(ownerKeyEnv(), "B4_AGENT_KEY_ESCROW", OWNER_KEY_FILE!) as Hex;
   const agent = walletFor(key);
-  if (agent.account.address.toLowerCase() !== o.agent.toLowerCase()) throw new Error(`the escrowed agent key in ${OWNER_ENV} does not match the B4 agent address ${o.agent}`);
+  if (agent.account.address.toLowerCase() !== o.agent.toLowerCase()) throw new Error(`the escrowed agent key in ${OWNER_KEY_FILE} does not match the B4 agent address ${o.agent}`);
   return { ...o, escrow: agent };
 }
 
@@ -305,13 +315,13 @@ export async function selfRevokeCore(w: Wallet, owner: Address, log: (s: string)
   const ownerBalance = await usdcBalance(owner);
   if (before === 0n) return { state: "nothing", before, after: 0n, used: 0n, ownerBalance, note: "allowance is already 0" };
   const n = before < ownerBalance ? before : ownerBalance;
-  if (n === 0n) return { state: "blocked", before, after: before, used: 0n, ownerBalance, note: `owner ${SYM} balance is 0, so transferFrom cannot lower the allowance (${usdc(before)} ${SYM} stays). The owner must run revoke.ts` };
+  if (n === 0n) return { state: "blocked", before, after: before, used: 0n, ownerBalance, note: `owner ${SYM} balance is 0, so transferFrom cannot lower the allowance (${usdc(before)} ${SYM} stays). The owner must revoke` };
   log(`selfRevoke: transferFrom(owner, owner, ${usdc(n)} ${SYM}) by the agent (allowance ${usdc(before)}, owner balance ${usdc(ownerBalance)})`);
   const data = encodeFunctionData({ abi: erc20Abi, functionName: "transferFrom", args: [owner, owner, n] });
   const sent = await send(w, USDC, data, "selfRevoke transferFrom(owner, owner)");
   const after = await readUntil(() => allowanceOf(owner, agent), (v) => v === before - n);
   return {
     state: after === 0n ? "revoked" : "partial", before, after, used: n, ownerBalance, tx: sent.hash,
-    note: after === 0n ? "allowance is 0" : `owner balance covered only ${usdc(n)} ${SYM}; ${usdc(after)} ${SYM} of allowance remains. Owner: run revoke.ts, or refill the owner and run recover.ts again`,
+    note: after === 0n ? "allowance is 0" : `owner balance covered only ${usdc(n)} ${SYM}; ${usdc(after)} ${SYM} of allowance remains. The owner revokes the rest`,
   };
 }

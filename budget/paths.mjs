@@ -2,10 +2,12 @@
 // The home is the client's: SUPERSTABLES_HOME (a leading ~, $HOME or ${HOME} is expanded; blank means the default),
 // else ~/.superstables. Same rule as src/core/home.ts.
 //
-//   $SUPERSTABLES_HOME/keys/budget/<rail>-owner.env    owner key (mode 600). Owner commands only.
+//   $SUPERSTABLES_HOME/keys/budget/<rail>-owner.env    owner key (mode 600). Tempo and Solana owner commands. The evm rail
+//                                                       has no owner key file: the owner approves in their own wallet.
 //   $SUPERSTABLES_HOME/keys/budget/<rail>-agent.env    agent key (mode 600). Agent commands only.
 //   $SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env   public addresses and budget terms, no secret.
 //   $SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/<id>.json   one journal per purchase.
+//   $SUPERSTABLES_HOME/budget/owner-approvals.jsonl          one line per owner page state change (no signatures).
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -24,3 +26,4 @@ export const ownerKeyFile = (rail) => join(KEYS_DIR, `${rail}-owner.env`);
 export const agentKeyFile = (rail) => join(KEYS_DIR, `${rail}-agent.env`);
 export const publicFile = (rail, chain) => join(STATE_DIR, "public", `${rail}-${chain}.env`);
 export const opsDir = (rail, chain) => join(STATE_DIR, "ops", `${rail}-${chain}`);
+export const ownerApprovalsLog = () => join(STATE_DIR, "owner-approvals.jsonl");

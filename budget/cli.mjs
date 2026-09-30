@@ -2,6 +2,10 @@
 // superstables budget: one command for the budget rails. A thin dispatcher over the rail scripts in evm/, tempo/
 // and solana/. It validates input, spawns the rail script, and prints one normalized `RESULT {...}` line last on
 // stdout. Logs go to stderr. Contract: CLI.md. Testnet only.
+// Owner commands on evm (setup, fund-agent, grant, revoke, and the owner's part of recover) never sign here: the rail opens a
+// page on 127.0.0.1 where the owner approves in their own wallet, and this dispatcher passes the link on as one stdout line,
+// `APPROVE {"action","url","expires"}`, as soon as it exists. The owner key file is a test and automation option only
+// (--owner-key-file PATH --yes).
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -22,14 +26,24 @@ const RAILS = {
 };
 
 // ---- commands: flags ('v' takes a value, 'b' is a switch), required flags, help text ----------------
+const OWNER_FLAGS = { timeout: "v", "no-open": "b", "owner-key-file": "v" };
+const OWNER_HELP = "  evm: the owner approves in their own wallet on a page this command opens on 127.0.0.1 (link printed as an APPROVE line and on stderr;\n  the default browser opens it unless --no-open). --timeout SECONDS (default 600) is how long the link stays open.\n  Tests and automation only: --owner-key-file PATH --yes signs with that key file instead.";
 const COMMANDS = {
+  setup: {
+    flags: { ...OWNER_FLAGS }, required: [],
+    help: "superstables budget setup --rail evm [--chain C] [--timeout S] [--no-open]\n  Creates the agent key file if it is missing (never overwrites it), asks the owner to connect their own wallet and sign a free\n  sign-in message (no transaction), and writes the public file with both addresses. Prints the next steps.\n  Tests and automation only: --owner-key-file PATH records that key's address instead of asking the wallet.",
+  },
+  "fund-agent": {
+    flags: { amount: "v", yes: "b", ...OWNER_FLAGS }, required: [],
+    help: "superstables budget fund-agent --rail evm [--chain C] [--amount GAS]\n  Owner command. Sends the agent a little of the chain's gas token (default from the chain table) so it can pay for its pulls.\n" + OWNER_HELP,
+  },
   doctor: {
     flags: { agent: "v" }, required: [],
     help: "superstables budget doctor --rail evm|tempo|solana [--chain C] [--agent LABEL]\n  Key files, public file, RPC and balances. Prints what to top up at which address. No transactions, no signatures.",
   },
   grant: {
-    flags: { amount: "v", expiry: "v", period: "v", sellers: "v", yes: "b", agent: "v" }, required: ["amount"],
-    help: "superstables budget grant --rail R --amount A [--expiry ISO] [--period SECONDS] [--sellers a,b] [--agent LABEL] [--yes]\n  Owner command. Prints the terms and what the chain enforces; sends only with --yes.\n  Refuses constraints the rail cannot enforce (evm and solana: no --expiry, --period, --sellers).\n  Tempo: --expiry defaults to 24h from now. --agent LABEL picks the access key (a revoked key can never be granted again).",
+    flags: { amount: "v", expiry: "v", period: "v", sellers: "v", yes: "b", agent: "v", ...OWNER_FLAGS }, required: ["amount"],
+    help: "superstables budget grant --rail R --amount A [--expiry ISO] [--period SECONDS] [--sellers a,b] [--agent LABEL] [--yes]\n  Owner command. Prints the terms and what the chain enforces.\n" + OWNER_HELP + "\n  tempo and solana: sends only with --yes (they sign with the owner key file for now).\n  Refuses constraints the rail cannot enforce (evm and solana: no --expiry, --period, --sellers).\n  Tempo: --expiry defaults to 24h from now. --agent LABEL picks the access key (a revoked key can never be granted again).",
   },
   status: {
     flags: { agent: "v" }, required: [],
@@ -44,26 +58,33 @@ const COMMANDS = {
     help: "superstables budget reconcile --rail R --op ID [--chain C]\n  Reads the chain for one operation and reports its state. Never signs or sends.",
   },
   recover: {
-    flags: { op: "v", yes: "b" }, required: [],
-    help: "superstables budget recover --rail evm [--chain C] [--op ID] [--yes]\n  EVM only. Owner command: revoke first, then return stranded funds. Prints the plan; sends only with --yes.",
+    flags: { op: "v", yes: "b", ...OWNER_FLAGS }, required: [],
+    help: "superstables budget recover --rail evm [--chain C] [--op ID]\n  EVM only. Stop the allowance first, then return stranded funds to the owner. Prints the plan, then runs it: the agent key signs\n  its own steps; the owner approves in their wallet only what the agent cannot do (the rest of the allowance, gas for the agent).\n" + OWNER_HELP,
   },
   revoke: {
-    flags: { yes: "b", agent: "v" }, required: [],
-    help: "superstables budget revoke --rail R [--chain C] [--agent LABEL] [--yes]\n  Owner command. Ends the budget on chain. Prints the plan; sends only with --yes.",
+    flags: { yes: "b", agent: "v", ...OWNER_FLAGS }, required: [],
+    help: "superstables budget revoke --rail R [--chain C] [--agent LABEL] [--yes]\n  Owner command. Ends the budget on chain. Prints the plan.\n" + OWNER_HELP + "\n  tempo and solana: sends only with --yes (they sign with the owner key file for now).",
   },
 };
 const TOP_HELP = `superstables budget: on-chain agent budgets on evm (${Object.values(EVM_CHAINS).map((c) => c.label).join(", ")}), tempo (Moderato) and solana (devnet). Testnet only.
 
 Commands (each takes --help):
-  superstables budget doctor    --rail R [--chain C]
-  superstables budget status    --rail R
-  superstables budget grant     --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b] [--yes]   owner
-  superstables budget buy       --rail R --url U --max M [--pay-to ADDR] [--op ID]                          agent
-  superstables budget reconcile --rail R --op ID
-  superstables budget revoke    --rail R [--yes]                                                            owner
-  superstables budget recover   --rail evm [--op ID] [--yes]                                                owner
+  superstables budget setup      --rail evm [--chain C]                                                    owner connects a wallet
+  superstables budget fund-agent --rail evm [--amount GAS]                                                 owner
+  superstables budget doctor     --rail R [--chain C]
+  superstables budget status     --rail R
+  superstables budget grant      --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b]          owner
+  superstables budget buy        --rail R --url U --max M [--pay-to ADDR] [--op ID]                         agent
+  superstables budget reconcile  --rail R --op ID
+  superstables budget revoke     --rail R                                                                  owner
+  superstables budget recover    --rail evm [--op ID]                                                      owner and agent
 
-stdout ends with: RESULT {"ok","command","rail","chain","op","state","paid","delivered","amount","remaining","tx","next"}
+Owner commands on evm open an approval page on 127.0.0.1: the owner approves in their own wallet. The link comes as a line
+  APPROVE {"action","url","expires"}
+as soon as it exists (and on stderr); the command waits for the owner, reads the chain, then prints its RESULT.
+tempo and solana owner commands still sign with the owner key file, and send only with --yes.
+
+stdout ends with: RESULT {"ok","command","rail","chain","op","state","paid","delivered","amount","remaining","tx","url","next"}
 Exit: 0 done, 1 failed, 2 bad input, 3 refused before signing, 4 paid but not delivered, 5 unknown (superstables budget reconcile).`;
 
 // ---- output -----------------------------------------------------------------------------------------
@@ -72,7 +93,7 @@ const log = (...a) => process.stderr.write(a.join(" ") + "\n");
 
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "paid", "delivered", "amount", "remaining", "tx", "expiry", "revoked", "atRisk", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "paid", "delivered", "amount", "remaining", "tx", "expiry", "revoked", "atRisk", "owner", "agent", "url", "next", "reason"];
   const out = { ok: code === 0 };
   for (const k of order) if (fields[k] !== undefined) out[k] = k === "reason" ? clean(fields[k]) : fields[k];
   writeSync(1, "RESULT " + JSON.stringify(out) + "\n");
@@ -153,6 +174,13 @@ function parse(argv) {
     for (const k of ["method", "body"]) if (f[k] !== undefined && !(k === "method" && f.method.toUpperCase() === "GET")) badInput(ctx, `evm buy is GET only (no --${k})`);
   }
   if (cmd === "recover" && f.rail !== "evm") badInput(ctx, "recover is EVM only (tempo and solana have no stranded funds: the agent never holds the budget)");
+  if ((cmd === "setup" || cmd === "fund-agent") && f.rail !== "evm") badInput(ctx, `${cmd} is evm only for now: tempo uses npx tsx budget/tempo/setup.ts, solana node budget/solana/generate-keys.mjs and node budget/solana/fund.mjs`);
+  if (cmd === "fund-agent" && f.amount !== undefined && !/^\d+(\.\d{1,18})?$/.test(f.amount)) badInput(ctx, "--amount must be a decimal amount of the chain's gas token");
+  if (f.timeout !== undefined && !(/^\d+$/.test(f.timeout) && Number(f.timeout) >= 10 && Number(f.timeout) <= 3600)) badInput(ctx, "--timeout must be a whole number of seconds from 10 to 3600");
+  const ownerFlagUsed = ["owner-key-file", "timeout", "no-open"].find((k) => f[k] !== undefined);
+  if (ownerFlagUsed && f.rail !== "evm") badInput(ctx, `--${ownerFlagUsed} is for the evm rail: tempo and solana owner commands still sign with their owner key file (--yes)`);
+  if (f.rail === "evm" && f.yes && !f["owner-key-file"]) badInput(ctx, "on evm the owner approves in their own wallet: drop --yes. --yes only goes with --owner-key-file PATH (tests and automation)");
+  if (f["owner-key-file"] !== undefined && !existsSync(f["owner-key-file"])) badInput(ctx, `--owner-key-file ${f["owner-key-file"]} does not exist`);
   return { cmd, f, ctx };
 }
 
@@ -160,6 +188,8 @@ function parse(argv) {
 const tsx = (dir, script, args) => ({ cwd: join(ROOT, dir), cmd: TSX, args: [script, ...args] });
 const mjs = (dir, script, args) => ({ cwd: join(ROOT, dir), cmd: process.execPath, args: [script, ...args] });
 const opt = (name, v) => (v === undefined ? [] : [`--${name}`, v]);
+/** The owner flags every evm owner script takes: how long the link stays open, whether to open a browser, the test key file. */
+const ownerOpts = (f) => [...opt("timeout", f.timeout), ...(f["no-open"] ? ["--no-open"] : []), ...opt("owner-key-file", f["owner-key-file"])];
 
 function railCommand(verb, f, extra = {}) {
   const agent = opt("agent", f.agent);
@@ -193,9 +223,11 @@ function evmCommand(verb, f, extra = {}) {
     case "buy": return E("buy", ["--url", f.url, "--max", f.max, "--op", f.op, ...opt("pay-to", f["pay-to"])]); // GET only
     case "reconcile": return E("reconcile", ["--op", f.op]);
     case "read": return E("read", []);
-    case "grant": return E("setBudget", ["--cap", f.amount]);
-    case "revoke": return E("revoke", []);
-    case "recover": return E("recover", [...opt("op", f.op), ...(extra.plan ? ["--plan"] : [])]);
+    case "grant": return E("setBudget", ["--cap", f.amount, ...ownerOpts(f)]);
+    case "revoke": return E("revoke", ownerOpts(f));
+    case "recover": return E("recover", [...opt("op", f.op), ...(extra.plan ? ["--plan"] : ownerOpts(f))]);
+    case "setup": return E("setup", ownerOpts(f));
+    case "fund-agent": return E("fundAgent", [...opt("amount", f.amount), ...ownerOpts(f)]);
   }
 }
 const evmReadFromResult = (r) => ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null });
@@ -203,12 +235,27 @@ const evmReadFromResult = (r) => ({ ok: true, remaining: r.allowance ?? null, ex
 
 // ---- running a rail script --------------------------------------------------------------------------
 // Rail logs are forwarded to stderr as they arrive. Returns { code, stdout } (stdout is kept to find RESULT).
+// An `APPROVE {...}` line from an evm owner script is passed on to this process's stdout at once: it carries the link the
+// owner opens, and the command then waits for the owner.
+let approvalUrl;
+function passApproval(line) {
+  if (!/^APPROVE \{/.test(line)) return;
+  try { approvalUrl = JSON.parse(line.slice(8)).url; } catch { return; }
+  writeSync(1, line + "\n");
+}
 function run(spec) {
   return new Promise((resolve) => {
     if (!existsSync(TSX)) { log(`superstables budget: dependencies are missing: run npm ci at the repo root (${REPO})`); return resolve({ code: 2, stdout: "", missing: true }); }
     const p = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env: process.env });
     let stdout = "";
-    p.stdout.on("data", (d) => { stdout += d; process.stderr.write(d); });
+    let partial = "";
+    p.stdout.on("data", (d) => {
+      stdout += d;
+      process.stderr.write(d);
+      const lines = (partial + d).split("\n");
+      partial = lines.pop();
+      for (const l of lines) passApproval(l);
+    });
     p.stderr.on("data", (d) => process.stderr.write(d));
     for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => p.kill(s));
     p.on("error", (e) => { log(`superstables budget: could not start ${spec.cmd}: ${e.message}`); resolve({ code: 2, stdout }); });
@@ -344,11 +391,19 @@ function ownerOutcome(code, rr = null) {
 // Owner transaction hashes: the evm RESULT carries them; the other rails print an explorer line.
 const ownerTx = (rr, stdout) => (typeof rr?.tx === "string" ? rr.tx : rr?.tx && typeof rr.tx === "object" ? rr.tx : txOf(stdout));
 
+// evm owner commands: the owner approves in the wallet by default; the key file needs --yes.
+const walletFlow = (f) => f.rail === "evm" && !f["owner-key-file"];
+const sendsNow = (f) => walletFlow(f) || f.yes === true;
+const waitLine = (f) => walletFlow(f) ? "The owner approves this in their own wallet: this command opens a page for it and waits." : "Nothing is sent without --yes.";
+const notSentNext = (f) => walletFlow(f) ? undefined : "rerun the same command with --yes to send (owner signs with the key file)";
+// A refusal or an unknown from an evm owner script keeps the script's own next step (it knows whether the owner declined).
+const ownerNext = (o, rr, fallback) => (["refused_precheck", "unknown"].includes(o.state) && rr?.next ? rr.next : fallback);
+
 async function grant({ f, ctx }) {
   const secs = f.expiry ? Math.ceil((Date.parse(f.expiry) - Date.now()) / 1000) : 86400;
   const now = await readBudget(f);
   const unit = unitOf(f);
-  log(`\nPLAN grant on ${f.rail} (${f.chain}). Nothing is sent without --yes.`);
+  log(`\nPLAN grant on ${f.rail} (${f.chain}). ${waitLine(f)}`);
   if (f.rail === "tempo") {
     const windows = f.period ? Math.ceil(secs / Number(f.period)) : 1;
     log(`  cap:       ${f.amount} ${unit}${f.period ? ` per ${f.period}s` : " in total (one-time)"} to access key ${f.agent ? `AGENT${f.agent}` : "primary agent"}`);
@@ -369,19 +424,19 @@ async function grant({ f, ctx }) {
     log(`  a live allowance is never overwritten silently: the script refuses until it is revoked.`);
   }
   if (now.ok) log(`  current:   remaining ${ago(now.remaining)}, expiry ${ago(now.expiry)}, revoked ${now.revoked}`);
-  if (!f.yes) return emit(0, { ...ctx, state: "planned", amount: f.amount, remaining: now.ok ? now.remaining : null, tx: {}, next: "rerun the same command with --yes to send (owner signs)" });
+  if (!sendsNow(f)) return emit(0, { ...ctx, state: "planned", amount: f.amount, remaining: now.ok ? now.remaining : null, tx: {}, next: notSentNext(f) });
 
   const r = await run(railCommand("grant", f, { expirySeconds: secs }));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
-  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, tx: {}, next: o.state === "refused_precheck" ? "nothing was sent; revoke the live budget first, or fix what the reason says" : `superstables budget status --rail ${f.rail}: the chain may or may not have changed`, reason: o.reason ?? `the rail script exited ${r.code}` });
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, amount: f.amount, tx: rr?.tx ? { grant: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, o.state === "refused_precheck" ? "nothing was sent; revoke the live budget first, or fix what the reason says" : `superstables budget status --rail ${f.rail}: the chain may or may not have changed`), reason: o.reason ?? `the rail script exited ${r.code}` });
   const after = await readBudget(f);
-  emit(0, { ...ctx, state: "settled", amount: f.amount, remaining: after.ok ? after.remaining : null, tx: { grant: ownerTx(rr, r.stdout) ?? null }, expiry: after.ok ? after.expiry : null, next: "none" });
+  emit(0, { ...ctx, state: "settled", amount: f.amount, remaining: after.ok ? after.remaining : null, tx: { grant: ownerTx(rr, r.stdout) ?? null }, expiry: after.ok ? after.expiry : null, url: approvalUrl, next: "none" });
 }
 
 async function revoke({ f, ctx }) {
   const now = await readBudget(f);
-  log(`\nPLAN revoke on ${f.rail} (${f.chain}). Nothing is sent without --yes.`);
+  log(`\nPLAN revoke on ${f.rail} (${f.chain}). ${waitLine(f)}`);
   if (now.ok) log(`  now: remaining ${ago(now.remaining)}, expiry ${ago(now.expiry)}, revoked ${now.revoked}, funds at risk ${ago(now.atRisk)}`);
   log({
     tempo: "  effect: AccountKeychain.revokeKey. From the block it lands in every payment by this key is refused, even one signed earlier. Open payment sessions are not covered.",
@@ -389,31 +444,53 @@ async function revoke({ f, ctx }) {
     evm: `  effect: ${unitOf(f)}.approve(agent, 0). From the block it lands the agent can pull nothing more. ${unitOf(f)} already pulled into the agent key is not covered: superstables budget recover returns it.`,
   }[f.rail]);
   if (now.ok && now.revoked) return emit(0, { ...ctx, state: "ok", remaining: now.remaining, revoked: true, tx: {}, next: "none", reason: "already revoked; nothing to send" });
-  if (!f.yes) return emit(0, { ...ctx, state: "planned", remaining: now.ok ? now.remaining : null, revoked: false, tx: {}, next: "rerun the same command with --yes to send (owner signs)" });
+  if (!sendsNow(f)) return emit(0, { ...ctx, state: "planned", remaining: now.ok ? now.remaining : null, revoked: false, tx: {}, next: notSentNext(f) });
   const r = await run(railCommand("revoke", f));
   const rr = railResult(r.stdout);
+  const o = ownerOutcome(r.code, rr);
+  if (walletFlow(f) && o.code !== 0 && ["refused_precheck", "unknown"].includes(o.state)) {
+    return emit(o.code, { ...ctx, state: o.state, remaining: now.ok ? now.remaining : null, revoked: false, tx: rr?.tx ? { revoke: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, "none"), reason: o.reason });
+  }
   const after = await readBudget(f);
   const done = r.code === 0 && after.ok && after.revoked;
-  const o = ownerOutcome(r.code, rr);
   emit(done ? 0 : o.code || 1, {
     ...ctx, state: done ? "settled" : o.code === 0 ? "failed" : o.state, remaining: after.ok ? after.remaining : null, revoked: after.ok ? after.revoked : null,
-    tx: { revoke: ownerTx(rr, r.stdout) ?? null }, next: done ? "none" : `superstables budget status --rail ${f.rail}: confirm whether the revoke landed, then run superstables budget revoke --yes again`, reason: done ? undefined : `the rail script exited ${r.code}`,
+    tx: { revoke: ownerTx(rr, r.stdout) ?? null }, url: approvalUrl, next: done ? "none" : `superstables budget status --rail ${f.rail}: confirm whether the revoke landed, then run superstables budget revoke again`, reason: done ? undefined : o.reason ?? `the rail script exited ${r.code}`,
   });
 }
 
 async function recover({ f, ctx }) {
   const plan = await run(railCommand("recover", f, { plan: true })); // the script's own --plan sends nothing
   if (plan.code !== 0) { const o = ownerOutcome(plan.code, railResult(plan.stdout)); return emit(o.code, { ...ctx, state: o.state, tx: {}, next: "read the plan output above", reason: o.reason ?? `the recover plan exited ${plan.code}` }); }
-  if (!f.yes) return emit(0, { ...ctx, state: "planned", tx: {}, next: "rerun the same command with --yes to send (owner signs: revoke first, then return funds)" });
+  if (!sendsNow(f)) return emit(0, { ...ctx, state: "planned", tx: {}, next: "rerun the same command with --yes to send (the owner key file signs the owner's steps)" });
   const r = await run(railCommand("recover", f));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
   const tx = {};
-  for (const [k, v] of [["selfRevoke", rr?.selfRevokeTx], ["ownerRevoke", rr?.ownerRevokeTx], ["sweep", rr?.sweepTx]]) if (v) tx[k] = v;
-  emit(o.code, { ...ctx, state: o.state, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, next: o.code === 0 ? "none" : `superstables budget status --rail ${f.rail}; then superstables budget recover again`, reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
+  for (const [k, v] of [["selfRevoke", rr?.selfRevokeTx], ["ownerRevoke", rr?.ownerRevokeTx], ["gas", rr?.gasTx], ["sweep", rr?.sweepTx]]) if (v) tx[k] = v;
+  emit(o.code, { ...ctx, state: o.state, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, url: approvalUrl, next: o.code === 0 ? "none" : ownerNext(o, rr, `superstables budget status --rail ${f.rail}; then superstables budget recover again`), reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
+}
+
+async function setup({ f, ctx }) {
+  log(`\nsetup on evm (${f.chain}): the agent key stays on this computer; the owner connects their own wallet. No owner key is created.`);
+  const r = await run(railCommand("setup", f));
+  const rr = railResult(r.stdout);
+  const o = ownerOutcome(r.code, rr);
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, agent: rr?.agent, url: approvalUrl, next: ownerNext(o, rr, "read the output above"), reason: o.reason ?? `the setup script exited ${r.code}` });
+  emit(0, { ...ctx, state: "ok", owner: rr?.owner, agent: rr?.agent, url: approvalUrl, next: rr?.next ?? "none" });
+}
+
+async function fundAgent({ f, ctx }) {
+  log(`\nfund-agent on evm (${f.chain}): the owner sends the agent gas. ${waitLine(f)}`);
+  if (!sendsNow(f)) return emit(0, { ...ctx, state: "planned", tx: {}, next: notSentNext(f) });
+  const r = await run(railCommand("fund-agent", f));
+  const rr = railResult(r.stdout);
+  const o = ownerOutcome(r.code, rr);
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, "superstables budget doctor --rail evm"), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
+  emit(0, { ...ctx, state: "settled", amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: "none" });
 }
 
 // ---- main -------------------------------------------------------------------------------------------
-const HANDLERS = { doctor, status, buy, reconcile, grant, revoke, recover };
+const HANDLERS = { setup, "fund-agent": fundAgent, doctor, status, buy, reconcile, grant, revoke, recover };
 const parsed = parse(process.argv.slice(2));
 await HANDLERS[parsed.cmd](parsed);

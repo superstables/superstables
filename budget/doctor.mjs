@@ -1,5 +1,7 @@
 // superstables budget doctor: key files, the public file, the RPC and balances for one rail. Reads files and the chain,
 // sends nothing, signs nothing, and never prints a secret (variable names and public addresses only).
+// The evm rail has no owner key file: the owner approves in their own wallet, so doctor checks the agent file, the public
+// file (the owner's address), the RPC and balances. Tempo and Solana still keep an owner key file.
 // Minimum balances are what one grant, a few purchases and a revoke need on each chain.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
@@ -38,15 +40,15 @@ const RAILS = {
     const c = EVM_CHAINS[chain], d = c.doctor, tok = c.token;
     const flag = chain === EVM_DEFAULT_CHAIN ? "" : ` --chain ${chain}`;
     return {
-      ownerVars: ["B4_OWNER_KEY", "B4_AGENT_KEY_ESCROW"], agentVars: ["B4_AGENT_KEY"], ownerSecrets: ["B4_OWNER_KEY"],
+      ownerVars: null, agentVars: ["B4_AGENT_KEY"], ownerSecrets: ["B4_OWNER_KEY"], agentKeyVar: "B4_AGENT_KEY",
       pub: publicFile("evm", chain), ownerAddr: "B4_OWNER_ADDRESS", agentAddr: "B4_AGENT_ADDRESS",
-      setup: `npx tsx budget/evm/setup.ts --from-keys${flag}`,
+      setup: `superstables budget setup --rail evm${flag}`,
       keyAddress: evmKeyAddress, caseSensitive: false,
       rpc: async () => { const id = Number(await rpc(c.rpc, "eth_chainId")); if (id !== c.chainId) throw new Error(`chain id ${id}, expected ${c.chainId}`); return `chain id ${id}`; },
       balances: async (owner, agent) => [
         { who: "owner", addr: owner, token: tok.symbol, have: await erc20Balance(c.rpc, tok.address, owner, tok.decimals), need: Number(d.minOwnerToken), hint: d.tokenFaucet },
         ...(c.gas.isToken ? [] : [{ who: "owner", addr: owner, token: c.gas.symbol, have: await nativeBalance(c.rpc, owner), need: Number(d.minOwnerGas), hint: d.gasFaucet }]),
-        { who: "agent", addr: agent, token: `${c.gas.symbol} (gas)`, have: await nativeBalance(c.rpc, agent), need: Number(d.minAgentGas), hint: `npx tsx budget/evm/fundAgent.ts${flag} --amount ${d.fundAgent}` },
+        { who: "agent", addr: agent, token: `${c.gas.symbol} (gas)`, have: await nativeBalance(c.rpc, agent), need: Number(d.minAgentGas), hint: `superstables budget fund-agent --rail evm${flag} (you approve it in your wallet), or send ${d.fundAgent} ${c.gas.symbol} to ${agent}` },
       ],
     };
   },
@@ -96,8 +98,11 @@ export async function runDoctor(f) {
   process.stderr.write(`\nsuperstables budget doctor: ${f.rail} (${f.chain})\n`);
 
   const owner = readEnv(ownerKeyFile(f.rail)), agent = readEnv(agentKeyFile(f.rail)), pub = readEnv(r.pub);
-  for (const [label, path, env, vars] of [["owner key file", ownerKeyFile(f.rail), owner, r.ownerVars], ["agent key file", agentKeyFile(f.rail), agent, r.agentVars]]) {
-    if (!existsSync(path)) { line(false, label, `${path} does not exist`); continue; }
+  const files = [["agent key file", agentKeyFile(f.rail), agent, r.agentVars]];
+  if (r.ownerVars) files.unshift(["owner key file", ownerKeyFile(f.rail), owner, r.ownerVars]);
+  else if (existsSync(ownerKeyFile(f.rail))) process.stderr.write(`  note  an owner key file is on this machine (${ownerKeyFile(f.rail)}). The ${f.rail} rail never reads it unless you pass --owner-key-file: the owner approves in their own wallet. Keep owner keys off the agent's machine.\n`);
+  for (const [label, path, env, vars] of files) {
+    if (!existsSync(path)) { line(false, label, `${path} does not exist${r.ownerVars ? "" : ` (run ${r.setup})`}`); continue; }
     const missing = vars.filter((v) => !env[v]);
     const m = mode(path);
     line(m === "600" && !missing.length, `${label} ${path}`, [m !== "600" && `mode is ${m}, must be 600 (chmod 600 ${path})`, missing.length && `missing ${missing.join(", ")}`].filter(Boolean).join("; "));
@@ -116,6 +121,10 @@ export async function runDoctor(f) {
       }
     }
     line(!problems.length, "agent key file holds no owner key", problems.join("; "));
+    if (r.agentKeyVar && agent[r.agentKeyVar] && agentAddress) {
+      const a = await r.keyAddress(agent[r.agentKeyVar]).catch(() => null);
+      line(!!a && a.toLowerCase() === agentAddress.toLowerCase(), "agent key matches the agent address in the public file", a ? (a.toLowerCase() === agentAddress.toLowerCase() ? agentAddress : `the key is for ${a}, the public file says ${agentAddress}`) : "the key is not a valid key");
+    }
   }
 
   if (!existsSync(r.pub)) line(false, `public file ${r.pub}`, `does not exist (run ${r.setup})`);

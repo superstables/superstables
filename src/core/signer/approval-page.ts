@@ -42,7 +42,8 @@ export interface ApprovalPageFacts {
 /** Where a person gets a browser wallet, when the page finds none. */
 export const WALLET_DOWNLOAD_URL = "https://metamask.io/download";
 
-function esc(value: unknown): string {
+/** HTML-escape one value. Shared with the owner approval page. */
+export function esc(value: unknown): string {
   return String(value === undefined || value === null ? "" : value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -52,11 +53,12 @@ function esc(value: unknown): string {
 }
 
 /** JSON that is safe to inline: nothing in it can close the script element around it. */
-function inlineJson(value: unknown): string {
+export function inlineJson(value: unknown): string {
   return JSON.stringify(value).replace(/</g, "\\u003c");
 }
 
-const STYLE = `
+/** The look every Superstables approval page shares. */
+export const STYLE = `
   :root {
     color-scheme: light dark;
     --bg: #f6f7f9;
