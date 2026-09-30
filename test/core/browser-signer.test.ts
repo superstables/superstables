@@ -13,6 +13,7 @@
 //   a rejection must leave nothing signed, and a request nobody answers must expire.
 
 import { spawn } from "node:child_process";
+import { generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,7 +28,9 @@ import { APPROVAL_PAGE_SCRIPT } from "../../src/core/signer/approval-page.js";
 import { BrowserWalletSigner } from "../../src/core/signer/browser.js";
 import { SignRefused, type SignRequest } from "../../src/core/signer/types.js";
 import { OWNER_PAGE_SCRIPT } from "../../src/core/signer/owner-approval-page.js";
-import { OwnerApprovalServer, signInMessage, type OwnerActionInput } from "../../src/core/signer/owner-approval-server.js";
+import { OwnerApprovalServer, signInMessage, type OwnerActionInput, type SolanaTransactionPort } from "../../src/core/signer/owner-approval-server.js";
+import { ownerApprovalPage } from "../../src/core/signer/owner-approval-page.js";
+import bs58 from "bs58";
 import { request as httpRequest } from "node:http";
 import type { Attempt } from "../../src/core/types.js";
 import { startFakeFacilitator, type FakeFacilitator } from "../helpers/fake-facilitator.js";
@@ -634,6 +637,236 @@ describe("the owner approval page", () => {
   });
 });
 
+// ── The owner approval page with a Solana wallet ─────────────────────────────────────────
+//
+// On solana the wallet only signs: the command builds the transaction when the owner presses
+// Approve, and checks what the wallet signed before it sends anything itself. The test plays
+// the wallet again (an ed25519 key) and stands in for the command's side with a port that
+// records what it was asked to do. What a person relies on: only their own signature connects,
+// only their account is asked, a transaction the command refuses is never sent, and the link
+// says honestly whether anything may have gone out.
+
+function ed25519Wallet() {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const raw = Buffer.from(publicKey.export({ format: "jwk" }).x!, "base64url");
+  return { address: bs58.encode(raw), sign: (message: Uint8Array) => ed25519Sign(null, message, privateKey) };
+}
+
+const SOL_OWNER = ed25519Wallet();
+const SOLANA_CHAIN = { family: "solana" as const, chainId: 0, chainName: "Solana devnet", rpcUrl: "https://api.devnet.solana.com", explorer: "https://explorer.solana.com", explorerQuery: "?cluster=devnet", walletChain: "solana:devnet", nativeCurrency: { name: "SOL", symbol: "SOL", decimals: 9 }, testnet: true };
+
+/** A port that builds "the transaction" as fixed bytes and answers submit as told; it records every broadcast. */
+function fakePort(answer: "sent" | "refused" | "throw-after-send" = "sent") {
+  const calls = { prepared: 0, broadcast: 0, signed: [] as string[] };
+  const port: SolanaTransactionPort = {
+    async prepare() {
+      calls.prepared += 1;
+      return Buffer.from(`tx-${calls.prepared}`).toString("base64");
+    },
+    async submit(signed, broadcasting) {
+      calls.signed.push(signed);
+      if (answer === "refused") return { status: "refused", reason: "Your wallet changed the transaction, so the command did not send it." };
+      if (!broadcasting()) return { status: "refused", reason: "The link expired while the wallet was signing." };
+      calls.broadcast += 1;
+      if (answer === "throw-after-send") throw new Error("socket hang up");
+      return { status: "sent", hash: "5".repeat(88) };
+    },
+  };
+  return { port, calls };
+}
+
+function solanaAction(port: SolanaTransactionPort, overrides: Partial<OwnerActionInput> = {}): OwnerActionInput {
+  return {
+    ...ownerAction(),
+    kind: "solana-transaction",
+    chain: SOLANA_CHAIN,
+    account: SOL_OWNER.address,
+    transaction: undefined,
+    solana: port,
+    ...overrides,
+  };
+}
+
+describe("the owner approval page with a Solana wallet", () => {
+  it("believes a connect only with an ed25519 signature from the address it names, over the exact message", async () => {
+    const server = await ownerServer();
+    const handle = server.request({ ...ownerAction({ kind: "connect", account: undefined, transaction: undefined, signIn: "Superstables budget: record this wallet as the owner." }), chain: SOLANA_CHAIN });
+    const message = Buffer.from(signInMessage("Superstables budget: record this wallet as the owner.", handle.id));
+    const impostor = ed25519Wallet();
+    const forged = await postJson(`${handle.url}/connect`, { address: SOL_OWNER.address, signature: impostor.sign(message).toString("base64"), signedMessage: message.toString("base64") });
+    expect(forged.status).toBe(400);
+    const other = Buffer.from("something else");
+    const swapped = await postJson(`${handle.url}/connect`, { address: SOL_OWNER.address, signature: SOL_OWNER.sign(other).toString("base64"), signedMessage: other.toString("base64") });
+    expect(swapped.status).toBe(400);
+    expect((await getJson(`${handle.url}/state`)).body.status).toBe("pending");
+    const real = await postJson(`${handle.url}/connect`, { address: SOL_OWNER.address, signature: SOL_OWNER.sign(message).toString("base64"), signedMessage: message.toString("base64") });
+    expect(real.status).toBe(200);
+    expect(await handle.settled).toEqual({ status: "connected", address: SOL_OWNER.address });
+  });
+
+  it("builds nothing before the owner's account is connected, and asks only that account", async () => {
+    const { port, calls } = fakePort();
+    const server = await ownerServer();
+    const handle = server.request(solanaAction(port));
+    expect((await postJson(`${handle.url}/prepare`, { address: SOL_OWNER.address })).status).toBe(409);
+    expect((await postJson(`${handle.url}/account`, { address: "not-an-address" })).status).toBe(400);
+    const stranger = await postJson(`${handle.url}/account`, { address: ed25519Wallet().address });
+    expect(stranger.status).toBe(403);
+    expect(String(stranger.body.error)).toContain(SOL_OWNER.address);
+    expect(calls.prepared).toBe(0);
+    expect((await postJson(`${handle.url}/account`, { address: SOL_OWNER.address })).status).toBe(200);
+    // an EVM route is not a way around the checks
+    expect((await postJson(`${handle.url}/sent`, { address: SOL_OWNER.address, hash: HASH })).status).toBe(404);
+    // each Approve builds afresh (a blockhash lives about a minute, a link much longer)
+    const first = await postJson(`${handle.url}/prepare`, { address: SOL_OWNER.address });
+    const second = await postJson(`${handle.url}/prepare`, { address: SOL_OWNER.address });
+    expect(first.body.transaction).not.toBe(second.body.transaction);
+    expect(calls.prepared).toBe(2);
+  });
+
+  it("sends what the wallet signed only through the command, and hands the command its signature", async () => {
+    const { port, calls } = fakePort();
+    const server = await ownerServer();
+    const handle = server.request(solanaAction(port));
+    await postJson(`${handle.url}/account`, { address: SOL_OWNER.address });
+    await postJson(`${handle.url}/prepare`, { address: SOL_OWNER.address });
+    const answer = await postJson(`${handle.url}/signed`, { address: SOL_OWNER.address, signedTransaction: "c2lnbmVk" });
+    expect(answer.status).toBe(200);
+    expect(calls.signed).toEqual(["c2lnbmVk"]);
+    expect(calls.broadcast).toBe(1);
+    expect(await handle.settled).toEqual({ status: "sent", address: SOL_OWNER.address, hash: "5".repeat(88) });
+    handle.finish({ ok: true, message: "Done. The chain shows a budget of 0.05 USDC." });
+    expect((await getJson(`${handle.url}/state`)).body.status).toBe("confirmed");
+  });
+
+  it("keeps the link open and sends nothing when the command refuses what the wallet signed", async () => {
+    const { port, calls } = fakePort("refused");
+    const server = await ownerServer();
+    const handle = server.request(solanaAction(port));
+    await postJson(`${handle.url}/account`, { address: SOL_OWNER.address });
+    await postJson(`${handle.url}/prepare`, { address: SOL_OWNER.address });
+    const answer = await postJson(`${handle.url}/signed`, { address: SOL_OWNER.address, signedTransaction: "dGFtcGVyZWQ=" });
+    expect(answer.status).toBe(409);
+    expect(String(answer.body.error)).toContain("Nothing was sent");
+    expect(calls.broadcast).toBe(0);
+    expect((await getJson(`${handle.url}/state`)).body.status).toBe("ready");
+    // the owner gives up: a rejection, and nothing was sent
+    await postJson(`${handle.url}/reject`, { by: "page" });
+    expect(await handle.settled).toMatchObject({ status: "rejected", sending: false });
+  });
+
+  it("sends nothing when the link expired while the wallet was signing", async () => {
+    const { port, calls } = fakePort();
+    const server = await ownerServer();
+    const handle = server.request(solanaAction(port, { timeoutMs: 400 }));
+    await postJson(`${handle.url}/account`, { address: SOL_OWNER.address });
+    await postJson(`${handle.url}/prepare`, { address: SOL_OWNER.address });
+    expect(await handle.settled).toMatchObject({ status: "expired", sending: false });
+    expect((await postJson(`${handle.url}/signed`, { address: SOL_OWNER.address, signedTransaction: "c2lnbmVk" })).status).toBe(409);
+    expect(calls.broadcast).toBe(0);
+  });
+
+  it("treats a wallet that would not sign as a rejection with nothing sent", async () => {
+    const { port } = fakePort();
+    const server = await ownerServer();
+    const handle = server.request(solanaAction(port));
+    await postJson(`${handle.url}/account`, { address: SOL_OWNER.address });
+    await postJson(`${handle.url}/prepare`, { address: SOL_OWNER.address });
+    await postJson(`${handle.url}/reject`, { by: "wallet" });
+    const outcome = await handle.settled;
+    expect(outcome).toMatchObject({ status: "rejected", sending: false });
+    expect(outcome.status === "rejected" && outcome.reason).toContain("in the wallet");
+  });
+
+  it("says it may have sent something when the command lost track after the broadcast", async () => {
+    const { port, calls } = fakePort("throw-after-send");
+    const server = await ownerServer();
+    const handle = server.request(solanaAction(port));
+    await postJson(`${handle.url}/account`, { address: SOL_OWNER.address });
+    await postJson(`${handle.url}/prepare`, { address: SOL_OWNER.address });
+    expect((await postJson(`${handle.url}/signed`, { address: SOL_OWNER.address, signedTransaction: "c2lnbmVk" })).status).toBe(502);
+    expect(calls.broadcast).toBe(1);
+    expect(await handle.settled).toMatchObject({ status: "expired", sending: true });
+  });
+
+  it("names Phantom and devnet on the page, and links the explorer to the right cluster", async () => {
+    const { port } = fakePort();
+    const server = await ownerServer();
+    const handle = server.request(solanaAction(port));
+    const html = await (await fetch(handle.url)).text();
+    expect(html).toContain("Phantom (or another Solana wallet) is needed here");
+    expect(html).toContain("Testnet Mode");
+    expect(html).toContain("Solana devnet");
+    expect(html).toContain('"walletChain":"solana:devnet"');
+    expect(html).toContain('"explorerQuery":"?cluster=devnet"');
+    expect(html).not.toMatch(/<script[^>]+src=/i);
+    // an EVM page keeps naming MetaMask and has no devnet hint
+    const evm = ownerApprovalPage({ id: "0".repeat(32), kind: "evm-transaction", chain: ownerAction().chain, chainIdHex: "0x14a34", expiresAt: Date.now() + 1000 }, ownerAction().terms);
+    expect(evm).toContain("MetaMask (or another browser wallet) is needed here");
+    expect(evm).not.toContain("Testnet Mode");
+    // the page talks the Wallet Standard: it announces itself and listens for wallets
+    expect(OWNER_PAGE_SCRIPT).toContain("wallet-standard:app-ready");
+    expect(OWNER_PAGE_SCRIPT).toContain("wallet-standard:register-wallet");
+    expect(OWNER_PAGE_SCRIPT).toContain("solana:signTransaction");
+    expect(OWNER_PAGE_SCRIPT).toContain("solana:signMessage");
+    expect(OWNER_PAGE_SCRIPT).not.toContain("solana:signAndSendTransaction");
+  });
+
+  it("refuses to register a Solana transaction without its port, or on an EVM chain", async () => {
+    const server = await ownerServer();
+    expect(() => server.request(solanaAction(undefined as unknown as SolanaTransactionPort, { solana: undefined }))).toThrow();
+    expect(() => server.request(solanaAction(fakePort().port, { chain: ownerAction().chain }))).toThrow();
+    expect(() => server.request(ownerAction({ chain: SOLANA_CHAIN }))).toThrow();
+  });
+});
+
+// ── Tempo: what the owner's wallet is asked to send ──────────────────────────────────────
+//
+// On tempo the owner's wallet calls the keychain precompile directly in a plain transaction.
+// The calldata is the whole grant, so it must say exactly what the page says: the agent key,
+// the limit, the expiry, the period, and the sellers only when there is a seller list.
+
+describe("the tempo owner calldata", () => {
+  it("grants with the current authorizeKey, scoped to the sellers only when there are sellers", async () => {
+    const { decodeFunctionData } = await import("viem");
+    const { Abis } = await import("viem/tempo");
+    // budget/ is plain tsx, outside this project's type check: load it by path
+    const tempo = await import(join(REPO, "budget", "tempo", "owner.ts"));
+    const agent = privateKeyToAccount(generatePrivateKey()).address;
+    const seller = privateKeyToAccount(generatePrivateKey()).address;
+    const open = tempo.grantCalldata({ agent, limit: 50_000n, expiry: 1_790_000_000 });
+    expect(open.slice(0, 10)).toBe("0x980a6025");
+    const a = decodeFunctionData({ abi: Abis.accountKeychain, data: open }) as { args: readonly any[] };
+    expect(a.args[0]).toBe(agent);
+    expect(a.args[1]).toBe(0);
+    expect(a.args[2]).toMatchObject({ expiry: 1_790_000_000n, enforceLimits: true, allowAnyCalls: true, allowedCalls: [] });
+    expect(a.args[2].limits).toEqual([{ token: "0x20C0000000000000000000000000000000000000", amount: 50_000n, period: 0n }]);
+
+    const scoped = tempo.grantCalldata({ agent, limit: 10_000n, expiry: 1_790_000_000, period: 3600, sellers: [seller] });
+    const b = decodeFunctionData({ abi: Abis.accountKeychain, data: scoped }) as { args: readonly any[] };
+    expect(b.args[2].allowAnyCalls).toBe(false);
+    expect(b.args[2].limits[0].period).toBe(3600n);
+    expect(b.args[2].allowedCalls).toEqual([{ target: "0x20C0000000000000000000000000000000000000", selectorRules: [{ selector: "0xa9059cbb", recipients: [seller] }, { selector: "0x95777d59", recipients: [seller] }] }]);
+    expect(tempo.maxByExpiry(10_000n, 3 * 3600, 3600)).toEqual({ windows: 3, max: 30_000n });
+    expect(tempo.revokeCalldata(agent).slice(0, 10)).toBe("0x5ae7ab32");
+    // Moderato is added to MetaMask with 18 decimals: it refuses any other value
+    expect(tempo.TEMPO_OWNER_CHAIN).toMatchObject({ chainId: 42431, nativeCurrency: { decimals: 18 } });
+  });
+
+  it("reads a grant back as matching only when every limit is the planned one", async () => {
+    const tempo = await import(join(REPO, "budget", "tempo", "owner.ts"));
+    const seller = privateKeyToAccount(generatePrivateKey()).address;
+    const plan = { agent: AGENT, limit: 10_000n, expiry: 1_790_000_000, period: 3600, sellers: [seller] };
+    const onChain = { signatureType: 0, expiry: 1_790_000_000, enforceLimits: true, revoked: false, remaining: 10_000n, periodEnd: 1_789_996_400, scoped: true, admin: false, scopes: [{ target: "0x20c0000000000000000000000000000000000000", selectorRules: [{ selector: "0xa9059cbb", recipients: [seller.toLowerCase()] }, { selector: "0x95777d59", recipients: [seller] }] }] };
+    expect(tempo.grantProblems(onChain, plan)).toEqual([]);
+    expect(tempo.grantProblems({ ...onChain, remaining: 20_000n }, plan).join()).toContain("limit");
+    expect(tempo.grantProblems({ ...onChain, expiry: 1_790_000_001 }, plan).join()).toContain("expires");
+    expect(tempo.grantProblems({ ...onChain, scoped: false, scopes: [] }, plan).join()).toContain("seller list");
+    expect(tempo.grantProblems({ ...onChain, admin: true }, plan).join()).toContain("admin");
+    expect(tempo.grantProblems(onChain, { ...plan, sellers: undefined }).join()).toContain("no seller list was planned");
+  });
+});
+
 // ── detached owner approvals ─────────────────────────────────────────────────────────────
 //
 // An agent's shell tool shows a command's output only when it exits, so an owner command run
@@ -698,12 +931,12 @@ afterAll(() => {
   rmSync(budgetHome, { recursive: true, force: true });
 });
 
-/** Start one detached approval on base-sepolia, as the dispatcher does. */
-async function detach(timeoutMs = 20_000) {
+/** Start one detached approval (on base-sepolia unless told otherwise), as the dispatcher does. */
+async function detach(timeoutMs = 20_000, rail = "evm", chain = "base-sepolia") {
   const id = approvals.newApprovalId();
-  expect(approvals.claim("evm", "base-sepolia", id).ok).toBe(true);
+  expect(approvals.claim(rail, chain, id).ok).toBe(true);
   const started = await approvals.startDetached({
-    id, command: "grant", rail: "evm", chain: "base-sepolia", cmd: TSX, args: [workerFile], cwd: REPO,
+    id, command: "grant", rail, chain, cmd: TSX, args: [workerFile], cwd: REPO,
     env: { ...process.env, OWNER_ACTION: JSON.stringify(ownerAction({ timeoutMs })) }, timeoutS: Math.ceil(timeoutMs / 1000),
   });
   expect(started.kind).toBe("waiting");
@@ -825,6 +1058,30 @@ describe("a detached owner approval", () => {
     expect(replaced.code).toBe(3);
     expect(replaced.result.reason).toContain("replaced by oa-20260930000000-00000000");
     expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
+  });
+
+  it("holds tempo and solana owner commands to the same gate: the wallet by default, one approval per chain", async () => {
+    for (const [rail, chain] of [["tempo", "moderato"], ["solana", "devnet"]]) {
+      // --yes only goes with a test owner key file; nothing is spawned
+      const yes = await budget(["grant", "--rail", rail, "--amount", "0.01", "--yes"]);
+      expect(yes.code).toBe(2);
+      expect(yes.result.reason).toContain("the owner approves in their own wallet");
+      const record = await detach(20_000, rail, chain);
+      const second = await budget(["revoke", "--rail", rail]);
+      expect(second.code).toBe(3);
+      expect(second.result).toMatchObject({ command: "revoke", rail, chain, state: "refused_precheck", id: record.id, url: record.url });
+      expect(approvals.findPending(rail, chain)?.id).toBe(record.id);
+      // another rail's chain is not held by it
+      expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
+      await postJson(`${record.url}/reject`, { by: "page" });
+      expect((await budget(["wait", "--id", record.id, "--timeout", "10"])).code).toBe(3);
+      expect(await gone(record.pid)).toBe(true);
+      expect(approvals.findPending(rail, chain)).toBeNull();
+    }
+    // tempo's agent needs no gas: there is nothing to fund
+    const fund = await budget(["fund-agent", "--rail", "tempo"]);
+    expect(fund.code).toBe(2);
+    expect(fund.result.reason).toContain("needs no gas");
   });
 
   it("reports a worker that died without a result from what its page last logged", async () => {
