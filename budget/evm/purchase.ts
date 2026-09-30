@@ -318,7 +318,7 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
           why = e.reason; // the pull reverts with enough gas (or with the token's revert data): nothing was signed
         } else {
           // an RPC error while preparing: nothing was signed, and the chain has refused nothing
-          throw new Stop("precheck", `PULL NOT SENT: could not prepare the pull (${chainReason(e)}). Nothing was signed.`, "try again with a new --op; if it keeps failing, check the RPC (superstables budget doctor)");
+          throw new Stop("precheck", `PULL NOT SENT: could not prepare the pull (${chainReason(e)}). Nothing was signed.`, "try again; if it keeps failing, check the RPC (superstables budget doctor)");
         }
         res.pullRefusal = why;
         throw new Stop("chain", `REFUSED ON CHAIN at the pull: ${why}`);

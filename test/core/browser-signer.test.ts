@@ -1606,6 +1606,7 @@ type FakeAmoy = {
   balance: bigint; // the agent's POL
   tips: bigint[]; // eth_maxPriorityFeePerGas answers in order; the last one repeats
   refuse?: string; // the pull itself reverts with this Error(string), whatever the gas
+  broken?: boolean; // eth_estimateGas fails without reverting (a node that lost state)
   owner: string;
   agent: string;
   calls: string[];
@@ -1632,6 +1633,7 @@ function amoyNode(f: FakeAmoy) {
       }
       case "eth_estimateGas": {
         const req = params[0];
+        if (f.broken) return { error: { code: -32000, message: "missing trie node 5f3a (path ) state 0x0 is not available" } };
         if (f.refuse) {
           const data = encodeErrorResult({ abi: [{ type: "error", name: "Error", inputs: [{ name: "message", type: "string" }] }], errorName: "Error", args: [f.refuse] });
           return { error: { code: 3, message: `execution reverted: ${f.refuse}`, data } };
@@ -1714,6 +1716,11 @@ describe("the agent's gas, checked before it signs anything", () => {
     f.refuse = "ERC20: transfer amount exceeds allowance";
     const refused = await capped();
     expect(lib.estimateFailure(refused, { have: 0n, limit: 105_000n, fee })).toBe("refused");
+    // a node that fails without reverting is neither
+    f.refuse = undefined;
+    f.broken = true;
+    const broken = await capped();
+    expect(lib.estimateFailure(broken, { have: 0n, limit: 105_000n, fee })).toBe("other");
   });
 
   it("refuses to sign a pull the agent cannot pay for, with the cancel and return a failure would need", async () => {
@@ -1740,6 +1747,13 @@ describe("the agent's gas, checked before it signs anything", () => {
     const refused = await lib.agentGasFor(agent, AMOY_USDC, "0x23b872dd", "pull", ["cancel", "return"]).catch((err: unknown) => err);
     expect(refused).toBeInstanceOf(lib.ChainRefused);
     expect((refused as Error).message).toContain("transfer amount exceeds allowance");
+    // an RPC that fails without a revert is not the chain refusing, and not a shortage: its own error comes through
+    f.refuse = undefined;
+    f.broken = true;
+    const broken = await lib.agentGasFor(agent, AMOY_USDC, "0x23b872dd", "pull", ["cancel", "return"]).catch((err: unknown) => err);
+    expect(broken).not.toBeInstanceOf(lib.ChainRefused);
+    expect(broken).not.toBeInstanceOf(lib.GasShort);
+    expect(String((broken as Error).message)).toContain("missing trie node");
   });
 
   it("buy: a fee that rises after the precheck is refused before signing (exit 3), never called a chain refusal", async () => {
@@ -1766,6 +1780,25 @@ describe("the agent's gas, checked before it signs anything", () => {
       expect(early).toMatchObject({ state: "refused_precheck", exitCode: 3 });
       expect(early.journal.reason).toContain("including what a refund would cost");
       expect(f.calls).not.toContain("eth_estimateGas");
+      expect(f.calls).not.toContain("eth_sendRawTransaction");
+    } finally {
+      await seller.close();
+    }
+  });
+
+  it("buy: an RPC that fails to estimate the pull is not a chain refusal (exit 3, nothing signed)", async () => {
+    const { lib, purchase } = await evmRailOnAmoy();
+    const wallet = lib.walletFor(generatePrivateKey());
+    const agent = wallet.account.address;
+    const seller = await amoySeller(privateKeyToAccount(generatePrivateKey()).address);
+    const f: FakeAmoy = { balance: POL, tips: [30n * GWEI], broken: true, owner: OWNER.address, agent, calls: [] };
+    vi.stubGlobal("fetch", amoyNode(f));
+    try {
+      const r = await purchase.purchase({ url: seller.url, c: { owner: OWNER.address, agent, wallet, agentKey: "0x" }, op: `gas-rpc-${randomUUID().slice(0, 8)}`, max: 10_000n });
+      expect(r).toMatchObject({ state: "refused_precheck", exitCode: 3, signedPayment: false });
+      expect(r.journal.reason).toContain("PULL NOT SENT: could not prepare the pull");
+      expect(r.journal.reason).toContain("missing trie node");
+      expect(r.journal.pullTx).toBeUndefined();
       expect(f.calls).not.toContain("eth_sendRawTransaction");
     } finally {
       await seller.close();

@@ -265,11 +265,16 @@ export function revertData(e: any): Hex | undefined {
  * proxy (Amoy's USDC), "execution reverted" with empty data, which viem shows as "Execution reverted for an unknown reason".
  * Revert data (the contract said why) is a refusal. "gas required exceeds allowance" or "insufficient funds" is a shortage.
  * Empty data is a shortage when the balance is below limit x fee cap, and a refusal when the call had that much gas.
+ * Anything that is not a revert at all (the RPC failed, timed out, or answered something else) is "other": neither.
  */
-export function estimateFailure(e: any, o: { have: bigint; limit: bigint; fee: bigint }): "refused" | "short" {
+export function estimateFailure(e: any, o: { have: bigint; limit: bigint; fee: bigint }): "refused" | "short" | "other" {
   const data = revertData(e);
   if (data && data !== "0x") return "refused";
-  if (/gas required exceeds allowance|insufficient funds/i.test(chainReason(e) + " " + String(e?.message ?? ""))) return "short";
+  const text = chainReason(e) + " " + String(e?.message ?? "");
+  if (/gas required exceeds allowance|insufficient funds/i.test(text)) return "short";
+  let reverted = data !== undefined || /execution reverted|out of gas/i.test(text);
+  for (let c = e, i = 0; c && i < 10 && !reverted; c = c.cause, i++) if (c.code === 3) reverted = true;
+  if (!reverted) return "other";
   return o.have < o.limit * o.fee ? "short" : "refused";
 }
 
@@ -278,7 +283,8 @@ export function estimateFailure(e: any, o: { have: bigint; limit: bigint; fee: b
  * estimate at balance / fee cap only when a fee is given), so a revert here is the chain refusing the call; `estimateFailure`
  * still sorts a capped answer from a node that caps anyway. Gas = the larger of the chain's limit for `op` and the estimate plus
  * 20%. The agent must afford that plus the limits of `then` at the fee cap it will sign with, else GasShort. A refusal throws
- * ChainRefused. The caller signs with exactly these gas and fees.
+ * ChainRefused. An estimate that failed without reverting (the RPC) throws its own error: it is neither. The caller signs with
+ * exactly these gas and fees.
  */
 export async function agentGasFor(from: Address, to: Address, data: Hex, op: GasOp, then: GasOp[] = [], client = publicClient): Promise<{ gas: bigint; fees: Fees; g: GasNeed }> {
   const fees = await currentFees(client);
@@ -288,8 +294,10 @@ export async function agentGasFor(from: Address, to: Address, data: Hex, op: Gas
     est = await client.estimateGas({ account: from, to, data, prepare: false } as any);
   } catch (e: any) {
     const have = await retry(() => client.getBalance({ address: from }));
-    if (estimateFailure(e, { have, limit, fee: feeCap(fees) }) === "short") throw new GasShort(await agentGas(from, [op, ...then], { client, fees }));
-    throw new ChainRefused(chainReason(e));
+    const why = estimateFailure(e, { have, limit, fee: feeCap(fees) });
+    if (why === "short") throw new GasShort(await agentGas(from, [op, ...then], { client, fees }));
+    if (why === "refused") throw new ChainRefused(chainReason(e));
+    throw e;
   }
   const gas = (est * 12n) / 10n > limit ? (est * 12n) / 10n : limit;
   const g = await agentGas(from, [op, ...then], { client, fees, first: gas });
