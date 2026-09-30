@@ -238,12 +238,12 @@ export async function pageState(url) {
   }
 }
 
-/** What the page's status means for a caller who is waiting. */
-export function pageWords(page) {
+/** What the page's status means for a caller who is waiting. On solana the wallet only signs and the command sends. */
+export function pageWords(page, rail) {
   switch (page?.status) {
     case "pending": return "waiting for the owner to open the link and connect their wallet";
     case "ready": return "the owner connected their wallet; waiting for them to approve in it";
-    case "sending": return "the wallet was asked to send; waiting for the owner to confirm in it";
+    case "sending": return rail === "solana" ? "the owner signed in the wallet; the command is sending it" : "the wallet was asked to send; waiting for the owner to confirm in it";
     case "sent": return "the wallet sent the transaction; the command is reading it from the chain";
     case "connected": return "the owner connected and signed; the command is finishing";
     case undefined: case null: return "waiting for the owner";

@@ -616,8 +616,8 @@ async function wait({ f }) {
     process.exit(r.code);
   }
   const rec = r.record;
-  log(`superstables budget: ${rec.id} (${rec.command}) is still waiting: ${pageWords(r.page)}. Link: ${rec.url}`);
-  emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: waitNext(rec.id), reason: pageWords(r.page) });
+  log(`superstables budget: ${rec.id} (${rec.command}) is still waiting: ${pageWords(r.page, rec.rail)}. Link: ${rec.url}`);
+  emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: waitNext(rec.id), reason: pageWords(r.page, rec.rail) });
 }
 
 // ---- main -------------------------------------------------------------------------------------------
