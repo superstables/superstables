@@ -3,7 +3,8 @@
 //   1. GET the seller (free) -> 402 with the price.
 //   2. Prechecks (rule 4), all before anything is signed or sent: token, decimals, precision, price vs --max,
 //      recipient vs --pay-to, authorization lifetime, then (unless `precheck: false`) the budget expiry, the allowance,
-//      the owner's balance and the agent's own balance (must be 0 and have gas).
+//      the owner's balance and the agent's own balance (must be 0, and have the gas for the pull and for the cancel and return a
+//      failure would need, at the current fee).
 //   3. Journal the intent (rule 5), then the agent pulls exactly the price: USDC.transferFrom(owner, agent, price).
 //      THIS PURCHASE'S OWN pull must land before it may pay.
 //   4. The official x402 client signs the EIP-3009 authorization with from = agent (normal EOA signature).
@@ -18,8 +19,9 @@ import { ExactEvmScheme } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import {
   SYM, oneLine,
-  sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, nativeBalance, gasFmt, chainReason, publicClient, sleep,
-  type AgentCtx, type Wallet,
+  sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, chainReason, publicClient, sleep,
+  agentGas, gasWords, fundAgentNext, GasShort, ChainRefused,
+  type AgentCtx, type Wallet, type GasNeed, type GasOp,
 } from "./lib.ts";
 import {
   newJournal, readJournal, writeJournal, reconcileJournal, readSettlement, readPull, makeSafe, otherOpWithTx, addFee, exitCodeFor, REUSABLE, PENDING,
@@ -123,6 +125,11 @@ export type PurchaseResult = {
 class Stop extends Error {
   constructor(public kind: "precheck" | "chain" | "quote" | "reconciled", public reason: string, public next?: string) { super(reason); }
 }
+/** What one purchase may cost the agent in gas: the pull, and the cancel and return a failure after it would need. */
+export const PURCHASE_GAS: GasOp[] = ["pull", "cancel", "return"];
+/** The refusal for an agent short on gas (exit 3, nothing signed). */
+const gasStop = (g: GasNeed) =>
+  new Stop("precheck", `REFUSED: ${gasWords(g, "this purchase", ", including what a refund would cost")}. Nothing was signed or pulled.`, `${fundAgentNext(g)} (the owner approves it in their wallet), then buy again`);
 
 export { exitCodeFor };
 
@@ -262,8 +269,9 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
             `REFUSED: the agent key already holds ${usdc(held)} ${SYM}${GAS.isUsdc ? ` (more than the ${usdc(GAS.reserveMax!)} ${SYM} gas reserve it should hold)` : ""}: a seller refund or funds stranded by an earlier purchase arrived there. Nothing was signed or pulled.`,
             `owner: run "${recover}" to return the ${usdc(held)} ${SYM} to the owner (the agent key sends it back; the owner approves in their wallet only if something is left for them to do), then buy again with a new --op`);
         }
-        const gas = await nativeBalance(agent.account.address);
-        if (gas < GAS.minAgent) throw new Stop("precheck", `REFUSED: the agent key has ${gasFmt(gas)} ${GAS.symbol}, not enough for the pull's gas (needs ${gasFmt(GAS.minAgent)}). Top it up first: superstables budget fund-agent --rail evm --chain ${CFG.key} (the owner approves it in their wallet).`);
+        // The pull, and what a failure after it would need (cancel the authorization, return the price), at the current fee.
+        const g = await agentGas(agent.account.address, PURCHASE_GAS);
+        if (!g.ok) throw gasStop(g);
       }
       j.agentUsdcBefore = usdc(await usdcBalance(agent.account.address));
       // intent, before anything is sent
@@ -276,7 +284,7 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
           j.pullTx = hash;
           j.pullNonce = nonce;
           writeJournal(j);
-        });
+        }, { op: "pull", then: ["cancel", "return"] });
         j.pullBlock = String(sent.blockNumber);
         j.pullStatus = "success";
         addFee(j, sent.feeWei);
@@ -304,8 +312,13 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
             ? `not sent: byte-identical to operation ${twin}'s pull (the same agent nonce in two processes; run one process per agent key)`
             : `the network did not accept the transaction: ${chainReason(e)}`;
           throw new Stop("chain", `PULL NOT SENT: ${res.pullRefusal}`);
+        } else if (e instanceof GasShort) {
+          throw gasStop(e.g); // the fee rose after the precheck: nothing was signed
+        } else if (e instanceof ChainRefused) {
+          why = e.reason; // the pull reverts with enough gas (or with the token's revert data): nothing was signed
         } else {
-          why = chainReason(e); // failed before anything was signed (gas estimation revert or RPC error)
+          // an RPC error while preparing: nothing was signed, and the chain has refused nothing
+          throw new Stop("precheck", `PULL NOT SENT: could not prepare the pull (${chainReason(e)}). Nothing was signed.`, "try again with a new --op; if it keeps failing, check the RPC (superstables budget doctor)");
         }
         res.pullRefusal = why;
         throw new Stop("chain", `REFUSED ON CHAIN at the pull: ${why}`);

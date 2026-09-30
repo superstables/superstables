@@ -11,6 +11,10 @@ import { defineChain, parseUnits, type Address, type Chain } from "viem";
 import * as viemChains from "viem/chains";
 import { EVM_CHAINS, EVM_DEFAULT_CHAIN } from "./chains.mjs";
 
+/** Gas limit of each transaction on this chain (chains.mjs `gas.limits`): the agent's pull, cancel, return and selfRevoke, the owner's approve and revoke. */
+export type GasOp = "pull" | "cancel" | "return" | "selfRevoke" | "approve" | "revoke";
+export type GasLimits = Record<GasOp, bigint>;
+
 export type ChainCfg = {
   key: string;
   label: string; // used in messages ("is not <label> USDC")
@@ -25,7 +29,7 @@ export type ChainCfg = {
   network: string; // x402 network id, eip155:<chainId>
   legacyNetworks: string[]; // x402 v1 names to accept as the same chain
   domain: { name: string; version: string };
-  gas: { symbol: string; decimals: number; isUsdc: boolean; minAgent: bigint; topUp: bigint; reserveMax?: bigint };
+  gas: { symbol: string; decimals: number; isUsdc: boolean; limits: GasLimits; minAgent: bigint; topUp: bigint; reserveMax?: bigint };
   logRange?: number; // the RPC's eth_getLogs block-range cap, when it has one
 };
 
@@ -46,6 +50,7 @@ function build(key: string): ChainCfg {
     legacyNetworks: t.legacy, domain: t.token.domain, ...(t.logRange ? { logRange: t.logRange } : {}),
     gas: {
       symbol: g.symbol, decimals: g.decimals, isUsdc: g.isToken,
+      limits: Object.fromEntries(Object.entries(g.limits).map(([k, v]) => [k, BigInt(v as number)])) as GasLimits,
       minAgent: parseUnits(g.minAgent, g.decimals), topUp: parseUnits(g.topUp, g.decimals),
       ...(g.reserveMax ? { reserveMax: parseUnits(g.reserveMax, t.token.decimals) } : {}),
     },

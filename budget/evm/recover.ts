@@ -13,23 +13,25 @@ import "./cli-guard.mjs";
 //                      uses (cancel an open authorization, return the price, journal it). --op <id> limits this to one operation.
 //   3. SWEEP           USDC stranded in the agent key that no journal explains goes back by a plain transfer. On a chain where USDC is the
 //                      gas token (Arc) the agent keeps its gas reserve (chains.ts gas.reserveMax). Skipped with --op.
-//   Steps 2 and 3 need gas in the agent key: if it has too little, the owner sends some first (in the wallet).
+//   Every agent step checks first that the agent can pay for it at the current fee (lib.ts agentGas: the chain's gas limits x fee
+//   cap). Steps 2 and 3 need gas for each cancel and return: if the agent has too little, the owner sends what is missing first
+//   (in the wallet; at least the chain's gas.topUp).
 // --plan prints these steps for the current chain state and sends nothing (no key file, no page).
 //
 // npx tsx budget/evm/recover.ts [--chain <name>] [--op <id>] [--plan] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 // Exit codes: 0 recovered (or planned), 1 incomplete or failed, 3 refused before anything was sent (unknown --op, the owner
 // rejected or the link expired), 5 an operation is still unknown.
 import { existsSync } from "node:fs";
-import { encodeFunctionData, type Hex } from "viem";
+import { encodeFunctionData, parseUnits, type Hex } from "viem";
 import { pendingJournalsFor, makeSafe, readJournal, checkOpId, type Journal } from "./ops.ts";
-import { SYM, CFG, GAS, AGENT_ENV, OWNER_KEY_FILE, arg, flag, cmd, emit, agentCtx, ownerCtx, escrowCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, usdc, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC, assertRpcChain, type Wallet, type SelfRevoke } from "./lib.ts";
+import { SYM, CFG, GAS, AGENT_ENV, OWNER_KEY_FILE, arg, flag, cmd, emit, agentCtx, ownerCtx, escrowCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, usdc, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC, assertRpcChain, agentGas, gasWords, gasRound, GasShort, type Wallet, type SelfRevoke, type GasOp, type GasNeed } from "./lib.ts";
 import { revokeInWallet, fundInWallet } from "./owner.ts";
 
 const plan = flag("plan");
 const opId = arg("op") ? checkOpId(arg("op")!) : undefined;
 const KEEP = GAS.isUsdc ? GAS.reserveMax! : 0n; // the agent keeps this much USDC (its gas reserve)
-const GAS_TOPUP = GAS.topUp;
-const MIN_GAS = GAS.minAgent;
+/** What the owner sends an agent short on gas: what is missing (rounded up), at least the chain's gas.topUp. */
+const topUpFor = (g: GasNeed) => { const missing = parseUnits(gasRound(g.need - g.have, "up"), GAS.decimals); return missing > GAS.topUp ? missing : GAS.topUp; };
 const micro = (v?: string) => BigInt(Math.round(Number(v ?? "0") * 1e6));
 
 const pub = readCtx(); // public addresses, no secret
@@ -49,19 +51,23 @@ if (opId) {
   if (!pending.length) console.log(`operation ${opId} is ${j.state}${j.returned ? ` (returned ${j.returned} ${SYM})` : ""}: nothing stranded for it`);
 } else pending = pendingJournalsFor(pub.agent);
 
-const agentHasGas = agentNativeBefore >= MIN_GAS;
 const returnsNeeded = pending.length > 0 || (!opId && held > KEEP);
+// Gas for the agent's own steps at the current fee: selfRevoke (step 1), then a cancel and a return per pending operation and the sweep.
+const returnOps: GasOp[] = [...pending.flatMap((): GasOp[] => ["cancel", "return"]), ...(!opId && held > KEEP ? (["return"] as GasOp[]) : [])];
+const revokeGas = await agentGas(pub.agent, ["selfRevoke"]);
+const agentHasGas = revokeGas.ok;
+const plannedGas = returnsNeeded ? await agentGas(pub.agent, allowance > 0n && agentHasGas ? ["selfRevoke", ...returnOps] : returnOps) : null;
 const owner = OWNER_KEY_FILE ? "the owner (key file)" : "the owner, in their wallet,";
 if (plan) {
   console.log("PLAN (nothing is sent):");
   if (allowance === 0n) console.log("  1. stop authority: the allowance is already 0");
   else if (agentHasGas) console.log(`  1. stop authority: the agent lowers the allowance ${usdc(allowance)} ${SYM} to 0 (selfRevoke, agent key); if some is left, ${owner} approves 0`);
-  else console.log(`  1. stop authority: the agent has no gas, so ${owner} approves 0 (the allowance is ${usdc(allowance)} ${SYM})`);
-  if (returnsNeeded && !agentHasGas) console.log(`  2a. the agent key has too little gas: ${owner} sends it ${gasFmt(GAS_TOPUP)} ${GAS.symbol}`);
+  else console.log(`  1. stop authority: ${gasWords(revokeGas, "its selfRevoke")}, so ${owner} approves 0 (the allowance is ${usdc(allowance)} ${SYM})`);
+  if (plannedGas && !plannedGas.ok) console.log(`  2a. ${gasWords(plannedGas, "returning the funds")}: ${owner} sends it ${gasFmt(topUpFor(plannedGas))} ${GAS.symbol}`);
   if (pending.length) for (const j of pending) console.log(`  2. operation ${j.op} (${j.state}, pulled ${j.pulled ?? "unknown"} ${SYM}, returned ${j.returned ?? "0"}): cancel the open authorization if any, return the price to the owner (agent key)`);
   else console.log("  2. no journaled operation has funds stranded");
   console.log(opId ? "  3. sweep: skipped (--op)" : `  3. sweep: whatever the agent key holds above ${usdc(KEEP)} ${SYM} after step 2 goes to the owner (agent key; now ${usdc(held)} ${SYM})`);
-  process.exit(emit("recover", 0, { state: "planned", op: opId ?? null, plan: { gasTopUp: returnsNeeded && !agentHasGas ? gasFmt(GAS_TOPUP) : null, ownerRevoke: allowance > 0n && !agentHasGas, allowance: usdc(allowance), pendingOps: pending.map((j) => ({ op: j.op, state: j.state, pulled: j.pulled ?? null, returned: j.returned ?? "0" })), agentHolds: usdc(held), sweep: opId ? false : true }, next: `run superstables budget recover --rail evm --chain ${CFG.key}${opId ? ` --op ${opId}` : ""} to send these steps` }));
+  process.exit(emit("recover", 0, { state: "planned", op: opId ?? null, plan: { gasTopUp: plannedGas && !plannedGas.ok ? gasFmt(topUpFor(plannedGas)) : null, ownerRevoke: allowance > 0n && !agentHasGas, allowance: usdc(allowance), pendingOps: pending.map((j) => ({ op: j.op, state: j.state, pulled: j.pulled ?? null, returned: j.returned ?? "0" })), agentHolds: usdc(held), sweep: opId ? false : true }, next: `run superstables budget recover --rail evm --chain ${CFG.key}${opId ? ` --op ${opId}` : ""} to send these steps` }));
 }
 
 await assertRpcChain();
@@ -78,9 +84,15 @@ const ownerKey = OWNER_KEY_FILE ? await ownerCtx() : null;
 // 1. STOP AUTHORITY, before anything else moves
 console.log("== 1. stop authority");
 let sr: SelfRevoke | null = null;
+if (allowance > 0n && !agentHasGas) console.log(`${gasWords(revokeGas, "its selfRevoke")}: the owner revokes instead`);
 if (allowance > 0n && agentHasGas) {
-  sr = await selfRevokeCore(agentWallet, pub.owner);
-  console.log(`${sr.state}: ${sr.note}`);
+  try {
+    sr = await selfRevokeCore(agentWallet, pub.owner);
+    console.log(`${sr.state}: ${sr.note}`);
+  } catch (e) {
+    if (!(e instanceof GasShort)) throw e;
+    console.log(`selfRevoke not sent: ${gasWords(e.g, "it")} (the fee rose). The owner revokes instead`);
+  }
 }
 let allowanceAfter = await allowanceOf(pub.owner, pub.agent);
 let ownerRevokeTx: string | null = null;
@@ -99,12 +111,13 @@ writePublic({ B4_REVOKED_AT: String(Math.floor(Date.now() / 1000)) }, ["B4_CAP",
 // gas for the agent-side returns
 let topUp = 0n;
 let gasTx: Hex | null = null;
-if (returnsNeeded && (await nativeBalance(pub.agent)) < MIN_GAS) {
-  console.log(`the agent key has too little gas to return funds; the owner sends ${gasFmt(GAS_TOPUP)} ${GAS.symbol}`);
-  if (ownerKey) gasTx = (await sendNative(ownerKey.wallet, pub.agent, GAS_TOPUP, "gas top-up owner -> agent")).hash;
-  else gasTx = await fundInWallet("recover", pub.owner, pub.agent, GAS_TOPUP, gasFmt(GAS_TOPUP), await nativeBalance(pub.agent));
-  topUp = GAS_TOPUP;
-  await readUntil(() => nativeBalance(pub.agent), (v) => v >= MIN_GAS);
+const returnGas = returnOps.length ? await agentGas(pub.agent, returnOps) : null;
+if (returnGas && !returnGas.ok) {
+  topUp = topUpFor(returnGas);
+  console.log(`${gasWords(returnGas, "returning the funds")}; the owner sends ${gasFmt(topUp)} ${GAS.symbol}`);
+  if (ownerKey) gasTx = (await sendNative(ownerKey.wallet, pub.agent, topUp, "gas top-up owner -> agent")).hash;
+  else gasTx = await fundInWallet("recover", pub.owner, pub.agent, topUp, gasFmt(topUp), returnGas.have);
+  await readUntil(() => nativeBalance(pub.agent), (v) => v >= returnGas.have + topUp);
 }
 
 // 2. CANCEL / RETURN journaled pulls
@@ -129,8 +142,14 @@ if (!opId) {
   if (heldNow > KEEP) {
     const sweep = heldNow - KEEP;
     sweptNow = sweep;
-    const sent = await send(agentWallet, USDC, encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [pub.owner, sweep] }), `recover: transfer ${usdc(sweep)} ${SYM} agent -> owner (agent key)`);
-    sweepTx = sent.hash;
+    try {
+      const sent = await send(agentWallet, USDC, encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [pub.owner, sweep] }), `recover: transfer ${usdc(sweep)} ${SYM} agent -> owner (agent key)`, { op: "return" });
+      sweepTx = sent.hash;
+    } catch (e) {
+      if (!(e instanceof GasShort)) throw e;
+      sweptNow = 0n;
+      console.log(`sweep not sent: ${gasWords(e.g, "the sweep")} (the fee rose). Nothing was signed`);
+    }
   } else console.log(`nothing above ${usdc(KEEP)} ${SYM} to sweep`);
 }
 const heldAfter = await readUntil(() => usdcBalance(pub.agent), (v) => !!opId || v <= KEEP);

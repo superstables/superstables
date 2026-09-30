@@ -89,7 +89,7 @@ RESULT {"ok":true,"command":"buy","rail":"tempo","chain":"moderato","op":"rb-202
 
 - Tempo: a revoked or expired access key can never be granted again. Use a fresh key: `superstables budget setup --rail tempo --agent LABEL`, then `--agent LABEL` on `grant`, `status`, `buy`, `revoke`.
 - Solana: one delegate slot per token account. A new grant overwrites the old one, so the rail refuses while one is live.
-- EVM: `buy` is GET only. The agent pulls the exact price, then pays; a failed purchase returns the price. Pulled funds left in the agent key are returned by `superstables budget recover` (when the owner asks; the agent key sends them back to the owner).
+- EVM: `buy` is GET only. The agent pulls the exact price, then pays; a failed purchase returns the price. When the agent key cannot pay the gas for that at the current fee, `buy` exits 3 before signing and `next` names `fund-agent`: tell the owner. Pulled funds left in the agent key are returned by `superstables budget recover` (when the owner asks; the agent key sends them back to the owner).
 - Revoke does not reverse confirmed payments. Pending transactions depend on chain ordering. On EVM, a payment can still settle from funds already pulled. On Tempo, payment sessions opened elsewhere are not covered by a revoke.
 - The chain limits spending, but that does not make parallel CLI purchases safe. Do not run two `buy`s on one agent key at once.
 - Something looks off (missing key, empty balance): run `superstables budget doctor` before anything else.

@@ -20,7 +20,9 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { encodeErrorResult } from "viem";
+import { createServer } from "node:http";
 import { usdcRequirement } from "../../src/core/chain.js";
 import { PaymentEngine } from "../../src/core/pay.js";
 import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
@@ -1583,6 +1585,209 @@ describe("settlement binding and failed reads on the chain", () => {
     const address = new PublicKey(SOL_OWNER.address);
     expect(await getAccountOrNull({ getAccountInfo: async () => null }, address)).toBeNull();
     await expect(getAccountOrNull({ getAccountInfo: down }, address)).rejects.toThrow("fetch failed");
+  });
+});
+
+// ── gas the agent needs before it signs ─────────────────────────────────────────────────
+//
+// A live run on Polygon Amoy (30 Sep 2026): the tip jumped from 30 to 348 gwei, the agent held 0.02 POL, and the node capped
+// eth_estimateGas at balance / fee cap. The pull needs about 88,700 gas; the cap was 57,418, and the node answered
+// {"code":3,"message":"execution reverted","data":"0x"}. buy called that a chain refusal. The chain refused nothing. These tests
+// run the evm rail on polygon-amoy against a fake RPC that answers the way that node did (global fetch is stubbed, so viem's
+// real transport builds the real errors).
+
+const AMOY_RPC = "https://polygon-amoy-bor-rpc.publicnode.com";
+const AMOY_USDC = "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582";
+const GWEI = 1_000_000_000n;
+const POL = 10n ** 18n;
+const PULL_GAS = 88_717n; // what the node estimates for the pull when it is not capped
+
+type FakeAmoy = {
+  balance: bigint; // the agent's POL
+  tips: bigint[]; // eth_maxPriorityFeePerGas answers in order; the last one repeats
+  refuse?: string; // the pull itself reverts with this Error(string), whatever the gas
+  owner: string;
+  agent: string;
+  calls: string[];
+};
+function amoyNode(f: FakeAmoy) {
+  const word = (v: bigint) => `0x${v.toString(16).padStart(64, "0")}`;
+  const hex = (v: bigint) => `0x${v.toString(16)}`;
+  const answer = (method: string, params: any[]): { result?: unknown; error?: unknown } => {
+    f.calls.push(method);
+    switch (method) {
+      case "eth_chainId": return { result: "0x13882" };
+      case "eth_blockNumber": return { result: "0x100" };
+      case "eth_getBlockByNumber": return { result: { number: "0x100", hash: `0x${"11".repeat(32)}`, parentHash: `0x${"22".repeat(32)}`, timestamp: "0x66fb0000", baseFeePerGas: "0x3f", gasLimit: "0x1c9c380", gasUsed: "0x0", transactions: [] } };
+      case "eth_maxPriorityFeePerGas": { const tip = f.tips.length > 1 ? f.tips.shift()! : f.tips[0]; return { result: hex(tip) }; }
+      case "eth_gasPrice": return { result: hex(f.tips[0]) };
+      case "eth_getBalance": return { result: hex(f.balance) };
+      case "eth_getTransactionCount": return { result: "0x0" };
+      case "eth_call": {
+        const data = String(params[0].data);
+        if (data.startsWith("0x313ce567")) return { result: word(6n) }; // decimals()
+        if (data.startsWith("0xdd62ed3e")) return { result: word(20_000n) }; // allowance: 0.02 USDC
+        if (data.startsWith("0x70a08231")) return { result: word(data.toLowerCase().includes(f.owner.slice(2).toLowerCase()) ? 100_000n : 0n) }; // balanceOf
+        return { error: { code: -32000, message: `unexpected eth_call ${data.slice(0, 10)}` } };
+      }
+      case "eth_estimateGas": {
+        const req = params[0];
+        if (f.refuse) {
+          const data = encodeErrorResult({ abi: [{ type: "error", name: "Error", inputs: [{ name: "message", type: "string" }] }], errorName: "Error", args: [f.refuse] });
+          return { error: { code: 3, message: `execution reverted: ${f.refuse}`, data } };
+        }
+        const fee = BigInt(req.maxFeePerGas ?? req.gasPrice ?? 0);
+        if (fee === 0n) return { result: hex(PULL_GAS) }; // no fee fields: no cap
+        const cap = f.balance / fee;
+        if (cap >= PULL_GAS) return { result: hex(PULL_GAS) };
+        // what the probe on Amoy saw: a cap under 40,000 names the allowance, above that the proxy runs out of gas inside
+        return { error: cap < 40_000n ? { code: -32000, message: `gas required exceeds allowance (${cap})` } : { code: 3, message: "execution reverted", data: "0x" } };
+      }
+      default: return { error: { code: -32601, message: `the method ${method} does not exist/is not available` } };
+    }
+  };
+  const realFetch = globalThis.fetch;
+  return async (input: any, init?: any): Promise<Response> => {
+    const url = String(input?.url ?? input);
+    if (!url.startsWith(AMOY_RPC)) return realFetch(input, init);
+    const body = JSON.parse(String(init?.body));
+    const one = (b: any) => ({ jsonrpc: "2.0", id: b.id, ...answer(b.method, b.params ?? []) });
+    return new Response(JSON.stringify(Array.isArray(body) ? body.map(one) : one(body)), { status: 200, headers: { "content-type": "application/json" } });
+  };
+}
+
+/** The evm rail's modules on polygon-amoy (the chain is read once, when lib.ts is first imported). */
+async function evmRailOnAmoy() {
+  const before = process.env.B4_CHAIN;
+  process.env.B4_CHAIN = "polygon-amoy";
+  try {
+    const lib = await import(join(REPO, "budget", "evm", "lib.ts"));
+    const purchase = await import(join(REPO, "budget", "evm", "purchase.ts"));
+    expect(lib.CFG.key).toBe("polygon-amoy");
+    return { lib, purchase };
+  } finally {
+    if (before === undefined) delete process.env.B4_CHAIN;
+    else process.env.B4_CHAIN = before;
+  }
+}
+
+/** A seller that only asks: a v2 402 for 0.01 USDC on Amoy. */
+async function amoySeller(payTo: string): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = createServer((req, res) => {
+    const body = {
+      x402Version: 2, error: "Payment required",
+      resource: { url: `http://${req.headers.host}${req.url}`, description: "test", mimeType: "application/json" },
+      accepts: [{ scheme: "exact", network: "eip155:80002", asset: AMOY_USDC, amount: "10000", payTo, maxTimeoutSeconds: 300, extra: { name: "USDC", version: "2" } }],
+    };
+    res.writeHead(402, { "content-type": "application/json", "payment-required": Buffer.from(JSON.stringify(body)).toString("base64") });
+    res.end(JSON.stringify(body));
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const port = (server.address() as { port: number }).port;
+  return { url: `http://127.0.0.1:${port}/paid`, close: () => new Promise((done) => server.close(() => done())) };
+}
+
+describe("the agent's gas, checked before it signs anything", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sorts a node's capped estimate from a refusal: shortage without revert data and below limit x fee, refusal otherwise", async () => {
+    const { lib } = await evmRailOnAmoy();
+    const agent = privateKeyToAccount(generatePrivateKey()).address;
+    const f: FakeAmoy = { balance: POL / 50n, tips: [348n * GWEI], owner: OWNER.address, agent, calls: [] };
+    vi.stubGlobal("fetch", amoyNode(f));
+    const fee = 348n * GWEI;
+    const capped = async () => {
+      try { await lib.publicClient.estimateGas({ account: agent, to: AMOY_USDC, data: "0x23b872dd", maxFeePerGas: fee, maxPriorityFeePerGas: fee }); } catch (e) { return e; }
+      throw new Error("the capped estimate should fail");
+    };
+    // the words buy used to report: viem cannot tell this from a refusal
+    const e = await capped();
+    expect(String((e as any).shortMessage)).toContain("Execution reverted for an unknown reason");
+    expect(lib.estimateFailure(e, { have: f.balance, limit: 105_000n, fee })).toBe("short");
+    // the same empty revert with enough POL for the limit is the chain refusing
+    expect(lib.estimateFailure(e, { have: POL, limit: 105_000n, fee })).toBe("refused");
+    // a cap low enough for the node to say so
+    f.balance = POL / 100_000n;
+    const low = await capped();
+    expect(lib.estimateFailure(low, { have: f.balance, limit: 105_000n, fee })).toBe("short");
+    // revert data is the contract saying why: a refusal, however little POL there is
+    f.refuse = "ERC20: transfer amount exceeds allowance";
+    const refused = await capped();
+    expect(lib.estimateFailure(refused, { have: 0n, limit: 105_000n, fee })).toBe("refused");
+  });
+
+  it("refuses to sign a pull the agent cannot pay for, with the cancel and return a failure would need", async () => {
+    const { lib } = await evmRailOnAmoy();
+    const agent = privateKeyToAccount(generatePrivateKey()).address;
+    const f: FakeAmoy = { balance: POL / 50n, tips: [348n * GWEI], owner: OWNER.address, agent, calls: [] };
+    vi.stubGlobal("fetch", amoyNode(f));
+    const g = await lib.agentGas(agent, ["pull", "cancel", "return"]);
+    // 105,000 + 105,000 + 70,000 gas at 348 gwei
+    expect(g).toMatchObject({ ok: false, have: POL / 50n, gas: 280_000n });
+    expect(g.need).toBe(280_000n * g.fee);
+    expect(lib.gasWords(g, "this purchase", ", including what a refund would cost")).toBe("the agent key has 0.02 POL; this purchase needs about 0.098 POL at the current fee (348 gwei), including what a refund would cost");
+    expect(lib.fundAgentNext(g)).toBe("owner: superstables budget fund-agent --rail evm --chain polygon-amoy --amount 0.078");
+    const short = await lib.agentGasFor(agent, AMOY_USDC, "0x23b872dd", "pull", ["cancel", "return"]).catch((err: unknown) => err);
+    expect(short).toBeInstanceOf(lib.GasShort);
+    // at the usual 30 gwei the same agent can pay: the pull gets the chain's limit, signed at the fee that was checked
+    f.tips = [30n * GWEI];
+    const ok = await lib.agentGasFor(agent, AMOY_USDC, "0x23b872dd", "pull", ["cancel", "return"]);
+    expect(ok.gas).toBe(106_460n); // the estimate plus 20% is above the 105,000 limit
+    expect(ok.fees.maxFeePerGas).toBe(30n * GWEI + 75n);
+    expect(ok.g.ok).toBe(true);
+    // a call that reverts with data is the chain refusing, never a shortage
+    f.refuse = "ERC20: transfer amount exceeds allowance";
+    const refused = await lib.agentGasFor(agent, AMOY_USDC, "0x23b872dd", "pull", ["cancel", "return"]).catch((err: unknown) => err);
+    expect(refused).toBeInstanceOf(lib.ChainRefused);
+    expect((refused as Error).message).toContain("transfer amount exceeds allowance");
+  });
+
+  it("buy: a fee that rises after the precheck is refused before signing (exit 3), never called a chain refusal", async () => {
+    const { lib, purchase } = await evmRailOnAmoy();
+    const wallet = lib.walletFor(generatePrivateKey());
+    const agent = wallet.account.address;
+    const seller = await amoySeller(privateKeyToAccount(generatePrivateKey()).address);
+    // the precheck reads 30 gwei, the pull's own check 348 gwei (the jump seen live)
+    const f: FakeAmoy = { balance: POL / 50n, tips: [30n * GWEI, 348n * GWEI], owner: OWNER.address, agent, calls: [] };
+    vi.stubGlobal("fetch", amoyNode(f));
+    try {
+      const c = { owner: OWNER.address, agent, wallet, agentKey: "0x" };
+      const r = await purchase.purchase({ url: seller.url, c, op: `gas-rise-${randomUUID().slice(0, 8)}`, max: 10_000n });
+      expect(r).toMatchObject({ state: "refused_precheck", exitCode: 3, signedPayment: false, pulled: 0n });
+      expect(r.journal.pullTx).toBeUndefined();
+      expect(r.journal.reason).toContain("the agent key has 0.02 POL; this purchase needs about 0.098 POL at the current fee (348 gwei), including what a refund would cost");
+      expect(r.journal.next).toContain("superstables budget fund-agent --rail evm --chain polygon-amoy");
+      expect(f.calls).toContain("eth_estimateGas"); // refused by the pull's own check, the one that estimates
+      expect(f.calls).not.toContain("eth_sendRawTransaction");
+      // too little POL at the precheck's own fee: refused there, before the pull is estimated or the journal says it was sent
+      f.tips = [348n * GWEI];
+      f.calls.length = 0;
+      const early = await purchase.purchase({ url: seller.url, c, op: `gas-low-${randomUUID().slice(0, 8)}`, max: 10_000n });
+      expect(early).toMatchObject({ state: "refused_precheck", exitCode: 3 });
+      expect(early.journal.reason).toContain("including what a refund would cost");
+      expect(f.calls).not.toContain("eth_estimateGas");
+      expect(f.calls).not.toContain("eth_sendRawTransaction");
+    } finally {
+      await seller.close();
+    }
+  });
+
+  it("buy: a pull that reverts with enough gas is the chain refusing it (exit 1), and nothing is signed", async () => {
+    const { lib, purchase } = await evmRailOnAmoy();
+    const wallet = lib.walletFor(generatePrivateKey());
+    const agent = wallet.account.address;
+    const seller = await amoySeller(privateKeyToAccount(generatePrivateKey()).address);
+    const f: FakeAmoy = { balance: POL, tips: [30n * GWEI], refuse: "ERC20: transfer amount exceeds allowance", owner: OWNER.address, agent, calls: [] };
+    vi.stubGlobal("fetch", amoyNode(f));
+    try {
+      const r = await purchase.purchase({ url: seller.url, c: { owner: OWNER.address, agent, wallet, agentKey: "0x" }, op: `gas-refused-${randomUUID().slice(0, 8)}`, max: 10_000n });
+      expect(r).toMatchObject({ state: "refused_chain", exitCode: 1, signedPayment: false });
+      expect(r.pullRefusal).toContain("transfer amount exceeds allowance");
+      expect(r.journal.pullTx).toBeUndefined();
+      expect(f.calls).not.toContain("eth_sendRawTransaction");
+    } finally {
+      await seller.close();
+    }
   });
 });
 
