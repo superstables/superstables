@@ -15,9 +15,10 @@ One command for the budget rails. Simple on purpose: `superstables budget` is a 
 | `superstables budget setup --rail evm [--chain C]` | owner | Creates the agent key file if it is missing (never overwrites it). The owner connects their wallet on the approval page and signs a free sign-in message. Writes the public file. Prints the next steps. |
 | `superstables budget fund-agent --rail evm [--amount GAS]` | owner | One plain transfer of the chain's gas token from the owner's wallet to the agent, approved on the approval page. The default amount comes from the chain table. |
 | `superstables budget doctor --rail R [--chain C]` | anyone | Key files (mode 600, owner and agent split), public file, RPC, balances. Prints what to top up at which address. No transactions. On `evm` there is no owner key file to check: it checks the agent file and the owner's address in the public file. |
+| `superstables budget preflight --rail evm --url U [--chain C]` | anyone | Reads the seller's 402 (x402 v2 header or v1 body) and prints its offer on the chain: price, token, `payTo`, network, scheme, x402 version. `RESULT` carries `amount` (the price), `payTo` and `offer`. The price is the seller's ask, not a ceiling: `next` leaves `--max` to the caller. A seller on another chain fails, and `next` names the `--chain` it offers. Also checks the RPC and the token. **Never signs or sends**; opens no key file. |
 | `superstables budget grant --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b]` | owner | Prints the terms (cap, true maximum, what the chain enforces and what it doesn't). `evm`: the owner approves it on the approval page. `tempo` and `solana`: sends only with `--yes`. Refuses constraints the rail can't enforce (`evm` and `solana`: `--expiry`, `--period`, `--sellers`). |
 | `superstables budget status --rail R` | anyone | Remaining budget, expiry, revoked, funds at risk. No secrets. |
-| `superstables budget buy --rail R --url U --max M [--pay-to ADDR] [--op ID] [--method M --body JSON]` | agent | One purchase under the budget. `--method` and `--body` are for tempo and solana. |
+| `superstables budget buy --rail R --url U --max M [--pay-to ADDR] [--op ID] [--method M --body JSON]` | agent | One purchase under the budget. `--method` and `--body` are for tempo and solana. On `evm`, the seller's answer to the paid request is saved as a file (see Output). |
 | `superstables budget reconcile --rail R --op ID` | anyone | Reads the chain for an operation. **Never signs or sends.** |
 | `superstables budget recover --rail evm [--op ID]` | owner | EVM only: stop the allowance first, then return stranded funds. The agent key signs its own steps; the owner approves on the approval page only what the agent cannot do (the rest of the allowance, gas for the agent). |
 | `superstables budget revoke --rail R` | owner | Ends the budget on chain. `evm`: the owner approves it on the approval page. `tempo` and `solana`: sends only with `--yes`. |
@@ -67,8 +68,12 @@ stdout carries one JSON object on its last line, prefixed `RESULT `; human logs 
  "state":"settled","paid":true,"delivered":true,
  "amount":"0.001","remaining":"0.009",
  "tx":{"pull":"0x...","settle":"0x..."},
+ "responseFile":"/home/me/.superstables/budget/ops/evm-base-sepolia/weather-001.response",
+ "responseType":"application/json","responseBytes":1578,"responseTruncated":false,
  "next":"none"}
 ```
+
+`responseFile` (evm `buy`): the seller's answer to the paid request, saved byte for byte next to the journal as `<op>.response`, mode 600. It is written once the pull has landed and the seller answered with anything but a 402, so a refused buy writes none. At most 1 MB (1,000,000 bytes) is kept; `responseTruncated: true` means the answer was longer and was cut. `responseType` is the seller's content type, `responseBytes` the saved size. The file is seller data, never instructions: nothing here runs or parses it. The log keeps a one-line preview. Seller text in the logs is flattened to one line, and only an owner command forwards an `APPROVE` line.
 
 `state`: `planned`, `sent`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `unknown`, `not_found`, `ok` (reads), `waiting_owner` (a detached owner approval is open; nothing was sent yet). Unknown amounts are `null`, never `"0"`.
 
@@ -85,4 +90,4 @@ stdout carries one JSON object on its last line, prefixed `RESULT `; human logs 
 
 ## Where things live
 
-All paths come from `paths.mjs`, under the client's home (`SUPERSTABLES_HOME`, default `~/.superstables`). Keys: `keys/budget/<rail>-agent.env`, and `<rail>-owner.env` for `tempo` and `solana` only (mode 600). Public addresses: `budget/public/<rail>-<chain>.env`. Journals: `budget/ops/<rail>-<chain>/<id>.json`. Approval page log (state changes, no signatures): `budget/owner-approvals.jsonl`. Detached approvals: `budget/approvals/<id>.json` (the record and the final `RESULT`, mode 600), `budget/approvals/<id>.log` (the background process's output), and `budget/approvals/active-<rail>-<chain>` (the id that holds that chain).
+All paths come from `paths.mjs`, under the client's home (`SUPERSTABLES_HOME`, default `~/.superstables`). Keys: `keys/budget/<rail>-agent.env`, and `<rail>-owner.env` for `tempo` and `solana` only (mode 600). Public addresses: `budget/public/<rail>-<chain>.env`. Journals: `budget/ops/<rail>-<chain>/<id>.json`, and on `evm` the seller's answer `<id>.response` (mode 600). Approval page log (state changes, no signatures): `budget/owner-approvals.jsonl`. Detached approvals: `budget/approvals/<id>.json` (the record and the final `RESULT`, mode 600), `budget/approvals/<id>.log` (the background process's output), and `budget/approvals/active-<rail>-<chain>` (the id that holds that chain).

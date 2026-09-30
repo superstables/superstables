@@ -258,6 +258,7 @@ seller list the chain enforces; and `solana`, an SPL token delegate on Solana de
 ```bash
 npx superstables budget setup  --rail evm                        # agent key; the owner connects a wallet
 npx superstables budget doctor --rail evm
+npx superstables budget preflight --rail evm --url <seller url>  # the seller's price and address; signs nothing
 npx superstables budget grant  --rail evm --amount 0.01          # the owner approves in the wallet
 npx superstables budget buy    --rail evm --url <seller url> --max 0.002
 npx superstables budget revoke --rail evm                        # the kill switch, approved in the wallet
