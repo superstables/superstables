@@ -27,11 +27,23 @@ The steps use the `evm` rail. On `tempo` (access key) and `solana` (SPL delegate
 
 | `--rail` | What the owner grants | Chain (`--chain`) | Pick it when |
 | --- | --- | --- | --- |
-| `evm` | A plain ERC-20 `approve` to the agent key | `base-sepolia` (default), `arc-testnet` | The seller takes x402 on an EVM chain and you want any wallet to be able to be the owner |
+| `evm` | A plain ERC-20 `approve` to the agent key | `base-sepolia` (default) and the other chains in [EVM chains](#evm-chains) | The seller takes x402 on an EVM chain and you want any wallet to be able to be the owner |
 | `tempo` | An access key with a cap, an expiry and an optional seller list | `moderato` | You need the chain itself to enforce an expiry, a per-period cap or a seller list, or the seller speaks MPP |
 | `solana` | An SPL token delegate | `devnet` | The seller takes x402 on Solana |
 
 Only Tempo enforces an expiry and a seller list on chain. On `evm` and `solana` the chain enforces a total cap only, so a stolen agent key can pay any address up to the cap, and the budget does not expire by itself. `superstables budget grant` refuses `--expiry`, `--period` and `--sellers` there instead of pretending. Details: [references/paths.md](references/paths.md).
+
+## EVM chains
+
+Each chain below passed grant, buy (settled and delivered), reconcile, revoke and a refused buy after the revoke on its testnet, through this CLI, with a third-party seller. The chain table is `evm/chains.mjs`: one entry per chain.
+
+| `--chain` | Token (EIP-712 name/version) | Gas | Bought from |
+| --- | --- | --- | --- |
+| `base-sepolia` (default) | USDC (`USDC`/2) | ETH | tollbooth-hello-testnet.sjwilliams8.workers.dev |
+| `arc-testnet` | USDC (`USDC`/2) | USDC | watchevelive.com |
+| `arbitrum-sepolia` | USDC (`USD Coin`/2) | ETH | PayAI Echo, PayAI facilitator |
+| `polygon-amoy` | USDC (`USDC`/2) | POL | PayAI Echo, PayAI facilitator |
+| `skale-base-sepolia` | bridged USDC (`Bridged USDC (SKALE Bridge)`/2) | CREDIT | PayAI Echo, PayAI facilitator |
 
 ## Quickstart
 
@@ -52,11 +64,11 @@ Where things live. `SUPERSTABLES_HOME` is the client's home, `~/.superstables` u
 | Public addresses and budget terms (no secrets) | `$SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env` |
 | Purchase journals | `$SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/` |
 
-Both `evm` chains use the same two key files. Keep the owner file off any machine that runs the agent. Agent commands never open it.
+Every `evm` chain uses the same two key files; each chain has its own public file. Keep the owner file off any machine that runs the agent. Agent commands never open it.
 
 In each block, run `doctor` first: it lists what is missing and which address to top up.
 
-### evm (Base Sepolia, or Arc Testnet with `--chain arc-testnet`)
+### evm (Base Sepolia, or another chain with `--chain`)
 
 1. Create the keys. This writes both files, refuses to overwrite existing ones, and prints only addresses:
 
@@ -71,14 +83,15 @@ In each block, run `doctor` first: it lists what is missing and which address to
    writeFileSync(agentKeyFile("evm"), `B4_AGENT_KEY=${k}\n` + addr, w);
    console.log("owner", a(o), "agent", a(k));'
    npx tsx budget/evm/setup.ts --from-keys                       # public file for Base Sepolia
-   npx tsx budget/evm/setup.ts --from-keys --chain arc-testnet   # Arc only: its own public file, same keys
+   npx tsx budget/evm/setup.ts --from-keys --chain arc-testnet   # each other chain (here Arc): its own public file, same keys
    ```
 
-   The owner file keeps a copy of the agent key (`B4_AGENT_KEY_ESCROW`) so that `recover` can return stranded funds without the agent. Without the second `setup.ts` line, `doctor --chain arc-testnet` fails on the public file.
+   The owner file keeps a copy of the agent key (`B4_AGENT_KEY_ESCROW`) so that `recover` can return stranded funds without the agent. Run the second `setup.ts` line once per chain you use; without it, `doctor --chain <key>` fails on the public file.
 
 2. Fund the owner address from step 1 with faucets, then let the owner send the agent gas. `doctor` checks these minimums:
    - Base Sepolia: the owner needs at least 0.01 USDC ([faucet.circle.com](https://faucet.circle.com), pick Base Sepolia) and 0.00003 ETH (any Base Sepolia ETH faucet; 0.0003 is a comfortable amount). The agent needs at least 0.00003 ETH: `npx tsx budget/evm/fundAgent.ts --amount 0.0001`. A transaction here costs well under 0.000001 ETH.
    - Arc Testnet: gas is USDC, so there is no second token. The owner needs at least 0.2 USDC after funding the agent, and the agent at least 0.01 USDC. Get 0.4 USDC from [faucet.circle.com](https://faucet.circle.com) (pick Arc Testnet), then `npx tsx budget/evm/fundAgent.ts --chain arc-testnet --amount 0.1`. A transaction here costs about 0.0005 to 0.0015 USDC.
+   - Arbitrum Sepolia, Polygon Amoy and SKALE Base Sepolia: `npx superstables budget doctor --rail evm --chain <key>` prints the minimums and where to get each token. Fund the agent with `npx tsx budget/evm/fundAgent.ts --chain <key> --amount <gas>`.
 3. Then:
 
    ```sh

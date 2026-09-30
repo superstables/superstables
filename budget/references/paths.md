@@ -1,6 +1,6 @@
 # The rails, in detail
 
-Load this file when you choose a rail, explain what a budget allows, or compare rails. `superstables budget --rail evm` is a plain ERC-20 approve with pull then pay (`evm/`, Base Sepolia and Arc Testnet; the chain table is `evm/chains.mjs`). `--rail tempo` is a Tempo keychain access key (`tempo/`, Moderato). `--rail solana` is an SPL token delegate (`solana/`, devnet).
+Load this file when you choose a rail, explain what a budget allows, or compare rails. `superstables budget --rail evm` is a plain ERC-20 approve with pull then pay (`evm/`, Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy and SKALE Base Sepolia; the chain table is `evm/chains.mjs`). `--rail tempo` is a Tempo keychain access key (`tempo/`, Moderato). `--rail solana` is an SPL token delegate (`solana/`, devnet).
 
 ## Methods
 

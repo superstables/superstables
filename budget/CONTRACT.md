@@ -4,7 +4,7 @@ Every rail's main path follows these rules.
 
 | Rail | Main path | Scripts |
 | --- | --- | --- |
-| EVM | Plain approve, pull then pay | `evm/` (`--chain base-sepolia|arc-testnet`) |
+| EVM | Plain approve, pull then pay | `evm/` (`--chain base-sepolia|arc-testnet|arbitrum-sepolia|polygon-amoy|skale-base-sepolia`) |
 | Tempo | Keychain access key, MPP charge | `tempo/` |
 | Solana | SPL delegate, x402 exact | `solana/` |
 

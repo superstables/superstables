@@ -33,6 +33,30 @@ export const EVM_CHAINS = {
     gas: { symbol: "USDC", decimals: 18, isToken: true, minAgent: "0.01", topUp: "0.1", reserveMax: "2" },
     doctor: { minOwnerToken: "0.2", minOwnerGas: null, minAgentGas: "0.01", fundAgent: "0.1", tokenFaucet: "faucet.circle.com, Arc Testnet", gasFaucet: "faucet.circle.com, Arc Testnet" },
   },
+  "arbitrum-sepolia": {
+    label: "Arbitrum Sepolia", chainId: 421614, viem: "arbitrumSepolia",
+    rpc: "https://sepolia-rollup.arbitrum.io/rpc", explorer: "https://sepolia.arbiscan.io",
+    token: { address: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", symbol: "USDC", decimals: 6, domain: { name: "USD Coin", version: "2" } },
+    legacy: [],
+    gas: { symbol: "ETH", decimals: 18, isToken: false, minAgent: "0.000005", topUp: "0.00003" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.circle.com, Arbitrum Sepolia", gasFaucet: "an Arbitrum Sepolia ETH faucet" },
+  },
+  "polygon-amoy": {
+    label: "Polygon Amoy", chainId: 80002, viem: "polygonAmoy",
+    rpc: "https://polygon-amoy-bor-rpc.publicnode.com", explorer: "https://amoy.polygonscan.com",
+    token: { address: "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
+    legacy: ["polygon-amoy"], logRange: 10000,
+    gas: { symbol: "POL", decimals: 18, isToken: false, minAgent: "0.005", topUp: "0.02" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.01", minAgentGas: "0.01", fundAgent: "0.05", tokenFaucet: "faucet.circle.com, Polygon PoS Amoy", gasFaucet: "a Polygon Amoy POL faucet" },
+  },
+  "skale-base-sepolia": {
+    label: "SKALE Base Sepolia", chainId: 324705682, viem: "skaleBaseSepoliaTestnet",
+    rpc: "https://base-sepolia-testnet.skalenodes.com/v1/jubilant-horrible-ancha", explorer: "https://base-sepolia-testnet-explorer.skalenodes.com",
+    token: { address: "0x2e08028E3C4c2356572E096d8EF835cD5C6030bD", symbol: "USDC", decimals: 6, domain: { name: "Bridged USDC (SKALE Bridge)", version: "2" } },
+    legacy: ["skale-base-sepolia"], logRange: 2000,
+    gas: { symbol: "CREDIT", decimals: 18, isToken: false, minAgent: "0.0001", topUp: "0.001" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.001", minAgentGas: "0.001", fundAgent: "0.002", tokenFaucet: "Base Sepolia USDC over the SKALE bridge", gasFaucet: "base-sepolia-faucet.skale.space" },
+  },
 };
 
 export const EVM_CHAIN_KEYS = Object.keys(EVM_CHAINS);

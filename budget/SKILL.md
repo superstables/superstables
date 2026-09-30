@@ -1,6 +1,6 @@
 ---
 name: superstables-budget
-description: Buy from x402 or MPP sellers with USDC (pathUSD on Tempo) under a budget the owner granted once, using the `superstables budget` CLI on testnets (Base Sepolia, Arc Testnet, Tempo Moderato, Solana devnet). Use when asked to buy from a seller under a cap, check or reconcile a purchase, or, as the owner, to grant, revoke or recover a budget. Testnet only, never mainnet.
+description: Buy from x402 or MPP sellers with USDC (pathUSD on Tempo) under a budget the owner granted once, using the `superstables budget` CLI on testnets (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Tempo Moderato, Solana devnet). Use when asked to buy from a seller under a cap, check or reconcile a purchase, or, as the owner, to grant, revoke or recover a budget. Testnet only, never mainnet.
 disable-model-invocation: true
 ---
 
@@ -14,7 +14,7 @@ The owner authorizes an agent once. The agent then pays sellers from the owner's
 
 | `--rail` | Path | `--chain` | The chain enforces | It does not enforce |
 | --- | --- | --- | --- | --- |
-| `evm` | plain ERC-20 approve, pull then pay | `base-sepolia` (default), `arc-testnet` | total cap | expiry, period, seller list |
+| `evm` | plain ERC-20 approve, pull then pay | `base-sepolia` (default), `arc-testnet`, `arbitrum-sepolia`, `polygon-amoy`, `skale-base-sepolia` | total cap | expiry, period, seller list |
 | `tempo` | keychain access key, MPP charge | `moderato` | cap, expiry, period, seller list | per-payment maximum |
 | `solana` | SPL delegate, x402 | `devnet` | total cap | expiry, period, seller list |
 
