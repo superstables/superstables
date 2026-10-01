@@ -4,18 +4,22 @@
 
 **Payments belong in the agent workflow.**
 
-Superstables connects service discovery, pricing and payment for AI agents. The client lets an
-agent find a paid service, retrieve its payment terms and request your approval. Once you sign
-in MetaMask, the client sends the signed request and records the payment outcome and the
-service's response.
+Superstables connects service discovery, pricing and payment for AI agents. The client offers
+two ways to pay:
 
-This is a testnet demo using [x402](https://x402.org) with the `exact` scheme and test USDC on
-Base Sepolia. The client is available through MCP, a CLI and a TypeScript SDK. Each payment
-requires your approval. There is no mainnet support or unattended mode.
+- **Approve each payment.** Through MCP, a CLI or a TypeScript SDK, an agent finds a paid
+  service, retrieves its payment terms and requests your approval. Once you sign in your wallet,
+  the client sends the signed request and records the payment outcome and the service's
+  response. The agent can request a payment, but it cannot approve one.
+- **Grant a budget once.** With [`superstables budget`](#on-chain-budgets-superstables-budget), a
+  separate tool, you give an agent key a spending budget on chain from your own wallet. The agent
+  then buys within it without asking you again, until the budget runs out, expires on Tempo, or
+  you revoke it. The chain enforces the total.
 
-After setup, the agent starts the client and its local approval page. In the default MetaMask
-flow, your signing key remains in your wallet. The agent can request a payment, but it cannot
-approve one.
+Both are testnet only. Per-payment approval uses [x402](https://x402.org) with the `exact`
+scheme and test USDC on Base Sepolia. Budgets run on Base Sepolia and five other EVM testnets,
+Tempo Moderato and Solana devnet. There is no mainnet support. In the default MetaMask flow and
+in budgets, your signing key remains in your wallet.
 
 ## What the demo shows
 
@@ -51,7 +55,7 @@ with the transaction on the explorer.
 | Rail | x402, `exact` scheme |
 | Network | Base Sepolia testnet (`eip155:84532`) |
 | Asset | Test USDC (`0x036CbD53842c5426634e7929541eC2318f3dCF7e`, 6 decimals) |
-| Approval | MetaMask signs each payment, on an approval page the client serves on `127.0.0.1`. There is no unattended mode |
+| Approval | MetaMask signs each payment, on an approval page the client serves on `127.0.0.1`. For purchases without an approval each time, see [On-chain budgets](#on-chain-budgets-superstables-budget) |
 | Alternative | A local wallet process that holds a key in a file, for a browser-free machine: `--wallet local` |
 | Clients | Claude Code, tested end to end with the MetaMask flow. The server uses MCP over stdio and starts with `superstables mcp`, so other MCP clients can run it too |
 | Also usable as | a CLI (`superstables`) and a TypeScript SDK |
@@ -94,7 +98,7 @@ demo flow because the facilitator covers the gas.
 > Find a paid service for BTC market data, quote it, tell me the price, and pay it if I say yes.
 
 When you say yes, the agent answers with a link like `http://127.0.0.1:4412/approve/<id>` (another
-port if a second payment is already waiting on 4412). Open it. Press **Connect wallet**, then **Approve in MetaMask**, and check the recipient and the
+port if a second payment is already waiting on 4412). Open it. Press **Connect wallet**, then **Review in wallet**, and check the recipient and the
 amount in MetaMask's popup before you sign. The agent reports the transaction and the data it
 paid for.
 
@@ -103,8 +107,11 @@ The built-in catalogue points to the demo seller hosted by Superstables at
 To run it locally, see [Run the seller yourself](#run-the-seller-yourself).
 
 Full details, including every environment variable, are in [docs/install.md](docs/install.md).
-The presenter's script is in [docs/demo.md](docs/demo.md). What changed in each release is in
-[CHANGELOG.md](CHANGELOG.md).
+Step by step: [docs/buy-once.md](docs/buy-once.md) for approving each payment and
+[docs/budget.md](docs/budget.md) for a budget. Every command's help is in
+[docs/cli.md](docs/cli.md) and [docs/cli-budget.md](docs/cli-budget.md), and the security model in
+[docs/security.md](docs/security.md). The presenter's script is in [docs/demo.md](docs/demo.md).
+What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## The CLI
 

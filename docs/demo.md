@@ -100,7 +100,7 @@ MetaMask asks which account to connect, and — the first time — to add or swi
 The page then shows the connected address and prepares the authorization for exactly that
 account.
 
-**6. Press "Approve in MetaMask" and sign.**
+**6. Press "Review in wallet" and sign.**
 
 MetaMask shows the signature request: a `TransferWithAuthorization` with the recipient and the
 value in it. Point at the `to` and the `value` before you press sign, and mention the one wart:
@@ -137,11 +137,11 @@ The agent quotes, calls `pay`, and hands you a new link. Open it.
 **9. Refuse.** Either way works, and both are worth showing if there is time:
 
 - press **Reject** on the page — the decision never reaches MetaMask at all; or
-- press **Connect wallet**, then **Approve in MetaMask**, and press **Reject** in MetaMask's
-  popup. The page says "You rejected in MetaMask; nothing was signed", and stays open so you
-  could still sign or reject deliberately.
+- press **Connect wallet**, then **Review in wallet**, and press **Reject** in MetaMask's
+  popup. The page says "You rejected this payment in your wallet. Nothing was signed.", and the
+  payment ends there.
 
-Take the first one to the end. The page says the payment was rejected, and the agent reports:
+Either way, the page says the payment was rejected, and the agent reports:
 
 > The owner rejected this payment in their wallet. Nothing was signed or submitted, and the
 > service was not called.
@@ -157,8 +157,9 @@ The approvals log has the request going `pending` and then `denied`, and nothing
 signature exists, so there was nothing to submit and nothing to revoke — and the seller was
 never called, because there was nothing to call it with.
 
-That is the whole claim of this release: the agent can ask, and only the owner can cause a
-payment.
+In this flow, the agent asks and the owner decides each payment. A budget, where the owner
+approves once and the agent then buys on its own, is a separate tool with its own demo: see
+[Budget](budget.md).
 
 ## If there is time
 
@@ -189,8 +190,8 @@ state, put `--home /tmp/superstables-demo` before every subcommand.
 | --- | --- | --- |
 | The page says "MetaMask (or another browser wallet) is needed" | No `window.ethereum` in this browser | Install MetaMask, or open the link in the browser that has it. The Reject button still works |
 | MetaMask never opens when you press Connect | Its popup was suppressed, or it is locked | Open the MetaMask extension, unlock it, and press Connect again |
-| The value in MetaMask looks a thousand times too big | It is in USDC's smallest unit | `10000` is 0.01 USDC. The page prints the conversion under the amount |
-| The page says "There is no payment waiting under this link" | The link was already used, rejected, or expired, or the agent restarted | Ask the agent to quote and pay again |
+| The value in MetaMask looks a million times too big | It is in USDC's smallest unit | `10000` is 0.01 USDC. The page prints the conversion under the amount |
+| The page says "This link is unavailable" | The link was already used, rejected, or expired, or the agent restarted | Ask the agent to quote and pay again |
 | Agent: "the approval page could not start" and names a port | `SUPERSTABLES_APPROVE_PORT` fixes a port that is busy, probably with another payment waiting for its owner | Leave that process running. Unset `SUPERSTABLES_APPROVE_PORT`, or set it to a free port, then pay the same quote again |
 | The page's countdown runs out while you look at MetaMask | Five minutes passed | Quote and pay again; nothing was signed |
 | Payment fails: "the payment did not settle" with an insufficient-funds reason | The connected account has no test USDC | Top it up at <https://faucet.circle.com>; MetaMask shows the balance |

@@ -1,11 +1,20 @@
-# The security boundary in this release
+# Security model
 
-This release is a testnet demo. It moves test USDC on Base Sepolia and nothing else. Read this
-page before you point it at anything you care about, because it says plainly what the design
-protects and what it does not.
+This release is a testnet demo: it moves test tokens on testnets and nothing else. This page says
+plainly what the design protects and what it does not. Read it before you point the client at
+anything you care about.
 
-The one sentence version: **the agent can ask for a payment, and only the owner can cause one.**
-Everything below is the detail behind that sentence.
+The client pays in two ways, and they have different boundaries:
+
+| | Buy once (`pay`, the MCP tools) | Budget (`superstables budget`) |
+| --- | --- | --- |
+| Who approves | The owner, in their own wallet, for every payment | The owner, in their own wallet, once, for the whole budget |
+| Keys on this computer | None in the default mode (with `--wallet local`, that wallet's key) | The agent key, which signs purchases. No owner key |
+| What limits spending | The owner's decision on each payment. The spend policy is a check in this client | The chain: the allowance (`evm`), the delegated amount (`solana`), the access key's limits (`tempo`) |
+| What a hostile agent can do | Ask for payments. It cannot sign one | Spend what is left of the budget; on `evm` and `solana`, to any address |
+| How it ends | Each approval link expires after 5 minutes | `superstables budget revoke`, approved in the owner's wallet |
+
+The sections below cover buy once. Budgets have their own section: [Budgets](#budgets).
 
 ## Where the key is
 
@@ -110,7 +119,8 @@ It **cannot**:
   what MetaMask displays and what you sign.
 
 The defence against payment spam is that every request needs a human decision and expires on
-its own. There is no unattended mode in this release, by design.
+its own. Buy once has no unattended mode, by design. A budget is the separate, explicit way for
+an owner to let an agent pay without asking each time.
 
 ## What a compromised MCP process could do
 
@@ -230,22 +240,38 @@ system account, not a hardware boundary: any process running as you can read
 wallet is concerned. A hostile agent confined to the wallet's HTTP API cannot pay. Arbitrary
 code running as your user can. Run that mode with a key that holds testnet funds only.
 
+## Budgets
+
+`superstables budget` has its own keys and its own boundary.
+
+- **Two keys.** The owner's key stays in the owner's wallet: `setup`, `fund-agent`, `grant`,
+  `revoke` and the owner's part of `recover` are approved on a page on `127.0.0.1`, in that wallet.
+  The agent key, in `~/.superstables/keys/budget/<rail>-agent.env` (mode 600), signs purchases.
+  `doctor` fails if that file holds an owner key.
+- **The chain enforces the budget.** On `evm`, the total allowance. On `solana`, the delegated
+  amount. On `tempo`, the access key's total or per-period limit, its expiry, and its seller list
+  when one was granted. No rail enforces a per-payment maximum on chain.
+- **This CLI checks the rest**, before it signs: `--max`, the expected token, `--pay-to` and one
+  purchase per `--op`. A stolen agent key skips all of these and can spend what is left of the
+  budget, on `evm` and `solana` to any address. Keep budgets small.
+- **Setup is a trusted step.** Whoever holds the setup link, the agent included, can complete it
+  with a key of their own: the page's origin check stops other websites, not local programs. So the
+  owner runs it, and checks the owner address that setup prints and every owner page shows.
+- **The page shows the terms; the wallet sends the transaction.** The command builds the
+  transaction and the page's terms from its own plan, never from what the agent says. After the
+  wallet sends it, the command reads the chain and refuses (exit 3) a transaction that differs from
+  the plan, naming each difference.
+- **Revoke is the kill switch.** It is approved in the owner's wallet and works even if the agent
+  key was stolen: `approve(agent, 0)` on `evm`, `revokeKey` on `tempo`, the SPL `Revoke` on
+  `solana`. It does not reverse confirmed payments. On `evm`, a purchase whose price was already
+  pulled can still settle; `recover` returns USDC left in the agent key.
+
+Per rail, with what each revoke does not cover:
+[Budget rails and chains](../budget/README.md#safety-model).
+
 ## What changes in the next milestone
 
-- **Budgets.** Approval per payment is the only mode of the MCP tools and `pay`. A budget,
-  approved once and spent down, now exists as a separate testnet tool, `superstables budget`
-  ([budget/README.md](../budget/README.md)): the owner grants an agent key a spending limit on
-  chain and revokes it with one transaction. It has its own keys and its own boundary. The
-  chain enforces the total cap, and on Tempo also an expiry and a seller list. A stolen agent
-  key can spend all of it. Its `setup` is a trusted step: whoever holds the setup link, the
-  agent included, can complete it with a key of their own (the page's origin check stops other
-  websites, not local programs), so the owner runs it and checks the connected owner address that
-  setup prints and its page shows. Bringing
-  budgets into the approval flow, with terms a person can read in the wallet, is the next step.
 - **A signing surface that reads like money.** MetaMask shows an EIP-712 authorization in atomic
   units; a person should see "0.01 USDC to this seller" in the wallet, not only on our page.
 - **A boundary that survives the machine.** Spending limits that hold even when the host is
   compromised have to live somewhere other than the host.
-
-Until then, treat this as what it is: a demonstration that the owner, and only the owner,
-decides.
