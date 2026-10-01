@@ -30,6 +30,8 @@ On tempo, `--agent LABEL` picks the access key for `doctor`, `grant`, `status`, 
 
 Every command: `--help` exits 0 and bad input exits 2 before any secret is read. `--mainnet` or a mainnet chain id is refused.
 
+`--site URL` is accepted by every command, so a caller told to pass `--site <origin>` to each one can. It must be an origin (https, or http on this computer). Where a site is recorded, a different one is refused (exit 2, nothing read or sent): for a command on a chain set up with `--hosted`, the site recorded in that chain's public file; for `wait`, the site the approval was made on. `setup --hosted` and `find` use `--site` to choose the site, and `buy-once` uses it to choose where to buy. Everywhere else it is checked and ignored.
+
 ## Owner approval
 
 `setup`, `fund-agent`, `grant`, `revoke` and, on `evm`, the owner's part of `recover` use the owner's wallet by default. The explicit test key-file option is described below. The rail script builds the transaction and the terms, starts a page on `127.0.0.1` (random port, one-time random id in the path), and waits. The owner opens the page in the browser with their wallet, connects, and approves or rejects. For transactions, the script checks the chain before the final `RESULT`. Setup verifies a message signature and records the address. Detached commands first return a pending `RESULT`.

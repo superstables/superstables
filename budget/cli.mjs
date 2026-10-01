@@ -191,7 +191,7 @@ function parse(argv) {
   if (rest.includes("--help") || rest.includes("-h")) { console.log(spec.help); process.exit(0); }
   if (rest.includes("--mainnet")) return refuse({ command: cmd }, "mainnet is refused: superstables budget is testnet only");
 
-  const allowed = { rail: "v", chain: "v", ...spec.flags };
+  const allowed = { rail: "v", chain: "v", site: "v", ...spec.flags }; // --site is accepted by every command
   const f = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
@@ -219,6 +219,11 @@ function parse(argv) {
     if (f.id === undefined) return badInput(ctx, "missing required flag --id (the id an owner command printed)");
     if (!isApprovalId(f.id)) return badInput(ctx, `--id must be an approval id like oa-20260930120000-1a2b3c4d (got "${f.id}")`);
     if (f.timeout !== undefined && !(/^\d+$/.test(f.timeout) && Number(f.timeout) <= 300)) badInput(ctx, "--timeout must be a whole number of seconds from 0 to 300");
+    if (f.site !== undefined) {
+      const site = siteOrigin(f.site);
+      if (site.error) badInput(ctx, `--site: ${site.error}`);
+      f.site = site.origin;
+    }
     return { cmd, f, ctx };
   }
   const ctx = { command: cmd, rail: f.rail };
@@ -232,6 +237,16 @@ function parse(argv) {
   f.chain ??= rail.chain;
   ctx.chain = f.chain;
   for (const r of spec.required) if (f[r] === undefined) return badInput(ctx, `missing required flag --${r}`);
+  if (f.site !== undefined && !f.hosted) {
+    // --site is accepted by every command. Nothing else here depends on it, so it only has to be a site, and the one this chain's
+    // approvals are hosted on when there is one: another site is a mistake in the command, not a second place to ask the owner.
+    const site = siteOrigin(f.site);
+    if (site.error) badInput(ctx, `--site: ${site.error}`);
+    f.site = site.origin;
+    const recorded = hostedSite(f);
+    const recordedOrigin = recorded ? siteOrigin(recorded).origin : null;
+    if (recordedOrigin && recordedOrigin !== f.site) badInput(ctx, `--site ${f.site} is not the site this chain's approvals are hosted on (${recordedOrigin}): use --site ${recordedOrigin}, or leave --site out`);
+  }
 
   const amount = (name) => {
     if (f[name] === undefined) return;
@@ -271,7 +286,6 @@ function parse(argv) {
   if (f.yes && !f["owner-key-file"]) badInput(ctx, "show the approval link to the owner and poll wait: drop --yes. --yes only goes with --owner-key-file PATH (unattended tests only)");
   if (f["owner-key-file"] !== undefined && !existsSync(f["owner-key-file"])) badInput(ctx, `--owner-key-file ${f["owner-key-file"]} does not exist`);
   if (f.wait && f.detach) badInput(ctx, "--wait and --detach cannot go together");
-  if (f.site !== undefined && !f.hosted) badInput(ctx, "--site goes with --hosted (the site that hosts the owner's approvals)");
   if (f.hosted) {
     if (f.rail !== "evm") badInput(ctx, `hosted approvals are EVM only for now: run superstables budget setup --rail ${f.rail} without --hosted (the owner approves on a page on this computer)`);
     if (f["owner-key-file"] !== undefined) badInput(ctx, "--hosted asks the owner on superstables.com; with --owner-key-file there is no owner to ask");

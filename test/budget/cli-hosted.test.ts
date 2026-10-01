@@ -62,12 +62,59 @@ describe("setup --hosted: refusals before anything runs", () => {
     }
   });
 
-  it("wants --site only with --hosted, and an https site", async () => {
-    expect((await budget(["setup", "--rail", "evm", "--site", "https://www.superstables.com"])).result.reason).toMatch(/--site goes with --hosted/);
+  it("wants an https site for --site, with or without --hosted", async () => {
     const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", "http://example.com"]);
     expect(r.code).toBe(2);
     expect(r.result.reason).toMatch(/https/);
+    for (const args of [["setup", "--rail", "evm"], ["status", "--rail", "evm"], ["doctor", "--rail", "evm"], ["grant", "--rail", "evm", "--amount", "1"], ["fund-agent", "--rail", "evm"], ["revoke", "--rail", "evm"], ["recover", "--rail", "evm"], ["buy", "--rail", "evm", "--url", "https://x.example/a", "--max", "1"], ["wait", "--shown", "--id", "oa-20260930120000-1a2b3c4d"]]) {
+      const bad = await budget([...args, "--site", "http://example.com"]);
+      expect(bad.code, args.join(" ")).toBe(2);
+      expect(bad.result.reason, args.join(" ")).toMatch(/--site: the site must be an https URL/);
+    }
   });
+});
+
+describe("--site on every command", () => {
+  const COMMANDS: string[][] = [
+    ["setup", "--rail", "evm", "--new-owner"], ["status", "--rail", "evm"], ["doctor", "--rail", "evm"], ["grant", "--rail", "evm", "--amount", "0.01"],
+    ["fund-agent", "--rail", "evm"], ["revoke", "--rail", "evm"], ["recover", "--rail", "evm"], ["preflight", "--rail", "evm", "--url", "https://x.example/a"],
+    ["buy", "--rail", "evm", "--url", "https://x.example/a", "--max", "1"], ["reconcile", "--rail", "evm", "--op", "none"],
+  ];
+
+  // An owner command would start an approval. --timeout 1 is refused after --site is checked, so it stands in for "accepted" without one.
+  const OWNER_COMMANDS = new Set(["setup", "grant", "fund-agent", "revoke", "recover"]);
+  const run = (args: string[], site: string) => budget(OWNER_COMMANDS.has(args[0]) ? [...args, "--timeout", "1", "--site", site] : [...args, "--site", site]);
+  const accepted = (r: { result: any }, args: string[]) => expect(r.result.reason ?? "", args.join(" ")).toMatch(OWNER_COMMANDS.has(args[0]) ? /^--timeout must be/ : /^(?!.*(--site|unknown flag))/);
+
+  it("is accepted and ignored where no site is recorded (a chain that approves on this computer, or tempo and solana)", async () => {
+    for (const args of COMMANDS) accepted(await run(args, "https://staging.superstables.com"), args);
+    const t = await budget(["status", "--rail", "tempo", "--site", "https://staging.superstables.com"]);
+    expect(t.result.reason ?? "").not.toMatch(/--site|unknown flag/);
+  }, 60_000);
+
+  it("is refused clearly where the chain's approvals are hosted on another site, and accepted on the same one", async () => {
+    mkdirSync(join(home, "budget", "public"), { recursive: true });
+    writeFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A\nAPPROVALS=hosted\nSITE=${site.url}\n`);
+    for (const args of COMMANDS) {
+      const other = await run(args, "https://staging.superstables.com");
+      expect(other.code, args.join(" ")).toBe(2);
+      expect(other.result.reason, args.join(" ")).toMatch(new RegExp(`--site https://staging.superstables.com is not the site this chain's approvals are hosted on \\(${site.url.replace(/[.]/g, "\\.")}\\): use --site ${site.url.replace(/[.]/g, "\\.")}, or leave --site out`));
+      accepted(await run(args, site.url), args);
+    }
+  }, 120_000);
+
+  it("wait: refused when the approval was made on another site, accepted on the same one", async () => {
+    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
+    expect(first.result.state).toBe("waiting_owner");
+    const other = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0", "--site", "https://staging.superstables.com"]);
+    expect(other.code).toBe(2);
+    expect(other.result.reason).toMatch(/is not the site this approval was made on/);
+    const same = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0", "--site", site.url]);
+    expect(same.result).toMatchObject({ state: "waiting_owner", id: first.result.id });
+    // the refusal comes before the --shown check: nothing is read for a request that is not on this site
+    const noShown = await budget(["wait", "--id", first.result.id, "--site", "https://staging.superstables.com"]);
+    expect(noShown.result.reason).toMatch(/is not the site this approval was made on/);
+  }, 60_000);
 });
 
 describe("setup --hosted", () => {

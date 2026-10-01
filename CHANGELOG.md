@@ -56,6 +56,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`superstables budget wait --shown`.** `wait` polls only when the caller passes `--shown`,
   meaning it has written the approval link, the match code and the terms in a reply the owner can
   read. Without it, `wait` exits 2 with `state: "show_owner_first"` and reads nothing.
+- **`--site` on every `superstables budget` command.** A caller told to pass `--site <origin>`
+  to each command can. Where a site is recorded (a chain set up with `--hosted`, or the site an
+  approval was made on) and it differs, the command refuses; elsewhere it is ignored.
 
 ## [0.2.0] - 2026-09-22
 
