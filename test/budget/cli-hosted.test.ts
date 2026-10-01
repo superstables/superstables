@@ -133,6 +133,9 @@ describe("setup --hosted", () => {
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
     expect(first.result.next).toMatch(/write the exact url, the match code ABC-DEF and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call, then poll superstables budget wait --id /);
+    // testnet is stated in the message the agent relays, and the first link asks the owner to sign in
+    expect(first.result.next).toMatch(/the first link they open asks them to sign in with their wallet \(a message, no fee\).*Testnet only: test USDC, no real money\.$/);
+    expect(first.stderr).toMatch(/Testnet only: test USDC, no real money\./);
     const id = first.result.id;
     const recordPath = join(approvals(), `${id}.json`);
     expect(statSync(recordPath).mode & 0o777).toBe(0o600);
