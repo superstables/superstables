@@ -22,12 +22,13 @@ describe("budget/SKILL.md", () => {
   });
 
   it("shows the link before polling, offers buy once only for listed services, and treats a no as final", () => {
-    expect(skill).toMatch(/Write the link in a reply, then poll/);
+    expect(skill).toMatch(/Write the link in a reply and end your turn/);
+    expect(skill).toMatch(/so is a spent budget/);
     expect(skill).toMatch(/`wait` refuses without `--shown`/);
     expect(skill).toMatch(/A no is final/);
     const budget = readFileSync(resolve(BUDGET, "references/budget.md"), "utf8");
     expect(budget).toMatch(/Offer buy once only if that service is in `superstables budget find --once`/);
-    expect(budget).toMatch(/say the budget is spent and stop/);
+    expect(budget).toMatch(/say the budget is spent and end your turn/);
     for (const f of ["references/once.md", "references/budget.md"]) expect(readFileSync(resolve(BUDGET, f), "utf8")).toMatch(/wait --id ID --shown/);
   });
 

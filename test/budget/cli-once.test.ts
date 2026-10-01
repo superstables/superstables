@@ -170,7 +170,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(first.result).toMatchObject({ ok: true, command: "buy-once", rail: "evm", chain: "base-sepolia", service: "demo-market-data", state: "waiting_owner", matchCode: "KPT-RWD", url: first.approve.url });
     expect(first.result.id).toMatch(/^oa-\d{14}-[0-9a-f]{8}$/);
     expect(first.result.purchase).toBe(site.purchases[0].id);
-    expect(first.result.next).toMatch(new RegExp(`^write the link, the code and the terms in your reply to the owner, then run superstables budget wait --id ${first.result.id} --shown\\. .*Testnet only: test USDC, no real money\\.$`));
+    expect(first.result.next).toMatch(new RegExp(`^write the link, the code and the terms in your reply to the owner and end your turn there\\. When they say they've approved, run superstables budget wait --id ${first.result.id} --shown\\. .*Testnet only: test USDC, no real money\\.$`));
     expect(first.stderr).toMatch(/match code: KPT-RWD/);
     expect(first.stderr).toMatch(/first link they open asks them to sign in with their wallet \(a message, no fee\)/);
     expect(first.stderr).toMatch(/Testnet only: test USDC, no real money\./);
@@ -189,7 +189,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const refused = await budget(["wait", "--id", id, "--timeout", "0"]);
     expect(refused.code).toBe(2);
     expect(refused.result).toMatchObject({ ok: false, command: "wait", state: "show_owner_first", id, matchCode: "KPT-RWD", url: first.approve.url, service: "demo-market-data" });
-    expect(refused.result.next).toMatch(/^write the link, the code and the terms in your reply to the owner, then run superstables budget wait --id \S+ --shown\./);
+    expect(refused.result.next).toMatch(/^write the link, the code and the terms in your reply to the owner and end your turn there\. When they say they've approved, run superstables budget wait --id \S+ --shown\./);
     expect(site.purchases[0].polls).toBe(0);
 
     const pending = await budget(["wait", "--shown", "--id", id, "--timeout", "0"]);

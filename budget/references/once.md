@@ -20,7 +20,7 @@ A new account starts with a limit of 0.05 test USDC per payment and 1 per day, w
    ```
    `--params JSON` also works. The inputs must be ones the service lists; a wrong one is refused with the accepted values. The command checks the price against `--max` before anything is created, asks the site for the purchase, and returns at once with `APPROVE {...}` and `RESULT {"state":"waiting_owner","id","url","matchCode","expires","terms","next"}` and exit 0. That is not approval and nothing is paid yet.
 4. Write the link, the `matchCode` and the terms in a reply, as the shared rules say. They have 10 minutes, and the page offers three codes: they must pick yours.
-5. Poll `superstables budget wait --id ID --shown` in the same turn until the state is final, as the shared rules say. Do not stop at "ready for approval".
+5. Reply with the link and code and end your turn, as the shared rules say. When the owner says they've approved, run `superstables budget wait --id ID --shown` until the state is final.
 
 One buy-once purchase is open at a time. A second `buy-once` is refused with the pending link; keep polling that id. `--replace` cancels the open one, only while the owner has not signed and only when they ask.
 

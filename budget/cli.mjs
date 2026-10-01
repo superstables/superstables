@@ -743,14 +743,14 @@ async function fundAgent({ f, ctx }) {
 const OWNER_COMMANDS = new Set(["setup", "fund-agent", "grant", "revoke", "recover"]);
 const waitNext = (id, r = {}) => showFirst(id, Boolean(r.matchCode));
 /** The next step of a wait that is still waiting: poll again. A new link (recover can ask twice) is written first. */
-const stillWaiting = (id) => `the owner has not finished: run superstables budget wait --id ${id} --shown again. If the url is not the one you showed, write the new link and code first. Not approved or paid yet; do not approve for the owner.`;
+const stillWaiting = (id) => `the owner has not finished. Say so in one line and end your turn; run superstables budget wait --id ${id} --shown again when they say they've approved. If the url is not the one you showed, write the new link and code first. Not approved or paid yet; do not approve for the owner.`;
 const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCode: r.matchCode, expires: r.expires, terms: r.terms });
 
 function refusePending(ctx, pending) {
   log(`superstables budget: refused: owner approval ${pending.id} (${pending.command}) is still waiting for the owner on ${pending.rail} ${pending.chain}`);
   emit(3, {
     ...ctx, state: "refused_precheck", ...approvalFields(pending),
-    next: `nothing was started. Write the pending link, the code and the terms in your reply to the owner, then superstables budget wait --id ${pending.id} --shown. Only if the owner asks to replace it and has cancelled any wallet prompt: rerun with --replace`,
+    next: `nothing was started. Write the pending link, the code and the terms in your reply to the owner and end your turn there. When they say they've approved, run superstables budget wait --id ${pending.id} --shown. Only if the owner asks to replace it and has cancelled any wallet prompt: rerun with --replace`,
     reason: `owner approval ${pending.id} (${pending.command}) is still waiting for the owner on this chain; one owner approval at a time`,
   });
 }
@@ -791,8 +791,8 @@ async function ownerGate({ cmd, f, ctx }) {
   const rec = r.record;
   writeSync(1, `APPROVE ${JSON.stringify({ action: rec.action, url: rec.url, expires: rec.expires, terms: rec.terms, ...(rec.matchCode ? { matchCode: rec.matchCode } : {}) })}\n`);
   log(rec.matchCode
-    ? `\nThe request waits on superstables.com until ${rec.expires}; this command keeps reading it in the background. Write the link, the match code ${rec.matchCode} and the terms in your reply to the owner, then run: superstables budget wait --id ${id} --shown`
-    : `\nThe approval page stays open in the background until ${rec.expires}. Write the link and the terms in your reply to the owner, then run: superstables budget wait --id ${id} --shown`);
+    ? `\nThe request waits on superstables.com until ${rec.expires}; this command keeps reading it in the background. Write the link, the match code ${rec.matchCode} and the terms in your reply to the owner and end your turn there. When they say they've approved, run: superstables budget wait --id ${id} --shown`
+    : `\nThe approval page stays open in the background until ${rec.expires}. Write the link and the terms in your reply to the owner and end your turn there. When they say they've approved, run: superstables budget wait --id ${id} --shown`);
   emit(0, { ...ctx, state: "waiting_owner", ...approvalFields(rec), next: waitNext(id, rec) });
 }
 

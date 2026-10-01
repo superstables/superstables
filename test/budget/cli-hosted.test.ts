@@ -179,7 +179,7 @@ describe("setup --hosted", () => {
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
-    expect(first.result.next).toMatch(/^write the link, the code and the terms in your reply to the owner, then run superstables budget wait --id oa-\S+ --shown\. .*Testnet only: test USDC, no real money\.$/);
+    expect(first.result.next).toMatch(/^write the link, the code and the terms in your reply to the owner and end your turn there\. When they say they've approved, run superstables budget wait --id oa-\S+ --shown\. .*Testnet only: test USDC, no real money\.$/);
     expect(first.stderr).toMatch(/Testnet only: test USDC, no real money\./);
     const id = first.result.id;
     const recordPath = join(approvals(), `${id}.json`);
