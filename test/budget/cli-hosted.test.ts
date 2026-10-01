@@ -81,7 +81,7 @@ describe("setup --hosted", () => {
     expect(r.approve.url).toMatch(/\/approve\/budget\/bl_test0001#ssba_/);
     expect(r.stderr).toMatch(/match code: ABC-DEF/);
     expect(r.stderr).toMatch(/any device where the owner is signed in to/);
-    expect(r.stderr).toMatch(/Write the code in your own message/);
+    expect(r.stderr).toMatch(/Write this link, the match code ABC-DEF and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call/);
     const pub = publicFile();
     expect(pub).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
     expect(pub).toMatch(/^APPROVALS=hosted$/m);
@@ -131,7 +131,7 @@ describe("setup --hosted", () => {
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
-    expect(first.result.next).toMatch(/match code ABC-DEF, written in your own message/);
+    expect(first.result.next).toMatch(/write the exact url, the match code ABC-DEF and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call, then poll superstables budget wait --id /);
     const id = first.result.id;
     const recordPath = join(approvals(), `${id}.json`);
     expect(statSync(recordPath).mode & 0o777).toBe(0o600);
