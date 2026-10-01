@@ -53,6 +53,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the build, and `THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences. The
   skill asks the owner whether to buy once or set up a budget, and loads the steps for that
   choice only.
+- **`superstables budget wait --shown`.** `wait` polls only when the caller passes `--shown`,
+  meaning it has written the approval link, the match code and the terms in a reply the owner can
+  read. Without it, `wait` exits 2 with `state: "show_owner_first"` and reads nothing.
 
 ## [0.2.0] - 2026-09-22
 

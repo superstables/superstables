@@ -1289,7 +1289,7 @@ describe("a detached owner approval", () => {
     expect(record.terms.title).toBe("give your agent a budget");
     expect(approvals.alive(record.pid)).toBe(true);
 
-    const pending = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    const pending = await budget(["wait", "--shown", "--id", record.id, "--timeout", "0"]);
     expect(pending.code).toBe(0);
     expect(pending.result).toMatchObject({ command: "grant", state: "waiting_owner", id: record.id, url: record.url, expires: record.expires });
     expect(pending.result.terms.amount).toBe("0.01");
@@ -1298,15 +1298,15 @@ describe("a detached owner approval", () => {
 
     // the owner approves in the wallet
     await postJson(`${record.url}/account`, { address: OWNER.address });
-    const connected = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    const connected = await budget(["wait", "--shown", "--id", record.id, "--timeout", "0"]);
     expect(connected.result.reason).toContain("the owner account is selected");
     await postJson(`${record.url}/sending`, { address: OWNER.address });
     await postJson(`${record.url}/sent`, { address: OWNER.address, hash: HASH });
 
-    const settled = await budget(["wait", "--id", record.id, "--timeout", "10"]);
+    const settled = await budget(["wait", "--shown", "--id", record.id, "--timeout", "10"]);
     expect(settled.code).toBe(0);
     expect(settled.result).toMatchObject({ command: "grant", state: "settled", id: record.id, tx: { grant: HASH } });
-    const again = await budget(["wait", "--id", record.id]);
+    const again = await budget(["wait", "--shown", "--id", record.id]);
     expect(again.code).toBe(0);
     expect(again.stdout).toBe(settled.stdout);
 
@@ -1326,7 +1326,7 @@ describe("a detached owner approval", () => {
     expect(await unreachable(record.url)).toBe(true);
     expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
     // and a later wait still says the same
-    const later = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    const later = await budget(["wait", "--shown", "--id", record.id, "--timeout", "0"]);
     expect(later.code).toBe(3);
     expect(later.result.state).toBe("refused_precheck");
   });
@@ -1342,7 +1342,7 @@ describe("a detached owner approval", () => {
 
     // the owner rejects on the page: the chain is free again, and wait says it was rejected
     await postJson(`${record.url}/reject`, { by: "page" });
-    const rejected = await budget(["wait", "--id", record.id, "--timeout", "10"]);
+    const rejected = await budget(["wait", "--shown", "--id", record.id, "--timeout", "10"]);
     expect(rejected.code).toBe(3);
     expect(rejected.result.reason).toContain("rejected on the page");
     expect(await gone(record.pid)).toBe(true);
@@ -1362,7 +1362,7 @@ describe("a detached owner approval", () => {
     const idle = await detach();
     expect((await approvals.replacePending(idle, "oa-20260930000000-00000000")).ok).toBe(true);
     expect(await gone(idle.pid)).toBe(true);
-    const replaced = await budget(["wait", "--id", idle.id]);
+    const replaced = await budget(["wait", "--shown", "--id", idle.id]);
     expect(replaced.code).toBe(3);
     expect(replaced.result.reason).toContain("replaced by oa-20260930000000-00000000");
     expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
@@ -1382,7 +1382,7 @@ describe("a detached owner approval", () => {
       // another rail's chain is not held by it
       expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
       await postJson(`${record.url}/reject`, { by: "page" });
-      expect((await budget(["wait", "--id", record.id, "--timeout", "10"])).code).toBe(3);
+      expect((await budget(["wait", "--shown", "--id", record.id, "--timeout", "10"])).code).toBe(3);
       expect(await gone(record.pid)).toBe(true);
       expect(approvals.findPending(rail, chain)).toBeNull();
     }
@@ -1398,7 +1398,7 @@ describe("a detached owner approval", () => {
     process.kill(record.pid, "SIGKILL");
     expect(await gone(record.pid)).toBe(true);
     expect(await unreachable(record.url)).toBe(false);
-    const pending = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    const pending = await budget(["wait", "--shown", "--id", record.id, "--timeout", "0"]);
     expect(pending.code).toBe(0);
     expect(pending.result.state).toBe("waiting_owner");
     expect(pending.result.reason).toContain("still running");
@@ -1409,7 +1409,7 @@ describe("a detached owner approval", () => {
     // once nothing of it is left, wait reports from what the page logged, and the chain is free
     process.kill(-record.pid, "SIGKILL");
     for (let i = 0; i < 50 && approvals.groupAlive(record.pid); i++) await new Promise((r) => setTimeout(r, 100));
-    const ended = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    const ended = await budget(["wait", "--shown", "--id", record.id, "--timeout", "0"]);
     expect(ended.code).toBe(3);
     expect(ended.result.reason).toContain("stopped without a recorded submission");
     expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
@@ -1421,7 +1421,7 @@ describe("a detached owner approval", () => {
     await postJson(`${record.url}/sending`, { address: OWNER.address });
     process.kill(-record.pid, "SIGKILL");
     for (let i = 0; i < 50 && approvals.groupAlive(record.pid); i++) await new Promise((r) => setTimeout(r, 100));
-    const outcome = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    const outcome = await budget(["wait", "--shown", "--id", record.id, "--timeout", "0"]);
     expect(outcome.code).toBe(5);
     expect(outcome.result.state).toBe("unknown");
   });
@@ -1513,7 +1513,7 @@ describe("a detached owner approval", () => {
     const record = await detach();
     process.kill(-record.pid, "SIGKILL");
     expect(await gone(record.pid)).toBe(true);
-    const outcome = await budget(["wait", "--id", record.id, "--timeout", "0"]);
+    const outcome = await budget(["wait", "--shown", "--id", record.id, "--timeout", "0"]);
     expect(outcome.code).toBe(3);
     expect(outcome.result).toMatchObject({ state: "refused_precheck", id: record.id });
     expect(outcome.result.reason).toContain("stopped without a recorded submission");

@@ -132,9 +132,7 @@ describe("setup --hosted", () => {
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
-    expect(first.result.next).toMatch(/write the exact url, the match code ABC-DEF and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call, then poll superstables budget wait --id /);
-    // testnet is stated in the message the agent relays, and the first link asks the owner to sign in
-    expect(first.result.next).toMatch(/the first link they open asks them to sign in with their wallet \(a message, no fee\).*Testnet only: test USDC, no real money\.$/);
+    expect(first.result.next).toMatch(/^write the link, the code and the terms in your reply to the owner, then run superstables budget wait --id oa-\S+ --shown\. .*Testnet only: test USDC, no real money\.$/);
     expect(first.stderr).toMatch(/Testnet only: test USDC, no real money\./);
     const id = first.result.id;
     const recordPath = join(approvals(), `${id}.json`);
@@ -143,12 +141,18 @@ describe("setup --hosted", () => {
     expect(record.hosted).toMatchObject({ site: site.url, requestId: "bl_test0001", token: "ssbt_test_bl_test0001secret", kind: "link" });
     expect(readFileSync(join(approvals(), `${id}.log`), "utf8")).not.toContain("ssbt_");
 
-    const pending = await budget(["wait", "--id", id, "--timeout", "0"]);
+    // without --shown, wait refuses and prints no state (the background worker keeps reading the site on its own)
+    const refused = await budget(["wait", "--id", id, "--timeout", "0"]);
+    expect(refused.code).toBe(2);
+    expect(refused.result).toMatchObject({ ok: false, state: "show_owner_first", id, matchCode: "ABC-DEF", action: "setup" });
+    expect(refused.result.next).toMatch(/--shown/);
+
+    const pending = await budget(["wait", "--shown", "--id", id, "--timeout", "0"]);
     expect(pending.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF" });
     expect(pending.result.reason).toMatch(/superstables\.com.*match code/);
 
     Object.assign(site.requests[0], { state: "linked", owner: OWNER });
-    const done = await budget(["wait", "--id", id, "--timeout", "30"]);
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "30"]);
     expect(done.code, done.stderr).toBe(0);
     expect(done.result).toMatchObject({ state: "ok", owner: OWNER, approvals: "hosted", id });
     // final: the token is removed from the record
@@ -166,13 +170,13 @@ describe("setup --hosted", () => {
     expect(second.code, second.stderr).toBe(0);
     expect(second.result.state).toBe("waiting_owner");
     expect(site.requests[0]).toMatchObject({ state: "cancelled" });
-    const old = await budget(["wait", "--id", first.result.id, "--timeout", "30"]);
+    const old = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30"]);
     expect(old.code).toBe(3);
     expect(old.result.reason).toMatch(/nothing was sent/);
 
     // clean up the second worker: the site ends it
     site.requests[1].state = "expired";
-    const end = await budget(["wait", "--id", second.result.id, "--timeout", "30"]);
+    const end = await budget(["wait", "--shown", "--id", second.result.id, "--timeout", "30"]);
     expect(end.code).toBe(3);
   }, 120_000);
 });

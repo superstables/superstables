@@ -276,7 +276,7 @@ Solana wallet (Phantom, Solflare, Backpack, ...) on `solana`. On `evm`, `setup -
 instead: you approve from any device where you are signed in with your wallet, after picking the match code the agent shows
 you. That needs a superstables.com account. Setup records your address; grants, revokes and funding require wallet
 approval. `superstables budget find` lists the services superstables.com says a budget can pay. Without a budget, `superstables budget buy-once --service ID --max M` buys one listed service that you approve on superstables.com (Base Sepolia, test USDC; `find --once` lists them). The default flow stores only the agent key in `~/.superstables/keys/budget/`. Run by an agent, an owner
-command returns at once with the link and an approval id, and the agent polls `superstables budget wait --id <id>`
+command returns at once with the link and an approval id, and the agent polls `superstables budget wait --id <id> --shown`
 until the command has a final result. `waiting_owner` is not approval or settlement. Every command ends with one
 `RESULT {json}` line and a fixed exit code, so an agent can act on it. EVM and Solana allowances have no automatic expiry or seller restriction. Revoke stops
 further use of the permission once it takes effect on chain; it does not reverse confirmed

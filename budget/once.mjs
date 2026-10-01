@@ -171,7 +171,11 @@ function termsOf(service, created) {
   };
 }
 
-export const waitNextOnce = (id, matchCode) => `write the exact url, the match code ${matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call. Say it is testnet only (test USDC, no real money) and that the first link asks them to sign in with their wallet (no fee). Then keep running superstables budget wait --id ${id} in this same turn until the state is final. If your tool cannot wait that long, tell the owner "tell me when you've approved", and run it again when they do. waiting_owner and exit 0 do not mean approved or paid. Do not approve for the owner, and do not run buy-once again for this purchase. ${TESTNET_LINE}`;
+/**
+ * The `next` of every command that returns waiting_owner: the link is written for the owner first, and `wait` refuses
+ * without --shown (cli.mjs), so an agent cannot poll before the owner can read it.
+ */
+export const showFirst = (id, withCode = true) => `write the link${withCode ? ", the code" : ""} and the terms in your reply to the owner, then run superstables budget wait --id ${id} --shown. Not approved or paid yet: do not approve for the owner. ${TESTNET_LINE}`;
 
 // ---- records ---------------------------------------------------------------------------------------------------------
 
@@ -285,7 +289,7 @@ export async function waitOnce(record, timeoutMs, { fetchImpl } = {}) {
     const s = await settleOnce(record, { waitS: Math.floor(Math.min(20_000, left) / 1000), fetchImpl });
     if (s.final) return s;
     if (s.unreachable && Date.now() > Date.parse(record.expires) + AFTER_EXPIRY_MS) {
-      return { final: true, code: 5, record, result: { ok: false, command: "buy-once", rail: "evm", chain: ONCE_CHAIN, id: record.id, purchase: record.hosted?.requestId, service: record.service?.id, state: "unknown", paid: null, delivered: null, amount: null, tx: {}, next: `superstables budget wait --id ${record.id} again when ${record.hosted?.site} answers; never buy this again. Ask the owner to check their wallet activity and account page`, reason: `the purchase cannot be read: ${s.unreachable}` } };
+      return { final: true, code: 5, record, result: { ok: false, command: "buy-once", rail: "evm", chain: ONCE_CHAIN, id: record.id, purchase: record.hosted?.requestId, service: record.service?.id, state: "unknown", paid: null, delivered: null, amount: null, tx: {}, next: `superstables budget wait --id ${record.id} --shown again when ${record.hosted?.site} answers; never buy this again. Ask the owner to check their wallet activity and account page`, reason: `the purchase cannot be read: ${s.unreachable}` } };
     }
     if (Date.now() >= until) return s;
     if (s.unreachable) await sleep(Math.min(3000, Math.max(0, until - Date.now()))); // a long poll that failed at once must not spin
@@ -304,10 +308,10 @@ export async function startOnce({ site, service: serviceId, params, max, replace
   const open = await findOpenOnce({ fetchImpl });
   if (open) {
     if (!replace) {
-      return refused(`buy-once purchase ${open.id} is still waiting for the owner: one at a time`, `nothing was started. Show the owner the pending link, then superstables budget wait --id ${open.id}. Only if the owner asks to replace it and has not started approving: rerun with --replace`, 3, { pending: open });
+      return refused(`buy-once purchase ${open.id} is still waiting for the owner: one at a time`, `nothing was started. Write the pending link, the code and the terms in your reply to the owner, then superstables budget wait --id ${open.id} --shown. Only if the owner asks to replace it and has not started approving: rerun with --replace`, 3, { pending: open });
     }
     const c = await cancelPurchase({ site: open.hosted.site, id: open.hosted.requestId, token: open.hosted.token, fetchImpl });
-    if (!c?.cancelled) return refused(`the pending purchase ${open.id} ${c ? `could not be cancelled (${c.reason}): the owner may be signing it` : `could not be reached on ${open.hosted.site}`}, so it is not replaced`, `superstables budget wait --id ${open.id}`, 3, { pending: open });
+    if (!c?.cancelled) return refused(`the pending purchase ${open.id} ${c ? `could not be cancelled (${c.reason}): the owner may be signing it` : `could not be reached on ${open.hosted.site}`}, so it is not replaced`, `superstables budget wait --id ${open.id} --shown`, 3, { pending: open });
     await settleOnce(open, { waitS: 0, fetchImpl });
   }
 

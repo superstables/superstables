@@ -24,7 +24,7 @@ One command for the budget rails. `superstables budget` is a thin dispatcher ove
 | `superstables budget recover --rail evm [--op ID]` | owner | EVM only: stop the allowance first, then return stranded funds. The agent key signs its own steps; the owner approves on the approval page only what the agent cannot do (the rest of the allowance, gas for the agent). |
 | `superstables budget revoke --rail R` | owner | Ends the budget on chain. The owner approves it on the approval page. |
 | `superstables budget find [--json] [--site URL] [--chain C] [--once]` | anyone | Lists the services superstables.com says a budget can pay (`GET /api/v1/budget/services`): name, price, chain (the `--chain` key when the client knows the network) and URL, as a table on stdout, or one JSON line with `--json`. `RESULT` carries them as `services`. When the site has no list, it exits 1 and `next` says that any seller URL works with `preflight` and `buy`. The site is `--site`, else `SUPERSTABLES_SITE`, else the `SITE` that `setup --hosted` recorded (for `--chain C`, or the first `evm` chain that has one), else `https://www.superstables.com`. Reads only; no account, key or rail. With `--once`, it lists instead the services that can be bought once (`GET /api/v1/purchase/services`): id, name, price and inputs (`*` marks a required one); `RESULT` carries them as `services`. `--once` takes no `--rail` or `--chain`. |
-| `superstables budget wait --id ID [--timeout S]` | anyone | After a detached owner command: waits up to `S` seconds (default 30, at most 300) and prints the approval's state. **Never signs or sends.** |
+| `superstables budget wait --id ID --shown [--timeout S] [--site URL]` | anyone | After a detached owner command or `buy-once`: waits up to `S` seconds (default 30, at most 300) and prints the approval's state. `--shown` says the link, the match code and the terms were written in a reply the owner can read; without it `wait` refuses (see [Detached owner approvals](#detached-owner-approvals)). **Never signs or sends.** |
 
 On tempo, `--agent LABEL` picks the access key for `doctor`, `grant`, `status`, `buy` and `revoke`, and `setup --agent LABEL` makes a new one.
 
@@ -54,7 +54,7 @@ With more than one wallet installed, the page lists them and the owner chooses o
 - A site that cannot be reached, or that refuses the request (for example a cap above the account's limit), is a refusal before anything is sent: exit 3 with the site's reason. Once the site reports that the wallet was asked, or a transaction hash, an unfinished outcome is `unknown` (exit 5), never "nothing sent".
 
 - As soon as the link exists, stdout gets one line `APPROVE {"action","url","expires","terms"}` (hosted: also `matchCode`). `terms` holds the page's plain words: `title`, `amount`, `unit`, `summary`, `enforced`, `notEnforced`. The same link goes to stderr. The final `RESULT` is still the last line, and carries `url`.
-- The sentence on stderr that carries the link, and the `next` of a `waiting_owner` result, say: `Testnet only: test USDC, no real money.` The hosted ones also say that the first link the owner opens asks them to sign in with their wallet (a message, no fee).
+- The sentence on stderr that carries the link, and the `next` of a `waiting_owner` result, say: `Testnet only: test USDC, no real money.` The stderr sentence for a hosted link also says that the first link the owner opens asks them to sign in with their wallet (a message, no fee).
 - `--timeout SECONDS` (10 to 3600, default 600): how long the link stays open. `--no-open`: do not open it in the default browser.
 
 ### Detached or blocking
@@ -66,9 +66,9 @@ An agent's shell tool usually shows output only when the command exits, and many
 | Detached | stdout is not a terminal (an agent), or `--detach` | The command starts itself again as a background process and returns as soon as the link exists. It prints `APPROVE`, then `RESULT` with `state: "waiting_owner"`, exit 0, and `id`, `url`, `expires`, `terms` and `next`. The browser is not opened. |
 | Blocking | stdout is a terminal (a person), or `--wait` | As before: the command opens the link in the default browser (unless `--no-open`), waits for the owner, reads the chain and prints the final `RESULT`. |
 
-Then `superstables budget wait --id ID [--timeout S]` polls the approval:
+Then `superstables budget wait --id ID --shown [--timeout S]` polls the approval. The `next` of every command that returns `waiting_owner` (`setup`, `grant`, `revoke`, `fund-agent`, `recover`, `buy-once`) says: write the link, the code and the terms in your reply to the owner, then run `superstables budget wait --id <id> --shown`. `--shown` means the caller has done that. Without it, `wait` refuses before it reads anything: exit 2, `RESULT` with `state: "show_owner_first"`, the same `id`, `url`, `matchCode`, `expires` and `terms`, and a short `next`. An approval that has already ended returns its final `RESULT` without `--shown`. An unknown `id` is exit 2 as before.
 
-- Still open: `RESULT` with `state: "waiting_owner"`, exit 0, the same `id`, `url`, `expires` and `terms`, and a `reason` describing the recorded page state (for example "the owner account is selected; waiting for wallet approval"). `recover` can ask the owner twice (the rest of the allowance, then gas for the agent). A new link ends the wait at once, with the new `url`.
+- Still open: `RESULT` with `state: "waiting_owner"`, exit 0, the same `id`, `url`, `expires` and `terms`, and a `reason` describing the recorded page state (for example "the owner account is selected; waiting for wallet approval"). `recover` can ask the owner twice (the rest of the allowance, then gas for the agent). A new link ends the wait at once, with the new `url`: write it before polling again.
 - Ended: the owner command's own final `RESULT` and exit code, exactly as the blocking command prints them, plus `id`: `settled` with the `tx` the command read from the chain, `refused_precheck` (exit 3) when the owner rejected or the link expired before the wallet was asked to send, or the transaction on chain did not match the plan, `unknown` (exit 5) when the wallet may have sent (including a rejection reported after it was asked). Later `wait` calls return the stored final result. Waiting never approves the request or retries a transaction.
 - The background process ended without a `RESULT` (killed, or the machine restarted): `refused_precheck` (exit 3) when its last page log has no recorded submission, else `unknown` (exit 5).
 - An unknown id exits 2.
@@ -126,13 +126,13 @@ stdout carries one JSON object on its last line, prefixed `RESULT `; human logs 
 
 `buy-once` ends the same way: its `RESULT` has `service`, `purchase`, `txUrl` and `payer` as well, and `id` is the approval id `wait` takes.
 
-`state`: `planned`, `sent`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `unknown`, `not_found`, `ok` (reads), `waiting_owner` (the detached owner command has no final result yet, including while it checks a submitted transaction). Unknown amounts are `null`, never `"0"`.
+`state`: `planned`, `sent`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `unknown`, `not_found`, `ok` (reads), `waiting_owner` (the detached owner command has no final result yet, including while it checks a submitted transaction), `show_owner_first` (`wait` without `--shown`, exit 2: nothing was polled). Unknown amounts are `null`, never `"0"`.
 
 ## Exit codes (same on every rail)
 
 | Code | Meaning | What the caller does |
 | --- | --- | --- |
-| 0 | Done (purchase settled and delivered, or command succeeded). Also `state: "waiting_owner"`: the command has no final result yet | continue; on `waiting_owner`, show the link and run `superstables budget wait --id ID` until the state is final |
+| 0 | Done (purchase settled and delivered, or command succeeded). Also `state: "waiting_owner"`: the command has no final result yet | continue; on `waiting_owner`, write the link, the code and the terms in your reply to the owner, then run `superstables budget wait --id ID --shown` until the state is final |
 | 1 | Failed, including a chain refusal | read `next`; don't retry blindly |
 | 2 | Bad input | fix the command |
 | 3 | Refused; owner actions may report a mismatch after submission | respect it; never raise `--max` to get around it |

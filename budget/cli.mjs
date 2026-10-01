@@ -28,7 +28,7 @@ import { approvalsDir, opsDir, publicFile } from "./paths.mjs";
 import { HOLDER_ENV, WORKER_ENV, adoptWorker, claim, findPending, forget, isApprovalId, logFile, pageWords, readApproval, recordFinal, recordLink, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { DEFAULT_SITE, chosenSite, listSiteServices, siteOrigin } from "./site.mjs";
-import { ONCE_CHAIN, TESTNET_LINE, listOnceServices, startOnce, waitNextOnce, waitOnce } from "./once.mjs";
+import { ONCE_CHAIN, TESTNET_LINE, listOnceServices, showFirst, startOnce, waitOnce } from "./once.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // Two ways to run. In a checkout the TypeScript sources sit next to this file, and the rails always run from them, on the
@@ -97,8 +97,8 @@ const COMMANDS = {
     help: "superstables budget recover --rail evm [--chain C] [--op ID]\n  EVM only. Stop the allowance first, then return stranded funds to the owner. Prints the plan, then runs it: the agent key signs\n  its own steps; the owner approves in their wallet only what the agent cannot do (the rest of the allowance, gas for the agent).\n" + OWNER_HELP,
   },
   wait: {
-    flags: { id: "v", timeout: "v" }, required: ["id"],
-    help: "superstables budget wait --id ID [--timeout S]\n  Waits up to S seconds (default 30, at most 300) for a detached owner approval, or a buy-once purchase, and prints its state as a RESULT: still\n  waiting_owner (exit 0), or the final RESULT and exit code of the owner command or purchase, the same on every later call.\n  Never signs or sends anything.",
+    flags: { id: "v", timeout: "v", shown: "b", site: "v" }, required: ["id"],
+    help: "superstables budget wait --id ID --shown [--timeout S] [--site URL]\n  --shown means: I have written the link, the match code and the terms in a reply the owner can read. Without it, wait refuses (exit 2,\n  state show_owner_first) and polls nothing; once the approval has ended it prints the final result without it. --site is checked against the\n  site the approval was made on, and refused if it differs.\n  Waits up to S seconds (default 30, at most 300) for a detached owner approval, or a buy-once purchase, and prints its state as a RESULT: still\n  waiting_owner (exit 0), or the final RESULT and exit code of the owner command or purchase, the same on every later call.\n  Never signs or sends anything.",
   },
   "buy-once": {
     flags: { service: "v", param: "m", params: "v", max: "v", site: "v", wait: "b", detach: "b", replace: "b" }, required: ["service", "max"],
@@ -126,7 +126,7 @@ Commands (each takes --help; superstables budget --version names this build):
   superstables budget reconcile  --rail R --op ID
   superstables budget revoke     --rail R                                                                  owner
   superstables budget recover    --rail evm [--op ID]                                                      owner and agent
-  superstables budget wait       --id ID [--timeout S]                                                     after an owner command
+  superstables budget wait       --id ID --shown [--timeout S]                                             after an owner command, once you showed the owner the link
   superstables budget find       [--json] [--once]                                                         services a budget can pay (--once: services you can buy once)
   superstables budget buy-once   --service ID --max M [--param K=V ...]                                    one purchase the owner approves on superstables.com
 
@@ -137,8 +137,10 @@ matchCode the APPROVE line carries. The link comes as a line
   APPROVE {"action","url","expires","terms","matchCode"}
 as soon as it exists (and on stderr). Not in a terminal (an agent), or with --detach, the command then returns at once:
   RESULT {"state":"waiting_owner","id","url","expires","terms","next"}
-and superstables budget wait --id ID returns the state until it is final. In a terminal, or with --wait, it waits for the
+and superstables budget wait --id ID --shown (after you wrote the link, the code and the terms in a reply the owner can read) returns the state until it is final. In a terminal, or with --wait, it waits for the
 owner, reads the chain, then prints its RESULT.
+
+--site URL is accepted by every command. Where a site is recorded (setup --hosted) and it differs, the command refuses (exit 2); where it does not matter, it is ignored.
 
 stdout ends with: RESULT {"ok","command","rail","chain","op","state","paid","delivered","amount","remaining","tx","id","url","next"}
 Exit: 0 done (or state waiting_owner: not done yet), 1 failed, 2 bad input, 3 refused (read reason and tx), 4 paid but not delivered,
@@ -725,16 +727,16 @@ async function fundAgent({ f, ctx }) {
 
 // ---- detached owner approvals (approvals.mjs) -------------------------------------------------------
 const OWNER_COMMANDS = new Set(["setup", "fund-agent", "grant", "revoke", "recover"]);
-const waitNext = (id, r = {}) => r.matchCode
-  ? `write the exact url, the match code ${r.matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call, then poll superstables budget wait --id ${id} until final. The owner opens the link on any device where they are signed in to superstables.com with their wallet; the first link they open asks them to sign in with their wallet (a message, no fee). waiting_owner and exit 0 do not mean approved. Do not approve for the owner or start another owner command. ${TESTNET_LINE}`
-  : `write the exact url and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call, then poll superstables budget wait --id ${id} until final. Only the owner should use the page, in their wallet browser on this computer. waiting_owner and exit 0 do not mean approved. Do not approve for the owner or start another owner command. ${TESTNET_LINE}`;
+const waitNext = (id, r = {}) => showFirst(id, Boolean(r.matchCode));
+/** The next step of a wait that is still waiting: poll again. A new link (recover can ask twice) is written first. */
+const stillWaiting = (id) => `the owner has not finished: run superstables budget wait --id ${id} --shown again. If the url is not the one you showed, write the new link and code first. Not approved or paid yet; do not approve for the owner.`;
 const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCode: r.matchCode, expires: r.expires, terms: r.terms });
 
 function refusePending(ctx, pending) {
   log(`superstables budget: refused: owner approval ${pending.id} (${pending.command}) is still waiting for the owner on ${pending.rail} ${pending.chain}`);
   emit(3, {
     ...ctx, state: "refused_precheck", ...approvalFields(pending),
-    next: `nothing was started. Show the owner the pending link, then superstables budget wait --id ${pending.id}. Only if the owner asks to replace it and has cancelled any wallet prompt: rerun with --replace`,
+    next: `nothing was started. Write the pending link, the code and the terms in your reply to the owner, then superstables budget wait --id ${pending.id} --shown. Only if the owner asks to replace it and has cancelled any wallet prompt: rerun with --replace`,
     reason: `owner approval ${pending.id} (${pending.command}) is still waiting for the owner on this chain; one owner approval at a time`,
   });
 }
@@ -747,7 +749,7 @@ async function ownerGate({ cmd, f, ctx }) {
   if (pending) {
     if (!f.replace) return refusePending(ctx, pending);
     const r = await replacePending(pending, id);
-    if (!r.ok) return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id}`, reason: r.reason });
+    if (!r.ok) return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id} --shown`, reason: r.reason });
     log(`superstables budget: cancelled approval ${pending.id} before its wallet was asked. Check wallet activity before approving its replacement`);
   }
   const c = claim(f.rail, f.chain, id);
@@ -775,13 +777,21 @@ async function ownerGate({ cmd, f, ctx }) {
   const rec = r.record;
   writeSync(1, `APPROVE ${JSON.stringify({ action: rec.action, url: rec.url, expires: rec.expires, terms: rec.terms, ...(rec.matchCode ? { matchCode: rec.matchCode } : {}) })}\n`);
   log(rec.matchCode
-    ? `\nThe request waits on superstables.com until ${rec.expires}; this command keeps reading it in the background. Show the owner the link and the match code ${rec.matchCode}, then run: superstables budget wait --id ${id}`
-    : `\nThe approval page stays open in the background until ${rec.expires}. Show the owner the link, then run: superstables budget wait --id ${id}`);
+    ? `\nThe request waits on superstables.com until ${rec.expires}; this command keeps reading it in the background. Write the link, the match code ${rec.matchCode} and the terms in your reply to the owner, then run: superstables budget wait --id ${id} --shown`
+    : `\nThe approval page stays open in the background until ${rec.expires}. Write the link and the terms in your reply to the owner, then run: superstables budget wait --id ${id} --shown`);
   emit(0, { ...ctx, state: "waiting_owner", ...approvalFields(rec), next: waitNext(id, rec) });
 }
 
 async function wait({ f }) {
   const once = readApproval(f.id);
+  // --site names the site the approval was made on: another one is a mistake, not a different request
+  const madeOn = once?.hosted?.site ? siteOrigin(once.hosted.site).origin : null;
+  if (f.site !== undefined && madeOn && madeOn !== f.site) return badInput({ command: "wait" }, `--site ${f.site} is not the site this approval was made on (${madeOn}): use --site ${madeOn}, or leave --site out`);
+  // Nothing is polled until the caller says the owner can read the link: an agent that polls first tends to never write it.
+  if (once && !once.final && !f.shown) {
+    log(`superstables budget: wait refused: write the link, the code and the terms in your reply to the owner first, then run: superstables budget wait --id ${f.id} --shown`);
+    return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", ...approvalFields(once), next: showFirst(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
+  }
   if (once?.command === "buy-once") return waitBuyOnce(once, f);
   const r = await waitFor(f.id, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);
   if (!r) return badInput({ command: "wait" }, `no owner approval with id ${f.id} under ${approvalsDir()}`);
@@ -794,7 +804,7 @@ async function wait({ f }) {
     ? `the background worker stopped, but its page or chain reads are still running (${pageWords(r.page, rec.rail)}); nothing is final until they stop. Do not start another owner command`
     : pageWords(r.page, rec.rail);
   log(`superstables budget: ${rec.id} (${rec.command}) has no final result: ${words}. Link: ${rec.url}${rec.matchCode ? ` (match code ${rec.matchCode})` : ""}`);
-  emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: waitNext(rec.id, rec), reason: words });
+  emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: stillWaiting(rec.id), reason: words });
 }
 
 // ---- buy-once (once.mjs) ----------------------------------------------------------------------------------------------
@@ -813,12 +823,12 @@ async function buyOnce({ f, ctx }) {
   const rec = r.record;
   writeSync(1, `APPROVE ${JSON.stringify(r.approve)}\n`);
   const host = new URL(f.site).host.replace(/^www\./, "");
-  log(`\nWrite this link, the match code ${rec.matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call: the page asks them to pick the code. The link opens on any device where the owner is signed in to ${host} with their wallet. The first link they open asks them to sign in with their wallet (a message, no fee).\n\n  ${rec.url}\n\n  match code: ${rec.matchCode}\n\nIt expires in ${inMinutes(rec.expires)}. ${TESTNET_LINE} Then run: superstables budget wait --id ${rec.id}. Do not approve for the owner.\n`);
-  if (detach) return emit(0, { ...ctx, service: f.service, state: "waiting_owner", purchase: rec.hosted.requestId, ...approvalFields(rec), next: waitNextOnce(rec.id, rec.matchCode) });
+  log(`\nWrite this link, the match code ${rec.matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call: the page asks them to pick the code. The link opens on any device where the owner is signed in to ${host} with their wallet. The first link they open asks them to sign in with their wallet (a message, no fee).\n\n  ${rec.url}\n\n  match code: ${rec.matchCode}\n\nIt expires in ${inMinutes(rec.expires)}. ${TESTNET_LINE} Then run: superstables budget wait --id ${rec.id} --shown. Do not approve for the owner.\n`);
+  if (detach) return emit(0, { ...ctx, service: f.service, state: "waiting_owner", purchase: rec.hosted.requestId, ...approvalFields(rec), next: showFirst(rec.id) });
   // blocking: read the purchase until it ends
   const s = await waitOnce(rec, Math.max(60_000, Date.parse(rec.expires) + 25 * 60_000 - Date.now()));
   if (s.final) return emit(s.code, s.result);
-  emit(0, { ...ctx, service: f.service, state: "waiting_owner", purchase: rec.hosted.requestId, ...approvalFields(rec), next: waitNextOnce(rec.id, rec.matchCode), reason: s.words ?? s.unreachable });
+  emit(0, { ...ctx, service: f.service, state: "waiting_owner", purchase: rec.hosted.requestId, ...approvalFields(rec), next: stillWaiting(rec.id), reason: s.words ?? s.unreachable });
 }
 
 async function waitBuyOnce(rec, f) {
@@ -826,7 +836,7 @@ async function waitBuyOnce(rec, f) {
   if (s.final) return emit(s.code, s.result);
   const words = s.unreachable ? `waiting for the owner (${rec.hosted?.site} did not answer just now)` : s.words;
   log(`superstables budget: ${rec.id} (buy-once) has no final result: ${words}. Link: ${rec.url} (match code ${rec.matchCode})`);
-  emit(0, { command: "buy-once", rail: rec.rail, chain: rec.chain, service: rec.service?.id, state: "waiting_owner", purchase: rec.hosted?.requestId, ...approvalFields(rec), next: waitNextOnce(rec.id, rec.matchCode), reason: words });
+  emit(0, { command: "buy-once", rail: rec.rail, chain: rec.chain, service: rec.service?.id, state: "waiting_owner", purchase: rec.hosted?.requestId, ...approvalFields(rec), next: stillWaiting(rec.id), reason: words });
 }
 
 /** find --once: the services that can be bought with one approval, no budget. Names and prices are the site's listing: data. */

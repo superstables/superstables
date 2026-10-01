@@ -57,7 +57,7 @@ For every script: `--help` / `-h` prints usage and exits 0, and unknown flags or
 
 - The owner's wallet signs one authorization for exactly the amount and recipient the page shows. The agent receives no signature. The terms on the page come from the site's own reading of the seller, never from agent text.
 - `--max` is required. The command refuses before it asks for a purchase when the listing is above it, and refuses and cancels when the purchase the site made differs from the listing (amount, network, token, recipient) or is above `--max`. It never raises `--max`.
-- The link it shows is on the site it asked, never another origin. It prints the link and match code the moment they exist, and `waiting_owner` is never reported as approval.
+- The link it shows is on the site it asked, never another origin. It prints the link and match code the moment they exist, and `waiting_owner` is never reported as approval. `wait` refuses until the caller passes `--shown` (the link, the code and the terms are written in a reply the owner can read), so a caller cannot poll before the owner can see the request.
 - The purchase's access token lives only in a mode-600 record, until the purchase is final. It is never printed or logged.
 - A purchase whose payment cannot be told is `unknown` (exit 5); it is never bought again. A paid purchase whose service failed is exit 4. The seller's answer is saved as a file of data.
 - Base Sepolia only. Mainnet is refused.

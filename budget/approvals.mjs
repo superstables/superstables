@@ -1,7 +1,7 @@
 // Detached owner approvals. An agent's shell tool usually shows a command's output only when the command exits, so an
 // owner command on evm that waits for the owner's wallet would hide its own approval link. In detached mode the command
 // starts itself again as a background worker (the same command, blocking, with its output in a log file), returns as
-// soon as the worker has a link, and the caller polls with `superstables budget wait --id <id>`.
+// soon as the worker has a link, and the caller polls with `superstables budget wait --id <id> --shown`.
 //
 //   startDetached            the caller's side: register an id, start the worker, return once it has a link or has ended.
 //   recordLink, recordFinal  the worker's side: each link as soon as it exists, then the final RESULT and exit code.

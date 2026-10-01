@@ -20,7 +20,7 @@ A new account starts with a limit of 0.05 test USDC per payment and 1 per day, w
    ```
    `--params JSON` also works. The inputs must be ones the service lists; a wrong one is refused with the accepted values. The command checks the price against `--max` before anything is created, asks the site for the purchase, and returns at once with `APPROVE {...}` and `RESULT {"state":"waiting_owner","id","url","matchCode","expires","terms","next"}` and exit 0. That is not approval and nothing is paid yet.
 4. Write the exact `url` (including the part after `#`), the `matchCode` and the terms in your reply to the owner, as the shared rules say: testnet only, and the first link asks them to sign in. They have 10 minutes. The page offers three codes and they must pick yours.
-5. Keep polling `superstables budget wait --id ID` in the same turn until the state is final. If your tool cannot wait that long, say "tell me when you've approved" and run `wait` when they do.
+5. Keep polling `superstables budget wait --id ID --shown` in the same turn until the state is final. If your tool cannot wait that long, say "tell me when you've approved" and run `wait` when they do.
 
 One buy-once purchase is open at a time. A second `buy-once` is refused with the pending link; keep polling that id. `--replace` cancels the open one, only while the owner has not signed and only when they ask.
 
