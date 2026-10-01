@@ -163,8 +163,22 @@ export function dedupe(raws: RawService[]): NormalService[] {
       priceDisplay: group.map((g) => g.priceDisplay).find(Boolean) ?? displayPrice(priceUsd),
       priceUsd,
       facilitator: group.map((g) => g.facilitator).find(Boolean)?.toLowerCase() ?? null,
-      sources: group.map((g) => ({ source: g.source, sourceUrl: g.sourceUrl ?? null, raw: g.raw })),
+      sources: group.map((g) => ({ source: g.source, sourceUrl: g.sourceUrl ?? null, raw: jsonbSafe(g.raw) })),
     });
   }
   return out;
+}
+
+/**
+ * Postgres jsonb rejects the NUL character (U+0000) anywhere in a value or key. A source
+ * listing that contains one (a JSON Schema pattern such as "[\u0000-\u001f]") would fail
+ * the whole service_sources insert, so NUL is stored as the literal text "\u0000" instead.
+ */
+export function jsonbSafe<T>(value: T): T {
+  if (typeof value === "string") return value.replaceAll("\u0000", "\\u0000") as T;
+  if (Array.isArray(value)) return value.map(jsonbSafe) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [jsonbSafe(k), jsonbSafe(v)])) as T;
+  }
+  return value;
 }

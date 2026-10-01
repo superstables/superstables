@@ -20,7 +20,7 @@ export default function Footer() {
           <Link href="/docs">API docs</Link>
           <Link href="/pricing">Pricing</Link>
           <Link href="/#roadmap">Roadmap</Link>
-          <Link href="/contract">Contract</Link>
+          <Link href="/buy">Buy $STBL</Link>
           <Link href="/treasury">Treasury</Link>
           <a href={site.links.x} target="_blank" rel="noopener noreferrer">Book a demo</a>
         </div>

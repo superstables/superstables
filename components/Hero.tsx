@@ -24,8 +24,8 @@ export default function Hero() {
             <Link className="btn primary lg" href="/discover">
               Discover payable services
             </Link>
-            <Link className="btn lg" href="/submit">
-              New listing
+            <Link className="btn lg" href="/buy">
+              Buy $STBL
             </Link>
           </div>
           <p className="hero-api">

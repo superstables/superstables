@@ -7,10 +7,9 @@ const LINKS = [
   { href: "/demo", label: "Demo" },
   { href: "/docs", label: "API" },
   { href: "/#roadmap", label: "Roadmap" },
-  { href: "/contract", label: "Contract" },
+  { href: "/buy", label: "Buy $STBL" },
   { href: "/treasury", label: "Treasury" },
   { href: "/discover", label: "Discover services" },
-  { href: "/submit", label: "New listing" },
 ];
 
 export default function MobileMenu() {

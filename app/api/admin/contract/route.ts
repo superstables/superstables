@@ -33,6 +33,7 @@ export async function POST(req: Request) {
   }
 
   await setSetting(TOKEN_CONTRACT_KEY, value.trim());
-  revalidatePath("/contract");
+  revalidatePath("/buy");
+  revalidatePath("/treasury");
   return NextResponse.json({ ok: true, value: value.trim() });
 }

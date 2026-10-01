@@ -8,7 +8,7 @@ const LINKS = [
   { href: "/demo", label: "Demo" },
   { href: "/docs", label: "API" },
   { href: "/#roadmap", label: "Roadmap" },
-  { href: "/contract", label: "Contract" },
+  { href: "/buy", label: "Buy $STBL" },
   { href: "/treasury", label: "Treasury" },
 ];
 
@@ -39,9 +39,6 @@ export default function Nav({ current }: { current?: string } = {}) {
           <ThemeToggle />
           <Link className="btn primary" href="/discover">
             Discover services
-          </Link>
-          <Link className="btn" href="/submit">
-            New listing
           </Link>
           <MobileMenu />
         </div>

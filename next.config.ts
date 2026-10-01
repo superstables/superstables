@@ -27,6 +27,10 @@ const nextConfig: NextConfig = {
       })),
     ];
   },
+  async redirects() {
+    // The Contract page became Buy $STBL; links already shared keep working.
+    return [{ source: "/contract", destination: "/buy", permanent: true }];
+  },
   async rewrites() {
     return {
       // Markdown negotiation (Accept quality values and /?mode=agent) is decided in proxy.ts, which

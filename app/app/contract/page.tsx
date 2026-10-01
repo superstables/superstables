@@ -43,7 +43,7 @@ export default function ContractAdminPage() {
 
   return (
     <>
-      <PageHead title="Token contract" desc="Sets the contract address shown on the public /contract page. It goes live within seconds of saving." />
+      <PageHead title="Token contract" desc="Sets the contract address shown on the public /buy and /treasury pages. It goes live within seconds of saving." />
       <div className="panel">
         <div className="settings-row">
           <span>
@@ -76,9 +76,9 @@ export default function ContractAdminPage() {
           {trimmed !== "" && !valid && <p style={{ color: "var(--ink-2)", fontSize: 13.5, margin: "0 0 10px" }}>Not a valid address yet: it must be 0x followed by 40 hex characters.</p>}
           {valid && !confirmed && confirm.trim() !== "" && <p style={{ color: "var(--ink-2)", fontSize: 13.5, margin: "0 0 10px" }}>The two fields do not match.</p>}
           <button className="btn primary" disabled={!valid || !confirmed || state.kind === "saving"} onClick={save}>
-            {state.kind === "saving" ? "Publishing…" : current ? "Replace the published address" : "Publish to /contract"}
+            {state.kind === "saving" ? "Publishing…" : current ? "Replace the published address" : "Publish to /buy"}
           </button>
-          {state.kind === "saved" && <span style={{ marginLeft: 12, fontSize: 14 }}>Published. Check <a className="link" href="/contract" target="_blank" rel="noreferrer">superstables.com/contract</a>.</span>}
+          {state.kind === "saved" && <span style={{ marginLeft: 12, fontSize: 14 }}>Published. Check <a className="link" href="/buy" target="_blank" rel="noreferrer">superstables.com/buy</a>.</span>}
           {state.kind === "error" && <span style={{ marginLeft: 12, fontSize: 14, color: "var(--ink-2)" }}>{state.msg}</span>}
         </div>
       </div>

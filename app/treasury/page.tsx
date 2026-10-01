@@ -3,6 +3,9 @@ import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { CopyBtn } from "@/components/app/ui";
+import TokenDetails from "@/components/token/TokenDetails";
+import { tokenContract as staticTokenContract } from "@/content/site";
+import { getSetting, TOKEN_CONTRACT_KEY } from "@/lib/settings";
 import { getTreasury } from "@/lib/treasury";
 import "../app.css";
 
@@ -17,7 +20,7 @@ const date = (iso: string) => new Date(iso + "T00:00:00Z").toLocaleDateString("e
 export const revalidate = 300;
 
 export default async function TreasuryPage() {
-  const t = await getTreasury();
+  const [t, address] = await Promise.all([getTreasury(), getSetting(TOKEN_CONTRACT_KEY)]);
   const totalSpent = t.categories.reduce((s, c) => s + c.usd, 0);
   return (
     <>
@@ -43,6 +46,9 @@ export default async function TreasuryPage() {
           <div className="settings-row"><span><b>Total spent</b><p>Itemized below.</p></span><span className="mono">{usd(t.valuation.spentUsd)}</span></div>
           <div className="settings-row"><span><b>Fees generated</b><p>Since launch, on the pons pair. {t.fees.pendingClaimNvda.toLocaleString("en-US", { maximumFractionDigits: 6 })} NVDA still pending claim.</p></span><span className="mono">{t.fees.generatedNvda.toLocaleString("en-US", { maximumFractionDigits: 6 })} NVDA</span></div>
         </div>
+
+        <div className="sub-head" style={{ marginTop: 36 }}><h2>Contract details</h2></div>
+        <TokenDetails address={address || staticTokenContract} onTreasury />
 
         <div className="sub-head" style={{ marginTop: 36 }}><h2>Wallets</h2></div>
         <div className="panel">
@@ -88,7 +94,7 @@ export default async function TreasuryPage() {
         </div>
 
         <p style={{ marginTop: 28, fontSize: 14, color: "var(--ink-2)" }}>
-          Contract address and the dev wallet lock terms are on the <Link className="link" href="/contract">Contract page</Link>.
+          The dev wallet lock terms are on the <Link className="link" href="/buy">Buy $STBL page</Link>.
           Nothing on this page is financial advice. Questions:{" "}
           <a className="link" href="https://x.com/superstables" target="_blank" rel="noopener noreferrer">@superstables</a>.
         </p>

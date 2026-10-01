@@ -16,8 +16,8 @@ export const site = {
   },
 };
 
-/** The token's contract address on Robinhood Chain. Set it here the moment it exists; /contract renders it. */
-export const tokenContract: string | null = null;
+/** The token's contract address on Robinhood Chain. Set it here the moment it exists; /buy and /treasury render it. */
+export const tokenContract: string | null = "0x79a74fd91f8e1c4ab8e76253dec5c91f3094393f";
 
 export const rails = [
   { name: "x402", kind: "protocol" },
