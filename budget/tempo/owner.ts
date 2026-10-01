@@ -277,7 +277,7 @@ export function grantTerms(p: GrantPlan & { owner: Address; expirySeconds: numbe
       { label: 'Expires', value: `${iso(p.expiry)} (in about ${about(p.expirySeconds)})` },
       { label: 'Sellers', value: p.sellers ? p.sellers.join(', ') : 'any address' },
       { label: 'Planned maximum by expiry', value: `${most}${windows > 1 ? ` (${windows} periods of ${amt})` : ''}` },
-      { label: 'You hold', value: `${fromBaseUnits(p.held)} ${TOKEN_LABEL}` },
+      { label: 'Your balance', value: `${fromBaseUnits(p.held)} ${TOKEN_LABEL}` },
       { label: 'Transaction', value: `AccountKeychain.authorizeKey(${p.agent}, ...) at ${KEYCHAIN}`, mono: true },
     ],
     enforced: [

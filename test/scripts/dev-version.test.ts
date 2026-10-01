@@ -1,11 +1,11 @@
-// The version a development bundle is stamped with. Small, pure, and worth a test of its own,
-// because it is the thing that makes a desktop host notice that a bundle is new: get it wrong
-// and the host keeps the copy it already has, which is the bug this exists to prevent.
+// The version a development build is stamped with. Small, pure, and worth a test of its own,
+// because it is what tells two builds of the same release apart: get it wrong and a development
+// copy reports itself as the release, which is the confusion this exists to prevent.
 
 import { describe, expect, it } from "vitest";
 import { devVersion, revisionOf, utcTimestamp } from "../../scripts/dev-version.mjs";
 
-describe("the development bundle version", () => {
+describe("the development build version", () => {
   it("names the release and the commit it was built at", () => {
     expect(devVersion("0.1.0", { count: 14, sha: "abc1234" })).toBe("0.1.0-dev.14+gabc1234");
   });

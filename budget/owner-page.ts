@@ -135,7 +135,7 @@ export function ownerPageFor(rail: OwnerRail) {
       const host = new URL(site).host.replace(/^www\./, "");
       console.error(`\nWrite this link, the match code ${h.matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call: the page asks them to pick the code. The link opens on any device where the owner is signed in to ${host} with their wallet (${rail.walletWords}):\n\n  ${h.url}\n\n  match code: ${h.matchCode}\n\nThe first link they open asks them to sign in with their wallet (a message, no fee). It expires in ${inMinutes(h.expiresAt)}. Setup links this agent to their ${host} account and sends no transaction. Other actions ask their wallet for a transaction. Testnet only: test USDC, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
     } else {
-      console.error(`\nWrite this link and its terms in your reply to the owner, a visible message, not only in your reasoning or a tool call. Only the owner should use the page, in the browser with their wallet (${rail.walletWords}):\n\n  ${h.url}\n\nThe link works on this computer only and expires in ${inMinutes(h.expiresAt)}. Setup asks for a message signature. Other actions ask for a transaction approval. Testnet only: test USDC, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
+      console.error(`\nWrite this link and its terms in your reply to the owner, a visible message, not only in your reasoning or a tool call. Only the owner should use the page, in the browser with their wallet (${rail.walletWords}):\n\n  ${h.url}\n\nThe link works on this computer only (over SSH, the owner first forwards the port: ssh -L ${new URL(h.url).port}:127.0.0.1:${new URL(h.url).port} user@this-host) and expires in ${inMinutes(h.expiresAt)}; after that, run the command again for a new link. Setup asks for a message signature. Other actions ask for a transaction approval. Testnet only: test USDC, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
     }
     if (!argv.includes("--no-open")) openBrowser(h.url);
   }
@@ -207,15 +207,24 @@ export function ownerPageFor(rail: OwnerRail) {
       return { handle, outcome: await handle.settled };
     },
 
-    /** The owner rejected, or the link expired: one clear RESULT, then exit. Nothing was sent unless the wallet had been asked. */
-    async endUnapproved(command: string, outcome: Unapproved, extra: Record<string, unknown> = {}): Promise<never> {
+    /**
+     * The owner rejected, or the link expired: one clear RESULT, then exit. Nothing was sent unless the wallet had been asked.
+     * `statusCommand`: the read that shows whether it landed, when it is more than the rail's (tempo: the --agent label).
+     */
+    async endUnapproved(command: string, outcome: Unapproved, extra: Record<string, unknown> = {}, statusCommand = rail.statusCommand): Promise<never> {
       await closeOwnerPage(2000);
       if (outcome.sending) {
         console.log(`UNKNOWN: ${outcome.reason}. The wallet may have sent it; read the chain before trying again.`);
-        process.exit(rail.emit(command, 5, { state: "unknown", reason: outcome.reason, ...extra, next: `${rail.statusCommand}: read whether it landed before running this again` }));
+        process.exit(rail.emit(command, 5, { state: "unknown", reason: outcome.reason, ...extra, next: `${statusCommand}: read whether it landed before running this again` }));
       }
       console.log(`NOT APPROVED: ${outcome.reason}`);
-      process.exit(rail.emit(command, 3, { state: "refused_precheck", reason: outcome.status === "expired" ? `the approval link expired: ${outcome.reason}` : outcome.reason, ...extra, next: "check the result and wallet activity. Request a new approval only if the owner asks" }));
+      // the wallet was never asked to send: nothing was sent. An expired link is not a decision, so asking again is safe.
+      const expired = outcome.status === "expired";
+      const reason = expired && !/expired/.test(outcome.reason) ? `the approval link expired: ${outcome.reason}` : outcome.reason;
+      const next = expired
+        ? `nothing was sent: the link expired before the owner approved. To try again, run the same command again for a new link${command === "setup" ? " (setup reuses the agent key it created)" : ""}`
+        : "nothing was sent. Request a new approval only if the owner asks";
+      process.exit(rail.emit(command, 3, { state: "refused_precheck", reason, ...extra, next }));
     },
   };
 }

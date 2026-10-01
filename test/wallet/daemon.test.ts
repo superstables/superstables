@@ -122,7 +122,7 @@ describe("wallet credentials", () => {
     const res = await fetch(wallet.url + "/");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
-    expect(await res.text()).toContain("Superstables wallet");
+    expect(await res.text()).toContain("Payment approvals");
   });
 });
 

@@ -19,6 +19,7 @@
 
 import { z } from "zod";
 import { describeNetwork, toCaip2 } from "./chain.js";
+import { chainName, routesFor } from "./routes.js";
 import type { ResolvedRequest, ServiceListing, ServiceParam } from "./types.js";
 
 export const DEMO_SERVICE_ID = "superstables-demo-market-data";
@@ -31,8 +32,24 @@ export const EXTERNAL_COIN_PRICE_ID = "x402-coin-api.vercel.app";
  */
 export const HOSTED_DEMO_SERVICE_URL = "https://www.superstables.com/api/demo/market";
 
-/** Where the public index lives. Overridable so a self-hosted index can be pointed at. */
-export const INDEX_URL = process.env.SUPERSTABLES_INDEX_URL ?? "https://www.superstables.com/api/v1/services";
+/** The public index Superstables runs: every x402 service it has found, with rails, chains and price. */
+export const DEFAULT_INDEX_URL = "https://www.superstables.com/api/v1/services";
+
+/** Where the public index lives, as this process started. Kept for SDK users; the code reads indexUrl(). */
+export const INDEX_URL = process.env.SUPERSTABLES_INDEX_URL ?? DEFAULT_INDEX_URL;
+
+/**
+ * The index to read, or undefined when it is switched off. SUPERSTABLES_INDEX_URL points at
+ * another index that answers the same API (a self-hosted one, say); the empty string or "off"
+ * switches the index off, and discovery then lists the built-in catalogue only.
+ */
+export function indexUrl(): string | undefined {
+  const raw = process.env.SUPERSTABLES_INDEX_URL;
+  if (raw === undefined) return DEFAULT_INDEX_URL;
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed.toLowerCase() === "off") return undefined;
+  return trimmed;
+}
 
 /** Where the hosted catalogue lives: every paid demo endpoint the website operates, with parameters. */
 export const HOSTED_CATALOGUE_URL = "https://www.superstables.com/api/demo/catalogue";
@@ -54,7 +71,7 @@ export function hostedCatalogueUrl(): string | undefined {
  * Are the simulated demo services switched on? SUPERSTABLES_DEMO_SERVICES=on (or 1, true, yes)
  * includes the hosted catalogue's prepared services in discovery. Off, the default, never reads
  * the catalogue, so a client that was not set up for the demo never sees a simulated listing.
- * The Claude Desktop bundle and the demo page's configuration snippets switch it on.
+ * The demo page's configuration snippets switch it on.
  */
 export function demoServicesEnabled(): boolean {
   const raw = (process.env.SUPERSTABLES_DEMO_SERVICES ?? "").trim().toLowerCase();
@@ -92,6 +109,13 @@ export interface DiscoveryResult {
   warnings: string[];
 }
 
+/** Rails, chains and routes of a listing paid with x402 on Base Sepolia, like every built-in one. */
+const BASE_SEPOLIA_X402: Pick<ServiceListing, "rails" | "chains" | "routes"> = {
+  rails: ["x402"],
+  chains: ["base-sepolia"],
+  routes: routesFor(["x402"], ["base-sepolia"]),
+};
+
 /** The one service this release can discover, quote and pay without any further setup. */
 export function demoService(): ServiceListing {
   const endpoint = process.env.SUPERSTABLES_DEMO_SERVICE_URL ?? HOSTED_DEMO_SERVICE_URL;
@@ -125,7 +149,10 @@ export function demoService(): ServiceListing {
     operator: "Superstables (demo service on the testnet)",
     source: "demo-catalogue",
     testnet: true,
+    // Live spot prices, not prepared output: the payment is the demo, the data is real.
+    mock: false,
     actionable: true,
+    ...BASE_SEPOLIA_X402,
   };
 }
 
@@ -165,6 +192,7 @@ export function externalCoinPriceService(): ServiceListing {
     source: "demo-catalogue",
     testnet: true,
     actionable: true,
+    ...BASE_SEPOLIA_X402,
   };
 }
 
@@ -218,7 +246,7 @@ export async function findServices(options: FindServicesOptions = {}): Promise<D
   // caller that asked for no network gets none. They are read side by side.
   const [{ listings, warnings }, index] = await Promise.all([
     allListings({ includeHosted: includeIndex, demoServices }),
-    includeIndex
+    includeIndex && indexUrl()
       ? fetchIndex(query, limit).then((rows) => ({ rows, error: undefined })).catch((err: unknown) => ({ rows: [] as ServiceListing[], error: message(err) }))
       : Promise.resolve({ rows: [] as ServiceListing[], error: undefined }),
   ]);
@@ -262,7 +290,7 @@ export async function getService(
   const { listings } = await allListings({ includeHosted: includeIndex, demoServices });
   const listed = listings.find((s) => s.id === id);
   if (listed) return probe ? await probeDemo(listed) : listed;
-  if (!includeIndex) return undefined;
+  if (!includeIndex || !indexUrl()) return undefined;
   try {
     const found = await fetchIndex(id, DEFAULT_LIMIT);
     return found.find((s) => s.id === id);
@@ -545,6 +573,9 @@ function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing
     ...(notActionableReason ? { notActionableReason } : {}),
     ...(row.mock !== undefined ? { mock: row.mock } : {}),
     ...(row.example_prompts && row.example_prompts.length > 0 ? { examplePrompts: row.example_prompts } : {}),
+    rails: ["x402"],
+    chains: [chainName(network)],
+    routes: routesFor(["x402"], [chainName(network)]),
   };
 }
 
@@ -565,7 +596,7 @@ interface IndexRow {
 }
 
 async function fetchIndex(query: string, limit: number): Promise<ServiceListing[]> {
-  const url = new URL(INDEX_URL);
+  const url = new URL(indexUrl() ?? DEFAULT_INDEX_URL);
   url.searchParams.set("q", query);
   url.searchParams.set("live", "true");
   url.searchParams.set("limit", String(limit));
@@ -581,9 +612,12 @@ async function fetchIndex(query: string, limit: number): Promise<ServiceListing[
 
 function fromIndexRow(row: IndexRow): ServiceListing {
   const chains = row.chains ?? [];
-  const chain = chains[0] ?? "";
-  const payable = chains.some((c) => toCaip2(c) === "eip155:84532");
-  const testnet = chains.some((c) => /sepolia|testnet|devnet/i.test(c));
+  const rails = row.rails ?? [];
+  const routes = routesFor(rails, chains);
+  // The network shown is the one `pay` could use when the listing offers it, not merely the
+  // first one listed: ["base", "base-sepolia"] is a Base Sepolia listing as far as `pay` goes.
+  const chain = chains.find((c) => toCaip2(c) === "eip155:84532") ?? chains[0] ?? "";
+  const testnet = chains.some((c) => /sepolia|testnet|devnet|amoy|moderato/i.test(c));
   return {
     id: String(row.id),
     name: row.name ?? String(row.id),
@@ -612,10 +646,22 @@ function fromIndexRow(row: IndexRow): ServiceListing {
     lastSeenLive: row.last_seen_live,
     testnet,
     actionable: false,
-    notActionableReason: payable
+    notActionableReason: routes.pay
       ? "the index does not yet record the request parameters this service needs"
-      : "mainnet network not supported in this release",
+      : !testnet
+        ? `mainnet only (${describeOffer(rails, chains)}); this client pays on testnets only`
+        : routes.budget.length > 0
+          ? `\`superstables pay\` pays x402 on Base Sepolia only; a \`superstables budget\` rail could pay ${describeOffer(rails, chains)}`
+          : `this client does not pay ${describeOffer(rails, chains)}`,
+    rails,
+    chains,
+    routes,
   };
+}
+
+function describeOffer(rails: string[], chains: string[]): string {
+  const protocols = rails.length > 0 ? rails.join(", ") : "an unnamed protocol";
+  return `${protocols} on ${chains.length > 0 ? chains.join(", ") : "no named chain"}`;
 }
 
 function message(err: unknown): string {

@@ -19,6 +19,7 @@ import { parseEventLogs, encodeFunctionData, parseSignature, type Address, type 
 import {
   SYM,
   OPS_DIR, USDC, CFG, RAIL, cmd, erc20Abi, publicClient, usdc, sleep, tx, retry, allowanceOf, usdcBalance, readUntil, feeOf, sendJournaled, receiptOf,
+  GasShort, gasWords,
   type Wallet,
 } from "./lib.ts";
 
@@ -94,7 +95,7 @@ export function readJournal(op: string): Journal | null {
   if (!existsSync(p)) return null;
   const j = JSON.parse(readFileSync(p, "utf8"));
   if (j.path !== "approve") {
-    console.error(`error: operation ${op} is not a B4 (plain approve) operation; use the tool that created it`);
+    console.error(`error: operation ${op} is not an evm budget purchase; reconcile it on the rail that made it`);
     process.exit(2);
   }
   return j as Journal;
@@ -370,6 +371,10 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   return { j, verdict: "unknown" };
 }
 
+/** Why an agent step was not sent for lack of gas, and the way out (recover sends the agent gas before its own steps). */
+const gasShortNote = (e: GasShort, what: string) =>
+  `${gasWords(e.g, what)}. Nothing was signed. The owner runs "superstables budget recover --rail evm --chain ${CFG.key}": it sends the agent gas first, then finishes this`;
+
 /** Agent signs CancelAuthorization for this op's nonce (EIP-712, USDC domain) and returns v, r, s. */
 async function signCancel(w: Wallet, nonce: Hex) {
   const sig = await w.account.signTypedData({
@@ -409,13 +414,14 @@ export async function makeSafe(j: Journal, w: Wallet, o: { log?: (s: string) => 
     try {
       const { v, r, s: sg } = await signCancel(w, j.auth.nonce);
       const data = encodeFunctionData({ abi: erc20Abi, functionName: "cancelAuthorization", args: [j.agent, j.auth.nonce, v, r, sg] });
-      const sent = await sendJournaled(w, USDC, data, "cancelAuthorization (agent)", ({ hash, nonce }) => { j.cancelTx = hash; j.cancelNonce = nonce; writeJournal(j); });
+      const sent = await sendJournaled(w, USDC, data, "cancelAuthorization (agent)", ({ hash, nonce }) => { j.cancelTx = hash; j.cancelNonce = nonce; writeJournal(j); }, { op: "cancel", then: ["return"] });
       j.cancelStatus = "success";
       addFee(j, sent.feeWei);
       writeJournal(j);
     } catch (e: any) {
       if (e?.txHash) { j.cancelStatus = "reverted"; if (e.feeWei) addFee(j, e.feeWei); }
-      j.notes.push(`cancelAuthorization did not land: ${String(e?.shortMessage ?? e?.message ?? e).split("\n")[0]}`);
+      if (e instanceof GasShort) log(`cancelAuthorization not sent: ${gasShortNote(e, "the cancel and the return after it")}`);
+      j.notes.push(e instanceof GasShort ? `cancelAuthorization not sent: ${gasShortNote(e, "the cancel and the return after it")}` : `cancelAuthorization did not land: ${String(e?.shortMessage ?? e?.message ?? e).split("\n")[0]}`);
       writeJournal(j);
       // the seller may have settled first: the chain decides
       s = await readSettlement(j);
@@ -448,14 +454,15 @@ export async function makeSafe(j: Journal, w: Wallet, o: { log?: (s: string) => 
   log(`returning ${usdc(amount)} ${SYM} from the agent to the owner ${j.owner}`);
   const data = encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [j.owner, amount] });
   try {
-    const sent = await sendJournaled(w, USDC, data, "return price to owner (agent)", ({ hash, nonce }) => { j.returnTx = hash; j.returnNonce = nonce; writeJournal(j); });
+    const sent = await sendJournaled(w, USDC, data, "return price to owner (agent)", ({ hash, nonce }) => { j.returnTx = hash; j.returnNonce = nonce; writeJournal(j); }, { op: "return" });
     j.returnStatus = "success";
     addFee(j, sent.feeWei);
     j.returned = usdc(amount);
     writeJournal(j);
   } catch (e: any) {
     if (e?.txHash) { j.returnStatus = "reverted"; if (e.feeWei) addFee(j, e.feeWei); }
-    j.notes.push(`return transfer failed: ${String(e?.shortMessage ?? e?.message ?? e).split("\n")[0]}`);
+    if (e instanceof GasShort) log(`return not sent: ${gasShortNote(e, "the return")}`);
+    j.notes.push(e instanceof GasShort ? `return not sent: ${gasShortNote(e, "the return")}` : `return transfer failed: ${String(e?.shortMessage ?? e?.message ?? e).split("\n")[0]}`);
     writeJournal(j);
   }
   return (await reconcileJournal(j, { quiet: true })).j;

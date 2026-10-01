@@ -1,9 +1,12 @@
-# Every push and pull request is type-checked, tested, built and packed. The bundle is built in
-# CI and not only at release time, because a manifest that no longer matches the code is a
-# failure people only notice when they try to install it.
+# Every push and pull request is type-checked, tested and built, and the skill zip is built and
+# run on its own.
 #
 # The tests never reach the network (they stand up their own servers on loopback), so CI needs
 # no keys, no funded wallet and no facilitator.
+#
+# The install job installs the client the four ways people do (the packed tarball, a checkout, a
+# checkout without dev packages, a git URL) and runs it, with scripts/install-check.mjs. Its
+# `budget doctor` reads a public testnet RPC; everything else stays local.
 
 name: CI
 
@@ -17,12 +20,15 @@ permissions:
 
 jobs:
   build:
-    name: Node ${{ matrix.node }}
-    runs-on: ubuntu-latest
+    name: Node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        node: ["20", "22"]
+        include:
+          - { os: ubuntu-latest, node: "20" }
+          - { os: ubuntu-latest, node: "22" }
+          - { os: macos-latest, node: "22" }
     steps:
       - uses: actions/checkout@v4
 
@@ -42,12 +48,32 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Bundle
-        run: npm run bundle
+      # The skill zip, unpacked outside the checkout and run with node alone. `find` reads the
+      # hosted catalogue, the one step here that needs the network.
+      - name: Skill zip
+        run: npm run skill && npm run skill:check
 
-      - name: Upload the bundle
-        uses: actions/upload-artifact@v4
+  install:
+    name: Install routes, Node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: "20" }
+          - { os: macos-latest, node: "22" }
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: superstables-mcpb-node${{ matrix.node }}
-          path: build/*.mcpb
-          if-no-files-found: error
+          # the git route clones this checkout, and the build stamps the commit count
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install four ways and run
+        run: node scripts/install-check.mjs
+        env:
+          TMPDIR: ${{ runner.temp }}

@@ -48,6 +48,7 @@ import {
   fromBaseUnits,
   isChainRefusal,
   loadAgentEnv,
+  oneLine,
   toBaseUnits,
 } from './lib/common.ts'
 import { chainHead, getTxSigner, mppMemo, readKey } from './lib/chain.ts'
@@ -118,7 +119,7 @@ async function main() {
   // 1. An operation that is pending or settled is never started again under the same id.
   const existing = readOp(opId)
   if (existing && BLOCKING.includes(existing.state)) {
-    console.log(`Operation ${opId} is already ${existing.state}${existing.tx ? ` (tx ${existing.tx})` : ''}. Not paying again.`)
+    console.log(`Operation ${opId} is already ${existing.state}${existing.tx ? ` (tx ${oneLine(existing.tx, 100)})` : ''}. Not paying again.`)
     console.log(`Run: npx tsx budget/tempo/reconcile.ts --op ${opId}`)
     printResult({
       op: opId,
@@ -156,7 +157,7 @@ async function main() {
   try {
     prepared = await mppx.prepareRequest(url, { ...reqInit(), signal: AbortSignal.timeout(30_000) }, { requirePayment: true })
   } catch (err) {
-    const msg = String((err as Error)?.message ?? err).slice(0, 300)
+    const msg = oneLine((err as Error)?.message ?? err)
     console.log(`\nREFUSED before signing: could not get a usable ${TOKEN_LABEL} tempo.charge challenge: ${msg}`)
     op = baseOp({ amount: '0', amountDecimal: '0', recipient: '', chainId: CHAIN_ID }, ownerAddress, agentKey)
     finish('refused_precheck', { reason: `no_usable_challenge: ${msg}`, next: 'check the seller URL; nothing was signed' })
@@ -165,9 +166,10 @@ async function main() {
   const challenge = payment.challenge
   const req = challenge.request as Record<string, any>
   const details = (req.methodDetails ?? {}) as Record<string, any>
-  console.log(`  challenge: ${challenge.method}.${challenge.intent} realm=${challenge.realm}`)
-  console.log(`    amount=${req.amount} currency=${req.currency} chainId=${details.chainId} recipient=${req.recipient}`)
-  console.log(`    feePayer=${details.feePayer ?? false} supportedModes=${JSON.stringify(details.supportedModes ?? ['pull', 'push'])} expires=${challenge.expires ?? 'n/a'}`)
+  // every value here is the seller's: one line each (oneLine), so none can start a line of its own
+  console.log(`  challenge: ${oneLine(`${challenge.method}.${challenge.intent} realm=${challenge.realm}`, 500)}`)
+  console.log(`    ${oneLine(`amount=${req.amount} currency=${req.currency} chainId=${details.chainId} recipient=${req.recipient}`, 500)}`)
+  console.log(`    ${oneLine(`feePayer=${details.feePayer ?? false} supportedModes=${JSON.stringify(details.supportedModes ?? ['pull', 'push'])} expires=${challenge.expires ?? 'n/a'}`, 500)}`)
 
   const check = challenge.intent !== 'charge' || challenge.method !== 'tempo'
     ? ({ ok: false, code: 'unsupported_intent', reason: `challenge is ${challenge.method}.${challenge.intent}, only tempo.charge is bought here` } as const)
@@ -187,7 +189,7 @@ async function main() {
     agentKey,
   )
   if (!check.ok) {
-    console.log(`\nREFUSED before signing (${check.code}): ${check.reason}`)
+    console.log(`\nREFUSED before signing (${check.code}): ${oneLine(check.reason, 1000)}`)
     console.log('Nothing was signed or sent.')
     finish('refused_precheck', { reason: `${check.code}: ${check.reason}`, next: 'nothing was signed; pick another seller or raise --max' })
   }
@@ -204,17 +206,33 @@ async function main() {
   const primary = amount - splitTotal
 
   let remainingBefore: bigint | null = null
+  let noBudget: string | undefined
   try {
     const k = await readKey(ownerAddress, agentKey)
     remainingBefore = k.remaining
     console.log(`  key: ${k.exists ? 'active' : k.revoked ? 'REVOKED' : 'not authorized'}, remaining ${fromBaseUnits(k.remaining)} ${TOKEN_LABEL}, expiry ${k.expiry ? new Date(k.expiry * 1000).toISOString() : 'n/a'}`)
+    // No budget on chain for this key: the chain would refuse the payment, so nothing is signed. (A read that failed
+    // proves nothing: then the chain does the refusing, as before.)
+    if (k.revoked) noBudget = 'the agent access key is revoked (a revoked key can never be granted again)'
+    else if (!k.exists) noBudget = 'the agent access key is not authorized: the owner has not granted a budget'
+    else if (k.expiry && k.expiry * 1000 <= Date.now()) noBudget = `the budget expired at ${new Date(k.expiry * 1000).toISOString()}`
   } catch (err) {
     console.log(`  (could not read the key state: ${String((err as Error).message).slice(0, 120)})`)
   }
 
   if (args.quote) {
-    console.log(`\nQuoted: ${fromBaseUnits(amount)} ${TOKEN_LABEL} to ${req.recipient}. Nothing was signed.`)
+    console.log(`\nQuoted: ${fromBaseUnits(amount)} ${TOKEN_LABEL} to ${oneLine(req.recipient)}. Nothing was signed.`)
     finish('quoted', { reason: 'quote_only', next: 'run the same command again without --quote to buy' })
+  }
+  if (noBudget) {
+    console.log(`\nREFUSED before signing: ${noBudget}. Nothing was signed or sent.`)
+    const newKey = /revoked|expired/.test(noBudget)
+    finish('refused_precheck', {
+      reason: `no_budget: ${noBudget}`,
+      next: newKey
+        ? `the owner makes a new key with superstables budget setup --rail tempo --agent LABEL, then superstables budget grant --rail tempo --agent LABEL --amount A; nothing was signed`
+        : `the owner grants a budget: superstables budget grant --rail tempo${agentLabel ? ` --agent ${agentLabel}` : ''} --amount A; nothing was signed`,
+    })
   }
 
   // 5. Sign. Push mode broadcasts inside createCredential, so the intent is already `submitted`.
@@ -226,7 +244,7 @@ async function main() {
   try {
     credential = await payment.createCredential()
   } catch (err) {
-    const desc = describeError(err)
+    const desc = oneLine(describeError(err), 1000)
     if (isChainRefusal(desc)) {
       console.log(`\nREFUSED by the chain before anything was signed or sent: ${desc}`)
       finish('refused_chain', { reason: desc, remaining: remainingBefore, next: 'nothing was signed; check the budget with readBudget' })
@@ -264,9 +282,10 @@ async function main() {
       /* no Payment-Receipt header */
     }
     bodyText = await res.text()
-    console.log(`response (${res.headers.get('content-type') ?? ''}): ${bodyText.slice(0, 500)}`)
+    // seller text: a one-line preview only
+    console.log(`response (${oneLine(res.headers.get('content-type') ?? '', 100)}): ${oneLine(bodyText, 500)}`)
   } catch (err) {
-    sendError = String((err as Error)?.message ?? err).slice(0, 200)
+    sendError = oneLine((err as Error)?.message ?? err, 200)
     console.log(`\nNo complete answer from the seller (${sendError}). Reading the chain, not resending.`)
   }
   const delivered = httpStatus !== undefined && httpStatus >= 200 && httpStatus < 300
@@ -283,7 +302,7 @@ async function main() {
     console.log(`chain: tx ${r.transactionHash} ${r.status} in block ${r.blockNumber}`)
     console.log(`explorer: ${explorerTx(r.transactionHash)}`)
     console.log(`signer: keychain keyId ${outcome.keyId ?? 'n/a'} (agent key ${agentKey})`)
-    if (op.tx && op.tx.toLowerCase() !== r.transactionHash.toLowerCase()) console.log(`note: the seller's receipt named ${op.tx}, the chain search by memo found ${r.transactionHash}`)
+    if (op.tx && op.tx.toLowerCase() !== r.transactionHash.toLowerCase()) console.log(`note: the seller's receipt named ${oneLine(op.tx, 100)}, the chain search by memo found ${r.transactionHash}`)
     if (j.state === 'settled') {
       console.log(`SETTLED: ${fromBaseUnits(j.debit)} ${TOKEN_LABEL} left the owner. Seller delivery: ${delivered ? 'yes' : `NO (HTTP ${httpStatus ?? 'none'})`}. Not retried.`)
       finish('settled', { tx: r.transactionHash, debit: j.debit, remaining: remainingAfter, delivered, next: delivered ? 'none' : 'paid but not delivered; do not pay again, contact the seller with the tx hash' })
@@ -339,7 +358,7 @@ function baseOp(
 
 main().catch((err) => {
   // Anything unexpected after the payment was signed is an unknown outcome, never "no transfer sent".
-  const msg = String((err as Error)?.message ?? err).slice(0, 300)
+  const msg = oneLine((err as Error)?.message ?? err)
   console.error('buy failed:', msg)
   if (op && (op.state === 'submitted')) {
     finish('unknown', { reason: msg, next: `npx tsx budget/tempo/reconcile.ts --op ${opId}` })

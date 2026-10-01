@@ -4,7 +4,7 @@ Every rail's main path follows these rules.
 
 | Rail | Main path | Scripts |
 | --- | --- | --- |
-| EVM | Plain approve, pull then pay | `evm/` (`--chain base-sepolia|arc-testnet|arbitrum-sepolia|polygon-amoy|skale-base-sepolia`) |
+| EVM | Plain approve, pull then pay | `evm/` (`--chain base-sepolia|arc-testnet|arbitrum-sepolia|polygon-amoy|skale-base-sepolia|ethereum-sepolia`) |
 | Tempo | Keychain access key, MPP charge | `tempo/` |
 | Solana | SPL delegate, x402 exact | `solana/` |
 
@@ -15,6 +15,7 @@ Every rail's main path follows these rules.
   - EVM with hosted approvals (`setup --hosted`): the same transaction goes to superstables.com, and the owner's wallet sends it from there. The agent key signs each request to the site, so these owner commands open the agent key file; it never leaves this computer. The command verifies on chain as above, and refuses a request the site would put to another address than the recorded owner.
   - EVM and Tempo: an EIP-1193 browser wallet (for example MetaMask) sends exactly the transaction the command built. On Tempo that is a plain type-2 call to the AccountKeychain precompile, and the owner pays its own fee.
   - Solana: a Wallet Standard wallet (for example Phantom) only signs. The command builds the transaction when the owner presses Approve and sends it itself, only if the signed message is byte for byte the one it built and the signature is the owner's.
+- `setup` is a trusted step. Its link is the only credential, and the page's origin check stops cross-site requests, not local programs: anyone holding the link, the agent included, can complete it with a key they control. So the owner runs it, and setup's result and its page both name the connected owner address for the owner to check it is their wallet.
 - Agent commands (`buy`, `reconcile`) open only the agent file. They must work with no owner key file anywhere.
 - Read commands (`read`/`readBudget`/`status`) need no secret file.
 - Never print, log or copy key material.

@@ -188,7 +188,7 @@ async function main() {
   ]
   console.log('\nNext:')
   steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`))
-  finish?.({ ok: true, message: `Done. ${owner} is recorded as the owner of agent ${agent}. You can close this page. Next: grant a budget (the terminal lists the command).` })
+  finish?.({ ok: true, message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: grant a budget (the terminal lists the command).` })
   await closeOwnerPage()
   process.exit(result(0, { state: 'ok', owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_ENV_PATH, agentKeyFile: AGENT_ENV_PATH, steps, next: 'superstables budget doctor --rail tempo, then superstables budget grant --rail tempo --amount A' }))
 }

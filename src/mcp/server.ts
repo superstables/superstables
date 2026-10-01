@@ -22,7 +22,7 @@ import { FINAL_ATTEMPT_STATES } from "../core/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { demoServicesEnabled, findServices as findServicesImpl, getService as getServiceImpl } from "../core/discovery.js";
-import { PaymentEngine, SERVICE_BODY_LIMIT } from "../core/pay.js";
+import { PaymentEngine, QuoteUsedError, SERVICE_BODY_LIMIT } from "../core/pay.js";
 import type { Policy } from "../core/policy.js";
 import { homeDir } from "../core/home.js";
 import { quote as takeQuote } from "../core/quote.js";
@@ -66,7 +66,7 @@ The flow is: find_services -> quote -> (show the owner what it costs) -> pay -> 
 
 Before calling pay, tell the person the price, the network and the recipient address that the quote returned, in your own words. Never call pay without having shown them a quote. Once they say yes, call pay: it is safe to call, because it cannot move money by itself. It hands the quote to the owner's own wallet — a page they open in their browser, or a separate wallet process on their machine — where a human approves or rejects on a screen that shows the verified amount, asset, network and recipient. You are not the one approving; the wallet is where that happens, and refusing to call pay only blocks the person from getting to that screen.
 
-A payment has only happened when the state is "settled" or "paid_service_failed". Any other state means no money moved; never say a payment succeeded, and never call pay a second time for the same work. "awaiting_approval" means the owner has been asked in their wallet and nothing has been signed: call payment_status with the attempt_id to wait for their decision. "denied" and "expired" mean the owner said no, or did not answer; that is a normal outcome, report it plainly and do not retry unless asked. "uncertain" means the payment may or may not have settled: say so, and do not pay again.
+A payment has only happened when the state is "settled" or "paid_service_failed". Any other state means no money moved; never say a payment succeeded, and never call pay a second time for the same work. "awaiting_approval" means the owner has been asked in their wallet and nothing has been signed: call payment_status with the attempt_id to wait for their decision. "denied" means the owner rejected it; "expired" means nobody approved within the wallet's window; "abandoned" means the wait ended before anyone decided (for example, this server stopped); abandoned_by says what ended it. None of them moved money. Report them plainly, never call "expired" or "abandoned" a rejection, and do not retry unless asked. "uncertain" means the payment may or may not have settled: say so, and do not pay again.
 
 When pay returns an approval_url, show that link to the person exactly as it is written, on its own. It is the only way for them to see the payment and sign it, and a link you paraphrase or shorten does not open.
 
@@ -180,6 +180,9 @@ export function createSuperstablesServer(deps: SuperstablesServerDeps): McpServe
       try {
         started = deps.engine.startPayment(quote_id);
       } catch (err) {
+        if (err instanceof QuoteUsedError && err.attempt) {
+          return refusal(`${err.message}. Follow that one: payment_status with attempt_id ${err.attempt.id}.`);
+        }
         return refusal(messageOf(err));
       }
       const attempt = await waitForLinkOrEnd(deps, started.id, waitMs);
@@ -274,18 +277,24 @@ export function createSuperstablesServer(deps: SuperstablesServerDeps): McpServe
 // ── Views ────────────────────────────────────────────────────────────────────────────────
 
 /** Everything an agent should say about an attempt, including the sentence to say it with. */
-export function attemptView(deps: Pick<SuperstablesServerDeps, "records">, attempt: Attempt): object {
+export function attemptView(
+  deps: Pick<SuperstablesServerDeps, "records">,
+  attempt: Attempt,
+  surface: Surface = "mcp",
+): Record<string, unknown> {
   const receipt = attempt.receiptId ? deps.records.getReceipt(attempt.receiptId) : undefined;
   const body = serviceResponse(attempt.serviceBody);
   return {
     attempt_id: attempt.id,
     quote_id: attempt.quoteId,
     state: attempt.state,
-    message: messageFor(attempt, receipt),
+    message: messageFor(attempt, receipt, surface),
     ...(attempt.approvalUrl ? { approval_url: attempt.approvalUrl } : {}),
     ...(body === undefined ? {} : { service_response: body }),
     ...(receipt ? { receipt: receiptView(receipt) } : {}),
     ...(attempt.reason ? { reason: attempt.reason } : {}),
+    ...(attempt.refusal ? { refusal: attempt.refusal } : {}),
+    ...(attempt.abandonedBy ? { abandoned_by: attempt.abandonedBy } : {}),
     history: attempt.history,
   };
 }
@@ -305,40 +314,49 @@ function receiptView(receipt: Receipt): object {
   };
 }
 
+/** Who reads the sentence: a model on MCP, or someone at the `superstables` CLI. */
+export type Surface = "mcp" | "cli";
+
 /**
  * One sentence per state, written so a model can repeat it to the owner without adding
  * anything. The wording is deliberate: "asked", "rejected", "settled" and "may or may not"
- * are not interchangeable, and the difference is the whole point of this file.
+ * are not interchangeable, and the difference is the whole point of this file. Only the
+ * next step differs between surfaces: a model calls payment_status, a person at the CLI runs
+ * `superstables status <attempt>`. The CLI prints the approval link once on its own line, so
+ * its sentence does not repeat it.
  */
-export function messageFor(attempt: Attempt, receipt?: Receipt): string {
+export function messageFor(attempt: Attempt, receipt?: Receipt, surface: Surface = "mcp"): string {
   const terms = attempt.terms;
   const amount = `${terms.amountDecimal} ${terms.asset}`;
   const transaction = attempt.transaction ?? receipt?.transaction ?? "unknown";
   const status = attempt.serviceStatus ?? "no status";
+  const check =
+    surface === "mcp"
+      ? "Call payment_status with this attempt_id"
+      : `Run \`superstables status ${attempt.id}\` to see where it got to`;
   switch (attempt.state) {
     case "awaiting_approval":
       // The link is the whole approval in browser mode: without it nobody can sign, so the
       // sentence the model repeats has to carry it.
-      return attempt.approvalUrl
+      return attempt.approvalUrl && surface === "mcp"
         ? `The owner has been asked to approve ${amount} to ${terms.recipient} on ${terms.networkLabel}. ` +
           `Open this link to review and sign in MetaMask: ${attempt.approvalUrl}. Nothing is signed yet. ` +
-          "Call payment_status with this attempt_id to wait for the decision."
+          `${check} to wait for the decision.`
         : `The owner has been asked to approve ${amount} to ${terms.recipient} on ${terms.networkLabel} ` +
-          "in their wallet. Nothing is signed yet. Call payment_status with this attempt_id to wait for the decision.";
+          `in their wallet. Nothing is signed yet. ${check}${surface === "mcp" ? " to wait for the decision" : ""}.`;
     case "approved":
-      return (
-        `The owner approved ${amount} and the payment is being prepared. Nothing has settled yet. ` +
-        "Call payment_status with this attempt_id."
-      );
+      return `The owner approved ${amount} and the payment is being prepared. Nothing has settled yet. ${check}.`;
     case "submitting":
-      return (
-        "The payment has been sent to the service and the facilitator is settling it. " +
-        "Call payment_status with this attempt_id."
-      );
+      return `The payment has been sent to the service and the facilitator is settling it. ${check}.`;
     case "denied":
       return "The owner rejected this payment in their wallet. Nothing was signed or submitted, and the service was not called.";
     case "expired":
       return "Nobody approved the payment within the wallet's window. Nothing was signed.";
+    case "abandoned":
+      return (
+        `Nobody decided: ${attempt.reason ?? "the wait for the owner ended before they approved or rejected this payment"}. ` +
+        "This is not a rejection. Nothing was submitted and nothing was paid, and approving through the old link now pays nothing."
+      );
     case "settled":
       return (
         `Paid ${amount} on ${terms.networkLabel}; settlement confirmed by the facilitator ` +

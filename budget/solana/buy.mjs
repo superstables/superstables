@@ -56,12 +56,13 @@ import {
   parsePubkeyFlag,
   usageError,
   retryRead,
+  oneLine,
   sleep,
   EXIT,
   USDC_MINT,
   USDC_DECIMALS,
 } from "./lib.mjs";
-import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer } from "./ops.mjs";
+import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, refusalIsFinal } from "./ops.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
@@ -119,8 +120,9 @@ function finish(state, code, extra = {}) {
   console.log("RESULT " + JSON.stringify(line));
   process.exit(code);
 }
+// Everything the seller sent (its body, its offer, its headers, its errors) is printed through oneLine: one line each.
 const refuse = (reasons, extra = {}) => {
-  for (const r of [].concat(reasons)) console.error(`Refused (nothing signed): ${r}`);
+  for (const r of [].concat(reasons)) console.error(`Refused (nothing signed): ${oneLine(r, 1000)}`);
   finish("refused_precheck", EXIT.REFUSED, { reason: [].concat(reasons).join("; "), next: "fix the request or pass a new --max/--pay-to; nothing was signed or paid", ...extra });
 };
 
@@ -158,7 +160,7 @@ try {
 }
 console.log(`\nInitial request: HTTP ${initial.res.status}`);
 if (initial.res.status !== 402) {
-  console.log(initial.text.slice(0, 300));
+  console.log(oneLine(initial.text, 300));
   refuse(`the seller did not ask for payment (HTTP ${initial.res.status}); nothing to buy`);
 }
 
@@ -183,7 +185,7 @@ const x402Version = decoded.x402Version ?? (usedHeader ? 2 : 1);
 const accepts = decoded.accepts ?? [];
 console.log(`\nx402Version: ${x402Version}. ${accepts.length} accept(s) offered:`);
 for (const a of accepts) {
-  console.log(`  - scheme=${a.scheme} network=${a.network} amount=${a.amount ?? a.maxAmountRequired} asset=${a.asset} payTo=${a.payTo}`);
+  console.log(`  - ${oneLine(`scheme=${a?.scheme} network=${a?.network} amount=${a?.amount ?? a?.maxAmountRequired} asset=${a?.asset} payTo=${a?.payTo}`, 500)}`);
 }
 
 // --- 3. prechecks: before any key is opened or anything is signed ---------------------------------
@@ -203,7 +205,7 @@ const feePayerStr = requirement.extra?.feePayer;
 const amountUi = formatUnits(amountBase);
 console.log(`\nSelected offer: ${amountUi} USDC (${amountBase} base units) to ${payToPk.toBase58()}`);
 console.log(`Mint: ${USDC_MINT.toBase58()} (${USDC_DECIMALS} decimals)`);
-console.log(`Facilitator-sponsored fee payer: ${feePayerStr ?? "(none offered, agent pays its own fee)"}`);
+console.log(`Facilitator-sponsored fee payer: ${feePayerStr ? oneLine(feePayerStr, 100) : "(none offered, agent pays its own fee)"}`);
 console.log(`Prechecks passed: price <= ${maxBase === null ? "(no --max, --check only)" : formatUnits(maxBase) + " USDC"}, devnet USDC, 6 decimals${payToFlag ? ", recipient matches --pay-to" : ""}.`);
 
 if (checkOnly) {
@@ -340,7 +342,7 @@ try {
   paid = await fetchOnce(url, method, bodyText, { [paymentHeaderName]: paymentHeaderValue }, 90_000);
   console.log(`Paid request: HTTP ${paid.res.status}`);
 } catch (e) {
-  paidError = e?.message ?? String(e);
+  paidError = oneLine(e?.message ?? e);
   console.log(`Paid request did not complete: ${paidError} (outcome uncertain; reading the chain, never resending)`);
 }
 
@@ -352,16 +354,16 @@ if (paid) {
     if (h) {
       try {
         const settleInfo = b64decodeJson(h);
-        console.log(`${hname} header:`, JSON.stringify(settleInfo));
+        console.log(`${hname} header: ${oneLine(JSON.stringify(settleInfo), 1000)}`);
         settlementSig = settleInfo.transaction ?? settleInfo.signature ?? settlementSig;
         responseNote = settleInfo.errorReason ?? settleInfo.error ?? responseNote;
       } catch {
-        console.log(`${hname} header (undecoded):`, h);
+        console.log(`${hname} header (undecoded): ${oneLine(h, 1000)}`);
       }
     }
   }
-  console.log("\nResponse body (truncated):");
-  console.log(paid.text.slice(0, 800));
+  console.log("\nResponse body (one-line preview):");
+  console.log(oneLine(paid.text, 800));
 }
 const httpStatus = paid?.res.status ?? null;
 const deliveredHttp = paid ? paid.res.status >= 200 && paid.res.status < 300 : null;
@@ -418,10 +420,16 @@ if (!deliveredHttp && !readError) {
 }
 if (sim?.value?.err && !String(sim.value.err).startsWith("simulation unavailable")) {
   const failLine = (sim.value.logs ?? []).filter((l) => /failed|error|insufficient/i.test(l)).slice(-1)[0] ?? null;
-  updateOp(opId, { state: "refused_chain", chainError: sim.value.err, chainLog: failLine, delivered: false }, "chain refuses the transaction (simulation)");
-  console.log(`\n=> The chain refuses this payment: ${JSON.stringify(sim.value.err)}${failLine ? ` | ${failLine}` : ""}`);
+  console.log(`\n=> The chain refuses this payment now: ${JSON.stringify(sim.value.err)}${failLine ? ` | ${failLine}` : ""}`);
   console.log("   Our transaction was not found on chain.");
-  finish("refused_chain", EXIT.FAILED, { delivered: false, chainError: sim.value.err, next: `run reconcile before reusing this --op: node budget/solana/reconcile.mjs --op ${opId}` });
+  // refused for good only once the signed transaction can no longer land (refusalIsFinal); until then it is unknown
+  if (await refusalIsFinal(conn, rec)) {
+    updateOp(opId, { state: "refused_chain", chainError: sim.value.err, chainLog: failLine, delivered: false }, "chain refuses the transaction (simulation), and its blockhash has expired");
+    finish("refused_chain", EXIT.FAILED, { delivered: false, chainError: sim.value.err, next: `run reconcile before reusing this --op: node budget/solana/reconcile.mjs --op ${opId}` });
+  }
+  updateOp(opId, { state: "unknown", chainError: sim.value.err, chainLog: failLine, delivered: deliveredHttp }, `chain refuses the transaction now (simulation), but it can land until block height ${lastValidBlockHeight}`);
+  console.log(`   The seller holds the signed transaction, which stays valid until block height ${lastValidBlockHeight}: a later grant or deposit could still let it land. Outcome unknown. Do not pay again.`);
+  finish("unknown", EXIT.UNCERTAIN, { delivered: deliveredHttp, chainError: sim.value.err, reason: `the chain refuses this payment now (simulation), but the signed transaction can land until block height ${lastValidBlockHeight}`, next: `node budget/solana/reconcile.mjs --op ${opId} once the block height is past ${lastValidBlockHeight}` });
 }
 updateOp(opId, { state: "unknown", delivered: deliveredHttp }, readError ? `could not read the chain: ${readError}` : "own transaction not found yet");
 console.log(readError ? `\n=> Could not read the chain (${readError}). Outcome unknown; it may land. Do not pay again.` : "\n=> Our transaction was NOT found on chain yet. Outcome unknown; it may still land. Do not pay again.");

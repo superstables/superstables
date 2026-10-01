@@ -43,9 +43,16 @@ export interface Signer {
   sign(req: SignRequest, hooks?: SignHooks): Promise<SignResult>;
 }
 
-export type RefusalCode = "denied" | "expired" | "policy" | "invalid" | "unavailable";
+export type RefusalCode =
+  | "denied"
+  | "expired"
+  | "abandoned"
+  | "policy"
+  | "invalid"
+  | "unavailable"
+  | "approval_page";
 
-/** The signer would not sign: the owner said no, the request expired, the wallet's policy refused, the request was malformed, or the wallet is unreachable. */
+/** The signer would not sign: the owner said no, the request expired, the process serving it stopped before anyone decided, the wallet's policy refused, the request was malformed, the wallet is unreachable, or the approval page could not start. */
 export class SignRefused extends Error {
   constructor(readonly code: RefusalCode, reason: string, readonly walletRequestId?: string) {
     super(reason);

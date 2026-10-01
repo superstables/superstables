@@ -11,10 +11,11 @@ import {
   type Address, type Hex, type NonceManager,
 } from "viem";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
-import { CFG } from "./chains.ts";
+import { CFG, type GasOp } from "./chains.ts";
+import { EVM_CHAINS } from "./chains.mjs";
 import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 
-export { CFG };
+export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
 export const RPC = CFG.rpc;
 export const EXPLORER = CFG.explorer;
@@ -66,7 +67,7 @@ export function usageError(msg: string): never {
   console.error(`error: ${msg}`);
   process.exit(2);
 }
-/** USDC has 6 decimals on both chains: refuse anything with more precision instead of rounding it. */
+/** A token amount with the token's decimals: refuse anything with more precision instead of rounding it. */
 export function toUsdc(s: string): bigint {
   if (!new RegExp(`^\\d+(\\.\\d{1,${USDC_DECIMALS}})?$`).test(s)) usageError(`"${s}" is not a ${SYM} amount with at most ${USDC_DECIMALS} decimals`);
   return parseUnits(s, USDC_DECIMALS);
@@ -184,6 +185,126 @@ export function chainReason(e: any): string {
   return m.replace(/\s+/g, " ").slice(0, 400);
 }
 
+// ---- gas the agent can pay ----
+// Before the agent signs anything (pull, cancel, return, selfRevoke) it checks it can pay: the chain's gas limit for that
+// transaction (chains.mjs `gas.limits`) plus the limits of what a failure would need next, times the current fee cap. A node
+// refuses a transaction when the balance is below gas x fee cap, and caps eth_estimateGas at balance / fee cap, so the fee cap
+// (not the smaller fee a transaction ends up paying) is the price to check. Fees jump: on Polygon Amoy the tip went from 30 to
+// 348 gwei within one run, and an agent that had been fine was suddenly short.
+
+/** The fee fields the next transaction carries: EIP-1559 where the chain has it, else a legacy gas price. */
+export type Fees = { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint } | { gasPrice: bigint };
+export const feeCap = (f: Fees): bigint => ("gasPrice" in f ? f.gasPrice : f.maxFeePerGas);
+/** The fees viem would put on the next transaction (the chain's own fee rules, base fee x 1.2 plus the tip by default). */
+export async function currentFees(client = publicClient): Promise<Fees> {
+  try {
+    const f = await client.estimateFeesPerGas();
+    if (f.maxFeePerGas !== undefined && f.maxPriorityFeePerGas !== undefined) return { maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas };
+  } catch {}
+  return { gasPrice: await client.getGasPrice() };
+}
+
+export type GasNeed = { ok: boolean; have: bigint; need: bigint; gas: bigint; fee: bigint; ops: GasOp[] };
+/**
+ * Can `agent` pay for `ops` (the next transaction first, then what a failure would need) at the current fee cap?
+ * need = the larger of the chain's floor (gas.minAgent) and the sum of the ops' gas limits x fee cap. `first` replaces the
+ * first op's limit when its gas is already known.
+ */
+export async function agentGas(agent: Address, ops: GasOp[], o: { client?: typeof publicClient; fees?: Fees; first?: bigint } = {}): Promise<GasNeed> {
+  const client = o.client ?? publicClient;
+  const fee = feeCap(o.fees ?? (await currentFees(client)));
+  const gas = ops.reduce((sum, op, i) => sum + (i === 0 && o.first !== undefined ? o.first : GAS.limits[op]), 0n);
+  const need = gas * fee > GAS.minAgent ? gas * fee : GAS.minAgent;
+  const have = await retry(() => client.getBalance({ address: agent }));
+  return { ok: have >= need, have, need, gas, fee, ops };
+}
+
+/** A gas-token amount rounded to two significant digits (up for what is needed, down for what is there), for messages. */
+export function gasRound(v: bigint, dir: "up" | "down"): string {
+  const digits = v.toString().length;
+  if (v <= 0n || digits <= 2) return gasFmt(v);
+  const step = 10n ** BigInt(digits - 2);
+  return gasFmt(dir === "up" ? ((v + step - 1n) / step) * step : (v / step) * step);
+}
+/** A fee cap in gwei, short. */
+export function gwei(fee: bigint): string {
+  const g = Number(formatUnits(fee, 9));
+  return g >= 10 ? g.toFixed(0) : g >= 1 ? String(Number(g.toFixed(1))) : String(Number(g.toPrecision(2)));
+}
+/** "the agent key has X POL; <what> needs about Y POL at the current fee (Z gwei)<extra>" */
+export function gasWords(g: GasNeed, what: string, extra = ""): string {
+  return `the agent key has ${gasRound(g.have, "down")} ${GAS.symbol}; ${what} needs about ${gasRound(g.need, "up")} ${GAS.symbol} at the current fee (${gwei(g.fee)} gwei)${extra}`;
+}
+/** The owner's next step for an agent short on gas. Names an amount only when the chain's default top-up is not enough. */
+export function fundAgentNext(g: GasNeed): string {
+  const byDefault = parseUnits((EVM_CHAINS as Record<string, any>)[CFG.key].doctor.fundAgent, GAS.decimals);
+  const short = g.need - g.have;
+  return `owner: superstables budget fund-agent --rail evm --chain ${CFG.key}${short > byDefault ? ` --amount ${gasRound(short, "up")}` : ""}`;
+}
+
+/** The agent cannot pay for this transaction and what a failure would need after it. Nothing was signed. */
+export class GasShort extends Error {
+  constructor(public g: GasNeed) { super(`not enough gas: ${gasWords(g, "this")}`); }
+}
+/** The chain refuses the call itself: it reverts with enough gas, or with the contract's own revert data. Nothing was signed. */
+export class ChainRefused extends Error {
+  constructor(public reason: string) { super(reason); }
+}
+
+/** Revert data in a viem error chain (the JSON-RPC error's `data`), if there is any. */
+export function revertData(e: any): Hex | undefined {
+  for (let c = e, i = 0; c && i < 10; c = c.cause, i++) {
+    const d = typeof c.data === "string" ? c.data : typeof c.data?.data === "string" ? c.data.data : undefined;
+    if (d && /^0x[0-9a-fA-F]*$/.test(d)) return d as Hex;
+  }
+  return undefined;
+}
+/**
+ * Why a gas estimate failed: the chain refusing the call, or the sender short on gas. The words alone do not tell: a node that
+ * caps the estimate at balance / fee cap says "gas required exceeds allowance", or, when the cap lands inside a token behind a
+ * proxy (Amoy's USDC), "execution reverted" with empty data, which viem shows as "Execution reverted for an unknown reason".
+ * Revert data (the contract said why) is a refusal. "gas required exceeds allowance" or "insufficient funds" is a shortage.
+ * Empty data is a shortage when the balance is below limit x fee cap, and a refusal when the call had that much gas.
+ * Anything that is not a revert at all (the RPC failed, timed out, or answered something else) is "other": neither.
+ */
+export function estimateFailure(e: any, o: { have: bigint; limit: bigint; fee: bigint }): "refused" | "short" | "other" {
+  const data = revertData(e);
+  if (data && data !== "0x") return "refused";
+  const text = chainReason(e) + " " + String(e?.message ?? "");
+  if (/gas required exceeds allowance|insufficient funds/i.test(text)) return "short";
+  let reverted = data !== undefined || /execution reverted|out of gas/i.test(text);
+  for (let c = e, i = 0; c && i < 10 && !reverted; c = c.cause, i++) if (c.code === 3) reverted = true;
+  if (!reverted) return "other";
+  return o.have < o.limit * o.fee ? "short" : "refused";
+}
+
+/**
+ * Gas and fees for one agent transaction, checked before anything is signed. The estimate carries no fee fields (a node caps an
+ * estimate at balance / fee cap only when a fee is given), so a revert here is the chain refusing the call; `estimateFailure`
+ * still sorts a capped answer from a node that caps anyway. Gas = the larger of the chain's limit for `op` and the estimate plus
+ * 20%. The agent must afford that plus the limits of `then` at the fee cap it will sign with, else GasShort. A refusal throws
+ * ChainRefused. An estimate that failed without reverting (the RPC) throws its own error: it is neither. The caller signs with
+ * exactly these gas and fees.
+ */
+export async function agentGasFor(from: Address, to: Address, data: Hex, op: GasOp, then: GasOp[] = [], client = publicClient): Promise<{ gas: bigint; fees: Fees; g: GasNeed }> {
+  const fees = await currentFees(client);
+  const limit = GAS.limits[op];
+  let est: bigint;
+  try {
+    est = await client.estimateGas({ account: from, to, data, prepare: false } as any);
+  } catch (e: any) {
+    const have = await retry(() => client.getBalance({ address: from }));
+    const why = estimateFailure(e, { have, limit, fee: feeCap(fees) });
+    if (why === "short") throw new GasShort(await agentGas(from, [op, ...then], { client, fees }));
+    if (why === "refused") throw new ChainRefused(chainReason(e));
+    throw e;
+  }
+  const gas = (est * 12n) / 10n > limit ? (est * 12n) / 10n : limit;
+  const g = await agentGas(from, [op, ...then], { client, fees, first: gas });
+  if (!g.ok) throw new GasShort(g);
+  return { gas, fees, g };
+}
+
 // ---- sending ----
 /** Refuse to sign anything when the RPC does not answer for the chain in chains.ts (a mainnet RPC behind a testnet name, a wrong URL). Read once. */
 let rpcChecked = false;
@@ -219,9 +340,11 @@ export async function sendNative(w: Wallet, to: Address, value: bigint, label: s
   if (r.status !== "success") throw new Error(`${label} reverted on chain: ${hash}`);
   return { hash, feeWei: feeOf(r) };
 }
-export async function send(w: Wallet, to: Address, data: Hex, label: string) {
+/** `agent`: an agent transaction (selfRevoke, sweep): its gas is checked first (agentGasFor), and it is signed with that gas and fee. */
+export async function send(w: Wallet, to: Address, data: Hex, label: string, agent?: { op: GasOp; then?: GasOp[] }) {
   await assertRpcChain();
-  const hash = await w.client.sendTransaction({ to, data, value: 0n, chain, account: w.account });
+  const pre = agent ? await agentGasFor(w.account.address, to, data, agent.op, agent.then) : null;
+  const hash = await w.client.sendTransaction({ to, data, value: 0n, chain, account: w.account, ...(pre ? { gas: pre.gas, ...pre.fees } : {}) } as any);
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
   await sleep(3500);
@@ -232,17 +355,19 @@ export async function send(w: Wallet, to: Address, data: Hex, label: string) {
  * Sign the transaction locally, hand its hash to `onHash` (the caller writes it to the operation journal), and only
  * then broadcast it. A process killed at any point leaves a journal that names the exact transaction to look for.
  * With a nonce manager the nonce comes from it (parallel purchases in one process must not sign the same nonce).
- * `gas` skips the gas estimation (used only to force a transaction that the chain will revert, to read its refusal).
+ * Every journaled transaction is the agent's: `gasFor` names it and what a failure would need after it. Its gas is checked
+ * (agentGasFor) before the nonce is taken or anything is signed: GasShort or ChainRefused means nothing was signed.
  */
 export async function sendJournaled(
   w: Wallet, to: Address, data: Hex, label: string,
   onHash: (h: { hash: Hex; nonce: number }) => void | Promise<void>,
-  opts: { gas?: bigint } = {},
+  gasFor: { op: GasOp; then?: GasOp[] },
 ) {
   await assertRpcChain();
+  const pre = await agentGasFor(w.account.address, to, data, gasFor.op, gasFor.then);
   const nm = (w.account as any).nonceManager;
   const nonce = nm ? await nm.consume({ address: w.account.address, chainId: CHAIN_ID, client: publicClient }) : undefined;
-  const req: any = await w.client.prepareTransactionRequest({ to, data, value: 0n, chain, account: w.account, ...(nonce !== undefined ? { nonce } : {}), ...(opts.gas ? { gas: opts.gas } : {}) } as any);
+  const req: any = await w.client.prepareTransactionRequest({ to, data, value: 0n, chain, account: w.account, gas: pre.gas, ...pre.fees, ...(nonce !== undefined ? { nonce } : {}) } as any);
   const serializedTransaction = await w.client.signTransaction(req);
   const hash = keccak256(serializedTransaction);
   await onHash({ hash, nonce: Number(req.nonce) });
@@ -264,7 +389,7 @@ export function readCtx(): Pub {
   const p = publicEnv();
   const owner = p.B4_OWNER_ADDRESS, agent = p.B4_AGENT_ADDRESS;
   if (!owner || !agent || !isAddress(owner) || !isAddress(agent)) {
-    console.error(`error: no B4 addresses in ${PUBLIC_ENV} (run superstables budget setup --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`} first)`);
+    console.error(`error: no budget has been set up here for ${CFG.label}: ${PUBLIC_ENV} records no owner and agent (the owner runs superstables budget setup --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`} first)`);
     process.exit(1);
   }
   return {
@@ -280,7 +405,7 @@ export async function agentCtx() {
   const env = agentEnv();
   const key = need(env, "B4_AGENT_KEY", AGENT_ENV) as Hex;
   const agent = walletFor(key);
-  if (agent.account.address.toLowerCase() !== pub.agent.toLowerCase()) throw new Error(`the agent key in ${AGENT_ENV} does not match the B4 agent address ${pub.agent}`);
+  if (agent.account.address.toLowerCase() !== pub.agent.toLowerCase()) throw new Error(`the agent key in ${AGENT_ENV} does not match the agent address in the public file, ${pub.agent}`);
   if (env.B4_OWNER_ADDRESS && env.B4_OWNER_ADDRESS.toLowerCase() !== pub.owner.toLowerCase()) throw new Error(`owner address in ${AGENT_ENV} differs from the public state`);
   return { ...pub, wallet: agent, agentKey: key };
 }
@@ -297,7 +422,7 @@ export async function ownerCtx() {
   const pub = readCtx();
   const key = need(ownerKeyEnv(), "B4_OWNER_KEY", OWNER_KEY_FILE!) as Hex;
   const owner = walletFor(key);
-  if (owner.account.address.toLowerCase() !== pub.owner.toLowerCase()) throw new Error(`the owner key in ${OWNER_KEY_FILE} does not match the B4 owner address ${pub.owner}`);
+  if (owner.account.address.toLowerCase() !== pub.owner.toLowerCase()) throw new Error(`the owner key in ${OWNER_KEY_FILE} does not match the owner address in the public file, ${pub.owner}`);
   return { ...pub, wallet: owner };
 }
 export type OwnerCtx = Awaited<ReturnType<typeof ownerCtx>>;
@@ -306,7 +431,7 @@ export async function escrowCtx() {
   const o = await ownerCtx();
   const key = need(ownerKeyEnv(), "B4_AGENT_KEY_ESCROW", OWNER_KEY_FILE!) as Hex;
   const agent = walletFor(key);
-  if (agent.account.address.toLowerCase() !== o.agent.toLowerCase()) throw new Error(`the escrowed agent key in ${OWNER_KEY_FILE} does not match the B4 agent address ${o.agent}`);
+  if (agent.account.address.toLowerCase() !== o.agent.toLowerCase()) throw new Error(`the escrowed agent key in ${OWNER_KEY_FILE} does not match the agent address in the public file, ${o.agent}`);
   return { ...o, escrow: agent };
 }
 
@@ -323,7 +448,7 @@ export async function selfRevokeCore(w: Wallet, owner: Address, log: (s: string)
   if (n === 0n) return { state: "blocked", before, after: before, used: 0n, ownerBalance, note: `owner ${SYM} balance is 0, so transferFrom cannot lower the allowance (${usdc(before)} ${SYM} stays). The owner must revoke` };
   log(`selfRevoke: transferFrom(owner, owner, ${usdc(n)} ${SYM}) by the agent (allowance ${usdc(before)}, owner balance ${usdc(ownerBalance)})`);
   const data = encodeFunctionData({ abi: erc20Abi, functionName: "transferFrom", args: [owner, owner, n] });
-  const sent = await send(w, USDC, data, "selfRevoke transferFrom(owner, owner)");
+  const sent = await send(w, USDC, data, "selfRevoke transferFrom(owner, owner)", { op: "selfRevoke" });
   const after = await readUntil(() => allowanceOf(owner, agent), (v) => v === before - n);
   return {
     state: after === 0n ? "revoked" : "partial", before, after, used: n, ownerBalance, tx: sent.hash,

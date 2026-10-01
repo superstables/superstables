@@ -1,11 +1,10 @@
 // Which build is this? The one question a machine that has been reinstalled a few times cannot
-// answer by looking, and the reason it matters: a desktop host that keeps an older copy of the
-// extension around looks exactly like a host running the new one, until something asks.
+// answer by looking, and the reason it matters: an MCP client still running an older copy of the
+// server looks exactly like one running the new copy, until something asks.
 //
-// The answer is the version in package.json, and it is deliberately read from the file rather
-// than baked in at compile time, because the bundle ships a package.json of its own: the copy
-// staged by `npm run bundle` is what a user's machine actually holds, so stamping that copy
-// (see `npm run bundle -- --dev`) is enough for every surface here to report the real build.
+// The answer is the version in package.json, read from the file at run time rather than baked in
+// at compile time, so a checkout, an npm install and a git install each report the package they
+// actually are. A standalone build has no package.json beside it; see below.
 //
 // The same file is found from source and from the build: `src/core/version.ts` and
 // `dist/core/version.js` are both two directories below the package root.
@@ -20,7 +19,12 @@ export function clientVersion(): string {
   return cached;
 }
 
+// A standalone build (scripts/budget-build.mjs, buildStandalone) has no package.json beside it:
+// esbuild writes the version in here instead. Everywhere else the name is undefined.
+declare const SUPERSTABLES_BUILD_VERSION: string | undefined;
+
 function readVersion(): string {
+  if (typeof SUPERSTABLES_BUILD_VERSION === "string") return SUPERSTABLES_BUILD_VERSION;
   try {
     const text = readFileSync(new URL("../../package.json", import.meta.url), "utf8");
     return (JSON.parse(text) as { version?: string }).version ?? "0.0.0";

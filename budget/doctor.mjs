@@ -3,10 +3,15 @@
 // No rail has an owner key file: the owner approves in their own wallet, so doctor checks the agent file, the public file
 // (the owner's address), the RPC and balances. An owner key file on this machine is only noted: nothing reads it unless a
 // test passes --owner-key-file.
-// Minimum balances are what one grant, a few purchases and a revoke need on each chain.
+// Minimum balances are what one grant, a few purchases and a revoke need on each chain. On evm the gas minimums grow with
+// the chain's current fee: the agent needs DOCTOR_SPIKE times what one purchase and the cleanup a failure would need (pull,
+// cancel, return) cost now, the owner DOCTOR_SPIKE times a grant, a revoke and a fund-agent (the gas limits in evm/chains.mjs).
+// The agent also needs the chain's fixed minimum: it buys alone, and a fee spike between doctor and a purchase (Amoy) would
+// stop it with nobody there. The owner's fixed minimum applies only when the fee cannot be read: the owner approves in a
+// wallet that shows the fee and refuses what it cannot pay, and on a cheap testnet that minimum is many times the real cost.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
-import { EVM_CHAINS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
+import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
 
@@ -21,6 +26,24 @@ async function rpc(url, method, params = []) {
 }
 const erc20Balance = async (url, token, addr, decimals = 6) => Number(BigInt(await rpc(url, "eth_call", [{ to: token, data: "0x70a08231" + addr.slice(2).toLowerCase().padStart(64, "0") }, "latest"]))) / 10 ** decimals;
 const nativeBalance = async (url, addr) => Number(BigInt(await rpc(url, "eth_getBalance", [addr, "latest"]))) / 1e18;
+// The fee cap the next transaction would carry, in wei: base fee x 1.2 plus the tip (viem's default), else the legacy gas price.
+const evmFeeCap = async (url) => {
+  try {
+    const [block, tip] = await Promise.all([rpc(url, "eth_getBlockByNumber", ["latest", false]), rpc(url, "eth_maxPriorityFeePerGas")]);
+    if (block?.baseFeePerGas) return (BigInt(block.baseFeePerGas) * 12n) / 10n + BigInt(tip);
+  } catch {}
+  return BigInt(await rpc(url, "eth_gasPrice"));
+};
+/** Round up to two significant digits, for amounts to ask for. */
+/**
+ * The owner's gas balance doctor asks for: DOCTOR_SPIKE times what a grant, a revoke and a fund-agent cost at the current fee,
+ * rounded up to two significant digits; the chain's fixed minimum only when the fee could not be read (`now` null).
+ */
+export const evmOwnerGasNeed = (now, fixed) => up2(now === null ? Number(fixed) : DOCTOR_SPIKE * now);
+/** The agent's: the chain's fixed minimum, or DOCTOR_SPIKE times what a purchase and its cleanup cost now if that is more. */
+export const evmAgentGasNeed = (now, fixed) => up2(Math.max(Number(fixed), DOCTOR_SPIKE * (now ?? 0)));
+const up2 = (x) => { if (!(x > 0)) return 0; const step = 10 ** (Math.floor(Math.log10(x)) - 1); return Number((Math.ceil(x / step - 1e-9) * step).toPrecision(2)); };
+const gweiText = (wei) => { const g = Number(wei) / 1e9; return g >= 10 ? g.toFixed(0) : g >= 1 ? String(Number(g.toFixed(1))) : String(Number(g.toPrecision(2))); };
 const evmKeyAddress = async (v) => (/^0x[0-9a-fA-F]{64}$/.test(v) ? (await import("viem/accounts")).privateKeyToAddress(v) : null);
 // A Solana secret key is 64 bytes: the seed, then the public key.
 const solanaKeyAddress = async (v) => {
@@ -39,19 +62,38 @@ const splBalance = async (addr) => {
 const RAILS = {
   evm: ({ chain }) => {
     // B4_RPC replaces the chain's RPC, as it does for the rail scripts (evm/chains.ts)
-    const c = { ...EVM_CHAINS[chain], rpc: process.env.B4_RPC?.trim() || EVM_CHAINS[chain].rpc }, d = c.doctor, tok = c.token;
-    const flag = chain === EVM_DEFAULT_CHAIN ? "" : ` --chain ${chain}`;
+    const c = { ...EVM_CHAINS[chain], rpc: process.env.B4_RPC?.trim() || EVM_CHAINS[chain].rpc }, d = c.doctor, tok = c.token, g = c.gas, L = g.limits;
+    const flag = ` --chain ${chain}`;
     return {
       ownerVars: null, agentVars: ["B4_AGENT_KEY"], ownerSecrets: ["B4_OWNER_KEY"], agentKeyVar: "B4_AGENT_KEY",
       pub: publicFile("evm", chain), ownerAddr: "B4_OWNER_ADDRESS", agentAddr: "B4_AGENT_ADDRESS",
-      setup: `superstables budget setup --rail evm${flag}`,
+      setup: `superstables budget setup --rail evm${flag}`, newOwner: `superstables budget setup --rail evm${flag} --new-owner`,
       keyAddress: evmKeyAddress, caseSensitive: false,
       rpc: async () => { const id = Number(await rpc(c.rpc, "eth_chainId")); if (id !== c.chainId) throw new Error(`chain id ${id}, expected ${c.chainId}`); return `chain id ${id}`; },
-      balances: async (owner, agent) => [
-        { who: "owner", addr: owner, token: tok.symbol, have: await erc20Balance(c.rpc, tok.address, owner, tok.decimals), need: Number(d.minOwnerToken), hint: d.tokenFaucet },
-        ...(c.gas.isToken ? [] : [{ who: "owner", addr: owner, token: c.gas.symbol, have: await nativeBalance(c.rpc, owner), need: Number(d.minOwnerGas), hint: d.gasFaucet }]),
-        { who: "agent", addr: agent, token: `${c.gas.symbol} (gas)`, have: await nativeBalance(c.rpc, agent), need: Number(d.minAgentGas), hint: `superstables budget fund-agent --rail evm${flag} (you approve it in your wallet), or send ${d.fundAgent} ${c.gas.symbol} to ${agent}` },
-      ],
+      balances: async (owner, agent) => {
+        // what the gas costs at the current fee (null when the fee cannot be read: then only the fixed minimums apply)
+        const fee = await evmFeeCap(c.rpc).catch(() => null);
+        const cost = (gas) => (fee === null ? null : Number(BigInt(gas) * fee) / 10 ** g.decimals);
+        const purchaseGas = L.pull + L.cancel + L.return, ownerGas = L.approve + L.revoke + 21000;
+        const purchaseNow = cost(purchaseGas), ownerNow = cost(ownerGas);
+        const at = fee === null ? "" : ` now at ${gweiText(fee)} gwei`;
+        const agentNeed = evmAgentGasNeed(purchaseNow, d.minAgentGas);
+        const agentHave = await nativeBalance(c.rpc, agent);
+        const send = up2(Math.max(Number(d.fundAgent), agentNeed - agentHave));
+        return [
+          { who: "owner", addr: owner, token: tok.symbol, have: await erc20Balance(c.rpc, tok.address, owner, tok.decimals), need: Number(d.minOwnerToken), hint: d.tokenFaucet },
+          ...(g.isToken ? [] : [{
+            who: "owner", addr: owner, token: g.symbol, have: await nativeBalance(c.rpc, owner), hint: d.gasFaucet,
+            need: evmOwnerGasNeed(ownerNow, d.minOwnerGas),
+            note: ownerNow === null ? "the current fee could not be read" : `a grant, a revoke and a fund-agent (${ownerGas} gas) cost about ${up2(ownerNow)} ${g.symbol}${at}`,
+          }]),
+          {
+            who: "agent", addr: agent, token: `${g.symbol} (gas)`, have: agentHave, need: agentNeed,
+            note: purchaseNow === null ? "the current fee could not be read" : `one purchase plus the cleanup a failed one needs (pull, cancel, return: ${purchaseGas} gas) costs about ${up2(purchaseNow)} ${g.symbol}${at}`,
+            hint: `superstables budget fund-agent --rail evm${flag}${send > Number(d.fundAgent) ? ` --amount ${send}` : ""} (you approve it in your wallet), or send ${send} ${g.symbol} to ${agent}`,
+          },
+        ];
+      },
     };
   },
   tempo: ({ agent = "" }) => ({
@@ -114,7 +156,7 @@ export async function runDoctor(f) {
   const agentAddress = pub[r.agentAddr] ?? agent[r.agentAddr] ?? owner[r.agentAddr];
   // Setup proves control of an address, not who the person is: show the owner on record so a person who is not it stops.
   process.stderr.write(ownerAddress
-    ? `\n  OWNER (recorded): ${ownerAddress}\n  If this isn't your wallet, stop: do not approve grants for it. superstables budget setup --rail ${f.rail} --new-owner replaces it (refused while a budget is live).\n\n`
+    ? `\n  OWNER (recorded): ${ownerAddress}\n  If this isn't your wallet, stop: do not approve grants for it. ${r.newOwner ?? `superstables budget setup --rail ${f.rail} --new-owner`} replaces it (refused while a budget is live).\n\n`
     : `\n  OWNER (recorded): none yet. Setup records whoever connects: the owner runs it, or watches it run.\n\n`);
   if (existsSync(agentKeyFile(f.rail))) {
     const problems = r.ownerSecrets.filter((n) => agent[n]).map((n) => `defines ${n}`);
@@ -147,7 +189,7 @@ export async function runDoctor(f) {
     try {
       for (const b of await r.balances(ownerAddress, agentAddress)) {
         const ok = b.have >= b.need;
-        line(ok, `${b.who} ${b.token} balance`, `${b.have} at ${b.addr} (need at least ${b.need})`);
+        line(ok, `${b.who} ${b.token} balance`, `${b.have} at ${b.addr} (need at least ${b.need}${b.note ? `; ${b.note}` : ""})`);
         if (!ok) topUps.push(`top up ${b.token} at ${b.addr}: have ${b.have}, need at least ${b.need} (${b.hint})`);
       }
     } catch (e) { line(false, "balances", e.message); }

@@ -1,5 +1,0 @@
-interface:
-  display_name: "Superstables budget"
-  short_description: "Pay for services with test USDC on testnets: buy once, or within an owner-set budget, with the superstables budget CLI"
-policy:
-  allow_implicit_invocation: false

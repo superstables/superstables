@@ -65,7 +65,13 @@ describe("quote", () => {
       x402Version: 2,
     });
     expect(q.description).toBe("Market data for one asset");
-    expect(q.policy).toEqual({ allowed: true, reason: undefined });
+    expect(q.policy).toMatchObject({ allowed: true, reason: undefined });
+    // Every rule the payment was held to, in evaluation order, with what was compared.
+    expect(q.policy.checks?.map((c) => c.rule)).toEqual([
+      "kill_switch", "deny", "allow", "stablecoins", "caps.per_call", "caps.per_day",
+    ]);
+    expect(q.policy.checks?.every((c) => c.ok)).toBe(true);
+    expect(q.policy.checks?.find((c) => c.rule === "caps.per_call")?.detail).toBe("0.01 USDC, at most 0.05 USDC");
     expect(Date.parse(q.expiresAt) - Date.parse(q.createdAt)).toBe(10 * 60 * 1000);
     expect(r.getQuote(q.id)?.terms.amountAtomic).toBe("10000");
   });
@@ -83,6 +89,11 @@ describe("quote", () => {
     expect(q.policy.allowed).toBe(false);
     expect(q.policy.reason).toContain("caps.per_call");
     expect(r.getQuote(q.id)?.policy.allowed).toBe(false);
+    expect(q.policy.checks?.find((c) => c.rule === "caps.per_call")).toEqual({
+      rule: "caps.per_call",
+      ok: false,
+      detail: "0.01 USDC, at most 0.001 USDC",
+    });
   });
 
   it("judges the host it was asked to call, not the one the seller claims", async () => {

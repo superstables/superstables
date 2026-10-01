@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { findServices, getService } from "../core/discovery.js";
-import { DEFAULT_APPROVE_PORT, homeDir, policyPath, recordsDir } from "../core/home.js";
+import { approvePortFromEnvironment, homeDir, policyPath, recordsDir } from "../core/home.js";
 import { PaymentEngine } from "../core/pay.js";
 import { loadPolicy } from "../core/policy.js";
 import { Records } from "../core/records.js";
@@ -35,10 +35,9 @@ export function walletModeFromEnvironment(): WalletMode {
  */
 export function signerFor(mode: WalletMode = walletModeFromEnvironment()): Signer & { status(): Promise<WalletStatus> } {
   if (mode === "local") return new WalletSigner();
-  const port = Number(process.env.SUPERSTABLES_APPROVE_PORT);
-  return new BrowserWalletSigner({
-    port: Number.isInteger(port) && port >= 0 ? port : DEFAULT_APPROVE_PORT,
-  });
+  // A port the owner chose is kept as chosen; with none, the default, or a free port when
+  // another payment is already waiting on the default.
+  return new BrowserWalletSigner({ port: approvePortFromEnvironment() });
 }
 
 /**

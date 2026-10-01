@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
-import { PaymentEngine } from "../../src/core/pay.js";
+import { PaymentEngine, QuoteUsedError } from "../../src/core/pay.js";
 import { Records } from "../../src/core/records.js";
 import { quote } from "../../src/core/quote.js";
 import { WalletSigner } from "../../src/core/signer/wallet.js";
@@ -159,9 +159,18 @@ describe("PaymentEngine", () => {
     const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
 
     const first = s.engine.startPayment(q.id);
-    expect(() => s.engine.startPayment(q.id)).toThrow(/already been used/);
+    expect(() => s.engine.startPayment(q.id)).toThrow(`A payment for this quote already exists: attempt ${first.id}`);
     await s.engine.waitForAttempt(first.id, 10_000);
-    expect(() => s.engine.startPayment(q.id)).toThrow(/already been used/);
+    let refused: unknown;
+    try {
+      s.engine.startPayment(q.id);
+    } catch (err) {
+      refused = err;
+    }
+    expect(refused).toBeInstanceOf(QuoteUsedError);
+    expect((refused as QuoteUsedError).attempt?.id).toBe(first.id);
+    expect((refused as QuoteUsedError).attempt?.state).toBe(s.engine.getAttempt(first.id)?.state);
+    expect((refused as Error).message).not.toContain("(not final)");
     expect(s.engine.listAttempts()).toHaveLength(1);
   });
 
@@ -205,10 +214,15 @@ describe("PaymentEngine", () => {
     const final = await s.engine.waitForAttempt(s.engine.startPayment(q.id).id, 10_000);
 
     expect(final.state).toBe("failed");
+    expect(final.refusal).toBe("unavailable");
     expect(final.reason).toBe(
-      "the wallet is not running or the agent token is wrong; start it with `superstables wallet serve`",
+      "the wallet is not running or the agent token is wrong; start it with `superstables wallet serve`. " +
+        `Nothing was signed, and quote ${q.id} can still be paid`,
     );
     expect(s.facilitator.calls).toEqual({ verify: 0, settle: 0 });
+    // The owner was never asked, so the quote was handed back: it starts a new attempt.
+    expect(s.records.getQuote(q.id)?.status).toBe("open");
+    expect(() => s.engine.startPayment(q.id)).not.toThrow();
   });
 
   it("stops before the wallet when the local policy already said no", async () => {

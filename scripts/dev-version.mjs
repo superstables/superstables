@@ -1,19 +1,18 @@
-// The version a development bundle carries, so that two builds of the same release are never
+// The version a development build carries, so that two builds of the same release are never
 // called the same thing.
 //
-// The problem this solves is specific: a desktop host asked to install an extension whose
-// version it already has may keep the copy it has. The build then looks installed and behaves
-// like the old one, and nothing on screen says which is running. A version that changes with
-// every commit removes the ambiguity — the host sees a new version, and whatever the client
-// reports afterwards (`wallet_status`, `superstables --version`, the server's first stderr
-// line) names the exact build.
+// A development copy of the skill zip that says it is the release it came from looks exactly
+// like that release once it is installed, and nothing on screen says which is running. A
+// version that changes with every commit removes the ambiguity: whatever the client reports
+// (`superstables --version`, `wallet_status`, the MCP server's first stderr line) names the
+// exact build.
 //
 // The stamp is `<version>-dev.<commits>+g<sha>`: a SemVer prerelease that sorts below the
 // release it is derived from, plus the commit it was built at. Without git — a tarball, a
 // machine with no git — a UTC minute takes the place of the commit count.
 //
-// Nothing here writes to the repository's own files. `scripts/bundle.mjs` applies the stamp to
-// the staged copies alone, which are what ships.
+// Nothing here writes to the repository's own files. `scripts/skill.mjs --dev` writes the stamp
+// into the build it produces, and nowhere else.
 
 import { execFileSync } from "node:child_process";
 
@@ -53,7 +52,7 @@ export function devVersion(version, revision) {
   return `${core}-${prerelease}.${count}+g${sha}`;
 }
 
-/** `2026-09-18T12:07:41Z` -> `202609181207`. Minutes, because two bundles a second apart is not a thing. */
+/** `2026-09-18T12:07:41Z` -> `202609181207`. Minutes, because two builds a second apart is not a thing. */
 export function utcTimestamp(date = new Date()) {
   return date.toISOString().replace(/[-:T]/g, "").slice(0, 12);
 }

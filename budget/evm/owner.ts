@@ -7,6 +7,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { DEFAULT_SITE } from "../site.mjs";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
+import { delegatedCall } from "./delegation.ts";
 import { CFG, GAS, SYM, USDC, USDC_DECIMALS, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentEnv, need } from "./lib.ts";
 
 export { closeOwnerPage };
@@ -78,11 +79,16 @@ export async function readSent(hash: Hex, want: { from: Address; to: Address; da
   }
   if (!r) return null;
   const same = (a?: string | null, b?: string | null) => (a ?? "").toLowerCase() === (b ?? "").toLowerCase();
+  // A smart-account wallet (MetaMask paying the fee) has a relayer send the call through the owner's account: compare
+  // the call the owner's account made, not the relayer's envelope. Anything else in the envelope stays a problem.
+  const inner = delegatedCall(t, want.from);
+  if (inner) console.log(`the wallet sent this through the owner's smart account: ${t.from} sent it to the delegation manager ${t.to}, and the owner's account made the call checked below`);
+  const call = inner ? { from: want.from, ...inner } : { from: t.from, to: t.to, data: t.input, value: BigInt(t.value) };
   const problems: string[] = [];
-  if (!same(t.from, want.from)) problems.push(`it was sent from ${t.from}, not the owner ${want.from}`);
-  if (!same(t.to, want.to)) problems.push(`it was sent to ${t.to}, not ${want.to}`);
-  if (!same(t.input, want.data ?? "0x")) problems.push("the wallet changed the transaction data (for example the spending cap)");
-  if (BigInt(t.value) !== (want.value ?? 0n)) problems.push(`it sent a value of ${t.value}, not ${want.value ?? 0n}`);
+  if (!same(call.from, want.from)) problems.push(`it was sent from ${call.from}, not the owner ${want.from}`);
+  if (!same(call.to, want.to)) problems.push(`it was sent to ${call.to}, not ${want.to}`);
+  if (!same(call.data, want.data ?? "0x")) problems.push("the wallet changed the transaction data (for example the spending cap)");
+  if (call.value !== (want.value ?? 0n)) problems.push(`it sent a value of ${call.value}, not ${want.value ?? 0n}`);
   if (t.chainId !== undefined && t.chainId !== null && Number(t.chainId) !== CFG.chainId) problems.push(`it was signed for chain ${t.chainId}, not ${CFG.label} (${CFG.chainId})`);
   if (BigInt(r.blockNumber) <= want.afterBlock) problems.push(`it was mined in block ${r.blockNumber}, before this request started (block ${want.afterBlock})`);
   await sleep(2500); // public RPC nodes lag a moment behind a block they just served
@@ -214,7 +220,7 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
     rows: [
       { label: "To your agent", value: agent, mono: true },
       { label: "From your wallet", value: owner, mono: true },
-      { label: "Agent has now", value: `${gasFmt(agentHas)} ${GAS.symbol}` },
+      { label: "Agent balance before this transfer", value: `${gasFmt(agentHas)} ${GAS.symbol}` },
       { label: "Transaction", value: t.words || `a plain transfer of ${amt} ${GAS.symbol}`, mono: !!t.words },
     ],
     enforced: [],
@@ -241,7 +247,10 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
     await closeOwnerPage();
     process.exit(emit(command, mismatch ? 3 : 1, { state: mismatch ? "mismatch" : "failed", tx: sent.hash, reason: mismatch ? `the transaction on chain is not the one planned: ${why}` : why, next: "check wallet activity, then superstables budget doctor --rail evm" }));
   }
-  handle.finish({ ok: true, message: `Done. Your agent received ${amt} ${GAS.symbol}. You can close this page.`, hash: sent.hash });
+  // the balance after the transfer, read from the chain (a node may lag a moment behind the receipt)
+  const after = await readUntil(() => nativeBalance(agent), (v) => v >= agentHas + value);
+  console.log(`agent balance after the transfer: ${gasFmt(after)} ${GAS.symbol}`);
+  handle.finish({ ok: true, message: `Done. Your agent received ${amt} ${GAS.symbol} and now has ${gasFmt(after)} ${GAS.symbol}. You can close this page.`, hash: sent.hash });
   await closeOwnerPage();
   return sent.hash;
 }

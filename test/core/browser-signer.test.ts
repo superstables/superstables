@@ -20,7 +20,8 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { encodeErrorResult } from "viem";
 import { usdcRequirement } from "../../src/core/chain.js";
 import { PaymentEngine } from "../../src/core/pay.js";
 import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
@@ -33,7 +34,7 @@ import { OWNER_PAGE_SCRIPT } from "../../src/core/signer/owner-approval-page.js"
 import { OwnerApprovalServer, signInMessage, type OwnerActionInput, type SolanaTransactionPort } from "../../src/core/signer/owner-approval-server.js";
 import { ownerApprovalPage } from "../../src/core/signer/owner-approval-page.js";
 import bs58 from "bs58";
-import { request as httpRequest } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import type { Attempt } from "../../src/core/types.js";
 import { startFakeFacilitator, type FakeFacilitator } from "../helpers/fake-facilitator.js";
 import { startPaidEndpoint, type PaidEndpoint } from "../helpers/paid-endpoint.js";
@@ -66,9 +67,13 @@ afterAll(async () => {
 // ── Helpers ──────────────────────────────────────────────────────────────────────────────
 
 /** A signer on an ephemeral port, with its own home, closed when the test ends. */
-function newSigner(options: { policy?: Policy; timeoutMs?: number } = {}): BrowserWalletSigner {
+function newSigner(
+  options: { policy?: Policy; timeoutMs?: number; port?: number; preferredPort?: number } = {},
+): BrowserWalletSigner {
   const signer = new BrowserWalletSigner({
-    port: 0,
+    // A chosen port, the default-like preferred port, or (the usual case) any free one.
+    port: options.preferredPort === undefined ? (options.port ?? 0) : undefined,
+    preferredPort: options.preferredPort,
     home: mkdtempSync(join(home, "signer-")),
     policy: options.policy ?? DEFAULT_POLICY,
     timeoutMs: options.timeoutMs ?? 5_000,
@@ -185,9 +190,63 @@ describe("the approval page a browser wallet signs on", () => {
     await signer.start();
     const page = await fetch(`${signer.url}/approve/${"0".repeat(32)}`);
     expect(page.status).toBe(404);
-    expect(await page.text()).toContain("There is no payment waiting under this link");
+    expect(await page.text()).toContain("This link is unavailable");
     const state = await getJson(`${signer.url}/approve/${"0".repeat(32)}/state`);
     expect(state.status).toBe(404);
+  });
+
+  it("answers only to Host 127.0.0.1 on its own port, so a rebinding DNS name cannot reach it", async () => {
+    const signer = newSigner();
+    let link = "";
+    const pending = signer.sign(signRequest(), { onPending: (_id, url) => (link = url ?? "") }).catch(() => undefined);
+    await waitFor(() => link !== "");
+    const port = new URL(link).port;
+    const statusWithHost = (path: string, host: string, method = "GET") =>
+      new Promise<number>((done, fail) => {
+        const req = httpRequest(`${link}${path}`, { method, headers: { host, origin: `http://${host}`, "content-type": "application/json" } }, (res) => {
+          res.resume();
+          done(res.statusCode ?? 0);
+        });
+        req.once("error", fail);
+        req.end(method === "POST" ? "{}" : undefined);
+      });
+    expect(await statusWithHost("", `evil.example:${port}`)).toBe(421);
+    expect(await statusWithHost("/state", `evil.example:${port}`)).toBe(421);
+    expect(await statusWithHost("/reject", `evil.example:${port}`, "POST")).toBe(421);
+    expect(await statusWithHost("", `127.0.0.1:${Number(port) + 1}`)).toBe(421);
+    expect(await statusWithHost("", "127.0.0.1")).toBe(421);
+    // The rebinding attempt changed nothing; the real host still serves the page.
+    expect((await getJson(`${link}/state`)).body.status).toBe("pending");
+    expect(await statusWithHost("", `localhost:${port}`)).toBe(200);
+    expect((await fetch(link)).status).toBe(200);
+    await postJson(`${link}/reject`, {});
+    await pending;
+  });
+
+  it("takes state changes only from its own page's origin, as JSON (CSRF, not authentication)", async () => {
+    const signer = newSigner();
+    const account = privateKeyToAccount(generatePrivateKey());
+    let link = "";
+    const pending = signer.sign(signRequest(), { onPending: (_id, url) => (link = url ?? "") }).catch(() => undefined);
+    await waitFor(() => link !== "");
+
+    const foreign = await postJson(`${link}/reject`, {}, { origin: "https://untrusted.example" });
+    expect(foreign.status).toBe(403);
+    const otherPort = await postJson(`${link}/reject`, {}, { origin: `http://127.0.0.1:${Number(new URL(link).port) + 1}` });
+    expect(otherPort.status).toBe(403);
+    const noOrigin = await fetch(`${link}/reject`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect(noOrigin.status).toBe(403);
+    const plain = await postJson(`${link}/reject`, {}, { "content-type": "text/plain" });
+    expect(plain.status).toBe(415);
+    const form = await postJson(`${link}/account`, { address: account.address }, { "content-type": "application/x-www-form-urlencoded" });
+    expect(form.status).toBe(415);
+    expect((await getJson(`${link}/state`)).body.status).toBe("pending");
+
+    // From the page's own origin, the same requests work.
+    expect((await postJson(`${link}/account`, { address: account.address })).status).toBe(200);
+    expect((await postJson(`${link}/reject`, {})).status).toBe(200);
+    expect((await getJson(`${link}/state`)).body.status).toBe("denied");
+    await pending;
   });
 
   it("is plain ES2017 that a browser can run without a build step", async () => {
@@ -204,7 +263,11 @@ describe("the approval page a browser wallet signs on", () => {
     expect(checked.code).toBe(0);
     // The two things the page must not lose: it never loads anything, and it names the wallet.
     expect(APPROVAL_PAGE_SCRIPT).toContain("eth_signTypedData_v4");
-    expect(APPROVAL_PAGE_SCRIPT).toContain("You rejected in MetaMask; nothing was signed.");
+    // A rejection in the wallet ends the payment at once, and a page past its expiry or without its client offers nothing.
+    expect(APPROVAL_PAGE_SCRIPT).toContain('post("/reject", { by: "wallet" })');
+    expect(APPROVAL_PAGE_SCRIPT).toContain("You rejected this payment in your wallet. Nothing was signed.");
+    expect(APPROVAL_PAGE_SCRIPT).toContain('ended("expired")');
+    expect(APPROVAL_PAGE_SCRIPT).toContain('ended("gone"');
   });
 
   it("loads nothing from another origin", async () => {
@@ -305,6 +368,24 @@ describe("the browser-wallet signer", () => {
     const refusal = await pending;
     expect(refusal).toBeInstanceOf(SignRefused);
     expect((refusal as SignRefused).code).toBe("denied");
+    expect((await getJson(`${link}/state`)).body.status).toBe("denied");
+  });
+
+  it("records a rejection the wallet reported as the owner's, with nothing signed", async () => {
+    const signer = newSigner();
+    const account = privateKeyToAccount(generatePrivateKey());
+    let link = "";
+    const pending = signer.sign(signRequest(), { onPending: (_id, url) => (link = url ?? "") }).catch((err: unknown) => err);
+    await waitFor(() => link !== "");
+
+    const signature = await signWith(account, await connect(link, account));
+    expect((await postJson(`${link}/reject`, { by: "wallet" })).status).toBe(200);
+    const refusal = await pending;
+    expect((refusal as SignRefused).code).toBe("denied");
+    const state = (await getJson(`${link}/state`)).body;
+    expect(state).toMatchObject({ status: "denied", reason: "rejected by the owner in their wallet" });
+    // a signature that arrives after the rejection is not taken
+    expect((await postJson(`${link}/signature`, { address: account.address, signature })).status).toBe(409);
     expect((await getJson(`${link}/state`)).body.status).toBe("denied");
   });
 
@@ -455,6 +536,56 @@ describe("a whole payment, approved in the browser", () => {
     expect(records.listReceipts()).toHaveLength(0);
     expect(facilitator.calls.settle).toBe(settlesBefore);
   });
+
+  it("ends an attempt abandoned, never denied, when the page closes before anyone decided", async () => {
+    const dir = mkdtempSync(join(home, "engine-closed-"));
+    const records = new Records(join(dir, "records"));
+    const signer = newSigner();
+    const engine = new PaymentEngine({ records, policy: DEFAULT_POLICY, signer });
+
+    const taken = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
+    const linkSoon = firstApprovalUrl(engine);
+    const started = engine.startPayment(taken.id);
+    await linkSoon;
+
+    // The process serving the page goes away: nobody approved and nobody rejected.
+    await signer.close();
+    const finished = await engine.waitForAttempt(started.id, 5_000);
+    expect(finished.state).toBe("abandoned");
+    expect(finished.reason).toContain("before anyone approved or rejected");
+    expect(finished.abandonedBy).toBe("page_closed");
+    expect(records.getAttempt(started.id)?.state).toBe("abandoned");
+    expect(records.listReceipts()).toHaveLength(0);
+  });
+
+  it("never submits a signature that arrives after the caller stopped waiting", async () => {
+    const dir = mkdtempSync(join(home, "engine-stopped-"));
+    const records = new Records(join(dir, "records"));
+    const signer = newSigner();
+    const engine = new PaymentEngine({ records, policy: DEFAULT_POLICY, signer });
+    const account = privateKeyToAccount(generatePrivateKey());
+    const settlesBefore = facilitator.calls.settle;
+
+    const taken = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
+    const linkSoon = firstApprovalUrl(engine);
+    const started = engine.startPayment(taken.id);
+    const link = await linkSoon;
+
+    const stopped = engine.stop(started.id, "the caller stopped waiting", "wait");
+    expect(stopped?.state).toBe("abandoned");
+    expect(stopped?.reason).toBe("the caller stopped waiting");
+    expect(stopped?.abandonedBy).toBe("wait");
+
+    // The owner signs anyway, on a page that is still open: the engine must not act on it.
+    await approveInWallet(link, account);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(engine.getAttempt(started.id)?.state).toBe("abandoned");
+    expect(records.getAttempt(started.id)?.state).toBe("abandoned");
+    expect(facilitator.calls.settle).toBe(settlesBefore);
+    expect(records.listReceipts()).toHaveLength(0);
+    // And the quote stays spent: a second attempt needs a new quote.
+    expect(() => engine.startPayment(taken.id)).toThrow(/A payment for this quote already exists/);
+  });
 });
 
 // ── The owner approval page ──────────────────────────────────────────────────────────────
@@ -504,6 +635,112 @@ async function ownerServer(): Promise<OwnerApprovalServer> {
 }
 
 const HASH = `0x${"ab".repeat(32)}`;
+
+describe("the approval page's port", () => {
+  /** A port that was free a moment ago, standing in for the default 4412 on a busy machine. */
+  async function freePort(): Promise<number> {
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const address = probe.address();
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    return typeof address === "object" && address ? address.port : 0;
+  }
+
+  /** Something else holding a port, the way another waiting `pay` would. */
+  async function occupy(): Promise<{ port: number; close: () => Promise<void> }> {
+    const holder = createServer();
+    await new Promise<void>((resolve) => holder.listen(0, "127.0.0.1", resolve));
+    const address = holder.address();
+    return {
+      port: typeof address === "object" && address ? address.port : 0,
+      close: () => new Promise<void>((resolve) => holder.close(() => resolve())),
+    };
+  }
+
+  it("lets two payments wait at once: the second takes a free port, and both links open", async () => {
+    const preferred = await freePort();
+    const flows = [0, 1].map(() => {
+      const dir = mkdtempSync(join(home, "two-flows-"));
+      const records = new Records(join(dir, "records"));
+      const signer = newSigner({ preferredPort: preferred });
+      return { records, signer, engine: new PaymentEngine({ records, policy: DEFAULT_POLICY, signer }) };
+    });
+
+    const links: string[] = [];
+    for (const flow of flows) {
+      const taken = await quote({ url: seller.url }, { records: flow.records, policy: DEFAULT_POLICY });
+      const linkSoon = firstApprovalUrl(flow.engine);
+      flow.engine.startPayment(taken.id);
+      links.push(await linkSoon);
+    }
+
+    const ports = links.map((link) => Number(new URL(link).port));
+    expect(ports[0]).toBe(preferred);
+    expect(ports[1]).not.toBe(preferred);
+    expect(flows[0]?.signer.movedFrom).toBeUndefined();
+    expect(flows[1]?.signer.movedFrom).toBe(preferred);
+    for (const link of links) {
+      const page = await fetch(link);
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain(`${PRICE}`);
+    }
+  });
+
+  it("keeps a chosen port that is busy, says not to stop what holds it, and leaves the quote payable", async () => {
+    const holder = await occupy();
+    try {
+      const dir = mkdtempSync(join(home, "busy-port-"));
+      const records = new Records(join(dir, "records"));
+      const busy = newSigner({ port: holder.port });
+      const engine = new PaymentEngine({ records, policy: DEFAULT_POLICY, signer: busy });
+
+      const taken = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
+      const finished = await engine.waitForAttempt(engine.startPayment(taken.id).id, 10_000);
+
+      expect(finished.state).toBe("failed");
+      expect(finished.refusal).toBe("approval_page");
+      expect(finished.approvalUrl).toBeUndefined();
+      expect(finished.reason).toContain(`port ${holder.port} on 127.0.0.1 is already in use`);
+      expect(finished.reason).toContain("do not stop it");
+      expect(finished.reason).toContain("SUPERSTABLES_APPROVE_PORT");
+      expect(finished.reason).toContain(`quote ${taken.id} can still be paid`);
+      expect(busy.movedFrom).toBeUndefined();
+
+      // The owner was never asked, so the same quote pays once a page can start.
+      expect(records.getQuote(taken.id)?.status).toBe("open");
+      const retry = new PaymentEngine({ records, policy: DEFAULT_POLICY, signer: newSigner() });
+      const linkSoon = firstApprovalUrl(retry);
+      const again = retry.startPayment(taken.id);
+      expect(await linkSoon).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/approve\/[0-9a-f]{32}$/);
+      expect(again.quoteId).toBe(taken.id);
+      expect(records.getQuote(taken.id)?.status).toBe("used");
+    } finally {
+      await holder.close();
+    }
+  });
+
+  it("records what ended an abandoned wait, so a stopped process is never read as the owner", async () => {
+    const dir = mkdtempSync(join(home, "abandoned-by-"));
+    const records = new Records(join(dir, "records"));
+    const engine = new PaymentEngine({ records, policy: DEFAULT_POLICY, signer: newSigner() });
+
+    const endings: [Attempt["abandonedBy"], string][] = [
+      ["stopped", "this `superstables pay` process was stopped (SIGTERM) before the owner decided"],
+      ["wait", "`superstables pay` stopped waiting after --wait 5 s, before the owner decided"],
+    ];
+    for (const [cause, reason] of endings) {
+      const taken = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
+      const linkSoon = firstApprovalUrl(engine);
+      const started = engine.startPayment(taken.id);
+      await linkSoon;
+      const stopped = engine.stop(started.id, reason, cause);
+      expect(stopped?.state).toBe("abandoned");
+      expect(stopped?.abandonedBy).toBe(cause);
+      expect(records.getAttempt(started.id)?.abandonedBy).toBe(cause);
+      expect(records.getAttempt(started.id)?.reason).toBe(reason);
+    }
+  });
+});
 
 describe("the owner approval page", () => {
   it("shows the command's terms and asks the wallet for exactly the transaction the command built", async () => {
@@ -675,7 +912,7 @@ describe("the owner approval page", () => {
     expect(status).toBe(421);
     const unknown = await fetch(`${server.url}/owner/${"0".repeat(32)}`);
     expect(unknown.status).toBe(404);
-    expect(await unknown.text()).toContain("This approval link is unavailable");
+    expect(await unknown.text()).toContain("This link is unavailable");
   });
 
   it("is plain ES2017 that a browser can run without a build step", async () => {
@@ -925,7 +1162,7 @@ class FakeNode {
 type PageWindow = EventTarget & { ethereum?: unknown };
 
 /** The owner page's script, loaded in a stand-in browser with the given wallets installed first. */
-function ownerPageInBrowser(facts: Record<string, unknown>, install: (window: PageWindow) => void) {
+function ownerPageInBrowser(facts: Record<string, unknown>, install: (window: PageWindow) => void, state: Record<string, unknown> = { status: "pending" }) {
   const nodes = new Map<string, FakeNode>();
   const node = (id: string) => {
     let n = nodes.get(id);
@@ -954,7 +1191,7 @@ function ownerPageInBrowser(facts: Record<string, unknown>, install: (window: Pa
   };
   const fetch = async (url: string, init?: { method?: string }) => {
     if (init?.method === "POST") posted.push(url.split("/").pop()!);
-    return { ok: true, status: 200, json: async () => (url.endsWith("/state") ? { status: "pending" } : { transaction: "dHg=" }) };
+    return { ok: true, status: 200, json: async () => (url.endsWith("/state") ? state : { transaction: "dHg=" }) };
   };
   const window = new EventTarget() as PageWindow;
   install(window);
@@ -1054,6 +1291,21 @@ describe("choosing a wallet on the owner page", () => {
     expect(page.posted).toEqual(["account", "sending", "sent"]);
     expect(hostile.provider.calls).toEqual([]);
     expect(injected.calls).toEqual([]);
+  });
+
+  it("names the connected owner address when setup ends, even in a browser that did not connect it", async () => {
+    // anyone holding the link could complete setup from another client: the owner's own page shows who is now on record
+    const someone = privateKeyToAccount(generatePrivateKey()).address;
+    const page = ownerPageInBrowser({ ...evmFacts(), kind: "connect", transaction: undefined, message: "record this wallet" }, () => {}, {
+      status: "confirmed",
+      address: someone,
+      message: `Done. The owner on record is now ${someone}. Check that this is your own wallet's address.`,
+    });
+    await page.later();
+    expect(page.node("account-row").hidden).toBe(false);
+    expect(page.node("account").hidden).toBe(false);
+    expect(page.node("account").textContent).toBe(someone);
+    expect(page.node("say").textContent).toContain("Check that this is your own wallet");
   });
 
   it("uses one announced wallet directly, falls back to window.ethereum, and says to install one when there is none", async () => {
@@ -1583,6 +1835,428 @@ describe("settlement binding and failed reads on the chain", () => {
     const address = new PublicKey(SOL_OWNER.address);
     expect(await getAccountOrNull({ getAccountInfo: async () => null }, address)).toBeNull();
     await expect(getAccountOrNull({ getAccountInfo: down }, address)).rejects.toThrow("fetch failed");
+  });
+});
+
+// ── gas the agent needs before it signs ─────────────────────────────────────────────────
+//
+// A live run on Polygon Amoy (30 Sep 2026): the tip jumped from 30 to 348 gwei, the agent held 0.02 POL, and the node capped
+// eth_estimateGas at balance / fee cap. The pull needs about 88,700 gas; the cap was 57,418, and the node answered
+// {"code":3,"message":"execution reverted","data":"0x"}. buy called that a chain refusal. The chain refused nothing. These tests
+// run the evm rail on polygon-amoy against a fake RPC that answers the way that node did (global fetch is stubbed, so viem's
+// real transport builds the real errors).
+
+const AMOY_RPC = "https://polygon-amoy-bor-rpc.publicnode.com";
+const AMOY_USDC = "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582";
+const GWEI = 1_000_000_000n;
+const POL = 10n ** 18n;
+const PULL_GAS = 88_717n; // what the node estimates for the pull when it is not capped
+
+type FakeAmoy = {
+  balance: bigint; // the agent's POL
+  tips: bigint[]; // eth_maxPriorityFeePerGas answers in order; the last one repeats
+  refuse?: string; // the pull itself reverts with this Error(string), whatever the gas
+  broken?: boolean; // eth_estimateGas fails without reverting (a node that lost state)
+  owner: string;
+  agent: string;
+  calls: string[];
+};
+function amoyNode(f: FakeAmoy) {
+  const word = (v: bigint) => `0x${v.toString(16).padStart(64, "0")}`;
+  const hex = (v: bigint) => `0x${v.toString(16)}`;
+  const answer = (method: string, params: any[]): { result?: unknown; error?: unknown } => {
+    f.calls.push(method);
+    switch (method) {
+      case "eth_chainId": return { result: "0x13882" };
+      case "eth_blockNumber": return { result: "0x100" };
+      case "eth_getBlockByNumber": return { result: { number: "0x100", hash: `0x${"11".repeat(32)}`, parentHash: `0x${"22".repeat(32)}`, timestamp: "0x66fb0000", baseFeePerGas: "0x3f", gasLimit: "0x1c9c380", gasUsed: "0x0", transactions: [] } };
+      case "eth_maxPriorityFeePerGas": { const tip = f.tips.length > 1 ? f.tips.shift()! : f.tips[0]; return { result: hex(tip) }; }
+      case "eth_gasPrice": return { result: hex(f.tips[0]) };
+      case "eth_getBalance": return { result: hex(f.balance) };
+      case "eth_getTransactionCount": return { result: "0x0" };
+      case "eth_call": {
+        const data = String(params[0].data);
+        if (data.startsWith("0x313ce567")) return { result: word(6n) }; // decimals()
+        if (data.startsWith("0xdd62ed3e")) return { result: word(20_000n) }; // allowance: 0.02 USDC
+        if (data.startsWith("0x70a08231")) return { result: word(data.toLowerCase().includes(f.owner.slice(2).toLowerCase()) ? 100_000n : 0n) }; // balanceOf
+        return { error: { code: -32000, message: `unexpected eth_call ${data.slice(0, 10)}` } };
+      }
+      case "eth_estimateGas": {
+        const req = params[0];
+        if (f.broken) return { error: { code: -32000, message: "missing trie node 5f3a (path ) state 0x0 is not available" } };
+        if (f.refuse) {
+          const data = encodeErrorResult({ abi: [{ type: "error", name: "Error", inputs: [{ name: "message", type: "string" }] }], errorName: "Error", args: [f.refuse] });
+          return { error: { code: 3, message: `execution reverted: ${f.refuse}`, data } };
+        }
+        const fee = BigInt(req.maxFeePerGas ?? req.gasPrice ?? 0);
+        if (fee === 0n) return { result: hex(PULL_GAS) }; // no fee fields: no cap
+        const cap = f.balance / fee;
+        if (cap >= PULL_GAS) return { result: hex(PULL_GAS) };
+        // what the probe on Amoy saw: a cap under 40,000 names the allowance, above that the proxy runs out of gas inside
+        return { error: cap < 40_000n ? { code: -32000, message: `gas required exceeds allowance (${cap})` } : { code: 3, message: "execution reverted", data: "0x" } };
+      }
+      default: return { error: { code: -32601, message: `the method ${method} does not exist/is not available` } };
+    }
+  };
+  const realFetch = globalThis.fetch;
+  return async (input: any, init?: any): Promise<Response> => {
+    const url = String(input?.url ?? input);
+    if (!url.startsWith(AMOY_RPC)) return realFetch(input, init);
+    const body = JSON.parse(String(init?.body));
+    const one = (b: any) => ({ jsonrpc: "2.0", id: b.id, ...answer(b.method, b.params ?? []) });
+    return new Response(JSON.stringify(Array.isArray(body) ? body.map(one) : one(body)), { status: 200, headers: { "content-type": "application/json" } });
+  };
+}
+
+/** The evm rail's modules on polygon-amoy (the chain is read once, when lib.ts is first imported). */
+async function evmRailOnAmoy() {
+  const before = process.env.B4_CHAIN;
+  process.env.B4_CHAIN = "polygon-amoy";
+  try {
+    const lib = await import(join(REPO, "budget", "evm", "lib.ts"));
+    const purchase = await import(join(REPO, "budget", "evm", "purchase.ts"));
+    expect(lib.CFG.key).toBe("polygon-amoy");
+    return { lib, purchase };
+  } finally {
+    if (before === undefined) delete process.env.B4_CHAIN;
+    else process.env.B4_CHAIN = before;
+  }
+}
+
+/** A seller that only asks: a v2 402 for 0.01 USDC on Amoy. */
+async function amoySeller(payTo: string): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = createServer((req, res) => {
+    const body = {
+      x402Version: 2, error: "Payment required",
+      resource: { url: `http://${req.headers.host}${req.url}`, description: "test", mimeType: "application/json" },
+      accepts: [{ scheme: "exact", network: "eip155:80002", asset: AMOY_USDC, amount: "10000", payTo, maxTimeoutSeconds: 300, extra: { name: "USDC", version: "2" } }],
+    };
+    res.writeHead(402, { "content-type": "application/json", "payment-required": Buffer.from(JSON.stringify(body)).toString("base64") });
+    res.end(JSON.stringify(body));
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const port = (server.address() as { port: number }).port;
+  return { url: `http://127.0.0.1:${port}/paid`, close: () => new Promise((done) => server.close(() => done())) };
+}
+
+describe("the agent's gas, checked before it signs anything", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sorts a node's capped estimate from a refusal: shortage without revert data and below limit x fee, refusal otherwise", async () => {
+    const { lib } = await evmRailOnAmoy();
+    const agent = privateKeyToAccount(generatePrivateKey()).address;
+    const f: FakeAmoy = { balance: POL / 50n, tips: [348n * GWEI], owner: OWNER.address, agent, calls: [] };
+    vi.stubGlobal("fetch", amoyNode(f));
+    const fee = 348n * GWEI;
+    const capped = async () => {
+      try { await lib.publicClient.estimateGas({ account: agent, to: AMOY_USDC, data: "0x23b872dd", maxFeePerGas: fee, maxPriorityFeePerGas: fee }); } catch (e) { return e; }
+      throw new Error("the capped estimate should fail");
+    };
+    // the words buy used to report: viem cannot tell this from a refusal
+    const e = await capped();
+    expect(String((e as any).shortMessage)).toContain("Execution reverted for an unknown reason");
+    expect(lib.estimateFailure(e, { have: f.balance, limit: 105_000n, fee })).toBe("short");
+    // the same empty revert with enough POL for the limit is the chain refusing
+    expect(lib.estimateFailure(e, { have: POL, limit: 105_000n, fee })).toBe("refused");
+    // a cap low enough for the node to say so
+    f.balance = POL / 100_000n;
+    const low = await capped();
+    expect(lib.estimateFailure(low, { have: f.balance, limit: 105_000n, fee })).toBe("short");
+    // revert data is the contract saying why: a refusal, however little POL there is
+    f.refuse = "ERC20: transfer amount exceeds allowance";
+    const refused = await capped();
+    expect(lib.estimateFailure(refused, { have: 0n, limit: 105_000n, fee })).toBe("refused");
+    // a node that fails without reverting is neither
+    f.refuse = undefined;
+    f.broken = true;
+    const broken = await capped();
+    expect(lib.estimateFailure(broken, { have: 0n, limit: 105_000n, fee })).toBe("other");
+  });
+
+  it("refuses to sign a pull the agent cannot pay for, with the cancel and return a failure would need", async () => {
+    const { lib } = await evmRailOnAmoy();
+    const agent = privateKeyToAccount(generatePrivateKey()).address;
+    const f: FakeAmoy = { balance: POL / 50n, tips: [348n * GWEI], owner: OWNER.address, agent, calls: [] };
+    vi.stubGlobal("fetch", amoyNode(f));
+    const g = await lib.agentGas(agent, ["pull", "cancel", "return"]);
+    // 105,000 + 105,000 + 70,000 gas at 348 gwei
+    expect(g).toMatchObject({ ok: false, have: POL / 50n, gas: 280_000n });
+    expect(g.need).toBe(280_000n * g.fee);
+    expect(lib.gasWords(g, "this purchase", ", including what a refund would cost")).toBe("the agent key has 0.02 POL; this purchase needs about 0.098 POL at the current fee (348 gwei), including what a refund would cost");
+    expect(lib.fundAgentNext(g)).toBe("owner: superstables budget fund-agent --rail evm --chain polygon-amoy --amount 0.078");
+    const short = await lib.agentGasFor(agent, AMOY_USDC, "0x23b872dd", "pull", ["cancel", "return"]).catch((err: unknown) => err);
+    expect(short).toBeInstanceOf(lib.GasShort);
+    // at the usual 30 gwei the same agent can pay: the pull gets the chain's limit, signed at the fee that was checked
+    f.tips = [30n * GWEI];
+    const ok = await lib.agentGasFor(agent, AMOY_USDC, "0x23b872dd", "pull", ["cancel", "return"]);
+    expect(ok.gas).toBe(106_460n); // the estimate plus 20% is above the 105,000 limit
+    expect(ok.fees.maxFeePerGas).toBe(30n * GWEI + 75n);
+    expect(ok.g.ok).toBe(true);
+    // a call that reverts with data is the chain refusing, never a shortage
+    f.refuse = "ERC20: transfer amount exceeds allowance";
+    const refused = await lib.agentGasFor(agent, AMOY_USDC, "0x23b872dd", "pull", ["cancel", "return"]).catch((err: unknown) => err);
+    expect(refused).toBeInstanceOf(lib.ChainRefused);
+    expect((refused as Error).message).toContain("transfer amount exceeds allowance");
+    // an RPC that fails without a revert is not the chain refusing, and not a shortage: its own error comes through
+    f.refuse = undefined;
+    f.broken = true;
+    const broken = await lib.agentGasFor(agent, AMOY_USDC, "0x23b872dd", "pull", ["cancel", "return"]).catch((err: unknown) => err);
+    expect(broken).not.toBeInstanceOf(lib.ChainRefused);
+    expect(broken).not.toBeInstanceOf(lib.GasShort);
+    expect(String((broken as Error).message)).toContain("missing trie node");
+  });
+
+  it("buy: a fee that rises after the precheck is refused before signing (exit 3), never called a chain refusal", async () => {
+    const { lib, purchase } = await evmRailOnAmoy();
+    const wallet = lib.walletFor(generatePrivateKey());
+    const agent = wallet.account.address;
+    const seller = await amoySeller(privateKeyToAccount(generatePrivateKey()).address);
+    // the precheck reads 30 gwei, the pull's own check 348 gwei (the jump seen live)
+    const f: FakeAmoy = { balance: POL / 50n, tips: [30n * GWEI, 348n * GWEI], owner: OWNER.address, agent, calls: [] };
+    vi.stubGlobal("fetch", amoyNode(f));
+    try {
+      const c = { owner: OWNER.address, agent, wallet, agentKey: "0x" };
+      const r = await purchase.purchase({ url: seller.url, c, op: `gas-rise-${randomUUID().slice(0, 8)}`, max: 10_000n });
+      expect(r).toMatchObject({ state: "refused_precheck", exitCode: 3, signedPayment: false, pulled: 0n });
+      expect(r.journal.pullTx).toBeUndefined();
+      expect(r.journal.reason).toContain("the agent key has 0.02 POL; this purchase needs about 0.098 POL at the current fee (348 gwei), including what a refund would cost");
+      expect(r.journal.next).toContain("superstables budget fund-agent --rail evm --chain polygon-amoy");
+      expect(f.calls).toContain("eth_estimateGas"); // refused by the pull's own check, the one that estimates
+      expect(f.calls).not.toContain("eth_sendRawTransaction");
+      // too little POL at the precheck's own fee: refused there, before the pull is estimated or the journal says it was sent
+      f.tips = [348n * GWEI];
+      f.calls.length = 0;
+      const early = await purchase.purchase({ url: seller.url, c, op: `gas-low-${randomUUID().slice(0, 8)}`, max: 10_000n });
+      expect(early).toMatchObject({ state: "refused_precheck", exitCode: 3 });
+      expect(early.journal.reason).toContain("including what a refund would cost");
+      expect(f.calls).not.toContain("eth_estimateGas");
+      expect(f.calls).not.toContain("eth_sendRawTransaction");
+    } finally {
+      await seller.close();
+    }
+  });
+
+  it("buy: an RPC that fails to estimate the pull is not a chain refusal (exit 3, nothing signed)", async () => {
+    const { lib, purchase } = await evmRailOnAmoy();
+    const wallet = lib.walletFor(generatePrivateKey());
+    const agent = wallet.account.address;
+    const seller = await amoySeller(privateKeyToAccount(generatePrivateKey()).address);
+    const f: FakeAmoy = { balance: POL, tips: [30n * GWEI], broken: true, owner: OWNER.address, agent, calls: [] };
+    vi.stubGlobal("fetch", amoyNode(f));
+    try {
+      const r = await purchase.purchase({ url: seller.url, c: { owner: OWNER.address, agent, wallet, agentKey: "0x" }, op: `gas-rpc-${randomUUID().slice(0, 8)}`, max: 10_000n });
+      expect(r).toMatchObject({ state: "refused_precheck", exitCode: 3, signedPayment: false });
+      expect(r.journal.reason).toContain("PULL NOT SENT: could not prepare the pull");
+      expect(r.journal.reason).toContain("missing trie node");
+      expect(r.journal.pullTx).toBeUndefined();
+      expect(f.calls).not.toContain("eth_sendRawTransaction");
+    } finally {
+      await seller.close();
+    }
+  });
+
+  it("buy: a pull that reverts with enough gas is the chain refusing it (exit 1), and nothing is signed", async () => {
+    const { lib, purchase } = await evmRailOnAmoy();
+    const wallet = lib.walletFor(generatePrivateKey());
+    const agent = wallet.account.address;
+    const seller = await amoySeller(privateKeyToAccount(generatePrivateKey()).address);
+    const f: FakeAmoy = { balance: POL, tips: [30n * GWEI], refuse: "ERC20: transfer amount exceeds allowance", owner: OWNER.address, agent, calls: [] };
+    vi.stubGlobal("fetch", amoyNode(f));
+    try {
+      const r = await purchase.purchase({ url: seller.url, c: { owner: OWNER.address, agent, wallet, agentKey: "0x" }, op: `gas-refused-${randomUUID().slice(0, 8)}`, max: 10_000n });
+      expect(r).toMatchObject({ state: "refused_chain", exitCode: 1, signedPayment: false });
+      expect(r.pullRefusal).toContain("transfer amount exceeds allowance");
+      expect(r.journal.pullTx).toBeUndefined();
+      expect(f.calls).not.toContain("eth_sendRawTransaction");
+    } finally {
+      await seller.close();
+    }
+  });
+});
+
+describe("doctor on an evm chain", () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  /** doctor for polygon-amoy against the fake node; returns what it printed. */
+  async function doctorAmoy(f: FakeAmoy): Promise<string> {
+    const keys = join(budgetHome, "keys", "budget");
+    const pub = join(budgetHome, "budget", "public");
+    for (const dir of [keys, pub]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const agentFile = join(keys, "evm-agent.env");
+    if (!existsSync(agentFile)) {
+      const key = generatePrivateKey();
+      writeFileSync(agentFile, `B4_AGENT_KEY=${key}\nB4_AGENT_ADDRESS=${privateKeyToAccount(key).address}\n`, { mode: 0o600 });
+    }
+    const agent = /B4_AGENT_ADDRESS=(\S+)/.exec(readFileSync(agentFile, "utf8"))![1];
+    writeFileSync(join(pub, "evm-polygon-amoy.env"), `B4_OWNER_ADDRESS=${f.owner}\nB4_AGENT_ADDRESS=${agent}\n`);
+    vi.stubGlobal("fetch", amoyNode(f));
+    let out = "";
+    vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => { out += String(chunk); return true; }) as typeof process.stderr.write);
+    const { runDoctor } = await import(join(REPO, "budget", "doctor.mjs"));
+    await runDoctor({ rail: "evm", chain: "polygon-amoy" });
+    vi.restoreAllMocks();
+    return out;
+  }
+
+  it("names the chain in the new-owner hint", async () => {
+    const out = await doctorAmoy({ balance: POL, tips: [30n * GWEI], owner: OWNER.address, agent: AGENT, calls: [] });
+    expect(out).toContain(`OWNER (recorded): ${OWNER.address}`);
+    expect(out).toContain("superstables budget setup --rail evm --chain polygon-amoy --new-owner replaces it");
+  });
+
+  it("asks the agent for twice what one purchase and a failure's cleanup cost at the current fee, and says what that is", async () => {
+    // 0.02 POL was "ok" before the Amoy run that could not afford its pull
+    const spike = await doctorAmoy({ balance: POL / 50n, tips: [348n * GWEI], owner: OWNER.address, agent: AGENT, calls: [] });
+    const agentLine = spike.split("\n").find((l) => l.includes("agent POL (gas) balance"))!;
+    expect(agentLine).toMatch(/^\s+FAIL/);
+    expect(agentLine).toContain("need at least 0.2; one purchase plus the cleanup a failed one needs (pull, cancel, return: 280000 gas) costs about 0.098 POL now at 348 gwei");
+    expect(spike).toContain("superstables budget fund-agent --rail evm --chain polygon-amoy --amount 0.18");
+    // at the usual 30 gwei the chain's own minimum (0.05 POL) is the larger
+    const usual = await doctorAmoy({ balance: POL / 50n, tips: [30n * GWEI], owner: OWNER.address, agent: AGENT, calls: [] });
+    expect(usual.split("\n").find((l) => l.includes("agent POL (gas) balance"))).toContain("need at least 0.05; one purchase plus the cleanup a failed one needs (pull, cancel, return: 280000 gas) costs about 0.0085 POL now at 30 gwei");
+    const funded = await doctorAmoy({ balance: POL / 10n, tips: [30n * GWEI], owner: OWNER.address, agent: AGENT, calls: [] });
+    expect(funded.split("\n").find((l) => l.includes("agent POL (gas) balance"))).toMatch(/^\s+ok/);
+  });
+});
+
+// The owner commands' words, from the real CLI in its own process. Its RPC is a fake Amoy node loaded with --import (it replaces
+// fetch for the chain's RPC URL only), so nothing here reaches a network.
+const FAKE_NODE_SOURCE = `
+const cfg = JSON.parse(process.env.FAKE_AMOY);
+const RPC = ${JSON.stringify(AMOY_RPC)};
+const hex = (v) => "0x" + BigInt(v).toString(16);
+const word = (v) => "0x" + BigInt(v).toString(16).padStart(64, "0");
+let receiptServed = false;
+const lc = (a) => String(a).toLowerCase();
+function tx(hash) {
+  return { hash, from: cfg.owner, to: cfg.agent, value: hex(cfg.value), input: "0x", chainId: "0x13882", blockNumber: "0x101", blockHash: "0x" + "33".repeat(32),
+    transactionIndex: "0x0", nonce: "0x0", gas: "0x5208", type: "0x2", maxFeePerGas: hex(31e9), maxPriorityFeePerGas: hex(30e9), accessList: [], v: "0x0", r: "0x1", s: "0x1", yParity: "0x0" };
+}
+function answer(method, params) {
+  switch (method) {
+    case "eth_chainId": return { result: "0x13882" };
+    case "eth_blockNumber": return { result: "0x100" };
+    case "eth_getBlockByNumber": return { result: { number: "0x100", hash: "0x" + "11".repeat(32), parentHash: "0x" + "22".repeat(32), timestamp: "0x66fb0000", baseFeePerGas: "0x3f", gasLimit: "0x1c9c380", gasUsed: "0x0", transactions: [] } };
+    case "eth_maxPriorityFeePerGas": case "eth_gasPrice": return { result: hex((cfg.tipGwei ?? 30) * 1e9) };
+    case "eth_getBalance": return { result: hex(lc(params[0]) === lc(cfg.agent) ? (receiptServed ? cfg.agentAfter : cfg.agentBefore) : cfg.ownerBalance) };
+    case "eth_call": {
+      const data = String(params[0].data);
+      if (data.startsWith("0x313ce567")) return { result: word(6) }; // decimals()
+      if (data.startsWith("0xdd62ed3e")) return { result: word(cfg.allowance ?? 0) }; // allowance
+      if (data.startsWith("0x70a08231")) return { result: word(lc(data).includes(lc(cfg.owner).slice(2)) ? (cfg.ownerUsdc ?? 0) : 0) }; // balanceOf
+      return { result: word(0) };
+    }
+    case "eth_getTransactionByHash": return { result: tx(params[0]) };
+    case "eth_getTransactionReceipt": receiptServed = true; return { result: { transactionHash: params[0], transactionIndex: "0x0", blockHash: "0x" + "33".repeat(32), blockNumber: "0x101",
+      from: cfg.owner, to: cfg.agent, status: "0x1", gasUsed: "0x5208", cumulativeGasUsed: "0x5208", effectiveGasPrice: hex(30e9), logs: [], logsBloom: "0x" + "0".repeat(512), type: "0x2", contractAddress: null } };
+    default: return { error: { code: -32601, message: "the method " + method + " does not exist/is not available" } };
+  }
+}
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = String(input?.url ?? input);
+  if (!url.startsWith(RPC)) return realFetch(input, init);
+  const body = JSON.parse(String(init?.body));
+  const one = (b) => ({ jsonrpc: "2.0", id: b.id, ...answer(b.method, b.params ?? []) });
+  return new Response(JSON.stringify(Array.isArray(body) ? body.map(one) : one(body)), { status: 200, headers: { "content-type": "application/json" } });
+};
+`;
+
+describe("the owner commands' words on an evm chain", () => {
+  /** A fresh owner and agent for polygon-amoy in the test home, and the fake node's settings. */
+  function amoyBudget(agentBefore: bigint, agentAfter: bigint, value: bigint, chain: Record<string, number> = {}) {
+    const keys = join(budgetHome, "keys", "budget");
+    const pub = join(budgetHome, "budget", "public");
+    for (const dir of [keys, pub]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const agentFile = join(keys, "evm-agent.env");
+    if (!existsSync(agentFile)) {
+      const key = generatePrivateKey();
+      writeFileSync(agentFile, `B4_AGENT_KEY=${key}\nB4_AGENT_ADDRESS=${privateKeyToAccount(key).address}\n`, { mode: 0o600 });
+    }
+    const agent = /B4_AGENT_ADDRESS=(\S+)/.exec(readFileSync(agentFile, "utf8"))![1];
+    writeFileSync(join(pub, "evm-polygon-amoy.env"), `B4_OWNER_ADDRESS=${OWNER.address}\nB4_AGENT_ADDRESS=${agent}\n`);
+    const preload = join(budgetHome, "fake-amoy-node.mjs");
+    writeFileSync(preload, FAKE_NODE_SOURCE);
+    const fake = { owner: OWNER.address, agent, agentBefore: String(agentBefore), agentAfter: String(agentAfter), value: String(value), ownerBalance: String(POL), ...chain };
+    return { agent, env: { ...process.env, SUPERSTABLES_HOME: budgetHome, FAKE_AMOY: JSON.stringify(fake), NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${preload}`.trim() } };
+  }
+
+  /** Run the real CLI; hand each stdout line to `onLine` as it arrives. */
+  function cli(args: string[], env: NodeJS.ProcessEnv, onLine: (line: string) => void = () => {}): Promise<{ code: number; stdout: string; stderr: string; result: Record<string, any> }> {
+    return new Promise((done, fail) => {
+      const child = spawn(process.execPath, [CLI, ...args], { env });
+      let stdout = "", stderr = "", partial = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += String(chunk);
+        const lines = (partial + String(chunk)).split("\n");
+        partial = lines.pop()!;
+        for (const l of lines) onLine(l);
+      });
+      child.stderr.on("data", (chunk) => (stderr += String(chunk)));
+      child.once("error", fail);
+      child.once("close", (code) => {
+        const line = stdout.trim().split("\n").reverse().find((l) => l.startsWith("RESULT "));
+        done({ code: code ?? 1, stdout, stderr, result: line ? JSON.parse(line.slice(7)) : {} });
+      });
+    });
+  }
+
+  it("revoke with nothing to revoke says so, and promises no page", async () => {
+    const { env } = amoyBudget(0n, 0n, 0n);
+    for (const mode of ["--wait", "--detach"]) {
+      const r = await cli(["revoke", "--rail", "evm", "--chain", "polygon-amoy", mode, "--no-open"], env);
+      expect(r.code).toBe(0);
+      expect(r.result).toMatchObject({ command: "revoke", state: "ok", revoked: true, reason: "already revoked; nothing to send" });
+      expect(r.stderr).toContain("revoke on evm (polygon-amoy): nothing to revoke, the budget is already revoked (the allowance is 0). No page opens and nothing is sent.");
+      expect(r.stderr).not.toContain("opens a page");
+      expect(r.stderr).not.toContain("runs in the background");
+      expect(r.stdout).not.toContain("APPROVE ");
+    }
+  });
+
+  it("buy short on gas: exit 3, and the RESULT's next is the owner's fund-agent", async () => {
+    // the live Amoy case: 0.006 POL in the agent, the tip at 242 gwei
+    const { env } = amoyBudget(POL * 6n / 1000n, POL * 6n / 1000n, 0n, { tipGwei: 242, allowance: 20_000, ownerUsdc: 100_000 });
+    const seller = await amoySeller(privateKeyToAccount(generatePrivateKey()).address);
+    try {
+      const r = await cli(["buy", "--rail", "evm", "--chain", "polygon-amoy", "--url", seller.url, "--max", "0.01", "--op", `cli-gas-${randomUUID().slice(0, 8)}`], env);
+      expect(r.code).toBe(3);
+      expect(r.result).toMatchObject({ command: "buy", state: "refused_precheck", paid: false });
+      expect(r.result.reason).toBe("REFUSED: the agent key has 0.006 POL; this purchase needs about 0.068 POL at the current fee (242 gwei), including what a refund would cost. Nothing was signed or pulled.");
+      expect(r.result.next).toBe("owner: superstables budget fund-agent --rail evm --chain polygon-amoy --amount 0.062 (the owner approves it in their wallet), then buy again");
+    } finally {
+      await seller.close();
+    }
+  });
+
+  it("fund-agent's done page shows the agent's balance read after the transfer", async () => {
+    const value = POL / 100n; // 0.01 POL
+    const { env } = amoyBudget(POL / 50n, POL / 50n + value, value);
+    let url = "";
+    let message = "";
+    const hash = `0x${"cd".repeat(32)}`;
+    const drive = async () => {
+      await postJson(`${url}/account`, { address: OWNER.address });
+      await postJson(`${url}/sending`, { address: OWNER.address });
+      await postJson(`${url}/sent`, { address: OWNER.address, hash });
+      for (let i = 0; i < 200 && !message; i++) {
+        const state = await getJson(`${url}/state`).catch(() => null);
+        if (state?.body.status === "confirmed") message = String(state.body.message);
+        else await new Promise((r) => setTimeout(r, 50));
+      }
+    };
+    let driving: Promise<void> | undefined;
+    const r = await cli(["fund-agent", "--rail", "evm", "--chain", "polygon-amoy", "--amount", "0.01", "--wait", "--no-open", "--timeout", "60"], env, (line) => {
+      if (!line.startsWith("APPROVE ") || driving) return;
+      const approve = JSON.parse(line.slice(8));
+      expect(approve.terms.title).toBe("Send funds for network fees");
+      url = approve.url;
+      driving = drive();
+    });
+    await driving;
+    expect(r.code).toBe(0);
+    expect(message).toBe("Done. Your agent received 0.01 POL and now has 0.03 POL. You can close this page.");
+    expect(r.result).toMatchObject({ command: "fund-agent", state: "settled", tx: { fundAgent: hash } });
   });
 });
 

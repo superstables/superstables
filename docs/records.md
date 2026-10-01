@@ -57,8 +57,9 @@ pay it.
 
 The quote is the guard. The moment an attempt is created, the quote is marked `used` —
 synchronously, before anything is awaited, so two calls in the same tick cannot both start.
-A second `pay` on the same quote is refused with "This quote has already been used to start a
-payment; quote again before paying".
+A second `pay` on the same quote is refused (exit 2) with a message that names the payment
+that exists: "A payment for this quote already exists: attempt ATTEMPT_ID, STATE", and
+`superstables status ATTEMPT_ID` to follow it.
 
 One quote, at most one attempt, at most one payment. To pay the same service twice, quote it
 twice.
@@ -75,6 +76,8 @@ awaiting_approval ──┼── the owner says no ─────────�
                     │
                     ├── nobody answers in time ─────────────────────────────→ expired
                     │
+                    ├── the wait ends before anyone decides ────────────────→ abandoned
+                    │
                     └── the owner approves ──→ approved ──→ submitting ──┬──→ settled
                                                                          ├──→ paid_service_failed
                                                                          ├──→ failed
@@ -88,7 +91,8 @@ awaiting_approval ──┼── the owner says no ─────────�
 | `submitting` | no | The request is being replayed with the payment credential attached |
 | `denied` | yes | The owner rejected it — on the approval page, or in MetaMask's own popup. Nothing was signed, nothing was submitted, the service was not called |
 | `expired` | yes | Nobody answered within the approval window (five minutes in browser mode, 120 seconds with the local wallet). Nothing was signed |
-| `failed` | yes | No payment happened, and that is known. See `reason` |
+| `abandoned` | yes | Nobody decided: whoever was waiting for the owner stopped first (`pay --wait` ran out, `pay` was interrupted, or the process serving the approval page stopped). Not a rejection. Nothing was submitted |
+| `failed` | yes | No payment happened, and that is known. See `reason`; `refusal` says which check refused when one did (`policy`, `invalid`, `unavailable`) |
 | `settled` | yes | The facilitator confirmed the transfer and the service answered 2xx. A receipt exists |
 | `paid_service_failed` | yes | The money moved, the service then answered a non-2xx status. A receipt exists |
 | `uncertain` | yes | The credential left this machine and what became of it is not known. **Never retried automatically** |
@@ -142,8 +146,9 @@ verified terms, the reported context and the account that connected — and neve
 | --- | --- |
 | `pending` | The link exists and is waiting for the owner. Nothing is signed |
 | `signed` | The owner signed in their browser wallet, and the signature was verified to be theirs |
-| `denied` | Rejected on the page, rejected in MetaMask, or the agent stopped before a decision |
+| `denied` | Rejected on the page, or rejected in MetaMask |
 | `expired` | Five minutes passed without a decision |
+| `abandoned` | The process serving the page stopped before anyone decided |
 
 A payment the policy refuses never appears here at all: nobody was asked. The same is true of a
 requirement this client cannot pay — an unsupported network, the wrong asset — which is refused

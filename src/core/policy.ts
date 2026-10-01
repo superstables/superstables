@@ -6,6 +6,7 @@
 
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
+import type { PolicyCheck } from "./types.js";
 
 export interface Money {
   amount: number;
@@ -133,4 +134,52 @@ export function evaluatePolicy(policy: Policy, a: Attempt): Verdict {
   return { allowed: true };
 }
 
-export const round6 = (n: number): number => Math.round(n * 1e6) / 1e6;
+/**
+ * Every rule of the policy as it applies to one payment, in evaluation order, passed or not.
+ * evaluatePolicy() answers yes or no; this says what was compared with what, so a quote can
+ * show the limits it was held to rather than only the verdict.
+ */
+export function policyChecks(policy: Policy, a: Attempt): PolicyCheck[] {
+  const checks: PolicyCheck[] = [];
+  checks.push({ rule: "kill_switch", ok: !policy.killSwitch, detail: policy.killSwitch ? "on: every payment is refused" : "off" });
+  if (a.domain) {
+    const denied = policy.deny.find((p) => domainMatches(p, a.domain));
+    checks.push({
+      rule: "deny",
+      ok: !denied,
+      detail: denied ? `host ${a.domain} matches ${denied}` : policy.deny.length ? `host ${a.domain} matches none of ${policy.deny.join(", ")}` : "empty",
+    });
+    const allowed = policy.allow.length === 0 || policy.allow.some((p) => domainMatches(p, a.domain));
+    checks.push({
+      rule: "allow",
+      ok: allowed,
+      detail: policy.allow.length === 0 ? "empty: any host" : `host ${a.domain} ${allowed ? "is" : "is not"} on ${policy.allow.join(", ")}`,
+    });
+  }
+  const coin = policy.stablecoins.includes(a.asset.toUpperCase());
+  checks.push({ rule: "stablecoins", ok: coin, detail: `${a.asset} ${coin ? "is" : "is not"} in [${policy.stablecoins.join(", ")}]` });
+  checks.push(
+    policy.perCall
+      ? {
+          rule: "caps.per_call",
+          ok: a.amountDecimal <= policy.perCall.amount,
+          detail: `${a.amountDecimal} ${a.asset}, at most ${formatMoney(policy.perCall)}`,
+        }
+      : { rule: "caps.per_call", ok: true, detail: "not set" },
+  );
+  if (!policy.perDay) {
+    checks.push({ rule: "caps.per_day", ok: true, detail: "not set" });
+  } else if (a.spentTodayDecimal === undefined) {
+    checks.push({ rule: "caps.per_day", ok: true, detail: `at most ${formatMoney(policy.perDay)}; today's spending unknown` });
+  } else {
+    const total = round6(a.spentTodayDecimal + a.amountDecimal);
+    checks.push({
+      rule: "caps.per_day",
+      ok: total <= policy.perDay.amount,
+      detail: `${round6(a.spentTodayDecimal)} ${a.asset} paid today (UTC) + this ${a.amountDecimal} = ${total}, at most ${formatMoney(policy.perDay)}`,
+    });
+  }
+  return checks;
+}
+
+export const round6 =(n: number): number => Math.round(n * 1e6) / 1e6;

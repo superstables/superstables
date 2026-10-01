@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_NETWORK, networkFor, usdcBalance } from "../chain.js";
-import { DEFAULT_APPROVE_PORT, browserWalletPath, ensureDir, homeDir, policyPath, recordsDir } from "../home.js";
+import { browserWalletPath, ensureDir, homeDir, policyPath, recordsDir } from "../home.js";
 import { evaluatePolicy, formatMoney, loadPolicy, type Policy } from "../policy.js";
 import { Records } from "../records.js";
 import type { VerifiedTerms, WalletStatus } from "../types.js";
@@ -27,8 +27,14 @@ const BALANCE_TIMEOUT_MS = 5_000;
 const APPROVAL_MODE = "ask-every-payment" as const;
 
 export interface BrowserWalletSignerOptions {
-  /** 0 picks a free port (tests). Defaults to DEFAULT_APPROVE_PORT. */
+  /**
+   * A port somebody chose (SUPERSTABLES_APPROVE_PORT), kept as chosen even when it is busy; 0
+   * picks a free port (tests). Leave it out for DEFAULT_APPROVE_PORT, or a free port when
+   * another payment is already waiting on that one.
+   */
   port?: number;
+  /** The port to try first when none was chosen. Defaults to DEFAULT_APPROVE_PORT. */
+  preferredPort?: number;
   /** How long the person has to open the link and sign. */
   timeoutMs?: number;
   /** The owner's policy. Defaults to the policy file, or the built-in defaults. */
@@ -59,7 +65,8 @@ export class BrowserWalletSigner implements Signer {
     const dir = options.home ? join(options.home, "records") : recordsDir();
     this.records = new Records(dir);
     this.server = new ApprovalServer({
-      port: options.port ?? DEFAULT_APPROVE_PORT,
+      port: options.port,
+      preferredPort: options.preferredPort,
       recordsDirPath: dir,
       onAccount: (address) => this.remember(address),
     });
@@ -69,6 +76,11 @@ export class BrowserWalletSigner implements Signer {
   /** Where the approval pages live. Empty until the server has been started. */
   get url(): string {
     return this.server.port === 0 ? "" : this.server.url;
+  }
+
+  /** The default port, when it was busy and the page took a free one instead. */
+  get movedFrom(): number | undefined {
+    return this.server.movedFrom;
   }
 
   /** Bind the approval server. Called for you on the first sign(); safe to call twice. */
@@ -151,7 +163,13 @@ export class BrowserWalletSigner implements Signer {
       throw new SignRefused("policy", verdict.reason ?? "the owner's spend policy refuses this payment");
     }
 
-    await this.start();
+    try {
+      await this.start();
+    } catch (err) {
+      // Nobody has been asked and there is no link: a refusal the caller can act on, not a
+      // crash, and one that leaves the quote usable.
+      throw new SignRefused("approval_page", err instanceof Error ? err.message : String(err));
+    }
     const verified: VerifiedTerms = {
       ...judged.terms,
       payer: (this.remembered ?? this.readRemembered())?.address ?? "",
@@ -168,6 +186,7 @@ export class BrowserWalletSigner implements Signer {
     const outcome = await approval.settled;
     if (outcome.status === "signed") return outcome.result;
     if (outcome.status === "expired") throw new SignRefused("expired", outcome.reason, approval.id);
+    if (outcome.status === "abandoned") throw new SignRefused("abandoned", outcome.reason, approval.id);
     throw new SignRefused("denied", outcome.reason, approval.id);
   }
 
