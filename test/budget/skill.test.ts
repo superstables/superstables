@@ -17,7 +17,18 @@ describe("budget/SKILL.md", () => {
     expect(top).toMatch(/Testnet only: test USDC, no real money\./);
     expect(skill.indexOf("## First, ask the owner what they would like to try")).toBeGreaterThan(0);
     expect(skill.indexOf("references/once.md")).toBeGreaterThan(skill.indexOf("## First, ask the owner"));
-    expect(skill).toMatch(/tell me when you've approved/);
+    expect(skill).toMatch(/Tell me when you.ve approved\./);
+    expect(skill).toMatch(/wait --id ID --shown/);
+  });
+
+  it("shows the link before polling, offers buy once only for listed services, and treats a no as final", () => {
+    expect(skill).toMatch(/Write the link in a reply, then poll/);
+    expect(skill).toMatch(/`wait` refuses without `--shown`/);
+    expect(skill).toMatch(/A no is final/);
+    const budget = readFileSync(resolve(BUDGET, "references/budget.md"), "utf8");
+    expect(budget).toMatch(/Offer buy once only if that service is in `superstables budget find --once`/);
+    expect(budget).toMatch(/say the budget is spent and stop/);
+    for (const f of ["references/once.md", "references/budget.md"]) expect(readFileSync(resolve(BUDGET, f), "utf8")).toMatch(/wait --id ID --shown/);
   });
 
   it("points only to files that exist, and the references state testnet too", () => {
