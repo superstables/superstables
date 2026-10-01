@@ -1625,7 +1625,7 @@ describe("a detached owner approval", () => {
       // --yes only goes with a test owner key file; nothing is spawned
       const yes = await budget(["grant", "--rail", rail, "--amount", "0.01", "--yes"]);
       expect(yes.code).toBe(2);
-      expect(yes.result.reason).toContain("show the approval link to the owner and poll wait");
+      expect(yes.result.reason).toContain("write the approval link in your reply to the owner, and run wait --shown when they say they have approved");
       const record = await detach(20_000, rail, chain);
       const second = await budget(["revoke", "--rail", rail]);
       expect(second.code).toBe(3);

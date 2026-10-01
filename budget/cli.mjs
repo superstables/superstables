@@ -638,7 +638,7 @@ function parse(argv) {
   if (cmd === "fund-agent" && f.rail === "tempo") badInput(ctx, "tempo's agent needs no gas: its access key spends the owner's pathUSD, and the fees come from the owner");
   if (cmd === "fund-agent" && f.amount !== undefined && !(f.rail === "solana" ? /^\d+(\.\d{1,9})?$/ : /^\d+(\.\d{1,18})?$/).test(f.amount)) badInput(ctx, f.rail === "solana" ? "--amount must be a decimal amount of SOL (at most 9 places)" : "--amount must be a decimal amount of the chain's gas token");
   if (f.timeout !== undefined && !(/^\d+$/.test(f.timeout) && Number(f.timeout) >= 10 && Number(f.timeout) <= 3600)) badInput(ctx, "--timeout must be a whole number of seconds from 10 to 3600");
-  if (f.yes && !f["owner-key-file"]) badInput(ctx, "show the approval link to the owner and poll wait: drop --yes. --yes only goes with --owner-key-file PATH (unattended tests only)");
+  if (f.yes && !f["owner-key-file"]) badInput(ctx, "write the approval link in your reply to the owner, and run wait --shown when they say they have approved: drop --yes. --yes only goes with --owner-key-file PATH (unattended tests only)");
   if (f["owner-key-file"] !== undefined && !existsSync(f["owner-key-file"])) badInput(ctx, `--owner-key-file ${f["owner-key-file"]} does not exist`);
   if (f.wait && f.detach) badInput(ctx, "--wait and --detach cannot go together");
   if (f.hosted) {
