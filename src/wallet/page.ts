@@ -1,5 +1,5 @@
 // The owner's approval page: one self-contained HTML string, served at GET / by the wallet
-// process. No build step, no framework, no external asset — the page a person uses to
+// process, in the look the other local pages share (src/core/signer/look.ts). No build step, no framework, no external asset — the page a person uses to
 // authorise a payment should be readable in full, in one file, by anyone who wants to check
 // what it does before clicking "Approve".
 //
@@ -12,94 +12,24 @@
 // block, labelled as unverified. What the wallet verified and what the agent claimed must
 // never look alike.
 
-export const APPROVAL_PAGE = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<title>Superstables wallet</title>
-<style>
-  :root {
-    color-scheme: light dark;
-    --bg: #f6f7f9;
-    --card: #ffffff;
-    --ink: #14171f;
-    --muted: #61697a;
-    --line: #e3e6ec;
-    --accent: #1b6b4a;
-    --accent-ink: #ffffff;
-    --danger: #a3302a;
-    --warn-bg: #fff8e6;
-    --warn-line: #e7d9ae;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #101319;
-      --card: #171b23;
-      --ink: #e9ecf2;
-      --muted: #9aa3b4;
-      --line: #262c38;
-      --accent: #2f9e6e;
-      --accent-ink: #06130d;
-      --danger: #e8776f;
-      --warn-bg: #241f12;
-      --warn-line: #4a3f23;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--ink);
-    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  }
-  .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
-  header h1 { font-size: 18px; margin: 0 0 4px; letter-spacing: -0.01em; }
-  header p { margin: 0; color: var(--muted); font-size: 13px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
-  .note { margin: 20px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--muted); }
-  .note.bad { border-color: var(--danger); color: var(--danger); }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 32px 0 12px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-bottom: 16px; }
-  .amount { font-size: 34px; font-weight: 640; letter-spacing: -0.02em; }
-  .amount span { font-size: 18px; font-weight: 500; color: var(--muted); margin-left: 6px; }
-  .tag { display: inline-block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); vertical-align: 2px; margin-left: 6px; }
-  .rows { margin: 16px 0 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 13px; }
-  .rows dt { color: var(--muted); }
-  .rows dd { margin: 0; word-break: break-all; }
-  .reported { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: 10px; font-size: 13px; }
-  .reported strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
-  .actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
-  button { font: inherit; font-weight: 560; padding: 10px 18px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-  button[disabled] { opacity: 0.55; cursor: default; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight: 560; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
-  tr:last-child td { border-bottom: 0; }
-  .status-signed { color: var(--accent); }
-  .status-denied, .status-rejected, .status-expired { color: var(--danger); }
-  .empty { color: var(--muted); font-size: 13px; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <h1>Superstables wallet</h1>
-    <p>This key never leaves this process &middot; the agent can ask, only you can approve.</p>
-  </header>
+import { framePage, pageLook, type PageLook } from "../core/signer/look.js";
 
-  <div id="notice" class="note" hidden></div>
+const WALLET_STYLE = `
+  h2.section { font-family: var(--mono); font-size: 11.5px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2); margin: 40px 0 0; }
+  #pending .card:first-child { margin-top: 14px; }
+  #pending .card + .card { margin-top: 16px; }
+  #pending > .empty, #history > .empty { margin-top: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 12px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; }
+  th { font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+  td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+  td.mono { font-size: 12.5px; }
+  tbody tr:last-child td { border-bottom: 0; }
+  .status-signed { color: var(--good); }
+  .status-denied, .status-rejected, .status-expired { color: var(--bad); }
+`;
 
-  <h2>Waiting for you</h2>
-  <div id="pending"><p class="empty">No payment is waiting for approval.</p></div>
-
-  <h2>History</h2>
-  <div id="history"><p class="empty">Nothing yet.</p></div>
-</div>
-
-<script>
+/** The page's own script. The owner secret comes from the location fragment, never from the server. */
+export const WALLET_PAGE_SCRIPT = `
 (function () {
   var secret = location.hash.replace(/^#/, "");
   var notice = document.getElementById("notice");
@@ -238,7 +168,26 @@ export const APPROVAL_PAGE = `<!doctype html>
   refresh();
   setInterval(refresh, 1000);
 })();
-</script>
-</body>
-</html>
 `;
+
+/** The wallet's page, ready to serve. Every payment on it arrives from the wallet's API after load. */
+export function walletPage(look: PageLook = pageLook()): string {
+  return framePage({
+    look,
+    title: "Payments waiting for you",
+    eyebrow: "Local wallet",
+    lede: "This wallet's key stays in its own process on this computer. Approve or reject each payment an agent asks for.",
+    wide: true,
+    style: WALLET_STYLE,
+    body: `
+  <div id="notice" class="note" hidden></div>
+
+  <h2 class="section">Waiting for you</h2>
+  <div id="pending"><p class="empty">No payment is waiting for approval.</p></div>
+
+  <h2 class="section">History</h2>
+  <div id="history"><p class="empty">Nothing yet.</p></div>
+
+<script>${WALLET_PAGE_SCRIPT}</script>`,
+  });
+}

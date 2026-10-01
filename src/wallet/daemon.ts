@@ -36,7 +36,7 @@ import type {
 } from "../core/types.js";
 import { termsFor, type RawAccept } from "../core/x402.js";
 import { loadAccount, readOrCreateSecret } from "./keystore.js";
-import { APPROVAL_PAGE } from "./page.js";
+import { walletPage } from "./page.js";
 
 /** The owner approves every payment in this release; there is no unattended mode. */
 const APPROVAL_MODE = "ask-every-payment" as const;
@@ -393,7 +393,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     // The approval page itself carries no secret: the owner's fragment stays in the browser.
     if (method === "GET" && path === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      res.end(APPROVAL_PAGE);
+      res.end(walletPage());
       return;
     }
 

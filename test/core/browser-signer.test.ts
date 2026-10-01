@@ -890,7 +890,7 @@ describe("the owner approval page", () => {
     expect(status).toBe(421);
     const unknown = await fetch(`${server.url}/owner/${"0".repeat(32)}`);
     expect(unknown.status).toBe(404);
-    expect(await unknown.text()).toContain("This approval link is unavailable");
+    expect(await unknown.text()).toContain("This link is unavailable");
   });
 
   it("is plain ES2017 that a browser can run without a build step", async () => {

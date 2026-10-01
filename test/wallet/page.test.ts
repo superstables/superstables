@@ -1,36 +1,37 @@
 // The approval page has no build step and no test runner of its own, so this guards the two
 // things that would be dangerous to lose: it must stay self-contained (nothing loaded from
 // another origin, since this page authorises payments), and it must keep saying which facts
-// the wallet verified and which ones the agent merely claimed.
+// the wallet verified and which ones the agent merely claimed. Both looks (look.ts) are checked.
 
 import { describe, expect, it } from "vitest";
-import { APPROVAL_PAGE } from "../../src/wallet/page.js";
+import { walletPage } from "../../src/wallet/page.js";
 
-describe("the approval page", () => {
+describe.each(["plain", "superstables"] as const)("the approval page, %s look", (look) => {
+  const page = walletPage(look);
+
   it("loads nothing from anywhere else", () => {
-    expect(APPROVAL_PAGE).not.toMatch(/<script[^>]+src=/i);
-    expect(APPROVAL_PAGE).not.toMatch(/<link[^>]+href=/i);
-    expect(APPROVAL_PAGE).not.toMatch(/https?:\/\/(?!127\.0\.0\.1)/);
+    expect(page).not.toMatch(/<script[^>]+src=/i);
+    expect(page).not.toMatch(/<link[^>]+href=/i);
+    expect(page).not.toMatch(/https?:\/\/(?!127\.0\.0\.1)/);
   });
 
-  it("says who holds the key and who decides", () => {
-    expect(APPROVAL_PAGE).toContain("This key never leaves this process");
-    expect(APPROVAL_PAGE).toContain("the agent can ask, only you can approve");
+  it("says where the key is and that the owner decides", () => {
+    expect(page).toContain("key stays in its own process on this computer");
+    expect(page).toContain("Approve or reject each payment an agent asks for.");
   });
 
   it("labels the agent's own account of the payment as unverified", () => {
-    expect(APPROVAL_PAGE).toContain("Reported by the agent (not verified)");
+    expect(page).toContain("Reported by the agent (not verified)");
   });
 
   it("offers both decisions, and only those", () => {
-    expect(APPROVAL_PAGE).toContain("Approve and sign");
-    expect(APPROVAL_PAGE).toContain("Reject");
+    expect(page).toContain("Approve and sign");
+    expect(page).toContain("Reject");
   });
 
   it("escapes everything it renders, reads the secret from the fragment and follows the system theme", () => {
-    expect(APPROVAL_PAGE).toContain("function esc(value)");
-    expect(APPROVAL_PAGE).toContain('location.hash.replace(/^#/, "")');
-    expect(APPROVAL_PAGE).toContain("color-scheme: light dark");
-    expect(APPROVAL_PAGE).toContain("prefers-color-scheme: dark");
+    expect(page).toContain("function esc(value)");
+    expect(page).toContain('location.hash.replace(/^#/, "")');
+    expect(page).toContain("prefers-color-scheme");
   });
 });

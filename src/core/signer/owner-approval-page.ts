@@ -1,7 +1,7 @@
 // The page an owner opens to do one thing in their own browser wallet: connect it (and sign
 // a free sign-in message that proves the address is theirs), or approve one transaction the
-// command built. It is the sibling of the payment approval page (approval-page.ts): same look,
-// same rules, served by the owner approval server on 127.0.0.1.
+// command built. It is the sibling of the payment approval page (approval-page.ts): same look
+// (look.ts), same rules, served by the owner approval server on 127.0.0.1.
 //
 // Two wallet families. evm (and Tempo): an EIP-1193 wallet found through EIP-6963, or
 // window.ethereum when none announces itself, which sends the transaction itself. solana: a
@@ -17,7 +17,8 @@
 //
 // The script is plain ES2017 with no bundler, exported so a test can parse it.
 
-import { STYLE, WALLET_DOWNLOAD_URL, esc, inlineJson } from "./approval-page.js";
+import { WALLET_DOWNLOAD_URL, esc, inlineJson } from "./approval-page.js";
+import { framePage, pageLook, type PageLook } from "./look.js";
 
 const PHANTOM_DOWNLOAD_URL = "https://phantom.com/download";
 
@@ -80,18 +81,21 @@ export interface OwnerPageFacts {
 }
 
 const OWNER_STYLE = `
-  .summary { margin: 6px 0 0; color: var(--muted); }
-  .limits { margin-top: 16px; display: grid; gap: 10px; font-size: 13px; }
-  .limits div { padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; }
-  .limits div.no { border-color: var(--warn-line); background: var(--warn-bg); }
-  .limits strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
-  .limits ul { margin: 0; padding-left: 18px; }
-  .fineprint p { margin: 0 0 6px; }
-  .owner-box { font-size: 14px; }
-  .owner-box .mono { display: block; margin: 4px 0; font-size: 15px; font-weight: 600; word-break: break-all; }
-  [hidden] { display: none !important; }
-  #wallet-list button { display: inline-flex; align-items: center; gap: 8px; }
-  #wallet-list img { width: 20px; height: 20px; border-radius: 4px; }
+  /* What the chain enforces and what it does not, side by side. */
+  .limits { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 24px; }
+  .limits > div { padding: 14px 16px; border: 1px solid var(--good-line); border-radius: 6px; background: var(--good-bg); }
+  .limits > div.no { border-color: var(--bad); background: var(--bad-bg); }
+  .limits strong { display: block; margin: 0 0 8px; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); }
+  .limits div.no strong { color: var(--bad); }
+  .limits ul { margin: 0; padding-left: 18px; font-size: 14.5px; }
+  .limits li + li { margin-top: 6px; }
+  .limits > div:only-child { grid-column: 1 / -1; }
+  @media (max-width: 600px) { .limits { grid-template-columns: minmax(0, 1fr); } }
+  .owner-box { font-size: 15px; }
+  .owner-box .mono { display: block; margin: 6px 0; font-size: 14px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+  #wallet-list { margin-top: 12px; }
+  #wallet-list button { height: 40px; padding: 0 14px; font-size: 14px; background: var(--bg-2); }
+  #wallet-list img { width: 18px; height: 18px; border-radius: 4px; }
 `;
 
 /**
@@ -591,34 +595,13 @@ function list(items: string[]): string {
   return `<ul>${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`;
 }
 
-function page(title: string, body: string): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<title>Superstables &middot; ${esc(title)}</title>
-<style>${STYLE}${OWNER_STYLE}</style>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <h1>Superstables &middot; ${esc(title)}</h1>
-    <p>Review the terms here, then confirm in your own wallet. Your wallet keeps its signing key.</p>
-  </header>
-${body}
-</div>
-</body>
-</html>
-`;
-}
+const OWNER_LEDE = "Review the terms here, then confirm in your own wallet. Your wallet keeps its signing key.";
 
 /** The whole page for one owner action, terms and all, ready to serve. */
-export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms): string {
+export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look: PageLook = pageLook()): string {
   const left = Math.max(0, Math.round((facts.expiresAt - Date.now()) / 1000));
   const clock = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
-  const chainCell = esc(facts.chain.chainName) + (facts.chain.testnet ? ' <span class="tag">testnet</span>' : "");
+  const chainCell = esc(facts.chain.chainName);
   const rows = terms.rows
     .map((row) => `<dt>${esc(row.label)}</dt><dd${row.mono ? ' class="mono"' : ""}>${esc(row.value)}</dd>`)
     .join("\n      ");
@@ -654,7 +637,6 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms): str
       : "";
   const body = `
   ${ownerBox}
-  <div id="say" class="note" hidden></div>
 
   <div id="no-wallet" class="note bad" hidden>
     ${noWallet}
@@ -671,6 +653,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms): str
     </dl>
     ${limits}
     ${networkHint}
+    <div id="say" class="note" hidden></div>
     <div class="actions">
       <button id="connect" class="primary" data-act="connect">Connect wallet</button>
       ${primary}
@@ -682,17 +665,28 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms): str
 
 <script id="owner-facts" type="application/json">${inlineJson(facts)}</script>
 <script>${OWNER_PAGE_SCRIPT}</script>`;
-  return page(terms.title, body);
+  return framePage({
+    look,
+    title: terms.title,
+    eyebrow: facts.kind === "connect" ? "Owner sign-in" : "Owner approval",
+    lede: OWNER_LEDE,
+    testnet: facts.chain.testnet,
+    style: OWNER_STYLE,
+    body,
+  });
 }
 
 /** What an unknown, or already finished, link gets. Same furniture, no buttons. */
-export function ownerNotFoundPage(): string {
-  return page(
-    "approve in your wallet",
-    `
+export function ownerNotFoundPage(look: PageLook = pageLook()): string {
+  return framePage({
+    look,
+    title: "This link is unavailable",
+    eyebrow: "Owner approval",
+    style: OWNER_STYLE,
+    body: `
   <div class="note bad">
-    This approval link is unavailable. The request may have ended or the command may have stopped.
+    The request may have ended or the command may have stopped.
     Cancel any open wallet request. Check the command result and wallet activity before asking for a new link.
   </div>`,
-  );
+  });
 }
