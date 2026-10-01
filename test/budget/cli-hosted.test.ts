@@ -179,8 +179,14 @@ describe("setup --hosted", () => {
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
-    expect(first.result.next).toMatch(/^write the link, the code and the terms in your reply to the owner and end your turn there\. When they say they've approved, run superstables budget wait --id oa-\S+ --shown\. .*Testnet only: test USDC, no real money\.$/);
+    expect(first.result.next).toMatch(/^reply to the owner with message_for_owner, word for word \(it has the link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id oa-\S+ --shown\. .*Testnet only: test USDC, no real money\.$/);
     expect(first.stderr).toMatch(/Testnet only: test USDC, no real money\./);
+    // the reply the agent sends word for word: the exact link (with the part after #), the code, the network, the testnet line
+    const msg = first.result.message_for_owner;
+    expect(msg).toContain(first.result.url);
+    expect(msg).toContain("Match code: ABC-DEF");
+    expect(msg).toMatch(/On Base Sepolia\. Testnet only: test USDC, no real money\./);
+    expect(msg.endsWith("Tell me when you've approved.")).toBe(true);
     const id = first.result.id;
     const recordPath = join(approvals(), `${id}.json`);
     expect(statSync(recordPath).mode & 0o777).toBe(0o600);

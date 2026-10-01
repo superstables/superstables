@@ -31,7 +31,7 @@ import { lockOp, railResult } from "./buy-guard.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { DEFAULT_SITE, chosenSite, listSiteServices, siteOrigin } from "./site.mjs";
-import { ONCE_CHAIN, TESTNET_LINE, listOnceServices, showFirst, startOnce, waitOnce } from "./once.mjs";
+import { ONCE_CHAIN, TESTNET_LINE, listOnceServices, messageForOwner, showFirst, startOnce, waitOnce } from "./once.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // Two ways to run. In a checkout the TypeScript sources sit next to this file, and the rails run from them, on the repo's
@@ -503,7 +503,7 @@ let FOREGROUND = false;
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 // A worker also stores it (and the exit code) in its approval record, for every later `wait`.
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   // final: false only while an owner approval is still open; a script polls wait until it is true
   fields = { ...fields, final: fields.state !== "waiting_owner" };
@@ -920,8 +920,22 @@ function normalize(cmd, f, rail, code) {
   const amount = state === "unknown" ? null : nothingMoved ? "0" : rail.debit == null ? null : String(rail.debit);
   return {
     code: exitFor(cmd, state, delivered),
-    fields: { ...base, state, paid, delivered, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : nextFor(state, delivered, f, cmd), reason: rail.reason },
+    fields: { ...base, state, paid, delivered, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
   };
+}
+
+/**
+ * A budget purchase refused because the budget cannot cover it: `budget_spent: true` and the words for the owner. They
+ * report; they never offer a revoke or a grant (an agent that offered one, and heard "go ahead", looped on owner steps).
+ */
+function budgetSpent(f, rail) {
+  const why = `${rail.reason ?? ""}`;
+  const net = EVM_CHAINS[f.chain]?.label ?? f.chain;
+  const unit = f.rail === "tempo" ? "pathUSD" : "test USDC";
+  const m = /price ([0-9.]+) exceeds the (?:allowance|remaining budget) ([0-9.]+)/.exec(why);
+  if (m) return { budget_spent: true, message_for_owner: `The budget left on ${net} (${m[2]} ${unit}) doesn't cover this purchase (${m[1]} ${unit}). Nothing was paid. ${TESTNET_LINE}` };
+  if (/allowance is 0|no delegate|no_budget/i.test(why)) return { budget_spent: true, message_for_owner: `There is no budget left on ${net} (it is spent, revoked or was never granted). Nothing was paid. ${TESTNET_LINE}` };
+  return {};
 }
 
 /**
@@ -934,9 +948,10 @@ function refusalNext(f, rail) {
   if (/superstables budget (recover|fund-agent)/.test(rail.next ?? "")) return rail.next;
   if (/fund-agent/.test(why)) return `the agent key needs gas: ask the owner to run superstables budget fund-agent ${r}; nothing was signed`;
   if (/allowance is 0|no delegate|never (set|granted)|not authorized|no_budget|revoked|expired/i.test(why)) {
-    return `no budget to spend: ask the owner to run superstables budget grant ${r} --amount A${f.rail === "tempo" && /revoked|expired/i.test(why) ? ` (a revoked or expired key needs superstables budget setup ${r} --agent LABEL first, then grant --agent LABEL)` : ""}. superstables budget status ${r} shows what is left. Nothing was signed`;
+    return `no budget left to spend (spent, revoked or never granted). Nothing was signed. Tell the owner in one reply (message_for_owner) and end your turn. Do not start or propose a revoke, a grant or gas: a grant is an owner command (superstables budget grant ${r} --amount A${f.rail === "tempo" && /revoked|expired/i.test(why) ? `; a revoked or expired key needs superstables budget setup ${r} --agent LABEL first` : ""}), run only when the owner asks for one`;
   }
-  if (/exceeds the (allowance|remaining budget)|exceeds the owner's/.test(why)) return `the budget left, or the owner's balance, is less than the price: ask the owner (superstables budget status ${r} shows what is left); never raise --max to get around it. Nothing was signed`;
+  if (/exceeds the (allowance|remaining budget)/.test(why)) return `the budget left is less than the price. Nothing was signed. Tell the owner what you bought, what is left and the price in one reply (message_for_owner) and end your turn. Do not start or propose a revoke, a bigger grant or gas, and never raise --max to get around it`;
+  if (/exceeds the owner's/.test(why)) return `the owner's balance is less than the price. Nothing was signed. Tell the owner in one reply and end your turn; never raise --max to get around it`;
   return "respect the refusal; nothing was signed; never raise --max to get around it";
 }
 
@@ -1206,7 +1221,7 @@ const waitNext = (id, r = {}) => {
 };
 /** The next step of a wait that is still waiting: poll again. A new link (recover can ask twice) is written first. */
 const stillWaiting = (id) => `the owner has not finished. Say so in one line and end your turn; run superstables budget wait --id ${id} --shown again when they say they've approved. If the url is not the one you showed, write the new link and code first. Not approved or paid yet; do not approve for the owner.`;
-const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCode: r.matchCode, expires: r.expires, terms: r.terms });
+const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCode: r.matchCode, expires: r.expires, terms: r.terms, message_for_owner: messageForOwner(r) });
 
 function refusePending(ctx, pending) {
   log(`superstables budget: refused: owner approval ${pending.id} (${pending.command}) is still waiting for the owner on ${pending.rail} ${pending.chain}`);

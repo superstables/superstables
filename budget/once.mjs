@@ -175,7 +175,31 @@ function termsOf(service, created) {
  * The `next` of every command that returns waiting_owner: the link is written for the owner first, and `wait` refuses
  * without --shown (cli.mjs), so an agent cannot poll before the owner can read it.
  */
-export const showFirst = (id, withCode = true) => `write the link${withCode ? ", the code" : ""} and the terms in your reply to the owner and end your turn there. When they say they've approved, run superstables budget wait --id ${id} --shown. Not approved or paid yet: do not approve for the owner. ${TESTNET_LINE}`;
+export const showFirst = (id, withCode = true) => `reply to the owner with message_for_owner, word for word (it has the link${withCode ? ", the code" : ""} and the amount), and end your turn there. When they say they've approved, run superstables budget wait --id ${id} --shown. Not approved or paid yet: do not approve for the owner. ${TESTNET_LINE}`;
+
+const OTHER_NETWORKS = { moderato: "Tempo Moderato", devnet: "Solana devnet" };
+/**
+ * The reply an agent sends the owner for a link that needs them, word for word (message_for_owner): the link, the match
+ * code, what it does and for how much, the testnet line, and the one thing to do next. An agent that writes its own reply
+ * may leave out the code or the link's #token.
+ */
+export function messageForOwner(r) {
+  if (!r?.url) return null;
+  const t = r.terms ?? {};
+  const network = EVM_CHAINS[r.chain]?.label ?? OTHER_NETWORKS[r.chain] ?? r.chain ?? "the testnet";
+  const what = t.title ?? r.action ?? r.command ?? "this request";
+  const unit = !t.unit || t.unit === "USDC" ? "test USDC" : `${t.unit} (testnet)`;
+  const hasAmount = t.amount != null && t.amount !== "";
+  const local = /^http:\/\/(127\.0\.0\.1|localhost)/.test(r.url);
+  return [
+    `Review and approve in your wallet: ${what}`,
+    r.url,
+    r.matchCode ? `Match code: ${r.matchCode} (pick it on the page)` : null,
+    `${hasAmount ? `${t.amount} ${unit} on ${network}.` : `On ${network}.`} ${TESTNET_LINE}`,
+    local ? "Open it in the browser that has your wallet, on this computer." : null,
+    "Tell me when you've approved.",
+  ].filter(Boolean).join("\n");
+}
 
 // ---- records ---------------------------------------------------------------------------------------------------------
 

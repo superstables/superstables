@@ -223,7 +223,7 @@ describe("an owner approval an agent started", () => {
     const port = new URL(url).port;
     expect(setup.result.next).toContain(`ssh -L ${port}:127.0.0.1:${port}`);
     // reply with the link and end the turn; wait --shown once the owner says they've approved
-    expect(setup.result.next).toContain("write the link and the terms in your reply to the owner and end your turn there");
+    expect(setup.result.next).toContain("reply to the owner with message_for_owner, word for word (it has the link and the amount), and end your turn there");
     expect(setup.result.next).toContain(`superstables budget wait --id ${id} --shown`);
     // the link once: one APPROVE line on stdout, none repeated on stderr
     expect(`${setup.stdout}\n${setup.stderr}`.split("\n").filter((l) => l.startsWith("APPROVE "))).toHaveLength(1);

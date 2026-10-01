@@ -19,7 +19,7 @@ A new account starts with a limit of 0.05 test USDC per payment and 1 per day, w
    superstables budget buy-once --service ID --param K=V [--param K=V ...] --max M
    ```
    `--params JSON` also works. The inputs must be ones the service lists; a wrong one is refused with the accepted values. The command checks the price against `--max` before anything is created, asks the site for the purchase, and returns at once with `APPROVE {...}` and `RESULT {"state":"waiting_owner","id","url","matchCode","expires","terms","next"}` and exit 0. That is not approval and nothing is paid yet.
-4. Write the link, the `matchCode`, the amount and network, "Testnet only, no real money" and "Tell me when you've approved" in a reply, as SKILL.md's safety rule 10 says, and end your turn. They have 10 minutes, and the page offers three codes: they must pick yours.
+4. Reply with `message_for_owner` word for word (the link, the `matchCode`, the amount and network, the testnet line, "Tell me when you've approved"), as SKILL.md's safety rule 10 says, and end your turn. They have 10 minutes, and the page offers three codes: they must pick yours.
 5. When the owner says they've approved, run `superstables budget wait --id ID --shown`. If it is still `waiting_owner`, say so in one line and end your turn again.
 
 One buy-once purchase is open at a time. A second `buy-once` is refused with the pending link; follow that id instead. `--replace` cancels the open one, only while the owner has not signed and only when they ask.

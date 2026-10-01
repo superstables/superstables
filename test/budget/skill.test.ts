@@ -34,13 +34,13 @@ describe("skills/superstables-payments/SKILL.md", () => {
     expect(skill).toMatch(/superstables budget find --once/);
     expect(skill).toMatch(/setup --rail evm --hosted/);
     expect(skill).toMatch(/Base Sepolia or Arc Testnet/);
-    expect(skill).toMatch(/Tell me when you.ve approved\./);
+    expect(skill).toMatch(/Tell me when you.ve approved/);
     expect(skill).toMatch(/wait --id ID --shown/);
   });
 
   it("writes the link before waiting, offers buy once only for listed services, and treats a no as final", () => {
-    expect(skill).toMatch(/Write the link in a reply and end your turn/);
-    expect(skill).toMatch(/Testnet only, no real money\./);
+    expect(skill).toMatch(/Reply with `message_for_owner` and end your turn/);
+    expect(skill).toMatch(/Testnet only: test USDC, no real money\./);
     expect(skill).toMatch(/so is a spent budget/);
     expect(skill).toMatch(/`wait` refuses without `--shown`/);
     expect(skill).toMatch(/A no is final/);
