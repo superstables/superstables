@@ -222,17 +222,24 @@ describe("an owner approval an agent started", () => {
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/owner\//);
     const port = new URL(url).port;
     expect(setup.result.next).toContain(`ssh -L ${port}:127.0.0.1:${port}`);
-    expect(setup.result.next).toContain(`superstables budget wait --id ${id} until final is true`);
+    // reply with the link and end the turn; wait --shown once the owner says they've approved
+    expect(setup.result.next).toContain("write the link and the terms in your reply to the owner and end your turn there");
+    expect(setup.result.next).toContain(`superstables budget wait --id ${id} --shown`);
     // the link once: one APPROVE line on stdout, none repeated on stderr
     expect(`${setup.stdout}\n${setup.stderr}`.split("\n").filter((l) => l.startsWith("APPROVE "))).toHaveLength(1);
     expect(setup.stdout.split("\n")[0]).toMatch(/^APPROVE \{/);
 
-    const waiting = await budget(["wait", "--id", id, "--timeout", "1"]);
+    // wait reads nothing until the caller says the owner can read the link
+    const unshown = await budget(["wait", "--id", id, "--timeout", "1"]);
+    expect(unshown.code).toBe(2);
+    expect(unshown.result).toMatchObject({ state: "show_owner_first", id });
+
+    const waiting = await budget(["wait", "--id", id, "--shown", "--timeout", "1"]);
     expect(waiting.code).toBe(0);
     expect(waiting.result).toMatchObject({ state: "waiting_owner", final: false, id });
 
     // nobody approves: the link expires, nothing was sent, and the next step is to run it again
-    const ended = await budget(["wait", "--id", id, "--timeout", "40"]);
+    const ended = await budget(["wait", "--id", id, "--shown", "--timeout", "40"]);
     expect(ended.code).toBe(3);
     expect(ended.result).toMatchObject({ command: "setup", state: "refused_precheck", final: true, id });
     expect(ended.result.reason).toMatch(/expired/);
@@ -249,7 +256,7 @@ describe("an owner approval an agent started", () => {
     expect(setup.stderr.split("\n").filter((l) => l.startsWith("APPROVE "))).toHaveLength(1);
     expect(JSON.parse(setup.stderr.split("\n").find((l) => l.startsWith("APPROVE "))!.slice(8)).url).toBe(out.url);
 
-    const ended = await budget(["wait", "--id", out.id, "--timeout", "40", "--json"]);
+    const ended = await budget(["wait", "--id", out.id, "--shown", "--timeout", "40", "--json"]);
     expect(ended.code).toBe(3);
     expect(JSON.parse(ended.stdout.trim())).toMatchObject({ command: "setup", state: "refused_precheck", final: true, id: out.id });
   }, 90_000);

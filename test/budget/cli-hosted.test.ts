@@ -311,8 +311,10 @@ describe("find", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/Weather\s+0\.001 USDC\s+base-sepolia\s+https:\/\/seller\.example\/w/);
     expect(r.result).toMatchObject({ command: "find", state: "ok", services: [{ name: "Weather", chain: "base-sepolia", url: "https://seller.example/w" }] });
+    // --json: stdout is the RESULT object alone (no table), which carries the services
     const j = await budget(["find", "--json", "--site", site.url]);
-    expect(JSON.parse(j.stdout.split("\n")[0])).toEqual(r.result.services);
+    expect(j.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(j.stdout).services).toEqual(r.result.services);
   }, 30_000);
 
   describe("which site", () => {

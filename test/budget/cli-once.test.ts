@@ -150,8 +150,10 @@ describe("find --once", () => {
     expect(r.stdout).toMatch(/demo-wallet-briefing\s+0\.003 USDC/);
     expect(r.result).toMatchObject({ command: "find", state: "ok", services: [{ id: "demo-market-data", price: "0.01", available: true, params: [{ name: "asset", required: true, values: ["BTC", "ETH"] }] }, { id: "demo-wallet-briefing", simulated: true }] });
     expect(r.result.next).toMatch(/Testnet only: test USDC, no real money\./);
+    // --json: stdout is the RESULT object alone (no table), which carries the services
     const j = await budget(["find", "--once", "--json", "--site", site.url]);
-    expect(JSON.parse(j.stdout.split("\n")[0])).toEqual(r.result.services);
+    expect(j.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(j.stdout).services).toEqual(r.result.services);
   }, 30_000);
 
   it("takes no --chain", async () => {
