@@ -302,7 +302,7 @@ export function approvalPage(facts: ApprovalPageFacts, look: PageLook = pageLook
   return framePage({
     look,
     title: "Approve a payment",
-    eyebrow: "Payment approval",
+    eyebrow: "Payment request",
     lede: "Check the amount and the recipient, then sign with your browser wallet, or reject. Your wallet keeps its key.",
     testnet: /testnet/i.test(facts.networkLabel || facts.network),
     body,
@@ -314,7 +314,7 @@ export function approvalNotFoundPage(look: PageLook = pageLook()): string {
   return framePage({
     look,
     title: "This link is unavailable",
-    eyebrow: "Payment approval",
+    eyebrow: "Payment request",
     body: `
   <div class="note bad">
     The request may have ended or the client may have restarted. Cancel any open wallet request.

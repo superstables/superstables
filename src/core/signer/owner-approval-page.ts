@@ -682,7 +682,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
   return framePage({
     look,
     title: terms.title,
-    eyebrow: facts.kind === "connect" ? "Owner sign-in" : "Owner approval",
+    eyebrow: facts.kind === "connect" ? "Owner sign-in" : "Agent request",
     lede: OWNER_LEDE,
     testnet: facts.chain.testnet,
     style: OWNER_STYLE,
@@ -695,7 +695,7 @@ export function ownerNotFoundPage(look: PageLook = pageLook()): string {
   return framePage({
     look,
     title: "This link is unavailable",
-    eyebrow: "Owner approval",
+    eyebrow: "Agent request",
     style: OWNER_STYLE,
     body: `
   <div class="note bad">
