@@ -30,10 +30,11 @@ afterEach(async () => {
   rmSync(home, { recursive: true, force: true });
 });
 
-function budget(args: string[]): Promise<{ code: number; stdout: string; stderr: string; result: any; approve: any }> {
+function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string; result: any; approve: any }> {
   return new Promise((done, fail) => {
     const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: rpc.url };
     delete env.SUPERSTABLES_SITE;
+    Object.assign(env, extraEnv);
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
     let stdout = "";
@@ -259,6 +260,48 @@ describe("find", () => {
     const j = await budget(["find", "--json", "--site", site.url]);
     expect(JSON.parse(j.stdout.split("\n")[0])).toEqual(r.result.services);
   }, 30_000);
+
+  describe("which site", () => {
+    let other: FakeSite;
+    const record = (chain: string, url: string, hosted = true) => {
+      mkdirSync(join(home, "budget", "public"), { recursive: true });
+      writeFileSync(join(home, "budget", "public", `evm-${chain}.env`), `B4_OWNER_ADDRESS=0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A\n${hosted ? "APPROVALS=hosted\n" : ""}SITE=${url}\n`);
+    };
+    beforeEach(async () => {
+      other = await startFakeSite();
+      site.services = [{ name: "Recorded", price: "0.001", network: "eip155:84532", url: "https://seller.example/recorded" }];
+      other.services = [{ name: "Other", price: "0.002", network: "eip155:84532", url: "https://seller.example/other" }];
+    });
+    afterEach(() => other.close());
+
+    it("uses the site recorded by setup --hosted when no site is given", async () => {
+      record("base-sepolia", site.url);
+      const r = await budget(["find"]);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.result).toMatchObject({ state: "ok", site: site.url, services: [{ name: "Recorded" }] });
+    }, 30_000);
+
+    it("without --chain, uses the first hosted chain recorded; with --chain, that chain's site", async () => {
+      record("arbitrum-sepolia", other.url);
+      expect((await budget(["find"])).result).toMatchObject({ site: other.url, services: [{ name: "Other" }] });
+      record("base-sepolia", site.url);
+      expect((await budget(["find", "--chain", "base-sepolia"])).result).toMatchObject({ site: site.url });
+      expect((await budget(["find", "--chain", "arbitrum-sepolia"])).result).toMatchObject({ site: other.url });
+    }, 60_000);
+
+    it("a file that is not hosted records no site; --site and SUPERSTABLES_SITE come first", async () => {
+      record("arbitrum-sepolia", other.url, false);
+      record("base-sepolia", site.url);
+      expect((await budget(["find"])).result.site).toBe(site.url);
+      expect((await budget(["find", "--site", other.url])).result).toMatchObject({ site: other.url, services: [{ name: "Other" }] });
+      expect((await budget(["find"], { SUPERSTABLES_SITE: other.url })).result.site).toBe(other.url);
+    }, 60_000);
+
+    it("refuses a rail or chain that cannot record a site", async () => {
+      expect((await budget(["find", "--rail", "tempo"])).code).toBe(2);
+      expect((await budget(["find", "--chain", "moderato"])).code).toBe(2);
+    }, 30_000);
+  });
 
   it("says any seller URL still works when the site has no list", async () => {
     const r = await budget(["find", "--site", site.url]);

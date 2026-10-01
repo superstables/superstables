@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { approvalsDir, opsDir, publicFile } from "./paths.mjs";
 import { HOLDER_ENV, WORKER_ENV, adoptWorker, claim, findPending, forget, isApprovalId, logFile, pageWords, readApproval, recordFinal, recordLink, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
-import { DEFAULT_SITE, chosenSite, listSiteServices } from "./site.mjs";
+import { DEFAULT_SITE, chosenSite, listSiteServices, siteOrigin } from "./site.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // Two ways to run. In a checkout the TypeScript sources sit next to this file, and the rails always run from them, on the
@@ -98,7 +98,7 @@ const COMMANDS = {
   },
   find: {
     flags: { json: "b", site: "v" }, required: [],
-    help: `superstables budget find [--json] [--site URL]\n  Lists the services superstables.com says a budget can pay: testnet, on a rail and network this tool pays. Name, price,\n  chain and URL; RESULT carries them as services. --json prints the list as one JSON line instead of a table. Reads only;\n  signs nothing and needs no account. The site is --site, else SUPERSTABLES_SITE, else ${DEFAULT_SITE}. Any other seller\n  URL works too: superstables budget preflight --rail evm --url U reads its price.`,
+    help: `superstables budget find [--json] [--site URL] [--chain C]\n  Lists the services superstables.com says a budget can pay: testnet, on a rail and network this tool pays. Name, price,\n  chain and URL; RESULT carries them as services. --json prints the list as one JSON line instead of a table. Reads only;\n  signs nothing and needs no account. The site is --site, else SUPERSTABLES_SITE, else the SITE recorded by setup --hosted (for --chain C, else the first evm chain that has one), else ${DEFAULT_SITE}. Any other seller\n  URL works too: superstables budget preflight --rail evm --url U reads its price.`,
   },
   revoke: {
     flags: { yes: "b", agent: "v", ...OWNER_FLAGS }, required: [],
@@ -194,7 +194,12 @@ function parse(argv) {
     if (v === undefined || (inline === undefined && v.startsWith("--"))) return badInput({ command: cmd }, `--${name} needs a value`);
     f[name] = v;
   }
-  if (cmd === "find") return { cmd, f, ctx: { command: cmd } };
+  if (cmd === "find") {
+    const ctx = { command: cmd };
+    if (f.rail !== undefined && f.rail !== "evm") return badInput(ctx, "--rail for find is evm: only evm chains record a site (hosted approvals)");
+    if (f.chain !== undefined && !EVM_CHAIN_KEYS.includes(f.chain)) return badInput(ctx, `--chain for find must be one of: ${EVM_CHAIN_KEYS.join(", ")}`);
+    return { cmd, f, ctx };
+  }
   if (cmd === "wait") {
     const ctx = { command: cmd };
     if (f.id === undefined) return badInput(ctx, "missing required flag --id (the id an owner command printed)");
@@ -388,6 +393,14 @@ function recordedOwner(f) {
   }
 }
 const ownerLine = (owner) => owner ? `  owner (recorded): ${owner}. If this isn't your wallet, stop: do not approve anything for this budget.` : "  owner (recorded): none yet (superstables budget setup, run by the owner or with the owner watching)";
+/** The site recorded by `setup --hosted` for --chain, or for the first evm chain that has one: an origin, or null. */
+function recordedSite(f) {
+  for (const chain of f.chain ? [f.chain] : EVM_CHAIN_KEYS) {
+    const site = hostedSite({ rail: "evm", chain });
+    if (site && !siteOrigin(site).error) return siteOrigin(site).origin;
+  }
+  return null;
+}
 /** Hosted approvals recorded for this rail and chain: the site's origin, or null (the page on this computer). */
 function hostedSite(f) {
   if (f.rail !== "evm") return null;
@@ -728,7 +741,9 @@ async function wait({ f }) {
 
 // Read only: the services the site lists for budgets. Signs nothing, needs no account, key file or rail.
 async function find({ f, ctx }) {
-  const site = chosenSite(f.site);
+  // --site, else SUPERSTABLES_SITE, else the site `setup --hosted` recorded, else the default
+  const recorded = f.site === undefined && !process.env.SUPERSTABLES_SITE?.trim() ? recordedSite(f) : null;
+  const site = recorded ? { origin: recorded } : chosenSite(f.site);
   if (site.error) return badInput(ctx, `--site: ${site.error}`);
   const chainByNetwork = Object.fromEntries(Object.entries(EVM_CHAINS).map(([k, c]) => [`eip155:${c.chainId}`, k]));
   const r = await listSiteServices({ site: site.origin, chainByNetwork });
