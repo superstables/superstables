@@ -42,10 +42,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   use local approvals only.
 - **`superstables budget find`** lists the services superstables.com says a budget can pay,
   with price, chain and URL. Any other seller URL still works.
+- **`superstables budget buy-once`** buys one service you approve on superstables.com, with no
+  setup, no gas and no budget. The agent names the service, its inputs and the most it accepts
+  (`--max`); you approve that one payment in your wallet, after picking the match code it shows
+  you. The result says whether it was paid and delivered, and the seller's answer is saved as a
+  file. `find --once` lists the services that can be bought this way. Base Sepolia, test USDC.
 - **`superstables budget` as a standalone skill zip.** `npm run skill` builds
   `superstables-budget-skill-<version>.zip`: the skill and the whole tool bundled into plain
   JavaScript that needs Node 20 or newer and nothing else. `superstables budget --version` names
-  the build, and `THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+  the build, and `THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences. The
+  skill asks the owner whether to buy once or set up a budget, and loads the steps for that
+  choice only.
 
 ## [0.2.0] - 2026-09-22
 

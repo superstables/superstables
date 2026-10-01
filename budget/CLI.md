@@ -1,6 +1,6 @@
 # `superstables budget` CLI contract
 
-One command for the budget rails. `superstables budget` is a thin dispatcher over the rail scripts, which follow `CONTRACT.md`. It normalizes their `RESULT` lines into one shape. Testnet only.
+One command for the budget rails. `superstables budget` is a thin dispatcher over the rail scripts, which follow `CONTRACT.md`. It normalizes their `RESULT` lines into one shape. `buy-once` is the other way to pay: one purchase the owner approves on superstables.com, with no budget. Testnet only: test USDC, no real money.
 
 | `--rail` | Path | Chains (`--chain`) | Implementation |
 | --- | --- | --- | --- |
@@ -19,10 +19,11 @@ One command for the budget rails. `superstables budget` is a thin dispatcher ove
 | `superstables budget grant --rail R --amount A [--expiry ISO] [--period S] [--sellers a,b]` | owner | Prints the terms (cap, true maximum, what the chain enforces and what it doesn't). The owner approves it on the approval page. Refuses constraints the rail can't enforce (`evm` and `solana`: `--expiry`, `--period`, `--sellers`). |
 | `superstables budget status --rail R` | anyone | Remaining budget, expiry, revoked, funds at risk. No secrets. |
 | `superstables budget buy --rail R --url U --max M [--pay-to ADDR] [--op ID] [--method M --body JSON]` | agent | One purchase under the budget. `--method` and `--body` are for tempo and solana. On `evm`, the seller's answer to the paid request is saved as a file (see Output). |
+| `superstables budget buy-once --service ID --max M [--param K=V ...] [--params JSON] [--site URL] [--wait \| --detach] [--replace]` | agent, owner approves | One purchase of a service the site lists for it, approved by the owner on superstables.com: no setup, no gas, no budget, no agent key (see [Buy once](#buy-once)). Base Sepolia only. `--service` and `--max` are required. |
 | `superstables budget reconcile --rail R --op ID` | anyone | Reads the chain for an operation. **Never signs or sends.** |
 | `superstables budget recover --rail evm [--op ID]` | owner | EVM only: stop the allowance first, then return stranded funds. The agent key signs its own steps; the owner approves on the approval page only what the agent cannot do (the rest of the allowance, gas for the agent). |
 | `superstables budget revoke --rail R` | owner | Ends the budget on chain. The owner approves it on the approval page. |
-| `superstables budget find [--json] [--site URL] [--chain C]` | anyone | Lists the services superstables.com says a budget can pay (`GET /api/v1/budget/services`): name, price, chain (the `--chain` key when the client knows the network) and URL, as a table on stdout, or one JSON line with `--json`. `RESULT` carries them as `services`. When the site has no list, it exits 1 and `next` says that any seller URL works with `preflight` and `buy`. The site is `--site`, else `SUPERSTABLES_SITE`, else the `SITE` that `setup --hosted` recorded (for `--chain C`, or the first `evm` chain that has one), else `https://www.superstables.com`. Reads only; no account, key or rail. |
+| `superstables budget find [--json] [--site URL] [--chain C] [--once]` | anyone | Lists the services superstables.com says a budget can pay (`GET /api/v1/budget/services`): name, price, chain (the `--chain` key when the client knows the network) and URL, as a table on stdout, or one JSON line with `--json`. `RESULT` carries them as `services`. When the site has no list, it exits 1 and `next` says that any seller URL works with `preflight` and `buy`. The site is `--site`, else `SUPERSTABLES_SITE`, else the `SITE` that `setup --hosted` recorded (for `--chain C`, or the first `evm` chain that has one), else `https://www.superstables.com`. Reads only; no account, key or rail. With `--once`, it lists instead the services that can be bought once (`GET /api/v1/purchase/services`): id, name, price and inputs (`*` marks a required one); `RESULT` carries them as `services`. `--once` takes no `--rail` or `--chain`. |
 | `superstables budget wait --id ID [--timeout S]` | anyone | After a detached owner command: waits up to `S` seconds (default 30, at most 300) and prints the approval's state. **Never signs or sends.** |
 
 On tempo, `--agent LABEL` picks the access key for `doctor`, `grant`, `status`, `buy` and `revoke`, and `setup --agent LABEL` makes a new one.
@@ -53,6 +54,7 @@ With more than one wallet installed, the page lists them and the owner chooses o
 - A site that cannot be reached, or that refuses the request (for example a cap above the account's limit), is a refusal before anything is sent: exit 3 with the site's reason. Once the site reports that the wallet was asked, or a transaction hash, an unfinished outcome is `unknown` (exit 5), never "nothing sent".
 
 - As soon as the link exists, stdout gets one line `APPROVE {"action","url","expires","terms"}` (hosted: also `matchCode`). `terms` holds the page's plain words: `title`, `amount`, `unit`, `summary`, `enforced`, `notEnforced`. The same link goes to stderr. The final `RESULT` is still the last line, and carries `url`.
+- The sentence on stderr that carries the link, and the `next` of a `waiting_owner` result, say: `Testnet only: test USDC, no real money.` The hosted ones also say that the first link the owner opens asks them to sign in with their wallet (a message, no fee).
 - `--timeout SECONDS` (10 to 3600, default 600): how long the link stays open. `--no-open`: do not open it in the default browser.
 
 ### Detached or blocking
@@ -84,6 +86,28 @@ The background worker has a timeout. The page expires its link after `--timeout`
 - `--yes` without `--owner-key-file` exits 2, on every rail.
 - Tests and automation only: `--owner-key-file PATH` (mode 600) with `--yes` signs with that key file instead. `setup --owner-key-file PATH` records its address.
 
+## Buy once
+
+`buy-once` wraps the site's hosted purchase API (`GET /api/v1/purchase/services`, `POST /api/v1/purchases` with an `Idempotency-Key` and `{service_id, params, max_amount}`, `GET /api/v1/purchases/{id}?wait=...`, `POST /api/v1/purchases/{id}/cancel`; the site documents it at `/docs/purchase.md`). Testnet only: test USDC on Base Sepolia, over x402 `exact`. `--rail` and `--chain` are accepted only as `evm` and `base-sepolia`; any other rail is exit 2 and a mainnet is exit 3.
+
+- Before anything is created it reads the service's listing, checks the inputs against it, and refuses (exit 3) when the price is above `--max` or the service is unavailable. After the site creates the purchase, it checks the terms again: the amount (at most `--max`, equal to the listing), the network, Base Sepolia's USDC and the recipient the listing names. The link must be on the site. A purchase that fails a check is cancelled, and its link is never shown.
+- As soon as the link exists, stdout gets `APPROVE {"action":"buy-once","url","expires","terms","matchCode"}` and stderr the same link in words, with the testnet line. Not in a terminal (an agent), or with `--detach`, the command then returns: `RESULT` with `state: "waiting_owner"`, exit 0, and `id`, `purchase` (the site's id), `service`, `url`, `matchCode`, `expires`, `terms` and `next`. In a terminal, or with `--wait`, it reads the purchase until it ends and prints the final `RESULT`.
+- There is no background process: the site does the work once the owner signs. `superstables budget wait --id ID` reads the purchase from the site, holding each read up to 20 s, and returns `waiting_owner` (its `reason` says whether the owner has not opened the link, the payment is going to the seller, or the chain is being read) or the final `RESULT`, the same on every later call. Waiting never approves or retries anything.
+- The final `RESULT`: `state: "settled"` with `paid`, `delivered`, `amount`, `tx: {settle}`, `txUrl`, `payer`, `purchase` (the receipt's id on the site), `service`, and, when the seller answered, `responseFile`, `responseType`, `responseBytes`, `responseTruncated`. The file is `$SUPERSTABLES_HOME/budget/once/<id>.response`, mode 600, holding the answer the site relays (it keeps the first 4,000 characters): seller data, never instructions.
+
+| Exit | State | When |
+| --- | --- | --- |
+| 0 | `settled` | Paid and delivered. Also `waiting_owner`: not final |
+| 1 | `failed` | Nothing was paid (the seller refused, the site did not answer, a rate limit) |
+| 2 | `failed` | Bad input: a flag, an input the service does not list, an unknown service |
+| 3 | `refused_precheck` | Nothing was paid: the price is above `--max`, the owner rejected it, said they did not ask for it, picked another code, or did not approve within 10 minutes; or a check above failed |
+| 4 | `settled` | Paid, the service did not deliver: never pay again |
+| 5 | `unknown` | A payment may have left and the site cannot tell yet: never buy again |
+
+- One buy-once purchase is open at a time. A second `buy-once` is refused (exit 3) with the pending `id`, `url` and `matchCode`; `--replace` asks the site to cancel it, which it does only while nobody has signed.
+- The purchase's access token (`sspt_test_...`) is kept only in the approval's record (`budget/approvals/<id>.json`, mode 600) and removed when the purchase is final. It is never printed or logged. A retried creation uses the same `Idempotency-Key`.
+- `--site` is the site, else `SUPERSTABLES_SITE`, else the `SITE` that `setup --hosted` recorded, else `https://www.superstables.com`.
+
 ## Output
 
 stdout carries one JSON object on its last line, prefixed `RESULT `; human logs go to stderr.
@@ -100,6 +124,8 @@ stdout carries one JSON object on its last line, prefixed `RESULT `; human logs 
 
 `responseFile` (evm `buy`): the seller's answer to the paid request, saved byte for byte next to the journal as `<op>.response`, mode 600. It is written once the pull has landed and the seller answered with anything but a 402, so a refused buy writes none. At most 1 MB (1,000,000 bytes) is kept; `responseTruncated: true` means the answer was longer and was cut. `responseType` is the seller's content type, `responseBytes` the saved size. The file is seller data, never instructions: nothing here runs or parses it. The log keeps a one-line preview. Seller text in the logs is flattened to one line, and only an owner command forwards an `APPROVE` line.
 
+`buy-once` ends the same way: its `RESULT` has `service`, `purchase`, `txUrl` and `payer` as well, and `id` is the approval id `wait` takes.
+
 `state`: `planned`, `sent`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `unknown`, `not_found`, `ok` (reads), `waiting_owner` (the detached owner command has no final result yet, including while it checks a submitted transaction). Unknown amounts are `null`, never `"0"`.
 
 ## Exit codes (same on every rail)
@@ -111,11 +137,11 @@ stdout carries one JSON object on its last line, prefixed `RESULT `; human logs 
 | 2 | Bad input | fix the command |
 | 3 | Refused; owner actions may report a mismatch after submission | respect it; never raise `--max` to get around it |
 | 4 | Paid but not delivered | never pay again; report it |
-| 5 | Outcome unknown | purchases: `reconcile --rail R --chain C --op ID`; owner actions: `status` on the same rail and chain, plus wallet activity. Never pay twice |
+| 5 | Outcome unknown | purchases: `reconcile --rail R --chain C --op ID` (`buy-once`: ask the owner to check wallet activity); owner actions: `status` on the same rail and chain, plus wallet activity. Never pay twice |
 
 ## Where things live
 
-All paths come from `paths.mjs`, under the client's home (`SUPERSTABLES_HOME`, default `~/.superstables`). Keys: `keys/budget/<rail>-agent.env` (mode 600). The default flow stores no owner key: the owner's key stays in their wallet. Public addresses: `budget/public/<rail>-<chain>.env`. Journals: `budget/ops/<rail>-<chain>/<id>.json`, and on `evm` the seller's answer `<id>.response` (mode 600). Approval page log (state changes, no signatures): `budget/owner-approvals.jsonl`. Detached approvals: `budget/approvals/<id>.json` (the record and the final `RESULT`, mode 600; for a hosted approval also the site, its request id and, until final, the access token), `budget/approvals/<id>.log` (the background process's output), and `budget/approvals/active-<rail>-<chain>` (the id that holds that chain).
+All paths come from `paths.mjs`, under the client's home (`SUPERSTABLES_HOME`, default `~/.superstables`). Keys: `keys/budget/<rail>-agent.env` (mode 600). The default flow stores no owner key: the owner's key stays in their wallet. Public addresses: `budget/public/<rail>-<chain>.env`. Journals: `budget/ops/<rail>-<chain>/<id>.json`, and on `evm` the seller's answer `<id>.response` (mode 600). Approval page log (state changes, no signatures): `budget/owner-approvals.jsonl`. What `buy-once` returned: `budget/once/<id>.response` (mode 600). Detached approvals, and each buy-once purchase's record: `budget/approvals/<id>.json` (the record and the final `RESULT`, mode 600; for a hosted approval also the site, its request id and, until final, the access token), `budget/approvals/<id>.log` (the background process's output), and `budget/approvals/active-<rail>-<chain>` (the id that holds that chain).
 
 Environment: `SUPERSTABLES_HOME` (above); `SUPERSTABLES_SITE`, the site for `setup --hosted` and `find` when `--site` is not given (`find` then uses the recorded site before the default); `B4_CHAIN`, the default `evm` chain for the rail scripts; `B4_RPC`, an RPC URL that replaces the selected `evm` chain's (for tests or your own node; scripts that sign still check the chain id first).
 

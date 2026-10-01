@@ -50,3 +50,14 @@ Refusal exits with code 3 and a `RESULT` line with `state: "refused_precheck"` a
 ## 6. Help and bad input never sign
 
 For every script: `--help` / `-h` prints usage and exits 0, and unknown flags or missing required flags exit 2. Both happen before any secret file is read or any RPC write. No script may default to a spending action when arguments are missing.
+
+## 7. Buy once never gives the agent a way to pay
+
+`buy-once` (one purchase the owner approves on superstables.com, `once.mjs`) holds no key and signs nothing. Its rules:
+
+- The owner's wallet signs one authorization for exactly the amount and recipient the page shows. The agent receives no signature. The terms on the page come from the site's own reading of the seller, never from agent text.
+- `--max` is required. The command refuses before it asks for a purchase when the listing is above it, and refuses and cancels when the purchase the site made differs from the listing (amount, network, token, recipient) or is above `--max`. It never raises `--max`.
+- The link it shows is on the site it asked, never another origin. It prints the link and match code the moment they exist, and `waiting_owner` is never reported as approval.
+- The purchase's access token lives only in a mode-600 record, until the purchase is final. It is never printed or logged.
+- A purchase whose payment cannot be told is `unknown` (exit 5); it is never bought again. A paid purchase whose service failed is exit 4. The seller's answer is saved as a file of data.
+- Base Sepolia only. Mainnet is refused.
