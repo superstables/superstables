@@ -53,7 +53,7 @@ export const isSiteRequestId = (id) => typeof id === "string" && /^b[la]_[A-Za-z
 /** An agent access token: ssbt_... */
 export const isSiteToken = (t) => typeof t === "string" && /^ssbt_[A-Za-z0-9_-]{8,256}$/.test(t);
 
-async function call(url, init, timeoutMs, fetchImpl = fetch) {
+export async function call(url, init, timeoutMs, fetchImpl = fetch) {
   let res;
   try {
     res = await fetchImpl(url, { ...init, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });

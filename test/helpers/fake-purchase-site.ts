@@ -1,0 +1,150 @@
+// A stand-in for superstables.com's hosted purchase API (/api/v1/purchase/services, /api/v1/purchases), for the buy-once
+// tests. It follows the site's published shape (docs/purchase.md): a listing with inputs and a price, a purchase made with an
+// Idempotency-Key, an access token that reads and cancels it, and the owner's link and match code. A test moves a purchase
+// along by changing its state, as the owner and the seller would. No network.
+import { randomUUID } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { readBody, startServer, type TestServer } from "./servers.js";
+
+export const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+export const SELLER = "0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E";
+export const PAYER = "0x2222222222222222222222222222222222222222";
+export const TX = `0x${"ab".repeat(32)}`;
+
+export interface FakePurchase {
+  id: string;
+  token: string;
+  key: string | undefined;
+  body: { service_id: string; params?: Record<string, string>; max_amount?: string };
+  service: Service;
+  state: string;
+  payment: Record<string, unknown>;
+  delivery: Record<string, unknown>;
+  reason?: string;
+  reason_code?: string;
+  final: boolean;
+  polls: number;
+  cancels: number;
+  /** Overrides the terms the site says it created (a seller that changed its price). */
+  terms?: Record<string, unknown>;
+}
+
+interface Service {
+  id: string;
+  name: string;
+  amount: string;
+  asset: string;
+  params: { name: string; required: boolean; enum?: string[]; default?: string }[];
+  available?: boolean;
+  simulated?: boolean;
+}
+
+export interface FakePurchaseSite extends TestServer {
+  services: Service[];
+  purchases: FakePurchase[];
+  /** Called on every read of a purchase, before the answer. */
+  onPoll?: (p: FakePurchase) => void;
+  /** Answer POST /api/v1/purchases with this status and error instead of creating one. */
+  refuseCreate?: { status: number; error: { code: string; message: string; allowed?: unknown } };
+  /** The origin the approval link points at (default: this site). */
+  approvalBase?: string;
+  /** Changes what the next POST creates, before it is stored (a different recipient, another price). */
+  tweak?: (p: FakePurchase) => void;
+  /** The owner signed and the seller answered: the purchase settles. */
+  settle(p: FakePurchase, result?: unknown): void;
+}
+
+export const MARKET: Service = {
+  id: "demo-market-data",
+  name: "Demo market data",
+  amount: "0.01",
+  asset: USDC,
+  params: [{ name: "asset", required: true, enum: ["BTC", "ETH"] }],
+};
+export const BRIEFING: Service = {
+  id: "demo-wallet-briefing",
+  name: "Wallet briefing",
+  amount: "0.003",
+  asset: USDC,
+  simulated: true,
+  params: [{ name: "sample_wallet", required: true, enum: ["demo-active", "demo-dormant"] }, { name: "period", required: false, enum: ["7d", "30d"], default: "7d" }],
+};
+
+const json = (res: ServerResponse, status: number, body: unknown) => {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
+};
+const atomic = (decimal: string) => String(Math.round(Number(decimal) * 1e6));
+
+const listing = (s: Service) => ({
+  id: s.id,
+  name: s.name,
+  description: `${s.name}, a test service.`,
+  simulated: s.simulated === true,
+  testnet: true,
+  available: s.available !== false,
+  ...(s.available === false ? { unavailable_reason: "the seller is offline" } : {}),
+  request: { method: "GET", endpoint: `https://seller.example/${s.id}`, params: s.params.map((p) => ({ name: p.name, in: "query", required: p.required, ...(p.enum ? { enum: p.enum } : {}), ...(p.default ? { default: p.default } : {}) })), unknown_params: "rejected" },
+  payment: { protocol: "x402", x402_version: 2, scheme: "exact", network: "eip155:84532", asset: { symbol: "USDC", address: s.asset, decimals: 6 }, amount: { decimal: s.amount, atomic: atomic(s.amount) }, pay_to: SELLER },
+});
+
+export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
+  const site = {} as FakePurchaseSite;
+  site.services = [structuredClone(MARKET), structuredClone(BRIEFING)];
+  site.purchases = [];
+  const terms = (p: FakePurchase) => p.terms ?? { amount: { decimal: p.service.amount, atomic: atomic(p.service.amount) }, asset: { symbol: "USDC", address: p.service.asset, decimals: 6 }, network: "eip155:84532", network_label: "Base Sepolia (testnet)", recipient: SELLER, protocol: "x402", x402_version: 2, scheme: "exact" };
+  const view = (p: FakePurchase) => ({
+    id: p.id, state: p.state, final: p.final, livemode: false,
+    service: { id: p.service.id, name: p.service.name, simulated: p.service.simulated === true, testnet: true },
+    request: { method: "GET", url: `https://seller.example/${p.service.id}`, params: p.body.params ?? {} },
+    terms: terms(p), payment: p.payment, delivery: p.delivery,
+    ...(p.state === "settled" || p.state === "paid_service_failed" ? { receipt: { id: p.id, purchase_id: p.id, transaction: TX, payer: PAYER } } : {}),
+    ...(p.reason ? { reason: p.reason } : {}), ...(p.reason_code ? { reason_code: p.reason_code } : {}),
+    message: `purchase ${p.state}`, next: "see state", next_action: { type: p.final ? "done" : "wait_for_owner" },
+  });
+  site.settle = (p, result = { asset: "BTC", price_usd: 65000 }) => {
+    Object.assign(p, { state: "settled", final: true, payment: { status: "paid", payer: PAYER, transaction: TX, chain: { status: "confirmed", block: 7 } }, delivery: { status: "delivered", http_status: 200, result } });
+  };
+  const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const raw = await readBody(req);
+    if (req.method === "GET" && url.pathname === "/api/v1/purchase/services") return json(res, 200, { supported: { network: "eip155:84532" }, services: site.services.map(listing) });
+    const one = /^\/api\/v1\/purchase\/services\/([^/]+)$/.exec(url.pathname);
+    if (req.method === "GET" && one) {
+      const s = site.services.find((x) => x.id === one[1]);
+      return s ? json(res, 200, listing(s)) : json(res, 404, { error: { code: "not_found", message: "no such service", money_moved: false } });
+    }
+    if (req.method === "POST" && url.pathname === "/api/v1/purchases") {
+      if (site.refuseCreate) return json(res, site.refuseCreate.status, { error: { ...site.refuseCreate.error, money_moved: false } });
+      const body = JSON.parse(raw);
+      const s = site.services.find((x) => x.id === body.service_id);
+      if (!s) return json(res, 404, { error: { code: "not_found", message: "no such service", money_moved: false } });
+      if (body.max_amount && Number(s.amount) > Number(body.max_amount)) return json(res, 409, { error: { code: "price_above_max", message: `the service costs ${s.amount}, above max_amount ${body.max_amount}`, money_moved: false } });
+      const id = randomUUID();
+      const p: FakePurchase = { id, token: `sspt_test_${id.replace(/-/g, "")}`, key: String(req.headers["idempotency-key"] ?? "") || undefined, body, service: s, state: "awaiting_approval", final: false, payment: { status: "awaiting_approval" }, delivery: { status: "pending" }, polls: 0, cancels: 0 };
+      site.tweak?.(p);
+      site.purchases.push(p);
+      return json(res, 201, {
+        ...view(p), access_token: p.token, replayed: false,
+        approval: { url: `${site.approvalBase ?? server.url}/approve/${id}#sspa_test_owner${site.purchases.length}`, match_code: "KPT-RWD", expires_at: new Date(Date.now() + 600_000).toISOString() },
+        message_for_owner: "Open the link and pick KPT-RWD.",
+      });
+    }
+    const m = /^\/api\/v1\/purchases\/([^/]+)(\/cancel)?$/.exec(url.pathname);
+    if (m) {
+      const p = site.purchases.find((x) => x.id === m[1]);
+      if (!p || req.headers.authorization !== `Bearer ${p.token}`) return json(res, 404, { error: { code: "not_found", message: "no such purchase", money_moved: false } });
+      if (m[2] && req.method === "POST") {
+        p.cancels++;
+        if (p.state !== "awaiting_approval") return json(res, 409, { error: { code: "not_awaiting_approval", message: "the purchase is no longer awaiting approval", money_moved: false } });
+        Object.assign(p, { state: "denied", final: true, reason_code: "agent_cancelled", reason: "the agent cancelled it", payment: { status: "not_paid" }, delivery: { status: "not_called" } });
+        return json(res, 200, view(p));
+      }
+      p.polls++;
+      site.onPoll?.(p);
+      return json(res, 200, view(p));
+    }
+    json(res, 404, { error: { code: "not_found", message: "not found" } });
+  });
+  return Object.assign(site, server);
+}

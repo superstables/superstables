@@ -74,6 +74,11 @@ export function readApproval(id) {
   }
 }
 
+/** Store a record (mode 600). A buy-once purchase has no worker: its record is made here (once.mjs). */
+export function saveApproval(record) {
+  return writeApproval(record);
+}
+
 function writeApproval(record) {
   ensureDir();
   const tmp = `${recordFile(record.id)}.${process.pid}.tmp`;
