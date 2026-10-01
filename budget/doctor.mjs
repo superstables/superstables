@@ -3,9 +3,12 @@
 // No rail has an owner key file: the owner approves in their own wallet, so doctor checks the agent file, the public file
 // (the owner's address), the RPC and balances. An owner key file on this machine is only noted: nothing reads it unless a
 // test passes --owner-key-file.
-// Minimum balances are what one grant, a few purchases and a revoke need on each chain. On evm the gas minimums also grow with
+// Minimum balances are what one grant, a few purchases and a revoke need on each chain. On evm the gas minimums grow with
 // the chain's current fee: the agent needs DOCTOR_SPIKE times what one purchase and the cleanup a failure would need (pull,
 // cancel, return) cost now, the owner DOCTOR_SPIKE times a grant, a revoke and a fund-agent (the gas limits in evm/chains.mjs).
+// The agent also needs the chain's fixed minimum: it buys alone, and a fee spike between doctor and a purchase (Amoy) would
+// stop it with nobody there. The owner's fixed minimum applies only when the fee cannot be read: the owner approves in a
+// wallet that shows the fee and refuses what it cannot pay, and on a cheap testnet that minimum is many times the real cost.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
@@ -32,6 +35,13 @@ const evmFeeCap = async (url) => {
   return BigInt(await rpc(url, "eth_gasPrice"));
 };
 /** Round up to two significant digits, for amounts to ask for. */
+/**
+ * The owner's gas balance doctor asks for: DOCTOR_SPIKE times what a grant, a revoke and a fund-agent cost at the current fee,
+ * rounded up to two significant digits; the chain's fixed minimum only when the fee could not be read (`now` null).
+ */
+export const evmOwnerGasNeed = (now, fixed) => up2(now === null ? Number(fixed) : DOCTOR_SPIKE * now);
+/** The agent's: the chain's fixed minimum, or DOCTOR_SPIKE times what a purchase and its cleanup cost now if that is more. */
+export const evmAgentGasNeed = (now, fixed) => up2(Math.max(Number(fixed), DOCTOR_SPIKE * (now ?? 0)));
 const up2 = (x) => { if (!(x > 0)) return 0; const step = 10 ** (Math.floor(Math.log10(x)) - 1); return Number((Math.ceil(x / step - 1e-9) * step).toPrecision(2)); };
 const gweiText = (wei) => { const g = Number(wei) / 1e9; return g >= 10 ? g.toFixed(0) : g >= 1 ? String(Number(g.toFixed(1))) : String(Number(g.toPrecision(2))); };
 const evmKeyAddress = async (v) => (/^0x[0-9a-fA-F]{64}$/.test(v) ? (await import("viem/accounts")).privateKeyToAddress(v) : null);
@@ -60,20 +70,20 @@ const RAILS = {
       keyAddress: evmKeyAddress, caseSensitive: false,
       rpc: async () => { const id = Number(await rpc(c.rpc, "eth_chainId")); if (id !== c.chainId) throw new Error(`chain id ${id}, expected ${c.chainId}`); return `chain id ${id}`; },
       balances: async (owner, agent) => {
-        // what the gas costs at the current fee (null when the fee cannot be read: the fixed minimums still apply)
+        // what the gas costs at the current fee (null when the fee cannot be read: then only the fixed minimums apply)
         const fee = await evmFeeCap(c.rpc).catch(() => null);
         const cost = (gas) => (fee === null ? null : Number(BigInt(gas) * fee) / 10 ** g.decimals);
         const purchaseGas = L.pull + L.cancel + L.return, ownerGas = L.approve + L.revoke + 21000;
         const purchaseNow = cost(purchaseGas), ownerNow = cost(ownerGas);
         const at = fee === null ? "" : ` now at ${gweiText(fee)} gwei`;
-        const agentNeed = up2(Math.max(Number(d.minAgentGas), DOCTOR_SPIKE * (purchaseNow ?? 0)));
+        const agentNeed = evmAgentGasNeed(purchaseNow, d.minAgentGas);
         const agentHave = await nativeBalance(c.rpc, agent);
         const send = up2(Math.max(Number(d.fundAgent), agentNeed - agentHave));
         return [
           { who: "owner", addr: owner, token: tok.symbol, have: await erc20Balance(c.rpc, tok.address, owner, tok.decimals), need: Number(d.minOwnerToken), hint: d.tokenFaucet },
           ...(g.isToken ? [] : [{
             who: "owner", addr: owner, token: g.symbol, have: await nativeBalance(c.rpc, owner), hint: d.gasFaucet,
-            need: up2(Math.max(Number(d.minOwnerGas), DOCTOR_SPIKE * (ownerNow ?? 0))),
+            need: evmOwnerGasNeed(ownerNow, d.minOwnerGas),
             note: ownerNow === null ? "the current fee could not be read" : `a grant, a revoke and a fund-agent (${ownerGas} gas) cost about ${up2(ownerNow)} ${g.symbol}${at}`,
           }]),
           {

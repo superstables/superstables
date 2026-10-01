@@ -133,12 +133,15 @@ export function ownerPageFor(rail: OwnerRail) {
       return { handle, outcome: await handle.settled };
     },
 
-    /** The owner rejected, or the link expired: one clear RESULT, then exit. Nothing was sent unless the wallet had been asked. */
-    async endUnapproved(command: string, outcome: Unapproved, extra: Record<string, unknown> = {}): Promise<never> {
+    /**
+     * The owner rejected, or the link expired: one clear RESULT, then exit. Nothing was sent unless the wallet had been asked.
+     * `statusCommand`: the read that shows whether it landed, when it is more than the rail's (tempo: the --agent label).
+     */
+    async endUnapproved(command: string, outcome: Unapproved, extra: Record<string, unknown> = {}, statusCommand = rail.statusCommand): Promise<never> {
       await closeOwnerPage(2000);
       if (outcome.sending) {
         console.log(`UNKNOWN: ${outcome.reason}. The wallet may have sent it; read the chain before trying again.`);
-        process.exit(rail.emit(command, 5, { state: "unknown", reason: outcome.reason, ...extra, next: `${rail.statusCommand}: read whether it landed before running this again` }));
+        process.exit(rail.emit(command, 5, { state: "unknown", reason: outcome.reason, ...extra, next: `${statusCommand}: read whether it landed before running this again` }));
       }
       console.log(`NOT APPROVED: ${outcome.reason}`);
       // the wallet was never asked to send: nothing was sent. An expired link is not a decision, so asking again is safe.

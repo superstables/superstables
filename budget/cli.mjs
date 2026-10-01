@@ -813,6 +813,8 @@ async function status({ f, ctx }) {
 }
 
 const chainFlag = (f) => (f.chain === RAILS[f.rail].chain ? "" : ` --chain ${f.chain}`);
+/** The status command for this rail, chain and (tempo) agent label: what a caller reads after an uncertain owner result. */
+const statusCommand = (f) => `superstables budget status --rail ${f.rail}${chainFlag(f)}${f.rail === "tempo" && f.agent ? ` --agent ${f.agent}` : ""}`;
 /** "no budget has been set up here", with what is missing, in plain words. */
 const noBudgetWords = (f, gaps) => `no budget has been set up here for ${f.rail} on ${f.chain}: ${gaps.missing.join("; ")}`;
 
@@ -845,7 +847,16 @@ async function buy({ f, ctx }) {
   const running = run(railCommand("buy", f));
   lock.holdAlso(currentChild?.pid);
   const r = await running;
-  // Stopped by a signal (this command or its rail script): it may have paid, whatever its stdout says. Always unknown.
+  // Stopped (by a signal or on its own) before its rail ever wrote this op's journal: every rail writes the journal
+  // before it signs or sends anything, the rail has exited, and this process holds the op's lock, so nothing was signed.
+  // A refusal with the op still unused, not an unknown that sends the caller to a reconcile with no journal to read.
+  if (!journalBefore && !existsSync(journal(f)) && (r.signal || interrupted)) {
+    const reason = `the buy was stopped by a signal${r.signal ? ` (${r.signal})` : ""} before it recorded a purchase. Nothing was signed or paid`;
+    log(`superstables budget: ${reason}.`);
+    return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: "this --op is still unused and nothing was signed. Buy again only if the purchase is still wanted", reason });
+  }
+  // Stopped by a signal (this command or its rail script) after the journal existed: it may have paid, whatever its
+  // stdout says. Always unknown.
   if (r.signal || interrupted) {
     const n = normalize("buy", f, null, 1);
     return emit(n.code, { ...n.fields, reason: `the buy was stopped by a signal${r.signal ? ` (${r.signal})` : ""} before its result was final; it may have paid` });
@@ -922,7 +933,7 @@ async function grant({ f, ctx }) {
   const r = await run(railCommand("grant", f, { expirySeconds: secs }));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
-  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, amount: f.amount, tx: rr?.tx ? { grant: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, o.state === "refused_precheck" ? "read reason and tx; a changed wallet transaction may already be on chain. Check status before granting again" : `superstables budget status --rail ${f.rail}: the chain may or may not have changed`), reason: o.reason ?? `the rail script exited ${r.code}` });
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, amount: f.amount, tx: rr?.tx ? { grant: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, o.state === "refused_precheck" ? "read reason and tx; a changed wallet transaction may already be on chain. Check status before granting again" : `${statusCommand(f)}: the chain may or may not have changed`), reason: o.reason ?? `the rail script exited ${r.code}` });
   const after = await readBudget(f);
   emit(0, { ...ctx, state: "settled", amount: f.amount, remaining: after.ok ? after.remaining : null, tx: { grant: ownerTx(rr, r.stdout) ?? null }, expiry: after.ok ? after.expiry : null, url: approvalUrl, next: "none" });
 }
@@ -955,7 +966,7 @@ async function revoke({ f, ctx }) {
   const done = r.code === 0 && after.ok && after.revoked;
   emit(done ? 0 : o.code || 1, {
     ...ctx, state: done ? "settled" : o.code === 0 ? "failed" : o.state, remaining: after.ok ? after.remaining : null, revoked: after.ok ? after.revoked : null,
-    tx: { revoke: ownerTx(rr, r.stdout) ?? null }, url: approvalUrl, next: done ? "none" : `superstables budget status --rail ${f.rail}: confirm whether the revoke landed, then run superstables budget revoke again`, reason: done ? undefined : o.reason ?? `the rail script exited ${r.code}`,
+    tx: { revoke: ownerTx(rr, r.stdout) ?? null }, url: approvalUrl, next: done ? "none" : `${statusCommand(f)}: confirm whether the revoke landed, then run superstables budget revoke again`, reason: done ? undefined : o.reason ?? `the rail script exited ${r.code}`,
   });
 }
 

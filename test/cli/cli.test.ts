@@ -8,7 +8,7 @@
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
@@ -556,3 +556,45 @@ describe("find against a local index", () => {
   });
 });
 
+
+describe("superstables budget, stopped by a signal", () => {
+  // An agent's tool stops the command it started with a signal to that one process. The budget program runs in a
+  // child: the signal must reach it, and this process must wait for its RESULT and exit with its code.
+  it("passes the signal on, waits for the budget program's RESULT and exits with its code", async () => {
+    const keys = join(home, "keys", "budget");
+    const pub = join(home, "budget", "public");
+    for (const dir of [keys, pub]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(keys, "solana-agent.env"), "SOLANA_AGENT_SECRET_BASE58=unused\n", { mode: 0o600 });
+    writeFileSync(join(pub, "solana-devnet.env"), "SOLANA_OWNER_ADDRESS=11111111111111111111111111111111\n");
+    // a seller that never answers: the buy waits on it until it is stopped
+    const seller = createServer(() => {});
+    await new Promise<void>((ready) => seller.listen(0, "127.0.0.1", ready));
+    const url = `http://127.0.0.1:${(seller.address() as { port: number }).port}/paid`;
+    try {
+      // one process, as an installed `superstables` is: node with tsx's loader, not tsx's own wrapper process
+      const child = spawn(process.execPath, ["--import", "tsx", CLI, "budget", "buy", "--rail", "solana", "--url", url, "--max", "0.01", "--op", "stopped"], {
+        cwd: ROOT,
+        env: { ...process.env, SUPERSTABLES_HOME: home },
+      });
+      let stdout = "";
+      let stopped = 0;
+      child.stdout.on("data", (chunk) => (stdout += String(chunk)));
+      child.stderr.on("data", (chunk) => {
+        if (!stopped && String(chunk).includes("Resource:")) {
+          stopped = Date.now();
+          child.kill("SIGTERM");
+        }
+      });
+      const [code, signal] = await new Promise<[number | null, string | null]>((done) => child.once("close", (c, s) => done([c, s])));
+      expect(stopped).toBeGreaterThan(0);
+      expect(Date.now() - stopped).toBeLessThan(10_000);
+      expect(signal).toBeNull();
+      expect(code).toBe(3);
+      const line = stdout.trim().split("\n").reverse().find((l) => l.startsWith("RESULT "));
+      expect(JSON.parse(line!.slice(7))).toMatchObject({ command: "buy", state: "refused_precheck", paid: false, op: "stopped" });
+    } finally {
+      seller.closeAllConnections();
+      seller.close();
+    }
+  }, 30_000);
+});

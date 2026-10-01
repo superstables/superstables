@@ -45,7 +45,7 @@ const RUNNABLE = {
   solana: ["setup", "fundAgent", "setBudget", "buy", "reconcile", "readBudget", "revokeBudget"],
 };
 const LIBRARIES = {
-  evm: ["chains", "cli-guard", "lib", "ops", "owner", "purchase"],
+  evm: ["chains", "cli-guard", "delegation", "lib", "ops", "owner", "purchase"],
   tempo: ["owner"], // and tempo/lib/, a folder of libraries
   solana: ["lib", "ops", "owner", "precheck", "token"],
 };

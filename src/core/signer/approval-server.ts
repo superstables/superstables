@@ -471,7 +471,9 @@ export class ApprovalServer {
         return;
       }
       record.status = "denied";
-      record.reason = "rejected by the owner on the approval page";
+      // The page posts { by: "wallet" } when the wallet answered the signature request with a rejection: nothing was
+      // signed, and a signature that came later could not be used, because only a pending payment takes one.
+      record.reason = body.by === "wallet" ? "rejected by the owner in their wallet" : "rejected by the owner on the approval page";
       this.audit(record);
       record.finish({ status: "denied", reason: record.reason });
       this.sendJson(res, 200, { status: record.status, reason: record.reason });

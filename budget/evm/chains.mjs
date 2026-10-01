@@ -17,8 +17,9 @@
 //              topUp: the least recover sends an agent that cannot pay for its steps.
 //   logRange   optional: the RPC's eth_getLogs block-range cap, where known (reconcile searches in windows of this size; it also
 //              shrinks a window the RPC refuses, so a missing value only costs extra calls).
-//   doctor     minimum balances for one grant, a few purchases and a revoke, and where to get them (decimal strings). Doctor
-//              asks for at least these, and at least DOCTOR_SPIKE times what one purchase and its cleanup cost at the current fee.
+//   doctor     minimum balances for one grant, a few purchases and a revoke, and where to get them (decimal strings). The
+//              token minimum always applies. For gas, doctor asks for DOCTOR_SPIKE times what the steps cost at the current fee,
+//              and at least minAgentGas for the agent, which buys alone; minOwnerGas only when it cannot read the fee.
 //
 // Gas limits of the agent's transactions (pull, cancel, return, selfRevoke) and the owner's (approve, revoke), from receipts read
 // back on 30 Sep 2026 (gasUsed, then the limit below with about 20% on top):

@@ -150,13 +150,12 @@ describe("seller text never becomes a dispatcher line", () => {
 });
 
 describe("a buy stopped by a signal", () => {
-  it("is unknown, never refused or not found: it may have paid", async () => {
-    fakeSetup("solana");
-    // a seller that never answers: the rail waits on it until the buy is stopped
+  /** A solana buy against a seller that never answers, stopped with SIGTERM while it waits. */
+  async function stoppedBuy(op: string) {
     const { url, server } = await seller(() => {});
     try {
       let stopped = false;
-      const r = await budget(["buy", "--rail", "solana", "--url", url, "--max", "0.01", "--op", "stopped-buy"], {
+      const r = await budget(["buy", "--rail", "solana", "--url", url, "--max", "0.01", "--op", op], {
         onStderr: (text, child) => {
           if (!stopped && text.includes("Resource:")) {
             stopped = true;
@@ -165,14 +164,35 @@ describe("a buy stopped by a signal", () => {
         },
       });
       expect(stopped).toBe(true);
-      expect(r.code).toBe(5);
-      expect(r.result).toMatchObject({ command: "buy", state: "unknown", paid: null, op: "stopped-buy" });
-      expect(r.result.reason).toContain("stopped by a signal");
-      expect(r.result.next).toContain("reconcile");
+      return r;
     } finally {
       server.closeAllConnections();
       server.close();
     }
+  }
+
+  it("is unknown once the op has a journal, never refused or not found: it may have paid", async () => {
+    fakeSetup("solana");
+    // an earlier attempt of this op that ended before it paid: the journal exists, so this run may have signed
+    const ops = join(home, "budget", "ops", "solana-devnet");
+    mkdirSync(ops, { recursive: true, mode: 0o700 });
+    writeFileSync(join(ops, "stopped-buy.json"), JSON.stringify({ op: "stopped-buy", state: "failed" }), { mode: 0o600 });
+    const r = await stoppedBuy("stopped-buy");
+    expect(r.code).toBe(5);
+    expect(r.result).toMatchObject({ command: "buy", state: "unknown", paid: null, op: "stopped-buy" });
+    expect(r.result.reason).toContain("stopped by a signal");
+    expect(r.result.next).toContain("reconcile");
+  });
+
+  it("paid nothing when it stopped before it recorded a purchase, and leaves the op unused", async () => {
+    fakeSetup("solana");
+    // every rail writes the op's journal before it opens the agent key or signs: no journal, nothing signed
+    const r = await stoppedBuy("stopped-early");
+    expect(r.code).toBe(3);
+    expect(r.result).toMatchObject({ command: "buy", state: "refused_precheck", paid: false, delivered: false, amount: "0", op: "stopped-early" });
+    expect(r.result.reason).toContain("stopped by a signal");
+    expect(r.result.next).not.toContain("reconcile");
+    expect(existsSync(join(home, "budget", "ops", "solana-devnet", "stopped-early.json"))).toBe(false);
   });
 });
 

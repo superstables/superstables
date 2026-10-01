@@ -115,7 +115,7 @@ async function main() {
     }
     const data = revokeCalldata(agentAddress)
     const { handle, outcome } = await askTransaction('revoke', owner, { to: KEYCHAIN, data }, revokeTerms({ owner, agent: agentAddress, remaining: before.remaining, expiry: before.expiry, feeToken, label: agentLabel }))
-    if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('revokeBudget', outcome, { remaining: fromBaseUnits(before.remaining) })
+    if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('revokeBudget', outcome, { remaining: fromBaseUnits(before.remaining) }, `superstables budget status --rail tempo${agentFlag(agentLabel)}`)
     if (outcome.status !== 'sent') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     finish = handle.finish
     console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`)

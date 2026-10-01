@@ -63,6 +63,7 @@ export const APPROVAL_PAGE_SCRIPT = `
   var typedData = null;
   var busy = false;
   var done = false;
+  var unanswered = 0;
 
   function el(id) { return document.getElementById(id); }
   function show(id, on) { el(id).hidden = !on; }
@@ -88,6 +89,8 @@ export const APPROVAL_PAGE_SCRIPT = `
   function countdown() {
     var left = Math.max(0, Math.round((facts.expiresAt - Date.now()) / 1000));
     el("expiry").textContent = String(left);
+    // past its expiry the payment cannot be approved, whether or not the client is still there to say so
+    if (left === 0 && !done && !busy) ended("expired");
   }
 
   function ended(status, why) {
@@ -122,10 +125,16 @@ export const APPROVAL_PAGE_SCRIPT = `
     return fetch(base + "/state", { cache: "no-store" })
       .then(function (res) { return res.ok ? res.json() : null; })
       .then(function (state) {
+        unanswered = 0;
         if (!state) return;
         if (state.status !== "pending") ended(state.status, state.reason);
       })
-      .catch(function () { /* a page that cannot reach loopback simply waits */ });
+      .catch(function () {
+        // The client serves this page from this computer; when it stops answering, the command that opened the page
+        // has ended and nothing can be approved here any more. One miss can be a hiccup; three are not.
+        unanswered += 1;
+        if (unanswered >= 3 && !busy) ended("gone", "The command that opened this page has stopped, so this payment can no longer be approved here. Cancel any open wallet request, and ask the agent for a new link if you still want to pay.");
+      });
   }
 
   function ensureChain() {
@@ -199,9 +208,22 @@ export const APPROVAL_PAGE_SCRIPT = `
       .catch(function (err) {
         setBusy(false);
         if (signed) say("Your wallet signed, but the client did not confirm it received the signature: " + reason(err) + ". Check the command result before trying again.", "bad");
-        else if (err && err.code === 4001) say("You rejected in your wallet; nothing was signed.", "bad");
+        else if (err && err.code === 4001) rejectedInWallet();
         else say("The wallet could not sign this: " + reason(err), "bad");
       });
+  }
+
+  // A rejection in the wallet is the owner's answer: end the payment, so the agent hears it now, not at expiry.
+  function rejectedInWallet() {
+    setBusy(true);
+    post("/reject", { by: "wallet" })
+      .then(function (answer) {
+        if (answer.ok) { ended("denied", "You rejected this payment in your wallet. Nothing was signed."); return; }
+        if (answer.data.status) { ended(answer.data.status, answer.data.reason); return; }
+        setBusy(false);
+        say("You rejected in your wallet; nothing was signed. The client did not record the rejection: press Reject, or check the command result.", "bad");
+      })
+      .catch(function () { setBusy(false); say("You rejected in your wallet; nothing was signed. The client is not answering. Check that the agent is still running.", "bad"); });
   }
 
   function reject() {

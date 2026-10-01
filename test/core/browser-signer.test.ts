@@ -263,7 +263,11 @@ describe("the approval page a browser wallet signs on", () => {
     expect(checked.code).toBe(0);
     // The two things the page must not lose: it never loads anything, and it names the wallet.
     expect(APPROVAL_PAGE_SCRIPT).toContain("eth_signTypedData_v4");
-    expect(APPROVAL_PAGE_SCRIPT).toContain("You rejected in your wallet; nothing was signed.");
+    // A rejection in the wallet ends the payment at once, and a page past its expiry or without its client offers nothing.
+    expect(APPROVAL_PAGE_SCRIPT).toContain('post("/reject", { by: "wallet" })');
+    expect(APPROVAL_PAGE_SCRIPT).toContain("You rejected this payment in your wallet. Nothing was signed.");
+    expect(APPROVAL_PAGE_SCRIPT).toContain('ended("expired")');
+    expect(APPROVAL_PAGE_SCRIPT).toContain('ended("gone"');
   });
 
   it("loads nothing from another origin", async () => {
@@ -364,6 +368,24 @@ describe("the browser-wallet signer", () => {
     const refusal = await pending;
     expect(refusal).toBeInstanceOf(SignRefused);
     expect((refusal as SignRefused).code).toBe("denied");
+    expect((await getJson(`${link}/state`)).body.status).toBe("denied");
+  });
+
+  it("records a rejection the wallet reported as the owner's, with nothing signed", async () => {
+    const signer = newSigner();
+    const account = privateKeyToAccount(generatePrivateKey());
+    let link = "";
+    const pending = signer.sign(signRequest(), { onPending: (_id, url) => (link = url ?? "") }).catch((err: unknown) => err);
+    await waitFor(() => link !== "");
+
+    const signature = await signWith(account, await connect(link, account));
+    expect((await postJson(`${link}/reject`, { by: "wallet" })).status).toBe(200);
+    const refusal = await pending;
+    expect((refusal as SignRefused).code).toBe("denied");
+    const state = (await getJson(`${link}/state`)).body;
+    expect(state).toMatchObject({ status: "denied", reason: "rejected by the owner in their wallet" });
+    // a signature that arrives after the rejection is not taken
+    expect((await postJson(`${link}/signature`, { address: account.address, signature })).status).toBe(409);
     expect((await getJson(`${link}/state`)).body.status).toBe("denied");
   });
 

@@ -8,7 +8,8 @@
 // what the owner decided. Exit codes follow src/cli/outcome.ts, the same table `budget` uses,
 // and every command that takes --json prints exactly one JSON value on stdout.
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -876,7 +877,7 @@ program
   .allowExcessArguments()
   .passThroughOptions()
   .argument("[args...]")
-  .action((args: string[]) => {
+  .action(async (args: string[]) => {
     const candidates = ["../../budget/cli.mjs", "../budget/cli.mjs"].map((p) => fileURLToPath(new URL(p, import.meta.url)));
     const cli = candidates.find((p) => existsSync(p));
     if (!cli) {
@@ -884,8 +885,26 @@ program
         `This install has no budget build (looked for ${candidates.join(" and ")}). In a checkout, run npm ci and npm run build; otherwise reinstall the client.`,
       );
     }
-    const run = spawnSync(process.execPath, [cli, ...args], { stdio: "inherit" });
-    process.exitCode = run.status ?? 1;
+    // Not spawnSync: a signal to this process alone (an agent's tool stopping the command it started) must reach
+    // the budget program, which records what it was doing and prints its own RESULT; and this process must wait for
+    // that RESULT and exit with its code, not die first with 130 (a terminal's Ctrl-C reaches both).
+    const child = spawn(process.execPath, [cli, ...args], { stdio: "inherit" });
+    const forward = (signal: NodeJS.Signals) => () => {
+      try {
+        child.kill(signal);
+      } catch {}
+    };
+    const handlers = (["SIGINT", "SIGTERM", "SIGHUP"] as const).map((s) => [s, forward(s)] as const);
+    for (const [s, h] of handlers) process.on(s, h);
+    const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((done) => {
+      child.on("error", (e) => {
+        process.stderr.write(`superstables budget: could not start ${cli}: ${e.message}\n`);
+        done([1, null]);
+      });
+      child.on("close", (c, s) => done([c, s]));
+    });
+    for (const [s, h] of handlers) process.off(s, h);
+    process.exitCode = code ?? (signal ? 128 + (osConstants.signals[signal] ?? 0) : 1);
   });
 
 // ── doctor ───────────────────────────────────────────────────────────────────────────────

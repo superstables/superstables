@@ -116,7 +116,7 @@ A `buy` with the same `--op` after `submitted` or `unknown` is refused and point
 
 Some sellers refund each payment to the payer, the agent key. The next `buy` then refuses (exit 3) and `next` names `recover`.
 
-`recover` returns USDC only: gas sent with `fund-agent` stays in the agent key, and on Arc up to 2 USDC stays as the agent's gas reserve.
+Only `recover` returns funds; `revoke` returns nothing. `recover` returns USDC only: gas sent with `fund-agent` stays in the agent key, and on Arc up to 2 USDC stays as the agent's gas reserve.
 
 ## Revoke, and what it does not cover
 

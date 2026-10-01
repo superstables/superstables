@@ -136,7 +136,7 @@ async function main() {
     console.log(`  expiry: ${new Date(plan.expiry * 1000).toISOString()} (unix ${plan.expiry}, chain time + ${expirySeconds}s)`)
     const data = grantCalldata(plan)
     const { handle, outcome } = await askTransaction('grant', owner, { to: KEYCHAIN, data }, grantTerms({ ...plan, owner, expirySeconds, held, feeToken, label }))
-    if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setBudget', outcome, { requested: amount })
+    if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setBudget', outcome, { requested: amount }, `superstables budget status --rail tempo${agentFlag(label)}`)
     if (outcome.status !== 'sent') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     finish = handle.finish
     console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`)
