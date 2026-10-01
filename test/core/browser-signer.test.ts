@@ -190,7 +190,7 @@ describe("the approval page a browser wallet signs on", () => {
     await signer.start();
     const page = await fetch(`${signer.url}/approve/${"0".repeat(32)}`);
     expect(page.status).toBe(404);
-    expect(await page.text()).toContain("There is no payment waiting under this link");
+    expect(await page.text()).toContain("This link is unavailable");
     const state = await getJson(`${signer.url}/approve/${"0".repeat(32)}/state`);
     expect(state.status).toBe(404);
   });
@@ -263,7 +263,7 @@ describe("the approval page a browser wallet signs on", () => {
     expect(checked.code).toBe(0);
     // The two things the page must not lose: it never loads anything, and it names the wallet.
     expect(APPROVAL_PAGE_SCRIPT).toContain("eth_signTypedData_v4");
-    expect(APPROVAL_PAGE_SCRIPT).toContain("You rejected in MetaMask; nothing was signed.");
+    expect(APPROVAL_PAGE_SCRIPT).toContain("You rejected in your wallet; nothing was signed.");
   });
 
   it("loads nothing from another origin", async () => {

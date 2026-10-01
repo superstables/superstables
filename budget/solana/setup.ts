@@ -90,7 +90,7 @@ if (OWNER_KEY_FILE) {
     notEnforced: [],
     notes: [
       "Signing the message proves control of this address. It grants no spending permission and has no network fee.",
-      "Your signing key stays in your wallet. You will review and approve any later budget grant separately.",
+      "You will review and approve any later budget grant separately.",
     ],
   }, `Superstables budget: record this wallet as the owner of agent ${agent} on Solana devnet (testnet).`, newOwner ? recorded : undefined);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent });

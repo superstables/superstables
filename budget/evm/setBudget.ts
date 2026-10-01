@@ -70,12 +70,12 @@ if (!verifyOnly && OWNER_KEY_FILE) {
     title: "Grant a spending budget",
     amount: usdc(cap),
     unit: SYM,
-    summary: `Allow the agent to withdraw up to ${capWords(cap)} from your wallet in total. Purchases within this allowance will not ask you to approve again.`,
+    summary: `Allow the agent to withdraw up to ${capWords(cap)} from your wallet in total. Purchases within this allowance need no further approval.`,
     rows: [
       { label: "Agent", value: pub.agent, mono: true },
       { label: "From your wallet", value: pub.owner, mono: true },
       tokenRow(),
-      { label: "You hold", value: `${usdc(ownerBal)} ${SYM}` },
+      { label: "Your balance", value: `${usdc(ownerBal)} ${SYM}` },
       approveRow(pub.agent, cap),
     ],
     enforced: [

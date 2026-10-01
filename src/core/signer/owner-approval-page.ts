@@ -291,7 +291,7 @@ export const OWNER_PAGE_SCRIPT = `
             show("connect", false);
             show("send", true);
             setBusy(false);
-            say("Review the terms above. Press \\u201cReview in wallet\\u201d and check the transaction in the wallet popup.");
+            say("Press \\u201cReview in wallet\\u201d and check the transaction in your wallet.");
           });
       })
       .catch(function (err) {
@@ -508,7 +508,7 @@ export const OWNER_PAGE_SCRIPT = `
             show("connect", false);
             show("send", true);
             setBusy(false);
-            say("Review the terms above. Press \\u201cReview in wallet\\u201d and check the transaction in " + w.name + ".");
+            say("Press \\u201cReview in wallet\\u201d and check the transaction in " + w.name + ".");
           });
       })
       .catch(function (err) {
@@ -595,7 +595,7 @@ function list(items: string[]): string {
   return `<ul>${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`;
 }
 
-const OWNER_LEDE = "Review the terms here, then confirm in your own wallet. Your wallet keeps its signing key.";
+const OWNER_LEDE = "Review the terms here before signing in your own wallet. Your wallet keeps its signing key.";
 
 /** The whole page for one owner action, terms and all, ready to serve. */
 export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look: PageLook = pageLook()): string {

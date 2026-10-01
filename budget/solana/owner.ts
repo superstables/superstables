@@ -177,13 +177,13 @@ export function grantTerms(p: { owner: string; agent: string; ata: string; cap: 
     title: "Grant a spending budget",
     amount: formatUnits(p.cap),
     unit: "USDC",
-    summary: `Allow the agent to transfer up to ${amt} from your USDC account in total. Purchases within this allowance will not ask you to approve again.`,
+    summary: `Allow the agent to transfer up to ${amt} from your USDC account in total. Purchases within this allowance need no further approval.`,
     rows: [
       { label: "Agent", value: p.agent, mono: true },
       { label: "Your wallet", value: p.owner, mono: true },
       { label: "Token", value: `USDC ${USDC_MINT.toBase58()}`, mono: true },
       { label: "Your USDC account", value: p.ata, mono: true },
-      { label: "You hold", value: `${formatUnits(p.held)} USDC` },
+      { label: "Your balance", value: `${formatUnits(p.held)} USDC` },
       { label: "Transaction", value: `SPL Token ApproveChecked: delegate ${p.agent}, ${p.cap} (${amt})`, mono: true },
     ],
     enforced: [
@@ -231,7 +231,7 @@ export function fundTerms(p: { owner: string; agent: string; lamports: bigint; a
     rows: [
       { label: "To your agent", value: p.agent, mono: true },
       { label: "From your wallet", value: p.owner, mono: true },
-      { label: "Agent has now", value: `${sol(p.agentHas)} SOL` },
+      { label: "Agent balance", value: `${sol(p.agentHas)} SOL` },
       { label: "Transaction", value: `a plain transfer of ${sol(p.lamports)} SOL` },
     ],
     enforced: [],

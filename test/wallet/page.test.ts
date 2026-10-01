@@ -16,8 +16,8 @@ describe.each(["plain", "superstables"] as const)("the approval page, %s look", 
   });
 
   it("says where the key is and that the owner decides", () => {
-    expect(page).toContain("key stays in its own process on this computer");
-    expect(page).toContain("Approve or reject each payment an agent asks for.");
+    expect(page).toContain("The wallet process uses a key file on this computer");
+    expect(page).toContain("Approve or reject each payment request.");
   });
 
   it("labels the agent's own account of the payment as unverified", () => {

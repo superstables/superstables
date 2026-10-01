@@ -99,8 +99,8 @@ export const APPROVAL_PAGE_SCRIPT = `
     show("reject", false);
     document.body.setAttribute("data-state", status);
     if (status === "signed") say("Signed. You can go back to the agent.", "good");
-    else if (status === "expired") say("This request expired; nothing was signed. Ask the agent to try again.", "bad");
-    else say(why || "This payment was rejected; nothing was signed.", "bad");
+    else if (status === "expired") say("This request expired. Cancel any open wallet request, then ask the agent for a new link.", "bad");
+    else say(why || "This payment was rejected. Cancel any open wallet request.", "bad");
   }
 
   function post(path, body) {
@@ -169,7 +169,7 @@ export const APPROVAL_PAGE_SCRIPT = `
         show("connect", false);
         show("approve", true);
         setBusy(false);
-        say("Ready. Press \\u201cApprove in MetaMask\\u201d and check the amount in the wallet popup.");
+        say("Ready. Press \\u201cReview in wallet\\u201d and check the amount in your wallet.");
       })
       .catch(function (err) {
         setBusy(false);
@@ -180,13 +180,14 @@ export const APPROVAL_PAGE_SCRIPT = `
 
   function approve() {
     if (!typedData || !account) return;
+    var signed = false;
     setBusy(true);
     say("Check your wallet: it is asking you to sign this payment.");
     provider.request({
       method: "eth_signTypedData_v4",
       params: [account, JSON.stringify(typedData)]
     })
-      .then(function (signature) { return post("/signature", { address: account, signature: signature }); })
+      .then(function (signature) { signed = true; return post("/signature", { address: account, signature: signature }); })
       .then(function (answer) {
         if (!answer.ok) {
           setBusy(false);
@@ -197,7 +198,8 @@ export const APPROVAL_PAGE_SCRIPT = `
       })
       .catch(function (err) {
         setBusy(false);
-        if (err && err.code === 4001) say("You rejected in MetaMask; nothing was signed.", "bad");
+        if (signed) say("Your wallet signed, but the client did not confirm it received the signature: " + reason(err) + ". Check the command result before trying again.", "bad");
+        else if (err && err.code === 4001) say("You rejected in your wallet; nothing was signed.", "bad");
         else say("The wallet could not sign this: " + reason(err), "bad");
       });
   }
@@ -205,8 +207,14 @@ export const APPROVAL_PAGE_SCRIPT = `
   function reject() {
     setBusy(true);
     post("/reject", {})
-      .then(function () { ended("denied", "You rejected this payment; nothing was signed."); })
-      .catch(function () { setBusy(false); say("The approval server is not answering. Is the agent still running?", "bad"); });
+      .then(function (answer) {
+        if (answer.ok) { ended("denied", "You rejected this payment. Cancel any open wallet request."); return; }
+        // 409: the payment ended first (signed, expired, rejected); show that, not a rejection
+        if (answer.data.status) { ended(answer.data.status, answer.data.reason); return; }
+        setBusy(false);
+        say(answer.data.error || "The client did not accept the rejection. Check the command result.", "bad");
+      })
+      .catch(function () { setBusy(false); say("The client is not answering. Check that the agent is still running.", "bad"); });
   }
 
   document.addEventListener("click", function (event) {
@@ -247,7 +255,7 @@ function reportedBlock(reported?: PaymentContext): string {
   if (reported?.serviceName) rows.push(`<div>Service: ${esc(reported.serviceName)}</div>`);
   if (reported?.target) rows.push(`<div class="mono">${esc(reported.target)}</div>`);
   if (reported?.description) rows.push(`<div>${esc(reported.description)}</div>`);
-  if (rows.length === 0) rows.push("<div>The agent said nothing about this payment.</div>");
+  if (rows.length === 0) rows.push("<div>The agent provided no payment details.</div>");
   return `<div class="reported"><strong>Reported by the agent (not verified)</strong>${rows.join("")}</div>`;
 }
 
@@ -280,7 +288,7 @@ export function approvalPage(facts: ApprovalPageFacts, look: PageLook = pageLook
     <div id="say" class="note" hidden></div>
     <div class="actions">
       <button id="connect" class="primary" data-act="connect">Connect wallet</button>
-      <button id="approve" class="primary" data-act="approve" hidden>Approve in MetaMask</button>
+      <button id="approve" class="primary" data-act="approve" hidden>Review in wallet</button>
       <button id="reject" data-act="reject">Reject</button>
     </div>
     <p class="fineprint">
@@ -305,12 +313,12 @@ export function approvalPage(facts: ApprovalPageFacts, look: PageLook = pageLook
 export function approvalNotFoundPage(look: PageLook = pageLook()): string {
   return framePage({
     look,
-    title: "No payment waiting",
+    title: "This link is unavailable",
     eyebrow: "Payment approval",
     body: `
   <div class="note bad">
-    There is no payment waiting under this link. It may have been approved, rejected or expired
-    already, or the agent may have been restarted. Nothing was signed. Ask the agent for a new link.
+    The request may have ended or the client may have restarted. Cancel any open wallet request.
+    Check the command result and wallet activity before asking for a new link.
   </div>`,
   });
 }

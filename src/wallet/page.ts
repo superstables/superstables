@@ -75,7 +75,7 @@ export const WALLET_PAGE_SCRIPT = `
     if (reported.serviceName) rows.push("<div>Service: " + esc(reported.serviceName) + "</div>");
     if (reported.target) rows.push('<div class="mono">' + esc(reported.target) + "</div>");
     if (reported.description) rows.push("<div>" + esc(reported.description) + "</div>");
-    if (rows.length === 0) rows.push("<div>The agent said nothing about this payment.</div>");
+    if (rows.length === 0) rows.push("<div>The agent provided no payment details.</div>");
     return '<div class="reported"><strong>Reported by the agent (not verified)</strong>' + rows.join("") + "</div>";
   }
 
@@ -144,7 +144,7 @@ export const WALLET_PAGE_SCRIPT = `
       clear();
       render(body.requests || []);
     }).catch(function () {
-      say("The wallet is not answering. Is it still running?", true);
+      say("The wallet is not answering. Check that it is still running.", true);
     });
   }
 
@@ -155,7 +155,7 @@ export const WALLET_PAGE_SCRIPT = `
       .then(function (response) {
         if (!response.ok) say("The wallet refused that (HTTP " + response.status + "). It may have expired.", true);
       })
-      .catch(function () { say("The wallet is not answering. Is it still running?", true); })
+      .catch(function () { say("The wallet is not answering. Check that it is still running.", true); })
       .then(function () { delete busy[id]; refresh(); });
   }
 
@@ -174,15 +174,15 @@ export const WALLET_PAGE_SCRIPT = `
 export function walletPage(look: PageLook = pageLook()): string {
   return framePage({
     look,
-    title: "Payments waiting for you",
+    title: "Payment approvals",
     eyebrow: "Local wallet",
-    lede: "This wallet's key stays in its own process on this computer. Approve or reject each payment an agent asks for.",
+    lede: "The wallet process uses a key file on this computer. Approve or reject each payment request.",
     wide: true,
     style: WALLET_STYLE,
     body: `
   <div id="notice" class="note" hidden></div>
 
-  <h2 class="section">Waiting for you</h2>
+  <h2 class="section">Pending</h2>
   <div id="pending"><p class="empty">No payment is waiting for approval.</p></div>
 
   <h2 class="section">History</h2>

@@ -167,7 +167,7 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
     rows: [
       { label: "To your agent", value: agent, mono: true },
       { label: "From your wallet", value: owner, mono: true },
-      { label: "Agent has before this transfer", value: `${gasFmt(agentHas)} ${GAS.symbol}` },
+      { label: "Agent balance before this transfer", value: `${gasFmt(agentHas)} ${GAS.symbol}` },
       { label: "Transaction", value: `a plain transfer of ${amt} ${GAS.symbol}` },
     ],
     enforced: [],
