@@ -11,6 +11,9 @@
 //   gas        the token that pays fees. isToken: the gas token IS the budget token (Arc): the agent's token balance is never 0,
 //              so "the agent holds nothing between purchases" becomes "holds no more than reserveMax". Decimal strings.
 //              minAgent: the least the agent needs for a pull. topUp: what recover sends an agent that has less.
+//              Sizing on Base Sepolia and Arbitrum Sepolia: a pull is one USDC transferFrom, up to about 100,000 gas, and a
+//              node may price it at 1 gwei or more (priority fee plus base fee), so one pull needs 0.0001 ETH set aside;
+//              fundAgent 0.002 ETH pays for about 20 purchases. The website accepts a fund-agent request up to 0.05.
 //   logRange   optional: the RPC's eth_getLogs block-range cap, where known (reconcile searches in windows of this size; it also
 //              shrinks a window the RPC refuses, so a missing value only costs extra calls).
 //   doctor     minimum balances for one grant, a few purchases and a revoke, and where to get them (decimal strings).
@@ -20,8 +23,8 @@ export const EVM_CHAINS = {
     rpc: "https://sepolia.base.org", explorer: "https://sepolia.basescan.org",
     token: { address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
     legacy: ["base-sepolia"], logRange: 1000,
-    gas: { symbol: "ETH", decimals: 18, isToken: false, minAgent: "0.000002", topUp: "0.00003" },
-    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.circle.com, Base Sepolia", gasFaucet: "a Base Sepolia ETH faucet" },
+    gas: { symbol: "ETH", decimals: 18, isToken: false, minAgent: "0.0001", topUp: "0.0003" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.0025", minAgentGas: "0.0001", fundAgent: "0.002", tokenFaucet: "faucet.circle.com, Base Sepolia", gasFaucet: "a Base Sepolia ETH faucet" },
   },
   // Circle's Arc Testnet. USDC is the native gas token: the native balance has 18 decimals, the ERC-20 at 0x3600... shows the
   // same balance in 6-decimal units (native / 1e12, rounded down; checked by preflight).
@@ -38,8 +41,8 @@ export const EVM_CHAINS = {
     rpc: "https://sepolia-rollup.arbitrum.io/rpc", explorer: "https://sepolia.arbiscan.io",
     token: { address: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", symbol: "USDC", decimals: 6, domain: { name: "USD Coin", version: "2" } },
     legacy: [],
-    gas: { symbol: "ETH", decimals: 18, isToken: false, minAgent: "0.000005", topUp: "0.00003" },
-    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.circle.com, Arbitrum Sepolia", gasFaucet: "an Arbitrum Sepolia ETH faucet" },
+    gas: { symbol: "ETH", decimals: 18, isToken: false, minAgent: "0.0001", topUp: "0.0003" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.0025", minAgentGas: "0.0001", fundAgent: "0.002", tokenFaucet: "faucet.circle.com, Arbitrum Sepolia", gasFaucet: "an Arbitrum Sepolia ETH faucet" },
   },
   "polygon-amoy": {
     label: "Polygon Amoy", chainId: 80002, viem: "polygonAmoy",
