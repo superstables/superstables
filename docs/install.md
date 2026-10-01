@@ -3,10 +3,6 @@
 Node 20 or newer, and MetaMask in your browser. Everything runs on your machine except the paid
 service, the public facilitators, the Base Sepolia RPC and the Superstables index.
 
-Using Claude Desktop and nothing else? Skip the checkout: every release ships an installable
-bundle, and Node is not needed. Go straight to [Claude Desktop](#claude-desktop), then come back
-for the MetaMask steps.
-
 ```bash
 git clone https://github.com/superstables/superstables-client.git
 cd superstables-client
@@ -28,7 +24,9 @@ key: in the default mode there is no key on this machine.
 The client signs with MetaMask. The agent starts the MCP server, that server binds
 `127.0.0.1:4412` the first time a payment needs approval, and it hands the agent a link of the
 form `http://127.0.0.1:4412/approve/<id>`. You open the link, connect MetaMask, and sign. The
-port is released when the server stops.
+port is released when the server stops. If another payment is already waiting on 4412 (a second
+agent, or a `superstables pay` in another terminal), the page takes a free port instead, and the
+link names it.
 
 So the only preparation is in the browser:
 
@@ -75,82 +73,65 @@ through:
 claude mcp add superstables --env SUPERSTABLES_HOME=/path/to/home -- node "$(pwd)/dist/mcp/main.js"
 ```
 
-## Claude Desktop
-
-Download `superstables-<version>.mcpb` from the
-[latest release](https://github.com/superstables/superstables-client/releases/latest). It is
-the compiled server with its runtime dependencies: nothing to clone, nothing to build, and
-Claude Desktop runs it with its own Node runtime.
-
-From a checkout, `npm run bundle` produces the same file. It compiles, stages the server with its
-runtime dependencies, validates the manifest and writes `build/superstables-<version>.mcpb`,
-printing the path and size.
-
-In Claude Desktop: **Settings → Extensions → Advanced → Install Extension…**, choose the file,
-and install it. The bundle keeps its state in `~/.superstables`; the only setting it exposes is
-the local wallet's URL, which matters only in `--wallet local` mode.
-
-The bundle contains the MCP server and nothing else, which in this mode is everything: the
-approval page is served by that same process.
-
-Both Claude Code and Claude Desktop have been tested end to end with the MetaMask flow: find,
-quote, approve, pay, receipt, and a rejected payment that signs nothing.
-
-### Updating the extension
-
-Claude Desktop may keep the copy of an extension it already has when the new one carries the
-same version number. The old build then runs, looks installed, and behaves like the old build.
-Install a new `.mcpb` like this, and the question does not arise:
-
-1. Quit Claude Desktop completely — **Cmd+Q** on a Mac. Closing the window is not enough; the
-   old server keeps running.
-2. Reopen it, go to **Settings → Extensions**, and uninstall the Superstables extension that is
-   there.
-3. Install the new `.mcpb`: **Advanced → Install Extension…**.
-4. Check that the version Claude Desktop shows for the extension is the version in the filename
-   of the bundle you just installed.
-5. Open a **new** chat and ask for the wallet status. The answer carries `client_version` and
-   `home`: the first must be the version you installed, the second the directory you expect
-   (`~/.superstables` unless you changed it). An older version there means an older build is
-   still running — go back to step 1.
-
-While developing, build with:
-
-```bash
-npm run bundle -- --dev
-```
-
-Every build then gets a version of its own, derived from the commit:
-`build/superstables-0.1.0-dev.14+gabc1234.mcpb`. The host cannot mistake it for the copy it
-already has, and `client_version` names the exact commit the running server was built from.
-Without `--dev` the bundle carries the released version, unchanged. Neither form writes to the
-repository's own `package.json` or `mcpb/manifest.json`; only the staged copies inside the
-bundle are stamped.
-
-Two other places answer the same question: `superstables --version` and `superstables doctor`,
-which prints the client version and the home directory above its checks. The MCP server also
-writes one line to stderr when it starts —
-`superstables client 0.1.0 · home /Users/you/.superstables · wallet browser` — which is what
-Claude Desktop shows in the extension's logs.
-
-Releases are tagged `v<version>` on GitHub, with the release notes taken from
-[../CHANGELOG.md](../CHANGELOG.md) and the `.mcpb` bundle attached, so a tagged release can be
-installed without building it.
+Claude Code has been tested end to end with the MetaMask flow: find, quote, approve, pay,
+receipt, and a rejected payment that signs nothing.
 
 ## Any other MCP client
 
-The server speaks MCP over stdio. Run it as:
+The MCP server is part of the CLI: `superstables mcp` runs it on stdio. Any MCP client that can
+start a local stdio server can use it. Most take a JSON entry like this one; where the file lives
+and what the top-level key is called depend on the client, so check its documentation.
 
-```bash
-node dist/mcp/main.js      # or: npx superstables mcp
+With `superstables` on your PATH (after `npm link` in a checkout, or a global install of the
+package):
+
+```json
+{
+  "mcpServers": {
+    "superstables": {
+      "command": "superstables",
+      "args": ["mcp"],
+      "env": { "SUPERSTABLES_DEMO_SERVICES": "on" }
+    }
+  }
+}
 ```
 
-It logs to stderr only, because stdout is the protocol. Its first line says which build is
-running, where its state lives and which signer it is using:
+Straight from a checkout, with the absolute path to it:
+
+```json
+{
+  "mcpServers": {
+    "superstables": {
+      "command": "node",
+      "args": ["/absolute/path/to/superstables-client/dist/cli/main.js", "mcp"],
+      "env": { "SUPERSTABLES_DEMO_SERVICES": "on" }
+    }
+  }
+}
+```
+
+Leave out `SUPERSTABLES_DEMO_SERVICES` to list only real sellers, and add `SUPERSTABLES_HOME` or
+`SUPERSTABLES_WALLET` to `env` to change where state lives or which signer is used (see
+[Environment](#environment-variables)).
+
+The server logs to stderr only, because stdout is the protocol. Its first line says which build
+is running, where its state lives and which signer it is using:
 
 ```
 superstables client 0.1.0 · home /Users/you/.superstables · wallet browser
 ```
+
+### Which build is running
+
+After an update, restart the client so it starts the server again: a client that keeps the old
+server process running keeps answering with the old build. Then ask the agent for the wallet
+status. The answer carries `client_version` and `home`: the first must be the version you just
+built or installed, the second the directory you expect (`~/.superstables` unless you changed it).
+`superstables --version` and `superstables doctor` answer the same question from a terminal.
+
+Releases are tagged `v<version>` on GitHub, with the release notes taken from
+[../CHANGELOG.md](../CHANGELOG.md).
 
 ## The paid service
 
@@ -212,7 +193,7 @@ wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 | --- | --- | --- |
 | `SUPERSTABLES_HOME` | `~/.superstables` | Where the policy, the records and the remembered account live |
 | `SUPERSTABLES_WALLET` | `browser` | Who signs: `browser` (MetaMask) or `local` (the wallet process) |
-| `SUPERSTABLES_APPROVE_PORT` | `4412` | Where the approval page is served, browser mode. `0` picks a free port |
+| `SUPERSTABLES_APPROVE_PORT` | unset: `4412`, or a free port when 4412 is busy | Fixes the approval page's port, browser mode. A fixed port that is busy fails at once, without asking the owner or using up the quote. `0` picks a free port |
 | `SUPERSTABLES_POLICY` | `$SUPERSTABLES_HOME/policy.yaml` | Read the policy from somewhere else |
 | `SUPERSTABLES_WALLET_URL` | `http://127.0.0.1:4411` | Where the client looks for the local wallet |
 | `SUPERSTABLES_WALLET_AGENT_TOKEN` | read from `wallet/agent-token` | The agent's bearer token for the local wallet, when it is not on this filesystem |
@@ -221,8 +202,8 @@ wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 | `SUPERSTABLES_DEMO_HOST` | `127.0.0.1` | Which interface `demo-service` binds |
 | `SUPERSTABLES_MCP_WAIT_MS` | `20000` | How long the MCP tools wait for a payment before answering "still waiting" |
 | `SUPERSTABLES_RPC_URL` | `https://sepolia.base.org` | Base Sepolia RPC, used to read the USDC balance |
-| `SUPERSTABLES_INDEX_URL` | `https://www.superstables.com/api/v1/services` | The public service index |
-| `SUPERSTABLES_DEMO_SERVICES` | unset (off) | `on` includes Superstables' prepared demo services (simulated answers, marked `mock`) in discovery, after the real sellers. The Claude Desktop bundle and the demo setup snippets set it; leave it off to see only real sellers |
+| `SUPERSTABLES_INDEX_URL` | `https://www.superstables.com/api/v1/services` | The service index `find` reads. Point it at another index that answers the same API, or set it to `off` to list the built-in catalogue only |
+| `SUPERSTABLES_DEMO_SERVICES` | unset (off) | `on` includes Superstables' prepared demo services (simulated answers, marked `mock`) in discovery, after the real sellers. The demo setup snippets set it; leave it off to see only real sellers |
 | `SUPERSTABLES_CATALOGUE_URL` | `https://www.superstables.com/api/demo/catalogue` | Where the prepared demo services are published, read only when `SUPERSTABLES_DEMO_SERVICES` is on. Point it at another deployment, or set it to `off` |
 | `SUPERSTABLES_DOCTOR_OFFLINE` | unset | `1` makes `doctor` skip every check that needs a network |
 
@@ -234,17 +215,18 @@ rather than during one. The CLI's `--home <dir>` sets it for you, and `--wallet 
 
 | Port | What binds it | When | Bound to |
 | --- | --- | --- | --- |
-| 4412 | the approval page, inside the agent's own process | browser mode, from the first payment | `127.0.0.1` |
+| 4412, or a free port when it is busy | the approval page, inside the agent's own process | browser mode, from the first payment | `127.0.0.1` |
 | 4411 | the local wallet | `--wallet local` only | `127.0.0.1` |
 | 4402 | the demo service | only if you run the seller yourself; the hosted one needs no port | `127.0.0.1` |
 
 None of them is reachable from another machine. If a port is busy, move it with the matching
-variable or `--port`.
+variable or `--port`. The approval page moves by itself: a busy 4412 usually means another
+payment is waiting there for its owner, so leave that process running.
 
 ## Uninstalling
 
-Remove the MCP server (`claude mcp remove superstables`, or uninstall the extension in Claude
-Desktop) and delete `~/.superstables`. In the default mode that directory holds no key — your
+Remove the MCP server (`claude mcp remove superstables`, or delete its entry from your MCP
+client's configuration) and delete `~/.superstables`. In the default mode that directory holds no key — your
 funds are in MetaMask and are not affected. With `--wallet local` it holds
 `wallet/key`, so deleting it makes any funds that key holds unreachable; they are testnet
 funds, but check before you delete.

@@ -18,10 +18,11 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { DEFAULT_NETWORK } from "../core/chain.js";
-import { HOSTED_DEMO_SERVICE_URL, INDEX_URL } from "../core/discovery.js";
+import { HOSTED_DEMO_SERVICE_URL, indexUrl } from "../core/discovery.js";
 import { FACILITATORS } from "../core/facilitator.js";
 import {
   DEFAULT_APPROVE_PORT,
+  approvePortFromEnvironment,
   browserWalletPath,
   ensureDir,
   homeDir,
@@ -173,11 +174,13 @@ function browserWalletCheck(): Check {
 }
 
 /**
- * Can this machine serve the approval page? The one thing that would stop it is the port
- * already being taken, so the check is to bind it and let it go again.
+ * Can this machine serve the approval page? The one thing that would stop it is a port the
+ * owner fixed with SUPERSTABLES_APPROVE_PORT already being taken, so the check is to bind it
+ * and let it go again. The default port being taken stops nothing: pay takes a free one.
  */
 async function approvalPageCheck(): Promise<Check> {
-  const port = Number(process.env.SUPERSTABLES_APPROVE_PORT) || DEFAULT_APPROVE_PORT;
+  const chosen = approvePortFromEnvironment();
+  const port = chosen ?? DEFAULT_APPROVE_PORT;
   const server = createServer();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -194,10 +197,21 @@ async function approvalPageCheck(): Promise<Check> {
       essential: true,
     };
   } catch (err) {
+    const waiting = "probably by another payment waiting for its owner; do not stop it";
+    if (chosen === undefined) {
+      return {
+        name: "approval page",
+        ok: true,
+        detail: `port ${port} is in use, ${waiting}. pay will serve its page on a free port instead`,
+        essential: true,
+      };
+    }
     return {
       name: "approval page",
       ok: false,
-      detail: `port ${port} is taken (${messageOf(err)}): set SUPERSTABLES_APPROVE_PORT to a free one`,
+      detail:
+        `port ${port} (SUPERSTABLES_APPROVE_PORT) is taken (${messageOf(err)}), ${waiting}. ` +
+        "Unset SUPERSTABLES_APPROVE_PORT to let pay pick a free port, or set it to a different one",
       essential: true,
     };
   } finally {
@@ -243,6 +257,10 @@ async function demoServiceCheck(): Promise<Check> {
 }
 
 async function indexCheck(): Promise<Check> {
+  const INDEX_URL = indexUrl();
+  if (!INDEX_URL) {
+    return { name: "Superstables index", ok: true, detail: "switched off: SUPERSTABLES_INDEX_URL=off", essential: false, skipped: true };
+  }
   const url = new URL(INDEX_URL);
   url.searchParams.set("limit", "1");
   try {

@@ -64,6 +64,11 @@ export class Records {
     return newestFirst(this.byId<Attempt>("attempts.jsonl"), (a) => a.createdAt, limit);
   }
 
+  /** The newest attempt started from a quote, if there is one. */
+  attemptForQuote(quoteId: string): Attempt | undefined {
+    return this.listAttempts().find((attempt) => attempt.quoteId === quoteId);
+  }
+
   // ── Receipts ─────────────────────────────────────────────────────────────────────────
 
   saveReceipt(receipt: Receipt): Receipt {

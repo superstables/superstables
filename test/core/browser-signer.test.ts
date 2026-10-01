@@ -22,7 +22,6 @@ import { transformSync } from "esbuild";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { encodeErrorResult } from "viem";
-import { createServer } from "node:http";
 import { usdcRequirement } from "../../src/core/chain.js";
 import { PaymentEngine } from "../../src/core/pay.js";
 import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
@@ -35,7 +34,7 @@ import { OWNER_PAGE_SCRIPT } from "../../src/core/signer/owner-approval-page.js"
 import { OwnerApprovalServer, signInMessage, type OwnerActionInput, type SolanaTransactionPort } from "../../src/core/signer/owner-approval-server.js";
 import { ownerApprovalPage } from "../../src/core/signer/owner-approval-page.js";
 import bs58 from "bs58";
-import { request as httpRequest } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import type { Attempt } from "../../src/core/types.js";
 import { startFakeFacilitator, type FakeFacilitator } from "../helpers/fake-facilitator.js";
 import { startPaidEndpoint, type PaidEndpoint } from "../helpers/paid-endpoint.js";
@@ -68,9 +67,13 @@ afterAll(async () => {
 // ── Helpers ──────────────────────────────────────────────────────────────────────────────
 
 /** A signer on an ephemeral port, with its own home, closed when the test ends. */
-function newSigner(options: { policy?: Policy; timeoutMs?: number } = {}): BrowserWalletSigner {
+function newSigner(
+  options: { policy?: Policy; timeoutMs?: number; port?: number; preferredPort?: number } = {},
+): BrowserWalletSigner {
   const signer = new BrowserWalletSigner({
-    port: 0,
+    // A chosen port, the default-like preferred port, or (the usual case) any free one.
+    port: options.preferredPort === undefined ? (options.port ?? 0) : undefined,
+    preferredPort: options.preferredPort,
     home: mkdtempSync(join(home, "signer-")),
     policy: options.policy ?? DEFAULT_POLICY,
     timeoutMs: options.timeoutMs ?? 5_000,
@@ -190,6 +193,60 @@ describe("the approval page a browser wallet signs on", () => {
     expect(await page.text()).toContain("There is no payment waiting under this link");
     const state = await getJson(`${signer.url}/approve/${"0".repeat(32)}/state`);
     expect(state.status).toBe(404);
+  });
+
+  it("answers only to Host 127.0.0.1 on its own port, so a rebinding DNS name cannot reach it", async () => {
+    const signer = newSigner();
+    let link = "";
+    const pending = signer.sign(signRequest(), { onPending: (_id, url) => (link = url ?? "") }).catch(() => undefined);
+    await waitFor(() => link !== "");
+    const port = new URL(link).port;
+    const statusWithHost = (path: string, host: string, method = "GET") =>
+      new Promise<number>((done, fail) => {
+        const req = httpRequest(`${link}${path}`, { method, headers: { host, origin: `http://${host}`, "content-type": "application/json" } }, (res) => {
+          res.resume();
+          done(res.statusCode ?? 0);
+        });
+        req.once("error", fail);
+        req.end(method === "POST" ? "{}" : undefined);
+      });
+    expect(await statusWithHost("", `evil.example:${port}`)).toBe(421);
+    expect(await statusWithHost("/state", `evil.example:${port}`)).toBe(421);
+    expect(await statusWithHost("/reject", `evil.example:${port}`, "POST")).toBe(421);
+    expect(await statusWithHost("", `127.0.0.1:${Number(port) + 1}`)).toBe(421);
+    expect(await statusWithHost("", "127.0.0.1")).toBe(421);
+    // The rebinding attempt changed nothing; the real host still serves the page.
+    expect((await getJson(`${link}/state`)).body.status).toBe("pending");
+    expect(await statusWithHost("", `localhost:${port}`)).toBe(200);
+    expect((await fetch(link)).status).toBe(200);
+    await postJson(`${link}/reject`, {});
+    await pending;
+  });
+
+  it("takes state changes only from its own page's origin, as JSON (CSRF, not authentication)", async () => {
+    const signer = newSigner();
+    const account = privateKeyToAccount(generatePrivateKey());
+    let link = "";
+    const pending = signer.sign(signRequest(), { onPending: (_id, url) => (link = url ?? "") }).catch(() => undefined);
+    await waitFor(() => link !== "");
+
+    const foreign = await postJson(`${link}/reject`, {}, { origin: "https://untrusted.example" });
+    expect(foreign.status).toBe(403);
+    const otherPort = await postJson(`${link}/reject`, {}, { origin: `http://127.0.0.1:${Number(new URL(link).port) + 1}` });
+    expect(otherPort.status).toBe(403);
+    const noOrigin = await fetch(`${link}/reject`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect(noOrigin.status).toBe(403);
+    const plain = await postJson(`${link}/reject`, {}, { "content-type": "text/plain" });
+    expect(plain.status).toBe(415);
+    const form = await postJson(`${link}/account`, { address: account.address }, { "content-type": "application/x-www-form-urlencoded" });
+    expect(form.status).toBe(415);
+    expect((await getJson(`${link}/state`)).body.status).toBe("pending");
+
+    // From the page's own origin, the same requests work.
+    expect((await postJson(`${link}/account`, { address: account.address })).status).toBe(200);
+    expect((await postJson(`${link}/reject`, {})).status).toBe(200);
+    expect((await getJson(`${link}/state`)).body.status).toBe("denied");
+    await pending;
   });
 
   it("is plain ES2017 that a browser can run without a build step", async () => {
@@ -457,6 +514,56 @@ describe("a whole payment, approved in the browser", () => {
     expect(records.listReceipts()).toHaveLength(0);
     expect(facilitator.calls.settle).toBe(settlesBefore);
   });
+
+  it("ends an attempt abandoned, never denied, when the page closes before anyone decided", async () => {
+    const dir = mkdtempSync(join(home, "engine-closed-"));
+    const records = new Records(join(dir, "records"));
+    const signer = newSigner();
+    const engine = new PaymentEngine({ records, policy: DEFAULT_POLICY, signer });
+
+    const taken = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
+    const linkSoon = firstApprovalUrl(engine);
+    const started = engine.startPayment(taken.id);
+    await linkSoon;
+
+    // The process serving the page goes away: nobody approved and nobody rejected.
+    await signer.close();
+    const finished = await engine.waitForAttempt(started.id, 5_000);
+    expect(finished.state).toBe("abandoned");
+    expect(finished.reason).toContain("before anyone approved or rejected");
+    expect(finished.abandonedBy).toBe("page_closed");
+    expect(records.getAttempt(started.id)?.state).toBe("abandoned");
+    expect(records.listReceipts()).toHaveLength(0);
+  });
+
+  it("never submits a signature that arrives after the caller stopped waiting", async () => {
+    const dir = mkdtempSync(join(home, "engine-stopped-"));
+    const records = new Records(join(dir, "records"));
+    const signer = newSigner();
+    const engine = new PaymentEngine({ records, policy: DEFAULT_POLICY, signer });
+    const account = privateKeyToAccount(generatePrivateKey());
+    const settlesBefore = facilitator.calls.settle;
+
+    const taken = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
+    const linkSoon = firstApprovalUrl(engine);
+    const started = engine.startPayment(taken.id);
+    const link = await linkSoon;
+
+    const stopped = engine.stop(started.id, "the caller stopped waiting", "wait");
+    expect(stopped?.state).toBe("abandoned");
+    expect(stopped?.reason).toBe("the caller stopped waiting");
+    expect(stopped?.abandonedBy).toBe("wait");
+
+    // The owner signs anyway, on a page that is still open: the engine must not act on it.
+    await approveInWallet(link, account);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(engine.getAttempt(started.id)?.state).toBe("abandoned");
+    expect(records.getAttempt(started.id)?.state).toBe("abandoned");
+    expect(facilitator.calls.settle).toBe(settlesBefore);
+    expect(records.listReceipts()).toHaveLength(0);
+    // And the quote stays spent: a second attempt needs a new quote.
+    expect(() => engine.startPayment(taken.id)).toThrow(/A payment for this quote already exists/);
+  });
 });
 
 // ── The owner approval page ──────────────────────────────────────────────────────────────
@@ -506,6 +613,112 @@ async function ownerServer(): Promise<OwnerApprovalServer> {
 }
 
 const HASH = `0x${"ab".repeat(32)}`;
+
+describe("the approval page's port", () => {
+  /** A port that was free a moment ago, standing in for the default 4412 on a busy machine. */
+  async function freePort(): Promise<number> {
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const address = probe.address();
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    return typeof address === "object" && address ? address.port : 0;
+  }
+
+  /** Something else holding a port, the way another waiting `pay` would. */
+  async function occupy(): Promise<{ port: number; close: () => Promise<void> }> {
+    const holder = createServer();
+    await new Promise<void>((resolve) => holder.listen(0, "127.0.0.1", resolve));
+    const address = holder.address();
+    return {
+      port: typeof address === "object" && address ? address.port : 0,
+      close: () => new Promise<void>((resolve) => holder.close(() => resolve())),
+    };
+  }
+
+  it("lets two payments wait at once: the second takes a free port, and both links open", async () => {
+    const preferred = await freePort();
+    const flows = [0, 1].map(() => {
+      const dir = mkdtempSync(join(home, "two-flows-"));
+      const records = new Records(join(dir, "records"));
+      const signer = newSigner({ preferredPort: preferred });
+      return { records, signer, engine: new PaymentEngine({ records, policy: DEFAULT_POLICY, signer }) };
+    });
+
+    const links: string[] = [];
+    for (const flow of flows) {
+      const taken = await quote({ url: seller.url }, { records: flow.records, policy: DEFAULT_POLICY });
+      const linkSoon = firstApprovalUrl(flow.engine);
+      flow.engine.startPayment(taken.id);
+      links.push(await linkSoon);
+    }
+
+    const ports = links.map((link) => Number(new URL(link).port));
+    expect(ports[0]).toBe(preferred);
+    expect(ports[1]).not.toBe(preferred);
+    expect(flows[0]?.signer.movedFrom).toBeUndefined();
+    expect(flows[1]?.signer.movedFrom).toBe(preferred);
+    for (const link of links) {
+      const page = await fetch(link);
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain(`${PRICE}`);
+    }
+  });
+
+  it("keeps a chosen port that is busy, says not to stop what holds it, and leaves the quote payable", async () => {
+    const holder = await occupy();
+    try {
+      const dir = mkdtempSync(join(home, "busy-port-"));
+      const records = new Records(join(dir, "records"));
+      const busy = newSigner({ port: holder.port });
+      const engine = new PaymentEngine({ records, policy: DEFAULT_POLICY, signer: busy });
+
+      const taken = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
+      const finished = await engine.waitForAttempt(engine.startPayment(taken.id).id, 10_000);
+
+      expect(finished.state).toBe("failed");
+      expect(finished.refusal).toBe("approval_page");
+      expect(finished.approvalUrl).toBeUndefined();
+      expect(finished.reason).toContain(`port ${holder.port} on 127.0.0.1 is already in use`);
+      expect(finished.reason).toContain("do not stop it");
+      expect(finished.reason).toContain("SUPERSTABLES_APPROVE_PORT");
+      expect(finished.reason).toContain(`quote ${taken.id} can still be paid`);
+      expect(busy.movedFrom).toBeUndefined();
+
+      // The owner was never asked, so the same quote pays once a page can start.
+      expect(records.getQuote(taken.id)?.status).toBe("open");
+      const retry = new PaymentEngine({ records, policy: DEFAULT_POLICY, signer: newSigner() });
+      const linkSoon = firstApprovalUrl(retry);
+      const again = retry.startPayment(taken.id);
+      expect(await linkSoon).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/approve\/[0-9a-f]{32}$/);
+      expect(again.quoteId).toBe(taken.id);
+      expect(records.getQuote(taken.id)?.status).toBe("used");
+    } finally {
+      await holder.close();
+    }
+  });
+
+  it("records what ended an abandoned wait, so a stopped process is never read as the owner", async () => {
+    const dir = mkdtempSync(join(home, "abandoned-by-"));
+    const records = new Records(join(dir, "records"));
+    const engine = new PaymentEngine({ records, policy: DEFAULT_POLICY, signer: newSigner() });
+
+    const endings: [Attempt["abandonedBy"], string][] = [
+      ["stopped", "this `superstables pay` process was stopped (SIGTERM) before the owner decided"],
+      ["wait", "`superstables pay` stopped waiting after --wait 5 s, before the owner decided"],
+    ];
+    for (const [cause, reason] of endings) {
+      const taken = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
+      const linkSoon = firstApprovalUrl(engine);
+      const started = engine.startPayment(taken.id);
+      await linkSoon;
+      const stopped = engine.stop(started.id, reason, cause);
+      expect(stopped?.state).toBe("abandoned");
+      expect(stopped?.abandonedBy).toBe(cause);
+      expect(records.getAttempt(started.id)?.abandonedBy).toBe(cause);
+      expect(records.getAttempt(started.id)?.reason).toBe(reason);
+    }
+  });
+});
 
 describe("the owner approval page", () => {
   it("shows the command's terms and asks the wallet for exactly the transaction the command built", async () => {
@@ -927,7 +1140,7 @@ class FakeNode {
 type PageWindow = EventTarget & { ethereum?: unknown };
 
 /** The owner page's script, loaded in a stand-in browser with the given wallets installed first. */
-function ownerPageInBrowser(facts: Record<string, unknown>, install: (window: PageWindow) => void) {
+function ownerPageInBrowser(facts: Record<string, unknown>, install: (window: PageWindow) => void, state: Record<string, unknown> = { status: "pending" }) {
   const nodes = new Map<string, FakeNode>();
   const node = (id: string) => {
     let n = nodes.get(id);
@@ -956,7 +1169,7 @@ function ownerPageInBrowser(facts: Record<string, unknown>, install: (window: Pa
   };
   const fetch = async (url: string, init?: { method?: string }) => {
     if (init?.method === "POST") posted.push(url.split("/").pop()!);
-    return { ok: true, status: 200, json: async () => (url.endsWith("/state") ? { status: "pending" } : { transaction: "dHg=" }) };
+    return { ok: true, status: 200, json: async () => (url.endsWith("/state") ? state : { transaction: "dHg=" }) };
   };
   const window = new EventTarget() as PageWindow;
   install(window);
@@ -1056,6 +1269,21 @@ describe("choosing a wallet on the owner page", () => {
     expect(page.posted).toEqual(["account", "sending", "sent"]);
     expect(hostile.provider.calls).toEqual([]);
     expect(injected.calls).toEqual([]);
+  });
+
+  it("names the connected owner address when setup ends, even in a browser that did not connect it", async () => {
+    // anyone holding the link could complete setup from another client: the owner's own page shows who is now on record
+    const someone = privateKeyToAccount(generatePrivateKey()).address;
+    const page = ownerPageInBrowser({ ...evmFacts(), kind: "connect", transaction: undefined, message: "record this wallet" }, () => {}, {
+      status: "confirmed",
+      address: someone,
+      message: `Done. The owner on record is now ${someone}. Check that this is your own wallet's address.`,
+    });
+    await page.later();
+    expect(page.node("account-row").hidden).toBe(false);
+    expect(page.node("account").hidden).toBe(false);
+    expect(page.node("account").textContent).toBe(someone);
+    expect(page.node("say").textContent).toContain("Check that this is your own wallet");
   });
 
   it("uses one announced wallet directly, falls back to window.ethereum, and says to install one when there is none", async () => {

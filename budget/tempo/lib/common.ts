@@ -5,7 +5,8 @@
 // key file is read only when a test names it with --owner-key-file (loadOwnerKeyFile), and never
 // in the same process as the agent file (contract rule 1). Never logs a private key.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, chmodSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { dirname } from 'node:path'
 import { Account, Addresses, createClient, http } from 'viem/tempo'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
@@ -25,6 +26,13 @@ export const CHAIN_ID: number = CHAIN_ID_
 export const TOKEN_ADDRESS: Address = Addresses.pathUsd
 export const TOKEN_DECIMALS: number = TOKEN_DECIMALS_
 export const TOKEN_LABEL: string = TOKEN_LABEL_
+
+/**
+ * Seller text (its challenge, its answer, its errors) on one log line: control characters, newlines included, and the Unicode
+ * line separators become spaces. A seller must not be able to start a line of its own on stdout, where the dispatcher reads
+ * APPROVE and RESULT lines. The same rule as evm's oneLine.
+ */
+export const oneLine = (s: unknown, max = 300): string => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim().slice(0, max)
 
 // Key files (contract rule 1). Owner and agent keys never share a file.
 //   the owner's wallet  holds the owner key. setup, grant and revoke ask it on the owner page.
@@ -153,8 +161,17 @@ export function setAgentPublic(updates: Record<string, string>) {
     if (i >= 0) lines[i] = `${k}=${v}`
     else lines.push(`${k}=${v}`)
   }
-  writeFileSync(AGENT_ENV_PATH, lines.join('\n') + '\n', { mode: 0o600 })
-  chmodSync(AGENT_ENV_PATH, 0o600)
+  // the agent file holds the only copy of the agent keys: write a new file (mode 600, never an existing one) and rename it
+  // over the old in one step, so a crash or a full disk leaves the old file or the new one, never a truncated one
+  const tmp = `${AGENT_ENV_PATH}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+  try {
+    writeFileSync(tmp, lines.join('\n') + '\n', { mode: 0o600, flag: 'wx' })
+    chmodSync(tmp, 0o600)
+    renameSync(tmp, AGENT_ENV_PATH)
+  } catch (err) {
+    try { unlinkSync(tmp) } catch {}
+    throw err
+  }
 }
 
 /** Root account for the owner from a test owner key file (--owner-key-file). Tests and automation only. */

@@ -389,7 +389,7 @@ export function readCtx(): Pub {
   const p = publicEnv();
   const owner = p.B4_OWNER_ADDRESS, agent = p.B4_AGENT_ADDRESS;
   if (!owner || !agent || !isAddress(owner) || !isAddress(agent)) {
-    console.error(`error: no B4 addresses in ${PUBLIC_ENV} (run superstables budget setup --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`} first)`);
+    console.error(`error: no budget has been set up here for ${CFG.label}: ${PUBLIC_ENV} records no owner and agent (the owner runs superstables budget setup --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`} first)`);
     process.exit(1);
   }
   return {
@@ -405,7 +405,7 @@ export async function agentCtx() {
   const env = agentEnv();
   const key = need(env, "B4_AGENT_KEY", AGENT_ENV) as Hex;
   const agent = walletFor(key);
-  if (agent.account.address.toLowerCase() !== pub.agent.toLowerCase()) throw new Error(`the agent key in ${AGENT_ENV} does not match the B4 agent address ${pub.agent}`);
+  if (agent.account.address.toLowerCase() !== pub.agent.toLowerCase()) throw new Error(`the agent key in ${AGENT_ENV} does not match the agent address in the public file, ${pub.agent}`);
   if (env.B4_OWNER_ADDRESS && env.B4_OWNER_ADDRESS.toLowerCase() !== pub.owner.toLowerCase()) throw new Error(`owner address in ${AGENT_ENV} differs from the public state`);
   return { ...pub, wallet: agent, agentKey: key };
 }
@@ -422,7 +422,7 @@ export async function ownerCtx() {
   const pub = readCtx();
   const key = need(ownerKeyEnv(), "B4_OWNER_KEY", OWNER_KEY_FILE!) as Hex;
   const owner = walletFor(key);
-  if (owner.account.address.toLowerCase() !== pub.owner.toLowerCase()) throw new Error(`the owner key in ${OWNER_KEY_FILE} does not match the B4 owner address ${pub.owner}`);
+  if (owner.account.address.toLowerCase() !== pub.owner.toLowerCase()) throw new Error(`the owner key in ${OWNER_KEY_FILE} does not match the owner address in the public file, ${pub.owner}`);
   return { ...pub, wallet: owner };
 }
 export type OwnerCtx = Awaited<ReturnType<typeof ownerCtx>>;
@@ -431,7 +431,7 @@ export async function escrowCtx() {
   const o = await ownerCtx();
   const key = need(ownerKeyEnv(), "B4_AGENT_KEY_ESCROW", OWNER_KEY_FILE!) as Hex;
   const agent = walletFor(key);
-  if (agent.account.address.toLowerCase() !== o.agent.toLowerCase()) throw new Error(`the escrowed agent key in ${OWNER_KEY_FILE} does not match the B4 agent address ${o.agent}`);
+  if (agent.account.address.toLowerCase() !== o.agent.toLowerCase()) throw new Error(`the escrowed agent key in ${OWNER_KEY_FILE} does not match the agent address in the public file, ${o.agent}`);
   return { ...o, escrow: agent };
 }
 

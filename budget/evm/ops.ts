@@ -95,7 +95,7 @@ export function readJournal(op: string): Journal | null {
   if (!existsSync(p)) return null;
   const j = JSON.parse(readFileSync(p, "utf8"));
   if (j.path !== "approve") {
-    console.error(`error: operation ${op} is not a B4 (plain approve) operation; use the tool that created it`);
+    console.error(`error: operation ${op} is not an evm budget purchase; reconcile it on the rail that made it`);
     process.exit(2);
   }
   return j as Journal;

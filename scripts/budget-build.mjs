@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Builds dist/budget/: `superstables budget` as plain JavaScript that runs with node alone (Node 20+).
 //
-// budget/ is TypeScript and ES modules that a checkout runs with its own tsx and node_modules. The standalone copy (the
-// skill zip's scripts/, see scripts/skill.mjs) has neither, so `npm run build` bundles the dispatcher and every runnable
+// budget/ is TypeScript and ES modules that a checkout runs with its own tsx and node_modules. A standalone copy (the npm
+// package's dist/budget; the skill zip's scripts/budget/, see scripts/cli-build.mjs, is built the same way) has
+// neither, so `npm run build` bundles the dispatcher and every runnable
 // rail script with esbuild into dist/budget/, keeping the layout the dispatcher expects: dist/budget/cli.mjs,
 // dist/budget/evm/buy.mjs, dist/budget/tempo/setBudget.mjs, ... Code the scripts share goes into dist/budget/lib/. Every
 // dependency is bundled in, so dist/budget imports only node: built-ins and its own files; checkSelfContained proves it.
@@ -11,7 +12,16 @@
 //   dist/budget/VERSION.json            the client version, the commit and the build time (`superstables budget --version`)
 //   dist/budget/THIRD_PARTY_NOTICES.txt every bundled package with its version, licence and full licence text
 //
-// A checkout never runs dist/budget: budget/cli.mjs runs the sources when they sit next to it (see its railSpec).
+// The npm package ships dist/budget (the client's `superstables budget` runs it when there is no checkout). A checkout
+// runs its sources, and dist/budget only when its dev packages are not installed (see the top of budget/cli.mjs).
+//
+// The packages only the budget loads (BUDGET_ONLY_DEPENDENCIES) are devDependencies: dist/budget carries them bundled,
+// and an install of the client never downloads them. So after building dist/budget, checkClientImports fails the build
+// when they are runtime dependencies again, or when anything else in dist/ imports one: that package would install and
+// then fail on the user's machine at the first import.
+//
+// buildStandalone is the part the whole-CLI build (scripts/cli-build.mjs) shares: the esbuild call, VERSION.json, the
+// notices with their licence checks, and checkSelfContained.
 //
 // node scripts/budget-build.mjs [--outdir <dir>]
 
@@ -41,6 +51,9 @@ const LIBRARIES = {
 };
 // The letters budget/cli.mjs uses for each rail's script lines: T("buy", ...) is tempo/buy, E("setBudget", ...) evm/setBudget.
 const DISPATCH = { T: "tempo", S: "solana", O: "solana", E: "evm" };
+
+// Packages that only the budget loads. Each rail adds its own.
+export const BUDGET_ONLY_DEPENDENCIES = ["@x402/fetch", "mppx", "@solana/web3.js", "bs58"];
 
 // Optional native speed-ups of ws that the packages loading them wrap in try/catch, and the optional `encoding` package
 // node-fetch tries the same way. Left out of the bundle; each falls back to JavaScript when it is absent.
@@ -95,7 +108,9 @@ export function checkSelfContained(dir, metafile) {
       ...[...text.matchAll(/^\s*(?:import|export)\b[^;"'`]*?\bfrom\s*["']([^"']+)["']/gm)].map((m) => m[1]),
       ...[...text.matchAll(/^\s*import\s*["']([^"']+)["']/gm)].map((m) => m[1]),
       ...[...text.matchAll(/\bimport\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]),
-      ...[...text.matchAll(/\b(?:__require|require)\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]),
+      // A require that opens a string literal is text, not a call: ajv keeps `require("ajv/dist/runtime/...")` in strings
+      // for the standalone validator code it can generate, which nothing here does.
+      ...[...text.matchAll(/(?<!["'`])\b(?:__require|require)\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]),
     ];
     for (const spec of specs) {
       if (spec.startsWith("./") || spec.startsWith("../")) {
@@ -110,6 +125,26 @@ export function checkSelfContained(dir, metafile) {
   }
   if (bad.length) throw new Error(`${relative(root, dir)} is not self-contained:\n  ${[...new Set(bad)].join("\n  ")}`);
   return files.length;
+}
+
+/**
+ * Fails when a budget-only package is a runtime dependency of the client, or when a .js/.cjs/.mjs file under dist/ outside
+ * dist/budget imports one (static imports, dynamic imports with a literal, require calls). Returns the files checked.
+ */
+export function checkClientImports(dist = join(root, "dist")) {
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const runtime = BUDGET_ONLY_DEPENDENCIES.filter((name) => name in (pkg.dependencies ?? {}));
+  if (runtime.length) throw new Error(`${runtime.join(", ")} must be devDependencies: only dist/budget uses them, and it bundles them in (BUDGET_ONLY_DEPENDENCIES in scripts/budget-build.mjs)`);
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const budgetOnly = new RegExp(`(?:\\bfrom\\s*|\\bimport\\s*\\(?\\s*|\\brequire\\s*\\(\\s*)["'](${BUDGET_ONLY_DEPENDENCIES.map(escapeRe).join("|")})(?:/[^"']*)?["']`);
+  let n = 0;
+  for (const file of readdirSync(dist, { recursive: true }).map(String)) {
+    if (!/\.[cm]?js$/.test(file) || file.split(/[\\/]/)[0] === "budget") continue;
+    n++;
+    const hit = readFileSync(join(dist, file), "utf8").match(budgetOnly);
+    if (hit) throw new Error(`dist/${file} imports ${hit[1]}, which only dist/budget carries: an install of the client does not have it (BUDGET_ONLY_DEPENDENCIES in scripts/budget-build.mjs)`);
+  }
+  return n;
 }
 
 // The folder and package.json of the package a bundled input file belongs to.
@@ -149,7 +184,7 @@ function repoUrl(pkg) {
   return r.replace(/^git\+/, "").replace(/\.git$/, "").replace(/^(?:ssh:\/\/)?git@([^:/]+)[:/]/, "https://$1/").replace(/^git:\/\//, "https://").replace(/^github:/, "https://github.com/").replace(/^(?!https?:)([\w-]+\/[\w.-]+)$/, "https://github.com/$1");
 }
 
-function writeNotices(outdir, metafile, version) {
+function writeNotices(outdir, metafile, version, { title, builtBy, rebuild }) {
   const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8")).packages ?? {};
   const packages = new Map(); // name@version -> { name, version, dir, pkg }
   const pkgByInput = new Map();
@@ -190,9 +225,9 @@ function writeNotices(outdir, metafile, version) {
   const texts = [...new Set(copyleft.flatMap((p) => p.copyleft.flatMap((id) => COPYLEFT[id])))];
   const rule = "=".repeat(100);
   const out = [];
-  out.push(`THIRD-PARTY NOTICES for superstables budget ${version.version}${version.commit ? ` (commit ${version.commit})` : ""}`);
+  out.push(`THIRD-PARTY NOTICES for ${title} ${version.version}${version.commit ? ` (commit ${version.commit})` : ""}`);
   out.push("");
-  out.push("This folder was built by scripts/budget-build.mjs from the superstables-client source");
+  out.push(`This folder was built by ${builtBy} from the superstables-client source`);
   out.push("(https://github.com/superstables/superstables-client). The Superstables code in it is licensed under Apache-2.0");
   out.push(`(the LICENSE file of that repository). The bundled .mjs files also contain code from the ${list.length} packages listed`);
   out.push("below, each under its own licence. The code is bundled by esbuild and not minified: a comment names the");
@@ -210,7 +245,7 @@ function writeNotices(outdir, metafile, version) {
         out.push(`  ${p.tarball ?? `npm package ${p.name}@${p.version}`}.`);
         out.push(`- To use a modified ${p.name}: edit its part of the bundled lib/*.mjs files (the comments mark it), or build this`);
         out.push("  folder again from the superstables-client source at the commit in VERSION.json with your copy in node_modules");
-        out.push("  (npm ci, replace the package, npm run build).");
+        out.push(`  (npm ci, replace the package, ${rebuild}).`);
       }
       out.push("");
     }
@@ -252,15 +287,22 @@ function gitDirty() {
   }
 }
 
-export async function buildBudget(outdir = join(root, "dist", "budget")) {
+/**
+ * Bundles entryPoints ({ "budget/cli": file, ... }, keyed by the output path without .mjs) into outdir with esbuild so
+ * that it runs with node alone, then writes VERSION.json (at each path in versionFiles) and THIRD_PARTY_NOTICES.txt and
+ * checks that the result is self-contained. `version` replaces package.json's (a --dev stamp). esbuild also writes it
+ * into src/core/version.ts, which has no package.json to read in a bundle.
+ */
+export async function buildStandalone({ outdir, entryPoints, name, title, builtBy, rebuild, version: stamped, versionFiles = ["VERSION.json"], plugins = [] }) {
   const { build } = await import("esbuild");
-  const entries = runnableEntries();
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const rev = revisionOf(root);
+  const version = { name, version: stamped ?? pkg.version, commit: rev.sha ?? null, commits: rev.count === undefined ? null : Number(rev.count), dirty: rev.sha ? gitDirty() : null, builtAt: new Date().toISOString().replace(/\.\d+Z$/, "Z") };
   rmSync(outdir, { recursive: true, force: true });
   const result = await build({
     absWorkingDir: root,
-    entryPoints: [join(src, "cli.mjs"), join(src, "doctor.mjs"), ...entries],
+    entryPoints,
     outdir,
-    outbase: src,
     bundle: true,
     splitting: true,
     format: "esm",
@@ -270,21 +312,37 @@ export async function buildBudget(outdir = join(root, "dist", "budget")) {
     chunkNames: "lib/[name]-[hash]",
     // A CommonJS dependency inside an ES module bundle still calls require().
     banner: { js: 'import { createRequire as __budgetRequire } from "node:module"; const require = __budgetRequire(import.meta.url);' },
+    define: { SUPERSTABLES_BUILD_VERSION: JSON.stringify(version.version) },
     external: OPTIONAL,
+    plugins,
     // licence comments stay in the code too, at the end of each file; the full texts are in THIRD_PARTY_NOTICES.txt
     legalComments: "eof",
     metafile: true,
     logLevel: "warning",
   });
-  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-  const rev = revisionOf(root);
-  const version = { name: "superstables-budget", version: pkg.version, commit: rev.sha ?? null, commits: rev.count === undefined ? null : Number(rev.count), dirty: rev.sha ? gitDirty() : null, builtAt: new Date().toISOString().replace(/\.\d+Z$/, "Z") };
-  writeFileSync(join(outdir, "VERSION.json"), JSON.stringify(version, null, 2) + "\n");
-  const { list, copyleft } = writeNotices(outdir, result.metafile, version);
+  for (const f of versionFiles) writeFileSync(join(outdir, f), JSON.stringify(version, null, 2) + "\n");
+  const { list, copyleft } = writeNotices(outdir, result.metafile, version, { title, builtBy, rebuild });
   const files = checkSelfContained(outdir, result.metafile);
   const bytes = readdirSync(outdir, { recursive: true }).reduce((n, f) => n + (statSync(join(outdir, f)).isFile() ? statSync(join(outdir, f)).size : 0), 0);
-  console.log(`budget: ${relative(root, outdir)}/ ${files} files, ${(bytes / 1e6).toFixed(2)} MB, ${entries.length} rail scripts, ${list.length} bundled packages (copyleft: ${copyleft.map((p) => `${p.name} ${p.version} ${p.licence}`).join(", ") || "none"}), version ${version.version}${version.commit ? ` ${version.commit}${version.dirty ? " with uncommitted changes" : ""}` : ""}`);
-  return { outdir, version, packages: list };
+  const summary = `${relative(root, outdir)}/ ${files} files, ${(bytes / 1e6).toFixed(2)} MB, ${list.length} bundled packages (copyleft: ${copyleft.map((p) => `${p.name} ${p.version} ${p.licence}`).join(", ") || "none"}), version ${version.version}${version.commit ? ` ${version.commit}${version.dirty ? " with uncommitted changes" : ""}` : ""}`;
+  return { outdir, version, packages: list, summary };
+}
+
+// The budget's entry points, keyed by their output path without .mjs (cli, doctor, evm/buy, tempo/setBudget, ...),
+// each under prefix.
+export function budgetEntryPoints(prefix = "") {
+  const entries = {};
+  for (const file of [join(src, "cli.mjs"), join(src, "doctor.mjs"), ...runnableEntries()]) {
+    entries[prefix + relative(src, file).split(sep).join("/").replace(/\.(ts|mjs)$/, "")] = file;
+  }
+  return entries;
+}
+
+export async function buildBudget(outdir = join(root, "dist", "budget")) {
+  const entryPoints = budgetEntryPoints();
+  const built = await buildStandalone({ outdir, entryPoints, name: "superstables-budget", title: "superstables budget", builtBy: "scripts/budget-build.mjs", rebuild: "npm run build" });
+  console.log(`budget: ${built.summary}, ${Object.keys(entryPoints).length - 2} rail scripts`);
+  return built;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
@@ -292,4 +350,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const outdir = i > 0 ? resolve(process.argv[i + 1]) : undefined;
   if (outdir) mkdirSync(dirname(outdir), { recursive: true });
   await buildBudget(outdir);
+  // `npm run build` has just compiled the rest of dist/ with tsc
+  if (!outdir) console.log(`budget: no budget-only package in the client's ${checkClientImports()} files in dist/`);
 }

@@ -179,6 +179,20 @@ export async function assessOp(conn, rec) {
   };
 }
 
+// Whether a signed payment the chain refuses today (a failed simulation) can be reported as refused for good. A simulation
+// is only the state now: the seller holds the signed transaction and can submit it until its blockhash expires, and a new
+// grant or deposit in that window can make it succeed. So only once the block height is past lastValidBlockHeight (plus
+// the margin) and a successful read finds no transaction of ours; until then the outcome is unknown. Never throws.
+export async function refusalIsFinal(conn, rec) {
+  try {
+    const height = await retryRead(() => conn.getBlockHeight("confirmed"));
+    if (typeof rec.lastValidBlockHeight !== "number" || !(height > rec.lastValidBlockHeight + EXPIRY_MARGIN_BLOCKS)) return false;
+    return (await findOwnTx(conn, rec)) === null;
+  } catch {
+    return false;
+  }
+}
+
 // Token movement of a landed transaction: the transferChecked our operation built.
 export async function readTransfer(conn, sig) {
   const t = await retryRead(() =>

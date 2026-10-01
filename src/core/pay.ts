@@ -9,7 +9,9 @@
 //      automatically — retrying a payment we cannot account for is how money gets spent twice.
 //
 // The duplicate-payment guard is the quote: it is marked `used` the moment an attempt exists
-// for it, and a second attempt on the same quote is refused.
+// for it, and a second attempt on the same quote is refused. The one exception is an attempt
+// that could not even ask the owner (no approval page, no wallet to talk to): nothing exists
+// that could be signed or submitted, so its quote is handed back.
 
 import { EventEmitter } from "node:events";
 import { decodePaymentResponseHeader, encodePaymentSignatureHeader } from "@x402/core/http";
@@ -20,7 +22,7 @@ import { NotPaidEndpointError, parseChallenge, sameTerms, termsFor, type Challen
 import { Records } from "./records.js";
 import { SignRefused, type Signer } from "./signer/types.js";
 import type { Policy } from "./policy.js";
-import type { Attempt, AttemptState, PaymentTerms, Quote, Receipt, ServiceOutcome } from "./types.js";
+import type { AbandonCause, Attempt, AttemptState, PaymentTerms, Quote, Receipt, ServiceOutcome } from "./types.js";
 import { FINAL_ATTEMPT_STATES } from "./types.js";
 
 /** How much of the service's answer is kept on the attempt and the receipt. */
@@ -37,6 +39,27 @@ export interface PaymentEngineOptions {
   signer: Signer;
   /** Injected in tests; the global fetch otherwise. */
   fetchImpl?: typeof fetch;
+}
+
+/**
+ * A second payment on a quote that already started one. The message names the payment that
+ * exists, so whoever asked picks that one up instead of starting another.
+ */
+export class QuoteUsedError extends Error {
+  constructor(
+    readonly quoteId: string,
+    /** The attempt this quote started, when the records still have it. */
+    readonly attempt?: Attempt,
+  ) {
+    super(
+      attempt
+        ? `A payment for this quote already exists: attempt ${attempt.id}, ${attempt.state}` +
+            `${isFinal(attempt.state) ? "" : " (not final)"}. A quote starts at most one payment; ` +
+            "do not start another one for it"
+        : "This quote has already been used to start a payment; quote again before paying",
+    );
+    this.name = "QuoteUsedError";
+  }
 }
 
 export class PaymentEngine {
@@ -66,7 +89,8 @@ export class PaymentEngine {
     const quote = getQuote(quoteId, this.records);
     if (!quote) throw new Error(`There is no quote ${quoteId} on this machine`);
     if (quote.status === "used") {
-      throw new Error("This quote has already been used to start a payment; quote again before paying");
+      const existing = this.records.attemptForQuote(quote.id);
+      throw new QuoteUsedError(quote.id, existing ? this.getAttempt(existing.id) : undefined);
     }
     if (quote.status === "stale") {
       throw new Error("The seller changed its terms after this quote was taken; quote again before paying");
@@ -123,6 +147,26 @@ export class PaymentEngine {
     return this.live.get(id) ?? this.records.getAttempt(id);
   }
 
+  /**
+   * The caller is going away (a CLI whose wait ran out, an interrupted process) and nobody
+   * will be left to carry this attempt on. An attempt still waiting for the owner ends
+   * `abandoned`: nothing was submitted, and `cause` records what ended the wait, so nobody
+   * mistakes it for the owner's answer. One whose credential may already be on its way ends
+   * `uncertain`, because that is what it is. A final attempt is left as it is.
+   */
+  stop(id: string, reason: string, cause?: AbandonCause): Attempt | undefined {
+    const attempt = this.live.get(id);
+    if (!attempt) return this.getAttempt(id);
+    if (attempt.state === "awaiting_approval") {
+      this.settleState(attempt, "abandoned", { reason, ...(cause ? { abandonedBy: cause } : {}) });
+    } else if (attempt.state === "approved" || attempt.state === "submitting") {
+      this.settleState(attempt, "uncertain", {
+        reason: `${reason} after the owner approved, while the payment was being submitted`,
+      });
+    }
+    return attempt;
+  }
+
   listAttempts(limit?: number): Attempt[] {
     return this.records.listAttempts(limit).map((a) => this.live.get(a.id) ?? a);
   }
@@ -144,6 +188,7 @@ export class PaymentEngine {
     // bothering the owner with something this machine has already decided against.
     if (!quote.policy.allowed) {
       this.settleState(attempt, "failed", {
+        refusal: "policy",
         reason: `the local spend policy refuses this payment: ${quote.policy.reason ?? "no reason given"}`,
       });
       return;
@@ -165,7 +210,12 @@ export class PaymentEngine {
       return;
     }
 
+    // Whoever was waiting may have stopped while the seller was being asked; then nobody
+    // is left to show the owner a link, so the owner is not asked.
+    if (isFinal(attempt.state)) return;
+
     // 2. Ask the owner. Nothing has left this machine yet.
+    let asked = false;
     let signed;
     try {
       signed = await this.signer.sign(
@@ -184,6 +234,7 @@ export class PaymentEngine {
         },
         {
           onPending: (walletRequestId, approvalUrl) => {
+            asked = true;
             this.transition(attempt, "awaiting_approval", {
               walletRequestId,
               // Present when the signer serves the approval page itself; the surfaces pass it
@@ -197,9 +248,27 @@ export class PaymentEngine {
         },
       );
     } catch (err) {
-      this.settleState(attempt, refusalState(err), { reason: message(err) });
+      const refusal = refusalOf(err);
+      const state = refusalState(err);
+      let reason = message(err);
+      // The signer could not reach the owner at all: no page, no wallet request, nothing to
+      // sign. Spending the quote on that would only send the agent off to quote again for a
+      // fault on this machine, so the quote goes back to being payable.
+      if (!asked && (refusal === "approval_page" || refusal === "unavailable") && this.reopenQuote(quote.id)) {
+        reason = `${reason}. Nothing was signed, and quote ${quote.id} can still be paid`;
+      }
+      this.settleState(attempt, state, {
+        reason,
+        ...(refusal ? { refusal } : {}),
+        // A signer that gave up with nobody deciding did so because its page went away.
+        ...(state === "abandoned" ? { abandonedBy: "page_closed" as const } : {}),
+      });
       return;
     }
+
+    // A signature that arrives after the attempt was abandoned is never sent: the caller has
+    // already been told nothing was submitted, and that has to stay true.
+    if (isFinal(attempt.state)) return;
 
     this.transition(attempt, "approved", { payer: signed.signer });
     this.transition(attempt, "submitting");
@@ -340,6 +409,14 @@ export class PaymentEngine {
     return this.records.saveReceipt(receipt);
   }
 
+  /** Hand a spent quote back, only if nothing else has happened to it since it was spent. */
+  private reopenQuote(id: string): boolean {
+    const quote = this.records.getQuote(id);
+    if (!quote || quote.status !== "used") return false;
+    this.records.saveQuote({ ...quote, status: "open" });
+    return true;
+  }
+
   private markQuote(id: string, status: Quote["status"]): void {
     const quote = this.records.getQuote(id);
     if (quote) this.records.saveQuote({ ...quote, status });
@@ -379,7 +456,16 @@ function refusalState(err: unknown): AttemptState {
   if (!(err instanceof SignRefused)) return "failed";
   if (err.code === "denied") return "denied";
   if (err.code === "expired") return "expired";
+  if (err.code === "abandoned") return "abandoned";
   return "failed"; // policy, invalid, unavailable: nothing was signed, nothing was paid
+}
+
+/** Which check refused, for the refusals that are not the owner's own decision. */
+function refusalOf(err: unknown): Attempt["refusal"] {
+  if (!(err instanceof SignRefused)) return undefined;
+  return err.code === "policy" || err.code === "invalid" || err.code === "unavailable" || err.code === "approval_page"
+    ? err.code
+    : undefined;
 }
 
 function firstSupported(challenge: Challenge): { terms: PaymentTerms; requirement: PaymentRequirements } | undefined {

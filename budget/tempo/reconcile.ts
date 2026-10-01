@@ -18,7 +18,7 @@
 
 import type { Address } from 'viem'
 import { hashCheck, intCheck, opIdCheck, parseCli } from './lib/args.mjs'
-import { explorerTx, fromBaseUnits } from './lib/common.ts'
+import { explorerTx, fromBaseUnits, oneLine } from './lib/common.ts'
 import { readKey } from './lib/chain.ts'
 import { judge, lookupOnce, waitForOutcome } from './lib/resolve.ts'
 import { OPS_DIR, printResult, readOp, writeOp, type OpState } from './lib/ops.ts'
@@ -65,7 +65,8 @@ async function main() {
     }) as never
   }
 
-  console.log(`op ${opId} (${op.kind}): journal says ${op.state}${op.reason ? ` (${op.reason})` : ''}; ${op.intent.amountDecimal} pathUSD to ${op.intent.recipient}${op.tx ? `; tx ${op.tx}` : ''}`)
+  // the reason, recipient and receipt tx may be the seller's text: one line (oneLine)
+  console.log(oneLine(`op ${opId} (${op.kind}): journal says ${op.state}${op.reason ? ` (${op.reason})` : ''}; ${op.intent.amountDecimal} pathUSD to ${op.intent.recipient}${op.tx ? `; tx ${op.tx}` : ''}`, 2000))
 
   if (op.state === 'refused_precheck' || op.state === 'refused_chain' || (op.state === 'quoted' && op.reason === 'quote_only')) {
     console.log('Nothing was signed for this operation. Nothing to reconcile.')

@@ -75,7 +75,13 @@ That id is deliberately narrow. Holding it lets someone see *one* payment and si
   approval can never produce two payments;
 - it expires five minutes after it is created, on a timer and on every request, so a reader
   never sees a pending request that has in fact run out of time;
-- the server binds `127.0.0.1` only. Nobody off this machine can open it at all.
+- the server binds `127.0.0.1` only. Nobody off this machine can open it at all;
+- it answers only to the Host it is bound to, `127.0.0.1:PORT` (or `localhost:PORT`), so a web
+  page under a DNS name that resolves to `127.0.0.1` cannot reach it;
+- `/account`, `/signature` and `/reject` accept only a JSON body sent from the page's own origin,
+  so another website open in your browser cannot reject or prepare a payment. This stops web
+  pages, not local programs: any process on this machine that holds the link can set those
+  headers, which is why the signature check below decides what is signed.
 
 When a signature arrives, it is checked before it is used: `verifyTypedData` must recover the
 same account the typed data was built for. A signature made by any other key is refused with a
@@ -149,8 +155,10 @@ Nothing stays signable.
 - The **EIP-3009 authorization** carries its own on-chain window: `validBefore` is set to now
   plus the seller's `maxTimeoutSeconds` (300 seconds unless the seller asks for something else).
   After that the facilitator cannot submit it at all.
-- Stopping the agent denies everything still pending, with the reason "the agent stopped before
-  this payment was approved". There is no queue that survives a restart.
+- Stopping the agent ends everything still pending as `abandoned`, with the reason "the process
+  serving the approval page stopped before anyone approved or rejected this payment". It is not
+  recorded as a rejection, and a signature that arrives afterwards is never submitted. There is no
+  queue that survives a restart.
 
 ## The approvals log
 
@@ -229,7 +237,10 @@ code running as your user can. Run that mode with a key that holds testnet funds
   ([budget/README.md](../budget/README.md)): the owner grants an agent key a spending limit on
   chain and revokes it with one transaction. It has its own keys and its own boundary. The
   chain enforces the total cap, and on Tempo also an expiry and a seller list. A stolen agent
-  key can spend all of it. Bringing
+  key can spend all of it. Its `setup` is a trusted step: whoever holds the setup link, the
+  agent included, can complete it with a key of their own (the page's origin check stops other
+  websites, not local programs), so the owner runs it and checks the connected owner address that
+  setup prints and its page shows. Bringing
   budgets into the approval flow, with terms a person can read in the wallet, is the next step.
 - **A signing surface that reads like money.** MetaMask shows an EIP-712 authorization in atomic
   units; a person should see "0.01 USDC to this seller" in the wallet, not only on our page.

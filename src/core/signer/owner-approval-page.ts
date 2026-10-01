@@ -169,6 +169,12 @@ export const OWNER_PAGE_SCRIPT = `
     show("expiry-val", false);
     show("fineprint", false);
     document.body.setAttribute("data-state", state.status);
+    // the address the command recorded, even when this browser did not connect it: the owner checks it is their wallet
+    if (state.address) {
+      el("account").textContent = state.address;
+      show("account-row", true);
+      show("account", true);
+    }
     if (state.status === "confirmed") say(state.message || "Confirmed. You can return to the agent.", "good", state.hash ? txLink(state.hash) : null);
     else if (state.status === "failed") say(state.message || "Not confirmed. Check the command result and wallet activity before trying again.", "bad", state.hash ? txLink(state.hash) : null);
     else if (state.status === "expired") say("This link expired. If your wallet still has a request open, cancel it. Check the command result and wallet activity before requesting a new link.", "bad");

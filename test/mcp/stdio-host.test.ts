@@ -1,12 +1,12 @@
-// The server as a desktop host actually starts it: a real `npx tsx src/mcp/main.ts` process,
-// spoken to over stdio by a real MCP client, with the environment a host hands over — including
-// the `${user_config.…}` placeholders Claude Desktop passes through verbatim when a setting is
-// empty, and a HOME of its own so the run cannot touch the machine's real one.
+// The server as an MCP client actually starts it: a real `npx tsx src/mcp/main.ts` process,
+// spoken to over stdio by a real MCP client, with the environment a client config hands over —
+// including `${…}` placeholders nobody expanded, and a HOME of its own so the run cannot touch
+// the machine's real one.
 //
 // Everything else in the test suite drives the server in-process, which cannot catch the two
-// failures a desktop host has produced in practice: an older copy of the extension still
-// running after a reinstall, with nothing on screen saying so; and a home directory that was
-// not where anyone thought it was. So this file asks the server what it is — its version and its
+// failures that matter most when the server is started by someone else: an older copy of the
+// server still running after an update, with nothing on screen saying so; and a home directory
+// that was not where anyone thought it was. So this file asks the server what it is — its version and its
 // home — through the same door an agent uses, and checks that the answer is the truth about
 // this process: the version in package.json, and the home derived from HOME.
 
@@ -57,9 +57,9 @@ beforeAll(async () => {
     stderr: "pipe",
     env: {
       ...stringEnv(process.env),
-      // What a host hands over when its settings are empty: its own placeholders, unexpanded.
-      SUPERSTABLES_HOME: "${user_config.home}",
-      SUPERSTABLES_WALLET_URL: "${user_config.wallet_url}",
+      // Placeholders a client config left unexpanded: not a path and not a URL.
+      SUPERSTABLES_HOME: "${SUPERSTABLES_HOME}",
+      SUPERSTABLES_WALLET_URL: "${SUPERSTABLES_WALLET_URL}",
       // So the server's idea of "the user's home" is this directory and nothing else.
       HOME: host,
       USERPROFILE: host,
@@ -78,7 +78,7 @@ afterAll(async () => {
   rmSync(host, { recursive: true, force: true });
 });
 
-describe("the MCP server as a desktop host starts it", () => {
+describe("the MCP server as an MCP client starts it", () => {
   it("offers the six tools over a real stdio transport", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([

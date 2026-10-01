@@ -265,7 +265,8 @@ describe("the Superstables MCP server", () => {
   it("refuses a second payment on a quote that has already been paid", async () => {
     const result = await call("pay", { quote_id: paidQuoteId });
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("already been used");
+    expect(textOf(result)).toContain("A payment for this quote already exists: attempt");
+    expect(textOf(result)).toContain("payment_status with attempt_id");
     expect(facilitator.calls.settle).toBe(1);
   });
 
@@ -401,9 +402,11 @@ describe("the Superstables MCP server in browser mode", () => {
 
     // The person, at their keyboard, with MetaMask: connect, sign, submit.
     const link = started.approval_url as string;
+    // As the page itself posts: from its own origin, with a JSON body (Node's fetch sends no Origin).
+    const asPage = { "content-type": "application/json", origin: new URL(link).origin };
     const prepared = await fetch(`${link}/account`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: asPage,
       body: JSON.stringify({ address: account.address }),
     });
     expect(prepared.status).toBe(200);
@@ -411,7 +414,7 @@ describe("the Superstables MCP server in browser mode", () => {
     const signature = await account.signTypedData(typedData as never);
     const submitted = await fetch(`${link}/signature`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: asPage,
       body: JSON.stringify({ address: account.address, signature }),
     });
     expect(submitted.status).toBe(200);
@@ -434,7 +437,12 @@ describe("the Superstables MCP server in browser mode", () => {
     );
     expect(started.approval_url).toBeDefined();
 
-    const rejected = await fetch(`${started.approval_url as string}/reject`, { method: "POST" });
+    const link = started.approval_url as string;
+    const rejected = await fetch(`${link}/reject`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: new URL(link).origin },
+      body: "{}",
+    });
     expect(rejected.status).toBe(200);
 
     const denied = await waitForFinalOn(browserClient, started.attempt_id);

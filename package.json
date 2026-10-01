@@ -1,6 +1,6 @@
 {
   "name": "@superstables/client",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Superstables client: discover paid services, quote them, and pay from an owner-controlled wallet. CLI, local MCP server and SDK.",
   "license": "Apache-2.0",
   "repository": { "type": "git", "url": "https://github.com/superstables/superstables-client.git" },
@@ -13,25 +13,23 @@
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
   },
-  "files": ["dist", "!dist/budget", "policy.example.yaml", "README.md", "CHANGELOG.md", "LICENSE"],
+  "files": ["dist", "policy.example.yaml", "README.md", "CHANGELOG.md", "LICENSE"],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/budget-build.mjs",
+    "prepare": "node scripts/prepare.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:live": "SUPERSTABLES_LIVE=1 vitest run test/live",
     "dev": "tsx src/cli/main.ts",
-    "bundle": "node scripts/bundle.mjs",
-    "skill": "node scripts/skill.mjs"
+    "skill": "node scripts/skill.mjs",
+    "skill:check": "node scripts/skill-check.mjs",
+    "install-check": "node scripts/install-check.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@solana/web3.js": "^1.99.0",
     "@x402/core": "^2.25.0",
     "@x402/evm": "^2.25.0",
-    "@x402/fetch": "^2.25.0",
-    "bs58": "^6.0.0",
     "commander": "^14.0.0",
-    "mppx": "^0.11.0",
     "viem": "^2.56.3",
     "yaml": "^2.6.0",
     "zod": "^4.6.1"
@@ -40,10 +38,13 @@
     "jayson": "^5.0.0"
   },
   "devDependencies": {
-    "@anthropic-ai/mcpb": "^2.1.2",
+    "@solana/web3.js": "^1.99.0",
     "@types/node": "^20.19.0",
+    "@x402/fetch": "^2.25.0",
+    "bs58": "^6.0.0",
     "esbuild": "^0.28.2",
     "fflate": "^0.8.2",
+    "mppx": "^0.11.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

@@ -7,7 +7,7 @@
 
 import { detect, termsFor, type Challenge, type RawAccept } from "./x402.js";
 import { describeNetwork } from "./chain.js";
-import { evaluatePolicy, type Policy } from "./policy.js";
+import { evaluatePolicy, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
 import { Records } from "./records.js";
 import type { Quote, ResolvedRequest, ServiceListing } from "./types.js";
@@ -37,13 +37,14 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
   const chosen = firstSupported(challenge, url);
 
   const asset = chosen.terms.asset;
-  const verdict = evaluatePolicy(deps.policy, {
+  const payment = {
     // The host we chose to call, never the one the seller claims in its challenge.
     domain: hostOf(url),
     amountDecimal: chosen.terms.amountDecimal,
     asset,
     spentTodayDecimal: deps.records.spentToday(asset),
-  });
+  };
+  const verdict = evaluatePolicy(deps.policy, payment);
 
   const now = Date.now();
   const record: Quote = {
@@ -58,7 +59,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
     request,
     terms: chosen.terms,
     requirement: chosen.requirement,
-    policy: { allowed: verdict.allowed, reason: verdict.reason },
+    policy: { allowed: verdict.allowed, reason: verdict.reason, checks: policyChecks(deps.policy, payment) },
     approval: "wallet",
   };
   return deps.records.saveQuote(record);

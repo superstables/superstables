@@ -15,7 +15,7 @@ npx superstables setup
 ```
 
 Connect the agent with the demo services switch on, so the prepared demo services are listed
-next to the real sellers (the Claude Desktop bundle has it on already):
+next to the real sellers:
 
 ```bash
 claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- node "$(pwd)/dist/mcp/main.js"
@@ -45,7 +45,7 @@ this demo has a wallet daemon and a server in two terminals.
 
 | Window | What it shows |
 | --- | --- |
-| 1 | Claude Code or Claude Desktop — the conversation. Both have been run end to end with the MetaMask flow |
+| 1 | the agent — the conversation. Claude Code has been run end to end with the MetaMask flow |
 | 2 | the browser, where the approval page and MetaMask's popup appear |
 
 ## Part one: a payment that goes through
@@ -191,7 +191,7 @@ state, put `--home /tmp/superstables-demo` before every subcommand.
 | MetaMask never opens when you press Connect | Its popup was suppressed, or it is locked | Open the MetaMask extension, unlock it, and press Connect again |
 | The value in MetaMask looks a thousand times too big | It is in USDC's smallest unit | `10000` is 0.01 USDC. The page prints the conversion under the amount |
 | The page says "There is no payment waiting under this link" | The link was already used, rejected, or expired, or the agent restarted | Ask the agent to quote and pay again |
-| Agent: "the approval page port is taken" | Something else is on 4412 | Set `SUPERSTABLES_APPROVE_PORT` to a free port for the agent's process |
+| Agent: "the approval page could not start" and names a port | `SUPERSTABLES_APPROVE_PORT` fixes a port that is busy, probably with another payment waiting for its owner | Leave that process running. Unset `SUPERSTABLES_APPROVE_PORT`, or set it to a free port, then pay the same quote again |
 | The page's countdown runs out while you look at MetaMask | Five minutes passed | Quote and pay again; nothing was signed |
 | Payment fails: "the payment did not settle" with an insufficient-funds reason | The connected account has no test USDC | Top it up at <https://faucet.circle.com>; MetaMask shows the balance |
 | Payment fails: "No facilitator could be reached" | All three public facilitators are unreachable | Check connectivity, then `superstables doctor`, which reports each facilitator separately. Nothing was signed, so nothing was spent |

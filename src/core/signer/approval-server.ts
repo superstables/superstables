@@ -17,6 +17,10 @@
 //     stays pending, so the person can simply try again with the right account.
 //  4. Nothing waits for ever. Requests expire on their own, an expiry is a refusal with a
 //     reason, and every state change is appended to an audit log that never holds a signature.
+//
+// Like the owner approval page, it answers only to Host 127.0.0.1:PORT (or localhost:PORT), so a
+// rebinding DNS name cannot reach it, and a state-changing POST must come from the page's own
+// origin with a JSON body, so another web page in the owner's browser cannot reject or sign.
 
 import { randomBytes } from "node:crypto";
 import { appendFileSync } from "node:fs";
@@ -35,7 +39,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 /** How often expiry is swept. The page also polls, so a second's granularity is plenty. */
 const SWEEP_MS = 1_000;
 
-export type ApprovalStatus = "pending" | "signed" | "denied" | "expired";
+export type ApprovalStatus = "pending" | "signed" | "denied" | "expired" | "abandoned";
 
 /** The EIP-712 payload, in the JSON-safe shape a browser wallet's signTypedData_v4 expects. */
 export interface ApprovalTypedData {
@@ -67,7 +71,7 @@ export interface ApprovalRequestInput {
 /** How an approval ended. `signed` carries the credential; everything else carries a reason. */
 export type ApprovalOutcome =
   | { status: "signed"; result: SignResult }
-  | { status: "denied" | "expired"; reason: string };
+  | { status: "denied" | "expired" | "abandoned"; reason: string };
 
 export interface ApprovalHandle {
   id: string;
@@ -90,8 +94,18 @@ interface ApprovalRecord extends ApprovalRequestInput {
 }
 
 export interface ApprovalServerOptions {
-  /** 0 picks a free port (tests). Defaults to DEFAULT_APPROVE_PORT. */
+  /**
+   * A port somebody chose (SUPERSTABLES_APPROVE_PORT), or 0 for any free one (tests). It is
+   * kept as chosen: when it is busy, start() fails with ApprovalPortBusy rather than moving.
+   * Leave it out to use `preferredPort`.
+   */
   port?: number;
+  /**
+   * The port to try when none was chosen. Defaults to DEFAULT_APPROVE_PORT. When it is busy,
+   * usually because another payment is waiting there for its owner, the page takes a free
+   * port instead and `movedFrom` says which one was busy.
+   */
+  preferredPort?: number;
   /** Where the audit log lives. Defaults to the records directory under SUPERSTABLES_HOME. */
   recordsDirPath?: string;
   /** Remember the connected account here, so `status` can name a payer later. */
@@ -145,6 +159,23 @@ function buildTypedData(record: ApprovalRecord, payer: string): ApprovalTypedDat
   };
 }
 
+/**
+ * The port somebody chose is taken. Most likely another `superstables pay` (or MCP server) is
+ * serving its own approval page there and waiting for its owner, so the message says to leave
+ * it alone: stopping that process would end someone else's payment.
+ */
+export class ApprovalPortBusy extends Error {
+  constructor(readonly port: number) {
+    super(
+      `port ${port} on 127.0.0.1 is already in use, so the approval page could not start. Another ` +
+        "`superstables pay` or MCP server is probably serving its own approval page there and waiting " +
+        "for its owner: do not stop it. Unset SUPERSTABLES_APPROVE_PORT to let pay pick a free port, " +
+        "or set it to a different one",
+    );
+    this.name = "ApprovalPortBusy";
+  }
+}
+
 export class ApprovalServer {
   private readonly options: ApprovalServerOptions;
   private readonly records = new Map<string, ApprovalRecord>();
@@ -152,6 +183,7 @@ export class ApprovalServer {
   private starting?: Promise<void>;
   private sweeper?: NodeJS.Timeout;
   private boundPort = 0;
+  private busyPort?: number;
 
   constructor(options: ApprovalServerOptions = {}) {
     this.options = options;
@@ -164,6 +196,11 @@ export class ApprovalServer {
 
   get port(): number {
     return this.boundPort;
+  }
+
+  /** The preferred port, when it was busy and the page took a free one instead. */
+  get movedFrom(): number | undefined {
+    return this.busyPort;
   }
 
   get pending(): number {
@@ -184,6 +221,28 @@ export class ApprovalServer {
   }
 
   private async listen(): Promise<void> {
+    const chosen = this.options.port;
+    const preferred = this.options.preferredPort ?? DEFAULT_APPROVE_PORT;
+    let server: Server;
+    try {
+      server = await this.bind(chosen ?? preferred);
+    } catch (err) {
+      if (!isAddressInUse(err)) throw err;
+      // A port somebody chose stays chosen; only the default gives way.
+      if (chosen !== undefined) throw new ApprovalPortBusy(chosen);
+      server = await this.bind(0);
+      this.busyPort = preferred;
+    }
+    const address = server.address();
+    this.boundPort = typeof address === "object" && address ? address.port : 0;
+    this.server = server;
+    this.sweeper = setInterval(() => this.sweep(), SWEEP_MS);
+    // The agent's own process must never be held open by this timer.
+    this.sweeper.unref();
+  }
+
+  /** A fresh server on one port, or the listen error. Node does not reuse a server that failed. */
+  private async bind(port: number): Promise<Server> {
     const server = createServer((req, res) => {
       void this.handle(req, res).catch((err: Error) => {
         if (res.headersSent) {
@@ -196,17 +255,12 @@ export class ApprovalServer {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       // 127.0.0.1 only: an approval page is never reachable from another machine.
-      server.listen(this.options.port ?? DEFAULT_APPROVE_PORT, "127.0.0.1", () => {
+      server.listen(port, "127.0.0.1", () => {
         server.off("error", reject);
         resolve();
       });
     });
-    const address = server.address();
-    this.boundPort = typeof address === "object" && address ? address.port : 0;
-    this.server = server;
-    this.sweeper = setInterval(() => this.sweep(), SWEEP_MS);
-    // The agent's own process must never be held open by this timer.
-    this.sweeper.unref();
+    return server;
   }
 
   /** Register one payment for approval and hand back the link and the promise to wait on. */
@@ -238,11 +292,14 @@ export class ApprovalServer {
   async close(): Promise<void> {
     if (this.sweeper) clearInterval(this.sweeper);
     this.sweeper = undefined;
+    // Closing is not a decision: nobody approved and nobody rejected, the page simply goes
+    // away with this process. Recording it as a rejection would put words in the owner's mouth.
     for (const record of this.records.values()) {
       if (record.status !== "pending") continue;
-      record.status = "denied";
-      record.reason = "the agent stopped before this payment was approved";
-      record.finish({ status: "denied", reason: record.reason });
+      record.status = "abandoned";
+      record.reason = "the process serving the approval page stopped before anyone approved or rejected this payment";
+      this.audit(record);
+      record.finish({ status: "abandoned", reason: record.reason });
     }
     const server = this.server;
     this.server = undefined;
@@ -336,6 +393,13 @@ export class ApprovalServer {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // DNS rebinding: a page on another name that resolves to 127.0.0.1 must not reach these
+    // routes. The link names 127.0.0.1 and this port; localhost on the same port is the same page.
+    const host = String(req.headers.host ?? "");
+    if (host !== `127.0.0.1:${this.boundPort}` && host !== `localhost:${this.boundPort}`) {
+      this.sendJson(res, 421, { error: "this page answers on 127.0.0.1 only" });
+      return;
+    }
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const method = req.method ?? "GET";
@@ -377,6 +441,19 @@ export class ApprovalServer {
     }
     if (method !== "POST") {
       this.sendJson(res, 405, { error: "that route takes a POST" });
+      return;
+    }
+    // CSRF defences for every state-changing route, as on the owner approval page: the request
+    // must come from this page's own origin (exactly http://<the Host checked above>) and carry
+    // a JSON body, which a cross-site form or a "simple" cross-origin request cannot. These stop
+    // other web pages in the owner's browser; they are not authentication. The signature check
+    // below is what decides whether anything was signed.
+    if (String(req.headers.origin ?? "") !== `http://${host}`) {
+      this.sendJson(res, 403, { error: "this route answers only to the approval page itself" });
+      return;
+    }
+    if (!/^application\/json(\s*;|$)/i.test(String(req.headers["content-type"] ?? ""))) {
+      this.sendJson(res, 415, { error: "send JSON (content-type: application/json)" });
       return;
     }
 
@@ -475,4 +552,8 @@ export class ApprovalServer {
 
     this.sendJson(res, 404, { error: "no such route" });
   }
+}
+
+function isAddressInUse(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | undefined)?.code === "EADDRINUSE";
 }

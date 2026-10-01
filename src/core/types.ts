@@ -49,6 +49,34 @@ export interface ServiceListing {
   mock?: boolean;
   /** Prompts the seller suggests, when it publishes any. */
   examplePrompts?: string[];
+  /** Payment protocols the listing accepts, as its source names them (e.g. ["x402"]). */
+  rails?: string[];
+  /**
+   * Chains the listing accepts, as its source names them (e.g. ["base-sepolia", "solana"]).
+   * The names are the source's own: in the public index "base" and "solana" are mainnets.
+   */
+  chains?: string[];
+  /** Which way this client could pay the listing, judged from its rails and chains alone. */
+  routes?: PayRoutes;
+}
+
+/** A `superstables budget` rail and the chain it would pay on. */
+export interface BudgetRoute {
+  rail: "evm" | "tempo" | "solana";
+  chain: string;
+}
+
+/**
+ * How a listing could be paid by this client, judged from its rails and chains only. A seller
+ * still has to answer with a challenge the payer accepts, and `pay` also needs the request
+ * parameters, so `pay: true` means "on the network `pay` supports", not "callable as listed"
+ * (that is `actionable`).
+ */
+export interface PayRoutes {
+  /** `superstables pay`: x402 on Base Sepolia, the owner approves each payment. */
+  pay: boolean;
+  /** `superstables budget` rails with a chain this listing accepts. Testnets only. */
+  budget: BudgetRoute[];
 }
 
 export interface ResolvedRequest {
@@ -74,6 +102,15 @@ export interface PaymentTerms {
   x402Version: 1 | 2;
 }
 
+/** One rule of the spend policy, as it applied to one payment. */
+export interface PolicyCheck {
+  /** The policy file's name for the rule: kill_switch, deny, allow, stablecoins, caps.per_call, caps.per_day. */
+  rule: string;
+  ok: boolean;
+  /** What was checked against what, in words: "0.01 USDC, at most 0.05 USDC". */
+  detail: string;
+}
+
 export type QuoteStatus = "open" | "used" | "stale" | "expired";
 
 export interface Quote {
@@ -91,7 +128,7 @@ export interface Quote {
   /** The seller's requirement verbatim: exactly what the wallet will be asked to sign. */
   requirement: PaymentRequirements;
   /** The local (software) policy's verdict. The wallet applies the owner's policy again. */
-  policy: { allowed: boolean; reason?: string };
+  policy: { allowed: boolean; reason?: string; checks?: PolicyCheck[] };
   /** Who decides: always the owner's wallet in this release. */
   approval: "wallet";
 }
@@ -107,11 +144,13 @@ export type AttemptState =
   | "settled"
   | "paid_service_failed"
   | "failed"
-  | "uncertain";
+  | "uncertain"
+  /** Nobody decided: whoever was waiting for the owner stopped first. Nothing was submitted. */
+  | "abandoned";
 
 /** States an attempt never leaves. */
 export const FINAL_ATTEMPT_STATES: readonly AttemptState[] = [
-  "denied", "expired", "settled", "paid_service_failed", "failed", "uncertain",
+  "denied", "expired", "abandoned", "settled", "paid_service_failed", "failed", "uncertain",
 ];
 
 export interface AttemptTransition {
@@ -119,6 +158,9 @@ export interface AttemptTransition {
   state: AttemptState;
   note?: string;
 }
+
+/** What ended an `abandoned` attempt. Never the owner: the owner's "no" is `denied`. */
+export type AbandonCause = "stopped" | "wait" | "page_closed";
 
 export interface Attempt {
   id: string;
@@ -136,6 +178,20 @@ export interface Attempt {
   approvalUrl?: string;
   /** Why it stopped: the wallet's reason, the seller's error, or the network failure. */
   reason?: string;
+  /**
+   * Why nothing was signed, when a check refused before the owner decided: "policy" for a
+   * spend policy (this client's or the wallet's), "invalid" for a request the signer would not
+   * take, "unavailable" for a wallet that did not answer, "approval_page" for an approval page
+   * that could not start. After the last two the owner was never asked, so the quote can still
+   * be paid.
+   */
+  refusal?: "policy" | "invalid" | "unavailable" | "approval_page";
+  /**
+   * For an `abandoned` attempt, what ended the wait: "stopped" when the process running it was
+   * stopped (Ctrl-C, a signal from another program, or the process exiting), "wait" when its
+   * --wait ran out, "page_closed" when the approval page closed under it. None is the owner.
+   */
+  abandonedBy?: AbandonCause;
   payer?: string;
   transaction?: string;
   transactionUrl?: string;

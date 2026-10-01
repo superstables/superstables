@@ -224,10 +224,42 @@ describe("findServices", () => {
 
     expect(filings).toMatchObject({
       actionable: false,
-      notActionableReason: "mainnet network not supported in this release",
+      notActionableReason: "mainnet only (x402 on base); this client pays on testnets only",
       testnet: false,
     });
     expect(filings?.payment.networkLabel).toBe("Base (mainnet)");
+  });
+
+  it("keeps the rails and chains the index returns, and says which way each listing could be paid", async () => {
+    stubIndex({
+      services: [
+        ...INDEX_FIXTURE.services,
+        // "solana" in the index is mainnet: no rail may claim it.
+        { ...INDEX_FIXTURE.services[0], id: "dual", chains: ["base", "base-sepolia", "solana"] },
+        { ...INDEX_FIXTURE.services[0], id: "arb", chains: ["arbitrum-sepolia"] },
+        { ...INDEX_FIXTURE.services[0], id: "sol-main", chains: ["solana"] },
+        { ...INDEX_FIXTURE.services[0], id: "sol-dev", chains: ["solana-devnet"] },
+        { ...INDEX_FIXTURE.services[0], id: "tempo", rails: ["mpp"], chains: ["tempo-moderato"] },
+      ],
+    });
+    const { services } = await findServices({ query: "example" });
+    const by = (id: string) => services.find((s) => s.id === id);
+
+    expect(by("example-weather")).toMatchObject({
+      rails: ["x402"],
+      chains: ["base-sepolia"],
+      routes: { pay: true, budget: [{ rail: "evm", chain: "base-sepolia" }] },
+    });
+    expect(by("example-filings")?.routes).toEqual({ pay: false, budget: [] });
+    const dual = by("dual");
+    expect(dual?.chains).toEqual(["base", "base-sepolia", "solana"]);
+    expect(dual?.routes).toEqual({ pay: true, budget: [{ rail: "evm", chain: "base-sepolia" }] });
+    expect(dual?.payment.network).toBe("eip155:84532");
+    expect(by("arb")?.routes).toEqual({ pay: false, budget: [{ rail: "evm", chain: "arbitrum-sepolia" }] });
+    expect(by("arb")?.notActionableReason).toContain("superstables budget");
+    expect(by("sol-main")?.routes).toEqual({ pay: false, budget: [] });
+    expect(by("sol-dev")?.routes).toEqual({ pay: false, budget: [{ rail: "solana", chain: "devnet" }] });
+    expect(by("tempo")?.routes).toEqual({ pay: false, budget: [{ rail: "tempo", chain: "moderato" }] });
   });
 
   it("asks the index with the query, live and limit it documents", async () => {

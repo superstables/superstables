@@ -11,11 +11,11 @@
 // the owner runs it or watches it run, and an agent must not complete it. A recorded owner never changes silently:
 // --new-owner replaces it, refused while the agent is the delegate of the recorded owner's USDC account.
 // npx tsx budget/solana/setup.ts [--new-owner] [--timeout <s>] [--no-open] [--owner-key-file <path>]
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, connection, formatUnits, loadOwner, parseEnvFile, parseStrict, readPublic, retryRead, writePublic } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, connection, formatUnits, loadOwner, parseEnvFile, parseStrict, readPublic, replaceKeyFile, retryRead, writePublic } from "./lib.mjs";
 import { getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { askConnect, closeOwnerPage, emit, endUnapproved, sol } from "./owner.ts";
@@ -111,8 +111,7 @@ if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${owner}`)
 // 3. the owner's public address, in the agent file (buy reads it) and the public file
 if (bound !== owner) {
   const lines = readFileSync(AGENT_KEY_PATH, "utf8").split("\n").filter((l) => l !== "" && !l.startsWith("SOLANA_OWNER_ADDRESS="));
-  writeFileSync(AGENT_KEY_PATH, `${[...lines, `SOLANA_OWNER_ADDRESS=${owner}`].join("\n")}\n`, { mode: 0o600 });
-  chmodSync(AGENT_KEY_PATH, 0o600);
+  replaceKeyFile(AGENT_KEY_PATH, `${[...lines, `SOLANA_OWNER_ADDRESS=${owner}`].join("\n")}\n`); // the only copy of the agent key: never truncated in place
 }
 writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent });
 console.log(`wrote ${PUBLIC_PATH} (no secret) and the owner's address into ${AGENT_KEY_PATH}`);
@@ -133,6 +132,6 @@ const steps = [
 ];
 console.log("\nNext:");
 steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
-finish?.({ ok: true, message: `Done. ${owner} is recorded as the owner of agent ${agent}. You can close this page. Next: fund your wallet with devnet SOL and USDC, give the agent SOL for fees, then grant a budget (the terminal lists the commands).` });
+finish?.({ ok: true, message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: fund your wallet with devnet SOL and USDC, give the agent SOL for fees, then grant a budget (the terminal lists the commands).` });
 await closeOwnerPage();
-process.exit(result(0, { state: "ok", owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_PATH, agentKeyFile: AGENT_KEY_PATH, steps, next: "fund the owner, then superstables budget fund-agent --rail solana, then superstables budget doctor --rail solana" }));
+process.exit(result(0, { state: "ok", owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_PATH, agentKeyFile: AGENT_KEY_PATH, steps, next: "superstables budget fund-agent --rail solana (SOL for the agent's fees), then superstables budget doctor --rail solana (it says what the owner still needs), then superstables budget grant --rail solana --amount A" }));

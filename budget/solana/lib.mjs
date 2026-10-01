@@ -7,7 +7,8 @@
 //   public file         public addresses only. Read commands (readBudget, reconcile) and owner commands use it.
 //   an owner key file   tests and automation only, named with --owner-key-file <path> (mode 600):
 //                       SOLANA_OWNER_SECRET_BASE58. The default path ownerKeyFile("solana") is never read.
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, readFileSync, renameSync, unlinkSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import {
@@ -160,6 +161,27 @@ export async function getSolBalance(conn, pubkey) {
 
 export function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// Replace a file that holds the only copy of a key: write a new file (mode 600, never an existing one) next to it and
+// rename it over the old in one step, so a crash or a full disk leaves the old file or the new one, never a truncated one.
+export function replaceKeyFile(path, text) {
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tmp, text, { mode: 0o600, flag: "wx" });
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch {}
+    throw err;
+  }
+}
+
+// Seller text (its 402, its answer, its headers, its errors) on one log line: control characters, newlines included, and
+// the Unicode line separators become spaces. A seller must not be able to start a line of its own on stdout, where the
+// dispatcher reads APPROVE and RESULT lines. The same rule as evm's oneLine.
+export function oneLine(s, max = 300) {
+  return String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim().slice(0, max);
 }
 
 // ---------------------------------------------------------------------------
