@@ -323,9 +323,9 @@ export const OWNER_PAGE_SCRIPT = `
       })
       .catch(function (err) {
         if (err && err.code === 4001) {
-          post("/reject", { by: "wallet" }).then(function () {
-            ended({ status: "rejected", mine: "Your wallet reported that you rejected this request. This link is closed. The command cannot prove from this page that nothing was submitted, so it reports the result as unknown until it checks the chain. Any existing budget stays in effect." });
-          });
+          post("/reject", { by: "wallet" }).then(function (answer) {
+            rejected(answer, "Your wallet reported that you rejected this request. This link is closed. The command cannot prove from this page that nothing was submitted, so it reports the result as unknown until it checks the chain. Any existing budget stays in effect.");
+          }, notAnswering);
           return;
         }
         setBusy(false);
@@ -550,9 +550,9 @@ export const OWNER_PAGE_SCRIPT = `
       })
       .catch(function (err) {
         if (err && err.walletSaidNo) {
-          post("/reject", { by: "wallet" }).then(function () {
-            ended({ status: "rejected", mine: "Your wallet did not return a signed transaction (" + String(err.message).replace(/[.\\s]+$/, "") + "). The command did not submit it. Any existing budget stays in effect." });
-          });
+          post("/reject", { by: "wallet" }).then(function (answer) {
+            rejected(answer, "Your wallet did not return a signed transaction (" + String(err.message).replace(/[.\\s]+$/, "") + "). The command did not submit it. Any existing budget stays in effect.");
+          }, notAnswering);
           return;
         }
         setBusy(false);
@@ -560,11 +560,25 @@ export const OWNER_PAGE_SCRIPT = `
       });
   }
 
+  function notAnswering() {
+    setBusy(false);
+    say("The command is not answering. Cancel any open wallet request and check the budget status.", "bad");
+  }
+
+  // Report a rejection only when the command accepted it. A 409 means the request had already moved on (sent,
+  // confirmed, expired, or being submitted): say why, and let the next state read show where it stands.
+  function rejected(answer, mine) {
+    if (answer.ok) { ended({ status: "rejected", mine: mine }); return; }
+    setBusy(false);
+    say((answer.data.error ? "Not rejected: " + answer.data.error + ". " : "The command did not accept the rejection. ") + "Check wallet activity and the budget status.", "bad");
+    refresh();
+  }
+
   function reject() {
     setBusy(true);
     post("/reject", { by: "page" })
-      .then(function () { ended({ status: "rejected", mine: "This request is closed. Cancel any open wallet request too. A transaction already submitted can still take effect. Any existing budget stays in effect." }); })
-      .catch(function () { setBusy(false); say("The command is not answering. Cancel any open wallet request and check the budget status.", "bad"); });
+      .then(function (answer) { rejected(answer, "This request is closed. Cancel any open wallet request too. A transaction already submitted can still take effect. Any existing budget stays in effect."); })
+      .catch(notAnswering);
   }
 
   document.addEventListener("click", function (event) {
@@ -595,7 +609,7 @@ function list(items: string[]): string {
   return `<ul>${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`;
 }
 
-const OWNER_LEDE = "Review the terms here before signing in your own wallet. Your wallet keeps its signing key.";
+const OWNER_LEDE = "Review the terms here before you sign with your own wallet. Your wallet keeps its signing key.";
 
 /** The whole page for one owner action, terms and all, ready to serve. */
 export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look: PageLook = pageLook()): string {

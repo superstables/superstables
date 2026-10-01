@@ -24,6 +24,12 @@ describe.each(["plain", "superstables"] as const)("the approval page, %s look", 
     expect(page).toContain("Reported by the agent (not verified)");
   });
 
+  it("shows each status in words, the same ones superstables.com uses", () => {
+    expect(page).toContain('"denied":"Rejected by you"');
+    expect(page).toContain('"rejected":"Refused by the wallet"');
+    expect(page).toContain("labels[request.status]");
+  });
+
   it("offers both decisions, and only those", () => {
     expect(page).toContain("Approve and sign");
     expect(page).toContain("Reject");

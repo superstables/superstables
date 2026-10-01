@@ -12,7 +12,9 @@
 // block, labelled as unverified. What the wallet verified and what the agent claimed must
 // never look alike.
 
+import { inlineJson } from "../core/signer/approval-page.js";
 import { framePage, pageLook, type PageLook } from "../core/signer/look.js";
+import { WALLET_STATUS_LABELS } from "../core/status-labels.js";
 
 const WALLET_STYLE = `
   h2.section { font-family: var(--mono); font-size: 11.5px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2); margin: 40px 0 0; }
@@ -23,6 +25,7 @@ const WALLET_STYLE = `
   th { font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
   td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
   td.mono { font-size: 12.5px; }
+  td:nth-child(-n+3) { white-space: nowrap; }
   tbody tr:last-child td { border-bottom: 0; }
   .status-signed { color: var(--good); }
   .status-denied, .status-rejected, .status-expired { color: var(--bad); }
@@ -35,6 +38,7 @@ export const WALLET_PAGE_SCRIPT = `
   var notice = document.getElementById("notice");
   var pendingEl = document.getElementById("pending");
   var historyEl = document.getElementById("history");
+  var labels = JSON.parse(document.getElementById("status-labels").textContent);
   var busy = {};
 
   function esc(value) {
@@ -104,7 +108,7 @@ export const WALLET_PAGE_SCRIPT = `
       var when = new Date(request.createdAt).toLocaleTimeString();
       return "<tr>" +
         "<td>" + esc(when) + "</td>" +
-        '<td class="status-' + esc(request.status) + '">' + esc(request.status) + "</td>" +
+        '<td class="status-' + esc(request.status) + '">' + esc(labels[request.status] || request.status) + "</td>" +
         "<td>" + esc(terms.amountDecimal) + " " + esc(terms.asset) + "</td>" +
         '<td class="mono">' + esc(terms.recipient) + "</td>" +
         "<td>" + esc(request.reason || "") + "</td>" +
@@ -153,7 +157,11 @@ export const WALLET_PAGE_SCRIPT = `
     refresh();
     ask("/owner/requests/" + encodeURIComponent(id) + "/" + action, { method: "POST" })
       .then(function (response) {
-        if (!response.ok) say("The wallet refused that (HTTP " + response.status + "). It may have expired.", true);
+        if (response.ok) return;
+        // 409: the request was already decided or expired; the wallet says which
+        return response.json().catch(function () { return {}; }).then(function (body) {
+          say(body.error ? "Not done: " + body.error + "." : "The wallet refused that (HTTP " + response.status + ").", true);
+        });
       })
       .catch(function () { say("The wallet is not answering. Check that it is still running.", true); })
       .then(function () { delete busy[id]; refresh(); });
@@ -188,6 +196,7 @@ export function walletPage(look: PageLook = pageLook()): string {
   <h2 class="section">History</h2>
   <div id="history"><p class="empty">Nothing yet.</p></div>
 
+<script id="status-labels" type="application/json">${inlineJson(WALLET_STATUS_LABELS)}</script>
 <script>${WALLET_PAGE_SCRIPT}</script>`,
   });
 }

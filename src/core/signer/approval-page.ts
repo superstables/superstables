@@ -303,7 +303,7 @@ export function approvalPage(facts: ApprovalPageFacts, look: PageLook = pageLook
     look,
     title: "Approve a payment",
     eyebrow: "Payment approval",
-    lede: "Check the amount and the recipient, then sign in your browser wallet or reject. Your wallet keeps its key.",
+    lede: "Check the amount and the recipient, then sign with your browser wallet, or reject. Your wallet keeps its key.",
     testnet: /testnet/i.test(facts.networkLabel || facts.network),
     body,
   });
