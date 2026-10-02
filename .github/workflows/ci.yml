@@ -11,22 +11,31 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Node ${{ matrix.node }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, superstables-ci]
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         node: ["20", "22"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -51,3 +60,4 @@ jobs:
           name: superstables-mcpb-node${{ matrix.node }}
           path: build/*.mcpb
           if-no-files-found: error
+          retention-days: 3
