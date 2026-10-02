@@ -983,7 +983,7 @@ function refusalNext(f, rail) {
   const r = `--rail ${f.rail}${chainFlag(f)}${agentFlag(f)}`;
   if (/superstables budget (recover|fund-agent)/.test(rail.next ?? "")) return rail.next;
   // A spent, revoked or expired budget is reported, never worked around: an offer of a new or bigger grant is the owner's to
-  // make (acquisition runs, 1-2 Oct: "ask the owner to run grant" here made agents propose revoke and re-grant).
+  // make (in agent test runs, "ask the owner to run grant" here made agents propose a revoke and a new grant).
   const stop = "Report what you bought, what is left and the price in one reply (message_for_owner), and end your turn. Do not propose or start a revoke, a new or bigger grant or gas unless the owner explicitly asks for one, and never raise --max to get around it";
   // tempo: a period budget used up for now, or a seller the key may not pay: the rail's own words say what holds
   if (/period ends at/.test(rail.reason ?? "")) return `${rail.next}. ${stop}`;
