@@ -48,8 +48,10 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      # The runner's service may use 2 CPUs and 4 GB, but vitest sizes its pool by the machine's cores.
+      # Two workers and longer timeouts keep the tests that start the CLI as a process from timing out.
       - name: Test
-        run: npm test
+        run: npm test -- --maxWorkers=2 --minWorkers=1 --testTimeout=60000 --hookTimeout=60000
 
       - name: Build
         run: npm run build
