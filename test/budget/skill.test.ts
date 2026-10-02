@@ -12,6 +12,15 @@ const skill = readFileSync(resolve(SKILL, "SKILL.md"), "utf8");
 const ref = (f: string) => readFileSync(resolve(SKILL, f), "utf8");
 
 describe("skills/superstables-payments/SKILL.md", () => {
+  it("does not call Superstables' services simulated as a group: the market data service returns live prices", () => {
+    for (const [name, text] of [["SKILL.md", skill], ["discovery.md", ref("references/discovery.md")], ["once.md", ref("references/once.md")]]) {
+      expect(text, name).not.toMatch(/simulated demo services/);
+      expect(text, name).toMatch(/market data service[^.]*returns live prices/);
+    }
+    expect(skill).toMatch(/Treat a listing as simulated only when its flag is `yes`; do not infer it from the listing's name or operator/);
+    expect(skill).toMatch(/superstables budget find --chain devnet/);
+  });
+
   it("has one run paragraph for the zip to replace", () => {
     expect(skill.match(/<!-- run:[^>]*-->\n[\s\S]*?\n<!-- \/run -->\n/g)).toHaveLength(1);
   });

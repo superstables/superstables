@@ -176,8 +176,9 @@ the seller documents. A mainnet listing gets no command.
 
 `SUPERSTABLES_INDEX_URL` points discovery at another index that answers the same API, such as a
 self-hosted one; `SUPERSTABLES_INDEX_URL=off` switches the index off and leaves the built-in
-catalogue. `SUPERSTABLES_DEMO_SERVICES=on` adds Superstables' simulated demo services, read from
-`SUPERSTABLES_CATALOGUE_URL` (`off` skips it).
+catalogue. `SUPERSTABLES_DEMO_SERVICES=on` adds Superstables' testnet services from the hosted catalogue,
+read from `SUPERSTABLES_CATALOGUE_URL` (`off` skips it). Most return prepared sample output and
+are marked simulated; the market data service returns live prices.
 
 ### Exit codes and `--json`
 
@@ -292,9 +293,9 @@ local policy and what a compromised agent or client process could do.
 The built-in catalogue includes the hosted Superstables demo seller and a third-party x402
 service. With the demo services switch on (`SUPERSTABLES_DEMO_SERVICES=on`, which the demo
 setup snippets set), discovery also reads the hosted catalogue at
-`https://www.superstables.com/api/demo/catalogue`, where Superstables publishes its prepared
-demo services: simulated answers, each marked `mock` in the listing and listed after the real
-sellers. With the switch off, the default, the catalogue is never read and no simulated listing
+`https://www.superstables.com/api/demo/catalogue`, where Superstables publishes its testnet
+services. Most return prepared sample output: those listings carry `mock: true` and are listed
+after the listings not marked simulated. The market data service returns live prices. With the switch off, the default, the catalogue is never read and no simulated listing
 appears. To inspect the seller side of the flow, run the demo seller from this repository. You can
 observe its HTTP 402 response, facilitator interaction and log entry for each paid call:
 

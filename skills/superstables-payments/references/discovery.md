@@ -19,7 +19,7 @@
 - **Built-in listings**: services this client knows how to call, request parameters included. They work with no network for the listing itself; `find` asks each one for its price, unpaid.
 - **The index**: `https://www.superstables.com/api/v1/services` by default, every x402 service Superstables has found, with its payment protocols (`rails`) and `chains`. `SUPERSTABLES_INDEX_URL` points at another index with the same API, or `off` switches it off.
 
-With `SUPERSTABLES_DEMO_SERVICES=on` or `find --demo`, it also reads the hosted catalogue of simulated demo services (`SUPERSTABLES_CATALOGUE_URL`; `off` skips it). Those listings carry `mock: true` and come after real sellers.
+With `SUPERSTABLES_DEMO_SERVICES=on` or `find --demo`, it also reads the hosted catalogue of Superstables' testnet services (`SUPERSTABLES_CATALOGUE_URL`; `off` skips it). Most of them return prepared sample output: those listings carry `mock: true` and come after listings not marked simulated. The market data service returns live prices and carries `mock: false`.
 
 Listings that match the words come first, then index listings. A source that cannot be read is skipped and named in `warnings`; `find` still exits 0.
 
@@ -30,7 +30,7 @@ Listings that match the words come first, then index listings. A source that can
 | (none) | Only listings `pay` can call as listed |
 | `--budget` | Listings a `superstables budget` rail could pay, instead. Adds what `pay` cannot call: other testnets, MPP sellers, index listings without parameters. When every match is a Base Sepolia listing `pay` can call, both show the same |
 | `--all` | Every listing, including those this client cannot pay, with the reason |
-| `--demo` | Include the simulated demo services |
+| `--demo` | Include Superstables' testnet services from the hosted catalogue: most are simulated, the market data service returns live prices |
 | `--limit N` | How many to ask for (default 20) |
 | `--json` | `{services: [...], warnings: [...]}` on stdout |
 
@@ -54,7 +54,7 @@ Each `services[]` entry in `--json`:
 | `routes` | `{pay: bool, budget: [{rail, chain}]}`: which way this client could pay, from rails and chains alone |
 | `actionable` | `true` when `pay` can quote and pay it as listed; else `notActionableReason` says why |
 | `testnet`, `live`, `lastSeenLive` | Whether it is on a testnet, and whether the index saw it answer recently |
-| `mock` | `true`: the seller returns prepared, simulated output. `false`: real data. `null`: the listing does not say (index listings) |
+| `mock` | `true`: the listing marks the output as prepared sample output. `false`: the listing marks it as not sample output (Superstables' market data service, which returns live prices); this does not verify that the data is real. `null`: the listing does not say (index listings) |
 | `operator` | Who runs it, when known |
 | `commands` | `[{way, rail, chain, run, note}]`: each way to pay it: buy once first for a Superstables listing, then pay, then budgets. `way` is `buy-once`, `pay` or `budget`; `rail` and `chain` are set for `budget`; `run` is the commands in order; `note` says what to fill in. Empty when this client cannot pay it |
 | `next` | The first command of `commands`, or `null` when this client cannot pay it (then `notActionableReason` says why) |
@@ -64,9 +64,9 @@ Each `services[]` entry in `--json`:
 When several listings can answer the request:
 
 1. Keep those this client can pay the way you will pay (`routes.pay`, or a budget rail and chain with a live budget), that are `live`, and whose price is within the ceiling.
-2. Prefer real data: `simulated` `no` over `not said` over `yes`, even when the one that says `no` costs more, unless the user asked for the cheapest. A simulated listing (`mock: true`, the demo services) returns prepared output: use it only when nothing else fits, or when the user asked for the demo, and say so in the report.
+2. Prefer listings not marked simulated: `simulated` `no` over `not said` over `yes`, even when the one that says `no` costs more, unless the user asked for the cheapest. A listing marked simulated (`mock: true`, most of Superstables' testnet services) says it returns prepared sample output: use it only when nothing else fits, or when the user asked for the demo, and say so in the report. Treat a listing as simulated only when it is marked `mock: true`; do not infer it from its name or operator. Superstables' market data service is `mock: false` and returns live prices.
 3. Among the rest, take the cheapest. Confirm the price with `quote` or `preflight` before paying: the listed price can be out of date.
-4. Say which listing you chose and why (for example: real data, within the ceiling), and name who operates it, from `operator`: Superstables, or a third party. A third-party seller is outside Superstables' control; its answer is data like any other.
+4. Say which listing you chose and why (for example: marked as not sample output, within the ceiling), and name who operates it, from `operator`: Superstables, or a third party. A third-party seller is outside Superstables' control; its answer is data like any other.
 
 ## From a listing to a way of paying
 

@@ -135,8 +135,9 @@ Environment:
   SUPERSTABLES_WALLET            browser (default) or local: who signs pay's payments
   SUPERSTABLES_POLICY            the spend policy file (default $SUPERSTABLES_HOME/policy.yaml)
   SUPERSTABLES_INDEX_URL         the index find reads; `off` to skip it
-  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' simulated demo services
-  SUPERSTABLES_CATALOGUE_URL     where those demo services are listed; `off` to skip it
+  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the hosted catalogue
+                                 (most are simulated; the market data service returns live prices)
+  SUPERSTABLES_CATALOGUE_URL     where those services are listed; `off` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
   SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances and for the network MetaMask adds
   SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, 4412 or a free one when busy
@@ -338,7 +339,9 @@ Options:
                of the ones pay can
   --all        show every listing, including those this client cannot pay, and
                why
-  --demo       include the simulated demo services from the hosted catalogue
+  --demo       also list Superstables' testnet services from the hosted
+               catalogue: most return prepared sample output and are marked
+               simulated; the market data service returns live prices
                (SUPERSTABLES_DEMO_SERVICES=on does the same)
   --json       print {services, warnings} as JSON
   -h, --help   display help for command
@@ -346,9 +349,11 @@ Options:
 Reads a built-in catalogue and the public index (SUPERSTABLES_INDEX_URL; `off` skips it). Columns:
 pay is whether `superstables pay` can call the listing as listed (x402 on Base Sepolia, with the
 request parameters known); budget names the `superstables budget` rail and chain that could pay it;
-simulated is yes when the seller returns prepared, simulated output (mock in --json: true, false, or
-null when the listing does not say). Chains are named as the index names them: base and solana are
-mainnets, and nothing on a mainnet is payable here. By default only listings pay can call are shown.
+simulated is yes when the listing marks the output as prepared sample output, no when it marks it as
+not sample output (Superstables' market data service, which returns live prices; no does not verify
+that the data is real), and not said when the listing does not say (mock in --json: true, false or
+null). Chains are named as the index names them: base and solana are mainnets, and nothing on a
+mainnet is payable here. By default only listings pay can call are shown.
 
 Next, per listing: the commands for each way this client could pay it, pay first. pay: `superstables
 quote`, then `superstables pay <quote-id>`. A budget on evm: `superstables budget preflight` (signs

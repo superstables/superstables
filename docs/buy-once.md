@@ -34,8 +34,10 @@ x402-coin-api.vercel.app       Coin price API (third party)   0.001 USDC per req
 superstables-demo-market-data  Superstables demo market data  0.01 USDC per request   base-sepolia  yes  evm base-sepolia  yes   no
 ```
 
-The Superstables demo market data service is built in. `SUPERSTABLES_DEMO_SERVICES=on` adds
-Superstables' simulated demo services to the list. Under the table, `find` prints the commands to pay
+The Superstables demo market data service is built in and returns live prices.
+`SUPERSTABLES_DEMO_SERVICES=on` adds the services from Superstables' hosted catalogue. Most
+return prepared sample output and are marked simulated; the market data service returns live
+prices. Under the table, `find` prints the commands to pay
 each listing, buy once first. `pay yes` means
 this way of paying can call it. With `--json`, each service has `commands`; `next` is the first command to run, or `null` when
 this client cannot pay the listing.
