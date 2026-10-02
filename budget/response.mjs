@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 export const MAX_RESPONSE_BYTES = 1_000_000;
 
-/** A response body, read up to `cap` bytes: { bytes, truncated }. */
+/** A response body, read up to `cap` bytes: { bytes, truncated }. truncated: not the whole answer (over `cap`, or cut off). */
 export async function readCapped(res, cap = MAX_RESPONSE_BYTES) {
   if (!res.body) return { bytes: Buffer.alloc(0), truncated: false };
   const reader = res.body.getReader();
@@ -29,7 +29,8 @@ export async function readCapped(res, cap = MAX_RESPONSE_BYTES) {
       size += chunk.length;
     }
   } catch {
-    // a body cut short is kept as far as it came
+    // a body cut short is kept as far as it came, and marked as not the whole answer
+    truncated = true;
   }
   if (truncated) reader.cancel().catch(() => {});
   return { bytes: Buffer.concat(parts, size), truncated };

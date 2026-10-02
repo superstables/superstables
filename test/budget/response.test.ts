@@ -28,6 +28,14 @@ describe("the seller's answer to a purchase", () => {
     expect(saveResponse(dir, "big", body, null, () => {})).toMatchObject({ responseBytes: MAX_RESPONSE_BYTES, responseTruncated: true, responseType: null });
   });
 
+  it("marks an answer that was cut off as not whole", async () => {
+    let pulls = 0;
+    const stream = new ReadableStream({ pull(c) { if (pulls++ === 0) c.enqueue(new TextEncoder().encode("partial")); else c.error(new Error("reset")); } });
+    const body = await readCapped(new Response(stream));
+    expect(body.bytes.toString()).toBe("partial");
+    expect(body.truncated).toBe(true);
+  });
+
   it("never writes through a link planted in its place, and reports nothing saved instead", async () => {
     symlinkSync(join(dir, "elsewhere"), join(dir, `x.response.${process.pid}.tmp`));
     const saved = saveResponse(dir, "x", await readCapped(new Response("data")), "text/plain", () => {});

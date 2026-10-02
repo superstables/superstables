@@ -120,7 +120,7 @@ Where things live. `SUPERSTABLES_HOME` is the client's home, `~/.superstables` u
 | --- | --- |
 | Agent key (mode 600) | `$SUPERSTABLES_HOME/keys/budget/<rail>-agent.env` |
 | Public addresses and budget terms (no secrets) | `$SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env` |
-| Purchase journals, and the seller's answer to each purchase (`<op>.response`, mode 600, at most 1 MB) | `$SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/` |
+| Purchase journals, and the seller's answer to each purchase when it was saved (`<op>.response`, mode 600, at most 1 MB) | `$SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/` |
 | Approval page log (no signatures) | `$SUPERSTABLES_HOME/budget/owner-approvals.jsonl` |
 
 The default flow creates no owner key file: the owner's key stays in their wallet. Every `evm` chain uses the same agent key file; each chain has its own public file.

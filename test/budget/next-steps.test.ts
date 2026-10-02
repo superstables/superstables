@@ -11,9 +11,10 @@ describe("next after a purchase that settled", () => {
 
   it("says to report and stop, with no grant offer, when what is left cannot cover another", () => {
     const next = afterPurchase({ amount: "0.001", remaining: "0.0005", unit: "pathUSD" });
-    expect(next).toMatch(/^none for this purchase\. The budget left \(0\.0005 pathUSD\) cannot cover another one at this price \(0\.001 pathUSD\)/);
+    expect(next).toMatch(/^This purchase settled and was delivered\. The remaining budget is 0\.0005 pathUSD, less than this purchase's price of 0\.001 pathUSD\./);
+    expect(next).toContain("use its preflight price");
     expect(next).toContain("end your turn");
-    expect(next).toContain("Do not propose or start a new or bigger grant unless the owner explicitly asks for one");
+    expect(next).toContain("Do not propose or start a revoke, a new or bigger grant, or more gas unless the owner explicitly asks for that action");
   });
 
   it("is none when the amount or what is left is unknown", () => {
