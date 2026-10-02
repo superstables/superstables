@@ -61,7 +61,9 @@ import {
   EXIT,
   USDC_MINT,
   USDC_DECIMALS,
+  OPS_DIR,
 } from "./lib.mjs";
+import { readCapped, saveResponse } from "../response.mjs";
 import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, refusalIsFinal } from "./ops.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
 
@@ -130,8 +132,8 @@ async function fetchOnce(u, m, body, extraHeaders, timeoutMs = 60_000) {
   const headers = { Accept: "application/json", ...extraHeaders };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const res = await fetch(u, { method: m, headers, body, signal: AbortSignal.timeout(timeoutMs) });
-  const text = await res.text();
-  return { res, text };
+  const capped = await readCapped(res);
+  return { res, text: capped.bytes.toString("utf8"), capped };
 }
 
 console.log(`Operation: ${opId}`);
@@ -211,7 +213,7 @@ console.log(`Prechecks passed: price <= ${maxBase === null ? "(no --max, --check
 if (checkOnly) {
   console.log("\n--check: stopping before opening any key or signing anything.");
   result = { ...result, next: `node budget/solana/buy.mjs --url ${url} --max ${amountUi}` };
-  finish("quoted", EXIT.OK, { price: amountUi, payTo: payToPk.toBase58() });
+  finish("quoted", EXIT.OK, { price: amountUi, payTo: payToPk.toBase58(), offer: { network: "solana-devnet", feePayer: !!feePayerStr } });
 }
 
 // --- 4. the agent key, chain reads, intent journal ------------------------------------------------
@@ -364,6 +366,11 @@ if (paid) {
   }
   console.log("\nResponse body (one-line preview):");
   console.log(oneLine(paid.text, 800));
+  // what was bought, saved next to the journal for the caller to read as seller data
+  if (paid.res.status !== 402) {
+    const saved = saveResponse(OPS_DIR, opId, paid.capped, paid.res.headers.get("content-type"));
+    if (saved) result = { ...result, ...saved };
+  }
 }
 const httpStatus = paid?.res.status ?? null;
 const deliveredHttp = paid ? paid.res.status >= 200 && paid.res.status < 300 : null;

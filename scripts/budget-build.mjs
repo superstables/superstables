@@ -41,7 +41,7 @@ const src = join(root, "budget");
 // standalone copy, and a new library must be named here so nobody mistakes it for a script.
 const RUNNABLE = {
   evm: ["setup", "fundAgent", "preflight", "setBudget", "buy", "reconcile", "revoke", "recover", "read"],
-  tempo: ["setup", "setBudget", "buy", "reconcile", "readBudget", "revokeBudget"],
+  tempo: ["setup", "setBudget", "buy", "preflight", "reconcile", "readBudget", "revokeBudget"],
   solana: ["setup", "fundAgent", "setBudget", "buy", "reconcile", "readBudget", "revokeBudget"],
 };
 const LIBRARIES = {

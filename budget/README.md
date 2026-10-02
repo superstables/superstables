@@ -120,7 +120,7 @@ Where things live. `SUPERSTABLES_HOME` is the client's home, `~/.superstables` u
 | --- | --- |
 | Agent key (mode 600) | `$SUPERSTABLES_HOME/keys/budget/<rail>-agent.env` |
 | Public addresses and budget terms (no secrets) | `$SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env` |
-| Purchase journals, and on `evm` the seller's answer to each purchase (`<op>.response`, mode 600, at most 1 MB) | `$SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/` |
+| Purchase journals, and the seller's answer to each purchase (`<op>.response`, mode 600, at most 1 MB) | `$SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/` |
 | Approval page log (no signatures) | `$SUPERSTABLES_HOME/budget/owner-approvals.jsonl` |
 
 The default flow creates no owner key file: the owner's key stays in their wallet. Every `evm` chain uses the same agent key file; each chain has its own public file.
@@ -183,7 +183,9 @@ In each block, run `doctor` first: it lists what is missing and which address to
 
    ```sh
    npx superstables budget doctor --rail tempo
-   npx superstables budget grant  --rail tempo --amount 0.05 --expiry 2026-10-01T12:00:00Z   # approve it in your wallet
+   npx superstables budget grant  --rail tempo --amount 0.05                 # approve it in your wallet
+   npx superstables budget preflight --rail tempo --url https://mpp.quicknode.com/tempo-testnet --method POST \
+                      --body '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'   # price and address; signs nothing
    npx superstables budget buy    --rail tempo --url https://mpp.quicknode.com/tempo-testnet --method POST \
                       --body '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
                       --max 0.001 --pay-to 0xFD24114C3981Aba78aE2441991B1BdB89329c556
@@ -191,7 +193,7 @@ In each block, run `doctor` first: it lists what is missing and which address to
    npx superstables budget revoke --rail tempo                                             # approve it in your wallet
    ```
 
-   `--expiry` defaults to 24 hours from now. `grant` also takes `--period SECONDS` (the limit refills each period; the plan and the page show the true maximum by expiry) and `--sellers a,b` (the only addresses the key may pay). The page shows all of it before your wallet opens.
+   `--expiry` defaults to 24 hours from now. The budget must outlive the approval link by more than a minute: with the default 10-minute `--timeout`, an expiry less than 11 minutes away is refused. Choose a later expiry or a shorter `--timeout`. `grant` also takes `--period SECONDS` (the limit refills each period; the plan and the page show the true maximum by expiry) and `--sellers a,b` (the only addresses the key may pay). The page shows all of it before your wallet opens.
 
 A revoked or expired Tempo key can never be granted again. For the next budget make a new key, `npx superstables budget setup --rail tempo --agent LABEL`, and pass `--agent LABEL` to `grant`, `status`, `buy` and `revoke`.
 
@@ -214,6 +216,7 @@ A revoked or expired Tempo key can never be granted again. For the next budget m
    ```sh
    npx superstables budget doctor --rail solana
    npx superstables budget grant  --rail solana --amount 0.05         # approve it in your wallet
+   npx superstables budget preflight --rail solana --url https://api.urbangametheory.xyz/agent/oracle/facts   # price and address; signs nothing
    npx superstables budget buy    --rail solana --url https://api.urbangametheory.xyz/agent/oracle/facts \
                       --max 0.01 --pay-to AMbsiP9F8YY2y8n9uFdqtw7yNZZHvTWFEWSQGHKtmkoQ
    npx superstables budget status --rail solana
@@ -269,7 +272,7 @@ The last line of stdout is always `RESULT {json}` (fields: `ok`, `command`, `rai
 | 4 | Paid, seller did not deliver | Never pay again. Report the `tx` hash. |
 | 5 | Outcome unknown | For a purchase, run `superstables budget reconcile --rail R --op ID` on the same chain. Never pay again for that purchase. For an owner action, check `status` and wallet activity. |
 
-Always pass `--max`, and `--pay-to` when you know the seller's address. It comes from the seller's own 402 answer. For `evm`, `superstables budget preflight --rail evm --url URL` prints the seller's price (`amount`) and address (`payTo`), for x402 v2 and v1 sellers, and signs nothing. On Arc add `--chain arc-testnet`: a seller on another chain fails, and `next` names the chain it offers. The price is what the seller asks, not a ceiling: set `--max` to what you accept. `--pay-to` from the same 402 catches a seller that changes its address before the buy; it does not prove who the seller is. Use one new `--op ID` per purchase; keep that ID for reconciliation. Do not use a new ID to retry an uncertain or already paid purchase.
+Always pass `--max`, and `--pay-to` when you know the seller's address. It comes from the seller's own 402 answer. `superstables budget preflight --rail R --url URL` sends one unpaid request and prints the seller's price (`amount`) and address (`payTo`), signing nothing, on every rail (on `tempo` and `solana`, with the purchase's `--method` and `--body`). On Arc add `--chain arc-testnet`: a seller on another chain fails, and `next` names the chain it offers. The price is what the seller asks, not a ceiling: set `--max` to what you accept. `--pay-to` from the same 402 catches a seller that changes its address before the buy; it does not prove who the seller is. Use one new `--op ID` per purchase; keep that ID for reconciliation. Do not use a new ID to retry an uncertain or already paid purchase.
 
 ## Safety model
 

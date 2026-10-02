@@ -5,8 +5,8 @@
 //            on superstables.com from any device. Listed first: it needs no page on this computer.
 //   pay      superstables quote, then superstables pay <quote-id>. x402 on Base Sepolia; the
 //            owner approves each payment.
-//   budget   evm: superstables budget preflight (signs nothing; prints the price and payTo),
-//            then superstables budget buy. tempo and solana have no preflight: buy alone.
+//   budget   superstables budget preflight (signs nothing; prints the price and payTo), then
+//            superstables budget buy, on every rail (evm, tempo, solana).
 //
 // The ways come from the listing's routes, which only ever name testnets: a mainnet listing gets
 // no command at all. A listing several ways can pay gets each: buy once, then pay, then budgets.
@@ -89,9 +89,12 @@ export function listingCommands(service: ServiceListing): ListingCommands[] {
         way: "budget",
         rail: route.rail,
         chain: route.chain,
-        run: [`superstables budget buy ${on} --url ${url} --max <ceiling> --op <new id>`],
+        run: [
+          `superstables budget preflight ${on} --url ${url}`,
+          `superstables budget buy ${on} --url ${url} --max <ceiling> --pay-to <payTo> --op <new id>`,
+        ],
         note: join(
-          `no preflight on ${route.rail}${price ? `; listed at ${price}` : ""}`,
+          `preflight signs nothing and prints the price and payTo; a seller that takes POST needs the same --method and --body on both${price ? `; listed at ${price}` : ""}`,
           paramsNote,
         ),
       });

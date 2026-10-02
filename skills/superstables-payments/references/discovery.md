@@ -38,7 +38,7 @@ Table columns: `id`, `name`, `price`, `chains`, `pay` (`yes`, `with params` when
 
 - `with pay`: `superstables quote ...`, then `superstables pay <quote-id>`.
 - `with a budget, evm on CHAIN`: `superstables budget preflight --rail evm --chain CHAIN --url URL`, then `superstables budget buy --rail evm --chain CHAIN --url URL --max <ceiling> --pay-to <payTo> --op <new id>`.
-- `with a budget, tempo on moderato` or `solana on devnet`: `superstables budget buy --rail RAIL --chain CHAIN --url URL --max <ceiling> --op <new id>` alone; these rails have no preflight.
+- `with a budget, tempo on moderato` or `solana on devnet`: the same two commands with `--rail tempo` or `--rail solana`; a seller that takes POST needs the same `--method` and `--body` on both.
 
 A listing on several testnets gets one entry per rail and chain. The URL has each required parameter filled with its example value; an index listing's URL ends in `?<parameters>`, since the index does not record them. A mainnet listing gets no command. Replace every `<...>` placeholder before running a command: `<ceiling>` is the most the owner accepts for one purchase, `<payTo>` is the address `preflight` prints, `<new id>` is a fresh purchase id.
 
@@ -114,7 +114,7 @@ superstables quote 'https://seller.example/path?k=v'
 ## Pricing for a budget
 
 - `evm`: `superstables budget preflight --rail evm --url URL [--chain C]`. `RESULT` has `amount` (the price), `payTo` (the seller's address) and `offer`. A seller on another chain fails, and `next` names the `--chain` it offers. It needs no setup and no budget: with none, it prints `note: no owner address in the public file ...`, which is expected and not an error.
-- `tempo` and `solana`: no preflight. Use the listing's `payment.price` if there is one. `buy` refuses (exit 3, nothing signed) when the seller asks more than `--max`.
+- `tempo` and `solana`: `superstables budget preflight --rail tempo|solana --url URL [--method POST --body JSON]`: the same `amount`, `payTo` and `offer`, from the seller's MPP `tempo.charge` on Moderato or x402 `exact` offer on devnet. It needs no setup either.
 
 ## A self-hosted index: what the client reads
 

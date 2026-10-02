@@ -51,7 +51,7 @@ Check every reply against this list before you send it. Each line points to the 
 
 ```
 Before you answer:
-- [ ] Price the seller (step 3): a quote for pay, or budget preflight on evm. Compare it with the ceiling, and say the price and whether it fits. Always: also when there is no budget, and also when you will ask the user something.
+- [ ] Price the seller (step 3): a quote for pay, or budget preflight for a budget. Compare it with the ceiling, and say the price and whether it fits. Always: also when there is no budget, and also when you will ask the user something.
 - [ ] No budget? Follow step 4: the user asked for the budget -> offer both options and do not start pay; one purchase, or the user did not say how -> buy once if `superstables budget find --once` lists the service (the owner approves on superstables.com from any device), else pay.
 - [ ] A pay is waiting? Your reply contains the approval link exactly as printed, the attempt id, the amount and the recipient. Leave that pay running, and say that you did (step 5).
 - [ ] Never run pay with a short --wait, or in a plain & or ( ... ) & (step 5).
@@ -90,7 +90,7 @@ superstables budget find --once          # the services buy once can pay (Supers
 
 With a budget set up through superstables.com, look in `superstables budget find` first: it lists sellers on the hosted chains that the index may not have (for example on Arc Testnet). Its URL goes straight to `budget preflight` and `budget buy`.
 
-Under each listing, `find` prints the commands for each way it can be paid (`commands` in `--json`): for a listing Superstables operates, `budget buy-once` first (the owner approves on superstables.com from any device: use it for one purchase); `quote` then `pay`; on an `evm` budget `preflight` then `buy`; on `tempo` or `solana` `buy` alone. Fill in every `<...>` placeholder before running one. `--budget` shows the listings a budget rail can pay instead, which adds those `pay` cannot call (other testnets, MPP sellers, index listings without parameters); when every match is a Base Sepolia listing `pay` can call, both show the same.
+Under each listing, `find` prints the commands for each way it can be paid (`commands` in `--json`): for a listing Superstables operates, `budget buy-once` first (the owner approves on superstables.com from any device: use it for one purchase); `quote` then `pay`; on a budget, `preflight` then `buy`. Fill in every `<...>` placeholder before running one. `--budget` shows the listings a budget rail can pay instead, which adds those `pay` cannot call (other testnets, MPP sellers, index listings without parameters); when every match is a Base Sepolia listing `pay` can call, both show the same.
 
 **Choosing between listings.** Consider only listings that are live (`live` yes) and within the ceiling. The `simulated` column (`mock` in `--json`) is `yes` (`true`) when the seller returns prepared, simulated data, `no` (`false`) for real data, and `not said` (`null`) when the listing does not say. Among those that fit:
 
@@ -113,8 +113,7 @@ If `status` finds no budget, it names the home it checked (`home` in its result)
 Do this whatever step 2 said, before you report or ask the user anything.
 
 - For `pay`: `superstables quote --service ID --param k=v` (or `quote URL`). It records the seller's terms, checks them against the spend policy and prints a quote id; with `--json` the id is the `id` field. A quote lasts 10 minutes, so take it just before `pay`. Nothing is signed.
-- For a budget on `evm`: `superstables budget preflight --rail evm --url URL [--chain C]`. `amount` is the price and `payTo` the seller's address. It needs no setup and no budget: its `note: no owner address in the public file` lines are expected then, not an error. Nothing is signed.
-- For a budget on `tempo` or `solana`: there is no preflight. Use the listing's price if `find` shows one; `buy` refuses before signing if the seller asks more than `--max`.
+- For a budget: `superstables budget preflight --rail R --url URL [--chain C]`. On `tempo` and `solana`, add the `--method` and `--body` the purchase will send (`evm` is GET only). `amount` is the price and `payTo` the seller's address. It needs no setup and no budget (on `evm`, its `note: no owner address in the public file` lines are expected then, not an error). Nothing is signed.
 
 The price is the seller's ask, not your ceiling. Say the price and whether it fits the ceiling. If it is above the ceiling the user set, stop and say so.
 
@@ -136,10 +135,10 @@ Do not start owner commands unless the owner asks.
 superstables budget buy --rail R --chain C --url URL --max CEILING --pay-to ADDRESS --op NEW_ID
 ```
 
-- `--max` is the user's ceiling for this one purchase, in the budget token (USDC; pathUSD on Tempo). Never the preflight price plus a margin, never higher than the user said.
+- `--max` is the user's ceiling for this one purchase, in the budget token (USDC; pathUSD on Tempo). Never the preflight price plus a margin, never higher than the user said. If the owner set a budget but no ceiling for one purchase, use the price preflight read: do not divide the budget by the number of purchases.
 - `--pay-to` is the `payTo` from preflight, when you have it.
 - `--op` is a new id for this purchase (for example `btc-20260930-1`). Keep it: `reconcile` needs it.
-- On `evm`, what you bought is in the file named by `responseFile`.
+- What you bought is in the file named by `responseFile`, on every rail.
 
 Details, rails and reconcile: [references/budget.md](references/budget.md).
 

@@ -167,8 +167,7 @@ protocols (`rails`, for example `["x402"]`) and `chains` (for example
 accepts x402 on Base Sepolia, and names the budget rail and chain that could pay it. Only testnet
 chain names count: in the index, `base` and `solana` are mainnets, and nothing on a mainnet is
 marked payable. Under the table, `find` prints the commands for each way to pay each listing, pay
-first: `quote` then `pay`; on an `evm` budget, `budget preflight` then `budget buy`; on `tempo` and
-`solana`, `budget buy` alone. `--json` has them as `commands`, and `next` is the first one. Index
+first: `quote` then `pay`; on a budget, `budget preflight` then `budget buy`. `--json` has them as `commands`, and `next` is the first one. Index
 listings do not record request parameters yet, so their URLs end in `?<parameters>` for the ones
 the seller documents. A mainnet listing gets no command.
 
@@ -329,7 +328,7 @@ npx superstables budget fund-agent --rail evm                        # gas for t
 npx superstables budget doctor     --rail evm                        # keys, addresses, balances; what to top up
 npx superstables budget grant      --rail evm --amount 0.01          # an allowance from the owner's wallet
 npx superstables budget status     --rail evm                        # is there a budget here, and what is left
-npx superstables budget preflight  --rail evm --url <seller url>     # the seller's price and address; signs nothing
+npx superstables budget preflight  --rail evm --url <seller url>     # the seller's price and address; signs nothing (every rail)
 npx superstables budget buy        --rail evm --url <seller url> --max 0.002
 npx superstables budget revoke     --rail evm                        # the kill switch, approved in the wallet
 ```

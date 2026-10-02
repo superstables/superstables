@@ -1,6 +1,5 @@
 // What `find` tells an agent to run for each listing. The commands must fit the listing's
-// routes: a quote for what `pay` can take, preflight and buy for an evm budget, buy alone on
-// tempo and solana, both when both fit (pay first), and nothing at all for a mainnet listing.
+// routes: a quote for what `pay` can take, preflight and buy for a budget on every rail, both when both fit (pay first), and nothing at all for a mainnet listing.
 
 import { describe, expect, it } from "vitest";
 import { formatListingCommands, listingCommands, quoteCommand } from "../../src/cli/next.js";
@@ -63,16 +62,20 @@ describe("the commands find prints for a listing", () => {
     expect(commands.flatMap((c) => c.run).join("\n")).not.toContain("quote");
   });
 
-  it("gives tempo and solana listings buy alone, since they have no preflight", () => {
+  it("gives tempo and solana listings preflight then buy, like evm", () => {
     const tempo = listingCommands(indexListing("tempo.example", ["mpp"], ["tempo-moderato"]));
     expect(tempo).toEqual([
       expect.objectContaining({
         way: "budget",
         rail: "tempo",
         chain: "moderato",
-        run: ["superstables budget buy --rail tempo --chain moderato --url 'https://tempo.example/api?<parameters>' --max <ceiling> --op <new id>"],
+        run: [
+          "superstables budget preflight --rail tempo --chain moderato --url 'https://tempo.example/api?<parameters>'",
+          "superstables budget buy --rail tempo --chain moderato --url 'https://tempo.example/api?<parameters>' --max <ceiling> --pay-to <payTo> --op <new id>",
+        ],
       }),
     ]);
+    expect(tempo[0].note).toContain("--method and --body");
     const price = { amountDecimal: 0.005, asset: "USDC", display: "0.005 USDC" };
     const solana = listingCommands(
       indexListing("devnet.example", ["x402"], ["solana-devnet"], {
@@ -81,8 +84,9 @@ describe("the commands find prints for a listing", () => {
     );
     expect(solana).toHaveLength(1);
     expect(solana[0]).toMatchObject({ rail: "solana", chain: "devnet" });
-    expect(solana[0].run).toHaveLength(1);
-    expect(solana[0].run[0]).toMatch(/^superstables budget buy --rail solana --chain devnet /);
+    expect(solana[0].run).toHaveLength(2);
+    expect(solana[0].run[0]).toMatch(/^superstables budget preflight --rail solana --chain devnet /);
+    expect(solana[0].run[1]).toMatch(/^superstables budget buy --rail solana --chain devnet .* --pay-to <payTo> /);
     expect(solana[0].note).toContain("listed at 0.005 USDC");
   });
 

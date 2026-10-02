@@ -501,8 +501,8 @@ describe("find against a local index", () => {
     expect(arc).toContain("--max <ceiling> --pay-to <payTo> --op <new id>");
 
     const tempo = section("tempo.example");
-    expect(tempo).not.toContain("budget preflight");
-    expect(tempo).toContain("superstables budget buy --rail tempo --chain moderato --url 'https://tempo.example/news?<parameters>' --max <ceiling>");
+    expect(tempo).toContain("superstables budget preflight --rail tempo --chain moderato --url 'https://tempo.example/news?<parameters>'");
+    expect(tempo).toContain("superstables budget buy --rail tempo --chain moderato --url 'https://tempo.example/news?<parameters>' --max <ceiling> --pay-to <payTo>");
 
     expect(stdout).not.toContain("main.example");
   });
@@ -550,7 +550,7 @@ describe("find against a local index", () => {
       }),
     ]);
     expect(by("arc.example")?.next).toMatch(/^superstables budget preflight --rail evm --chain arc-testnet /);
-    expect(by("tempo.example")?.next).toMatch(/^superstables budget buy --rail tempo --chain moderato /);
+    expect(by("tempo.example")?.next).toMatch(/^superstables budget preflight --rail tempo --chain moderato /);
     expect(by("main.example")?.commands).toEqual([]);
     expect(by("main.example")?.next).toBeNull();
   });

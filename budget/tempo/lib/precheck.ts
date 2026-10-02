@@ -7,3 +7,4 @@ export type Precheck =
   | { ok: false; code: string; reason: string }
 export const precheckCharge = check as (request: ChargeRequest, opts: { maxBase: bigint; payTo?: string }) => Precheck
 export { tempoChargeChallenges } from './precheck.mjs'
+export { budgetShortfall, recipientsOutsideScope, TRANSFER_WITH_MEMO_SELECTOR } from './precheck.mjs'

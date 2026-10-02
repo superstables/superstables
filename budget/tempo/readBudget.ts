@@ -55,11 +55,26 @@ async function main() {
   ])
   const [isScoped, scopesList] = scopesResult
 
+  const iso = (unix: number) => new Date(unix * 1000).toISOString()
+  const expiry = Number(metadata.expiry)
+  const periodEnd = Number(limit.periodEnd ?? 0)
+  const granted = expiry > 0 || metadata.isRevoked
+  const expired = expiry > 0 && expiry * 1000 <= Date.now()
   console.log(`Budget for agent ${agentAddress} on owner ${ownerAddress}`)
   console.log(`  owner explorer: ${explorerAddress(ownerAddress)}`)
   console.log(`  remaining:  ${limit.remaining} base units (${fromBaseUnits(limit.remaining)} ${TOKEN_LABEL})`)
-  console.log(`  periodEnd:  ${limit.periodEnd ?? 'n/a'}`)
-  console.log(`  expiry:     ${metadata.expiry} (${metadata.expiry > 0n ? new Date(Number(metadata.expiry) * 1000).toISOString() : 'n/a'})`)
+  // A key that was never granted reads as zeros (and "unlimited", "secp256k1"): say that instead of printing them.
+  if (!granted) {
+    console.log(`  periodEnd:  0 (no budget)`)
+    console.log(`  expiry:     0 (no budget)`)
+    console.log(`  isRevoked:  false`)
+    console.log(`  granted:    no. This agent key has no budget on chain: the owner has not granted one.`)
+    return
+  }
+  const live = !metadata.isRevoked && !expired
+  console.log(`  periodEnd:  ${periodEnd}${periodEnd ? ` (${iso(periodEnd)}: the current period ends${live && periodEnd < expiry ? ', and the limit refills then' : ''}${periodEnd * 1000 > Date.now() ? '' : ', already passed'})` : ' (one-time limit, no refill)'}`)
+  console.log(`  expiry:     ${expiry} (${iso(expiry)}${expired ? ', EXPIRED: a new budget needs a new agent key' : ''})`)
+  console.log(`  expired:    ${expired}`)
   console.log(`  spendPolicy: ${metadata.spendPolicy}`)
   console.log(`  isRevoked:  ${metadata.isRevoked}`)
   console.log(`  keyType:    ${metadata.keyType}`)

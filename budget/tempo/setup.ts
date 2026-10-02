@@ -175,7 +175,11 @@ async function main() {
   if (held !== null && held < MIN_OWNER) {
     try {
       await faucet(owner)
-      held = await tokenBalance(TOKEN_ADDRESS, owner).catch(() => held)
+      // the faucet answers with transaction hashes before they are mined: wait (up to 30 s) for the balance to show them
+      for (let i = 0; i < 15 && (held ?? 0n) < MIN_OWNER; i++) {
+        await new Promise((r) => setTimeout(r, 2000))
+        held = await tokenBalance(TOKEN_ADDRESS, owner).catch(() => held)
+      }
     } catch (e) {
       console.log(`the faucet did not answer (${(e as Error).message}); fund the owner later with: npx tsx budget/tempo/setup.ts --fund-only`)
     }
