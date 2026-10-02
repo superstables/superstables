@@ -29,6 +29,10 @@ jobs:
     name: Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
     timeout-minutes: 15
+    # The tests write their temporary homes and checkouts to TMPDIR. On the runner /tmp is a small
+    # tmpfs shared with everything else on the machine; the job's own temp folder is on disk.
+    env:
+      TMPDIR: ${{ runner.temp }}
     strategy:
       fail-fast: false
       matrix:
