@@ -89,7 +89,7 @@ export async function cancelSiteRequest({ site, id, token, fetchImpl }) {
   if (r.status === 0) return null;
   const state = typeof r.body?.state === "string" ? r.body.state : null;
   // a link with steps that is linked answers with the request as it stands, steps included: `view`
-  const view = r.ok && r.body && typeof r.body === "object" ? r.body : undefined;
+  const view = r.ok && Array.isArray(r.body?.steps) ? r.body : undefined;
   if (r.ok && (state === null || state === "cancelled")) return { cancelled: true, state: "cancelled", view };
   // refused (the wallet may have been asked, or the request already ended), or steps the wallet was already asked for
   const walletAsked = r.body?.wallet_asked === true || typeof r.body?.tx_hash === "string";
