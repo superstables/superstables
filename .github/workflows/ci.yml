@@ -29,10 +29,6 @@ jobs:
     name: Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
     timeout-minutes: 15
-    # The tests write their temporary homes and checkouts to TMPDIR. On the runner /tmp is a small
-    # tmpfs shared with everything else on the machine; the job's own temp folder is on disk.
-    env:
-      TMPDIR: ${{ runner.temp }}
     strategy:
       fail-fast: false
       matrix:
@@ -54,8 +50,12 @@ jobs:
 
       # The runner's service may use 2 CPUs and 4 GB, but vitest sizes its pool by the machine's cores.
       # Two workers and longer timeouts keep the tests that start the CLI as a process from timing out.
+      # The tests write their temporary homes and checkouts to TMPDIR. On the runner /tmp is a small
+      # tmpfs shared with everything else on the machine; the job's own temp folder is on disk.
       - name: Test
         run: npm test -- --maxWorkers=2 --minWorkers=1 --testTimeout=60000 --hookTimeout=60000
+        env:
+          TMPDIR: ${{ runner.temp }}
 
       - name: Build
         run: npm run build
@@ -64,6 +64,8 @@ jobs:
       # hosted catalogue, the one step here that needs the network.
       - name: Skill zip
         run: npm run skill && npm run skill:check
+        env:
+          TMPDIR: ${{ runner.temp }}
 
   install:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
