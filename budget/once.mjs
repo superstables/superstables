@@ -98,7 +98,8 @@ export function onceServiceOf(s) {
     asset: isAddress(pay.asset?.address, net) ? pay.asset.address : null,
     available: s.available !== false,
     unavailableReason: s.available === false ? str(s.unavailable_reason, 300) : null,
-    simulated: s.simulated === true,
+    // whether the seller returns prepared sample output, as the listing says: true or false, null when it does not say
+    simulated: typeof s.simulated === "boolean" ? s.simulated : null,
     params,
   };
 }

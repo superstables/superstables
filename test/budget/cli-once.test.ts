@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite, type Paid } from "../helpers/fake-purchase-site.js";
+import { MARKET, PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite, type Paid } from "../helpers/fake-purchase-site.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
@@ -151,9 +151,11 @@ describe("find --once", () => {
   it("lists what can be bought once, with inputs and prices", async () => {
     const r = await budget(["find", "--once", "--site", site.url]);
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout).toMatch(/demo-market-data\s+0\.01 USDC\s+asset\*=BTC\|ETH/);
-    expect(r.stdout).toMatch(/demo-wallet-briefing\s+0\.003 USDC/);
-    expect(r.result).toMatchObject({ command: "find", state: "ok", services: [{ id: "demo-market-data", price: "0.01", available: true, params: [{ name: "asset", required: true, values: ["BTC", "ETH"] }] }, { id: "demo-wallet-briefing", simulated: true }] });
+    expect(r.stdout).toMatch(/^id\s+price\s+simulated\s+network\s+inputs$/m);
+    expect(r.stdout).toMatch(/demo-market-data\s+0\.01 USDC\s+no\s+Base Sepolia\s+asset\*=BTC\|ETH/);
+    expect(r.stdout).toMatch(/demo-wallet-briefing\s+0\.003 USDC\s+yes\s+Base Sepolia/);
+    expect(r.stdout).toMatch(/simulated: yes when the listing says the service returns prepared sample output/);
+    expect(r.result).toMatchObject({ command: "find", state: "ok", services: [{ id: "demo-market-data", price: "0.01", available: true, simulated: false, params: [{ name: "asset", required: true, values: ["BTC", "ETH"] }] }, { id: "demo-wallet-briefing", simulated: true }] });
     expect(r.result.next).toMatch(/Testnet only: test USDC, no real money\./);
     // --json: stdout is the RESULT object alone (no table), which carries the services
     const j = await budget(["find", "--once", "--json", "--site", site.url]);
@@ -161,8 +163,26 @@ describe("find --once", () => {
     expect(JSON.parse(j.stdout).services).toEqual(r.result.services);
   }, 30_000);
 
-  it("takes no --chain", async () => {
-    expect((await budget(["find", "--once", "--chain", "base-sepolia", "--site", site.url])).code).toBe(2);
+  it("--chain and --rail narrow it; an unknown chain is refused with every key", async () => {
+    const base = await budget(["find", "--once", "--chain", "base-sepolia", "--site", site.url]);
+    expect(base.code, base.stderr).toBe(0);
+    expect(base.result).toMatchObject({ rail: "evm", chain: "base-sepolia" });
+    expect(base.result.services.map((x: any) => x.id)).toEqual(["demo-market-data", "demo-wallet-briefing"]);
+    const none = await budget(["find", "--once", "--chain", "devnet", "--site", site.url]);
+    expect(none.code).toBe(0);
+    expect(none.result.services).toEqual([]);
+    expect(none.stdout).toMatch(/No services can be bought once on devnet on /);
+    const bad = await budget(["find", "--once", "--chain", "solana-devnet", "--site", site.url]);
+    expect(bad.code).toBe(2);
+    expect(bad.result.reason).toMatch(/must be one of: .*ethereum-sepolia \(evm\); moderato \(tempo\); devnet \(solana\)$/);
+  }, 60_000);
+
+  it("says not said when the listing has no simulated flag", async () => {
+    site.services = [{ ...structuredClone(MARKET), noSimulatedFlag: true }];
+    const r = await budget(["find", "--once", "--site", site.url]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.result.services[0].simulated).toBeNull();
+    expect(r.stdout).toMatch(/demo-market-data\s+0\.01 USDC\s+not said\s+Base Sepolia/);
   }, 30_000);
 });
 
@@ -174,15 +194,25 @@ describe("buy-once on Tempo Moderato and Solana devnet", () => {
   it("find --once names each service's network", async () => {
     const r = await budget(["find", "--once", "--site", site.url]);
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout).toMatch(/demo-market-data\s+0\.01 USDC\s+asset\*=BTC\|ETH\s+on Base Sepolia/);
-    expect(r.stdout).toMatch(/demo-market-data-tempo\s+0\.001 pathUSD\s+asset\*=BTC\|ETH\s+on Tempo Moderato/);
-    expect(r.stdout).toMatch(/demo-market-data-solana\s+0\.01 USDC\s+asset\*=BTC\|ETH\s+on Solana devnet/);
+    expect(r.stdout).toMatch(/demo-market-data\s+0\.01 USDC\s+no\s+Base Sepolia\s+asset\*=BTC\|ETH/);
+    expect(r.stdout).toMatch(/demo-market-data-tempo\s+0\.001 pathUSD\s+no\s+Tempo Moderato\s+asset\*=BTC\|ETH/);
+    expect(r.stdout).toMatch(/demo-market-data-solana\s+0\.01 USDC\s+no\s+Solana devnet\s+asset\*=BTC\|ETH/);
     expect(r.result.services.map((x: any) => [x.id, x.network, x.rail, x.chain, x.unit])).toEqual([
       ["demo-market-data", "eip155:84532", "evm", "base-sepolia", "USDC"],
       ["demo-wallet-briefing", "eip155:84532", "evm", "base-sepolia", "USDC"],
       ["demo-market-data-tempo", "eip155:42431", "tempo", "moderato", "pathUSD"],
       ["demo-market-data-solana", "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1", "solana", "devnet", "USDC"],
     ]);
+  }, 30_000);
+
+  it("find --once --chain moderato and --chain devnet list that network's services only", async () => {
+    const tempo = await budget(["find", "--once", "--chain", "moderato", "--site", site.url]);
+    expect(tempo.code, tempo.stderr).toBe(0);
+    expect(tempo.result).toMatchObject({ rail: "tempo", chain: "moderato", services: [{ id: "demo-market-data-tempo", unit: "pathUSD", simulated: false }] });
+    expect(tempo.result.services).toHaveLength(1);
+    const solana = await budget(["find", "--once", "--rail", "solana", "--site", site.url, "--json"]);
+    expect(solana.code, solana.stderr).toBe(0);
+    expect(JSON.parse(solana.stdout).services.map((x: any) => x.id)).toEqual(["demo-market-data-solana"]);
   }, 30_000);
 
   it("Tempo: pathUSD on Tempo Moderato, the owner's wallet sends the transfer; wait reads the purchase", async () => {

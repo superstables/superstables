@@ -87,11 +87,12 @@ Payment progress:
 superstables find "btc price"            # listings pay can call, with the commands for every way to pay each
 superstables find "btc price" --budget   # listings a budget rail can pay, including ones pay cannot call
 superstables find "btc price" --json     # {services, warnings}: endpoint, params, routes, mock, operator, commands
-superstables budget find                 # the testnet services superstables.com checked that a budget can pay (Base Sepolia, Arc Testnet), with URL and price
+superstables budget find                 # the testnet services superstables.com checked that a budget can pay, on every rail, with price, simulated and URL
+superstables budget find --chain devnet  # only that chain: any --chain key the budget commands take (moderato, devnet, base-sepolia, ...), or --rail R
 superstables budget find --once          # the services buy once can pay (Superstables' own), with the network of each
 ```
 
-With a budget set up through superstables.com, look in `superstables budget find` first: it lists sellers on the hosted chains that the index may not have (for example on Arc Testnet). Its URL goes straight to `budget preflight` and `budget buy`.
+With a budget set up through superstables.com, look in `superstables budget find` first: it lists sellers on the hosted chains that the index may not have (for example on Arc Testnet). Its URL goes straight to `budget preflight` and `budget buy`. Its `simulated` column (`simulated` in `--json`) says whether each listing returns prepared sample output, the same way as below.
 
 Under each listing, `find` prints the commands for each way it can be paid (`commands` in `--json`): for a listing Superstables operates, `budget buy-once` first (the owner approves on superstables.com from any device: use it for one purchase); `quote` then `pay`; on a budget, `preflight` then `buy`. Fill in every `<...>` placeholder before running one. `--budget` shows the listings a budget rail can pay instead, which adds those `pay` cannot call (other testnets, MPP sellers, index listings without parameters); when every match is a Base Sepolia listing `pay` can call, both show the same.
 
