@@ -30,17 +30,20 @@ function indexListing(id: string, rails: string[], chains: string[], extra: Part
 }
 
 describe("the commands find prints for a listing", () => {
-  it("gives a listing pay can call the quote first, then the evm budget commands with the parameters filled", () => {
+  it("gives a catalogue listing buy once first, then the quote, then the evm budget commands with the parameters filled", () => {
     const service = { ...demoService(), endpoint: "https://seller.example/market" };
     const commands = listingCommands(service);
-    expect(commands.map((c) => c.way)).toEqual(["pay", "budget"]);
-    expect(commands[0].run).toEqual([
+    expect(commands.map((c) => c.way)).toEqual(["buy-once", "pay", "budget"]);
+    expect(commands[0].run).toEqual(["superstables budget buy-once --service superstables-demo-market-data --param asset=BTC --max <ceiling>"]);
+    expect(commands[0].note).toBe("the owner approves on superstables.com from any device; asset: BTC, ETH");
+    const pay = commands[1];
+    expect(pay.run).toEqual([
       "superstables quote --service superstables-demo-market-data --param asset=BTC",
       "superstables pay <quote-id>",
     ]);
-    expect(commands[0].note).toBe("asset: BTC, ETH");
-    expect(commands[1]).toMatchObject({ rail: "evm", chain: "base-sepolia" });
-    expect(commands[1].run).toEqual([
+    expect(pay.note).toBe("asset: BTC, ETH");
+    expect(commands[2]).toMatchObject({ rail: "evm", chain: "base-sepolia" });
+    expect(commands[2].run).toEqual([
       "superstables budget preflight --rail evm --chain base-sepolia --url 'https://seller.example/market?asset=BTC'",
       "superstables budget buy --rail evm --chain base-sepolia --url 'https://seller.example/market?asset=BTC' " +
         "--max <ceiling> --pay-to <payTo> --op <new id>",

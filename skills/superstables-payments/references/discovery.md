@@ -34,7 +34,7 @@ Listings that match the words come first, then index listings. A source that can
 | `--limit N` | How many to ask for (default 20) |
 | `--json` | `{services: [...], warnings: [...]}` on stdout |
 
-Table columns: `id`, `name`, `price`, `chains`, `pay` (`yes`, `with params` when the index lacks the request parameters, or `no`), `budget` (rail and chain, or `no`), `live`, `simulated` (`yes`, `no`, or `not said` when the listing does not say). After the table, `Next, per listing` gives the commands for each way this client could pay each listing, pay first:
+Table columns: `id`, `name`, `price`, `chains`, `pay` (`yes`, `with params` when the index lacks the request parameters, or `no`), `budget` (rail and chain, or `no`), `live`, `simulated` (`yes`, `no`, or `not said` when the listing does not say). After the table, `Next, per listing` gives the commands for each way this client could pay each listing, buy once first for a Superstables listing:
 
 - `with pay`: `superstables quote ...`, then `superstables pay <quote-id>`.
 - `with a budget, evm on CHAIN`: `superstables budget preflight --rail evm --chain CHAIN --url URL`, then `superstables budget buy --rail evm --chain CHAIN --url URL --max <ceiling> --pay-to <payTo> --op <new id>`.
@@ -56,7 +56,7 @@ Each `services[]` entry in `--json`:
 | `testnet`, `live`, `lastSeenLive` | Whether it is on a testnet, and whether the index saw it answer recently |
 | `mock` | `true`: the seller returns prepared, simulated output. `false`: real data. `null`: the listing does not say (index listings) |
 | `operator` | Who runs it, when known |
-| `commands` | `[{way, rail, chain, run, note}]`: each way to pay it, pay first. `way` is `pay` or `budget`; `rail` and `chain` are set for `budget`; `run` is the commands in order; `note` says what to fill in. Empty when this client cannot pay it |
+| `commands` | `[{way, rail, chain, run, note}]`: each way to pay it: buy once first for a Superstables listing, then pay, then budgets. `way` is `buy-once`, `pay` or `budget`; `rail` and `chain` are set for `budget`; `run` is the commands in order; `note` says what to fill in. Empty when this client cannot pay it |
 | `next` | The first command of `commands`, or `null` when this client cannot pay it (then `notActionableReason` says why) |
 
 ## Choosing between listings
