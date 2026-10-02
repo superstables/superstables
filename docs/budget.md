@@ -184,6 +184,22 @@ RESULT {"ok":false,"command":"buy",...,"state":"refused_precheck","final":true,"
 then returns the USDC it can from the agent key to the owner. On Arc Testnet it leaves up to 2 USDC
 there as gas.
 
+## Approve on superstables.com instead
+
+On `evm`, the owner can approve on superstables.com rather than on a page on this computer, from any
+device where they sign in with their wallet:
+
+```bash
+npx superstables budget setup --rail evm --chain arc-testnet --hosted
+```
+
+Setup then prints a link and a match code. The owner opens the link, signs in with their wallet the
+first time (a message, no fee), picks the same code and links the agent to their superstables.com
+account. From then on, `fund-agent`, `grant` and `revoke` on that chain ask through the site, each
+with its own link and code, and the owner approves the transaction in their wallet there. `recover`
+still uses the page on this computer. The agent key stays here, the owner's key stays in their
+wallet, and purchases never contact the site. Tempo and Solana budgets are approved locally only.
+
 ## From an agent
 
 Run by an agent (stdout is not a terminal), an owner command that needs the wallet does not wait
@@ -195,12 +211,16 @@ with nothing to revoke, returns its final result at once. `--wait` makes it bloc
 RESULT {"ok":true,"command":"grant",...,"state":"waiting_owner","final":false,"id":"oa-20261001231446-3c6ea55b","url":"http://127.0.0.1:33847/owner/013825489bc9de0494cd76603c7ff9e6","expires":"2026-10-01T23:15:10.110Z","terms":{...},"next":"show the owner the exact url and terms; ..."}
 ```
 
-`waiting_owner` is not an approval. The agent shows the owner the link and the terms, then polls
-until `final` is `true`:
+`waiting_owner` is not an approval. The agent writes the link, the terms and, for a hosted approval,
+the match code in a reply the owner can read, and ends its turn. When the owner says they have
+approved, it checks:
 
 ```bash
-npx superstables budget wait --id <id>
+npx superstables budget wait --id <id> --shown
 ```
+
+`--shown` says the link was written in a reply; without it, `wait` refuses. While the owner has not
+decided, `wait` answers `waiting_owner` again.
 
 `<id>` is the `id` in the command's result. Each call waits up to 30 seconds (`--timeout`, at most
 300); once the approval is final, it prints the owner command's own result.
@@ -215,7 +235,7 @@ command at a time per rail and chain.
 
 | Exit | Meaning | What to do |
 | --- | --- | --- |
-| 0 | Done, or `waiting_owner` with `final: false` | On `waiting_owner`, show the link and poll `wait` |
+| 0 | Done, or `waiting_owner` with `final: false` | On `waiting_owner`, write the link in a reply, then run `wait --id <id> --shown` when the owner says they have approved |
 | 1 | Failed, including a refusal by the chain | Read `reason` and `next`; do not retry blindly |
 | 2 | Bad input. Nothing was done | Fix the command; read its `--help` |
 | 3 | Refused: no budget, over `--max`, the owner rejected it, the link expired. A refused new purchase signs nothing; a repeated `--op` may be a purchase already paid or still unresolved, so check `paid` and `tx`. For an owner command, it can also mean a transaction that confirmed but differs from the plan | Read `reason`, `tx` and `next`; tell the owner. Do not raise `--max` |
