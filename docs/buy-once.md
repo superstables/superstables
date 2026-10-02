@@ -19,8 +19,9 @@ without an approval each time, see [Budget](budget.md).
 
 ## 1. Find a service (agent)
 
-The output below is from real runs on Base Sepolia. Use the quote id, attempt id and approval link
-from your own run.
+The output below comes from separate runs on Base Sepolia, shortened: a browser-wallet approval
+request, and a payment approved with the local wallet. Use the quote id, attempt id and approval
+link from your own run.
 
 ```bash
 npx superstables find "btc price"

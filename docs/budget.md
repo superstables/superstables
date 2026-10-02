@@ -31,9 +31,11 @@ expiry, a period and a seller list on chain; see the [security model](security.m
   `npx superstables`.
 - Linux or macOS (on Windows, WSL), and a browser wallet for the owner, such as MetaMask, Rabby or
   Coinbase Wallet, on the computer that runs the client.
-- Test funds in the owner's wallet, from <https://faucet.circle.com>:  - Arc Testnet: USDC only, since USDC also pays gas. About 0.4 USDC covers this page: 0.1 for the
-    agent's gas, the 0.06 budget and fees; `doctor` wants at least 0.2 left after funding the agent.  - Base Sepolia: at least the budget in USDC, plus a little Base Sepolia ETH for the fees of the
-    owner's transactions and the agent's gas (from any Base Sepolia ETH faucet). Buy once needs no
+- Test funds in the owner's wallet, from <https://faucet.circle.com>:
+  - Arc Testnet: USDC only, since USDC also pays gas. About 0.4 USDC covers this page: 0.1 for the
+    agent's gas, the 0.06 budget and fees; `doctor` wants at least 0.2 left after funding the agent.
+  - Base Sepolia: at least the budget in USDC, plus a little Base Sepolia ETH for the owner's
+    transaction fees and the agent's gas (from any Base Sepolia ETH faucet). Buy once needs no
     ETH; a budget does.
 
 `doctor` says what is missing and which address to top up.
@@ -216,7 +218,7 @@ command at a time per rail and chain.
 | 0 | Done, or `waiting_owner` with `final: false` | On `waiting_owner`, show the link and poll `wait` |
 | 1 | Failed, including a refusal by the chain | Read `reason` and `next`; do not retry blindly |
 | 2 | Bad input. Nothing was done | Fix the command; read its `--help` |
-| 3 | Refused: no budget, over `--max`, the owner rejected it, the link expired. Before a buy signs anything. For an owner command, it can also mean a transaction that confirmed but differs from the plan | Read `reason`, `tx` and `next`; tell the owner. Do not raise `--max` |
+| 3 | Refused: no budget, over `--max`, the owner rejected it, the link expired. A refused new purchase signs nothing; a repeated `--op` may be a purchase already paid or still unresolved, so check `paid` and `tx`. For an owner command, it can also mean a transaction that confirmed but differs from the plan | Read `reason`, `tx` and `next`; tell the owner. Do not raise `--max` |
 | 4 | Paid, the seller did not deliver | Do not pay again; report the `tx` |
 | 5 | Outcome unknown | For a purchase, `superstables budget reconcile --rail evm --chain C --op ID`; never buy it again under a new id. For an owner command, `status` and the wallet's activity |
 

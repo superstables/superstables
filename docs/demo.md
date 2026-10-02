@@ -116,11 +116,12 @@ and shows the BTC price it paid for.
 **7. Show the receipt.**
 
 ```bash
-npx superstables receipts --limit 1
+npx superstables receipts --limit 1 --json
 ```
 
 The amount, the payer, the recipient, the transaction hash and the explorer link. Open the link:
-`https://sepolia.basescan.org/tx/<hash>` is the transfer on Base Sepolia, a few seconds old.
+`https://sepolia.basescan.org/tx/<hash>` shows the reported transaction: check that it succeeded and
+moved the amount from your account to the recipient.
 Point out that the payer address is your MetaMask account, that nothing on this machine ever
 held its key, and that a facilitator paid the gas.
 

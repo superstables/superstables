@@ -11,7 +11,7 @@ The client pays in two ways, and they have different boundaries:
 | Keys the client holds | None with a browser wallet; `--wallet local` stores a signing key | The agent key, which signs purchases. The owner's key stays in their wallet |
 | What limits spending | The owner's decision on each payment. The spend policy is a check in this client | The chain: the allowance (`evm`), the delegated amount (`solana`), the access key's limits (`tempo`) |
 | What a hostile agent can do | Ask for payments. With `--wallet local`, code running as the owner can also read that key | Use the agent key to spend what is left of the budget (on `evm` and `solana`, to any address), and move funds held at the agent's address |
-| How it ends | Each approval link expires after 5 minutes | `superstables budget revoke`, approved in the owner's wallet |
+| How it ends | A browser approval request expires after 5 minutes; a local-wallet request after 120 seconds, by default | `superstables budget revoke`, approved in the owner's wallet |
 
 The sections below cover buy once. Budgets have their own section: [Budgets](#budgets).
 
@@ -73,7 +73,8 @@ That id is deliberately narrow. Holding it lets someone see *one* payment and si
 
 - it names one stored request, and the routes under it (`/state`, `/account`, `/signature`,
   `/reject`) only ever act on that request;
-- signing still needs the owner's wallet. The link is an invitation to sign, not a signature;
+- signing needs a valid signature from the account selected on the page. The link does not
+  choose that account, but it cannot spend from an account without its signature;
 - a decision is final: a second POST to a request that is no longer pending gets 409;
 - the client binds `127.0.0.1`, so another machine cannot reach the page directly; port
   forwarding can make it reachable elsewhere;
@@ -141,8 +142,9 @@ but it would not have to ask for the connection again.
 
 - A **quote** is good for 10 minutes. Paying re-reads the seller's challenge and refuses if the
   terms moved.
-- An **approval** expires five minutes after it is created. Expiry is the signer's own decision,
-  checked on a timer and on every request.
+- A **browser approval request** expires five minutes after it is created, by default, checked on a
+  timer and on every request. Local-wallet requests expire after 120 seconds by default
+  (`wallet serve --approval-timeout`).
 - The **EIP-3009 authorization** carries its own on-chain window: `validBefore` is set to now
   plus the seller's `maxTimeoutSeconds` (300 seconds unless the seller asks for something else).
   After that, it cannot succeed on chain.

@@ -8,7 +8,7 @@ are what you read to find out how a payment ended, including when its outcome is
 ```
 ~/.superstables/records/quotes.jsonl      what a seller said a call would cost
 ~/.superstables/records/attempts.jsonl    what happened when we tried to pay
-~/.superstables/records/receipts.jsonl    payments where the money actually moved
+~/.superstables/records/receipts.jsonl    payments the seller reported as settled
 ~/.superstables/records/approvals.jsonl   what the owner was asked, and what they answered
 ```
 
@@ -91,9 +91,10 @@ awaiting_approval ──┼── the owner says no ─────────�
 | `denied` | yes | The owner rejected it — on the approval page, or in MetaMask's own popup. No payment credential was sent. The seller was only asked for its terms |
 | `expired` | yes | Nobody decided within the approval window: five minutes in browser mode, 120 seconds with the local wallet, by default. Cancel any open wallet prompt before asking again |
 | `abandoned` | yes | Nobody decided: whoever was waiting for the owner stopped first (`pay --wait` ran out, `pay` was interrupted, or the process serving the approval page stopped). Not a rejection. Nothing was submitted |
-| `failed` | yes | No payment happened, and that is known. See `reason`; `refusal` says which check refused when one did (`policy`, `invalid`, `unavailable`, `approval_page`) |
-| `settled` | yes | The facilitator confirmed the transfer and the service answered 2xx. A receipt exists |
-| `paid_service_failed` | yes | The money moved, the service then answered a non-2xx status. A receipt exists |
+| `failed` | yes | The client stopped before sending a payment, or the seller reported that it was not paid. The
+client does not check the chain for this. See `reason`; `refusal` says which check refused when one did (`policy`, `invalid`, `unavailable`, `approval_page`) |
+| `settled` | yes | The seller reported that settlement succeeded, and the service answered 2xx. A receipt exists |
+| `paid_service_failed` | yes | The seller reported that settlement succeeded, and the service answered a non-2xx status. A receipt exists |
 | `uncertain` | yes | The credential may have been sent, and the outcome is unknown. **Never retried automatically** |
 
 A final state is never overwritten. Once an attempt has an ending, that ending is what the
@@ -101,11 +102,11 @@ record says.
 
 ### Why `failed` and `uncertain` are different
 
-`failed` means the money did not move and we know it: the owner's policy refused before anyone
+The client records `failed` when: the owner's policy refused before anyone
 was asked, the seller's terms changed between the quote and the payment, the approval page
 could not be served (or the local wallet could not be reached), the service asked for payment
-again, or the facilitator reported that the transfer did not settle. In every one of these the
-outcome is established. Quote again and try again, if it makes sense to.
+again, or the facilitator reported that the transfer did not settle. A failure before submission means this attempt sent no payment credential. After submission, the
+client relies on the seller's answer: if that is in doubt, check the chain before paying again.
 
 `uncertain` means the outcome is unknown after the owner signed. It comes from an interruption after
 approval, or from one of these:
@@ -130,10 +131,10 @@ money gets spent twice, and a retry cannot tell you which case you were in.
    `signed` line means the client verified a signature. A missing line does not prove that nothing
    was signed. With the local wallet, `~/.superstables/wallet/audit.jsonl` is the record.
 4. If the transfer is on chain, do not pay again; the service owes you an answer, so take it up
-   with the service. If it is not there, quote again only once the authorization can no longer be
-   used: the chain's time is past its `validBefore`, which is `maxTimeoutSeconds` (300 seconds by
-   default) after the typed data was prepared for signing. If you cannot tell, treat it as
-   unresolved.
+   with the service. Otherwise, quote again only after you have checked on chain that the authorization is unused and
+   the chain's time is past its signed `validBefore`, which in browser mode is `maxTimeoutSeconds`
+   (300 seconds by default) after the typed data was prepared for signing. If you cannot establish
+   both, treat the payment as unresolved.
 
 ## Approvals
 
@@ -166,7 +167,7 @@ reason), how long the whole attempt took, and, separately, what the service did:
 | Field | Meaning |
 | --- | --- |
 | `serviceOutcome: "ok"` | The service answered 2xx |
-| `serviceOutcome: "failed"` | The money moved and the service answered something else |
+| `serviceOutcome: "failed"` | The seller reported settlement, and the service answered outside 2xx |
 | `serviceStatus` | The HTTP status the service answered |
 | `serviceBodyPreview` | The first 4,000 characters of its answer |
 
