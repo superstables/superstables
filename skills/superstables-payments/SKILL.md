@@ -8,7 +8,7 @@ description: Finds services that charge per request, prices them without paying,
 The `superstables` CLI finds services that charge per request, reads their price without paying, and pays them with test stablecoins. **Testnet only: test USDC, no real money.** There are two ways to pay:
 
 - **One purchase the owner approves.** `superstables budget buy-once`: the owner approves it on superstables.com, from any device, with no setup; for the services `superstables budget find --once` lists (Base Sepolia). For any other x402 seller on Base Sepolia, `pay`: the owner approves in their wallet on a page on this computer.
-- **A budget**: the owner grants an on-chain budget once; the agent then buys on its own until it is spent, expires (Tempo only) or is revoked. The chain enforces the limit. With `setup --hosted` the owner approves its steps on superstables.com (Base Sepolia or Arc Testnet); otherwise on a page on this computer.
+- **A budget**: the owner grants an on-chain budget once; the agent then buys on its own until it is spent, expires (Tempo only) or is revoked. The chain enforces the limit. With `setup --hosted` the owner approves on superstables.com (Base Sepolia or Arc Testnet), the whole set-up with one link; otherwise on a page on this computer.
 
 The agent can ask for money to move; only the owner can approve it.
 
@@ -27,7 +27,7 @@ Every command has `--help` that lists its flags, whether it moves money, who run
 If the owner has not chosen how to pay, ask once, before any purchase or budget command, in one short reply, and end your turn: "This uses test USDC, no real money. Would you like one purchase you approve, or a budget?" `superstables budget find`, `find --once` and `doctor` are fine first if they help you answer. If they already chose, or asked for something specific, do not ask again.
 
 - **One purchase you approve**: buy once, for a service `superstables budget find --once` lists. Read [references/once.md](references/once.md). For another seller, `pay` (step 5 below).
-- **A budget**: set it up with `superstables budget setup --rail evm --hosted` on Base Sepolia or Arc Testnet; the owner approves each step on superstables.com. Read [references/budget.md](references/budget.md#a-hosted-budget-on-superstablescom).
+- **A budget**: ask the network (Base Sepolia or Arc Testnet) and the amount together, in one reply. Then `superstables budget setup --rail evm --hosted --chain C --grant A --fund`: one link on superstables.com, where the owner links this agent, sends it gas and approves the budget. Read [references/budget.md](references/budget.md#a-hosted-budget-on-superstablescom).
 
 ## Safety rules
 
@@ -176,7 +176,7 @@ When the owner asks for `setup`, `fund-agent`, `grant`, `revoke` or `recover`, y
 - `evm` and `solana`: `setup`, `fund-agent`, `doctor`, `grant`. The owner first funds their own wallet from faucets; `doctor` names the minimums.
 - `tempo`: `setup`, `grant`.
 
-On `evm`, `setup --hosted` moves the owner's approvals for that chain to superstables.com: they approve from any device where they are signed in with their wallet, and pick the match code you show them. Offer Base Sepolia or Arc Testnet first. Steps: [references/budget.md](references/budget.md#a-hosted-budget-on-superstablescom).
+On `evm`, `setup --hosted` moves the owner's approvals for that chain to superstables.com: they approve from any device where they are signed in with their wallet, and pick the match code you show them. Offer Base Sepolia or Arc Testnet first. For a new budget there, one link covers `setup`, `fund-agent` and `grant`: `superstables budget setup --rail evm --hosted --chain C --grant A --fund`. The separate commands stay for later changes. Steps: [references/budget.md](references/budget.md#a-hosted-budget-on-superstablescom).
 
 Copy this checklist and track it:
 
@@ -215,7 +215,7 @@ Owner request progress:
 - [ ] "Tell me when you've approved", then end your turn
 ```
 
-`setup`'s `terms` have only `title` and `summary`; its `enforced` and `notEnforced` are empty because it moves no money. Say what the budget will enforce from this table instead:
+`setup`'s `terms` have only `title` and `summary`; its `enforced` and `notEnforced` are empty because it moves no money (with `--grant`, they are the grant's). Say what the budget will enforce from this table instead:
 
 | Rail | The chain enforces | It does not enforce |
 | --- | --- | --- |
