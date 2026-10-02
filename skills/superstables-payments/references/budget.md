@@ -18,7 +18,7 @@ The owner approves a spending cap once, in their own wallet. You then buy from s
 
 ## A hosted budget on superstables.com
 
-The way to set up a budget when the owner chose one and did not ask for anything else. One link does the whole set-up: the owner links this agent to their superstables.com account, then, on the same page, approves the agent's gas and the budget in their wallet. They open it on any device where they are signed in with their wallet; they need an account there, and the first link they open asks them to sign in (a message, no fee). Write the link as SKILL.md's safety rule 10 says.
+For an owner who wants to approve from any device, such as their phone, and has or will make an account on superstables.com. Otherwise use the default, a page on this computer with no account ([The owner's steps per rail](#the-owners-steps-per-rail)); fall back to it too when `--hosted` fails or the owner has no account. One link does the whole hosted set-up: the owner links this agent to their superstables.com account, then, on the same page, approves the agent's gas and the budget in their wallet. They open it on any device where they are signed in with their wallet; they need an account there, and the first link they open asks them to sign in (a message, no fee). Write the link as SKILL.md's safety rule 10 says.
 
 1. **Ask which network and how much test USDC to allow, together**, in one reply. The default network is Base Sepolia.
    - **Arc Testnet** (`--chain arc-testnet`): one faucet covers both. Test USDC from faucet.circle.com (choose Arc Testnet) is the budget and pays the fees.
@@ -35,7 +35,7 @@ The way to set up a budget when the owner chose one and did not ask for anything
 
 On a hosted chain every later owner command (`grant`, `revoke`, `fund-agent`) asks through superstables.com, and refuses (exit 3, nothing sent) if the site would ask a different account than the owner on record. `recover` still uses the page on this computer. Buying does not change: `superstables budget buy` never contacts the site. `superstables budget find` lists the services superstables.com says a budget can pay; any other seller URL works too.
 
-Without `--hosted` the owner approves on a page on this computer instead, with no account; `setup --new-owner` without `--hosted` moves a hosted chain back to it.
+Without `--hosted` the owner approves on a page on this computer instead, with no account; `setup --new-owner` without `--hosted` moves a hosted chain back to it. The site is superstables.com unless the owner chose a compatible one (`--site`, or `SUPERSTABLES_SITE` in their environment); never set either yourself (SKILL.md's safety rule 9).
 
 ## The rails and what the chain enforces
 

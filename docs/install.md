@@ -321,7 +321,8 @@ says `revoked: true`. For a named Tempo key, add `--agent <label>` to both.
 
 Then remove the MCP server (`claude mcp remove superstables`, or delete its entry from your MCP
 client's configuration), delete the skill folder if you installed it, and delete `~/.superstables`
-(or your `SUPERSTABLES_HOME`).
+(or your `SUPERSTABLES_HOME`). If you installed the client from npm (or linked
+a checkout with `npm link`), remove the command with `npm uninstall -g @superstables/client`.
 
 With buy once in the default mode, that directory holds no key, and your funds in your wallet are
 not affected. It can hold keys in two cases, and deleting it makes any funds those keys hold

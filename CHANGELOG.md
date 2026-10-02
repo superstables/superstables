@@ -47,31 +47,37 @@ and removes the Claude Desktop bundle.
   reply the owner can read; without it, `wait` exits 2 with `state: "show_owner_first"`. An agent
   can start these commands; only the owner approves. For unattended tests only,
   `--owner-key-file PATH --yes` signs with an owner key file instead.
-- **Hosted owner approvals.** `setup --rail R --hosted` links the agent to the owner's
+- **Hosted owner approvals, optional.** `setup --rail R --hosted` links the agent to the owner's
   superstables.com account (Sign-In with Ethereum) and records that account's address as the owner
   (on Solana devnet, the Solana wallet the owner connects there). It works on every rail: EVM
   chains, Tempo Moderato and Solana devnet. Grants, revokes and gas transfers on that chain are
   then approved on superstables.com, in the owner's wallet, from any device where they are signed
   in, after they pick the match code the agent shows them. Each request is signed by the agent key, which stays
   on this computer, and the command still reads the chain before it reports success. A request
-  the site would put to another account than the recorded owner is refused. Approvals on
-  `127.0.0.1` remain the default and need no account. `recover` uses them only.
-  Every `superstables budget` command accepts `--site`; where a site is recorded and it differs,
-  the command refuses.
+  the site would put to another account than the recorded owner is refused. Hosted approvals
+  need a superstables.com account, or a compatible site the owner names with `--site` or
+  `SUPERSTABLES_SITE`. Approvals on `127.0.0.1` remain the default and need no account;
+  `recover` uses them only. Every `superstables budget` command accepts `--site`; where a site
+  is recorded and it differs, the command refuses. With `setup --hosted --grant A --fund`, one
+  link covers linking the agent, its gas and the budget.
 - **One purchase without a budget: `superstables budget buy-once`.** It buys one service the
   owner approves on superstables.com, with no setup, no gas and no budget. The agent names the
   service, its inputs and the most it accepts (`--max`); the owner approves that one payment in
   their wallet, after picking the match code. The result says whether it was paid and delivered,
   and the seller's answer is saved as a file. `superstables budget find --once` lists the
   services that can be bought this way, with the network of each: Base Sepolia or Solana devnet
-  (test USDC) or Tempo Moderato (test pathUSD).
+  (test USDC) or Tempo Moderato (test pathUSD). Buy once needs a superstables.com account (made
+  by signing in with the wallet), or a compatible site; `pay` still needs neither.
+- **`superstables budget setup --rail tempo --fund-only`** tops up the owner on record from the
+  Moderato faucet again and changes nothing else; it opens no page.
 - **`superstables budget find`** lists the services superstables.com says a budget can pay, with
   price, chain and URL. Any other seller URL still works.
 - **Buying within a budget.** `status` says whether a budget is set up and what is left.
-  `preflight` (`evm`) reads a seller's price and payee from its 402 and signs nothing. `buy`
-  checks the price against `--max`, and the token, chain and, with `--pay-to`, the payee, before
-  it signs; one `--op` id is never paid twice. On `evm` it saves the seller's answer next to the
-  purchase journal (at most 1 MB, mode 600) and names it as `responseFile`. Also on `evm`, it
+  `preflight` reads a seller's price and payee from its 402 on every rail and signs nothing.
+  `buy` checks the price against `--max`, and the token, chain and, with `--pay-to`, the payee,
+  before it signs; one `--op` id is never paid twice. On every rail it saves the seller's answer
+  next to the purchase journal (at most 1 MB, mode 600) and names it as `responseFile`. A
+  purchase refused because the budget cannot cover it carries `budget_spent: true`. On `evm`, it
   signs nothing unless the agent key can pay the gas, at the current fee, for the purchase and
   for the steps that return the price if it fails; otherwise it is refused (exit 3) and `next`
   names `fund-agent`. A `buy` with no budget set up is refused with nothing signed, and names
@@ -90,16 +96,17 @@ and removes the Claude Desktop bundle.
 - **The `superstables-payments` agent skill.** A skill that walks an agent through finding a
   service, pricing it without paying, and paying it, with safety rules and per-rail references.
   When the owner has not chosen how to pay, it asks once whether they want one purchase they
-  approve or a budget. For every approval link, the agent writes the link, the match code and
-  the terms in its reply and ends its turn, then checks the outcome when the owner says they
-  have approved. `npm run skill` builds `superstables-payments-skill-<version>.zip`: the skill and
-  the whole `superstables` CLI, budget included, bundled into plain JavaScript that needs only
-  Node 20 or newer (`node <skill folder>/scripts/superstables.mjs`). `--version` names the
-  build, and `THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+  approve or a budget, and sets up a budget with approvals on this computer unless the owner
+  wants them on superstables.com. For every approval link, the agent sends the command's
+  `message_for_owner` (the link, the match code, the amount and network) as its reply and ends
+  its turn, then checks the outcome once the owner says they have approved. `npm run skill`
+  builds `superstables-payments-skill-<version>.zip`: the skill and the whole `superstables`
+  CLI, budget included, bundled into plain JavaScript that needs only Node 20 or newer
+  (`node <skill folder>/scripts/superstables.mjs`). `--version` names the build, and `THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 - **Install from npm.** `npm install -g @superstables/client` installs the `superstables`
   command, with `superstables budget` and the MCP server (`superstables mcp`); the package is
-  also the TypeScript SDK. Until this release the client ran only from a checkout of this
-  repository, which still works.
+  also the TypeScript SDK. Earlier releases were installed from a checkout of this repository
+  or from git (`npm install github:superstables/superstables-client`); both still work.
 - **Help, `--json` and exit codes across the CLI.** Each command's `--help` says what it does,
   whether it can move money, who runs it, an example, what it prints and its exit codes. `find`,
   `quote`, `pay`, `status`, `receipts` and `attempts` take `--json` and print one JSON value on
@@ -138,6 +145,22 @@ and removes the Claude Desktop bundle.
 - **The Claude Desktop `.mcpb` bundle**, and `npm run bundle`. It is no longer built or attached
   to releases. The MCP server still runs with `superstables mcp`, from Claude Code or another MCP
   client; `docs/install.md` has example configurations.
+
+### Security
+
+- **Requests to the site are bound to it.** Each request the agent key signs for a hosted
+  approval names the site's origin and a single-use nonce, so it cannot be replayed to another
+  site or sent twice.
+- **The owner's link is verified.** Before `setup --hosted` records an owner, it verifies a
+  proof that the owner's account linked this agent, and records nothing if it does not verify.
+- **`--site` is limited.** It accepts superstables.com, its subdomains and loopback addresses.
+  Another origin is accepted only when the owner names it in an environment setting of their
+  own.
+- **Buy once checks the chain.** `buy-once` reports a purchase as paid only after it has read
+  the settlement on chain.
+- **Hosted Solana transactions are checked instruction by instruction** before the command
+  reports success.
+- **RPC overrides on Tempo and Solana must use `https`.**
 
 ### Breaking changes
 

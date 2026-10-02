@@ -207,6 +207,11 @@ still uses the page on this computer. The agent key stays here and the owner's k
 the site: the client pays the seller directly. On Solana the owner also connects a Solana wallet on
 the site's page; that address is the owner on record, and it signs each transaction the site builds.
 
+This is optional. Approvals on this computer remain the default and need no account. Hosted
+approvals need a superstables.com account, or a compatible deployment the owner names with `--site`
+or `SUPERSTABLES_SITE`; what such a site must do is in
+[budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).
+
 ## From an agent
 
 Run by an agent (stdout is not a terminal), an owner command that needs the wallet does not wait
@@ -218,8 +223,9 @@ with nothing to revoke, returns its final result at once. `--wait` makes it bloc
 RESULT {"ok":true,"command":"grant",...,"state":"waiting_owner","final":false,"id":"oa-20261001231446-3c6ea55b","url":"http://127.0.0.1:33847/owner/013825489bc9de0494cd76603c7ff9e6","expires":"2026-10-01T23:15:10.110Z","terms":{...},"next":"show the owner the exact url and terms; ..."}
 ```
 
-`waiting_owner` is not an approval. The agent writes the link, the terms and, for a hosted approval,
-the match code in a reply to the owner, and ends its turn there: some agent hosts show the owner
+`waiting_owner` is not an approval. The agent sends the `RESULT`'s `message_for_owner` (the link,
+the match code for a hosted approval, the amount and network) as its reply to the owner, and ends
+its turn there: some agent hosts show the owner
 nothing of a turn until it ends. When the owner says they have approved, it checks:
 
 ```bash

@@ -159,7 +159,10 @@ not running, `next` says the same quote can still be paid.
 With `superstables budget buy-once`, the owner approves the payment on superstables.com instead of a
 page on this computer, from any device where they sign in with their wallet. It needs no setup, no
 gas and no agent key. It pays on the network the service's listing names (Base Sepolia, Tempo
-Moderato or Solana devnet), for the services the site lists:
+Moderato or Solana devnet), for the services the site lists. It needs a superstables.com account
+(made by signing in with the wallet), or a compatible deployment the owner names with `--site` or
+`SUPERSTABLES_SITE` (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do));
+`pay`, above, needs neither:
 
 ```bash
 superstables budget find --once
@@ -169,8 +172,8 @@ superstables budget buy-once --service superstables-demo-market-data --param ass
 `--max` is the most you accept, in the service's token (USDC, or pathUSD on Tempo): a service that costs more is refused before anything is
 created. The command prints an `APPROVE` line with the link and a match code. Run by an agent (stdout is not
 a terminal), or with `--detach`, it then returns with `state: "waiting_owner"` and an approval `id`; in
-a terminal it waits for the purchase to end. Write the link, the code and the price in a reply the
-owner can read, and end your turn there. The owner opens the link, signs in with their wallet the
+a terminal it waits for the purchase to end. Send the `RESULT`'s `message_for_owner` (the link, the
+code and the price) as a reply the owner can read, and end your turn there. The owner opens the link, signs in with their wallet the
 first time (a message, no fee), picks the same code on the page and approves the payment in their
 wallet. When they say they have, run:
 
