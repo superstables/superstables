@@ -15,8 +15,9 @@ import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
 
-const SOLANA = { rpc: "https://api.devnet.solana.com", usdcMint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", minOwnerSol: 0.01, minOwnerUsdc: 0.05, minAgentSol: 0.005 };
-const TEMPO = { rpc: "https://rpc.moderato.tempo.xyz", chainId: 42431, pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
+const rpcEnv = (name, fallback) => (/^https?:\/\/\S+$/.test(process.env[name]?.trim() ?? "") ? process.env[name].trim() : fallback);
+const SOLANA = { rpc: rpcEnv("SUPERSTABLES_SOLANA_RPC", "https://api.devnet.solana.com"), usdcMint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", minOwnerSol: 0.01, minOwnerUsdc: 0.05, minAgentSol: 0.005 };
+const TEMPO = { rpc: rpcEnv("SUPERSTABLES_TEMPO_RPC", "https://rpc.moderato.tempo.xyz"), chainId: 42431, pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
 
 async function rpc(url, method, params = []) {
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(15_000) });

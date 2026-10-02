@@ -8,7 +8,7 @@
 //   waitFor                  `superstables budget wait`: the current state, within a timeout. It never signs or sends.
 //   findPending, claim       one owner approval at a time on a rail and chain.
 //
-// Hosted approvals (evm, `setup --hosted`): the request lives on superstables.com. The rail script stores the site's request
+// Hosted approvals (`setup --hosted`, every rail): the request lives on superstables.com. The rail script stores the site's request
 // id and the agent's access token for it in the record (recordHosted); `wait` reads the request's state from the site, and
 // `--replace` asks the site to cancel it. The token is removed from the record once the approval is final.
 //

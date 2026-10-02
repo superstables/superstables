@@ -4,9 +4,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createPublicKey, verify } from "node:crypto";
+import { Keypair } from "@solana/web3.js";
+import bs58 from "bs58";
 import { recoverMessageAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { agentProof, agentProofText, bodyHash, HostedApprovals, HostedRefusal, type HostedRecord } from "../../budget/hosted.js";
+import { agentProof, agentProofText, bodyHash, HostedApprovals, HostedRefusal, type HostedRecord, type SolanaAgentKey } from "../../budget/hosted.js";
 import { cancelSiteRequest, chosenSite, listSiteServices, siteOrigin } from "../../budget/site.mjs";
 import { startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import { startServer } from "../helpers/servers.js";
@@ -346,6 +349,139 @@ describe("hosted approvals", () => {
     await c.close();
     expect(site.requests[0].state).toBe("cancelled");
     expect(await h.settled).toMatchObject({ status: "rejected" });
+  });
+});
+
+describe("hosted approvals on tempo and solana", () => {
+  // Solana: the agent key is ed25519, the owner a base58 address, a transaction id a base58 signature
+  const SOL_KP = Keypair.fromSeed(new Uint8Array(32).fill(7));
+  const SOL_KEY: SolanaAgentKey = { ed25519: SOL_KP.secretKey, address: SOL_KP.publicKey.toBase58() };
+  const SOL_OWNER = Keypair.fromSeed(new Uint8Array(32).fill(8)).publicKey.toBase58();
+  const SOL_OTHER = Keypair.fromSeed(new Uint8Array(32).fill(9)).publicKey.toBase58();
+  const SIG = bs58.encode(new Uint8Array(64).fill(5));
+  const KEYCHAIN = "0xaAAAaaAA00000000000000000000000000000000";
+  let site: FakeSite;
+  let dir: string;
+  const solana = (over: Partial<ConstructorParameters<typeof HostedApprovals>[0]> = {}) =>
+    new HostedApprovals({ site: site.url, rail: "solana", chain: "devnet", agentKey: SOL_KEY, auditPath: join(dir, "audit.jsonl"), pollWaitS: 0, minPollMs: 20, ...over });
+  const tempo = () => new HostedApprovals({ site: site.url, rail: "tempo", chain: "moderato", agentKey: KEY, pollWaitS: 0, minPollMs: 20 });
+  const intent = (c: HostedApprovals, action: string, amount?: string, account = SOL_OWNER) =>
+    c.request({ kind: "solana-intent", action, account, solana: amount === undefined ? {} : { amount_atomic: amount }, terms: TERMS, timeoutMs: 60_000 });
+
+  beforeEach(async () => {
+    site = await startFakeSite();
+    dir = mkdtempSync(join(tmpdir(), "ss-hosted-rails-"));
+  });
+  afterEach(async () => {
+    await site.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("the Solana agent proof is ed25519 over the same four-line text, 0x and 128 hex, from the base58 key", async () => {
+    const body = JSON.stringify({ rail: "solana", chain: "devnet", agent: SOL_KEY.address });
+    const proof = await agentProof(SOL_KEY, "POST", "/api/v1/budget/links", body, 1790000000);
+    expect(proof.agent).toBe(SOL_KEY.address);
+    expect(proof.headers["Superstables-Agent"]).toBe(SOL_KEY.address);
+    expect(proof.headers["Superstables-Agent-Timestamp"]).toBe("1790000000");
+    const sig = proof.headers["Superstables-Agent-Signature"];
+    expect(sig).toMatch(/^0x[0-9a-f]{128}$/);
+    const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: Buffer.from(SOL_KP.publicKey.toBytes()).toString("base64url") }, format: "jwk" });
+    const text = Buffer.from(agentProofText("POST", "/api/v1/budget/links", body, 1790000000), "utf8");
+    expect(verify(null, text, key, Buffer.from(sig.slice(2), "hex"))).toBe(true);
+    // ed25519 is deterministic: the same key, text and time give the same signature
+    expect((await agentProof(SOL_KEY, "POST", "/api/v1/budget/links", body, 1790000000)).headers["Superstables-Agent-Signature"]).toBe(sig);
+    // one changed byte of the body, and it no longer verifies
+    expect(verify(null, Buffer.from(agentProofText("POST", "/api/v1/budget/links", body + " ", 1790000000), "utf8"), key, Buffer.from(sig.slice(2), "hex"))).toBe(false);
+  });
+
+  it("solana: links the agent; the owner is the base58 Solana address the site records", async () => {
+    site.onPoll = (r) => {
+      if (r.polls >= 2) Object.assign(r, { state: "linked", owner: SOL_OWNER });
+    };
+    const h = await solana().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
+    expect(await h.settled).toEqual({ status: "connected", address: SOL_OWNER });
+    expect(site.posts).toEqual([{ path: "/api/v1/budget/links", ok: true, why: undefined }]);
+    expect(site.requests[0].body).toEqual({ rail: "solana", chain: "devnet", agent: SOL_KEY.address });
+  });
+
+  it("solana: a grant sends the intent, not a transaction, and settles as sent with the signature", async () => {
+    site.owner = SOL_OWNER;
+    site.onPoll = (r) => {
+      if (r.polls >= 3) Object.assign(r, { state: "confirmed", tx_hash: SIG });
+    };
+    const h = await intent(solana(), "grant", "50000");
+    expect(await h.settled).toEqual({ status: "sent", address: SOL_OWNER, hash: SIG });
+    expect(site.requests[0].body).toEqual({ kind: "grant", rail: "solana", chain: "devnet", agent: SOL_KEY.address, solana: { amount_atomic: "50000" } });
+    expect(site.posts[0]).toMatchObject({ path: "/api/v1/budget/approvals", ok: true });
+  });
+
+  it("solana: revoke carries no amount; fund-agent carries lamports", async () => {
+    site.owner = SOL_OWNER;
+    site.onPoll = (r) => {
+      if (r.polls >= 2) Object.assign(r, { state: "confirmed", tx_hash: SIG });
+    };
+    const c = solana();
+    expect(await (await intent(c, "revoke")).settled).toMatchObject({ status: "sent", hash: SIG });
+    expect(await (await intent(c, "fund-agent", "10000000")).settled).toMatchObject({ status: "sent", hash: SIG });
+    expect(site.requests.map((r) => [r.body.kind, r.body.solana])).toEqual([["revoke", {}], ["fund_agent", { amount_atomic: "10000000" }]]);
+  });
+
+  it("solana: an approval the site ties to another owner is refused before any link, and base58 case counts", async () => {
+    site.owner = SOL_OTHER;
+    const err = await intent(solana(), "grant", "1").catch((e) => e);
+    expect(err).toBeInstanceOf(HostedRefusal);
+    expect(err.message).toMatch(new RegExp(`would ask ${SOL_OTHER} to approve this, but the owner recorded on this computer is ${SOL_OWNER}.*nothing was sent`));
+    expect(err.next).toMatch(/superstables budget setup --rail solana --hosted --new-owner/);
+    expect(site.requests[0].state).toBe("cancelled");
+    // the same letters in another case are another Solana address
+    const swapped = SOL_OWNER.replace(/[a-z]/, (c) => c.toUpperCase());
+    site.owner = swapped;
+    expect(await intent(solana(), "grant", "1").catch((e) => e)).toBeInstanceOf(HostedRefusal);
+  });
+
+  it("solana: a link with fund_agent then grant sends the amounts and reads each step's signature", async () => {
+    const c = solana();
+    const then = [{ kind: "fund_agent" as const, solana: { amount_atomic: "10000000" } }, { kind: "grant" as const, solana: { amount_atomic: "50000" } }];
+    const h = await c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, then });
+    expect(site.requests[0].body.then).toEqual(then);
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: SOL_OWNER });
+    Object.assign(r.steps![0], { state: "confirmed", tx_hash: SIG, wallet_asked: true });
+    Object.assign(r.steps![1], { state: "rejected", reason: "the owner rejected it", reason_code: "owner_rejected" });
+    const b = await h.bundle!;
+    expect(b.link).toEqual({ status: "connected", address: SOL_OWNER });
+    expect(b.steps).toMatchObject([{ kind: "fund_agent", state: "confirmed", hash: SIG }, { kind: "grant", state: "rejected", hash: null, reasonCode: "owner_rejected" }]);
+  });
+
+  it("solana: already linked, with steps asked: refused, with fund-agent and grant one by one", async () => {
+    site.linked = { [SOL_KEY.address]: SOL_OWNER };
+    const err = await solana().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, then: [{ kind: "grant", solana: { amount_atomic: "1" } }] }).catch((e) => e);
+    expect(err).toBeInstanceOf(HostedRefusal);
+    expect(err.message).toMatch(new RegExp(`already linked on .* to the account ${SOL_OWNER}`));
+    expect(err.next).toMatch(/superstables budget fund-agent --rail solana, then superstables budget grant --rail solana --amount A/);
+  });
+
+  it("tempo: links and asks for the exact keychain transaction, signed EIP-191 as on evm", async () => {
+    site.onPoll = (r) => {
+      if (r.kind === "link" && r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER });
+      if (r.kind !== "link" && r.polls >= 2) Object.assign(r, { state: "confirmed", tx_hash: HASH });
+    };
+    const c = tempo();
+    expect(await (await c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 })).settled).toEqual({ status: "connected", address: OWNER });
+    site.owner = OWNER;
+    const tx = { to: KEYCHAIN, data: "0x5ae7ab32" + "0".repeat(24) + AGENT.slice(2).toLowerCase(), value: "0x0" };
+    const h = await c.request({ kind: "evm-transaction", action: "revoke", account: OWNER, transaction: tx, terms: TERMS, timeoutMs: 60_000 });
+    expect(await h.settled).toEqual({ status: "sent", address: OWNER, hash: HASH });
+    expect(site.requests.map((r) => r.body)).toEqual([{ rail: "tempo", chain: "moderato", agent: AGENT }, { kind: "revoke", rail: "tempo", chain: "moderato", agent: AGENT, transaction: tx }]);
+    expect(site.posts.every((p) => p.ok)).toBe(true);
+  });
+
+  it("tempo: already linked, with a grant asked: refused, with the grant on its own (no gas on tempo)", async () => {
+    site.linked = { [AGENT.toLowerCase()]: OWNER };
+    const err = await tempo().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, then: [{ kind: "grant", transaction: { to: KEYCHAIN, data: "0x980a6025", value: "0x0" } }] }).catch((e) => e);
+    expect(err).toBeInstanceOf(HostedRefusal);
+    expect(err.next).toMatch(/A budget is a separate owner step: superstables budget grant --rail tempo --amount A/);
+    expect(err.next).not.toMatch(/fund-agent/);
   });
 });
 

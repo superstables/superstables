@@ -16,12 +16,13 @@ import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseStrict, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
-import { MIN_FEE_LAMPORTS, askSolanaTransaction, closeOwnerPage, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort } from "./owner.ts";
+import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort } from "./owner.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/revokeBudget.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
 Revoke the agent's budget. Owner command; this is the kill switch under a stolen agent key.
-The owner approves it in their own wallet on a page this command opens on 127.0.0.1.
+The owner approves it in their own wallet on a page this command opens on 127.0.0.1, or on
+superstables.com when the chain was set up with --hosted.
 
   --timeout <s>            how long the approval link stays open (default 600)
   --no-open                do not open the link in the default browser
@@ -67,15 +68,20 @@ if (OWNER_KEY_FILE) {
   sig = await sendAndConfirmTransaction(conn, new Transaction().add(...ix()), [kp], { commitment: "confirmed" });
   console.log(`signature: ${sig}`);
 } else {
-  const { port, sent } = transactionPort(conn, owner, ix);
-  const { handle, outcome } = await askSolanaTransaction("revoke", owner.toBase58(), port, revokeTerms({ owner: owner.toBase58(), agent: before.delegate.toBase58(), ata: ata.toBase58(), remaining: before.delegatedAmount }));
+  // hosted: the site builds the Revoke when the owner is ready and sends what their wallet signed
+  const hosted = approvalSite() !== null;
+  const startSlot = hosted ? await retryRead(() => conn.getSlot("confirmed")) : 0;
+  const terms = revokeTerms({ owner: owner.toBase58(), agent: before.delegate.toBase58(), ata: ata.toBase58(), remaining: before.delegatedAmount });
+  const local = hosted ? null : transactionPort(conn, owner, ix);
+  const { handle, outcome } = local
+    ? await askSolanaTransaction("revoke", owner.toBase58(), local.port, terms)
+    : await askSolanaIntent("revoke", owner.toBase58(), {}, terms);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("revokeBudget", outcome, { remaining: formatUnits(before.delegatedAmount) });
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   finish = handle.finish;
-  const s = sent()!;
-  sig = s.signature;
-  console.log(`sent ${sig}; reading it from the chain`);
-  const c = await confirmSent(conn, s);
+  sig = local ? local.sent()!.signature : outcome.hash;
+  console.log(`${local ? "sent" : "superstables.com reports"} ${sig}; reading it from the chain`);
+  const c = local ? { ...(await confirmSent(conn, local.sent()!)), problems: [] as string[] } : await confirmHosted(conn, sig, owner.toBase58(), startSlot);
   console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
   if (c.status === "unknown") {
     handle.finish({ ok: false, message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
@@ -87,6 +93,7 @@ if (OWNER_KEY_FILE) {
     await closeOwnerPage();
     process.exit(result(1, { state: "not_revoked", tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "run revoke again" }));
   }
+  if (c.problems.length) console.log(`note: ${c.problems.join("; ")}; the delegate is read below`);
 }
 
 let after = await retryRead(() => getAccount(conn, ata));

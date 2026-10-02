@@ -145,9 +145,11 @@ export function appendExtraAgent(label: string): { address: Address; created: bo
 }
 
 /** Adds or updates public values in the public file (addresses only, never a key). Mode 644. */
-export function writePublicEnv(updates: Record<string, string>) {
+/** Merge `updates` into the public file; `drop` names keys to remove (setup on this computer drops APPROVALS and SITE). */
+export function writePublicEnv(updates: Record<string, string>, drop: string[] = []) {
   for (const k of Object.keys(updates)) if (/PRIVATE|MNEMONIC|PASSWORD/i.test(k)) throw new Error(`${k} does not belong in the public file`)
-  const env = { ...loadPublicEnv(), ...updates }
+  const env: Record<string, string> = { ...loadPublicEnv(), ...updates }
+  for (const k of drop) delete env[k]
   mkdirSync(dirname(PUBLIC_ENV_PATH), { recursive: true, mode: 0o700 })
   writeFileSync(PUBLIC_ENV_PATH, '# Tempo public addresses only. Read commands use this file. No secrets.\n' + Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n') + '\n', { mode: 0o644 })
 }

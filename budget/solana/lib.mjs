@@ -37,7 +37,14 @@ process.on("unhandledRejection", async (err) => {
   process.exit(1);
 });
 
-export const RPC_URL = "https://api.devnet.solana.com";
+// SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL (tests point it at a local fake; you can point it at your own node). Anything but an http(s) URL is ignored, with a warning.
+export const RPC_URL = (() => {
+  const v = process.env.SUPERSTABLES_SOLANA_RPC?.trim();
+  if (!v) return "https://api.devnet.solana.com";
+  if (/^https?:\/\/[^\s]+$/.test(v)) return v;
+  process.stderr.write("warning: SUPERSTABLES_SOLANA_RPC is not an http(s) URL; using https://api.devnet.solana.com\n");
+  return "https://api.devnet.solana.com";
+})();
 export const EXPLORER_CLUSTER = "?cluster=devnet";
 export const USDC_MINT = new PublicKey(
   "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
@@ -143,10 +150,12 @@ export function readPublic() {
   };
 }
 
-// Merge-writes public values into the public state file (no secrets).
-export function writePublic(pairs) {
+// Merge-writes public values into the public state file (no secrets). `drop` names keys to remove (setup on this computer
+// drops APPROVALS and SITE).
+export function writePublic(pairs, drop = []) {
   const env = existsSync(PUBLIC_PATH) ? parseEnvFile(PUBLIC_PATH) : {};
   Object.assign(env, pairs);
+  for (const k of drop) delete env[k];
   mkdirSync(dirname(PUBLIC_PATH), { recursive: true, mode: 0o700 });
   const body =
     "# Solana devnet public addresses only. Read commands use this file. No secrets.\n" +

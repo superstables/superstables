@@ -22,7 +22,7 @@ import { explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient,
 import { chainHead, readKey, sleep } from './lib/chain.ts'
 import { closeGracePeriod, findOpenChannels, type OpenChannel } from './lib/channels.ts'
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
-import { KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, readSent, revokeCalldata, revokeTerms, tokenBalance } from './owner.ts'
+import { KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, readSent, revokeCalldata, revokeTerms, tokenBalance, useHostedAgent } from './owner.ts'
 
 const { values: args } = parseCli({
   name: 'revokeBudget.ts',
@@ -114,6 +114,7 @@ async function main() {
       process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: 'fund the owner (npx tsx budget/tempo/setup.ts --fund-only), then revoke again' }))
     }
     const data = revokeCalldata(agentAddress)
+    useHostedAgent(agentAddress) // a hosted chain: this agent key signs the request to the site
     const { handle, outcome } = await askTransaction('revoke', owner, { to: KEYCHAIN, data }, revokeTerms({ owner, agent: agentAddress, remaining: before.remaining, expiry: before.expiry, feeToken, label: agentLabel }))
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('revokeBudget', outcome, { remaining: fromBaseUnits(before.remaining) }, `superstables budget status --rail tempo${agentFlag(agentLabel)}`)
     if (outcome.status !== 'sent') throw new Error(`unexpected owner page outcome ${outcome.status}`)

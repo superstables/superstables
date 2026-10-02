@@ -5,7 +5,7 @@
 // call scoping on transfer and transferWithMemo) for the agent's access key.
 //
 // The owner approves it in their own wallet: this script builds the calldata and the terms, opens the owner page
-// (owner.ts), waits, and then reads the chain: the transaction (from the owner, to the keychain, the exact calldata, fee
+// (owner.ts; on a hosted chain, the link on superstables.com), waits, and then reads the chain: the transaction (from the owner, to the keychain, the exact calldata, fee
 // payer the owner) and the key (secp256k1, the planned expiry, the limit, the period, the seller scope, not an admin key).
 // With --owner-key-file <path> it signs with that key file instead (tests and automation only).
 //
@@ -32,7 +32,7 @@ import { chainHead, readKey, rpcRead, sleep } from './lib/chain.ts'
 import { OWNER_KEY_FILE, OWNER_TIMEOUT_MS, checkOwnerKeyFile } from '../owner-page.ts'
 import {
   KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, grantCalldata,
-  grantProblems, grantTerms, iso, maxByExpiry, readFullKey, readSent, tokenBalance, type FullKey, type GrantPlan,
+  grantTerms, iso, maxByExpiry, readSent, readUntilMatches, tokenBalance, useHostedAgent, type GrantPlan,
 } from './owner.ts'
 
 const { values: args } = parseCli({
@@ -55,17 +55,6 @@ const result = (exit: number, o: Record<string, unknown>) => emit('setBudget', e
 function refuse(reason: string, next: string, extra: Record<string, unknown> = {}): never {
   console.log(`REFUSED: ${reason}. Nothing was sent.`)
   process.exit(result(3, { state: 'refused_precheck', reason, next, ...extra }))
-}
-
-async function readUntilMatches(owner: Address, agent: Address, plan: GrantPlan, authorizedAt?: number): Promise<{ key: FullKey; problems: string[] }> {
-  let key = await readFullKey(owner, agent)
-  let problems = grantProblems(key, plan, authorizedAt)
-  for (let i = 0; i < 8 && problems.length; i++) {
-    await sleep(2000) // public RPC nodes lag a moment behind a block they just served
-    key = await readFullKey(owner, agent)
-    problems = grantProblems(key, plan, authorizedAt)
-  }
-  return { key, problems }
 }
 
 async function main() {
@@ -135,6 +124,7 @@ async function main() {
     plan = { agent, limit, expiry: head.timestamp + expirySeconds, period, sellers }
     console.log(`  expiry: ${new Date(plan.expiry * 1000).toISOString()} (unix ${plan.expiry}, chain time + ${expirySeconds}s)`)
     const data = grantCalldata(plan)
+    useHostedAgent(agent) // a hosted chain: this agent key signs the request to the site
     const { handle, outcome } = await askTransaction('grant', owner, { to: KEYCHAIN, data }, grantTerms({ ...plan, owner, expirySeconds, held, feeToken, label }))
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setBudget', outcome, { requested: amount }, `superstables budget status --rail tempo${agentFlag(label)}`)
     if (outcome.status !== 'sent') throw new Error(`unexpected owner page outcome ${outcome.status}`)

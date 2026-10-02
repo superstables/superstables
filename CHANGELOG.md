@@ -46,14 +46,15 @@ usable from its own help and exit codes, and removes the Claude Desktop bundle.
   reply the owner can read; without it, `wait` exits 2 with `state: "show_owner_first"`. An agent
   can start these commands; only the owner approves. For unattended tests only,
   `--owner-key-file PATH --yes` signs with an owner key file instead.
-- **Hosted owner approvals on EVM chains.** `setup --rail evm --hosted` links the agent to the
-  owner's superstables.com account (Sign-In with Ethereum) and records that account's address as
-  the owner. Grants, revokes and gas transfers on that chain are then approved on
-  superstables.com, in the owner's wallet, from any device where they are signed in, after they
-  pick the match code the agent shows them. Each request is signed by the agent key, which stays
+- **Hosted owner approvals.** `setup --rail R --hosted` links the agent to the owner's
+  superstables.com account (Sign-In with Ethereum) and records that account's address as the owner
+  (on Solana devnet, the Solana wallet the owner connects there). It works on every rail: EVM
+  chains, Tempo Moderato and Solana devnet. Grants, revokes and gas transfers on that chain are
+  then approved on superstables.com, in the owner's wallet, from any device where they are signed
+  in, after they pick the match code the agent shows them. Each request is signed by the agent key, which stays
   on this computer, and the command still reads the chain before it reports success. A request
   the site would put to another account than the recorded owner is refused. Approvals on
-  `127.0.0.1` remain the default and need no account. Tempo, Solana and `recover` use them only.
+  `127.0.0.1` remain the default and need no account. `recover` uses them only.
   Every `superstables budget` command accepts `--site`; where a site is recorded and it differs,
   the command refuses.
 - **One purchase without a budget: `superstables budget buy-once`.** It buys one service the
@@ -61,7 +62,8 @@ usable from its own help and exit codes, and removes the Claude Desktop bundle.
   service, its inputs and the most it accepts (`--max`); the owner approves that one payment in
   their wallet, after picking the match code. The result says whether it was paid and delivered,
   and the seller's answer is saved as a file. `superstables budget find --once` lists the
-  services that can be bought this way. Base Sepolia, test USDC.
+  services that can be bought this way, with the network of each: Base Sepolia or Solana devnet
+  (test USDC) or Tempo Moderato (test pathUSD).
 - **`superstables budget find`** lists the services superstables.com says a budget can pay, with
   price, chain and URL. Any other seller URL still works.
 - **Buying within a budget.** `status` says whether a budget is set up and what is left.

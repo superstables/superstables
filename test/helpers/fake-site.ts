@@ -1,7 +1,9 @@
 // A stand-in for superstables.com's budget API (/api/v1/budget/), for the hosted approval tests. It checks each agent
-// request the way the contract says the site does: the signature over the exact text, the agent in the headers and the
-// body, the timestamp. Requests move through their states when a test (or `onPoll`) says so. No network, no real key.
-import { createHash } from "node:crypto";
+// request the way the contract says the site does: the signature over the exact text (EIP-191 for an EVM agent, ed25519
+// for a Solana agent), the agent in the headers and the body, the timestamp. Requests move through their states when a
+// test (or `onPoll`) says so. No network, no real key.
+import { createHash, createPublicKey, verify } from "node:crypto";
+import bs58 from "bs58";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { recoverMessageAddress, type Hex } from "viem";
 import { readBody, startServer, type TestServer } from "./servers.js";
@@ -15,7 +17,8 @@ export interface FakeStep {
   reason: string | null;
   reason_code: string | null;
   wallet_asked: boolean;
-  transaction: { to: string; data: string; value: string };
+  transaction?: { to: string; data: string; value: string };
+  solana?: { amount_atomic: string };
 }
 
 export interface FakeRequest {
@@ -73,13 +76,18 @@ function bundleState(r: FakeRequest): { state: string; final: boolean } {
   return { state: open ? open.state : "confirmed", final: steps.every((s) => STEP_FINAL.has(s.state)) };
 }
 
-/** Why a `then` is not valid, as the site checks it, or undefined. */
-function thenProblem(then: unknown): { step?: number; message: string } | undefined {
+/** Why a `then` is not valid, as the site checks it, or undefined. Solana steps carry an amount, the others a transaction. */
+function thenProblem(then: unknown, rail: string): { step?: number; message: string } | undefined {
   if (!Array.isArray(then) || then.length === 0 || then.length > 2) return { message: "then has 1 or 2 steps" };
   const seen = new Set<string>();
   for (const [i, t] of then.entries()) {
     if (!t || !["fund_agent", "grant"].includes(t.kind) || seen.has(t.kind)) return { step: i, message: "each step is fund_agent or grant, at most once" };
+    if (rail === "tempo" && t.kind === "fund_agent") return { step: i, message: "tempo has no fund_agent" };
     seen.add(t.kind);
+    if (rail === "solana") {
+      if (t.transaction !== undefined || !/^[1-9]\d*$/.test(String(t.solana?.amount_atomic ?? ""))) return { step: i, message: "a solana step is { kind, solana: { amount_atomic } }" };
+      continue;
+    }
     const x = t.transaction;
     if (!x || !/^0x[0-9a-fA-F]{40}$/.test(x.to) || !/^0x([0-9a-fA-F]{2})*$/.test(x.data) || !/^0x[0-9a-fA-F]+$/.test(x.value)) return { step: i, message: "not a transaction" };
   }
@@ -114,14 +122,14 @@ export async function startFakeSite(): Promise<FakeSite> {
       const body = JSON.parse(raw);
       const link = url.pathname.endsWith("/links");
       if (link && body.then !== undefined) {
-        const bad = thenProblem(body.then);
+        const bad = thenProblem(body.then, body.rail);
         if (bad) return json(res, 400, { error: { code: "invalid_then", message: bad.message, ...(bad.step !== undefined ? { step: bad.step } : {}) } });
-        const owner = site.linked?.[String(body.agent).toLowerCase()];
+        const owner = site.linked?.[body.rail === "solana" ? String(body.agent) : String(body.agent).toLowerCase()];
         if (owner) return json(res, 409, { error: { code: "already_linked", message: "This agent is already linked on this chain. Ask for gas and a budget with separate approvals.", owner } });
       }
       const id = `${link ? "bl" : "ba"}_test${String(++n).padStart(4, "0")}`;
       const r: FakeRequest = { id, kind: link ? "link" : body.kind, token: `ssbt_test_${id}secret`, body, state: "awaiting_owner", owner: link ? null : site.owner, tx_hash: null, polls: 0, cancels: 0 };
-      if (link && Array.isArray(body.then)) r.steps = body.then.map((t: any, index: number) => ({ index, kind: t.kind, state: "queued", tx_hash: null, reason: null, reason_code: null, wallet_asked: false, transaction: t.transaction }));
+      if (link && Array.isArray(body.then)) r.steps = body.then.map((t: any, index: number) => ({ index, kind: t.kind, state: "queued", tx_hash: null, reason: null, reason_code: null, wallet_asked: false, ...(t.solana ? { solana: t.solana } : { transaction: t.transaction }) }));
       site.requests.push(r);
       return json(res, 201, {
         id,
@@ -171,6 +179,18 @@ async function checkProof(req: IncomingMessage, path: string, raw: string): Prom
   if (!agent || !sig || !Number.isFinite(ts)) return "missing agent headers";
   if (Math.abs(ts - Date.now() / 1000) > 300) return "stale timestamp";
   const text = `Superstables agent request\nPOST ${path}\n${createHash("sha256").update(raw).digest("hex")}\n${ts}`;
+  if (JSON.parse(raw).rail === "solana") {
+    // ed25519 over the text's UTF-8 bytes; base58 keys are case-sensitive
+    if (!/^0x[0-9a-f]{128}$/i.test(sig)) return "not an ed25519 signature";
+    let ok = false;
+    try {
+      const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: Buffer.from(bs58.decode(agent)).toString("base64url") }, format: "jwk" });
+      ok = verify(null, Buffer.from(text, "utf8"), key, Buffer.from(sig.slice(2), "hex"));
+    } catch {}
+    if (!ok) return "signature is not the agent's";
+    if (String(JSON.parse(raw).agent) !== agent) return "body agent differs";
+    return undefined;
+  }
   const signer = await recoverMessageAddress({ message: text, signature: sig });
   if (signer.toLowerCase() !== agent.toLowerCase()) return "signature is not the agent's";
   if (String(JSON.parse(raw).agent).toLowerCase() !== agent.toLowerCase()) return "body agent differs";

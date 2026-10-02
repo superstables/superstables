@@ -54,12 +54,17 @@ const publicFile = () => readFileSync(join(home, "budget", "public", "evm-base-s
 const approvals = () => join(home, "budget", "approvals");
 
 describe("setup --hosted: refusals before anything runs", () => {
-  it("is EVM only for now", async () => {
-    for (const rail of ["tempo", "solana"]) {
-      const r = await budget(["setup", "--rail", rail, "--hosted"]);
-      expect(r.code).toBe(2);
-      expect(r.result.reason).toMatch(/hosted approvals are EVM only for now: run superstables budget setup --rail \w+ without --hosted/);
-    }
+  it("takes every rail; tempo refuses --fund (no gas there), and --agent goes without --hosted", async () => {
+    const fund = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--fund"]);
+    expect(fund.code).toBe(2);
+    expect(fund.result.reason).toMatch(/tempo's agent needs no gas: setup --hosted on tempo takes --grant, not --fund/);
+    const agent = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--agent", "2"]);
+    expect(agent.code).toBe(2);
+    expect(agent.result.reason).toMatch(/setup --agent on a hosted chain links the new key there by itself: drop --hosted/);
+    const sol = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--fund", "2"]);
+    expect(sol.code).toBe(2);
+    expect(sol.result.reason).toMatch(/--fund takes an amount of SOL above 0 and at most 1/);
+    expect(site.posts).toEqual([]);
   });
 
   it("wants an https site for --site, with or without --hosted", async () => {

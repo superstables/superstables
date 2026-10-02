@@ -158,14 +158,15 @@ not running, `next` says the same quote can still be paid.
 
 With `superstables budget buy-once`, the owner approves the payment on superstables.com instead of a
 page on this computer, from any device where they sign in with their wallet. It needs no setup, no
-gas and no agent key. Base Sepolia only, for the services the site lists:
+gas and no agent key. It pays on the network the service's listing names (Base Sepolia, Tempo
+Moderato or Solana devnet), for the services the site lists:
 
 ```bash
 npx superstables budget find --once
 npx superstables budget buy-once --service superstables-demo-market-data --param asset=BTC --max 0.01
 ```
 
-`--max` is the most you accept, in USDC: a service that costs more is refused before anything is
+`--max` is the most you accept, in the service's token (USDC, or pathUSD on Tempo): a service that costs more is refused before anything is
 created. The command prints an `APPROVE` line with the link and a match code. Run by an agent (stdout is not
 a terminal), or with `--detach`, it then returns with `state: "waiting_owner"` and an approval `id`; in
 a terminal it waits for the purchase to end. Write the link, the code and the price in a reply the

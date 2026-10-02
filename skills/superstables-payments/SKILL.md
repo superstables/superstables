@@ -7,8 +7,8 @@ description: Finds services that charge per request, prices them without paying,
 
 The `superstables` CLI finds services that charge per request, reads their price without paying, and pays them with test stablecoins. **Testnet only: test USDC, no real money.** There are two ways to pay:
 
-- **One purchase the owner approves.** `superstables budget buy-once`: the owner approves it on superstables.com, from any device, with no setup; for the services `superstables budget find --once` lists (Base Sepolia). For any other x402 seller on Base Sepolia, `pay`: the owner approves in their wallet on a page on this computer.
-- **A budget**: the owner grants an on-chain budget once; the agent then buys on its own until it is spent, expires (Tempo only) or is revoked. The chain enforces the limit. With `setup --hosted` the owner approves on superstables.com (Base Sepolia or Arc Testnet), the whole set-up with one link; otherwise on a page on this computer.
+- **One purchase the owner approves.** `superstables budget buy-once`: the owner approves it on superstables.com, from any device, with no setup; for the services `superstables budget find --once` lists (Base Sepolia, Tempo Moderato or Solana devnet). For any other x402 seller on Base Sepolia, `pay`: the owner approves in their wallet on a page on this computer.
+- **A budget**: the owner grants an on-chain budget once; the agent then buys on its own until it is spent, expires (Tempo only) or is revoked. The chain enforces the limit. With `setup --hosted` the owner approves on superstables.com, on any rail, the whole set-up with one link; otherwise on a page on this computer.
 
 The agent can ask for money to move; only the owner can approve it.
 
@@ -85,7 +85,7 @@ superstables find "btc price"            # listings pay can call, with the comma
 superstables find "btc price" --budget   # listings a budget rail can pay, including ones pay cannot call
 superstables find "btc price" --json     # {services, warnings}: endpoint, params, routes, mock, operator, commands
 superstables budget find                 # the testnet services superstables.com checked that a budget can pay (Base Sepolia, Arc Testnet), with URL and price
-superstables budget find --once          # the services buy once can pay (Superstables' own, Base Sepolia)
+superstables budget find --once          # the services buy once can pay (Superstables' own), with the network of each
 ```
 
 With a budget set up through superstables.com, look in `superstables budget find` first: it lists sellers on the hosted chains that the index may not have (for example on Arc Testnet). Its URL goes straight to `budget preflight` and `budget buy`.
@@ -179,7 +179,7 @@ When the owner asks for `setup`, `fund-agent`, `grant`, `revoke` or `recover`, y
 - `evm` and `solana`: `setup`, `fund-agent`, `doctor`, `grant`. The owner first funds their own wallet from faucets; `doctor` names the minimums.
 - `tempo`: `setup`, `grant`.
 
-On `evm`, `setup --hosted` moves the owner's approvals for that chain to superstables.com: they approve from any device where they are signed in with their wallet, and pick the match code you show them. Offer Base Sepolia or Arc Testnet first. For a new budget there, one link covers `setup`, `fund-agent` and `grant`: `superstables budget setup --rail evm --hosted --chain C --grant A --fund`. The separate commands stay for later changes. Steps: [references/budget.md](references/budget.md#a-hosted-budget-on-superstablescom).
+`setup --hosted` moves the owner's approvals for that chain to superstables.com, on every rail: they approve from any device where they are signed in with their wallet, and pick the match code you show them. Offer Base Sepolia or Arc Testnet first. For a new budget there, one link covers `setup`, `fund-agent` and `grant`: `superstables budget setup --rail evm --hosted --chain C --grant A --fund` (Tempo: `--rail tempo --hosted --grant A`; Solana: `--rail solana --hosted --grant A --fund`). The separate commands stay for later changes. Steps: [references/budget.md](references/budget.md#a-hosted-budget-on-superstablescom).
 
 Copy this checklist and track it:
 

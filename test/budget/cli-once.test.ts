@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PAYER, SELLER, TX, startFakePurchaseSite, type FakePurchaseSite } from "../helpers/fake-purchase-site.js";
+import { PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite } from "../helpers/fake-purchase-site.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
@@ -59,11 +59,15 @@ describe("buy-once: refusals before anything is asked", () => {
     expect(site.purchases).toEqual([]);
   });
 
-  it("is Base Sepolia only: another rail or chain is refused clearly, and a mainnet is refused", async () => {
-    expect((await once(["--rail", "tempo"])).result.reason).toMatch(/Base Sepolia only/);
+  it("the network comes from the listing: --rail and --chain must name it, another chain is refused clearly, and a mainnet is refused", async () => {
+    const tempo = await once(["--rail", "tempo"]);
+    expect(tempo.code).toBe(2);
+    expect(tempo.result.reason).toMatch(/demo-market-data is on Base Sepolia \(--rail evm --chain base-sepolia\), not moderato: the network comes from the listing/);
+    expect(site.purchases).toEqual([]);
     const arc = await once(["--chain", "arc-testnet"]);
     expect(arc.code).toBe(2);
-    expect(arc.result.reason).toMatch(/Base Sepolia only/);
+    expect(arc.result.reason).toMatch(/buy-once pays on Base Sepolia .*Tempo Moderato .*Solana devnet .*not arc-testnet/);
+    expect((await once(["--rail", "solana", "--chain", "moderato"])).result.reason).toMatch(/--chain moderato is not on --rail solana/);
     const main = await once(["--chain", "base"]);
     expect(main.code).toBe(3);
     expect(main.result.reason).toMatch(/mainnet/);
@@ -158,6 +162,84 @@ describe("find --once", () => {
 
   it("takes no --chain", async () => {
     expect((await budget(["find", "--once", "--chain", "base-sepolia", "--site", site.url])).code).toBe(2);
+  }, 30_000);
+});
+
+describe("buy-once on Tempo Moderato and Solana devnet", () => {
+  beforeEach(() => {
+    site.services.push(structuredClone(TEMPO_MARKET), structuredClone(SOLANA_MARKET));
+  });
+
+  it("find --once names each service's network", async () => {
+    const r = await budget(["find", "--once", "--site", site.url]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/demo-market-data\s+0\.01 USDC\s+asset\*=BTC\|ETH\s+on Base Sepolia/);
+    expect(r.stdout).toMatch(/demo-market-data-tempo\s+0\.001 pathUSD\s+asset\*=BTC\|ETH\s+on Tempo Moderato/);
+    expect(r.stdout).toMatch(/demo-market-data-solana\s+0\.01 USDC\s+asset\*=BTC\|ETH\s+on Solana devnet/);
+    expect(r.result.services.map((x: any) => [x.id, x.network, x.rail, x.chain, x.unit])).toEqual([
+      ["demo-market-data", "eip155:84532", "evm", "base-sepolia", "USDC"],
+      ["demo-wallet-briefing", "eip155:84532", "evm", "base-sepolia", "USDC"],
+      ["demo-market-data-tempo", "eip155:42431", "tempo", "moderato", "pathUSD"],
+      ["demo-market-data-solana", "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1", "solana", "devnet", "USDC"],
+    ]);
+  }, 30_000);
+
+  it("Tempo: pathUSD on Tempo Moderato, the owner's wallet sends the transfer; wait reads the purchase", async () => {
+    const first = await once([], ["--service", "demo-market-data-tempo", "--param", "asset=BTC", "--max", "0.002"]);
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.result).toMatchObject({ ok: true, command: "buy-once", rail: "tempo", chain: "moderato", service: "demo-market-data-tempo", state: "waiting_owner", matchCode: "KPT-RWD" });
+    expect(first.approve.terms).toMatchObject({ title: "Buy once: Demo market data (Tempo)", amount: "0.001", unit: "pathUSD" });
+    expect(first.approve.terms.summary).toMatch(new RegExp(`One payment of 0\\.001 test pathUSD on Tempo Moderato to ${TEMPO_SELLER}`));
+    expect(first.approve.terms.enforced[0]).toMatch(/Your wallet sends one transfer of exactly 0\.001 pathUSD/);
+    expect(first.result.message_for_owner).toMatch(/0\.001 pathUSD \(testnet\) on Tempo Moderato\. Testnet only: test USDC, no real money\./);
+    expect(first.result.next).toMatch(/^reply to the owner with message_for_owner, word for word/);
+    expect(recordOf(first.result.id)).toMatchObject({ rail: "tempo", chain: "moderato" });
+    // the wait texts are the same as on Base Sepolia
+    const refused = await budget(["wait", "--id", first.result.id, "--timeout", "0"]);
+    expect(refused.result).toMatchObject({ state: "show_owner_first", rail: "tempo", chain: "moderato" });
+    const hash = `0x${"7e".repeat(32)}`;
+    site.settle(site.purchases[0], { asset: "BTC", price_usd: 65000 }, { transaction: hash, payer: PAYER });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ ok: true, rail: "tempo", chain: "moderato", state: "settled", paid: true, delivered: true, amount: "0.001", tx: { settle: hash }, txUrl: `https://explore.testnet.tempo.xyz/tx/${hash}`, payer: PAYER });
+    expect(done.result.next).toMatch(/Paid 0\.001 test pathUSD on Tempo Moderato/);
+  }, 60_000);
+
+  it("Solana: USDC on Solana devnet, base58 recipient, signature and payer", async () => {
+    const first = await once([], ["--service", "demo-market-data-solana", "--param", "asset=ETH", "--max", "0.01", "--rail", "solana"]);
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.result).toMatchObject({ rail: "solana", chain: "devnet", state: "waiting_owner", service: "demo-market-data-solana" });
+    expect(first.approve.terms.summary).toMatch(new RegExp(`One payment of 0\\.01 test USDC on Solana devnet to ${SOLANA_SELLER}`));
+    expect(first.approve.terms.notEnforced[0]).toMatch(/connect a Solana wallet/);
+    expect(first.result.message_for_owner).toMatch(/0\.01 test USDC on Solana devnet\./);
+    const sig = "5".repeat(87);
+    const payer = "8Kag3gJfDbVyqC1n7jUXwDzWWGWa5o1oHqfEPAUhHxD7";
+    site.settle(site.purchases[0], "ok", { transaction: sig, payer });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ rail: "solana", chain: "devnet", state: "settled", paid: true, amount: "0.01", tx: { settle: sig }, txUrl: `https://explorer.solana.com/tx/${sig}?cluster=devnet`, payer });
+  }, 60_000);
+
+  it("a purchase on another network, token or recipient than the listing is cancelled before any link", async () => {
+    site.tweak = (p) => { p.terms = { amount: { decimal: "0.01", atomic: "10000" }, asset: { symbol: "USDC", address: SOLANA_MARKET.asset, decimals: 6 }, network: SOLANA_MARKET.network, recipient: SOLANA_SELLER.toLowerCase() }; };
+    const r = await once([], ["--service", "demo-market-data-solana", "--param", "asset=ETH", "--max", "0.01"]);
+    expect(r.code).toBe(3);
+    // base58 is case-sensitive: the same letters in lower case are another address
+    expect(r.result.reason).toMatch(/recipient is not the one the listing names/);
+    expect(r.approve).toBeNull();
+    site.tweak = (p) => { p.terms = { amount: { decimal: "0.001", atomic: "1000" }, asset: { symbol: "pathUSD", address: TEMPO_MARKET.asset, decimals: 6 }, network: "eip155:84532", recipient: TEMPO_SELLER }; };
+    const t = await once([], ["--service", "demo-market-data-tempo", "--param", "asset=ETH", "--max", "0.01"]);
+    expect(t.code).toBe(3);
+    expect(t.result.reason).toMatch(/the purchase is on eip155:84532, not Tempo Moderato \(eip155:42431\)/);
+    expect(site.purchases.every((p) => p.state === "denied")).toBe(true);
+  }, 60_000);
+
+  it("a listing on a network buy-once does not pay is refused before anything is created", async () => {
+    site.services.push({ ...structuredClone(TEMPO_MARKET), id: "elsewhere", network: "eip155:1" });
+    const r = await once([], ["--service", "elsewhere", "--param", "asset=BTC", "--max", "1"]);
+    expect(r.code).toBe(3);
+    expect(r.result.reason).toMatch(/elsewhere is on eip155:1: buy-once pays on Base Sepolia, Tempo Moderato, Solana devnet only/);
+    expect(site.purchases).toEqual([]);
   }, 30_000);
 });
 
