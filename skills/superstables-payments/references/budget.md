@@ -67,7 +67,7 @@ APPROVE {"action","url","expires","terms"}
 RESULT {"ok":true,"command":"grant","state":"waiting_owner","final":false,"id":"oa-...","url","expires","terms","next"}
 ```
 
-- The owner does not see your tool output. Write `url` in your reply text, exactly as printed, before you poll `wait`.
+- The owner does not see your tool output. Write `url` in your reply text, exactly as printed, before you poll `wait`. The command also opens the page in the default browser by itself, except over SSH or with `--no-open`; that is the command's doing, not yours (safety rule 1 still holds: you never open it).
 - `terms` holds the page's plain words: `title`, `amount`, `unit`, `summary`, `enforced`, `notEnforced`. Show them with the link. They come from the command's own plan.
 - The page listens on `127.0.0.1` on a random port. Over SSH the owner forwards it first; `next` gives the exact `ssh -L` command.
 - `superstables budget wait --id ID [--timeout S]` waits up to S seconds (default 30, at most 300), then prints the state. While open: `waiting_owner`, `final: false`, exit 0, and `reason` describes the page state (not proof of anything). Once ended: the command's own final `RESULT` and exit code with `final: true`, the same on every later call.

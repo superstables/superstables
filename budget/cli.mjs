@@ -117,7 +117,8 @@ page is on this computer only: over SSH, the owner forwards its port first, ssh 
 hand the owner the link; only the owner approves, and an agent never does it for them.
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the link exists, with state waiting_owner, final
 false and an approval id; the page stays open in the background. Then run superstables budget wait --id ID until final is
-true. In a terminal, or with --wait: waits for the owner, and opens the link in the default browser unless --no-open.
+true. In a terminal, or with --wait: waits for the owner. Either way the link also opens in the default browser, unless
+--no-open, or, when not in a terminal, over SSH.
 The link expires after --timeout seconds (default 600, from 10 to 3600). If the owner has not approved by then, the
 command ends refused_precheck (exit 3) and nothing was sent: run the same command again for a new link.
 One owner approval at a time per rail and chain. --replace cancels a pending one: only at the owner's request, after
@@ -1064,7 +1065,11 @@ async function ownerGate({ cmd, f, ctx }) {
     return;
   }
   const argv = process.argv.slice(2).filter((a) => a !== "--detach" && a !== "--replace" && a !== "--json");
-  const args = [fileURLToPath(import.meta.url), ...argv, "--wait", ...(f["no-open"] ? [] : ["--no-open"])];
+  // The worker opens the page in this computer's default browser, as in a terminal: an agent's host may not show the
+  // owner the link. Not over SSH, where the browser would open on this host and not on the owner's computer.
+  // --no-open, when given, is already in argv.
+  const noBrowser = Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY) || process.env.VITEST !== undefined;
+  const args = [fileURLToPath(import.meta.url), ...argv, "--wait", ...(noBrowser && !f["no-open"] ? ["--no-open"] : [])];
   log(`\nsuperstables budget: the owner approval runs in the background (id ${id}); this command returns as soon as its link exists.`);
   const r = await startDetached({ id, command: cmd, rail: f.rail, chain: f.chain, cmd: process.execPath, args, cwd: process.cwd(), timeoutS: Number(f.timeout ?? 600), onLog: workerLog() });
   if (r.kind === "final") {

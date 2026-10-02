@@ -29,7 +29,7 @@ The steps use the `evm` rail. On `tempo` (access key) and `solana` (SPL delegate
 
 ### The approval page
 
-Owner actions use the same approval page on every rail. Setup asks for a free message signature; grants, revokes and funding ask for transactions with network fees. The command builds the transaction and the terms, starts a page on `127.0.0.1` on a random port, and prints the link. The link holds a one-time random id and expires after 10 minutes (`--timeout SECONDS` changes it). In a terminal, the command opens the link in the default browser unless you pass `--no-open`. In detached mode, the agent shows you the link. The owner:
+Owner actions use the same approval page on every rail. Setup asks for a free message signature; grants, revokes and funding ask for transactions with network fees. The command builds the transaction and the terms, starts a page on `127.0.0.1` on a random port, and prints the link. The link holds a one-time random id and expires after 10 minutes (`--timeout SECONDS` changes it). The command opens the link in the default browser unless you pass `--no-open`; in detached mode, not over SSH. In detached mode, the agent also shows you the link. The owner:
 
 1. Opens the link in the browser that has their wallet. The page shows the terms, written by the command from its own plan. The plan uses the command arguments, including the amount and recipients. Check them against what you intended to authorize.
 2. Presses **Connect wallet**. If more than one wallet is installed, the page asks which one to use, and then uses only that one. For transactions on `evm` and `tempo`, the page asks the wallet to switch to the selected testnet or add it. Setup only records your address.

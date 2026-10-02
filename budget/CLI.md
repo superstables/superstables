@@ -50,7 +50,7 @@ With more than one wallet installed, the page lists them and the owner chooses o
 
 - As soon as the link exists, stdout gets one line `APPROVE {"action","url","expires","terms"}` (stderr with `--json`). `terms` holds the page's plain words: `title`, `amount`, `unit`, `summary`, `enforced`, `notEnforced`. The same link goes to stderr in words. The `APPROVE` line is printed once per link: the dispatcher does not echo the rail script's own `APPROVE` or `RESULT` lines, or a background worker's, to stderr. The final `RESULT` is still the last line, and carries `url`.
 - The page listens on `127.0.0.1` only. Over SSH the owner forwards its port first, `ssh -L PORT:127.0.0.1:PORT user@host` with the port from the link; the stderr text and the `waiting_owner` `next` show that command with the real port.
-- `--timeout SECONDS` (10 to 3600, default 600): how long the link stays open. A link that expires before the wallet was asked ends the command `refused_precheck` (exit 3) with nothing sent, and `next` says to run the same command again for a new link (`setup` reuses the agent key it created). `--no-open`: do not open it in the default browser.
+- `--timeout SECONDS` (10 to 3600, default 600): how long the link stays open. A link that expires before the wallet was asked ends the command `refused_precheck` (exit 3) with nothing sent, and `next` says to run the same command again for a new link (`setup` reuses the agent key it created). `--no-open`: do not open it in the default browser. Detached, the link opens in the default browser too, except over SSH (`SSH_CONNECTION` or `SSH_TTY` set), where it would open on the remote host.
 
 ### Detached or blocking
 
@@ -58,7 +58,7 @@ An agent's shell tool usually shows output only when the command exits, and many
 
 | Mode | When | What happens |
 | --- | --- | --- |
-| Detached | stdout is not a terminal (an agent), or `--detach` | The command starts itself again as a background process and returns as soon as the link exists. It prints `APPROVE`, then `RESULT` with `state: "waiting_owner"`, exit 0, and `id`, `url`, `expires`, `terms` and `next`. The browser is not opened. |
+| Detached | stdout is not a terminal (an agent), or `--detach` | The command starts itself again as a background process and returns as soon as the link exists. It prints `APPROVE`, then `RESULT` with `state: "waiting_owner"`, exit 0, and `id`, `url`, `expires`, `terms` and `next`. The worker opens the link in the default browser (unless `--no-open`, or over SSH). |
 | Blocking | stdout is a terminal (a person), or `--wait` | As before: the command opens the link in the default browser (unless `--no-open`), waits for the owner, reads the chain and prints the final `RESULT`. |
 
 Then `superstables budget wait --id ID [--timeout S]` polls the approval:
