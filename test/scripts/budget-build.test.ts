@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { checkClientImports } from "../../scripts/budget-build.mjs";
+import { checkClientImports, dynamicCjsImports } from "../../scripts/budget-build.mjs";
 
 let dist: string;
 
@@ -37,4 +37,20 @@ describe("the client's imports after a build", () => {
       expect(() => checkClientImports(dist)).toThrow(/dist\/cli\/extra\.js imports/);
     });
   }
+});
+
+describe("the budget sources before a build", () => {
+  it("import @solana/web3.js statically everywhere: a dynamic import of it is a wrapper once bundled", () => {
+    expect(dynamicCjsImports()).toEqual([]);
+  });
+
+  it("are refused when one does", () => {
+    const dir = mkdtempSync(join(tmpdir(), "superstables-budget-src-"));
+    writeFileSync(join(dir, "setup.ts"), 'const { PublicKey } = await import("@solana/web3.js");\n');
+    try {
+      expect(dynamicCjsImports(dir)).toEqual([expect.stringContaining('setup.ts: import("@solana/web3.js")')]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -13,7 +13,7 @@
 // npx tsx budget/solana/setup.ts [--new-owner] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { Keypair } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, connection, formatUnits, loadOwner, parseEnvFile, parseStrict, readPublic, replaceKeyFile, retryRead, writePublic } from "./lib.mjs";
 import { getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
@@ -59,8 +59,7 @@ const bound = existing.SOLANA_OWNER_ADDRESS;
 const recorded: string | undefined = bound ?? (pub.owner && pub.agent?.toBase58() === agent ? pub.owner.toBase58() : undefined);
 if (newOwner && recorded) {
   // never move the owner while the agent is still the delegate of the recorded owner's USDC account
-  const { PublicKey: Pk } = await import("@solana/web3.js");
-  const acc = await retryRead(() => getAccountOrNull(connection(), getAssociatedTokenAddressSync(USDC_MINT, new Pk(recorded)))).then((a) => ({ ok: true as const, a }), (e) => ({ ok: false as const, e }));
+  const acc = await retryRead(() => getAccountOrNull(connection(), getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(recorded)))).then((a) => ({ ok: true as const, a }), (e) => ({ ok: false as const, e }));
   const live = !acc.ok ? null : Boolean(acc.a?.delegate && acc.a.delegate.toBase58() === agent && acc.a.delegatedAmount > 0n);
   if (live !== false) {
     const reason = live === null ? `could not read the USDC account of the recorded owner ${recorded}; the owner is not replaced` : `a budget is live: the agent is the delegate of ${recorded}'s USDC account with ${formatUnits(acc.ok ? acc.a!.delegatedAmount : 0n)} USDC left`;
@@ -117,7 +116,6 @@ writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent });
 console.log(`wrote ${PUBLIC_PATH} (no secret) and the owner's address into ${AGENT_KEY_PATH}`);
 
 const conn = connection();
-const { PublicKey } = await import("@solana/web3.js");
 const ownerPk = new PublicKey(owner);
 const [ownerSol, agentSol] = await Promise.all([retryRead(() => conn.getBalance(ownerPk, "confirmed")), retryRead(() => conn.getBalance(new PublicKey(agent), "confirmed"))]).catch(() => [null, null]);
 const usdc = await retryRead(() => getAccount(conn, getAssociatedTokenAddressSync(USDC_MINT, ownerPk))).then((a) => a.amount, () => 0n);

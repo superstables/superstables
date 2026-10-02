@@ -341,7 +341,30 @@ export function budgetEntryPoints(prefix = "") {
   return entries;
 }
 
+/**
+ * Sources whose dynamic import of a CommonJS package breaks once bundled: the bundle hands back a wrapper, so a named export
+ * such as PublicKey is undefined (solana setup crashed after recording the owner, 2 Oct 2026). Import those statically.
+ */
+const CJS_PACKAGES = ["@solana/web3.js"];
+export function dynamicCjsImports(dir = src) {
+  const bad = [];
+  const walk = (d) => {
+    for (const f of readdirSync(d)) {
+      const p = join(d, f);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.(ts|mjs)$/.test(f)) {
+        const text = readFileSync(p, "utf8");
+        for (const pkg of CJS_PACKAGES) if (text.includes(`import("${pkg}")`)) bad.push(`${relative(root, p)}: import("${pkg}")`);
+      }
+    }
+  };
+  walk(dir);
+  return bad;
+}
+
 export async function buildBudget(outdir = join(root, "dist", "budget")) {
+  const bad = dynamicCjsImports();
+  if (bad.length) throw new Error(`a dynamic import of a CommonJS package does not survive the bundle; import it statically:\n  ${bad.join("\n  ")}`);
   const entryPoints = budgetEntryPoints();
   const built = await buildStandalone({ outdir, entryPoints, name: "superstables-budget", title: "superstables budget", builtBy: "scripts/budget-build.mjs", rebuild: "npm run build" });
   console.log(`budget: ${built.summary}, ${Object.keys(entryPoints).length - 2} rail scripts`);
