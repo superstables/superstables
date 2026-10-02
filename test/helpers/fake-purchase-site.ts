@@ -34,6 +34,11 @@ interface Service {
   name: string;
   amount: string;
   asset: string;
+  /** CAIP-2; Base Sepolia when absent. */
+  network?: string;
+  payTo?: string;
+  protocol?: string;
+  symbol?: string;
   params: { name: string; required: boolean; enum?: string[]; default?: string }[];
   available?: boolean;
   simulated?: boolean;
@@ -50,8 +55,8 @@ export interface FakePurchaseSite extends TestServer {
   approvalBase?: string;
   /** Changes what the next POST creates, before it is stored (a different recipient, another price). */
   tweak?: (p: FakePurchase) => void;
-  /** The owner signed and the seller answered: the purchase settles. */
-  settle(p: FakePurchase, result?: unknown): void;
+  /** The owner signed and the seller answered: the purchase settles (on Base Sepolia unless `paid` names the tx and payer). */
+  settle(p: FakePurchase, result?: unknown, paid?: { transaction: string; payer: string }): void;
 }
 
 export const MARKET: Service = {
@@ -70,6 +75,32 @@ export const BRIEFING: Service = {
   params: [{ name: "sample_wallet", required: true, enum: ["demo-active", "demo-dormant"] }, { name: "period", required: false, enum: ["7d", "30d"], default: "7d" }],
 };
 
+export const TEMPO_SELLER = "0x7777777777777777777777777777777777777777";
+export const SOLANA_SELLER = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+/** The market-data demo on Tempo Moderato, sold over MPP in pathUSD. */
+export const TEMPO_MARKET: Service = {
+  id: "demo-market-data-tempo",
+  name: "Demo market data (Tempo)",
+  amount: "0.001",
+  asset: "0x20C0000000000000000000000000000000000000",
+  network: "eip155:42431",
+  payTo: TEMPO_SELLER,
+  protocol: "mpp",
+  symbol: "pathUSD",
+  params: [{ name: "asset", required: true, enum: ["BTC", "ETH"] }],
+};
+/** The same demo on Solana devnet, sold over x402 in USDC. */
+export const SOLANA_MARKET: Service = {
+  id: "demo-market-data-solana",
+  name: "Demo market data (Solana)",
+  amount: "0.01",
+  asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+  payTo: SOLANA_SELLER,
+  protocol: "x402",
+  params: [{ name: "asset", required: true, enum: ["BTC", "ETH"] }],
+};
+
 const json = (res: ServerResponse, status: number, body: unknown) => {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
@@ -85,25 +116,25 @@ const listing = (s: Service) => ({
   available: s.available !== false,
   ...(s.available === false ? { unavailable_reason: "the seller is offline" } : {}),
   request: { method: "GET", endpoint: `https://seller.example/${s.id}`, params: s.params.map((p) => ({ name: p.name, in: "query", required: p.required, ...(p.enum ? { enum: p.enum } : {}), ...(p.default ? { default: p.default } : {}) })), unknown_params: "rejected" },
-  payment: { protocol: "x402", x402_version: 2, scheme: "exact", network: "eip155:84532", asset: { symbol: "USDC", address: s.asset, decimals: 6 }, amount: { decimal: s.amount, atomic: atomic(s.amount) }, pay_to: SELLER },
+  payment: { protocol: s.protocol ?? "x402", ...(s.protocol === "mpp" ? {} : { x402_version: 2, scheme: "exact" }), network: s.network ?? "eip155:84532", asset: { symbol: s.symbol ?? "USDC", address: s.asset, decimals: 6 }, amount: { decimal: s.amount, atomic: atomic(s.amount) }, pay_to: s.payTo ?? SELLER },
 });
 
 export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
   const site = {} as FakePurchaseSite;
   site.services = [structuredClone(MARKET), structuredClone(BRIEFING)];
   site.purchases = [];
-  const terms = (p: FakePurchase) => p.terms ?? { amount: { decimal: p.service.amount, atomic: atomic(p.service.amount) }, asset: { symbol: "USDC", address: p.service.asset, decimals: 6 }, network: "eip155:84532", network_label: "Base Sepolia (testnet)", recipient: SELLER, protocol: "x402", x402_version: 2, scheme: "exact" };
+  const terms = (p: FakePurchase) => p.terms ?? { amount: { decimal: p.service.amount, atomic: atomic(p.service.amount) }, asset: { symbol: p.service.symbol ?? "USDC", address: p.service.asset, decimals: 6 }, network: p.service.network ?? "eip155:84532", recipient: p.service.payTo ?? SELLER, protocol: p.service.protocol ?? "x402" };
   const view = (p: FakePurchase) => ({
     id: p.id, state: p.state, final: p.final, livemode: false,
     service: { id: p.service.id, name: p.service.name, simulated: p.service.simulated === true, testnet: true },
     request: { method: "GET", url: `https://seller.example/${p.service.id}`, params: p.body.params ?? {} },
     terms: terms(p), payment: p.payment, delivery: p.delivery,
-    ...(p.state === "settled" || p.state === "paid_service_failed" ? { receipt: { id: p.id, purchase_id: p.id, transaction: TX, payer: PAYER } } : {}),
+    ...(p.state === "settled" || p.state === "paid_service_failed" ? { receipt: { id: p.id, purchase_id: p.id, transaction: (p.payment.transaction as string) ?? TX, payer: (p.payment.payer as string) ?? PAYER } } : {}),
     ...(p.reason ? { reason: p.reason } : {}), ...(p.reason_code ? { reason_code: p.reason_code } : {}),
     message: `purchase ${p.state}`, next: "see state", next_action: { type: p.final ? "done" : "wait_for_owner" },
   });
-  site.settle = (p, result = { asset: "BTC", price_usd: 65000 }) => {
-    Object.assign(p, { state: "settled", final: true, payment: { status: "paid", payer: PAYER, transaction: TX, chain: { status: "confirmed", block: 7 } }, delivery: { status: "delivered", http_status: 200, result } });
+  site.settle = (p, result = { asset: "BTC", price_usd: 65000 }, paid = { transaction: TX, payer: PAYER }) => {
+    Object.assign(p, { state: "settled", final: true, payment: { status: "paid", payer: paid.payer, transaction: paid.transaction, chain: { status: "confirmed", block: 7 } }, delivery: { status: "delivered", http_status: 200, result } });
   };
   const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");

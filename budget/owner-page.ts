@@ -3,10 +3,11 @@
 // asks the owner's own wallet to approve exactly that transaction. The command then reads the chain itself: the hash the page
 // reports is only a pointer. The agent's machine never holds the owner key.
 //
-// Hosted approvals (evm only, `setup --hosted`): a rail whose `hosted()` returns settings asks through superstables.com
+// Hosted approvals (`setup --hosted`, on every rail): a rail whose `hosted()` returns settings asks through superstables.com
 // instead (hosted.ts): the link opens on any device where the owner is signed in with their wallet, and the owner picks a
 // match code there. Same handle, same outcomes, same APPROVE line (plus `matchCode`). Setup, grant, revoke and fund-agent
-// use it; any other action (recover's owner steps) keeps the page on this computer.
+// use it; any other action (recover's owner steps) keeps the page on this computer. On solana the site builds the
+// transaction when the owner is ready (askSolanaIntent): the command sends only the amount.
 //
 // The link is printed as one stdout line `APPROVE {"action","url","expires","terms"}` (cli.mjs passes it on) and as a sentence
 // on stderr. The default browser opens it too, unless --no-open. --timeout <seconds> sets how long the link stays open
@@ -117,6 +118,10 @@ export interface OwnerRail {
   hostedSite?: () => string | null;
   /** The settings for a hosted request (read only when one is made: it opens the agent key). */
   hosted?: () => Omit<HostedSettings, "auditPath" | "onRecord">;
+  /** The rail (and chain) flags for the commands this page names, e.g. "--rail tempo". Default "--rail evm". */
+  railFlag?: string;
+  /** The wallets a hosted page asks for, when they differ from walletWords (solana: an EVM wallet signs in). */
+  hostedWalletWords?: string;
 }
 
 export type Unapproved = Extract<OwnerActionOutcome, { status: "rejected" | "expired" }>;
@@ -133,7 +138,7 @@ export function ownerPageFor(rail: OwnerRail) {
     console.log(`APPROVE ${JSON.stringify({ action, url: h.url, expires: new Date(h.expiresAt).toISOString(), terms, ...(h.matchCode ? { matchCode: h.matchCode } : {}) })}`);
     if (site) {
       const host = new URL(site).host.replace(/^www\./, "");
-      console.error(`\nWrite this link, the match code ${h.matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call: the page asks them to pick the code. The link opens on any device where the owner is signed in to ${host} with their wallet (${rail.walletWords}):\n\n  ${h.url}\n\n  match code: ${h.matchCode}\n\nThe first link they open asks them to sign in with their wallet (a message, no fee). It expires in ${inMinutes(h.expiresAt)}. ${h.bundle ? `After the link, the same page asks their wallet for each transaction in the terms, one after the other.` : `Setup links this agent to their ${host} account and sends no transaction. Other actions ask their wallet for a transaction.`} Testnet only: test USDC, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
+      console.error(`\nWrite this link, the match code ${h.matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call: the page asks them to pick the code. The link opens on any device where the owner is signed in to ${host} with their wallet (${rail.hostedWalletWords ?? rail.walletWords}):\n\n  ${h.url}\n\n  match code: ${h.matchCode}\n\nThe first link they open asks them to sign in with their wallet (a message, no fee). It expires in ${inMinutes(h.expiresAt)}. ${h.bundle ? `After the link, the same page asks their wallet for each transaction in the terms, one after the other.` : `Setup links this agent to their ${host} account and sends no transaction. Other actions ask their wallet for a transaction.`} Testnet only: test USDC, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
     } else {
       console.error(`\nWrite this link and its terms in your reply to the owner, a visible message, not only in your reasoning or a tool call. Only the owner should use the page, in the browser with their wallet (${rail.walletWords}):\n\n  ${h.url}\n\nThe link works on this computer only (over SSH, the owner first forwards the port: ssh -L ${new URL(h.url).port}:127.0.0.1:${new URL(h.url).port} user@this-host) and expires in ${inMinutes(h.expiresAt)}; after that, run the command again for a new link. Setup asks for a message signature. Other actions ask for a transaction approval. Testnet only: test USDC, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
     }
@@ -141,15 +146,15 @@ export function ownerPageFor(rail: OwnerRail) {
   }
 
   /** The hosted settings for this action, or undefined for the page on this computer. */
-  function hostedSettings(action: string, kind: "connect" | "evm-transaction") {
+  function hostedSettings(action: string, kind: "connect" | "transaction") {
     const recorded = rail.hostedSite?.();
     if (!recorded || !rail.hosted) return undefined;
     const site = siteOrigin(recorded);
     if (site.error) {
       console.log(`REFUSED: the recorded site is not usable: ${site.error}`);
-      process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: `the recorded site is not usable: ${site.error}`, next: "run superstables budget setup --rail evm --hosted again, with --site if you use another site" }));
+      process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: `the recorded site is not usable: ${site.error}`, next: `run superstables budget setup ${rail.railFlag ?? "--rail evm"} --hosted again, with --site if you use another site` }));
     }
-    if (kind === "evm-transaction" && !HOSTED_KIND[action]) {
+    if (kind === "transaction" && !HOSTED_KIND[action]) {
       console.error(`${action}: the owner's steps of recover use the approval page on this computer (127.0.0.1), not ${site.origin}. Hosted approvals cover setup, grant, revoke and fund-agent.`);
       return undefined;
     }
@@ -193,7 +198,7 @@ export function ownerPageFor(rail: OwnerRail) {
     /** EVM and Tempo: ask the owner's wallet to send exactly { to, data, value } from `owner`. */
     async askTransaction(action: string, owner: string, t: { to: string; data?: string; value?: bigint }, terms: OwnerTerms) {
       const transaction = { to: t.to, data: t.data ?? "0x", value: `0x${(t.value ?? 0n).toString(16)}` };
-      const hosted = hostedSettings(action, "evm-transaction");
+      const hosted = hostedSettings(action, "transaction");
       if (hosted) {
         const handle = await hostedFor(hosted).request({ kind: "evm-transaction", action, terms, account: owner, transaction, timeoutMs: OWNER_TIMEOUT_MS }).catch((e) => refusedBySite(action, e));
         announce(action, handle, terms, hosted.site);
@@ -202,6 +207,18 @@ export function ownerPageFor(rail: OwnerRail) {
       const s = await page();
       const handle = s.request({ kind: "evm-transaction", chain: rail.chain, terms, account: owner, timeoutMs: OWNER_TIMEOUT_MS, transaction });
       announce(action, handle, terms);
+      return { handle, outcome: await handle.settled };
+    },
+
+    /**
+     * Solana, hosted: the site builds the transaction for `solana` (the amount; none for a revoke) when the owner is ready,
+     * the owner's wallet signs it there and the site sends it. Settles as sent with the signature; the command reads it.
+     */
+    async askSolanaIntent(action: string, owner: string, solana: { amount_atomic?: string }, terms: OwnerTerms) {
+      const hosted = hostedSettings(action, "transaction");
+      if (!hosted) throw new Error(`${action} on solana asks through the site only when the chain is hosted`);
+      const handle = await hostedFor(hosted).request({ kind: "solana-intent", action, terms, account: owner, solana, timeoutMs: OWNER_TIMEOUT_MS }).catch((e) => refusedBySite(action, e));
+      announce(action, handle, terms, hosted.site);
       return { handle, outcome: await handle.settled };
     },
 

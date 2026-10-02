@@ -12,12 +12,13 @@
 import { SystemProgram, Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { connection, loadOwner, explorerTx, parseUnits, parseStrict, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
-import { MIN_FEE_LAMPORTS, askSolanaTransaction, closeOwnerPage, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort } from "./owner.ts";
+import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort } from "./owner.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
 Owner command. Sends the agent SOL for transaction fees (default 0.01, at most 1). Devnet only.
-The owner approves it in their own wallet on a page this command opens on 127.0.0.1.
+The owner approves it in their own wallet on a page this command opens on 127.0.0.1, or on
+superstables.com when the chain was set up with --hosted.
 
   --amount <sol>           SOL to send, at most 9 decimals
   --timeout <s>            how long the approval link stays open (default 600)
@@ -62,15 +63,20 @@ if (OWNER_KEY_FILE) {
   sig = await sendAndConfirmTransaction(conn, new Transaction().add(...ix()), [kp], { commitment: "confirmed" });
   console.log(`signature: ${sig}`);
 } else {
-  const { port, sent } = transactionPort(conn, owner, ix);
-  const { handle, outcome } = await askSolanaTransaction("fund-agent", owner.toBase58(), port, fundTerms({ owner: owner.toBase58(), agent: agent.toBase58(), lamports: amount, agentHas }));
+  // hosted: the site builds the transfer when the owner is ready and sends what their wallet signed
+  const hosted = approvalSite() !== null;
+  const startSlot = hosted ? await retryRead(() => conn.getSlot("confirmed")) : 0;
+  const terms = fundTerms({ owner: owner.toBase58(), agent: agent.toBase58(), lamports: amount, agentHas });
+  const local = hosted ? null : transactionPort(conn, owner, ix);
+  const { handle, outcome } = local
+    ? await askSolanaTransaction("fund-agent", owner.toBase58(), local.port, terms)
+    : await askSolanaIntent("fund-agent", owner.toBase58(), { amount_atomic: String(amount) }, terms);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("fundAgent", outcome);
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   finish = handle.finish;
-  const s = sent()!;
-  sig = s.signature;
-  console.log(`sent ${sig}; reading it from the chain`);
-  const c = await confirmSent(conn, s);
+  sig = local ? local.sent()!.signature : outcome.hash;
+  console.log(`${local ? "sent" : "superstables.com reports"} ${sig}; reading it from the chain`);
+  const c = local ? { ...(await confirmSent(conn, local.sent()!)), problems: [] as string[] } : await confirmHosted(conn, sig, owner.toBase58(), startSlot);
   console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
   if (c.status === "unknown") {
     handle.finish({ ok: false, message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
@@ -81,6 +87,13 @@ if (OWNER_KEY_FILE) {
     handle.finish({ ok: false, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The transfer is not confirmed. Check the command result and wallet activity before retrying.`, hash: sig });
     await closeOwnerPage();
     process.exit(result(1, { state: "failed", tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget doctor --rail solana" }));
+  }
+  if (c.problems.length) {
+    const reason = `the transaction on chain is not the one planned: ${c.problems.join("; ")}`;
+    console.log(`MISMATCH: ${reason}`);
+    handle.finish({ ok: false, message: `The chain shows something other than planned: ${c.problems.join("; ")}.`, hash: sig });
+    await closeOwnerPage();
+    process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "check the owner's wallet activity, then superstables budget doctor --rail solana" }));
   }
   const i = c.accountKeys!.indexOf(agent.toBase58());
   if (i >= 0) delta = BigInt(c.meta.postBalances[i]) - BigInt(c.meta.preBalances[i]);

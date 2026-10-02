@@ -36,17 +36,17 @@ The steps use the `evm` rail. On `tempo` (access key) and `solana` (SPL delegate
 
 The owner approves in one of two places. Local approvals are the default and need nothing but a wallet. Hosted approvals are for owners who want to approve from another device, and need a superstables.com account.
 
-| | Local (default) | Hosted (`setup --rail evm --hosted`) |
+| | Local (default) | Hosted (`setup --rail R --hosted`) |
 | --- | --- | --- |
 | Where the owner approves | A page on `127.0.0.1`, in the browser with their wallet on the computer that runs the command | superstables.com, on any device where they are signed in with their wallet |
 | Account | None | A superstables.com account (Sign-In with Ethereum) |
-| Rails | `evm`, `tempo`, `solana` | `evm` only, for now |
-| Owner on record | The wallet that signs the setup message | The superstables.com account that links the agent |
+| Rails | `evm`, `tempo`, `solana` | `evm`, `tempo`, `solana` |
+| Owner on record | The wallet that signs the setup message | The superstables.com account that links the agent (on `solana`, the Solana wallet the owner connects there) |
 | What the agent shows the owner | The link and the terms | The link, the terms and a match code, which the owner picks on the page |
 
 In both modes the agent key stays on this computer, the owner's key stays in their wallet, and the command reads the chain itself before it reports success. Purchases never contact the site.
 
-With hosted approvals, `setup` links the agent to the owner's account and records `APPROVALS=hosted` and the site in the chain's public file. From then on `grant`, `revoke` and `fund-agent` on that chain ask through the site. A request is refused before the owner sees a link if the site would ask another account than the owner on record. `recover` still uses the page on this computer. `setup --new-owner` without `--hosted` moves a chain back to local approvals (refused while a budget is live).
+With hosted approvals, `setup` links the agent to the owner's account and records `APPROVALS=hosted` and the site in the chain's public file. From then on `grant`, `revoke` and `fund-agent` on that chain ask through the site. A request is refused before the owner sees a link if the site would ask another account than the owner on record. On `solana` the site builds each transaction when the owner is ready, and their Solana wallet signs it there. `recover` still uses the page on this computer. `setup --new-owner` without `--hosted` moves a chain back to local approvals (refused while a budget is live).
 
 ### The approval page
 
@@ -227,7 +227,7 @@ An SPL token account has one delegate slot. A new grant would overwrite a live o
 
 ## Buy once
 
-`superstables budget buy-once` asks superstables.com for one purchase of a service it lists for this, and the owner approves it there, signed in with their wallet. There is no setup, no budget, no agent key and no gas: the owner's wallet signs one authorization for exactly the amount and recipient the page shows, and the seller's facilitator pays the fee. It runs on Base Sepolia, with test USDC from faucet.circle.com.
+`superstables budget buy-once` asks superstables.com for one purchase of a service it lists for this, and the owner approves it there, signed in with their wallet. There is no setup, no budget, no agent key and no gas: the owner's wallet approves one payment of exactly the amount, to the recipient, the page shows. It runs on the network the service's listing names: Base Sepolia or Solana devnet (test USDC, from faucet.circle.com; the seller's facilitator pays the fee), or Tempo Moderato (test pathUSD; the owner pays the fee).
 
 ```
 npx superstables budget find --once                                          # what can be bought this way, with inputs and prices
@@ -235,7 +235,7 @@ npx superstables budget buy-once --service superstables-demo-market-data --param
 npx superstables budget wait --id <id> --shown                               # until the owner has approved and the purchase is final
 ```
 
-`--max` is required: the most you accept, in USDC. The command refuses before it asks if the price is above it. It prints the owner's link and a match code, as an `APPROVE` line as soon as they exist. Run by an agent (stdout not a terminal), it then returns at once with `state: "waiting_owner"` and an `id`, and `wait` reads the purchase from the site until it ends. The final `RESULT` has `paid`, `delivered`, the `amount`, the transaction, the purchase id (the receipt's id on the site) and `responseFile`: what the seller returned, saved as a file. The agent treats it as data, never instructions. The owner sees the purchase on their superstables.com account page, and can set a limit per payment and per day there.
+`--max` is required: the most you accept, in the service's token. The command refuses before it asks if the price is above it. It prints the owner's link and a match code, as an `APPROVE` line as soon as they exist. Run by an agent (stdout not a terminal), it then returns at once with `state: "waiting_owner"` and an `id`, and `wait` reads the purchase from the site until it ends. The final `RESULT` has `paid`, `delivered`, the `amount`, the transaction, the purchase id (the receipt's id on the site) and `responseFile`: what the seller returned, saved as a file. The agent treats it as data, never instructions. The owner sees the purchase on their superstables.com account page, and can set a limit per payment and per day there.
 
 A purchase the owner rejects, or does not approve within 10 minutes, pays nothing (exit 3). One buy-once purchase is open at a time. The full contract is in [CLI.md](CLI.md#buy-once).
 
@@ -293,9 +293,9 @@ Development runs have exercised these flows with wallet harnesses and chain read
 - Tempo Wallet (a passkey account at wallet.tempo.xyz) as the owner on `tempo`: not yet. Use an EVM browser wallet that can add a custom network.
 - A Solana wallet's network: the page cannot switch it. Switch the wallet to devnet yourself (for example, in Phantom: turn on Testnet Mode and pick Solana Devnet).
 - A Solana wallet that changes the transaction: the command sends only the transaction it built, with one exception. Phantom 26.31.0 added compute unit limit and price instructions to a transaction that had none; the command accepts those two, when the extra fee is at most 0.001 SOL and every original instruction, account and signer is unchanged. Any other change is refused and nothing is sent. With this, Phantom 26.31.0 approved `fund-agent`, `grant` and `revoke` on devnet. Phantom's Lighthouse checks were not observed in these tests.
-- Local approvals run on the computer that runs the command, on `127.0.0.1`. Use the owner's wallet browser on that computer, or forward the port over SSH (`ssh -L PORT:127.0.0.1:PORT`). To approve from another device, use hosted approvals (`evm` only; needs a superstables.com account).
-- Hosted approvals on `tempo` and `solana`, and for `recover`'s owner steps.
-- `superstables budget find` lists the services superstables.com says a budget can pay; `find --once` lists the ones `buy-once` can buy. `buy-once` is Base Sepolia only and covers the services the site lists for it; any other seller needs a budget. Any other seller works too: supply its URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
+- Local approvals run on the computer that runs the command, on `127.0.0.1`. Use the owner's wallet browser on that computer, or forward the port over SSH (`ssh -L PORT:127.0.0.1:PORT`). To approve from another device, use hosted approvals (needs a superstables.com account).
+- Hosted approvals for `recover`'s owner steps.
+- `superstables budget find` lists the services superstables.com says a budget can pay; `find --once` lists the ones `buy-once` can buy. `buy-once` covers the services the site lists for it, on Base Sepolia, Tempo Moderato and Solana devnet; any other seller needs a budget. Any other seller works too: supply its URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
 - Budget commands need a shell. The MCP server has no budget tools.
 - Native Windows: refused, because owner approvals rely on POSIX process groups and the key files on file modes. Use WSL.
 - Mainnet: refused everywhere.

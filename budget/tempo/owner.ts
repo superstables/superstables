@@ -10,11 +10,18 @@
 // After the wallet sends, the command reads the chain itself (readSent, then the key): from the owner, to the keychain, the
 // exact calldata, success, a block after the request, fee payer the owner; then the key's type, expiry, limit, period and
 // seller scope, or its revocation.
+//
+// A chain set up with --hosted (APPROVALS=hosted and SITE in the public file) asks through that site instead (../hosted.ts):
+// the same transaction, sent by the owner's wallet from superstables.com; the agent key being granted or revoked signs the
+// request, and the site must act for the owner recorded here. The command reads the chain the same way afterwards.
+import { readFileSync } from 'node:fs'
 import { encodeFunctionData, getAddress, type Address, type Hex } from 'viem'
+import { privateKeyToAddress } from 'viem/accounts'
 import { Abis, Addresses } from 'viem/tempo'
 import type { OwnerChain, OwnerTerms } from '../../src/core/signer/owner-approval-server.ts'
 import { closeOwnerPage, ownerPageFor } from '../owner-page.ts'
-import { CHAIN_ID, EXPLORER_BASE, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, fromBaseUnits, makeClient } from './lib/common.ts'
+import { DEFAULT_SITE } from '../site.mjs'
+import { AGENT_ENV_PATH, CHAIN_ID, EXPLORER_BASE, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, fromBaseUnits, loadPublicEnv, makeClient, parseEnvFile } from './lib/common.ts'
 import { chainHead, rpcRead, sleep, topicOf } from './lib/chain.ts'
 
 export { closeOwnerPage }
@@ -46,11 +53,53 @@ export function emit(command: string, exit: number, o: Record<string, unknown>):
 }
 
 export const agentFlag = (label: string) => (label ? ` --agent ${label}` : '')
+
+/** undefined: read the public file. setup decides for itself (--hosted), before the file says anything. */
+let chosenSite: string | null | undefined
+/** setup: hosted on `site`, or null for the page on this computer, whatever the public file says. */
+export function useApprovalSite(site: string | null) {
+  chosenSite = site
+}
+/** The site that hosts this chain's owner approvals, or null for the page on this computer. */
+export function approvalSite(): string | null {
+  if (chosenSite !== undefined) return chosenSite
+  const p = loadPublicEnv()
+  return p.APPROVALS === 'hosted' ? p.SITE || DEFAULT_SITE : null
+}
+/** The agent key a hosted request is about (and signed by): the primary agent unless a command names another. */
+let hostedAgent: Address | undefined
+export function useHostedAgent(agent: Address) {
+  hostedAgent = agent
+}
+/** The private key in the agent file whose address is `agent`, or undefined. */
+function agentKeyFor(agent: Address): Hex | undefined {
+  const env = parseEnvFile(readFileSync(AGENT_ENV_PATH, 'utf8'))
+  for (const [k, v] of Object.entries(env)) {
+    if (!/^AGENT[A-Za-z0-9]*_PRIVATE_KEY$/.test(k) || !/^0x[0-9a-fA-F]{64}$/.test(v)) continue
+    if (privateKeyToAddress(v as Hex).toLowerCase() === agent.toLowerCase()) return v as Hex
+  }
+  return undefined
+}
+
 export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   chain: TEMPO_OWNER_CHAIN,
   walletWords: 'any EVM browser wallet that can add a custom network',
   statusCommand: 'superstables budget status --rail tempo',
   emit,
+  railFlag: '--rail tempo',
+  hostedSite: approvalSite,
+  hosted: () => {
+    const site = approvalSite()!
+    // the agent key signs each request to the site: the key this command grants or revokes, which must be on this computer
+    const agent = (hostedAgent ?? loadPublicEnv().AGENT_ADDRESS) as Address | undefined
+    const agentKey = agent ? agentKeyFor(agent) : undefined
+    if (!agent || !agentKey) {
+      const reason = `the agent key ${agent ?? '(none recorded)'} is not in ${AGENT_ENV_PATH}, so it cannot sign the request to ${site}`
+      console.log(`REFUSED: ${reason}. Nothing was requested.`)
+      process.exit(emit('owner', 3, { state: 'refused_precheck', reason, next: 'restore the agent key file, or set this chain up again' }))
+    }
+    return { site, rail: 'tempo' as const, chain: 'moderato', agentKey }
+  },
 })
 
 // ── calldata ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -189,6 +238,18 @@ export function grantProblems(k: FullKey, p: GrantPlan, authorizedAt?: number): 
   return out
 }
 
+/** Read the key until it matches the plan (public RPC nodes lag a moment behind a block they just served), at most ~16 s. */
+export async function readUntilMatches(owner: Address, agent: Address, plan: GrantPlan, authorizedAt?: number): Promise<{ key: FullKey; problems: string[] }> {
+  let key = await readFullKey(owner, agent)
+  let problems = grantProblems(key, plan, authorizedAt)
+  for (let i = 0; i < 8 && problems.length; i++) {
+    await sleep(2000)
+    key = await readFullKey(owner, agent)
+    problems = grantProblems(key, plan, authorizedAt)
+  }
+  return { key, problems }
+}
+
 export type Sent = { hash: Hex; status: 'success' | 'reverted'; blockNumber: bigint; blockTimestamp?: number; type: string; feePayer?: string; feeToken?: string; problems: string[] }
 
 /** Transaction types the owner's wallet may use: a plain root-signed transaction (the design sends type 2). */
@@ -246,6 +307,38 @@ export async function findKeyEvent(kind: 'authorized' | 'revoked', owner: Addres
   const head = (await chainHead()).number
   const logs = (await rpcRead('eth_getLogs', [{ address: KEYCHAIN, fromBlock: '0x' + (fromBlock + 1n).toString(16), toBlock: '0x' + head.toString(16), topics: [kind === 'authorized' ? KEY_AUTHORIZED : KEY_REVOKED, topicOf(owner), topicOf(key)] }])) as { transactionHash: Hex }[]
   return logs.length ? logs[logs.length - 1].transactionHash : null
+}
+
+/** What the chain shows for a grant the site reported (setup --hosted --grant), checked against the plan as grant checks it. */
+export type SentCheck = { state: 'settled' | 'mismatch' | 'failed' | 'unknown'; tx: string; reason?: string; key?: FullKey }
+
+/**
+ * The grant: authorizeKey(plan) from the owner, to the keychain, mined after `afterBlock`, successful, and the key on chain
+ * exactly the plan afterwards. A hash the chain never shows (a wallet's "speed up") is looked up as the keychain's own
+ * KeyAuthorized event for this key since `afterBlock`. Any difference from the plan is a mismatch: the owner revokes it.
+ */
+export async function checkGrantSent(hash: Hex, o: { owner: Address; plan: GrantPlan; afterBlock: bigint }): Promise<SentCheck> {
+  const data = grantCalldata(o.plan)
+  let sent = await readSent(hash, { from: o.owner, data, afterBlock: o.afterBlock })
+  if (!sent) {
+    const alt = await findKeyEvent('authorized', o.owner, o.plan.agent, o.afterBlock).catch(() => null)
+    if (alt) {
+      console.log(`the reported transaction is not on chain, but ${alt} authorized the key after this request started; reading that one`)
+      sent = await readSent(alt, { from: o.owner, data, afterBlock: o.afterBlock })
+    }
+  }
+  if (!sent) return { state: 'unknown', tx: hash, reason: 'the wallet reported a transaction the chain does not show (replaced, dropped or still pending)' }
+  console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a (the sender)'}`)
+  if (sent.status !== 'success') return { state: 'failed', tx: sent.hash, reason: 'the authorizeKey transaction reverted on chain' }
+  if (sent.problems.length) {
+    const reason = `the transaction on chain is not the one planned: ${sent.problems.join('; ')}`
+    console.log(`MISMATCH: ${reason}`)
+    return { state: 'mismatch', tx: sent.hash, reason }
+  }
+  const { key, problems } = await readUntilMatches(o.owner, o.plan.agent, o.plan, sent.blockTimestamp)
+  console.log(`readback: type ${key.signatureType}, expiry ${key.expiry}, limits ${key.enforceLimits}, remaining ${fromBaseUnits(key.remaining)}, periodEnd ${key.periodEnd || 'none (one-time)'}, scoped ${key.scoped}, admin ${key.admin}, revoked ${key.revoked}`)
+  if (problems.length) return { state: 'mismatch', tx: sent.hash, reason: `the key on chain is not the planned one: ${problems.join('; ')}`, key }
+  return { state: 'settled', tx: sent.hash, key }
 }
 
 // ── terms ────────────────────────────────────────────────────────────────────────────────────────────────

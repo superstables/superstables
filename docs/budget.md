@@ -190,11 +190,13 @@ there as gas.
 
 ## Approve on superstables.com instead
 
-On `evm`, the owner can approve on superstables.com rather than on a page on this computer, from any
-device where they sign in with their wallet:
+On any rail, the owner can approve on superstables.com rather than on a page on this computer, from
+any device where they sign in with their wallet:
 
 ```bash
 npx superstables budget setup --rail evm --chain arc-testnet --hosted
+npx superstables budget setup --rail tempo --hosted
+npx superstables budget setup --rail solana --hosted
 ```
 
 Setup then prints a link and a match code. The owner opens the link, signs in with their wallet the
@@ -202,7 +204,8 @@ first time (a message, no fee), picks the same code and links the agent to their
 account. From then on, `fund-agent`, `grant` and `revoke` on that chain ask through the site, each
 with its own link and code, and the owner approves the transaction in their wallet there. `recover`
 still uses the page on this computer. The agent key stays here and the owner's key stays in their wallet. Purchases need no approval from
-the site: the client pays the seller directly. Tempo and Solana budgets are approved locally only.
+the site: the client pays the seller directly. On Solana the owner also connects a Solana wallet on
+the site's page; that address is the owner on record, and it signs each transaction the site builds.
 
 ## From an agent
 

@@ -10,12 +10,18 @@
 //   3. submit() refuses, and sends nothing, unless the signed message is unchanged apart from bounded wallet-added
 //      compute-budget instructions, and the one signature is the owner's. Then it sends the signed bytes itself.
 // The command then reads the chain (confirmSent, then the token account) before its RESULT.
-import { ComputeBudgetProgram, Message, PublicKey, Transaction, VersionedMessage, type Connection, type TransactionInstruction } from "@solana/web3.js";
+//
+// A chain set up with --hosted (APPROVALS=hosted and SITE in the public file) asks through that site instead (../hosted.ts):
+// the agent key signs the request with ed25519 and sends the intent (the amount), not a transaction, because a Solana
+// transaction expires within a minute. The site builds it when the owner is ready, the owner's Solana wallet signs it and
+// the site sends it. The command then reads the signature from the chain (confirmHosted) and the token account, as above.
+import { ComputeBudgetProgram, Keypair, Message, PublicKey, Transaction, VersionedMessage, type Connection, type TransactionInstruction } from "@solana/web3.js";
 import bs58 from "bs58";
 import type { OwnerChain, OwnerTerms, SolanaTransactionPort } from "../../src/core/signer/owner-approval-server.ts";
 import { verifyEd25519 } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
-import { RPC_URL, USDC_MINT, formatUnits, retryRead, sleep } from "./lib.mjs";
+import { DEFAULT_SITE } from "../site.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, RPC_URL, USDC_MINT, formatUnits, parseEnvFile, retryRead, sleep } from "./lib.mjs";
 
 export { closeOwnerPage };
 
@@ -37,12 +43,57 @@ export function emit(command: string, exit: number, o: Record<string, unknown>):
   return exit;
 }
 
-export const { askConnect, askSolanaTransaction, endUnapproved } = ownerPageFor({
+/** undefined: read the public file. setup decides for itself (--hosted), before the file says anything. */
+let chosenSite: string | null | undefined;
+/** setup: hosted on `site`, or null for the page on this computer, whatever the public file says. */
+export function useApprovalSite(site: string | null) {
+  chosenSite = site;
+}
+/** The site that hosts this chain's owner approvals, or null for the page on this computer. */
+export function approvalSite(): string | null {
+  if (chosenSite !== undefined) return chosenSite;
+  const p = parseEnvFile(PUBLIC_PATH) as Record<string, string>;
+  return p.APPROVALS === "hosted" ? p.SITE || DEFAULT_SITE : null;
+}
+
+export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved } = ownerPageFor({
   chain: SOLANA_OWNER_CHAIN,
   walletWords: "any Solana wallet, such as Phantom, Solflare or Backpack",
+  hostedWalletWords: "an EVM wallet such as MetaMask to sign in, and a Solana wallet such as Phantom for this agent",
   statusCommand: "superstables budget status --rail solana",
   emit,
+  railFlag: "--rail solana",
+  hostedSite: approvalSite,
+  hosted: () => {
+    const site = approvalSite()!;
+    // the agent key signs each request to the site (ed25519); it must be the agent this chain's public file names
+    const secret = (parseEnvFile(AGENT_KEY_PATH) as Record<string, string>).SOLANA_AGENT_SECRET_BASE58;
+    const keypair = secret ? Keypair.fromSecretKey(bs58.decode(secret)) : null;
+    const recorded = (parseEnvFile(PUBLIC_PATH) as Record<string, string>).SOLANA_AGENT_ADDRESS;
+    const address = keypair?.publicKey.toBase58();
+    if (!keypair || (recorded && recorded !== address)) {
+      const reason = !keypair ? `${AGENT_KEY_PATH} has no SOLANA_AGENT_SECRET_BASE58` : `the agent key in ${AGENT_KEY_PATH} is ${address}, not the agent ${recorded} this chain was set up with`;
+      console.log(`REFUSED: ${reason}. Nothing was requested.`);
+      process.exit(emit("owner", 3, { state: "refused_precheck", reason, next: "restore the agent key file, or set this chain up again" }));
+    }
+    return { site, rail: "solana" as const, chain: "devnet", agentKey: { ed25519: keypair.secretKey, address: address! } };
+  },
 });
+
+/**
+ * Hosted: read a signature the site reported. The site built and sent the transaction, so the command checks what it can
+ * know: confirmed with no error, signer 0 (the fee payer) the owner, in a slot after the request started. Anything else in
+ * `problems` makes the command a mismatch. "unknown" when the chain does not show it within the wait.
+ */
+export async function confirmHosted(conn: Connection, signature: string, owner: string, afterSlot: number, waitMs = 120_000): Promise<Confirmed & { problems: string[] }> {
+  const c = await confirmSent(conn, { signature, blockhash: "", lastValidBlockHeight: Number.MAX_SAFE_INTEGER }, waitMs);
+  const problems: string[] = [];
+  if (c.status === "success" || c.status === "failed") {
+    if (c.signer !== owner) problems.push(`it was signed and paid for by ${c.signer}, not the owner ${owner}`);
+    if (c.slot !== undefined && c.slot <= afterSlot) problems.push(`it landed in slot ${c.slot}, before this request started (slot ${afterSlot})`);
+  }
+  return { ...c, problems };
+}
 
 /** A fee for one signature, and a margin: the owner must hold at least this much SOL to approve anything. */
 export const MIN_FEE_LAMPORTS = 10_000n;

@@ -18,12 +18,13 @@ import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
-import { MIN_FEE_LAMPORTS, askSolanaTransaction, closeOwnerPage, confirmSent, emit, endUnapproved, grantTerms, sol, transactionPort } from "./owner.ts";
+import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, grantTerms, sol, transactionPort } from "./owner.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/setBudget.ts --amount <usdc> [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
 Give the agent a spending budget: an SPL delegate, a total cap that lasts until spent or revoked.
-Owner command: the owner approves it in their own wallet on a page this command opens on 127.0.0.1.
+Owner command: the owner approves it in their own wallet on a page this command opens on 127.0.0.1, or on
+superstables.com when the chain was set up with --hosted.
 
   --amount <usdc>          decimal USDC, at most 6 decimals (required)
   --timeout <s>            how long the approval link stays open (default 600)
@@ -84,15 +85,21 @@ if (OWNER_KEY_FILE) {
   sig = await sendAndConfirmTransaction(conn, new Transaction().add(...ix()), [kp], { commitment: "confirmed" });
   console.log(`signature: ${sig}`);
 } else {
-  const { port, sent } = transactionPort(conn, owner, ix);
-  const { handle, outcome } = await askSolanaTransaction("grant", owner.toBase58(), port, grantTerms({ owner: owner.toBase58(), agent: agent.toBase58(), ata: ata.toBase58(), cap, held: before.amount }));
+  // hosted: the site builds the ApproveChecked when the owner is ready and sends what their wallet signed; on this computer,
+  // the page does, through the port. Either way the command reads the signature from the chain.
+  const hosted = approvalSite() !== null;
+  const startSlot = hosted ? await retryRead(() => conn.getSlot("confirmed")) : 0;
+  const terms = grantTerms({ owner: owner.toBase58(), agent: agent.toBase58(), ata: ata.toBase58(), cap, held: before.amount });
+  const local = hosted ? null : transactionPort(conn, owner, ix);
+  const { handle, outcome } = local
+    ? await askSolanaTransaction("grant", owner.toBase58(), local.port, terms)
+    : await askSolanaIntent("grant", owner.toBase58(), { amount_atomic: String(cap) }, terms);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setBudget", outcome, { requested: formatUnits(cap) });
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   finish = handle.finish;
-  const s = sent()!;
-  sig = s.signature;
-  console.log(`sent ${sig}; reading it from the chain`);
-  const c = await confirmSent(conn, s);
+  sig = local ? local.sent()!.signature : outcome.hash;
+  console.log(`${local ? "sent" : "superstables.com reports"} ${sig}; reading it from the chain`);
+  const c = local ? { ...(await confirmSent(conn, local.sent()!)), problems: [] as string[] } : await confirmHosted(conn, sig, owner.toBase58(), startSlot);
   console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
   if (c.status === "unknown") {
     handle.finish({ ok: false, message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
@@ -104,6 +111,13 @@ if (OWNER_KEY_FILE) {
     handle.finish({ ok: false, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The grant is not confirmed. A failed on-chain transaction may still charge a fee.`, hash: sig });
     await closeOwnerPage();
     process.exit(result(1, { state: "failed", tx: sig, reason: why, next: "superstables budget status --rail solana" }));
+  }
+  if (c.problems.length) {
+    const reason = `the transaction on chain is not the one planned: ${c.problems.join("; ")}`;
+    console.log(`MISMATCH: ${reason}`);
+    handle.finish({ ok: false, message: `The chain shows a different transaction than planned (${c.problems.join("; ")}). Revoke it: superstables budget revoke --rail solana.`, hash: sig });
+    await closeOwnerPage();
+    process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "revoke (superstables budget revoke --rail solana), then grant again" }));
   }
   if (c.signer !== owner.toBase58()) console.log(`note: signer 0 is ${c.signer}, not the owner`);
 }

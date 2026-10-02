@@ -1,7 +1,7 @@
 // superstables.com for `superstables budget`: which site, and the requests that need no agent signature. Plain JavaScript with
 // Node built-ins only, so the dispatcher (cli.mjs), approvals.mjs and the rail scripts share it.
 //
-// Hosted approvals (`setup --hosted`, EVM only) record APPROVALS=hosted and SITE=<origin> in the chain's public file. Every
+// Hosted approvals (`setup --hosted`, every rail) record APPROVALS=hosted and SITE=<origin> in the chain's public file. Every
 // later owner command on that chain then asks the owner through the site instead of the page on 127.0.0.1. The site API is
 // under /api/v1/budget/ (hosted.ts creates requests, signed by the agent key):
 //
@@ -100,6 +100,9 @@ export async function cancelSiteRequest({ site, id, token, fetchImpl }) {
 
 const str = (v) => (typeof v === "string" || typeof v === "number" ? siteText(String(v), 200) : null);
 
+/** The rail that pays a CAIP-2 network: Tempo Moderato is tempo, Solana is solana, any other eip155 chain evm. */
+const railOf = (network) => (network === "eip155:42431" ? "tempo" : network?.startsWith("solana:") ? "solana" : network?.startsWith("eip155:") ? "evm" : null);
+
 /** One listed service in the CLI's words: name, price, chain (the client's --chain key when known), network, rail, url. */
 function serviceOf(s, chainByNetwork) {
   if (!s || typeof s !== "object") return null;
@@ -114,7 +117,7 @@ function serviceOf(s, chainByNetwork) {
   const asset = p && typeof p === "object" ? str(p.asset ?? p.currency ?? p.symbol) : str(s.asset ?? s.currency) ?? "USDC";
   const network = str(s.network ?? s.chain_id ?? s.chainId);
   const chain = str(s.chain) ?? (network ? chainByNetwork[network] ?? null : null);
-  return { name: str(s.name ?? s.title) ?? new URL(url).host, price: amount ? `${amount}${asset ? ` ${asset}` : ""}` : null, chain, network, rail: str(s.rail) ?? (network?.startsWith("eip155:") ? "evm" : null), url };
+  return { name: str(s.name ?? s.title) ?? new URL(url).host, price: amount ? `${amount}${asset ? ` ${asset}` : ""}` : null, chain, network, rail: str(s.rail) ?? railOf(network), url };
 }
 
 /**
