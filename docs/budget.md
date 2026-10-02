@@ -197,8 +197,8 @@ Setup then prints a link and a match code. The owner opens the link, signs in wi
 first time (a message, no fee), picks the same code and links the agent to their superstables.com
 account. From then on, `fund-agent`, `grant` and `revoke` on that chain ask through the site, each
 with its own link and code, and the owner approves the transaction in their wallet there. `recover`
-still uses the page on this computer. The agent key stays here, the owner's key stays in their
-wallet, and purchases never contact the site. Tempo and Solana budgets are approved locally only.
+still uses the page on this computer. The agent key stays here and the owner's key stays in their wallet. Purchases need no approval from
+the site: the client pays the seller directly. Tempo and Solana budgets are approved locally only.
 
 ## From an agent
 

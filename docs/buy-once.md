@@ -166,8 +166,9 @@ npx superstables budget buy-once --service superstables-demo-market-data --param
 ```
 
 `--max` is the most you accept, in USDC: a service that costs more is refused before anything is
-created. The command prints an `APPROVE` line with the link and a match code, then returns with
-`state: "waiting_owner"` and an approval `id`. Write the link, the code and the price in a reply the
+created. The command prints an `APPROVE` line with the link and a match code. Run by an agent (stdout is not
+a terminal), or with `--detach`, it then returns with `state: "waiting_owner"` and an approval `id`; in
+a terminal it waits for the purchase to end. Write the link, the code and the price in a reply the
 owner can read, and end your turn there. The owner opens the link, signs in with their wallet the
 first time (a message, no fee), picks the same code on the page and approves the payment in their
 wallet. When they say they have, run:
@@ -177,8 +178,9 @@ npx superstables budget wait --id <id> --shown
 ```
 
 `--shown` says you wrote the link in a reply; without it, `wait` refuses. While the owner has not
-decided, it answers `waiting_owner` again. The final `RESULT` has `paid`, `delivered`, the
-transaction and `responseFile`, the seller's answer saved as a file. The site's side of this purchase
+decided, it answers `waiting_owner` again. The final `RESULT` reports `paid` and `delivered`, the transaction when there is one, and
+`responseFile` when the seller's answer was saved. Read `reason` and `next` before anything else, and
+do not pay again if it was paid or its outcome is unknown. The site's side of this purchase
 is the [HTTP purchase API](https://www.superstables.com/docs/purchase).
 
 ## From an agent
