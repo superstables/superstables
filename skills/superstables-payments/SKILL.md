@@ -84,7 +84,7 @@ Payment progress:
 superstables find "btc price"            # listings pay can call, with the commands for every way to pay each
 superstables find "btc price" --budget   # listings a budget rail can pay, including ones pay cannot call
 superstables find "btc price" --json     # {services, warnings}: endpoint, params, routes, mock, operator, commands
-superstables budget find                 # the testnet services superstables.com checked that a budget can pay (Base Sepolia, Arc Testnet), with URL and price
+superstables budget find "gold print"    # the testnet services superstables.com checked that a budget can pay (Base Sepolia, Arc Testnet), with URL and price; words narrow the list
 superstables budget find --once          # the services buy once can pay (Superstables' own, Base Sepolia)
 ```
 

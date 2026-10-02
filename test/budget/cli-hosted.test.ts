@@ -323,6 +323,20 @@ describe("find", () => {
     expect(JSON.parse(j.stdout).services).toEqual(r.result.services);
   }, 30_000);
 
+  it("narrows the list to the words given, and shows everything with a note when none matches", async () => {
+    site.services = [
+      { name: "Weather", price: "0.001", network: "eip155:84532", url: "https://seller.example/w" },
+      { name: "Official print", price: "0.05", network: "eip155:5042002", url: "https://seller.example/print?q=gold" },
+    ];
+    const hit = await budget(["find", "gold", "print", "--site", site.url]);
+    expect(hit.code, hit.stderr).toBe(0);
+    expect(hit.result.services.map((x: { name: string }) => x.name)).toEqual(["Official print"]);
+    const none = await budget(["find", "zzz", "--site", site.url]);
+    expect(none.code).toBe(0);
+    expect(none.result.services).toHaveLength(2);
+    expect(none.stderr).toContain('nothing matched "zzz"; showing every listing');
+  }, 30_000);
+
   describe("which site", () => {
     let other: FakeSite;
     const record = (chain: string, url: string, hosted = true) => {
