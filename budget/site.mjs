@@ -88,10 +88,12 @@ export async function cancelSiteRequest({ site, id, token, fetchImpl }) {
   const r = await call(`${site}${BUDGET_API}/requests/${id}/cancel`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" }, body: "{}" }, 15_000, fetchImpl);
   if (r.status === 0) return null;
   const state = typeof r.body?.state === "string" ? r.body.state : null;
-  if (r.ok && (state === null || state === "cancelled")) return { cancelled: true, state: "cancelled" };
-  // refused: the wallet may have been asked, or the request already ended
+  // a link with steps that is linked answers with the request as it stands, steps included: `view`
+  const view = r.ok && r.body && typeof r.body === "object" ? r.body : undefined;
+  if (r.ok && (state === null || state === "cancelled")) return { cancelled: true, state: "cancelled", view };
+  // refused (the wallet may have been asked, or the request already ended), or steps the wallet was already asked for
   const walletAsked = r.body?.wallet_asked === true || typeof r.body?.tx_hash === "string";
-  return { cancelled: false, state, walletAsked, reason: siteError(r.status, r.body) };
+  return { cancelled: false, state, walletAsked, reason: siteError(r.status, r.body), view };
 }
 
 // ---- find: GET /api/v1/budget/services ------------------------------------------------------------------------------

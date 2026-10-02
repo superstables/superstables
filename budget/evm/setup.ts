@@ -297,6 +297,7 @@ async function finishBundle(): Promise<never> {
         ? s.reasonCode === "cap_above_limit" ? `refused: the budget is above the limit set on the owner's ${HOST} account${s.reason ? ` (${s.reason})` : ""}` : `rejected${s.reason ? `: ${s.reason}` : " by the owner"}`
         : s.state === "skipped" ? "not asked, because an earlier step did not complete"
         : s.state === "expired" ? "not approved before the link expired"
+        : s.state === "cancelled" ? "withdrawn on superstables.com when this command stopped waiting, before the owner's wallet was asked"
         : `${s.state}${s.reason ? `: ${s.reason}` : ""}`;
       reports.push({ kind: s.kind, state: "refused_precheck", amount, reason: `nothing was sent: ${why}`, reasonCode: s.reasonCode ?? undefined });
     }

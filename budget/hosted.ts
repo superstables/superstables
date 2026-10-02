@@ -464,6 +464,19 @@ export class HostedApprovals {
     let cancelTried = false;
     let readAt = 0;
     const asked = () => steps.some((s) => s.walletAsked);
+    /** The site's word on each step (a read, or the answer to a cancel). */
+    const absorb = (seen: any[]) =>
+      steps.forEach((s, i) => {
+        const w = seen.find((x) => x && x.index === i) ?? seen[i];
+        if (!w || w.kind !== s.kind) return;
+        const before = s.state;
+        s.state = typeof w.state === "string" ? siteText(w.state, 40) : s.state;
+        if (isHash(w.tx_hash)) s.hash = w.tx_hash;
+        if (w.wallet_asked === true || s.state === "sending" || s.hash) s.walletAsked = true;
+        s.reason = typeof w.reason === "string" ? siteText(w.reason) : s.reason;
+        s.reasonCode = typeof w.reason_code === "string" ? siteText(w.reason_code, 60) : s.reasonCode;
+        if (s.state !== before) this.audit({ id: p.id, kind: s.kind, title: p.title, status: s.state, reason: s.reason || undefined, hash: s.hash ?? undefined, sending: s.walletAsked || undefined });
+      });
     const finish = (why: string | null) => {
       this.open.delete(p.id);
       // a step without a final state: as it stands, never "nothing sent" once the wallet was asked
@@ -471,7 +484,10 @@ export class HostedApprovals {
         if (STEP_FINAL.has(s.state)) continue;
         if (s.hash) continue; // sent: the command reads it from the chain
         if (s.walletAsked) Object.assign(s, { state: "unknown", reason: s.reason || why || "the wallet was asked to send, but no transaction came back from superstables.com" });
-        else Object.assign(s, { state: owner ? "expired" : "skipped", reason: s.reason || why || (owner ? "the step was not approved before the request ended" : "the agent was not linked, so this step was never asked") });
+        // linked, and the site did not confirm the step closed: it can still hand it to the owner's wallet, so it is
+        // never "nothing sent" here
+        else if (owner) Object.assign(s, { state: "unknown", reason: `the command stopped watching while ${this.s.site} could still ask the owner's wallet for this step, and withdrawing it did not succeed${why ? ` (${why})` : ""}; it may still be sent, so read the chain later` });
+        else Object.assign(s, { state: "skipped", reason: s.reason || why || "the agent was not linked, so this step was never asked" });
       }
       const link: OwnerActionOutcome = owner
         ? { status: "connected", address: owner }
@@ -491,12 +507,20 @@ export class HostedApprovals {
       const now = Date.now();
       // before the link: the link's expiry. After it: --timeout again for the steps, from the moment it was linked.
       const deadline = linkedAt ? Math.max(Math.min(p.localDeadline, p.siteExpiry), linkedAt + p.timeoutMs) : Math.min(p.localDeadline, p.siteExpiry);
-      if (now >= deadline && !cancelTried && !asked()) {
+      // Once linked, the steps the wallet was not asked for are withdrawn on the site (the ones it was asked for stay,
+      // as possibly sent): only the site's answer makes a step "nothing sent".
+      if (now >= deadline && !cancelTried && (owner || !asked())) {
         cancelTried = true;
         const c = await cancelSiteRequest({ site: this.s.site, id: p.id, token: p.token, fetchImpl: this.s.fetchImpl });
-        if (c?.cancelled) {
-          linkState = owner ? linkState : "expired";
-          return finish(owner ? "the steps were not approved in time, and the request was cancelled on superstables.com; nothing more was sent" : "the approval link expired without a completed approval, and the request was cancelled on superstables.com; nothing was sent");
+        if (owner) {
+          if (Array.isArray(c?.view?.steps)) {
+            absorb(c.view.steps);
+            if (c.view.final === true) return finish(null);
+          }
+          // a step still with the wallet, or no answer: read on until the grace below
+        } else if (c?.cancelled) {
+          linkState = "expired";
+          return finish("the approval link expired without a completed approval, and the request was cancelled on superstables.com; nothing was sent");
         }
         if (c?.walletAsked) for (const s of steps) if (!STEP_FINAL.has(s.state) && s.state !== "queued") s.walletAsked = true;
       }
@@ -521,18 +545,7 @@ export class HostedApprovals {
         linkState = state;
         linkReason = reason;
       }
-      const seen = Array.isArray(v.steps) ? (v.steps as any[]) : [];
-      steps.forEach((s, i) => {
-        const w = seen.find((x) => x && x.index === i) ?? seen[i];
-        if (!w || w.kind !== s.kind) return;
-        const before = s.state;
-        s.state = typeof w.state === "string" ? siteText(w.state, 40) : s.state;
-        if (isHash(w.tx_hash)) s.hash = w.tx_hash;
-        if (w.wallet_asked === true || s.state === "sending" || s.hash) s.walletAsked = true;
-        s.reason = typeof w.reason === "string" ? siteText(w.reason) : s.reason;
-        s.reasonCode = typeof w.reason_code === "string" ? siteText(w.reason_code, 60) : s.reasonCode;
-        if (s.state !== before) this.audit({ id: p.id, kind: s.kind, title: p.title, status: s.state, reason: s.reason || undefined, hash: s.hash ?? undefined, sending: s.walletAsked || undefined });
-      });
+      absorb(Array.isArray(v.steps) ? (v.steps as any[]) : []);
       if (state !== lastState) {
         lastState = state;
         this.audit({ id: p.id, kind: p.kind, title: p.title, status: state, reason: reason || undefined, address: owner ?? undefined });

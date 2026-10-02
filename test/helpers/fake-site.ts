@@ -49,6 +49,8 @@ export interface FakeSite extends TestServer {
   services?: unknown;
   /** Agents already linked, by address (lowercase), with their owner: a link with `then` for one of them is refused (409). */
   linked?: Record<string, string>;
+  /** Answer every cancel with a 503, as a site that can't be reached at that moment. */
+  cancelFails?: boolean;
 }
 
 const json = (res: ServerResponse, status: number, body: unknown) => {
@@ -57,7 +59,7 @@ const json = (res: ServerResponse, status: number, body: unknown) => {
 };
 
 const FINAL = new Set(["linked", "confirmed", "failed", "rejected", "expired", "cancelled", "unknown"]);
-const STEP_FINAL = new Set(["confirmed", "failed", "rejected", "expired", "unknown", "skipped"]);
+const STEP_FINAL = new Set(["confirmed", "failed", "rejected", "expired", "unknown", "skipped", "cancelled"]);
 const LINK_ENDED = new Set(["rejected", "expired", "cancelled"]);
 
 /**
@@ -139,6 +141,14 @@ export async function startFakeSite(): Promise<FakeSite> {
       if (!r || req.headers.authorization !== `Bearer ${r.token}`) return json(res, 404, { error: "no such request" });
       if (m[2] && req.method === "POST") {
         r.cancels++;
+        if (site.cancelFails) return json(res, 503, { error: { code: "unavailable", message: "try again" } });
+        if (r.steps && r.owner) {
+          // linked: the steps the wallet was not asked for are withdrawn; the others stay, as possibly sent
+          for (const s of r.steps) {
+            if (s.state === "queued" || (s.state === "awaiting_owner" && !s.wallet_asked)) Object.assign(s, { state: "cancelled", reason: "the agent cancelled this request before the owner's wallet was asked", reason_code: "agent_cancelled" });
+          }
+          return json(res, 200, view(r));
+        }
         if (r.state !== "awaiting_owner" || r.wallet_asked) return json(res, 409, { error: "the wallet was asked", state: r.state, wallet_asked: r.wallet_asked === true });
         r.state = "cancelled";
         return json(res, 200, view(r));

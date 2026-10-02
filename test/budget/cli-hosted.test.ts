@@ -491,6 +491,38 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     expect(publicFile()).not.toMatch(/^B4_CAP=/m);
   }, 180_000);
 
+  it("stops waiting after the link: the grant the wallet was not asked for is withdrawn on the site before it is called unsent", async () => {
+    await prepare();
+    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--timeout", "10"]);
+    expect(first.code, first.stderr).toBe(0);
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: OWNER });
+    Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND_HASH, wallet_asked: true });
+    Object.assign(r.steps![1], { state: "awaiting_owner" });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(r.cancels).toBe(1);
+    expect(r.steps![1].state).toBe("cancelled");
+    expect(done.code, done.stderr).toBe(3);
+    expect(done.result).toMatchObject({ state: "refused_precheck", linked: true, steps: [{ kind: "fund_agent", state: "settled" }, { kind: "grant", state: "refused_precheck" }] });
+    expect(done.result.steps[1].reason).toMatch(/^nothing was sent: withdrawn on superstables\.com/);
+  }, 180_000);
+
+  it("stops waiting after the link and can't withdraw the steps: they are unknown (exit 5), never nothing sent", async () => {
+    await prepare();
+    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--timeout", "10"]);
+    expect(first.code, first.stderr).toBe(0);
+    site.cancelFails = true;
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: OWNER });
+    Object.assign(r.steps![0], { state: "awaiting_owner" });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "150"]);
+    expect(r.cancels).toBe(1);
+    expect(done.code, done.stderr).toBe(5);
+    expect(done.result).toMatchObject({ state: "unknown", linked: true, steps: [{ kind: "fund_agent", state: "unknown" }, { kind: "grant", state: "unknown" }] });
+    expect(done.result.steps[1].reason).toMatch(/may still be sent/);
+    expect(JSON.stringify(done.result)).not.toMatch(/nothing was sent/);
+  }, 240_000);
+
   it("--grant or --fund without --hosted is refused before anything runs; without them setup is unchanged", async () => {
     for (const extra of [["--grant", "5"], ["--fund"], ["--fund", "0.001"]]) {
       const r = await budget(["setup", "--rail", "evm", ...extra]);
