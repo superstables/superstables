@@ -134,7 +134,7 @@ Testnet only: --mainnet, or a mainnet chain, is refused.
 
 ```text
 superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--hosted [--site URL] [--grant A] [--fund [AMOUNT]]]
-  [--timeout S] [--no-open] [--detach|--wait]
+  [--fund-only] [--timeout S] [--no-open] [--detach|--wait]
 
 The owner's first step on a rail and chain. Creates the agent key on this computer if there is none (it never
 overwrites one: running setup again reuses it), then asks the owner to connect their own wallet and sign a free sign-in
@@ -157,7 +157,8 @@ the link is still recorded and state is that step's. The steps get --timeout aga
 with fund-agent and grant. Without --hosted, --grant and --fund are refused: run fund-agent and grant after setup.
 tempo: also tops up the owner from the Moderato faucet when it holds less than 1 pathUSD. --agent LABEL adds a new agent
 key for the next budget (a revoked or expired key can never be granted again); it needs no page, except on a hosted
-chain, where the owner links the new key there.
+chain, where the owner links the new key there. --fund-only tops up the owner on record from the faucet again and changes
+nothing else; it needs no page either.
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its link once, as an APPROVE line on
 stdout and in words on stderr. The owner opens it in the browser that has their wallet, and approves or rejects there. The

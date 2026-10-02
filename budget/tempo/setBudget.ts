@@ -117,7 +117,7 @@ async function main() {
     const feeToken = await feeTokenOf(owner).catch((err) => refuse(`could not read the owner's fee token from the FeeManager (${String(err?.message ?? err).slice(0, 120)})`, 'check the Moderato RPC (superstables budget doctor --rail tempo), then grant again'))
     const feeBalance = await tokenBalance(feeToken, owner)
     if (feeBalance < MIN_FEE_BALANCE) {
-      refuse(`the owner ${owner} holds ${fromBaseUnits(feeBalance)} of its fee token ${feeToken}, less than the ${fromBaseUnits(MIN_FEE_BALANCE)} a grant's network fee may need`, 'fund the owner (npx tsx budget/tempo/setup.ts --fund-only uses the Moderato faucet), then grant again')
+      refuse(`the owner ${owner} holds ${fromBaseUnits(feeBalance)} of its fee token ${feeToken}, less than the ${fromBaseUnits(MIN_FEE_BALANCE)} a grant's network fee may need`, 'fund the owner (superstables budget setup --rail tempo --fund-only uses the Moderato faucet), then grant again')
     }
     const held = await tokenBalance(TOKEN_ADDRESS, owner)
     const head = await chainHead()

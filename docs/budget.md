@@ -27,8 +27,8 @@ expiry, a period and a seller list on chain; see the [security model](security.m
 
 ## What you need
 
-- The client: [Install the client](install.md). Commands below run from a checkout as
-  `npx superstables`.
+- The client: [Install the client](install.md). Commands below use the installed `superstables`
+  command.
 - Linux or macOS (on Windows, WSL), and a browser wallet for the owner, such as MetaMask, Rabby or
   Coinbase Wallet, on the computer that runs the client.
 - Test funds in the owner's wallet, from <https://faucet.circle.com>:
@@ -54,7 +54,7 @@ balances, transaction hashes and ids will differ: use the values from your own r
 ## 1. Set up (owner)
 
 ```bash
-npx superstables budget setup --rail evm --chain arc-testnet
+superstables budget setup --rail evm --chain arc-testnet
 ```
 
 This creates the agent key on this computer and opens a page where the owner connects their wallet
@@ -72,7 +72,7 @@ watch it run.
 ## 2. Give the agent gas (owner)
 
 ```bash
-npx superstables budget fund-agent --rail evm --chain arc-testnet
+superstables budget fund-agent --rail evm --chain arc-testnet
 ```
 
 The owner reviews the transfer on the page and approves it in their wallet, which sends it to the
@@ -82,7 +82,7 @@ agent's transaction fees and grants no allowance; the agent controls what it rec
 ## 3. Check (anyone)
 
 ```bash
-npx superstables budget doctor --rail evm --chain arc-testnet
+superstables budget doctor --rail evm --chain arc-testnet
 ```
 
 ```
@@ -97,7 +97,7 @@ RESULT {"ok":true,"command":"doctor","rail":"evm","chain":"arc-testnet","state":
 ## 4. Grant the budget (owner)
 
 ```bash
-npx superstables budget grant --rail evm --chain arc-testnet --amount 0.06
+superstables budget grant --rail evm --chain arc-testnet --amount 0.06
 ```
 
 The page shows the cap, the agent, the chain, and what the chain enforces and does not. The owner
@@ -117,8 +117,8 @@ A live budget is never replaced silently: to change it, revoke it, then grant ag
 Check the budget, then read the seller's price and address without signing anything:
 
 ```bash
-npx superstables budget status --rail evm --chain arc-testnet
-npx superstables budget preflight --rail evm --chain arc-testnet --url "https://www.watchevelive.com/print?q=gold"
+superstables budget status --rail evm --chain arc-testnet
+superstables budget preflight --rail evm --chain arc-testnet --url "https://www.watchevelive.com/print?q=gold"
 ```
 
 ```
@@ -131,7 +131,7 @@ Buy only if the price is within what the owner allows. Set `--max` to that maxim
 0.06 USDC:
 
 ```bash
-npx superstables budget buy --rail evm --chain arc-testnet --url "https://www.watchevelive.com/print?q=gold" \
+superstables budget buy --rail evm --chain arc-testnet --url "https://www.watchevelive.com/print?q=gold" \
   --max 0.06 --pay-to 0x0e56d191219fa7a4a8a50d17d4ce838e80bf566e --op gold-001
 ```
 
@@ -154,7 +154,7 @@ not such a request.
 ## 6. Check what is left (anyone)
 
 ```bash
-npx superstables budget status --rail evm --chain arc-testnet
+superstables budget status --rail evm --chain arc-testnet
 ```
 
 ```
@@ -167,7 +167,7 @@ the owner's steps.
 ## 7. Revoke (owner)
 
 ```bash
-npx superstables budget revoke --rail evm --chain arc-testnet
+superstables budget revoke --rail evm --chain arc-testnet
 ```
 
 Once it is confirmed on chain, the owner's transaction sets the allowance to 0 and stops further
@@ -184,7 +184,7 @@ A buy after the revoke is refused, with nothing signed:
 RESULT {"ok":false,"command":"buy",...,"state":"refused_precheck","final":true,"paid":false,...,"next":"no budget to spend: ask the owner to run superstables budget grant --rail evm --chain arc-testnet --amount A. ...","reason":"REFUSED AT THE PULL: the allowance is 0 (revoked, spent or never set). No transferFrom was sent."}
 ```
 
-`npx superstables budget recover --rail evm --chain arc-testnet` first brings the allowance to 0,
+`superstables budget recover --rail evm --chain arc-testnet` first brings the allowance to 0,
 then returns the USDC it can from the agent key to the owner. On Arc Testnet it leaves up to 2 USDC
 there as gas.
 
@@ -194,9 +194,9 @@ On any rail, the owner can approve on superstables.com rather than on a page on 
 any device where they sign in with their wallet:
 
 ```bash
-npx superstables budget setup --rail evm --chain arc-testnet --hosted
-npx superstables budget setup --rail tempo --hosted
-npx superstables budget setup --rail solana --hosted
+superstables budget setup --rail evm --chain arc-testnet --hosted
+superstables budget setup --rail tempo --hosted
+superstables budget setup --rail solana --hosted
 ```
 
 Setup then prints a link and a match code. The owner opens the link, signs in with their wallet the
@@ -223,7 +223,7 @@ the match code in a reply to the owner, and ends its turn there: some agent host
 nothing of a turn until it ends. When the owner says they have approved, it checks:
 
 ```bash
-npx superstables budget wait --id <id> --shown
+superstables budget wait --id <id> --shown
 ```
 
 `--shown` says the link was written in a reply; without it, `wait` refuses.
@@ -235,7 +235,7 @@ npx superstables budget wait --id <id> --shown
 If the link expires before the wallet is asked to send, the command ends `refused_precheck` (exit 3)
 with nothing sent: run it again for a new link. If the wallet was already asked, the outcome can be
 unknown (exit 5): check the wallet's activity and
-`npx superstables budget status --rail evm --chain arc-testnet` before trying again. Run one owner
+`superstables budget status --rail evm --chain arc-testnet` before trying again. Run one owner
 command at a time per rail and chain.
 
 ## Exit codes

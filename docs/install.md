@@ -19,34 +19,61 @@ testnet RPCs, the Superstables index and, when switched on, the hosted demo cata
 
 ## Install
 
-Pick one. All three run the same commands on the same state, in `~/.superstables`.
+Pick one. All of them run the same commands on the same state, in `~/.superstables`.
 
-**From a checkout.** The examples on these pages are written this way, from the repository root:
+**From npm.** The examples on these pages are written this way:
+
+```bash
+npm install -g @superstables/client
+superstables --version
+```
+
+This puts the `superstables` command on your PATH, `superstables budget` and the MCP server
+included. `npm install -g @superstables/client@latest` updates it;
+[Which build is running](#which-build-is-running) says how to check that an agent picked up the
+update.
+
+Don't type `npx superstables` to run the client. Where npx doesn't find this client's command, it
+downloads whatever package the npm registry has under the name `superstables`, which is not this
+client.
+
+### From a checkout
+
+To run the client from its sources, for example to work on it:
 
 ```bash
 git clone https://github.com/superstables/superstables-client.git
 cd superstables-client
 npm ci
 npm run build
-npx superstables --version
+npm link
+superstables --version
 ```
 
-`npx superstables …` works from the repository root because npm resolves this package's own
-`bin`. To have `superstables` on your PATH everywhere, run `npm link` once.
+`npm link` puts the checkout's `superstables` command on your PATH, so every command in these
+docs works as written. Without it, run `node <checkout>/dist/cli/main.js …`, or
+`npx --no superstables …` at the repository root. Keep the `--no`: when npx doesn't find this
+checkout's command, it downloads whatever package the npm registry has under that name, and
+`--no` makes it stop instead.
 
-**With npm, from git.** In any folder:
+### With npm, from git
+
+In any folder:
 
 ```bash
 npm install github:superstables/superstables-client
-npx superstables --version
+npx --no superstables --version
 ```
 
 npm clones the repository, builds it and installs the result, `superstables budget` included.
+Run it as `npx --no superstables …` in that folder, or as `node_modules/.bin/superstables …`.
 
-**The agent skill, with the whole CLI bundled.** `npm run skill` in a checkout builds
-`build/superstables-payments-skill-<version>.zip`, and releases attach the same zip. Unzip it
-into your agent's skills folder, `~/.claude/skills/` for Claude Code or `~/.agents/skills/` for
-Codex. It unpacks to `superstables-payments/`, and needs only Node:
+### The agent skill, with the whole CLI bundled
+
+`npm run skill` in a checkout builds `build/superstables-payments-skill-<version>.zip`, and
+releases attach the same zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
+Claude Code or `~/.agents/skills/` for Codex. It unpacks to `superstables-payments/`, and needs
+only Node:
 
 ```bash
 node ~/.claude/skills/superstables-payments/scripts/superstables.mjs --version
@@ -65,11 +92,13 @@ that connects an agent. In the default browser mode it creates no key: the owner
 again keeps the existing policy.
 
 ```bash
-npx superstables setup
-npx superstables doctor
+superstables setup
+superstables doctor
 ```
 
-`doctor` checks the machine, one line per item:
+`doctor` checks the machine, one line per item: that the home directory and policy are in place,
+which account last connected, that the approval port is free, and that the demo service, the
+index and the facilitators answer:
 
 ```
   client version           0.3.0
@@ -111,21 +140,26 @@ the CLI: the MCP server has no budget tools.
 
 ### Claude Code
 
-From the repository root:
+```bash
+claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- superstables mcp
+```
+
+`superstables setup` prints the same line with the absolute paths of Node and the client filled
+in, which also works when Claude Code starts with a different PATH. From a checkout, at the
+repository root:
 
 ```bash
 claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- node "$(pwd)/dist/mcp/main.js"
 ```
 
-`superstables setup` prints an equivalent command with the absolute paths filled in. Then, in Claude
-Code, run `/mcp`: `superstables` should be listed as connected, with six tools. If it is not,
-`claude mcp list` shows the configured command, and the server logs to stderr — start it by hand
-with `node dist/mcp/main.js` to see what it says.
+Then, in Claude Code, run `/mcp`: `superstables` should be listed as connected, with six tools.
+If it is not, `claude mcp list` shows the configured command, and the server logs to stderr —
+start it by hand with `superstables mcp` to see what it says.
 
 To keep the server's state somewhere else, pass `SUPERSTABLES_HOME` through:
 
 ```bash
-claude mcp add superstables --env SUPERSTABLES_HOME=/path/to/home -- node "$(pwd)/dist/mcp/main.js"
+claude mcp add superstables --env SUPERSTABLES_HOME=/path/to/home -- superstables mcp
 ```
 
 Claude Code has been tested end to end with the MetaMask flow: find, quote, approve, pay,
@@ -137,8 +171,8 @@ The MCP server is part of the CLI: `superstables mcp` runs it on stdio. Any MCP 
 start a local stdio server can use it. Most take a JSON entry like this one; where the file lives
 and what the top-level key is called depend on the client, so check its documentation.
 
-With `superstables` on your PATH (after `npm link` in a checkout, or a global install of the
-package):
+With `superstables` on your PATH (after `npm install -g @superstables/client`, or `npm link` in
+a checkout):
 
 ```json
 {
@@ -199,8 +233,8 @@ doing to watch the seller's side of a payment. `SUPERSTABLES_DEMO_SERVICE_URL` t
 client at that instance, or at any other one:
 
 ```bash
-npx superstables demo-service --pay-to 0xYourSellerAddress
-SUPERSTABLES_DEMO_SERVICE_URL="http://127.0.0.1:4402/v1/market" npx superstables find
+superstables demo-service --pay-to 0xYourSellerAddress
+SUPERSTABLES_DEMO_SERVICE_URL="http://127.0.0.1:4402/v1/market" superstables find
 ```
 
 A real x402 seller on `127.0.0.1:4402`. It answers `GET /v1/market?asset=BTC` with HTTP 402 and
@@ -222,8 +256,8 @@ The second signer keeps a key in a file and serves its own approval page, protec
 carried in the URL fragment. It is the fallback, not the default.
 
 ```bash
-npx superstables --wallet local setup          # creates ~/.superstables/wallet/key, prints the address
-npx superstables --wallet local wallet serve   # leave it running
+superstables --wallet local setup          # creates ~/.superstables/wallet/key, prints the address
+superstables --wallet local wallet serve   # leave it running
 ```
 
 It binds `127.0.0.1:4411`, prints an approval URL of the form
