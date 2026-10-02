@@ -61,7 +61,7 @@ Leave the `pay` you started running until it ends by itself, also when the owner
 
 ## Showing the owner the link
 
-Show the owner the link exactly as printed, the price, the recipient and the service. Say:
+Write the link exactly as printed in your reply (the owner does not see your tool output), with the price, the recipient and the service. Say:
 
 - It opens in the browser that has their wallet (MetaMask or another browser wallet), on this computer, while `pay` runs.
 - Over SSH, they forward the port the link names first: `ssh -L PORT:127.0.0.1:PORT user@host`.

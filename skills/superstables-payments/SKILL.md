@@ -137,7 +137,7 @@ nohup superstables pay QUOTE_ID --json > pay.json 2> pay.log < /dev/null &
 ```
 
 1. Read `pay.log` until it shows the link (`http://127.0.0.1:PORT/approve/...`) and the attempt id (first line: `Paying quote ... (attempt ATTEMPT_ID)`).
-2. Show the owner the link exactly as printed, with the price, the recipient and the service. Say it opens in the browser that has their wallet, on this computer, while `pay` runs; over SSH they forward the port first: `ssh -L PORT:127.0.0.1:PORT user@host`.
+2. Write the link exactly as printed in your reply (the owner does not see your tool output), with the price, the recipient and the service. Say it opens in the browser that has their wallet, on this computer, while `pay` runs; over SSH they forward the port first: `ssh -L PORT:127.0.0.1:PORT user@host`.
 3. Poll `superstables status ATTEMPT_ID --json` until `final` is `true` (every 15 to 30 seconds; the page gives the owner 5 minutes). `pay.json` holds the same outcome once `pay` ends.
 
 Do not use a plain `( ... ) &` subshell, and do not pass a short `--wait`: both end the attempt before the owner can act.
@@ -169,7 +169,7 @@ Copy this checklist and track it:
 Owner request progress:
 - [ ] 1. budget status --rail R [--chain C]: which steps are already done
 - [ ] 2. Tell the owner every remaining step, up front
-- [ ] 3. Start only the next owner step; show the link (checklist below)
+- [ ] 3. Start only the next owner step; put the link in your reply (checklist below)
 - [ ] 4. Poll budget wait until final; report; then the next step
 - [ ] 5. After grant: budget status, report remaining and the owner on record
 ```
@@ -177,7 +177,7 @@ Owner request progress:
 1. **Status first.** `superstables budget status --rail R [--chain C]`. Exit 1 with "no budget has been set up here" is the normal answer before `setup`, not an error. Status and `doctor` show the owner on record and what is missing; skip steps already done.
 2. **List the remaining steps up front**, with what each does (see [references/budget.md](references/budget.md#the-owners-steps-per-rail)), so the owner knows how many links to expect.
 3. **Start only the next step**, for example `superstables budget setup --rail evm`. Run by an agent, it returns in seconds with `APPROVE {...}` and `RESULT {"state":"waiting_owner","final":false,"id",...}`, exit 0. That is not approval. One owner approval per rail and chain can be pending: a second one is refused with the pending `id`; poll that one instead. `setup` creates the agent key on this computer before the owner connects; that is expected.
-4. **Tell the owner**, each time, using the checklist below.
+4. **Tell the owner**, each time, using the checklist below, in your reply text and before you poll. The owner does not see your tool output, so a link that is only in the command's output never reaches them.
 5. **Poll** `superstables budget wait --id ID --timeout 60` while `final` is `false` (each call waits up to `--timeout` seconds: default 30, at most 300). If `url` changes (`recover` can ask twice), show the new link. If the owner seems away, stop after about five minutes of polling: tell them the link stays valid until `expires`, and ask them to say when they have approved; then run `wait` once more. After `expires`, the command ends `refused_precheck` and nothing was sent: run the same command again for a new link (`setup` reuses the agent key).
 6. **Stop when `final` is `true`** and report the state:
    - `ok` (setup) or `settled`: done. Start the next step only if the owner wants to continue; after a grant, confirm with `budget status`.
@@ -187,7 +187,7 @@ Owner request progress:
 **What to tell the owner, for every link:**
 
 ```
-- [ ] The link exactly as printed (`url`), and that only they use it
+- [ ] Your reply contains the link exactly as printed (`url`), and says that only they use it
 - [ ] When it expires (`expires`; 10 minutes by default)
 - [ ] Open it in the browser that has their wallet, on this computer; over SSH, run the ssh -L command from `next` first
 - [ ] Check that the address the page shows is their own wallet; stop if it is not

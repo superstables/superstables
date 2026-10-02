@@ -1011,7 +1011,7 @@ async function fundAgent({ f, ctx }) {
 const OWNER_COMMANDS = new Set(OWNER_COMMANDS_LIST);
 const waitNext = (id, url) => {
   const port = /^http:\/\/127\.0\.0\.1:(\d+)\//.exec(url ?? "")?.[1] ?? "PORT";
-  return `show the owner the exact url and terms; only they use the page, in the browser with their wallet. It is on this computer only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. Then poll superstables budget wait --id ${id} until final is true; waiting_owner does not mean approved. If the link expires first, the command ends refused and nothing is sent: run it again for a new link. Do not approve for the owner or start another owner command`;
+  return `the owner cannot see this output: write the exact url and terms in your reply to them; only they use the page, in the browser with their wallet. It is on this computer only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. Then poll superstables budget wait --id ${id} until final is true; waiting_owner does not mean approved. If the link expires first, the command ends refused and nothing is sent: run it again for a new link. Do not approve for the owner or start another owner command`;
 };
 const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, expires: r.expires, terms: r.terms });
 
