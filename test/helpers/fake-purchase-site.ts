@@ -44,6 +44,8 @@ interface Service {
   params: { name: string; required: boolean; enum?: string[]; default?: string }[];
   available?: boolean;
   simulated?: boolean;
+  /** List it without a simulated flag at all, as a site that does not say. */
+  noSimulatedFlag?: boolean;
 }
 
 export interface FakePurchaseSite extends TestServer {
@@ -126,7 +128,7 @@ const listing = (s: Service) => ({
   id: s.id,
   name: s.name,
   description: `${s.name}, a test service.`,
-  simulated: s.simulated === true,
+  ...(s.noSimulatedFlag ? {} : { simulated: s.simulated === true }),
   testnet: true,
   available: s.available !== false,
   ...(s.available === false ? { unavailable_reason: "the seller is offline" } : {}),

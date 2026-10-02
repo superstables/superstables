@@ -71,7 +71,9 @@ and removes the Claude Desktop bundle.
 - **`superstables budget setup --rail tempo --fund-only`** tops up the owner on record from the
   Moderato faucet again and changes nothing else; it opens no page.
 - **`superstables budget find`** lists the services superstables.com says a budget can pay, with
-  price, chain and URL. Any other seller URL still works.
+  price, chain, whether the listing is marked simulated, and URL. `--rail` or `--chain` lists
+  one rail or chain, Tempo Moderato (`moderato`) and Solana devnet (`devnet`) included. Any other
+  seller URL still works.
 - **Buying within a budget.** `status` says whether a budget is set up and what is left.
   `preflight` reads a seller's price and payee from its 402 on every rail and signs nothing.
   `buy` checks the price against `--max`, and the token, chain and, with `--pay-to`, the payee,

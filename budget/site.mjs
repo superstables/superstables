@@ -157,7 +157,16 @@ const str = (v) => (typeof v === "string" || typeof v === "number" ? siteText(St
 /** The rail that pays a CAIP-2 network: Tempo Moderato is tempo, Solana is solana, any other eip155 chain evm. */
 const railOf = (network) => (network === "eip155:42431" ? "tempo" : network?.startsWith("solana:") ? "solana" : network?.startsWith("eip155:") ? "evm" : null);
 
-/** One listed service in the CLI's words: name, price, chain (the client's --chain key when known), network, rail, url. */
+/**
+ * Whether the listing says its output is prepared sample data: true or false as the site gives it (`simulated`, or `mock`
+ * or `sample`, the names other lists use), null when it does not say.
+ */
+const simulatedOf = (s) => [s.simulated, s.mock, s.sample].find((v) => typeof v === "boolean") ?? null;
+
+/**
+ * One listed service in the CLI's words: name, price, chain (the client's --chain key when known), network, rail,
+ * simulated (true, false, or null when the listing does not say), url.
+ */
 function serviceOf(s, chainByNetwork) {
   if (!s || typeof s !== "object") return null;
   let url = null;
@@ -171,7 +180,7 @@ function serviceOf(s, chainByNetwork) {
   const asset = p && typeof p === "object" ? str(p.asset ?? p.currency ?? p.symbol) : str(s.asset ?? s.currency) ?? "USDC";
   const network = str(s.network ?? s.chain_id ?? s.chainId);
   const chain = str(s.chain) ?? (network ? chainByNetwork[network] ?? null : null);
-  return { name: str(s.name ?? s.title) ?? new URL(url).host, price: amount ? `${amount}${asset ? ` ${asset}` : ""}` : null, chain, network, rail: str(s.rail) ?? railOf(network), url };
+  return { name: str(s.name ?? s.title) ?? new URL(url).host, price: amount ? `${amount}${asset ? ` ${asset}` : ""}` : null, chain, network, rail: str(s.rail) ?? railOf(network), simulated: simulatedOf(s), url };
 }
 
 /**

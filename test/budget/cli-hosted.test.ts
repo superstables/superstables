@@ -481,13 +481,88 @@ describe("find", () => {
     site.services = [{ name: "Weather", price: "0.001", network: "eip155:84532", url: "https://seller.example/w" }];
     const r = await budget(["find", "--site", site.url]);
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout).toMatch(/Weather\s+0\.001 USDC\s+base-sepolia\s+https:\/\/seller\.example\/w/);
-    expect(r.result).toMatchObject({ command: "find", state: "ok", services: [{ name: "Weather", chain: "base-sepolia", url: "https://seller.example/w" }] });
+    expect(r.stdout).toMatch(/^name\s+price\s+chain\s+simulated\s+url$/m);
+    expect(r.stdout).toMatch(/Weather\s+0\.001 USDC\s+base-sepolia\s+not said\s+https:\/\/seller\.example\/w/);
+    expect(r.result).toMatchObject({ command: "find", state: "ok", services: [{ name: "Weather", chain: "base-sepolia", simulated: null, url: "https://seller.example/w" }] });
+    expect(r.result.next).toBe("check the price with superstables budget preflight --rail evm --chain base-sepolia --url U before you buy");
     // --json: stdout is the RESULT object alone (no table), which carries the services
     const j = await budget(["find", "--json", "--site", site.url]);
     expect(j.stdout.trim().split("\n")).toHaveLength(1);
     expect(JSON.parse(j.stdout).services).toEqual(r.result.services);
   }, 30_000);
+
+  describe("every rail and chain, and whether a listing is simulated", () => {
+    // the shape GET /api/v1/budget/services has on the site: rail and chain named, `sample` for prepared output
+    beforeEach(() => {
+      site.services = { services: [
+        { name: "Weather", price: { amount: "0.001", asset: "USDC" }, network: "eip155:84532", chain: "base-sepolia", rail: "evm", sample: false, url: "https://seller.example/w" },
+        { name: "Market data", price: { amount: "0.01", asset: "USDC" }, network: "eip155:84532", chain: "base-sepolia", rail: "evm", sample: false, url: "https://seller.example/market" },
+        { name: "Market data on Tempo", price: { amount: "0.001", asset: "pathUSD" }, network: "eip155:42431", chain: "moderato", rail: "tempo", sample: false, url: "https://seller.example/market/tempo" },
+        { name: "Market data on Solana", price: { amount: "0.01", asset: "USDC" }, network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1", chain: "devnet", rail: "solana", sample: false, url: "https://seller.example/market/solana" },
+        { name: "Wallet briefing", price: { amount: "0.003", asset: "USDC" }, network: "eip155:84532", chain: "base-sepolia", rail: "evm", sample: true, url: "https://seller.example/briefing" },
+        { name: "Official print", price: { amount: "0.05", asset: "USDC" }, network: "eip155:5042002", rail: "evm", simulated: false, url: "https://seller.example/print" },
+      ] };
+    });
+    const names = (r: { result: any }) => r.result.services.map((s: { name: string }) => s.name);
+
+    it("--chain moderato lists the Tempo sellers only, and names the rail", async () => {
+      const r = await budget(["find", "--chain", "moderato", "--site", site.url]);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.result).toMatchObject({ state: "ok", rail: "tempo", chain: "moderato", services: [{ name: "Market data on Tempo", rail: "tempo", chain: "moderato", price: "0.001 pathUSD", simulated: false }] });
+      expect(names(r)).toEqual(["Market data on Tempo"]);
+      expect(r.stdout).toMatch(/Market data on Tempo\s+0\.001 pathUSD\s+moderato\s+no\s+https:\/\/seller\.example\/market\/tempo/);
+      expect(r.result.next).toBe("check the price with superstables budget preflight --rail tempo --chain moderato --url U before you buy");
+    }, 30_000);
+
+    it("--chain devnet lists the Solana sellers only", async () => {
+      const r = await budget(["find", "--chain", "devnet", "--site", site.url, "--json"]);
+      expect(r.code, r.stderr).toBe(0);
+      const out = JSON.parse(r.stdout);
+      expect(out).toMatchObject({ state: "ok", rail: "solana", chain: "devnet" });
+      expect(out.services.map((s: { name: string }) => s.name)).toEqual(["Market data on Solana"]);
+      expect(out.next).toMatch(/preflight --rail solana --chain devnet --url U/);
+    }, 30_000);
+
+    it("every EVM key works, and --rail narrows to a rail; the chain comes from the network when the site does not name it", async () => {
+      expect(names(await budget(["find", "--chain", "base-sepolia", "--site", site.url]))).toEqual(["Weather", "Market data", "Wallet briefing"]);
+      expect(names(await budget(["find", "--chain", "arc-testnet", "--site", site.url]))).toEqual(["Official print"]);
+      expect(names(await budget(["find", "--rail", "evm", "--site", site.url]))).toEqual(["Weather", "Market data", "Wallet briefing", "Official print"]);
+      expect(names(await budget(["find", "--rail", "tempo", "--chain", "moderato", "--site", site.url]))).toEqual(["Market data on Tempo"]);
+      const none = await budget(["find", "--chain", "polygon-amoy", "--site", site.url]);
+      expect(none.code).toBe(0);
+      expect(none.result.services).toEqual([]);
+      expect(none.stdout).toMatch(/No services listed on polygon-amoy on /);
+      expect(none.result.next).toMatch(/run superstables budget find without --rail and --chain for every chain/);
+    }, 60_000);
+
+    it("says yes or no for simulated, from the site's sample, simulated or mock flag, and explains the column", async () => {
+      const r = await budget(["find", "--site", site.url]);
+      expect(r.code, r.stderr).toBe(0);
+      const flag = Object.fromEntries(r.result.services.map((s: { name: string; simulated: unknown }) => [s.name, s.simulated]));
+      expect(flag).toEqual({ Weather: false, "Market data": false, "Market data on Tempo": false, "Market data on Solana": false, "Wallet briefing": true, "Official print": false });
+      expect(r.stdout).toMatch(/Wallet briefing\s+0\.003 USDC\s+base-sepolia\s+yes\s+/);
+      expect(r.stdout).toMatch(/Market data on Solana\s+0\.01 USDC\s+devnet\s+no\s+/);
+      expect(r.stdout).toMatch(/simulated: yes when the listing says the service returns prepared sample output, no when it is not marked as sample output/);
+      // several rails: next leaves the rail and chain to the listing
+      expect(r.result.next).toMatch(/--rail R --chain C --url U, with R and C from the listing/);
+    }, 30_000);
+
+    it("refuses an unknown chain and names every key the budget commands take", async () => {
+      const keys = "base-sepolia, arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia (evm); moderato (tempo); devnet (solana)";
+      const bad = await budget(["find", "--chain", "sepolia", "--site", site.url]);
+      expect(bad.code).toBe(2);
+      expect(bad.result.reason).toBe(`--chain for find must be one of: ${keys}`);
+      const rail = await budget(["find", "--chain", "solana", "--site", site.url]);
+      expect(rail.code).toBe(2);
+      expect(rail.result.reason).toBe(`--chain for find must be one of: ${keys} ("solana" is a rail: use --rail solana, or --chain devnet)`);
+      const mismatch = await budget(["find", "--rail", "tempo", "--chain", "devnet", "--site", site.url]);
+      expect(mismatch.code).toBe(2);
+      expect(mismatch.result.reason).toBe("--chain devnet is on the solana rail, not tempo: drop --rail, or use --rail solana");
+      const unknownRail = await budget(["find", "--rail", "lightning", "--site", site.url]);
+      expect(unknownRail.code).toBe(2);
+      expect(unknownRail.result.reason).toBe('--rail for find must be evm, tempo or solana (got "lightning")');
+    }, 60_000);
+  });
 
   describe("which site", () => {
     let other: FakeSite;
@@ -525,10 +600,16 @@ describe("find", () => {
       expect((await budget(["find"], { SUPERSTABLES_SITE: other.url })).result.site).toBe(other.url);
     }, 60_000);
 
-    it("refuses a rail or chain that cannot record a site", async () => {
-      expect((await budget(["find", "--rail", "tempo"])).code).toBe(2);
-      expect((await budget(["find", "--chain", "moderato"])).code).toBe(2);
-    }, 30_000);
+    it("--rail and --chain use the site recorded for that rail or chain, Tempo and Solana included", async () => {
+      record("base-sepolia", site.url);
+      mkdirSync(join(home, "budget", "public"), { recursive: true });
+      writeFileSync(join(home, "budget", "public", "tempo-moderato.env"), `APPROVALS=hosted\nSITE=${other.url}\n`);
+      expect((await budget(["find"])).result.site).toBe(site.url);
+      expect((await budget(["find", "--chain", "moderato"])).result).toMatchObject({ site: other.url, rail: "tempo", chain: "moderato" });
+      expect((await budget(["find", "--rail", "tempo"])).result.site).toBe(other.url);
+      // nothing recorded for Solana: the default site, as with any chain that has no record
+      expect((await budget(["find", "--chain", "devnet"], { SUPERSTABLES_SITE: site.url })).result.site).toBe(site.url);
+    }, 60_000);
   });
 
   it("says any seller URL still works when the site has no list", async () => {
