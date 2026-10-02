@@ -61,7 +61,8 @@ const splBalance = async (addr) => {
 // from a key-shaped value, how to check the RPC, and the balances to check.
 const RAILS = {
   evm: ({ chain }) => {
-    const c = EVM_CHAINS[chain], d = c.doctor, tok = c.token, g = c.gas, L = g.limits;
+    // B4_RPC replaces the chain's RPC, as it does for the rail scripts (evm/chains.ts)
+    const c = { ...EVM_CHAINS[chain], rpc: process.env.B4_RPC?.trim() || EVM_CHAINS[chain].rpc }, d = c.doctor, tok = c.token, g = c.gas, L = g.limits;
     const flag = ` --chain ${chain}`;
     return {
       ownerVars: null, agentVars: ["B4_AGENT_KEY"], ownerSecrets: ["B4_OWNER_KEY"], agentKeyVar: "B4_AGENT_KEY",

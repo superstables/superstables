@@ -41,7 +41,7 @@ const src = join(root, "budget");
 // standalone copy, and a new library must be named here so nobody mistakes it for a script.
 const RUNNABLE = {
   evm: ["setup", "fundAgent", "preflight", "setBudget", "buy", "reconcile", "revoke", "recover", "read"],
-  tempo: ["setup", "setBudget", "buy", "reconcile", "readBudget", "revokeBudget"],
+  tempo: ["setup", "setBudget", "buy", "preflight", "reconcile", "readBudget", "revokeBudget"],
   solana: ["setup", "fundAgent", "setBudget", "buy", "reconcile", "readBudget", "revokeBudget"],
 };
 const LIBRARIES = {
@@ -297,7 +297,10 @@ export async function buildStandalone({ outdir, entryPoints, name, title, builtB
   const { build } = await import("esbuild");
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const rev = revisionOf(root);
-  const version = { name, version: stamped ?? pkg.version, commit: rev.sha ?? null, commits: rev.count === undefined ? null : Number(rev.count), dirty: rev.sha ? gitDirty() : null, builtAt: new Date().toISOString().replace(/\.\d+Z$/, "Z") };
+  // A release builds from `git archive`, which has no .git: the release script names the commit instead.
+  const pinned = process.env.SUPERSTABLES_BUILD_COMMIT;
+  if (pinned !== undefined && !/^[0-9a-f]{7,40}$/.test(pinned)) throw new Error(`SUPERSTABLES_BUILD_COMMIT must be a commit hash (got "${pinned}")`);
+  const version = { name, version: stamped ?? pkg.version, commit: pinned ? pinned.slice(0, 7) : rev.sha ?? null, commits: rev.count === undefined ? null : Number(rev.count), dirty: rev.sha ? gitDirty() : null, builtAt: new Date().toISOString().replace(/\.\d+Z$/, "Z") };
   rmSync(outdir, { recursive: true, force: true });
   const result = await build({
     absWorkingDir: root,
@@ -338,7 +341,30 @@ export function budgetEntryPoints(prefix = "") {
   return entries;
 }
 
+/**
+ * Sources whose dynamic import of a CommonJS package breaks once bundled: the bundle hands back a wrapper, so a named export
+ * such as PublicKey is undefined (solana setup crashed after recording the owner, 2 Oct 2026). Import those statically.
+ */
+const CJS_PACKAGES = ["@solana/web3.js"];
+export function dynamicCjsImports(dir = src) {
+  const bad = [];
+  const walk = (d) => {
+    for (const f of readdirSync(d)) {
+      const p = join(d, f);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.(ts|mjs)$/.test(f)) {
+        const text = readFileSync(p, "utf8");
+        for (const pkg of CJS_PACKAGES) if (text.includes(`import("${pkg}")`)) bad.push(`${relative(root, p)}: import("${pkg}")`);
+      }
+    }
+  };
+  walk(dir);
+  return bad;
+}
+
 export async function buildBudget(outdir = join(root, "dist", "budget")) {
+  const bad = dynamicCjsImports();
+  if (bad.length) throw new Error(`a dynamic import of a CommonJS package does not survive the bundle; import it statically:\n  ${bad.join("\n  ")}`);
   const entryPoints = budgetEntryPoints();
   const built = await buildStandalone({ outdir, entryPoints, name: "superstables-budget", title: "superstables budget", builtBy: "scripts/budget-build.mjs", rebuild: "npm run build" });
   console.log(`budget: ${built.summary}, ${Object.keys(entryPoints).length - 2} rail scripts`);

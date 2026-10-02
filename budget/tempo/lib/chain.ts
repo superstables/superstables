@@ -1,6 +1,7 @@
 // Chain reads for the Tempo scripts. Reads retry with backoff; nothing here sends a transaction, so
 // a retry can never pay twice.
 import { keccak256, toBytes, type Address, type Hex } from 'viem'
+import { Abis, Addresses } from 'viem/tempo'
 import { RPC_URL, TOKEN_ADDRESS, fromBaseUnits, makeClient } from './common.ts'
 
 export const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
@@ -131,6 +132,18 @@ export async function readKey(owner: Address, key: Address): Promise<KeyState> {
     }
   }
   throw last
+}
+
+/** A key's call scope (the seller list): `scoped` false means any call is allowed. */
+export type KeyScope = { scoped: boolean; scopes: { target: string; selectorRules: { selector: string; recipients: string[] }[] }[] }
+
+export async function readScope(owner: Address, key: Address): Promise<KeyScope> {
+  const client = makeClient()
+  const r = (await client.readContract({ address: Addresses.accountKeychain, abi: Abis.accountKeychain, functionName: 'getAllowedCalls', args: [owner, key] })) as readonly [boolean, readonly any[]]
+  return {
+    scoped: Boolean(r[0]),
+    scopes: (r[1] ?? []).map((s: any) => ({ target: String(s.target), selectorRules: (s.selectorRules ?? []).map((x: any) => ({ selector: String(x.selector).toLowerCase(), recipients: [...(x.recipients ?? [])].map(String) })) })),
+  }
 }
 
 /**

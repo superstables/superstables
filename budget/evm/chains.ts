@@ -33,8 +33,8 @@ export type ChainCfg = {
   logRange?: number; // the RPC's eth_getLogs block-range cap, when it has one
 };
 
-function build(key: string): ChainCfg {
-  const t = (EVM_CHAINS as Record<string, any>)[key];
+function build(key: string, rpcOverride?: string): ChainCfg {
+  const t = { ...(EVM_CHAINS as Record<string, any>)[key], ...(rpcOverride ? { rpc: rpcOverride } : {}) };
   const preset = (viemChains as Record<string, Chain>)[t.viem];
   if (!preset || preset.id !== t.chainId) throw new Error(`chains.mjs: viem preset ${t.viem} is not chain ${t.chainId}`);
   const g = t.gas;
@@ -70,4 +70,21 @@ export function selectedChainKey(): string {
   }
   return key;
 }
-export const CFG: ChainCfg = CHAINS[selectedChainKey()];
+/**
+ * B4_RPC replaces the selected chain's RPC URL (tests point it at a local fake; you can point it at your own node). Every
+ * script that signs still checks the chain id it answers with first (lib.ts assertRpcChain).
+ */
+function rpcOverride(): string | undefined {
+  const v = process.env.B4_RPC?.trim();
+  if (!v) return undefined;
+  let ok = false;
+  try { ok = /^https?:$/.test(new URL(v).protocol); } catch {}
+  if (!ok) {
+    console.error(`error: B4_RPC must be an http(s) URL (got "${v}")`);
+    process.exit(2);
+  }
+  return v;
+}
+const KEY = selectedChainKey();
+const OVERRIDE = rpcOverride();
+export const CFG: ChainCfg = OVERRIDE ? build(KEY, OVERRIDE) : CHAINS[KEY];
