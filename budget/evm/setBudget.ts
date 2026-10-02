@@ -21,7 +21,7 @@ import "./cli-guard.mjs";
 // exactly the cap), 5 the wallet may have sent it but no hash came back, 1 anything else that failed.
 import { encodeFunctionData, type Hex } from "viem";
 import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, erc20Abi, USDC, publicClient, assertRpcChain, tx } from "./lib.ts";
-import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, tokenRow, approveRow, capWords, REVOKE_HINT } from "./owner.ts";
+import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, tokenRow, approveRow, capWords, REVOKE_HINT, grantTx, grantEnforced, GRANT_NOT_ENFORCED } from "./owner.ts";
 
 const cap = toUsdc(arg("cap")!);
 if (cap === 0n) { console.error("error: --cap must be above 0 (use revoke.ts to end a budget)"); process.exit(2); }
@@ -46,7 +46,7 @@ const liveRefusal = () => {
 
 let approveTx: string | null = null;
 let finishPage: ((v: { ok: boolean; message: string; hash?: string }) => void) | null = null;
-const data = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [pub.agent, cap] });
+const { data } = grantTx(pub.agent, cap);
 
 if (!verifyOnly && OWNER_KEY_FILE) {
   const c = await ownerCtx();
@@ -78,15 +78,8 @@ if (!verifyOnly && OWNER_KEY_FILE) {
       { label: "Your balance", value: `${usdc(ownerBal)} ${SYM}` },
       approveRow(pub.agent, cap),
     ],
-    enforced: [
-      `Withdrawals under this allowance total at most ${capWords(cap)}. Spending the allowance does not recover funds already withdrawn.`,
-      "Each withdrawal is limited by your token balance at that time. Later deposits can also be withdrawn while allowance remains.",
-    ],
-    notEnforced: [
-      "No expiry. The budget stays until it is spent or you revoke it.",
-      "No seller list or purchase requirement. Whoever holds the agent key can withdraw the allowance to any address.",
-      "No per-payment limit. The CLI checks --max, but anyone using the key outside the CLI can skip it.",
-    ],
+    enforced: grantEnforced(cap),
+    notEnforced: GRANT_NOT_ENFORCED,
     notes: [
       `Check the spending cap: ${capWords(cap)}, or ${cap} in the token's smallest units. Do not choose unlimited. A changed cap can take effect on chain even if the command refuses to record it.`,
       `To end the budget at any time: ${REVOKE_HINT}`,

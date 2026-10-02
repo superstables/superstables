@@ -41,9 +41,29 @@ usable from its own help and exit codes, and removes the Claude Desktop bundle.
   (Phantom, Solflare, Backpack, ...) on `solana`. The command then reads the result back from
   the chain and refuses a transaction that does not match the plan. No owner key is created or
   stored on this computer. Run by an agent, an owner command returns at once with the link and an
-  approval id; `superstables budget wait --id` reports the outcome. An agent can start these
-  commands; only the owner approves. For unattended tests only, `--owner-key-file PATH --yes`
-  signs with an owner key file instead.
+  approval id; `superstables budget wait --id ID --shown` reports the outcome. `wait` reads
+  nothing until the caller passes `--shown`, meaning it has written the link and the terms in a
+  reply the owner can read; without it, `wait` exits 2 with `state: "show_owner_first"`. An agent
+  can start these commands; only the owner approves. For unattended tests only,
+  `--owner-key-file PATH --yes` signs with an owner key file instead.
+- **Hosted owner approvals on EVM chains.** `setup --rail evm --hosted` links the agent to the
+  owner's superstables.com account (Sign-In with Ethereum) and records that account's address as
+  the owner. Grants, revokes and gas transfers on that chain are then approved on
+  superstables.com, in the owner's wallet, from any device where they are signed in, after they
+  pick the match code the agent shows them. Each request is signed by the agent key, which stays
+  on this computer, and the command still reads the chain before it reports success. A request
+  the site would put to another account than the recorded owner is refused. Approvals on
+  `127.0.0.1` remain the default and need no account. Tempo, Solana and `recover` use them only.
+  Every `superstables budget` command accepts `--site`; where a site is recorded and it differs,
+  the command refuses.
+- **One purchase without a budget: `superstables budget buy-once`.** It buys one service the
+  owner approves on superstables.com, with no setup, no gas and no budget. The agent names the
+  service, its inputs and the most it accepts (`--max`); the owner approves that one payment in
+  their wallet, after picking the match code. The result says whether it was paid and delivered,
+  and the seller's answer is saved as a file. `superstables budget find --once` lists the
+  services that can be bought this way. Base Sepolia, test USDC.
+- **`superstables budget find`** lists the services superstables.com says a budget can pay, with
+  price, chain and URL. Any other seller URL still works.
 - **Buying within a budget.** `status` says whether a budget is set up and what is left.
   `preflight` (`evm`) reads a seller's price and payee from its 402 and signs nothing. `buy`
   checks the price against `--max`, and the token, chain and, with `--pay-to`, the payee, before
@@ -65,8 +85,11 @@ usable from its own help and exit codes, and removes the Claude Desktop bundle.
   Linux and macOS are supported; on Windows, use WSL. `superstables budget` refuses to run on
   native Windows.
 - **The `superstables-payments` agent skill.** A skill that walks an agent through finding a
-  service, pricing it without paying, and paying it either way, with safety rules and per-rail
-  references. `npm run skill` builds `superstables-payments-skill-<version>.zip`: the skill and
+  service, pricing it without paying, and paying it, with safety rules and per-rail references.
+  When the owner has not chosen how to pay, it asks once whether they want one purchase they
+  approve or a budget. For every approval link, the agent writes the link, the match code and
+  the terms in its reply and ends its turn, then checks the outcome when the owner says they
+  have approved. `npm run skill` builds `superstables-payments-skill-<version>.zip`: the skill and
   the whole `superstables` CLI, budget included, bundled into plain JavaScript that needs only
   Node 20 or newer (`node <skill folder>/scripts/superstables.mjs`). `--version` names the
   build, and `THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.

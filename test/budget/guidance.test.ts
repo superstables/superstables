@@ -111,6 +111,81 @@ describe("status with no budget set up here", () => {
   });
 });
 
+/** A seller on loopback that answers every request with a 402 carrying `headers` (and `body`). */
+async function seller402(headers: Record<string, string>, body = "{}"): Promise<{ url: string; close: () => void; seen: { method?: string; body: string }[] }> {
+  const seen: { method?: string; body: string }[] = [];
+  const server = createServer((req, res) => {
+    let b = "";
+    req.on("data", (c) => (b += String(c)));
+    req.on("end", () => {
+      seen.push({ method: req.method, body: b });
+      res.writeHead(402, { "content-type": "application/json", ...headers }).end(body);
+    });
+  });
+  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+  const { port } = server.address() as { port: number };
+  return { url: `http://127.0.0.1:${port}/paid`, close: () => server.close(), seen };
+}
+const b64url = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+const tempoChallenge = (request: Record<string, unknown>) => `Payment id="c1", realm="seller.example", method="tempo", intent="charge", request="${b64url(request)}"`;
+const PATH_USD = "0x20c0000000000000000000000000000000000000";
+const TEMPO_SELLER = "0xFD24114C3981Aba78aE2441991B1BdB89329c556";
+
+describe("preflight on tempo and solana", () => {
+  it("prints a tempo seller's price and payee on Moderato with no setup, signing nothing, and the buy command with its method and body", async () => {
+    const s = await seller402({ "www-authenticate": [tempoChallenge({ amount: "1000", currency: PATH_USD, recipient: TEMPO_SELLER, methodDetails: { chainId: 4217 } }), tempoChallenge({ amount: "1000", currency: PATH_USD, recipient: TEMPO_SELLER, methodDetails: { chainId: 42431, feePayer: true } })].join(", ") });
+    try {
+      const r = await budget(["preflight", "--rail", "tempo", "--url", s.url, "--method", "POST", "--body", '{"id":1}']);
+      expect(r.code).toBe(0);
+      expect(r.result).toMatchObject({ ok: true, command: "preflight", rail: "tempo", state: "ok", amount: "0.001", payTo: TEMPO_SELLER, offer: { token: "pathUSD", network: "tempo-moderato", feePayer: true } });
+      expect(r.result.next).toContain("the seller asks 0.001 pathUSD");
+      expect(r.result.next).toContain(`superstables budget buy --rail tempo --chain moderato --url '${s.url}' --method POST --body '{"id":1}' --max <your ceiling> --pay-to ${TEMPO_SELLER}`);
+      expect(s.seen).toEqual([{ method: "POST", body: '{"id":1}' }]);
+      expect(existsSync(join(home, "keys"))).toBe(false);
+    } finally {
+      s.close();
+    }
+  });
+
+  it("fails on tempo when the seller offers Moderato nothing it can pay", async () => {
+    const mainnet = await seller402({ "www-authenticate": tempoChallenge({ amount: "1000", currency: PATH_USD, recipient: TEMPO_SELLER, methodDetails: { chainId: 4217 } }) });
+    const memo = await seller402({ "www-authenticate": tempoChallenge({ amount: "1000", currency: PATH_USD, recipient: TEMPO_SELLER, methodDetails: { chainId: 42431, memo: `0x${"ab".repeat(32)}` } }) });
+    try {
+      const a = await budget(["preflight", "--rail", "tempo", "--url", mainnet.url]);
+      expect(a.code).toBe(1);
+      expect(a.result).toMatchObject({ ok: false, state: "failed", amount: null });
+      expect(a.result.reason).toContain("no tempo.charge offer on Moderato");
+      const b = await budget(["preflight", "--rail", "tempo", "--url", memo.url]);
+      expect(b.code).toBe(1);
+      expect(b.result.reason).toContain("a payment memo of its own");
+    } finally {
+      mainnet.close();
+      memo.close();
+    }
+  });
+
+  it("prints a solana seller's devnet price and payee with no setup, from its x402 v2 header", async () => {
+    const payTo = "AMbsiP9F8YY2y8n9uFdqtw7yNZZHvTWFEWSQGHKtmkoQ";
+    const accepts = [{ scheme: "exact", network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1", amount: "10000", asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", payTo, maxTimeoutSeconds: 60, extra: { feePayer: "D6ZhtNQ5nT9ZnTHUbqXZsTx5MH2rPFiBBggX4hY1WePM" } }];
+    const s = await seller402({ "payment-required": Buffer.from(JSON.stringify({ x402Version: 2, accepts })).toString("base64") });
+    try {
+      const r = await budget(["preflight", "--rail", "solana", "--url", s.url]);
+      expect(r.code).toBe(0);
+      expect(r.result).toMatchObject({ ok: true, rail: "solana", state: "ok", amount: "0.01", payTo, offer: { token: "USDC", network: "solana-devnet", feePayer: true } });
+      expect(r.result.next).toContain(`superstables budget buy --rail solana --chain devnet --url '${s.url}' --max <your ceiling> --pay-to ${payTo}`);
+      expect(existsSync(join(home, "keys"))).toBe(false);
+    } finally {
+      s.close();
+    }
+  });
+
+  it("keeps evm preflight GET only", async () => {
+    const r = await budget(["preflight", "--rail", "evm", "--url", "http://127.0.0.1:9/paid", "--method", "POST"]);
+    expect(r.code).toBe(2);
+    expect(r.result.reason).toBe("evm preflight is GET only (no --method)");
+  });
+});
+
 describe("--json", () => {
   const json = (r: Run) => {
     const lines = r.stdout.trim().split("\n");
@@ -222,17 +297,24 @@ describe("an owner approval an agent started", () => {
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/owner\//);
     const port = new URL(url).port;
     expect(setup.result.next).toContain(`ssh -L ${port}:127.0.0.1:${port}`);
-    expect(setup.result.next).toContain(`superstables budget wait --id ${id} until final is true`);
+    // reply with the link and end the turn; wait --shown once the owner says they've approved
+    expect(setup.result.next).toContain("reply to the owner with message_for_owner, word for word (it has the link and the amount), and end your turn there");
+    expect(setup.result.next).toContain(`superstables budget wait --id ${id} --shown`);
     // the link once: one APPROVE line on stdout, none repeated on stderr
     expect(`${setup.stdout}\n${setup.stderr}`.split("\n").filter((l) => l.startsWith("APPROVE "))).toHaveLength(1);
     expect(setup.stdout.split("\n")[0]).toMatch(/^APPROVE \{/);
 
-    const waiting = await budget(["wait", "--id", id, "--timeout", "1"]);
+    // wait reads nothing until the caller says the owner can read the link
+    const unshown = await budget(["wait", "--id", id, "--timeout", "1"]);
+    expect(unshown.code).toBe(2);
+    expect(unshown.result).toMatchObject({ state: "show_owner_first", id });
+
+    const waiting = await budget(["wait", "--id", id, "--shown", "--timeout", "1"]);
     expect(waiting.code).toBe(0);
     expect(waiting.result).toMatchObject({ state: "waiting_owner", final: false, id });
 
     // nobody approves: the link expires, nothing was sent, and the next step is to run it again
-    const ended = await budget(["wait", "--id", id, "--timeout", "40"]);
+    const ended = await budget(["wait", "--id", id, "--shown", "--timeout", "40"]);
     expect(ended.code).toBe(3);
     expect(ended.result).toMatchObject({ command: "setup", state: "refused_precheck", final: true, id });
     expect(ended.result.reason).toMatch(/expired/);
@@ -249,7 +331,7 @@ describe("an owner approval an agent started", () => {
     expect(setup.stderr.split("\n").filter((l) => l.startsWith("APPROVE "))).toHaveLength(1);
     expect(JSON.parse(setup.stderr.split("\n").find((l) => l.startsWith("APPROVE "))!.slice(8)).url).toBe(out.url);
 
-    const ended = await budget(["wait", "--id", out.id, "--timeout", "40", "--json"]);
+    const ended = await budget(["wait", "--id", out.id, "--shown", "--timeout", "40", "--json"]);
     expect(ended.code).toBe(3);
     expect(JSON.parse(ended.stdout.trim())).toMatchObject({ command: "setup", state: "refused_precheck", final: true, id: out.id });
   }, 90_000);

@@ -12,6 +12,7 @@ Every rail's main path follows these rules.
 
 - The agent key lives in `$SUPERSTABLES_HOME/keys/budget/<rail>-agent.env` (mode 600). Public addresses go in a public state file under `$SUPERSTABLES_HOME/budget/public/`.
 - Every rail: the owner's key stays in the owner's wallet. Owner commands (`setup`, `fundAgent`, `setBudget`/`grant`, `revoke`, the owner's part of `recover` on EVM) build the transaction and ask the owner's wallet to approve it through the owner approval page on `127.0.0.1`. The terms on that page come from the command's own plan, never from agent text. The command then verifies on chain. An owner key file is used only when a test names it with `--owner-key-file`.
+  - EVM with hosted approvals (`setup --hosted`): the same transaction goes to superstables.com, and the owner's wallet sends it from there. The agent key signs each request to the site, so these owner commands open the agent key file; it never leaves this computer. The command verifies on chain as above, and refuses a request the site would put to another address than the recorded owner.
   - EVM and Tempo: an EIP-1193 browser wallet (for example MetaMask) sends exactly the transaction the command built. On Tempo that is a plain type-2 call to the AccountKeychain precompile, and the owner pays its own fee.
   - Solana: a Wallet Standard wallet (for example Phantom) only signs. The command builds the transaction when the owner presses Approve and sends it itself, only if the signed message is byte for byte the one it built and the signature is the owner's.
 - `setup` is a trusted step. Its link is the only credential, and the page's origin check stops cross-site requests, not local programs: anyone holding the link, the agent included, can complete it with a key they control. So the owner runs it, and setup's result and its page both name the connected owner address for the owner to check it is their wallet.
@@ -50,3 +51,14 @@ Refusal exits with code 3 and a `RESULT` line with `state: "refused_precheck"` a
 ## 6. Help and bad input never sign
 
 For every script: `--help` / `-h` prints usage and exits 0, and unknown flags or missing required flags exit 2. Both happen before any secret file is read or any RPC write. No script may default to a spending action when arguments are missing.
+
+## 7. Buy once never gives the agent a way to pay
+
+`buy-once` (one purchase the owner approves on superstables.com, `once.mjs`) holds no key and signs nothing. Its rules:
+
+- The owner's wallet signs one authorization for exactly the amount and recipient the page shows. The agent receives no signature. The terms on the page come from the site's own reading of the seller, never from agent text.
+- `--max` is required. The command refuses before it asks for a purchase when the listing is above it, and refuses and cancels when the purchase the site made differs from the listing (amount, network, token, recipient) or is above `--max`. It never raises `--max`.
+- The link it shows is on the site it asked, never another origin. It prints the link and match code the moment they exist, and `waiting_owner` is never reported as approval. `wait` refuses until the caller passes `--shown` (the link, the code and the terms are written in a reply the owner can read), so a caller cannot poll before the owner can see the request.
+- The purchase's access token lives only in a mode-600 record, until the purchase is final. It is never printed or logged.
+- A purchase whose payment cannot be told is `unknown` (exit 5); it is never bought again. A paid purchase whose service failed is exit 4. The seller's answer is saved as a file of data.
+- Base Sepolia only. Mainnet is refused.

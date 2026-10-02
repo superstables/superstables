@@ -51,10 +51,11 @@ import {
   oneLine,
   toBaseUnits,
 } from './lib/common.ts'
-import { chainHead, getTxSigner, mppMemo, readKey } from './lib/chain.ts'
+import { chainHead, getTxSigner, mppMemo, readKey, readScope } from './lib/chain.ts'
 import { judge, waitForOutcome } from './lib/resolve.ts'
-import { BLOCKING, newOpId, printResult, readOp, writeOp, type Op, type OpState } from './lib/ops.ts'
-import { precheckCharge } from './lib/precheck.ts'
+import { BLOCKING, OPS_DIR, newOpId, printResult, readOp, writeOp, type Op, type OpState } from './lib/ops.ts'
+import { readCapped, saveResponse } from '../response.mjs'
+import { budgetShortfall, precheckCharge, recipientsOutsideScope } from './lib/precheck.ts'
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
 
@@ -92,6 +93,8 @@ const exitFor = (state: OpState, delivered: boolean | null): number => {
 }
 
 let op: Op | undefined
+/** The seller's answer to the paid request, once saved (RESULT responseFile, ...). */
+let saved: Record<string, unknown> | null = null
 
 function finish(state: OpState, f: { tx?: string | null; debit?: bigint | null; remaining?: bigint | null; delivered?: boolean | null; next?: string; reason?: string }): never {
   if (op) {
@@ -109,6 +112,7 @@ function finish(state: OpState, f: { tx?: string | null; debit?: bigint | null; 
     debit: f.debit === undefined || f.debit === null ? null : fromBaseUnits(f.debit),
     remaining: f.remaining === undefined || f.remaining === null ? null : fromBaseUnits(f.remaining),
     delivered,
+    ...(saved ?? {}),
     next: f.next ?? 'none',
     ...(f.reason ? { reason: f.reason } : {}),
   })
@@ -207,6 +211,8 @@ async function main() {
 
   let remainingBefore: bigint | null = null
   let noBudget: string | undefined
+  let overBudget: string | undefined
+  let outsideScope: string[] = []
   try {
     const k = await readKey(ownerAddress, agentKey)
     remainingBefore = k.remaining
@@ -216,8 +222,23 @@ async function main() {
     if (k.revoked) noBudget = 'the agent access key is revoked (a revoked key can never be granted again)'
     else if (!k.exists) noBudget = 'the agent access key is not authorized: the owner has not granted a budget'
     else if (k.expiry && k.expiry * 1000 <= Date.now()) noBudget = `the budget expired at ${new Date(k.expiry * 1000).toISOString()}`
+    // The chain would refuse a payment above what is left (SpendingLimitExceeded): say so before signing, as evm does.
+    // A sponsored payment costs exactly the price; an unsponsored one also takes its fee from the same limit, which the
+    // chain still checks.
+    else overBudget = budgetShortfall(k, amount) ?? undefined
   } catch (err) {
     console.log(`  (could not read the key state: ${String((err as Error).message).slice(0, 120)})`)
+  }
+
+  // A key granted with a seller list may pay only those recipients (the chain answers CallNotAllowed otherwise). A read
+  // that failed proves nothing: then the chain does the refusing.
+  if (!noBudget) {
+    const recipients = [String(req.recipient), ...check.splits.map((x) => x.recipient)]
+    try {
+      outsideScope = recipientsOutsideScope(await readScope(ownerAddress, agentKey), recipients)
+    } catch (err) {
+      console.log(`  (could not read the key's seller list: ${String((err as Error).message).slice(0, 120)})`)
+    }
   }
 
   if (args.quote) {
@@ -232,6 +253,26 @@ async function main() {
       next: newKey
         ? `the owner makes a new key with superstables budget setup --rail tempo --agent LABEL, then superstables budget grant --rail tempo --agent LABEL --amount A; nothing was signed`
         : `the owner grants a budget: superstables budget grant --rail tempo${agentLabel ? ` --agent ${agentLabel}` : ''} --amount A; nothing was signed`,
+    })
+  }
+
+  if (outsideScope.length) {
+    const who = outsideScope.join(', ')
+    console.log(`\nREFUSED before signing: the budget's seller list does not include ${who}. Nothing was signed or sent.`)
+    finish('refused_precheck', {
+      reason: `seller_not_allowed: the budget's seller list does not include ${who}`,
+      remaining: remainingBefore,
+      next: 'this budget can pay only the sellers the owner listed in the grant; buy from one of them, or tell the owner; nothing was signed',
+    })
+  }
+  if (overBudget) {
+    console.log(`\nREFUSED before signing: ${overBudget}. Nothing was signed or sent.`)
+    finish('refused_precheck', {
+      reason: `budget_too_low: ${overBudget}`,
+      remaining: remainingBefore,
+      next: /period ends at/.test(overBudget)
+        ? `the budget left cannot cover this purchase until ${overBudget.replace(/^.*; the current period ends at (\S+?),.*$/, '$1')}, when the limit refills; nothing was signed`
+        : 'the budget left is less than the price; nothing was signed',
     })
   }
 
@@ -281,9 +322,11 @@ async function main() {
     } catch {
       /* no Payment-Receipt header */
     }
-    bodyText = await res.text()
-    // seller text: a one-line preview only
+    const body = await readCapped(res)
+    bodyText = body.bytes.toString('utf8')
+    // seller text: a one-line preview only; the whole answer is saved next to the journal
     console.log(`response (${oneLine(res.headers.get('content-type') ?? '', 100)}): ${oneLine(bodyText, 500)}`)
+    if (res.status !== 402) saved = saveResponse(OPS_DIR, opId, body, res.headers.get('content-type'))
   } catch (err) {
     sendError = oneLine((err as Error)?.message ?? err, 200)
     console.log(`\nNo complete answer from the seller (${sendError}). Reading the chain, not resending.`)

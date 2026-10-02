@@ -45,6 +45,12 @@ export function precheckCharge(request, opts) {
   for (const s of splits) {
     if (!isAddr(s?.recipient) || !/^\d+$/.test(String(s?.amount))) return refuse('bad_challenge', 'a payment split is malformed')
   }
+  // A seller that names its own payment memo runs an MPP server from before challenge-bound memos: current clients (mppx)
+  // always send the memo bound to the challenge, so such a seller answers "Transfer memo does not match the challenge memo"
+  // after the payment was signed. Refuse before signing.
+  if (details.memo !== undefined && details.memo !== null) {
+    return refuse('seller_memo', `the seller requires a payment memo of its own (${String(details.memo).slice(0, 20)}...) in its challenge; this client does not support that, so nothing was signed`)
+  }
   if (opts.payTo) {
     if (request.recipient.toLowerCase() !== opts.payTo.toLowerCase()) {
       return refuse('recipient_mismatch', `recipient ${request.recipient} is not the expected --pay-to ${opts.payTo}`)
@@ -56,6 +62,40 @@ export function precheckCharge(request, opts) {
     return refuse('price_exceeds_max', `price ${fromBase(amount)} ${TOKEN_LABEL} is above --max ${fromBase(opts.maxBase)}`)
   }
   return { ok: true, amount, recipient: request.recipient, splits }
+}
+
+/**
+ * Whether an access key can cover `amount`, read before signing. Null when it can (or has no limit); otherwise the words for the
+ * refusal, with the end of the current period when the limit refills before the key expires. Pure: `key` is what readKey returned.
+ * @param {{ spendPolicy: string, remaining: bigint, periodEnd: number, expiry?: number }} key
+ * @param {bigint} amount
+ * @param {number} [nowMs]
+ * @returns {string | null}
+ */
+export function budgetShortfall(key, amount, nowMs = Date.now()) {
+  if (key.spendPolicy === 'unlimited' || key.remaining >= amount) return null
+  const refills = key.periodEnd && key.periodEnd * 1000 > nowMs && (!key.expiry || key.periodEnd < key.expiry)
+  const refill = refills ? `; the current period ends at ${new Date(key.periodEnd * 1000).toISOString()}, when the limit refills` : ''
+  return `price ${fromBase(amount)} ${TOKEN_LABEL} exceeds the remaining budget ${fromBase(key.remaining)} ${TOKEN_LABEL}${refill}`
+}
+
+/** transferWithMemo(address,uint256,bytes32): what an MPP tempo.charge payment calls on the token. */
+export const TRANSFER_WITH_MEMO_SELECTOR = '0x95777d59'
+
+/**
+ * The recipients of a payment that a scoped key may NOT pay with transferWithMemo on pathUSD. Empty when the key is
+ * unscoped or every recipient is allowed. A rule with no recipients allows any recipient. Pure: `scope` is what readScope read.
+ * @param {{ scoped: boolean, scopes: { target: string, selectorRules: { selector: string, recipients: string[] }[] }[] }} scope
+ * @param {string[]} recipients
+ * @returns {string[]}
+ */
+export function recipientsOutsideScope(scope, recipients) {
+  if (!scope.scoped) return []
+  const rules = scope.scopes
+    .filter((s) => s.target.toLowerCase() === TOKEN_ADDRESS.toLowerCase())
+    .flatMap((s) => s.selectorRules)
+    .filter((r) => r.selector.toLowerCase() === TRANSFER_WITH_MEMO_SELECTOR)
+  return recipients.filter((to) => !rules.some((r) => r.recipients.length === 0 || r.recipients.some((x) => x.toLowerCase() === to.toLowerCase())))
 }
 
 /**
