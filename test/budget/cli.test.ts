@@ -87,6 +87,29 @@ describe("superstables budget on native Windows", () => {
   });
 });
 
+describe("setup --fund-only", () => {
+  for (const [argv, why] of [
+    [["--rail", "evm"], /tempo only/],
+    [["--rail", "tempo", "--agent", "2"], /no --agent/],
+    [["--rail", "tempo", "--new-owner"], /no --new-owner/],
+    [["--rail", "tempo", "--detach"], /no --detach/],
+  ] as const) {
+    it(`refuses ${argv.join(" ")} before running a rail script`, async () => {
+      const r = await run([BUDGET, "setup", "--fund-only", ...argv]);
+      expect(r.code).toBe(2);
+      expect(result(r.stdout)).toMatchObject({ ok: false, command: "setup", state: "failed" });
+      expect(result(r.stdout).reason).toMatch(why);
+    });
+  }
+
+  it("is in setup's help", async () => {
+    const r = await run([BUDGET, "setup", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/\[--fund-only\]/);
+    expect(r.stdout).toMatch(/--fund-only tops up the\s+owner on record/);
+  });
+});
+
 describe("a checkout without its dev packages", () => {
   it("says what to run when it has no build either", async () => {
     const repo = checkoutWithoutDevPackages();

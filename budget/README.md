@@ -151,7 +151,7 @@ In each block, run `doctor` first: it lists what is missing and which address to
    superstables budget setup --rail tempo
    ```
 
-2. Fund. If your wallet holds less than 1 pathUSD, `setup` tops it up from the Tempo faucet (test pathUSD, not USDC). `npx tsx budget/tempo/setup.ts --fund-only` does it again. The agent needs no funds and no gas: its key spends your pathUSD, and the fees come from you. So there is no `fund-agent` on Tempo.
+2. Fund. If your wallet holds less than 1 pathUSD, `setup` tops it up from the Tempo faucet (test pathUSD, not USDC). `superstables budget setup --rail tempo --fund-only` does it again. The agent needs no funds and no gas: its key spends your pathUSD, and the fees come from you. So there is no `fund-agent` on Tempo.
 3. Then:
 
    ```sh

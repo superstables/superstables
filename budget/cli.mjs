@@ -25,6 +25,8 @@ import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
+// The rail scripts run in their own folders: a relative SUPERSTABLES_HOME would point each of them somewhere else.
+process.env.SUPERSTABLES_HOME = HOME;
 // Two ways to run. In a checkout the TypeScript sources sit next to this file, and the rails run from them, on the repo's
 // own install: its tsx and its node_modules. The standalone copy (dist/budget, which the npm package ships, and the
 // skill's scripts/) has no sources: scripts/budget-build.mjs bundled every rail script to <rail>/<name>.mjs, which runs
@@ -127,9 +129,9 @@ Unattended tests only: --owner-key-file PATH --yes signs with that key file inst
 const OWNER_PRINTS = "the plan on stderr, the link once (APPROVE line), then a RESULT line with state waiting_owner, final\n  false, id, url, expires and next; or, when it waited, the final RESULT: state settled (or ok), tx, next.";
 const COMMANDS = {
   setup: {
-    flags: { agent: "v", "new-owner": "b", ...OWNER_FLAGS }, required: [],
+    flags: { agent: "v", "new-owner": "b", "fund-only": "b", ...OWNER_FLAGS }, required: [],
     help: helpText({
-      usage: "superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--timeout S] [--no-open] [--detach|--wait]",
+      usage: "superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--fund-only] [--timeout S] [--no-open] [--detach|--wait]",
       about: `The owner's first step on a rail and chain. Creates the agent key on this computer if there is none (it never
 overwrites one: running setup again reuses it), then asks the owner to connect their own wallet and sign a free sign-in
 message (no transaction). Records both addresses in the public file and prints the next steps. No owner key is created
@@ -137,7 +139,8 @@ or stored: the owner's key stays in their wallet.
 A trusted step: whoever connects becomes the owner on record. The owner runs it, or watches it run.
 --new-owner replaces a recorded owner with the wallet that connects; refused while a budget is live (revoke first).
 tempo: also tops up the owner from the Moderato faucet when it holds less than 1 pathUSD. --agent LABEL adds a new agent
-key for the next budget (a revoked or expired key can never be granted again); it needs no page.
+key for the next budget (a revoked or expired key can never be granted again); it needs no page. --fund-only tops up the
+owner on record from the faucet again and changes nothing else; it needs no page either.
 
 ${OWNER_HELP}
 
@@ -516,6 +519,11 @@ function parse(argv) {
     if (cmd === "setup" && f["new-owner"]) badInput(ctx, "setup --agent adds a key for the recorded owner; --new-owner replaces the owner: run them separately");
     if (!/^[A-Za-z0-9]{1,32}$/.test(f.agent)) badInput(ctx, "--agent must be 1 to 32 letters or digits");
   }
+  if (f["fund-only"]) {
+    if (f.rail !== "tempo") badInput(ctx, "--fund-only is for tempo only (it tops up the owner from the Moderato faucet)");
+    const other = ["agent", "new-owner", "owner-key-file", "detach", "replace", "wait"].find((k) => f[k] !== undefined && f[k] !== false);
+    if (other) badInput(ctx, `--fund-only tops up the owner on record and opens no page: it takes no --${other}`);
+  }
   if (f.period !== undefined && !/^[1-9]\d*$/.test(f.period)) badInput(ctx, "--period must be a whole number of seconds");
   if (f.sellers !== undefined && !f.sellers.split(",").every((s) => rail.addr.test(s))) badInput(ctx, `--sellers must be a comma list of ${f.rail} addresses`);
   if (f.expiry !== undefined && !(Date.parse(f.expiry) > Date.now())) badInput(ctx, "--expiry must be an ISO date in the future (for example 2026-10-01T12:00:00Z)");
@@ -558,7 +566,7 @@ function railCommand(verb, f, extra = {}) {
       case "read": return T("readBudget", agent);
       case "grant": return T("setBudget", ["--amount", f.amount, "--expiry-seconds", String(extra.expirySeconds), ...opt("period-seconds", f.period), ...opt("sellers", f.sellers), ...agent, ...ownerOpts(f)]);
       case "revoke": return T("revokeBudget", [...agent, ...ownerOpts(f)]);
-      case "setup": return T("setup", [...agent, ...(f["new-owner"] ? ["--new-owner"] : []), ...ownerOpts(f)]);
+      case "setup": return f["fund-only"] ? T("setup", ["--fund-only"]) : T("setup", [...agent, ...(f["new-owner"] ? ["--new-owner"] : []), ...ownerOpts(f)]);
     }
   }
   if (f.rail === "solana") {
@@ -984,6 +992,13 @@ async function recover({ f, ctx }) {
 }
 
 async function setup({ f, ctx }) {
+  if (f["fund-only"]) {
+    log("\nsetup --fund-only on tempo: tops up the owner on record from the Moderato faucet (test pathUSD). No page, nothing to sign.");
+    const r = await run(railCommand("setup", f));
+    const rr = railResult(r.stdout);
+    if (r.code !== 0 || !rr) return emit(r.code === 3 ? 3 : 1, { ...ctx, state: rr?.state ?? "failed", owner: rr?.owner, next: rr?.next ?? "read the output above, then rerun superstables budget doctor --rail tempo", reason: rr?.reason ?? `the setup script exited ${r.code} without a RESULT line` });
+    return emit(0, { ...ctx, state: "ok", owner: rr.owner, next: rr.next ?? "superstables budget doctor --rail tempo" });
+  }
   log(`\nsetup on ${f.rail} (${f.chain}): the agent key stays on this computer; the owner connects their own wallet. No owner key is created.`);
   log("  setup is a trusted step: whoever connects becomes the owner on record. An agent may start it and hand the owner the link; only the owner connects their wallet.");
   log(ownerLine(recordedOwner(f)));
@@ -1119,7 +1134,7 @@ if (WORKER_ID) {
     }
     emit(5, { command: parsed.cmd, rail: f.rail, chain: f.chain, state: "unknown", url: approvalUrl, next: `superstables budget status --rail ${f.rail} --chain ${f.chain}: read whether it landed before running this again`, reason: "the background approval ran past its deadline and was stopped" });
   }, workerDeadlineMs(Number(f.timeout ?? 600))).unref();
-} else if (OWNER_COMMANDS.has(parsed.cmd) && sendsNow(parsed.f)) {
+} else if (OWNER_COMMANDS.has(parsed.cmd) && sendsNow(parsed.f) && !parsed.f["fund-only"]) {
   await ownerGate(parsed);
 }
 await HANDLERS[parsed.cmd](parsed);

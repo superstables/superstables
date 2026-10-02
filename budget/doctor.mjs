@@ -103,7 +103,7 @@ const RAILS = {
     rpc: async () => { const id = Number(await rpc(TEMPO.rpc, "eth_chainId")); if (id !== TEMPO.chainId) throw new Error(`chain id ${id}, expected ${TEMPO.chainId}`); return `chain id ${id}`; },
     // The agent's access key spends the owner's pathUSD and fees come from the owner, so only the owner needs funds.
     balances: async (owner) => [
-      { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(TEMPO.rpc, TEMPO.pathUsd, owner), need: TEMPO.minOwner, hint: "npx tsx budget/tempo/setup.ts --fund-only uses the Moderato faucet" },
+      { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(TEMPO.rpc, TEMPO.pathUsd, owner), need: TEMPO.minOwner, hint: "superstables budget setup --rail tempo --fund-only uses the Moderato faucet" },
     ],
   }),
   solana: () => ({
