@@ -1,25 +1,29 @@
-# The security boundary in this release
+# Security model
 
-This release is a testnet demo. It moves test USDC on Base Sepolia and nothing else. Read this
-page before you point it at anything you care about, because it says plainly what the design
-protects and what it does not.
+Superstables client 0.3.0 makes testnet payments only. This page says what each way to pay protects
+and what it does not.
 
-The one sentence version: **the agent can ask for a payment, and only the owner can cause one.**
-Everything below is the detail behind that sentence.
+The client pays in two ways, and they have different boundaries:
+
+| | Buy once (`pay`, the MCP tools) | Budget (`superstables budget`) |
+| --- | --- | --- |
+| Who approves | The owner, in their own wallet, for every payment | The owner, in their own wallet, once, for the whole budget |
+| Keys the client holds | None with a browser wallet; `--wallet local` stores a signing key | The agent key, which signs purchases. The owner's key stays in their wallet |
+| What limits spending | The owner's decision on each payment. The spend policy is a check in this client | The chain: the allowance (`evm`), the delegated amount (`solana`), the access key's limits (`tempo`) |
+| What a hostile agent can do | Ask for payments. With `--wallet local`, code running as the owner can also read that key | Use the agent key to spend what is left of the budget (on `evm` and `solana`, to any address), and move funds held at the agent's address |
+| How it ends | A browser approval request expires after 5 minutes; a local-wallet request after 120 seconds, by default | `superstables budget revoke`, approved in the owner's wallet |
+
+The sections below cover buy once. Budgets have their own section: [Budgets](#budgets).
 
 ## Where the key is
 
-In MetaMask, where it was before any of this was installed. Nothing in this software holds a
-private key in the default mode, generates one, or reads one. There is no key file to steal on
-the machine the agent runs on, and there is nothing for a hostile agent to exfiltrate, because
-there is nothing there.
+In the default buy-once flow, the owner's signing key stays in their browser wallet. The client
+does not generate, read or store it. That does not mean the computer holds no keys: the browser
+wallet keeps its own, and the local wallet mode and budgets store separate keys.
 
-What this software does hold is the *asking* side: it builds the payment authorization, serves
-one page that shows it, and hands the signature it gets back to a facilitator. Every one of
-those steps is visible, and none of them can happen without a human pressing sign in MetaMask.
-
-(The `--wallet local` mode is the exception, and has its own section at the end. There, a key
-does live in a file on this machine.)
+Before the owner signs, the client builds an authorization and serves a page that shows its terms.
+After it checks the signature it gets back, it sends the authorization to the seller, which has a
+facilitator settle it.
 
 ## What the approval page verifies, and what it only repeats
 
@@ -36,10 +40,10 @@ payment core uses, and shown as fact:
 | Network | the requirement's `network`, which must be a supported one (`eip155:84532`) |
 | Recipient | the requirement's `payTo`, which must be a well-formed address |
 | Scheme | the requirement's `scheme`, which must be `exact` |
-| Payer | the account MetaMask connected with. The agent never names the payer |
+| Payer | the account the page reports as connected; that the account controls it is checked when its signature arrives |
 
-If any of those checks fails, the request is refused before anyone is asked, and no approval
-link ever exists.
+A payment requirement that fails these checks is refused before an approval link exists. The
+payer's signature is checked later, as described below.
 
 **Reported — what the agent says the payment is for**, stored under `reported` and labelled
 unverified wherever it is shown:
@@ -48,10 +52,9 @@ unverified wherever it is shown:
 - `serviceId`, `serviceName`, `description` — the agent's own labels
 - `quoteId`, `attemptId` — the agent's record ids
 
-None of it changes what gets signed. The typed data MetaMask is asked to sign is built from the
+None of it changes what gets signed. The typed data the wallet is asked to sign is built from the
 verified requirement, field by field: `to` is the requirement's `payTo`, `value` is its
-`amount`, `verifyingContract` is its asset. An agent that lies about a payment can only lie
-about the label on it.
+`amount`, `verifyingContract` is its asset.
 
 There is one place where reported context has an effect: the policy takes the hostname for its
 `allow`/`deny` rules from `reported.target`, because the requirement does not carry the URL that
@@ -70,12 +73,11 @@ That id is deliberately narrow. Holding it lets someone see *one* payment and si
 
 - it names one stored request, and the routes under it (`/state`, `/account`, `/signature`,
   `/reject`) only ever act on that request;
-- signing still needs MetaMask. The link is an invitation to sign, not a signature;
-- a decision is final: a second POST to a request that is no longer pending gets 409, so one
-  approval can never produce two payments;
-- it expires five minutes after it is created, on a timer and on every request, so a reader
-  never sees a pending request that has in fact run out of time;
-- the server binds `127.0.0.1` only. Nobody off this machine can open it at all;
+- signing needs a valid signature from the account selected on the page. The link does not
+  choose that account, but it cannot spend from an account without its signature;
+- a decision is final: a second POST to a request that is no longer pending gets 409;
+- the client binds `127.0.0.1`, so another machine cannot reach the page directly; port
+  forwarding can make it reachable elsewhere;
 - it answers only to the Host it is bound to, `127.0.0.1:PORT` (or `localhost:PORT`), so a web
   page under a DNS name that resolves to `127.0.0.1` cannot reach it;
 - `/account`, `/signature` and `/reject` accept only a JSON body sent from the page's own origin,
@@ -90,7 +92,8 @@ submitted on the strength of "the page said so".
 
 ## What a compromised agent can and cannot do
 
-Assume the agent is fully hostile — a prompt injection, a bad tool, whatever.
+This section assumes a hostile agent in the default browser-wallet flow, with a wallet that is not
+compromised.
 
 It **can**:
 
@@ -102,69 +105,60 @@ It **can**:
 
 It **cannot**:
 
-- sign anything. Every payment needs a human in MetaMask, and MetaMask is not reachable from
-  the agent's process;
-- read a private key, because there is none here to read;
-- turn one approval into two payments, or revive an expired one;
+- get the owner's signing key through the client;
+- make the client accept an authorization without a valid signature from the connected account;
+- make the client accept a decision on an expired approval request;
 - pay a recipient other than the one in the signed authorization — the recipient is *inside*
-  what MetaMask displays and what you sign.
+  what the wallet displays and what you sign.
 
-The defence against payment spam is that every request needs a human decision and expires on
-its own. There is no unattended mode in this release, by design.
+
 
 ## What a compromised MCP process could do
 
-This is the sharper question, because the approval page is served by that process. A hostile
-build of this software, or code injected into it, **could**:
+The MCP process serves the approval page. A hostile build of this software, or code injected into
+it, **could**:
 
 - show you a page that describes the payment dishonestly — a smaller amount, a different
   recipient, a service you recognise;
 - build typed data that differs from what the page says;
 - ask for payments repeatedly, hoping for a distracted yes.
 
-What it **cannot** do is make MetaMask lie. The popup is rendered by MetaMask from the request
-it was handed, in its own window, outside this software's reach: the contract being signed, the
-`to` address and the `value` in it are the ones that will actually move money. A page that says
-"0.01 USDC to Superstables" while asking MetaMask to sign 50 USDC to somebody else is a page
-whose lie is visible in the popup — which is exactly why the last look belongs there, and why
-the demo script points at MetaMask's own fields rather than at ours.
-
-So: read the page to know what you are being asked for, and read MetaMask to know what you are
-signing. If they disagree, MetaMask is right, and something is wrong with the software.
+A browser wallet that is not compromised shows its signing prompt apart from the client's page.
+Check the network, the token contract, the recipient and the amount in that prompt; for USDC, a
+`value` of `10000` is 0.01 USDC. Reject the request if the wallet's terms differ from the page's,
+or if you cannot check them.
 
 ## The same-machine caveat
 
-Any process running as your user can serve a page on loopback, and MetaMask's permission to
+Any process running as your user can serve a page on loopback, and a browser wallet's permission to
 connect is granted per origin. A hostile local process could serve its own page on
 `127.0.0.1:4412` after this one stops and inherit a connection you granted earlier. It would
-still have to get you to sign, and MetaMask would still show it the real amount and recipient,
+still have to get you to sign, and the wallet would still show it the real amount and recipient,
 but it would not have to ask for the connection again.
 
-That is the shape of the boundary here: it is between *asking* and *signing*, and MetaMask holds
-the signing side. It is not a boundary between processes on your machine, and nothing in this
-release pretends to be one.
+
 
 ## Expiry
 
-Nothing stays signable.
-
 - A **quote** is good for 10 minutes. Paying re-reads the seller's challenge and refuses if the
   terms moved.
-- An **approval** expires five minutes after it is created. Expiry is the signer's own decision,
-  checked on a timer and on every request.
+- A **browser approval request** expires five minutes after it is created, by default, checked on a
+  timer and on every request. Local-wallet requests expire after 120 seconds by default
+  (`wallet serve --approval-timeout`).
 - The **EIP-3009 authorization** carries its own on-chain window: `validBefore` is set to now
   plus the seller's `maxTimeoutSeconds` (300 seconds unless the seller asks for something else).
-  After that the facilitator cannot submit it at all.
-- Stopping the agent ends everything still pending as `abandoned`, with the reason "the process
-  serving the approval page stopped before anyone approved or rejected this payment". It is not
-  recorded as a rejection, and a signature that arrives afterwards is never submitted. There is no
-  queue that survives a restart.
+  After that, it cannot succeed on chain.
+- Closing the client marks pending approval requests `abandoned`, which is not a rejection, and a
+  signature that arrives afterwards is never sent. A payment already being sent can end
+  `uncertain` instead. If the process is killed, the log may have no final line; pending requests
+  are not restored after a restart.
 
 ## The approvals log
 
-Every state change of every approval appends one JSON line to
+The browser signer appends each state change of an approval to
 `~/.superstables/records/approvals.jsonl` (0600): the time, the id, the new status, the reason
-if there is one, the verified terms, the reported context, and the account that connected.
+if there is one, the verified terms, the reported context, and the account that connected. A
+failed write does not stop the approval, so the file is not a guaranteed complete record.
 
 It never contains a signature and never contains a key. It is a file for reading:
 
@@ -181,31 +175,31 @@ The agent side keeps its own append-only records next to it — quotes, attempts
 authoritative, at the gate, before an approval is created at all. A payment the policy refuses
 never becomes a link, so there is nothing to open and nobody is asked.
 
-Nothing in the policy is enforced by the blockchain, and nothing in it is enforced by MetaMask.
+Nothing in the policy is enforced by the blockchain, and nothing in it is enforced by the wallet.
 A cap of 0.05 USDC per payment means this software will not ask you to sign more than that; it
 does not mean your account cannot sign more. The only limits that survive a compromised machine
 are the ones inside what you sign — the amount and the recipient in the authorization — and the
 balance of the account, which is why this release is testnet only.
 
-The daily cap is counted from local files, the receipts in this directory, not from chain
-history. Delete them and the count starts again.
+The browser signer counts the daily cap from the receipts in this directory; the local wallet
+counts the authorizations in its own `wallet/audit.jsonl`. Neither reads chain history: delete
+those records and the count starts again.
 
 ## Testnet only
 
-One network (`eip155:84532`, Base Sepolia), one asset (test USDC at
+Buy once supports one network (`eip155:84532`, Base Sepolia), one asset (test USDC at
 `0x036CbD53842c5426634e7929541eC2318f3dCF7e`), one scheme (x402 `exact`). A requirement naming
 anything else is refused before anyone is asked. There is no configuration that turns on
 mainnet.
 
 Payments are settled by public facilitators, which submit the transfer and pay the gas. A
 facilitator sees the signed authorization, so it learns who paid whom and how much; it cannot
-alter the amount or the recipient, because those are inside what was signed. A facilitator that
-cannot be reached is skipped; a facilitator that answers "no" is believed, and the payment is
-not re-offered to the next one.
+alter the amount or the recipient, because those are inside what was signed. The client's facilitator helper tries the next facilitator when one cannot be
+reached, and stops when one refuses. Other sellers choose their own facilitators.
 
 ## The local wallet mode
 
-`--wallet local` (or `SUPERSTABLES_WALLET=local`) replaces MetaMask with a wallet process that
+`--wallet local` (or `SUPERSTABLES_WALLET=local`) replaces the browser wallet with a wallet process that
 holds a key in `~/.superstables/wallet/key`, mode 0600. It exists for a machine with no browser,
 and it moves the boundary.
 
@@ -218,8 +212,7 @@ It generates two random 32-byte hex secrets at first start, in `~/.superstables/
 
 Both are sent as `Authorization: Bearer …` and compared in constant time. A missing or unknown
 token gets 401; the agent token on an `/owner/…` route gets 403 — asking and approving are
-different powers, so they are different secrets. The owner secret never reaches an agent and
-never reaches the wallet's own HTTP log either: the owner opens
+different powers, so they are different secrets. The agent API never returns the owner secret, and the wallet's HTTP log never contains it: the owner opens
 `http://127.0.0.1:4411/#<owner-secret>`, and a URL fragment is not sent to the server. The
 wallet verifies the same facts the approval page does and signs the stored requirement byte for
 byte, and every state change goes to `wallet/audit.jsonl`.
@@ -230,22 +223,41 @@ system account, not a hardware boundary: any process running as you can read
 wallet is concerned. A hostile agent confined to the wallet's HTTP API cannot pay. Arbitrary
 code running as your user can. Run that mode with a key that holds testnet funds only.
 
+## Budgets
+
+`superstables budget` has its own keys and its own boundary.
+
+- **Two keys.** The owner's key stays in the owner's wallet. Setup asks for a message signature;
+  `fund-agent`, `grant`, `revoke` and the owner's part of `recover` show their terms on a page on
+  `127.0.0.1` before the wallet is asked.
+  The agent key, in `~/.superstables/keys/budget/<rail>-agent.env` (mode 600), signs purchases.
+  `doctor` fails if that file holds an owner key.
+- **The chain enforces the budget.** On `evm`, the total allowance. On `solana`, the delegated
+  amount. On `tempo`, the access key's total or per-period limit, its expiry, and its seller list
+  when one was granted. No rail enforces a per-payment maximum on chain.
+- **This CLI checks the rest**, before it signs: `--max`, the expected token, `--pay-to` and one
+  purchase per `--op`. A stolen agent key skips all of these and can spend what is left of the
+  budget, on `evm` and `solana` to any address. Keep budgets small.
+- **Setup is a trusted step.** Whoever holds the setup link, the agent included, can complete it
+  with a key of their own: the page's origin check stops other websites, not local programs. So the
+  owner runs it, and checks the owner address that setup prints and every owner page shows.
+- **The checks depend on the rail.** The command builds the page's terms and the transaction
+  from the same plan: the command's arguments and the chain's state, not the agent's description.
+  On `evm` and `tempo`, the wallet signs and submits, and the command then checks the transaction
+  on chain: one that differs from the plan is reported (exit 3), naming each difference, even if it
+  already confirmed. That detects it; it cannot undo it. On `solana`, the wallet only signs, and the
+  client checks the signed bytes are the transaction it built before it submits them.
+- **Revoke ends the permission once it is confirmed on chain.** The owner approves it in their
+  wallet: `approve(agent, 0)` on `evm`, `revokeKey` on `tempo`, the SPL `Revoke` on `solana`. It
+  works even if the agent key was stolen. It does not reverse confirmed payments or return funds
+  already transferred. On `evm`, a purchase whose price was already pulled can still settle, and
+  `recover` returns the USDC it can, leaving up to 2 USDC of gas on Arc Testnet. On `tempo`, it does
+  not close payment sessions the key opened elsewhere.
+
+Per rail, with what each revoke does not cover:
+[Budget rails and chains](../budget/README.md#safety-model).
+
 ## What changes in the next milestone
 
-- **Budgets.** Approval per payment is the only mode of the MCP tools and `pay`. A budget,
-  approved once and spent down, now exists as a separate testnet tool, `superstables budget`
-  ([budget/README.md](../budget/README.md)): the owner grants an agent key a spending limit on
-  chain and revokes it with one transaction. It has its own keys and its own boundary. The
-  chain enforces the total cap, and on Tempo also an expiry and a seller list. A stolen agent
-  key can spend all of it. Its `setup` is a trusted step: whoever holds the setup link, the
-  agent included, can complete it with a key of their own (the page's origin check stops other
-  websites, not local programs), so the owner runs it and checks the connected owner address that
-  setup prints and its page shows. Bringing
-  budgets into the approval flow, with terms a person can read in the wallet, is the next step.
-- **A signing surface that reads like money.** MetaMask shows an EIP-712 authorization in atomic
+- **A signing surface that reads like money.** Browser wallets such as MetaMask show an EIP-712 authorization in atomic
   units; a person should see "0.01 USDC to this seller" in the wallet, not only on our page.
-- **A boundary that survives the machine.** Spending limits that hold even when the host is
-  compromised have to live somewhere other than the host.
-
-Until then, treat this as what it is: a demonstration that the owner, and only the owner,
-decides.

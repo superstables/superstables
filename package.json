@@ -23,7 +23,8 @@
     "dev": "tsx src/cli/main.ts",
     "skill": "node scripts/skill.mjs",
     "skill:check": "node scripts/skill-check.mjs",
-    "install-check": "node scripts/install-check.mjs"
+    "install-check": "node scripts/install-check.mjs",
+    "docs:cli": "node scripts/cli-docs.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

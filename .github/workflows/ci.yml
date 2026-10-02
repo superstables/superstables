@@ -48,6 +48,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      # docs/cli.md and docs/cli-budget.md are the commands' --help; this fails when they drift.
+      - name: CLI reference matches the help
+        run: npm run docs:cli -- --check
+
       # The skill zip, unpacked outside the checkout and run with node alone. `find` reads the
       # hosted catalogue, the one step here that needs the network.
       - name: Skill zip
