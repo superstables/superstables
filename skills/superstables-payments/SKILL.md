@@ -187,23 +187,23 @@ Copy this checklist and track it:
 ```
 Owner request progress:
 - [ ] 1. budget status --rail R [--chain C]: which steps are already done
-- [ ] 2. Tell the owner every remaining step, up front
+- [ ] 2. Hosted: one link for the whole set-up (setup --hosted --grant A --fund). Local: tell the owner every remaining step, up front
 - [ ] 3. Start only the next owner step; write the link in a reply and end your turn (checklist below)
 - [ ] 4. When the owner says they've approved: budget wait --id ID --shown; report; then the next step
 - [ ] 5. After grant: budget status, report remaining and the owner on record
 ```
 
 1. **Status first.** `superstables budget status --rail R [--chain C]`. Exit 1 with "no budget has been set up here" is the normal answer before `setup`, not an error. Status and `doctor` show the owner on record and what is missing; skip steps already done.
-2. **List the remaining steps up front**, with what each does (see [references/budget.md](references/budget.md#the-owners-steps-per-rail)), so the owner knows how many links to expect.
+2. **On superstables.com, one link does the whole set-up**: `setup --rail evm --hosted --chain C --grant A --fund`. Before you run it, price what the owner wants to buy (`budget preflight`) and say whether the amount covers it; if it covers fewer purchases than they asked for, say so in the same reply. On this computer (no `--hosted`), list the remaining steps up front, with what each does (see [references/budget.md](references/budget.md#the-owners-steps-per-rail)), so the owner knows how many links to expect.
 3. **Start only the next step**, for example `superstables budget setup --rail evm` (or `--hosted`). Run by an agent, it returns in seconds with `APPROVE {...}` and `RESULT {"state":"waiting_owner","final":false,"id","url","matchCode",...}`, exit 0. That is not approval. One owner approval per rail and chain can be pending: a second one is refused with the pending `id`; follow that one instead. `setup` creates the agent key on this computer before the owner connects; that is expected.
-4. **Tell the owner** in a reply, each time, using the checklist below, and end your turn (safety rule 10).
+4. **Tell the owner** in a reply and end your turn (safety rule 10). For a link on superstables.com, `message_for_owner` is the whole reply: the page itself shows what the chain enforces and what it does not. For a page on this computer, use the checklist below.
 5. **When the owner says they've approved**, run `superstables budget wait --id ID --shown` (it waits up to 30 seconds; `--timeout` up to 300). If it is still `waiting_owner` (`final: false`), say so in one line and end your turn again. If `url` changes (`recover` can ask twice), write the new link first. After `expires`, the command ends `refused_precheck` and nothing was sent: run the same command again for a new link only if the owner asks (`setup` reuses the agent key).
 6. **Stop when `final` is `true`** and report the state:
-   - `ok` (setup) or `settled`: done. Start the next step only if the owner wants to continue; after a grant, confirm with `budget status`.
+   - `ok` (setup) or `settled`: done. After a grant (or a one-link set-up), confirm with `budget status`, then carry on with the purchases the owner already asked for, without asking again. Start another owner step only if the owner asked for it.
    - `refused_precheck` (exit 3): rejected, the link expired, or the chain did not match the plan. Read `reason`. A no is final: start a new approval only if the owner asks.
    - `unknown` (exit 5): the wallet may have sent. Run `budget status` and ask the owner to check wallet activity before anything else.
 
-**What to tell the owner, for every link:**
+**What to tell the owner, for a page on this computer:**
 
 ```
 - [ ] The link exactly as printed (`url`), and that only they use it
