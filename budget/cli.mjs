@@ -1505,7 +1505,8 @@ function printTable(header, rows, max) {
   writeSync(1, [header, ...rows].map(line).join("\n") + "\n");
 }
 /** The services on --rail and --chain, when given. `chainOf` names a service's chain as --chain spells it. */
-const onRailAndChain = (services, f, chainOf = (s) => s.chain) => services.filter((s) => (!f.rail || s.rail === f.rail) && (!f.chain || chainOf(s) === f.chain));
+const onRailAndChain = (services, f, chainOf = (s) => s.chain) =>
+  services.filter((s) => (!f.rail || (s.rail ?? RAIL_OF_CHAIN[chainOf(s)]) === f.rail) && (!f.chain || chainOf(s) === f.chain));
 /** "on devnet", "on the tempo rail", or "" without --rail and --chain: what the list was narrowed to, in words. */
 const narrowedTo = (f) => (f.chain ? ` on ${f.chain}` : f.rail ? ` on the ${f.rail} rail` : "");
 const SIMULATED_NOTE = "simulated: yes when the listing marks the output as prepared sample output, no when it marks it as not sample output (this does not verify that the data is real), not said when the listing does not say";
