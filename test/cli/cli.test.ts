@@ -231,7 +231,12 @@ const COMMANDS = [
 
 describe("the help", () => {
   it("says, for every command, whether it moves money, who runs it, an example and its exit codes", async () => {
-    const results = await Promise.all(COMMANDS.map((command) => run([...command, "--help"])));
+    // A few at a time: each one is two node processes (tsx and the CLI), and a CI runner may cap
+    // the number of threads its service can start.
+    const results: Awaited<ReturnType<typeof run>>[] = [];
+    for (let i = 0; i < COMMANDS.length; i += 4) {
+      results.push(...(await Promise.all(COMMANDS.slice(i, i + 4).map((command) => run([...command, "--help"])))));
+    }
     results.forEach((result, index) => {
       const name = COMMANDS[index].join(" ");
       expect(result.code, name).toBe(0);
