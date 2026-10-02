@@ -1,9 +1,7 @@
 # Quotes, attempts and receipts
 
-Every fact this client learns about a payment is written to disk before the next step starts.
-That is not bookkeeping for its own sake: a payment can fail in ways where the only honest
-answer is "here is what is known", and a record you can read afterwards is what makes that
-answer possible.
+The client records quotes, payment attempts, approval decisions and receipts on this computer. They
+are what you read to find out how a payment ended, including when its outcome is uncertain.
 
 ## The files
 
@@ -38,8 +36,7 @@ A quote is a read. It asks a paid endpoint for its 402 challenge, judges what th
 offers, and writes down the answer. Nothing is signed, nothing is paid, nothing is committed.
 
 What it freezes is the exact requirement the seller published — amount, asset, network,
-recipient — so that the owner later approves the same payment the agent was quoted. Everything
-on the quote is derived from that requirement; nothing is taken from the seller's
+recipient — so that the owner later approves the same payment the agent was quoted. The payment terms come from that requirement, not from the seller's
 self-declared resource URL, which a seller can write anything in.
 
 A quote also carries the local policy's verdict. A refusal is recorded on the quote rather than
@@ -48,8 +45,8 @@ pay it.
 
 | Quote status | Meaning |
 | --- | --- |
-| `open` | Good to pay. Quotes are good for 10 minutes |
-| `used` | An attempt exists for it. It can never be paid again |
+| `open` | Not used or expired yet. Check `policy.allowed`: the policy may refuse it. Quotes last 10 minutes |
+| `used` | An attempt started from it. Another is refused, unless the client reopened the quote because it could not ask the owner |
 | `stale` | The seller's terms changed between quoting and paying. Quote again |
 | `expired` | The 10 minutes ran out. Quote again |
 
@@ -61,8 +58,10 @@ A second `pay` on the same quote is refused (exit 2) with a message that names t
 that exists: "A payment for this quote already exists: attempt ATTEMPT_ID, STATE", and
 `superstables status ATTEMPT_ID` to follow it.
 
-One quote, at most one attempt, at most one payment. To pay the same service twice, quote it
-twice.
+If the approval page cannot start, or the local wallet cannot be reached, before the owner is asked,
+the client reopens the quote: pay it again only when the result says so. To pay the same service
+twice, quote it twice. The guard works within one process; it is not a lock across separate
+processes that share these files.
 
 ## Attempts
 
@@ -86,16 +85,16 @@ awaiting_approval ──┼── the owner says no ─────────�
 
 | State | Final | What it means |
 | --- | --- | --- |
-| `awaiting_approval` | no | The owner has been asked, and the attempt carries the `approvalUrl` they have to open. **Nothing is signed.** Nothing has left this machine |
-| `approved` | no | The owner signed in their wallet. The credential has not been sent yet |
+| `awaiting_approval` | no | The attempt is checking the quote or waiting for the owner. In browser mode, `approvalUrl` appears once the page is ready. **No payment credential has been sent** |
+| `approved` | no | The owner signed with their wallet. The payment credential has not been sent to the seller yet |
 | `submitting` | no | The request is being replayed with the payment credential attached |
-| `denied` | yes | The owner rejected it — on the approval page, or in MetaMask's own popup. Nothing was signed, nothing was submitted, the service was not called |
-| `expired` | yes | Nobody answered within the approval window (five minutes in browser mode, 120 seconds with the local wallet). Nothing was signed |
+| `denied` | yes | The owner rejected it — on the approval page, or in MetaMask's own popup. No payment credential was sent. The seller was only asked for its terms |
+| `expired` | yes | Nobody decided within the approval window: five minutes in browser mode, 120 seconds with the local wallet, by default. Cancel any open wallet prompt before asking again |
 | `abandoned` | yes | Nobody decided: whoever was waiting for the owner stopped first (`pay --wait` ran out, `pay` was interrupted, or the process serving the approval page stopped). Not a rejection. Nothing was submitted |
-| `failed` | yes | No payment happened, and that is known. See `reason`; `refusal` says which check refused when one did (`policy`, `invalid`, `unavailable`) |
+| `failed` | yes | No payment happened, and that is known. See `reason`; `refusal` says which check refused when one did (`policy`, `invalid`, `unavailable`, `approval_page`) |
 | `settled` | yes | The facilitator confirmed the transfer and the service answered 2xx. A receipt exists |
 | `paid_service_failed` | yes | The money moved, the service then answered a non-2xx status. A receipt exists |
-| `uncertain` | yes | The credential left this machine and what became of it is not known. **Never retried automatically** |
+| `uncertain` | yes | The credential may have been sent, and the outcome is unknown. **Never retried automatically** |
 
 A final state is never overwritten. Once an attempt has an ending, that ending is what the
 record says.
@@ -108,13 +107,13 @@ could not be served (or the local wallet could not be reached), the service aske
 again, or the facilitator reported that the transfer did not settle. In every one of these the
 outcome is established. Quote again and try again, if it makes sense to.
 
-`uncertain` means the credential was sent and the answer never came back, or came back without
-a payment receipt. Two cases produce it:
+`uncertain` means the outcome is unknown after the owner signed. It comes from an interruption after
+approval, or from one of these:
 
 - the service could not be reached after the credential was sent (a timeout, a dropped
   connection);
-- the service answered, but with no `PAYMENT-RESPONSE` header, so whether the transfer settled
-  is not something this machine knows.
+- the service answered without a readable `PAYMENT-RESPONSE` or `X-PAYMENT-RESPONSE` header (other
+  than an HTTP 402, which is recorded as `failed`), so whether the transfer settled is not known here.
 
 The client does not retry these, ever. Retrying a payment that may already have settled is how
 money gets spent twice, and a retry cannot tell you which case you were in.
@@ -127,14 +126,14 @@ money gets spent twice, and a retry cannot tell you which case you were in.
    recipient around that time. Base Sepolia:
    `https://sepolia.basescan.org/address/<the account that paid>` — in browser mode that is the
    MetaMask account you connected, which `~/.superstables/browser-wallet.json` also names.
-3. Check what was approved:
-   `grep -o '"status":"[^"]*"' ~/.superstables/records/approvals.jsonl | tail`. A `signed` line
-   means you did sign something; nothing after it means nothing more was decided. (With the
-   local wallet, `~/.superstables/wallet/audit.jsonl` says the same.)
-4. If the transfer is on chain, the payment happened and the service owes you an answer; take
-   it up with the service. If it is not there, and the authorization's window has passed
-   (`maxTimeoutSeconds` after signing, 300 seconds by default), it can no longer be submitted
-   by anyone, and it is safe to quote again.
+3. Check the approval record for this attempt in `~/.superstables/records/approvals.jsonl`. A
+   `signed` line means the client verified a signature. A missing line does not prove that nothing
+   was signed. With the local wallet, `~/.superstables/wallet/audit.jsonl` is the record.
+4. If the transfer is on chain, do not pay again; the service owes you an answer, so take it up
+   with the service. If it is not there, quote again only once the authorization can no longer be
+   used: the chain's time is past its `validBefore`, which is `maxTimeoutSeconds` (300 seconds by
+   default) after the typed data was prepared for signing. If you cannot tell, treat it as
+   unresolved.
 
 ## Approvals
 
@@ -145,9 +144,9 @@ verified terms, the reported context and the account that connected — and neve
 | Approval status | Meaning |
 | --- | --- |
 | `pending` | The link exists and is waiting for the owner. Nothing is signed |
-| `signed` | The owner signed in their browser wallet, and the signature was verified to be theirs |
+| `signed` | The owner signed with their browser wallet, and the signature was verified to be theirs |
 | `denied` | Rejected on the page, or rejected in MetaMask |
-| `expired` | Five minutes passed without a decision |
+| `expired` | The approval window ended before the client accepted a signature or a rejection; cancel any open wallet prompt |
 | `abandoned` | The process serving the page stopped before anyone decided |
 
 A payment the policy refuses never appears here at all: nobody was asked. The same is true of a
@@ -156,12 +155,12 @@ before an approval is created.
 
 ## Receipts
 
-A receipt is written only when the money moved — that is, for `settled` and for
-`paid_service_failed`. Its id is the attempt's id.
+A receipt is written when the seller's settlement response reports success, for `settled` and for
+`paid_service_failed`. Its id is the attempt's id. The client does not check the transfer on chain
+itself: the transaction link is how you check it.
 
 It records the terms that were paid, the payer (the account that signed — your MetaMask
-account, in the default mode), the transaction and its explorer URL, the
-facilitator's settlement response verbatim (success, payer, transaction, network, error
+account, in the default mode), the transaction and its explorer URL, selected fields of the settlement response (success, payer, transaction, network, error
 reason), how long the whole attempt took, and, separately, what the service did:
 
 | Field | Meaning |

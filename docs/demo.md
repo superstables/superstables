@@ -1,13 +1,13 @@
 # Running the demo
 
 A script for showing this to a room. It takes about five minutes and has two halves: a payment
-that goes through, and one you refuse. The second half is the point.
+that goes through, and one you refuse. 
 
 Everything is testnet. No real money moves at any stage.
 
 ## Before the room
 
-Done once, not on stage.
+Done once, not on stage, from a checkout of the client, with Node 20 or newer and MetaMask.
 
 ```bash
 npm install && npm run build
@@ -40,12 +40,11 @@ npx superstables doctor
 Every line should be a ✓ or a "-". "browser wallet: no account connected yet" is normal.
 
 Have two things on screen: the agent, and a browser window you can bring forward. Nothing else
-needs to be running — that is worth saying out loud at the start, because the usual version of
-this demo has a wallet daemon and a server in two terminals.
+needs to be running.
 
 | Window | What it shows |
 | --- | --- |
-| 1 | the agent — the conversation. Claude Code has been run end to end with the MetaMask flow |
+| 1 | the agent: the Claude Code conversation |
 | 2 | the browser, where the approval page and MetaMask's popup appear |
 
 ## Part one: a payment that goes through
@@ -64,7 +63,7 @@ marked as such) show up only when the question matches what they sell.
 > Quote it for BTC. Don't pay yet.
 
 It calls `quote` and reports the price, the network and the recipient address, and that nothing
-has been paid. Say the quiet part out loud: reading a price from an x402 service is free, and
+has been paid. Explain that reading the price signs nothing and pays nothing, and
 this quote has frozen the seller's exact terms, so what you approve is what the agent was
 quoted.
 
@@ -77,7 +76,6 @@ It calls `pay` and answers with a link:
 > The owner has been asked to approve 0.01 USDC to 0x… on Base Sepolia (testnet). Open this
 > link to review and sign in MetaMask: http://127.0.0.1:4412/approve/… Nothing is signed yet.
 
-The agent has not paid anything. It cannot: all it can do is hand you that link.
 
 **4. Open the link.**
 
@@ -85,7 +83,7 @@ The page shows, in large type:
 
 - **0.01 USDC**
 - **To** the full recipient address, in monospace
-- **On** Base Sepolia, with a *testnet* tag
+- **Network** Base Sepolia, with a *testnet* tag
 - **Expires in** a countdown
 - a separate block: **Reported by the agent (not verified)** — the service name, the URL and its
   description
@@ -103,7 +101,7 @@ account.
 **6. Press "Review in wallet" and sign.**
 
 MetaMask shows the signature request: a `TransferWithAuthorization` with the recipient and the
-value in it. Point at the `to` and the `value` before you press sign, and mention the one wart:
+value in it. Point at the `to` and the `value` before you sign, and explain that
 MetaMask shows the value in USDC's smallest unit, so `10000` is 0.01 USDC. The page says the
 same thing underneath the amount.
 
@@ -122,7 +120,7 @@ npx superstables receipts --limit 1
 ```
 
 The amount, the payer, the recipient, the transaction hash and the explorer link. Open the link:
-`https://sepolia.basescan.org/tx/<hash>` is a real transfer on a real chain, a few seconds old.
+`https://sepolia.basescan.org/tx/<hash>` is the transfer on Base Sepolia, a few seconds old.
 Point out that the payer address is your MetaMask account, that nothing on this machine ever
 held its key, and that a facilitator paid the gas.
 
@@ -141,31 +139,27 @@ The agent quotes, calls `pay`, and hands you a new link. Open it.
   popup. The page says "You rejected this payment in your wallet. Nothing was signed.", and the
   payment ends there.
 
-Either way, the page says the payment was rejected, and the agent reports:
+Either way, the page shows the rejection, and the agent reports that the owner rejected the
+payment and that nothing was signed or submitted.
 
-> The owner rejected this payment in their wallet. Nothing was signed or submitted, and the
-> service was not called.
-
-Then show that this is true rather than merely stated:
+Then show the records:
 
 ```bash
-npx superstables receipts --limit 5                                   # still one receipt
+npx superstables receipts --limit 5                                   # no new receipt for the rejected request
 grep -o '"status":"[^"]*"' ~/.superstables/records/approvals.jsonl | tail -3
 ```
 
-The approvals log has the request going `pending` and then `denied`, and nothing else. No
-signature exists, so there was nothing to submit and nothing to revoke — and the seller was
-never called, because there was nothing to call it with.
+For this request, the approvals log shows `pending` and then `denied`, and no new receipt
+appears. The seller was asked for its terms, but no payment credential was sent to it.
 
 In this flow, the agent asks and the owner decides each payment. A budget, where the owner
-approves once and the agent then buys on its own, is a separate tool with its own demo: see
-[Budget](budget.md).
+approves once and the agent then buys on its own, is a separate tool: see [Budget](budget.md).
 
 ## If there is time
 
-- **Let one expire.** Ask for a payment and do nothing. After five minutes the page says so and
-  the agent reports `expired`. Nothing was signed.
-- **Set a cap it will break.** Put `per_call: 0.005 USDC` in `~/.superstables/policy.yaml` and
+- **Let one expire.** Ask for a payment and do nothing. After five minutes the page and the agent report `expired`. Cancel any open wallet prompt
+  before asking for another payment.
+- **Set a cap it will break.** Set `per_call: 0.005 USDC` under `caps:` in `~/.superstables/policy.yaml` and
   try to pay 0.01. The refusal happens before you are asked: there is no link, because there is
   nothing to approve. Say plainly that this is software policy, not a chain limit — see
   [security.md](security.md).
@@ -181,8 +175,9 @@ approves once and the agent then buys on its own, is a separate tool with its ow
 rm -f ~/.superstables/records/*.jsonl        # forget quotes, attempts, receipts and approvals
 ```
 
-Your MetaMask account is untouched by any of this. To rehearse without touching your usual
-state, put `--home /tmp/superstables-demo` before every subcommand.
+Your MetaMask account is untouched by any of this. To rehearse in a separate home, run `export SUPERSTABLES_HOME=/tmp/superstables-demo` before setup
+and the CLI commands, and add `-e SUPERSTABLES_HOME=/tmp/superstables-demo` to the `claude mcp add`
+command so the MCP server uses the same home.
 
 ## Troubleshooting
 
@@ -191,13 +186,13 @@ state, put `--home /tmp/superstables-demo` before every subcommand.
 | The page says "MetaMask (or another browser wallet) is needed" | No `window.ethereum` in this browser | Install MetaMask, or open the link in the browser that has it. The Reject button still works |
 | MetaMask never opens when you press Connect | Its popup was suppressed, or it is locked | Open the MetaMask extension, unlock it, and press Connect again |
 | The value in MetaMask looks a million times too big | It is in USDC's smallest unit | `10000` is 0.01 USDC. The page prints the conversion under the amount |
-| The page says "This link is unavailable" | The link was already used, rejected, or expired, or the agent restarted | Ask the agent to quote and pay again |
+| The page says "This link is unavailable" | The link was already used, rejected, or expired, or the agent restarted | Ask the agent for the original attempt's `payment_status` first. Do not pay again if it settled or is uncertain |
 | Agent: "the approval page could not start" and names a port | `SUPERSTABLES_APPROVE_PORT` fixes a port that is busy, probably with another payment waiting for its owner | Leave that process running. Unset `SUPERSTABLES_APPROVE_PORT`, or set it to a free port, then pay the same quote again |
-| The page's countdown runs out while you look at MetaMask | Five minutes passed | Quote and pay again; nothing was signed |
+| The page's countdown runs out while you look at MetaMask | Five minutes passed | Cancel the open wallet prompt and check the attempt's status. Quote again only once it has ended without a payment |
 | Payment fails: "the payment did not settle" with an insufficient-funds reason | The connected account has no test USDC | Top it up at <https://faucet.circle.com>; MetaMask shows the balance |
-| Payment fails: "No facilitator could be reached" | All three public facilitators are unreachable | Check connectivity, then `superstables doctor`, which reports each facilitator separately. Nothing was signed, so nothing was spent |
+| Payment fails: "No facilitator could be reached" | All three public facilitators are unreachable | Check connectivity, then `superstables doctor`, which reports each facilitator separately. Check the attempt's status before paying again |
 | `find_services` shows the demo service with `live: false` | The hosted service did not answer 402 | Check connectivity; or run the seller yourself and set `SUPERSTABLES_DEMO_SERVICE_URL` to it |
 | Agent: "Payment settled … but the service answered HTTP 5xx" | The money moved and the service then failed | Do not pay again. The receipt records both facts |
 | Agent: "The payment may or may not have settled" | The credential was sent and no answer came back | Do not retry. Follow the steps in [records.md](records.md#why-failed-and-uncertain-are-different) |
 | Claude Code `/mcp` does not list superstables | The server is not configured, or it will not start | `claude mcp list`, then run `node dist/mcp/main.js` by hand and read stderr |
-| The agent sits for twenty seconds before giving you the link | `pay` waits for a decision before it answers, and you have not made one yet | Nothing is wrong. For a brisker demo, start the agent with `SUPERSTABLES_MCP_WAIT_MS=3000` and call `payment_status` after approving |
+| The agent does not give you the link at once | The MCP `pay` tool answers once a link exists or the attempt ends; it may still be checking the seller's terms | Wait for the tool result. After approving, ask for `payment_status` with the attempt id |

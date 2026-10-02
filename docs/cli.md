@@ -1,6 +1,6 @@
 # CLI reference
 
-Every `superstables` command, with the text its `--help` prints. The help is written to be enough on its own: what the command does, whether it can move money, who runs it, an example, what it prints and its exit codes. Budgets have their own page: [Budget CLI reference](cli-budget.md).
+The `superstables` commands other than budgets, with the text their `--help` prints. The help is written to be enough on its own: what the command does, whether it can move money, who runs it, an example, what it prints and its exit codes. Budgets have their own page: [Budget CLI reference](cli-budget.md).
 
 This page is generated from the help by `npm run docs:cli`, and CI fails when the two differ.
 

@@ -8,18 +8,18 @@ Superstables connects service discovery, pricing and payment for AI agents. The 
 two ways to pay:
 
 - **Approve each payment.** Through MCP, a CLI or a TypeScript SDK, an agent finds a paid
-  service, retrieves its payment terms and requests your approval. Once you sign in your wallet,
-  the client sends the signed request and records the payment outcome and the service's
-  response. The agent can request a payment, but it cannot approve one.
+  service, retrieves its payment terms and requests your approval. Once you approve and sign
+  with your wallet, the client sends the signed request and records the payment outcome and the
+  service's response. The agent can request a payment, but it cannot approve one.
 - **Grant a budget once.** With [`superstables budget`](#on-chain-budgets-superstables-budget), a
   separate tool, you give an agent key a spending budget on chain from your own wallet. The agent
-  then buys within it without asking you again, until the budget runs out, expires on Tempo, or
-  you revoke it. The chain enforces the total.
+  then buys without asking you again, within an allowance the chain enforces, until it is spent or
+  you revoke it. On Tempo, it also expires, and can refill each period.
 
 Both are testnet only. Per-payment approval uses [x402](https://x402.org) with the `exact`
 scheme and test USDC on Base Sepolia. Budgets run on Base Sepolia and five other EVM testnets,
-Tempo Moderato and Solana devnet. There is no mainnet support. In the default MetaMask flow and
-in budgets, your signing key remains in your wallet.
+Tempo Moderato and Solana devnet. With browser-wallet approval, your signing key remains in your
+wallet; budget purchases use a separate agent key stored on this computer.
 
 ## What the demo shows
 

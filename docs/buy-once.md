@@ -6,8 +6,7 @@ wallet. Nothing is paid without that approval, and every payment needs a new one
 without an approval each time, see [Budget](budget.md).
 
 **Testnet only.** x402 with the `exact` scheme, test USDC on Base Sepolia (`eip155:84532`, token
-`0x036CbD53842c5426634e7929541eC2318f3dCF7e`, 6 decimals). No real money moves. A seller that asks
-for another network, asset or scheme is refused before the owner is asked.
+`0x036CbD53842c5426634e7929541eC2318f3dCF7e`, 6 decimals). No real money moves. If the seller offers no payment option the client supports, it is refused before the owner is asked.
 
 ## What you need
 
@@ -20,6 +19,9 @@ for another network, asset or scheme is refused before the owner is asked.
 
 ## 1. Find a service (agent)
 
+The output below is from real runs on Base Sepolia. Use the quote id, attempt id and approval link
+from your own run.
+
 ```bash
 npx superstables find "btc price"
 ```
@@ -31,9 +33,11 @@ x402-coin-api.vercel.app       Coin price API (third party)   0.001 USDC per req
 superstables-demo-market-data  Superstables demo market data  0.01 USDC per request   base-sepolia  yes  evm base-sepolia  yes   no
 ```
 
-Under the table, `find` prints the commands to pay each listing, buy once first. `pay yes` means
-this way of paying can call it. With `--json`, each service has `commands`, and `next` is the first
-one.
+The Superstables demo market data service is built in. `SUPERSTABLES_DEMO_SERVICES=on` adds
+Superstables' simulated demo services to the list. Under the table, `find` prints the commands to pay
+each listing, buy once first. `pay yes` means
+this way of paying can call it. With `--json`, each service has `commands`; `next` is the first command to run, or `null` when
+this client cannot pay the listing.
 
 ## 2. Price it without paying (agent)
 
@@ -48,7 +52,7 @@ npx superstables quote --service superstables-demo-market-data --param asset=BTC
   price           0.01 USDC
   network         Base Sepolia (testnet)
   recipient       0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E
-  expires         2026-10-01T23:04:26.243Z (10 minutes; one quote starts at most one payment)
+  expires         2026-10-01T23:18:26.048Z (10 minutes; one quote starts at most one payment)
   policy          allowed by /home/you/.superstables/policy.yaml
     ok       kill_switch  off
     ok       deny         empty
@@ -57,13 +61,16 @@ npx superstables quote --service superstables-demo-market-data --param asset=BTC
     ok       caps.per_call 0.01 USDC, at most 0.05 USDC
     ok       caps.per_day 0 USDC paid today (UTC) + this 0.01 = 0.01, at most 1 USDC
 
-Nothing has been paid. Next: `superstables pay b54cdbae-339a-4c84-965c-2d146ee5a945` asks the wallet's owner to approve it; the owner's wallet checks the policy again.
 ```
 
-A quote reads the seller's HTTP 402 answer and records its exact terms. Nothing is signed. It is
-good for 10 minutes, and it can start one payment. `quote <url>` works for any x402 URL.
+A quote reads the seller's HTTP 402 answer and records its exact terms, without signing or paying.
+It expires after 10 minutes. To quote a URL directly, run `npx superstables quote '<url>'` with its
+query parameters; the seller must accept GET and offer the payment terms above.
 
 ## 3. Ask the owner (agent)
+
+If your shell tool cannot show output while a command runs, use the detached command in
+[From an agent](#from-an-agent) instead of the one below.
 
 ```bash
 npx superstables pay b54cdbae-339a-4c84-965c-2d146ee5a945
@@ -77,7 +84,8 @@ Open this link and approve the payment in your browser wallet:
   http://127.0.0.1:4412/approve/324a415688aa0b48d2ee25a8a1e9326e
 ```
 
-`pay` asks the seller for its terms again, refuses if they changed, and serves the approval page.
+`pay` asks the seller for its terms again and refuses if they changed. The client checks the spend
+policy again before it serves the approval page.
 Then it waits until the owner decides, for up to 5 minutes. The page works only while `pay` runs.
 
 ## 4. Approve or reject (owner)
@@ -89,14 +97,15 @@ the agent says. What the agent says the payment is for is shown apart, under "Re
 
 1. Press **Connect wallet**. The first time, the wallet asks to add or switch to Base Sepolia.
 2. Press **Review in wallet**, and check the recipient and the amount in the wallet before you
-   sign. The wallet shows the amount in USDC's smallest unit: `10000` is 0.01 USDC.
-3. Sign, or press **Reject** on the page or in the wallet. A rejection signs nothing and pays
-   nothing, and the service is not called.
+   sign. If the wallet shows USDC's smallest unit, `10000` means 0.01 USDC.
+3. Sign with your wallet, or reject the request on the page or in the wallet. Rejecting before
+   signing produces no signature and no payment, and the client sends nothing more to the service.
 
 ## 5. Read the outcome (agent)
 
-When the owner signs, a facilitator settles the payment, the client calls the service and `pay`
-prints the result:
+After the owner signs, the client sends the request again with the signed payment authorization.
+The seller has a facilitator settle the payment and answers. On success, `pay` prints the receipt
+and the service's response:
 
 ```
   approved
@@ -133,15 +142,16 @@ npx superstables receipts --limit 5
 | State | What happened | Exit | What next |
 | --- | --- | --- | --- |
 | `settled` | Paid, and the service answered | 0 | Use the answer |
-| `denied` | The owner rejected it. Nothing was signed or paid | 3 | Ask again only if the owner wants to |
+| `denied` | The owner rejected it; the client submitted no payment | 3 | Ask again only if the owner wants to |
 | `expired` | Nobody decided within 5 minutes. Nothing was paid | 1 | A new quote, then `pay` |
 | `abandoned` | `pay` stopped before anyone decided (it was stopped, or `--wait` ran out). Not a rejection. Nothing was paid | 1 | A new quote, then `pay`, with no short `--wait` |
 | `failed` | Nothing was paid, and that is known: the policy refused it, the terms changed, or the payment did not settle. `reason` says which | 1 or 3 | Read `reason` and `next` |
 | `paid_service_failed` | Paid, but the service answered with an error | 4 | Do not pay again. Report the receipt |
-| `uncertain` | The payment left this machine and its outcome is not known | 5 | Do not pay again. Follow [Quotes, attempts and receipts](records.md#why-failed-and-uncertain-are-different) |
+| `uncertain` | The payment may or may not have settled | 5 | Do not pay again. Follow [Quotes, attempts and receipts](records.md#why-failed-and-uncertain-are-different) |
 
-A quote starts at most one payment. `pay` on a used quote is refused (exit 2) and names the
-payment it started; follow that one with `superstables status <attempt-id>`.
+`pay` on a used quote is refused (exit 2) and names the attempt it started; follow it with
+`npx superstables status <attempt-id>`. If the approval page could not start or the local wallet was
+not running, `next` says the same quote can still be paid.
 
 ## From an agent
 
@@ -152,8 +162,10 @@ must keep running until the owner decides, so start it detached and read the lin
 nohup npx superstables pay <quote-id> --json > pay.json 2> pay.log < /dev/null &
 ```
 
-Show the owner the link exactly as printed, with the price and the recipient, then poll
-`npx superstables status <attempt-id> --json` until `final` is `true`. Do not use a short `--wait`:
+Read `pay.log` for the attempt id (its first line) and the approval link. Show the owner the link
+exactly as printed, with the price and the recipient. Then poll
+`npx superstables status <attempt-id> --json` until `final` is `true`, and follow the outcomes table
+above. `pay.json` holds the same result once `pay` ends. Do not use a short `--wait`:
 it ends the attempt as `abandoned` before the owner can act.
 
 With MCP, the `pay` tool returns the link at once and the server keeps the page open;
