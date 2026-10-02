@@ -66,28 +66,26 @@ mainnet.
 
 ## Quick start
 
-You need MetaMask in your browser and Node 20 or newer. The client runs from a checkout:
+You need MetaMask in your browser and Node 20 or newer. Install the client from npm:
 
 ```bash
-git clone https://github.com/superstables/superstables-client.git
-cd superstables-client
-npm install
-npm run build
-npx superstables setup
+npm install -g @superstables/client
+superstables setup
 ```
 
 `setup` creates `~/.superstables`, writes a starting `policy.yaml`, and prints the connection
 steps with your local paths. In the default MetaMask mode, it does not create a signing key.
+To run the client from a checkout of this repository instead, see
+[docs/install.md](docs/install.md#from-a-checkout).
 
 **Connect an agent.** Claude Code:
 
 ```bash
-claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- node "$(pwd)/dist/mcp/main.js"
+claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- superstables mcp
 ```
 
-Another MCP client: point its configuration at `superstables mcp`, or at
-`node <checkout>/dist/cli/main.js mcp`. [docs/install.md](docs/install.md#any-other-mcp-client)
-has example entries.
+Another MCP client: point its configuration at `superstables mcp`.
+[docs/install.md](docs/install.md#any-other-mcp-client) has example entries.
 
 **Get MetaMask ready.** Install it from <https://metamask.io/download> if needed. Add Base
 Sepolia, or accept the approval page's network prompt when you first connect. Fund your
@@ -116,8 +114,10 @@ What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## The CLI
 
-Run as `npx superstables …` from the repository root, or `npm link` once and then `superstables`
-anywhere. `superstables --help` and each command's `--help` are written to be enough on their own:
+After `npm install -g @superstables/client`, run it as `superstables …`. In a checkout, run
+`npm link` once to put the same command on your PATH. Don't type `npx superstables` outside a
+checkout: npx would download whatever package the npm registry has under that name, which is not
+this client. `superstables --help` and each command's `--help` are written to be enough on their own:
 what the command does, whether it can move money, who runs it, an example, what it prints and
 its exit codes. Two options go before the command: `--home <dir>` puts all state somewhere other
 than `~/.superstables`, and `--wallet browser|local` chooses who signs (browser by default;
@@ -292,8 +292,8 @@ appears. To inspect the seller side of the flow, run the demo seller from this r
 observe its HTTP 402 response, facilitator interaction and log entry for each paid call:
 
 ```bash
-npx superstables demo-service --pay-to 0xYourSellerAddress
-SUPERSTABLES_DEMO_SERVICE_URL="http://127.0.0.1:4402/v1/market" npx superstables find
+superstables demo-service --pay-to 0xYourSellerAddress
+SUPERSTABLES_DEMO_SERVICE_URL="http://127.0.0.1:4402/v1/market" superstables find
 ```
 
 Set `--pay-to` to an address you control. Test funds sent to an address you do not control
@@ -307,8 +307,8 @@ in `~/.superstables/wallet/key` and serves its own approval page, protected by a
 URL fragment.
 
 ```bash
-npx superstables --wallet local setup        # creates the key, prints the address
-npx superstables --wallet local wallet serve # leave it running
+superstables --wallet local setup        # creates the key, prints the address
+superstables --wallet local wallet serve # leave it running
 ```
 
 Set `SUPERSTABLES_WALLET=local` when starting the MCP server to select this mode for Claude.
@@ -326,14 +326,14 @@ Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia or
 optional period and seller list enforced on chain; and `solana`, an SPL token delegate on Solana devnet.
 
 ```bash
-npx superstables budget setup      --rail evm                        # agent key; the owner connects a wallet
-npx superstables budget fund-agent --rail evm                        # gas for the agent key, approved in the wallet
-npx superstables budget doctor     --rail evm                        # keys, addresses, balances; what to top up
-npx superstables budget grant      --rail evm --amount 0.01          # an allowance from the owner's wallet
-npx superstables budget status     --rail evm                        # is there a budget here, and what is left
-npx superstables budget preflight  --rail evm --url <seller url>     # the seller's price and address; signs nothing (every rail)
-npx superstables budget buy        --rail evm --url <seller url> --max 0.002
-npx superstables budget revoke     --rail evm                        # the kill switch, approved in the wallet
+superstables budget setup      --rail evm                        # agent key; the owner connects a wallet
+superstables budget fund-agent --rail evm                        # gas for the agent key, approved in the wallet
+superstables budget doctor     --rail evm                        # keys, addresses, balances; what to top up
+superstables budget grant      --rail evm --amount 0.01          # an allowance from the owner's wallet
+superstables budget status     --rail evm                        # is there a budget here, and what is left
+superstables budget preflight  --rail evm --url <seller url>     # the seller's price and address; signs nothing (every rail)
+superstables budget buy        --rail evm --url <seller url> --max 0.002
+superstables budget revoke     --rail evm                        # the kill switch, approved in the wallet
 ```
 
 `superstables budget --help` is enough to use it: where the owner and the agent start, which rail and `--chain` serve
@@ -345,8 +345,8 @@ USDC stays in the owner's wallet until a purchase pulls exactly its price. `--ma
 the budget token (`--max 0.002` is 0.002 USDC). A `buy` before setup and grant is refused (exit 3) with nothing signed,
 and its `next` names the owner's commands.
 
-An npm install of the client includes it as a self-contained build, and it runs from a
-checkout of this repository too, after `npm ci` and `npm run build`. It runs on Linux and macOS; on Windows, run it in WSL. Owner actions use a local page on `127.0.0.1` and a
+An npm install of the client (`npm install -g @superstables/client`) includes it as a
+self-contained build, and it runs from a checkout of this repository too, after `npm ci` and `npm run build`. It runs on Linux and macOS; on Windows, run it in WSL. Owner actions use a local page on `127.0.0.1` and a
 browser extension wallet on the same computer: any EVM browser wallet (MetaMask, Rabby, Coinbase
 Wallet, ...) on `evm`, any EVM browser wallet that can add a custom network on `tempo`, and any
 Solana wallet (Phantom, Solflare, Backpack, ...) on `solana`, with no account. On any rail, `setup --hosted` moves them to

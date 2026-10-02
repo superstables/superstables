@@ -5,6 +5,8 @@
   "license": "Apache-2.0",
   "repository": { "type": "git", "url": "https://github.com/superstables/superstables-client.git" },
   "homepage": "https://www.superstables.com",
+  "bugs": { "url": "https://github.com/superstables/superstables-client/issues" },
+  "keywords": ["x402", "mpp", "ai-agents", "mcp", "payments", "usdc", "testnet"],
   "type": "module",
   "engines": { "node": ">=20" },
   "bin": { "superstables": "./dist/cli/main.js" },
@@ -13,6 +15,7 @@
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
   },
+  "publishConfig": { "access": "public" },
   "files": ["dist", "policy.example.yaml", "README.md", "CHANGELOG.md", "LICENSE"],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/budget-build.mjs",

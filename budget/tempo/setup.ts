@@ -318,7 +318,7 @@ async function main() {
         held = await tokenBalance(TOKEN_ADDRESS, owner).catch(() => held)
       }
     } catch (e) {
-      console.log(`the faucet did not answer (${(e as Error).message}); fund the owner later with: npx tsx budget/tempo/setup.ts --fund-only`)
+      console.log(`the faucet did not answer (${(e as Error).message}); fund the owner later with: superstables budget setup --rail tempo --fund-only`)
     }
   }
   console.log(`owner ${owner}: pathUSD ${held === null ? 'unknown' : fromBaseUnits(held)}. The agent needs no funds.`)

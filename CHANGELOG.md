@@ -11,8 +11,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 An owner can now give an agent an on-chain budget once, and the agent buys within it without
 an approval per payment: `superstables budget`, on testnets, across three payment rails and
-eight chains. The release also ships a standalone agent skill with the whole CLI, makes the CLI
-usable from its own help and exit codes, and removes the Claude Desktop bundle.
+eight chains. The client is now on npm as `@superstables/client`. The release also ships a
+standalone agent skill with the whole CLI, makes the CLI usable from its own help and exit codes,
+and removes the Claude Desktop bundle.
 
 ### Added
 
@@ -95,6 +96,10 @@ usable from its own help and exit codes, and removes the Claude Desktop bundle.
   the whole `superstables` CLI, budget included, bundled into plain JavaScript that needs only
   Node 20 or newer (`node <skill folder>/scripts/superstables.mjs`). `--version` names the
   build, and `THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+- **Install from npm.** `npm install -g @superstables/client` installs the `superstables`
+  command, with `superstables budget` and the MCP server (`superstables mcp`); the package is
+  also the TypeScript SDK. Until this release the client ran only from a checkout of this
+  repository, which still works.
 - **Help, `--json` and exit codes across the CLI.** Each command's `--help` says what it does,
   whether it can move money, who runs it, an example, what it prints and its exit codes. `find`,
   `quote`, `pay`, `status`, `receipts` and `attempts` take `--json` and print one JSON value on

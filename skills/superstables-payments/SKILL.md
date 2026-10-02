@@ -17,7 +17,7 @@ Terms used below: the **owner** controls the wallet and approves; the **agent** 
 ## Running the CLI
 
 <!-- run: scripts/skill.mjs puts the standalone skill's own paragraph here -->
-`superstables` is the client's command: `superstables` where the client is installed, or `npx superstables` from a checkout of the client repository (after `npm ci` and `npm run build` at its root). It needs Node 20 or newer, on Linux or macOS (on Windows, WSL). Keys and state are in `$SUPERSTABLES_HOME` (default `~/.superstables`).
+`superstables` is the client's command, on the PATH once the client is installed (`npm install -g @superstables/client`) or linked from a checkout of the client repository (`npm ci`, `npm run build` and `npm link` at its root). Never run it as `npx superstables`: where the client is not found, npx downloads and runs whatever package the npm registry has under that name. It needs Node 20 or newer, on Linux or macOS (on Windows, WSL). Keys and state are in `$SUPERSTABLES_HOME` (default `~/.superstables`).
 <!-- /run -->
 
 Every command has `--help` that lists its flags, whether it moves money, who runs it, what it prints and its exit codes. Read a command's `--help` before its first use instead of guessing flags. `superstables budget --help` also maps chain names to rails and lists the owner's steps per rail. Every `superstables budget` command accepts `--site <origin>`; when you were told to pass one, pass it to each.

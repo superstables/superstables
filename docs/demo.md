@@ -7,18 +7,18 @@ Everything is testnet. No real money moves at any stage.
 
 ## Before the room
 
-Done once, not on stage, from a checkout of the client, with Node 20 or newer and MetaMask.
+Done once, not on stage, with Node 20 or newer and MetaMask.
 
 ```bash
-npm install && npm run build
-npx superstables setup
+npm install -g @superstables/client
+superstables setup
 ```
 
 Connect the agent with the demo services switch on, so the prepared demo services are listed
 next to the real sellers:
 
 ```bash
-claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- node "$(pwd)/dist/mcp/main.js"
+claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- superstables mcp
 ```
 
 In MetaMask: have an account with test USDC on Base Sepolia — 1 USDC is plenty at 0.01 USDC a
@@ -34,7 +34,7 @@ optional extra at the end.
 Check the machine:
 
 ```bash
-npx superstables doctor
+superstables doctor
 ```
 
 Every line should be a ✓ or a "-". "browser wallet: no account connected yet" is normal.
@@ -116,7 +116,7 @@ and shows the BTC price it paid for.
 **7. Show the receipt.**
 
 ```bash
-npx superstables receipts --limit 1 --json
+superstables receipts --limit 1 --json
 ```
 
 The amount, the payer, the recipient, the transaction hash and the explorer link. Open the link:
@@ -146,7 +146,7 @@ payment and that nothing was signed or submitted.
 Then show the records:
 
 ```bash
-npx superstables receipts --limit 5                                   # no new receipt for the rejected request
+superstables receipts --limit 5                                   # no new receipt for the rejected request
 grep -o '"status":"[^"]*"' ~/.superstables/records/approvals.jsonl | tail -3
 ```
 
@@ -166,7 +166,7 @@ approves once and the agent then buys on its own, is a separate tool: see [Budge
   [security.md](security.md).
 - **Pay the same quote twice.** Ask the agent to pay the quote it already paid. It is refused:
   one quote, at most one payment. See [records.md](records.md).
-- **Run the seller too.** `npx superstables demo-service --pay-to 0xYourSellerAddress` with
+- **Run the seller too.** `superstables demo-service --pay-to 0xYourSellerAddress` with
   `SUPERSTABLES_DEMO_SERVICE_URL=http://127.0.0.1:4402/v1/market` set for the agent, and the
   seller's side of the payment logs one line per paid call in your terminal.
 
@@ -195,5 +195,5 @@ command so the MCP server uses the same home.
 | `find_services` shows the demo service with `live: false` | The hosted service did not answer 402 | Check connectivity; or run the seller yourself and set `SUPERSTABLES_DEMO_SERVICE_URL` to it |
 | Agent: "Payment settled … but the service answered HTTP 5xx" | The money moved and the service then failed | Do not pay again. The receipt records both facts |
 | Agent: "The payment may or may not have settled" | The credential was sent and no answer came back | Do not retry. Follow the steps in [records.md](records.md#why-failed-and-uncertain-are-different) |
-| Claude Code `/mcp` does not list superstables | The server is not configured, or it will not start | `claude mcp list`, then run `node dist/mcp/main.js` by hand and read stderr |
+| Claude Code `/mcp` does not list superstables | The server is not configured, or it will not start | `claude mcp list`, then run `superstables mcp` by hand and read stderr |
 | The agent does not give you the link at once | The MCP `pay` tool answers once a link exists or the attempt ends; it may still be checking the seller's terms | Wait for the tool result. After approving, ask for `payment_status` with the attempt id |

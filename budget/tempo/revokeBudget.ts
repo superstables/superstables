@@ -111,7 +111,7 @@ async function main() {
     if (feeBalance < MIN_FEE_BALANCE) {
       const reason = `the owner ${owner} holds ${fromBaseUnits(feeBalance)} of its fee token ${feeToken}, less than the ${fromBaseUnits(MIN_FEE_BALANCE)} the revoke's network fee may need`
       console.log(`REFUSED: ${reason}. Nothing was sent.`)
-      process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: 'fund the owner (npx tsx budget/tempo/setup.ts --fund-only), then revoke again' }))
+      process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: 'fund the owner (superstables budget setup --rail tempo --fund-only), then revoke again' }))
     }
     const data = revokeCalldata(agentAddress)
     useHostedAgent(agentAddress) // a hosted chain: this agent key signs the request to the site
