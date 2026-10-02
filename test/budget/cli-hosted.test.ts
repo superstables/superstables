@@ -421,7 +421,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     const first = await start();
     expect(first.result).toMatchObject({ command: "setup", state: "waiting_owner", final: false, action: "setup", matchCode: "ABC-DEF" });
     expect(first.result.terms).toMatchObject({ title: "Link this agent, send it gas and approve a budget of 0.01 test USDC", amount: "0.01", unit: "USDC" });
-    expect(first.result.terms.summary).toMatch(/1\. Link this agent.*2\. Send 0\.002 ETH.*3\. Allow the agent to withdraw up to 0\.01 USDC/);
+    expect(first.result.terms.summary).toMatch(/1\. Link this agent.*2\. Send 0\.0001 ETH.*3\. Allow the agent to withdraw up to 0\.01 USDC/);
     expect(first.result.terms.notEnforced.join(" ")).toMatch(/No expiry/);
     expect(first.result.message_for_owner).toContain(first.result.url);
     expect(first.result.message_for_owner).toContain("Link this agent, send it gas and approve a budget of 0.01 test USDC");
@@ -444,7 +444,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     expect(done.result).toMatchObject({
       ok: true, command: "setup", state: "ok", final: true, owner: OWNER, agent: AGENT, approvals: "hosted", site: site.url, linked: true,
       amount: "0.01", remaining: "0.01", tx: { fundAgent: FUND_HASH, grant: GRANT_HASH },
-      steps: [{ kind: "fund_agent", state: "settled", tx: FUND_HASH, amount: "0.002" }, { kind: "grant", state: "settled", tx: GRANT_HASH, amount: "0.01" }],
+      steps: [{ kind: "fund_agent", state: "settled", tx: FUND_HASH, amount: "0.0001" }, { kind: "grant", state: "settled", tx: GRANT_HASH, amount: "0.01" }],
     });
     const pub = publicFile();
     expect(pub).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
@@ -467,7 +467,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
       ok: false, state: "refused_precheck", final: true, owner: OWNER, linked: true, approvals: "hosted", tx: { fundAgent: FUND_HASH },
       steps: [{ kind: "fund_agent", state: "settled", tx: FUND_HASH }, { kind: "grant", state: "refused_precheck", reasonCode: "owner_rejected" }],
     });
-    expect(done.result.reason).toMatch(/^linked: yes; gas: 0\.002 ETH sent; budget: nothing was sent: rejected: The owner rejected this in their wallet\.$/);
+    expect(done.result.reason).toMatch(/^linked: yes; gas: 0\.0001 ETH sent; budget: nothing was sent: rejected: The owner rejected this in their wallet\.$/);
     expect(done.result.amount).toBeUndefined();
     expect(done.result.next).toMatch(/the agent is linked and has gas\. Tell the owner .* only if the owner asks: superstables budget grant --rail evm --amount A$/);
     const pub = publicFile();
