@@ -1,0 +1,55 @@
+name: test
+on:
+  pull_request: {}
+  push:
+    branches: [main, staging]
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, superstables-ci]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - name: Start a temporary test database
+        shell: bash
+        run: |
+          set -euo pipefail
+          PG_BIN=$(dirname "$(find /usr/lib/postgresql -path '*/bin/pg_ctl' -type f | sort -V | tail -n 1)")
+          test -x "$PG_BIN/pg_ctl"
+          PGDIR=$(mktemp -d "$RUNNER_TEMP/postgres.XXXXXX")
+          PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+          printf 'CI_PG_BIN=%s\nCI_PG_DIR=%s\n' "$PG_BIN" "$PGDIR" >> "$GITHUB_ENV"
+          "$PG_BIN/initdb" -D "$PGDIR/data" -U ci --auth=trust >/dev/null
+          "$PG_BIN/pg_ctl" -D "$PGDIR/data" -o "-p $PORT -k $PGDIR -c listen_addresses=127.0.0.1" -l "$PGDIR/log" -w start
+          "$PG_BIN/createdb" -h 127.0.0.1 -p "$PORT" -U ci purchase_test
+          printf 'PURCHASE_TEST_DATABASE_URL=postgres://ci@127.0.0.1:%s/purchase_test\n' "$PORT" >> "$GITHUB_ENV"
+      - name: Apply migrations to the test database
+        env:
+          DATABASE_DRIVER: postgres
+          DATABASE_URL: ${{ env.PURCHASE_TEST_DATABASE_URL }}
+          DATABASE_URL_UNPOOLED: ${{ env.PURCHASE_TEST_DATABASE_URL }}
+        run: node scripts/migrate.mjs
+      - run: npm test
+      - name: Stop the test database
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${CI_PG_DIR:-}" ]]; then
+            "$CI_PG_BIN/pg_ctl" -D "$CI_PG_DIR/data" -m immediate -w stop
+            rm -rf -- "$CI_PG_DIR"
+          fi
