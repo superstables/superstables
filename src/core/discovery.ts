@@ -68,8 +68,9 @@ export function hostedCatalogueUrl(): string | undefined {
 }
 
 /**
- * Are the simulated demo services switched on? SUPERSTABLES_DEMO_SERVICES=on (or 1, true, yes)
- * includes the hosted catalogue's prepared services in discovery. Off, the default, never reads
+ * Is the hosted catalogue switched on? SUPERSTABLES_DEMO_SERVICES=on (or 1, true, yes) includes
+ * Superstables' testnet services from the hosted catalogue in discovery: most return prepared
+ * sample output (mock: true); the market data service returns live prices. Off, the default, never reads
  * the catalogue, so a client that was not set up for the demo never sees a simulated listing.
  * The demo page's configuration snippets switch it on.
  */
@@ -99,7 +100,7 @@ export interface FindServicesOptions {
   includeIndex?: boolean;
   /** Check that the demo service is actually answering. Costs one HTTP request. */
   probe?: boolean;
-  /** Include the simulated demo services from the hosted catalogue. Default: the SUPERSTABLES_DEMO_SERVICES switch. */
+  /** Include Superstables' testnet services from the hosted catalogue (most simulated). Default: the SUPERSTABLES_DEMO_SERVICES switch. */
   demoServices?: boolean;
 }
 
@@ -213,7 +214,7 @@ export async function allListings(
   const { includeHosted = true, demoServices = demoServicesEnabled() } = options;
   const builtIn = catalogue();
   const url = hostedCatalogueUrl();
-  // The hosted catalogue holds the simulated demo services: it is read only for the demo.
+  // The hosted catalogue holds Superstables' testnet services, most of them simulated: it is read only for the demo.
   if (!includeHosted || !demoServices || !url) return { listings: builtIn, warnings: [] };
 
   const warnings: string[] = [];

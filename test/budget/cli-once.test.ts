@@ -154,9 +154,9 @@ describe("find --once", () => {
     expect(r.stdout).toMatch(/^id\s+price\s+simulated\s+network\s+inputs$/m);
     expect(r.stdout).toMatch(/demo-market-data\s+0\.01 USDC\s+no\s+Base Sepolia\s+asset\*=BTC\|ETH/);
     expect(r.stdout).toMatch(/demo-wallet-briefing\s+0\.003 USDC\s+yes\s+Base Sepolia/);
-    expect(r.stdout).toMatch(/simulated: yes when the listing says the service returns prepared sample output/);
+    expect(r.stdout).toMatch(/simulated: yes when the listing marks the output as prepared sample output/);
     expect(r.result).toMatchObject({ command: "find", state: "ok", services: [{ id: "demo-market-data", price: "0.01", available: true, simulated: false, params: [{ name: "asset", required: true, values: ["BTC", "ETH"] }] }, { id: "demo-wallet-briefing", simulated: true }] });
-    expect(r.result.next).toMatch(/Testnet only: test USDC, no real money\./);
+    expect(r.result.next).toMatch(/Testnet only: test tokens, no real money\./);
     // --json: stdout is the RESULT object alone (no table), which carries the services
     const j = await budget(["find", "--once", "--json", "--site", site.url]);
     expect(j.stdout.trim().split("\n")).toHaveLength(1);

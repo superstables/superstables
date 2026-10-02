@@ -542,7 +542,7 @@ describe("find", () => {
       expect(flag).toEqual({ Weather: false, "Market data": false, "Market data on Tempo": false, "Market data on Solana": false, "Wallet briefing": true, "Official print": false });
       expect(r.stdout).toMatch(/Wallet briefing\s+0\.003 USDC\s+base-sepolia\s+yes\s+/);
       expect(r.stdout).toMatch(/Market data on Solana\s+0\.01 USDC\s+devnet\s+no\s+/);
-      expect(r.stdout).toMatch(/simulated: yes when the listing says the service returns prepared sample output, no when it is not marked as sample output/);
+      expect(r.stdout).toMatch(/simulated: yes when the listing marks the output as prepared sample output, no when it marks it as not sample output \(this does not verify that the data is real\)/);
       // several rails: next leaves the rail and chain to the listing
       expect(r.result.next).toMatch(/--rail R --chain C --url U, with R and C from the listing/);
     }, 30_000);

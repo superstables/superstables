@@ -127,8 +127,9 @@ Environment:
   SUPERSTABLES_WALLET            browser (default) or local: who signs pay's payments
   SUPERSTABLES_POLICY            the spend policy file (default $SUPERSTABLES_HOME/policy.yaml)
   SUPERSTABLES_INDEX_URL         the index find reads; \`off\` to skip it
-  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' simulated demo services
-  SUPERSTABLES_CATALOGUE_URL     where those demo services are listed; \`off\` to skip it
+  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the hosted catalogue
+                                 (most are simulated; the market data service returns live prices)
+  SUPERSTABLES_CATALOGUE_URL     where those services are listed; \`off\` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
   SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances and for the network MetaMask adds
   SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, ${DEFAULT_APPROVE_PORT} or a free one when busy

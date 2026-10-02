@@ -154,8 +154,9 @@ explain(
       console.log("");
       console.log("Connect an agent over MCP (Claude Code shown; other MCP hosts take the same command):");
       console.log(`  claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- ${mcpCommand()}`);
-      console.log("  The switch adds Superstables' prepared demo services, whose answers are simulated;");
-      console.log("  leave it out to see only real sellers.");
+      console.log("  The switch adds Superstables' testnet services from the hosted catalogue. Most return");
+      console.log("  prepared sample output and are marked simulated; the market data service returns live prices.");
+      console.log("  Leave it out to list no simulated services.");
       console.log("");
       console.log("Next: `superstables doctor` checks the machine; `superstables find` lists what can be bought.");
       console.log("On-chain budgets are set up separately: `superstables budget setup --rail evm`.");
@@ -333,7 +334,7 @@ explain(
     .option("--limit <n>", "how many services to ask for", toInteger, 20)
     .option("--budget", "show the listings a `superstables budget` rail could pay, instead of the ones pay can")
     .option("--all", "show every listing, including those this client cannot pay, and why")
-    .option("--demo", "include the simulated demo services from the hosted catalogue (SUPERSTABLES_DEMO_SERVICES=on does the same)")
+    .option("--demo", "also list Superstables' testnet services from the hosted catalogue: most return prepared sample output and are marked simulated; the market data service returns live prices (SUPERSTABLES_DEMO_SERVICES=on does the same)")
     .option("--json", "print {services, warnings} as JSON")
     .action(
       async (
@@ -349,7 +350,7 @@ explain(
             json({
               services: services.map((s) => {
                 const commands = listingCommands(s);
-                // mock is always present: true (simulated output), false (real data), or null
+                // mock is always present: true (marked as sample output), false (marked as not sample output), or null
                 // when the listing does not say, so an agent never has to guess from a missing key.
                 return { ...s, mock: s.mock ?? null, next: commands[0]?.run[0] ?? null, commands };
               }),
@@ -402,8 +403,10 @@ explain(
       "Reads a built-in catalogue and the public index (SUPERSTABLES_INDEX_URL; `off` skips it). " +
         "Columns: pay is whether `superstables pay` can call the listing as listed (x402 on Base Sepolia, " +
         "with the request parameters known); budget names the `superstables budget` rail and chain that " +
-        "could pay it; simulated is yes when the seller returns prepared, simulated output (mock in --json: " +
-        "true, false, or null when the listing does not say). Chains are named as the index names them: base and solana are mainnets, and " +
+        "could pay it; simulated is yes when the listing marks the output as prepared sample output, no when " +
+        "it marks it as not sample output (Superstables' market data service, which returns live prices; no " +
+        "does not verify that the data is real), and not said when the listing does not say (mock in --json: " +
+        "true, false or null). Chains are named as the index names them: base and solana are mainnets, and " +
         "nothing on a mainnet is payable here. By default only listings pay can call are shown.",
       "Next, per listing: the commands for each way this client could pay it, pay first. pay: " +
         "`superstables quote`, then `superstables pay <quote-id>`. A budget on evm: `superstables budget " +

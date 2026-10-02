@@ -89,9 +89,12 @@ export function createSuperstablesServer(deps: SuperstablesServerDeps): McpServe
       title: "Find paid services",
       description:
         "Search for services that can be paid for per request. Returns what each one costs, " +
-        "on which network, and whether this client can actually call and pay it. Simulated demo " +
-        "services (mock: true, prepared answers) are included only when demo services are switched " +
-        "on for this server, and always after the real sellers.",
+        "on which network, and whether this client can actually call and pay it. mock is true when the " +
+        "listing marks its output as prepared sample output and false when it marks it as not sample " +
+        "output; false does not verify the data. Superstables' testnet services from the hosted catalogue " +
+        "are included only when demo services are switched on for this server: most are simulated " +
+        "(mock: true) and come after the listings not marked simulated; the market data service returns " +
+        "live prices (mock: false).",
       inputSchema: {
         query: z.string().optional().describe("What to look for, in plain words. Omit to list everything."),
         limit: z.number().int().min(1).max(25).default(10).describe("How many services to return."),

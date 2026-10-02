@@ -75,6 +75,12 @@ describe("the superstables CLI", () => {
     }
     // The one sentence a reader must not miss.
     expect(result.stdout).toContain("no real money moves");
+    // The hosted catalogue is not simulated as a whole: its market data service returns live prices.
+    expect(result.stdout).not.toMatch(/simulated demo services/);
+    expect(result.stdout).toMatch(/most are simulated; the market data service returns live prices/);
+    const find = await run(["find", "--help"]);
+    expect(find.stdout).not.toMatch(/simulated demo services/);
+    expect(find.stdout).toMatch(/the market data\s+service\s+returns\s+live\s+prices/);
   });
 
   it("writes a policy file and reads it back", async () => {

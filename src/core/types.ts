@@ -45,7 +45,7 @@ export interface ServiceListing {
   /** True when this client can quote and pay the service as listed. */
   actionable: boolean;
   notActionableReason?: string;
-  /** True when the seller says its output is prepared, simulated data (the hosted demo services). */
+  /** True when the listing marks its output as prepared sample data (most hosted catalogue services); false when it marks it as not sample data. */
   mock?: boolean;
   /** Prompts the seller suggests, when it publishes any. */
   examplePrompts?: string[];
