@@ -290,7 +290,7 @@ export function recordLink(id, approve) {
  */
 export function recordHosted(id, hosted) {
   if (!isApprovalId(id)) return null;
-  return update(id, { hosted: { site: hosted.site, requestId: hosted.requestId, kind: hosted.kind, matchCode: hosted.matchCode, token: hosted.token } });
+  return update(id, { hosted: { site: hosted.site, requestId: hosted.requestId, kind: hosted.kind, matchCode: hosted.matchCode, token: hosted.token, ...(hosted.then?.length ? { then: hosted.then } : {}) } });
 }
 
 /** The command ended: store its RESULT and exit code for every later `wait`, and free the chain. The access token goes. */
@@ -389,7 +389,10 @@ export async function pageStateOf(record) {
   const h = record?.hosted;
   if (h?.token) {
     const r = await readSiteRequest({ site: h.site, id: h.requestId, token: h.token, wait: 0 });
-    return r.ok ? { status: `hosted:${r.view.state}`, walletAsked: r.view.wallet_asked === true || typeof r.view.tx_hash === "string" } : { status: "hosted:unreachable" };
+    // a link with wallet steps: once linked, the request's state is its current step's
+    const linked = Array.isArray(r.view?.steps) && typeof r.view.owner === "string";
+    const stepAsked = linked && r.view.steps.some((s) => s?.wallet_asked === true || typeof s?.tx_hash === "string");
+    return r.ok ? { status: `hosted:${r.view.state}`, linked, walletAsked: r.view.wallet_asked === true || typeof r.view.tx_hash === "string" || stepAsked } : { status: "hosted:unreachable" };
   }
   return pageState(record?.url);
 }
@@ -413,10 +416,12 @@ export function pageWords(page, rail) {
     case "sending": return rail === "solana" ? "the owner signed in the wallet; the command is sending it" : "a wallet transaction was requested; submission is not confirmed yet";
     case "sent": return "a transaction id is available; the command is checking it on chain";
     case "connected": return "the owner connected and signed; the command is finishing";
-    case "hosted:awaiting_owner": return page.walletAsked ? "the owner's wallet was asked to send; no transaction is reported yet" : "waiting for the owner to open the link on superstables.com, signed in with their wallet, and pick the match code";
+    case "hosted:awaiting_owner": if (page.linked) return "the owner linked this agent; waiting for them to approve the next transaction in their wallet, on the same page";
+      return page.walletAsked ? "the owner's wallet was asked to send; no transaction is reported yet" : "waiting for the owner to open the link on superstables.com, signed in with their wallet, and pick the match code";
     case "hosted:sending": return "the owner's wallet was asked to send; no transaction is reported yet";
     case "hosted:unknown": return "superstables.com cannot tell whether the wallet sent it; the command is finishing and the chain must be checked";
     case "hosted:linked": return "the owner linked this agent; the command is finishing";
+    case "hosted:queued": return "the owner linked this agent; the next wallet step has not been asked yet";
     case "hosted:sent": case "hosted:confirmed": case "hosted:failed": return "a transaction hash was reported; the command is checking it on chain";
     case "hosted:unreachable": return "waiting for the owner (superstables.com did not answer just now)";
     case undefined: case null: return "waiting for the owner";
@@ -454,7 +459,8 @@ function abandoned(record, hostedCancelled = false) {
   const page = lastPageStatus(record.url);
   const base = { command: record.command, rail: record.rail, chain: record.chain };
   const status = `superstables budget status --rail ${record.rail}${record.chain ? ` --chain ${record.chain}` : ""}`;
-  const hostedOpen = Boolean(record.hosted && record.hosted.kind !== "link" && !hostedCancelled);
+  // a link moves no funds, unless wallet steps follow it on the same page (setup --hosted --grant/--fund)
+  const hostedOpen = Boolean(record.hosted && (record.hosted.kind !== "link" || record.hosted.then?.length) && !hostedCancelled);
   if (hostedOpen && !page.sending) {
     return { code: 5, result: { ok: false, ...base, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason: "the background approval stopped while its request may still be open on superstables.com; the owner may still approve it there" } };
   }

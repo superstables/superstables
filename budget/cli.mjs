@@ -75,7 +75,7 @@ const RAILS = {
   solana: { chains: ["devnet"], chain: "devnet", addr: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/, unit: "USDC" },
 };
 
-// ---- commands: flags ('v' takes a value, 'b' is a switch), required flags, help text ----------------
+// ---- commands: flags ('v' takes a value, 'b' is a switch, 'o' an optional value, 'm' repeats), required flags, help text
 // Every command's help says what it does, whether it can move money, who runs it, one example, what it prints and the exit
 // codes: enough to use it from --help alone, without the README.
 /** Items joined with commas, wrapped at `width` characters, continuation lines indented. */
@@ -139,9 +139,9 @@ Unattended tests only: --owner-key-file PATH --yes signs with that key file inst
 const OWNER_PRINTS = "the plan on stderr, the link once (APPROVE line), then a RESULT line with state waiting_owner, final\n  false, id, url, matchCode (hosted), expires and next; or, when it waited, the final RESULT: state settled (or ok), tx, next.";
 const COMMANDS = {
   setup: {
-    flags: { agent: "v", "new-owner": "b", hosted: "b", ...OWNER_FLAGS }, required: [],
+    flags: { agent: "v", "new-owner": "b", hosted: "b", grant: "v", fund: "o", ...OWNER_FLAGS }, required: [],
     help: helpText({
-      usage: "superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--hosted [--site URL]] [--timeout S]\n  [--no-open] [--detach|--wait]",
+      usage: "superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--hosted [--site URL] [--grant A] [--fund [AMOUNT]]]\n  [--timeout S] [--no-open] [--detach|--wait]",
       about: `The owner's first step on a rail and chain. Creates the agent key on this computer if there is none (it never
 overwrites one: running setup again reuses it), then asks the owner to connect their own wallet and sign a free sign-in
 message (no transaction). Records both addresses in the public file and prints the next steps. No owner key is created
@@ -154,16 +154,22 @@ records the account's address as the owner, and records APPROVALS=hosted and SIT
 fund-agent on this chain use it from then on (recover stays on this computer). Needs a superstables.com account. --site URL
 picks another site (default ${DEFAULT_SITE}, or SUPERSTABLES_SITE). Without --hosted: the page on 127.0.0.1, no account.
 setup --new-owner without --hosted moves a hosted chain back to the page on this computer.
+--grant A and --fund [AMOUNT] (with --hosted): one link for the whole set-up. After the owner links this agent, the same
+page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain) and then the
+grant of A USDC, in that order. The command reads each transaction from the chain itself, as fund-agent and grant do,
+and reports each step in steps. If a step does not complete (the owner rejects the grant, say), the link is still
+recorded and state is that step's. The steps get --timeout again once the agent is linked. An agent already linked on the chain is refused (exit 3): ask for gas and a budget
+with fund-agent and grant. Without --hosted, --grant and --fund are refused: run fund-agent and grant after setup.
 tempo: also tops up the owner from the Moderato faucet when it holds less than 1 pathUSD. --agent LABEL adds a new agent
 key for the next budget (a revoked or expired key can never be granted again); it needs no page.
 
 ${OWNER_HELP}
 
 ${FLOW_HELP}`,
-      money: "no. The owner signs a message, not a transaction.",
+      money: "no. The owner signs a message, not a transaction. With --fund and --grant: the gas to the agent, and an\n  allowance of A from the owner's wallet, once the owner approves each in their wallet.",
       who: "the owner. An agent may start it and hand the owner the link.",
-      example: "superstables budget setup --rail evm",
-      prints: OWNER_PRINTS.replace("tx, next", "owner, agent, approvals (local or hosted), site, next"),
+      example: "superstables budget setup --rail evm --hosted --chain base-sepolia --grant 5 --fund",
+      prints: OWNER_PRINTS.replace("tx, next", "owner, agent, approvals (local or hosted), site, next;\n  with --grant or --fund also linked, steps (kind, state, tx, amount, reason for each), tx, amount, remaining"),
       exits: EXITS_OWNER,
     }),
   },
@@ -403,6 +409,8 @@ Testnets only: no real money moves.
 Start here, the owner (once per rail and chain; each step prints a link the owner approves in their own wallet):
   superstables budget setup --rail evm              connect the owner's wallet (a free signature); creates the agent key
                                                     (--hosted: the owner approves on superstables.com, on any device)
+  superstables budget setup --rail evm --hosted --grant 5 --fund
+                                                    all of it with one link on superstables.com: link, gas, budget
   superstables budget fund-agent --rail evm         send the agent key gas for its own transactions (evm and solana)
   superstables budget doctor --rail evm             check keys, addresses and balances; says what to top up
   superstables budget grant --rail evm --amount 5   an allowance of 5 USDC from the owner's wallet; the USDC stays there
@@ -503,7 +511,7 @@ let FOREGROUND = false;
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 // A worker also stores it (and the exit code) in its approval record, for every later `wait`.
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   // final: false only while an owner approval is still open; a script polls wait until it is true
   fields = { ...fields, final: fields.state !== "waiting_owner" };
@@ -556,6 +564,8 @@ function parse(argv) {
     if (!allowed[name]) return badInput({ command: cmd }, `unknown flag --${name} for superstables budget ${cmd}`);
     if (name in f && allowed[name] !== "m") return badInput({ command: cmd }, `--${name} given twice`);
     if (allowed[name] === "b") { f[name] = true; continue; }
+    // 'o': an optional value (--fund, or --fund 0.001): the next argument is its value unless it is a flag
+    if (allowed[name] === "o") { f[name] = inline ?? (rest[i + 1] !== undefined && !rest[i + 1].startsWith("--") ? rest[++i] : true); continue; }
     const v = inline ?? rest[++i];
     if (v === undefined || (inline === undefined && v.startsWith("--"))) return badInput({ command: cmd }, `--${name} needs a value`);
     if (allowed[name] === "m") (f[name] ??= []).push(v); // a flag that may repeat
@@ -641,6 +651,12 @@ function parse(argv) {
   if (f.yes && !f["owner-key-file"]) badInput(ctx, "write the approval link in your reply to the owner, and run wait --shown when they say they have approved: drop --yes. --yes only goes with --owner-key-file PATH (unattended tests only)");
   if (f["owner-key-file"] !== undefined && !existsSync(f["owner-key-file"])) badInput(ctx, `--owner-key-file ${f["owner-key-file"]} does not exist`);
   if (f.wait && f.detach) badInput(ctx, "--wait and --detach cannot go together");
+  if (cmd === "setup" && (f.grant !== undefined || f.fund !== undefined)) {
+    // one link for the whole set-up: hosted only. On this computer the steps stay separate.
+    if (!f.hosted) badInput(ctx, `--grant and --fund go with --hosted (evm): one link on superstables.com then links the agent, sends it gas and grants the budget. Without --hosted, run setup, then fund-agent and grant: each asks the owner on its own`);
+    if (f.grant !== undefined && (!/^\d+(\.\d{1,6})?$/.test(f.grant) || !(Number(f.grant) > 0))) badInput(ctx, `--grant must be a positive amount of USDC with at most 6 places (got "${f.grant}")`);
+    if (typeof f.fund === "string" && !(/^\d+(\.\d{1,18})?$/.test(f.fund) && Number(f.fund) > 0 && Number(f.fund) <= 5)) badInput(ctx, `--fund takes an amount of the chain's gas token above 0 and at most 5, or nothing for fund-agent's default (got "${f.fund}")`);
+  }
   if (f.hosted) {
     if (f.rail !== "evm") badInput(ctx, `hosted approvals are EVM only for now: run superstables budget setup --rail ${f.rail} without --hosted (the owner approves on a page on this computer)`);
     if (f["owner-key-file"] !== undefined) badInput(ctx, "--hosted asks the owner on superstables.com; with --owner-key-file there is no owner to ask");
@@ -740,7 +756,7 @@ function evmCommand(verb, f, extra = {}) {
     case "grant": return E("setBudget", ["--cap", f.amount, ...ownerOpts(f)]);
     case "revoke": return E("revoke", ownerOpts(f));
     case "recover": return E("recover", [...opt("op", f.op), ...(extra.plan ? ["--plan"] : ownerOpts(f))]);
-    case "setup": return E("setup", [...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...ownerOpts(f)]);
+    case "setup": return E("setup", [...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...(f.fund === undefined ? [] : ["--fund", ...(f.fund === true ? [] : ["--fund-amount", f.fund])]), ...ownerOpts(f)]);
     case "fund-agent": return E("fundAgent", [...opt("amount", f.amount), ...ownerOpts(f)]);
   }
 }
@@ -1185,17 +1201,20 @@ async function setup({ f, ctx }) {
     log(`\nsetup on ${f.rail} (${f.chain}): the agent key stays on this computer; the owner connects their own wallet. No owner key is created.`);
     log("  setup is a trusted step: whoever connects becomes the owner on record. An agent may start it and hand the owner the link; only the owner connects their wallet.");
   }
+  if (f.grant !== undefined || f.fund !== undefined) log(`  one link: after the link, the same page asks the owner's wallet for ${[f.fund !== undefined ? "gas for the agent" : "", f.grant !== undefined ? `a budget of ${f.grant} ${unitOf(f)}` : ""].filter(Boolean).join(", then ")}. Each transaction is read from the chain before it is reported.`);
   log(ownerLine(recordedOwner(f)));
   const r = await run(railCommand("setup", f));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
-  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, owner: rr?.owner, agent: rr?.agent, url: approvalUrl, next: ownerNext(o, rr, "read the output above"), reason: o.reason ?? `the setup script exited ${r.code}` });
+  // the one-link set-up: the link is recorded, and each step's own outcome (the first one that did not complete sets the state)
+  const steps = rr?.linked === true ? { linked: true, steps: rr.steps, tx: rr.tx ?? {}, amount: rr.cap, remaining: rr.allowance, approvals: "hosted", site: hostedSite(f) ?? undefined } : rr?.linked === false ? { linked: false } : {};
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, owner: rr?.owner, agent: rr?.agent, ...steps, url: approvalUrl, next: rr?.linked === true ? rr.next : ownerNext(o, rr, "read the output above"), reason: o.reason ?? `the setup script exited ${r.code}` });
   if (rr?.replacedOwner) log(`superstables budget: the recorded owner changed from ${rr.replacedOwner} to ${rr.owner}`);
   const site = hostedSite(f);
   // Whoever completed the page is now the owner on record: the owner checks that it is their wallet before anything else.
   const check = rr?.owner ? `the owner on record is now ${rr.owner}: the owner checks that this is their own wallet's address. If it is not, stop: grant nothing, and run superstables budget setup --rail ${f.rail} --chain ${f.chain} --new-owner with the owner present` : undefined;
   if (check) log(`\nOWNER CONNECTED: ${rr.owner}\n  Check that this is your own wallet's address. If it is not, someone else completed setup: grant nothing, and run setup --new-owner yourself.`);
-  emit(0, { ...ctx, state: "ok", owner: rr?.owner, agent: rr?.agent, approvals: f.rail === "evm" ? (site ? "hosted" : "local") : undefined, site: site ?? undefined, url: approvalUrl, next: check ? `${check}. Then: ${rr?.next ?? "none"}` : rr?.next ?? "none" });
+  emit(0, { ...ctx, state: "ok", owner: rr?.owner, agent: rr?.agent, approvals: f.rail === "evm" ? (site ? "hosted" : "local") : undefined, site: site ?? undefined, ...steps, url: approvalUrl, next: check ? `${check}. Then: ${rr?.next ?? "none"}` : rr?.next ?? "none" });
 }
 
 async function fundAgent({ f, ctx }) {
@@ -1210,6 +1229,11 @@ async function fundAgent({ f, ctx }) {
 
 // ---- detached owner approvals (approvals.mjs) -------------------------------------------------------
 const OWNER_COMMANDS = new Set(OWNER_COMMANDS_LIST);
+/**
+ * The seconds a background approval may take before its backstop, past the link's own --timeout. setup with --grant or
+ * --fund gets --timeout twice (the link, then its wallet steps) and the chain reads for two transactions.
+ */
+const backstopS = (cmd, f) => Number(f.timeout ?? 600) * (cmd === "setup" && (f.grant !== undefined || f.fund !== undefined) ? 2 : 1) + (cmd === "setup" && (f.grant !== undefined || f.fund !== undefined) ? 420 : 0);
 /**
  * The next step after an owner command returned waiting_owner: write the link in a reply and end the turn; wait --shown
  * once the owner says they've approved. A link on this computer also needs the port forwarded over SSH.
@@ -1274,7 +1298,7 @@ async function ownerGate({ cmd, f, ctx }) {
   const argv = process.argv.slice(2).filter((a) => a !== "--detach" && a !== "--replace" && a !== "--json");
   const args = [fileURLToPath(import.meta.url), ...argv, "--wait", ...(f["no-open"] ? [] : ["--no-open"])];
   log(`\nsuperstables budget: the owner approval runs in the background (id ${id}); this command returns as soon as its link exists.`);
-  const r = await startDetached({ id, command: cmd, rail: f.rail, chain: f.chain, cmd: process.execPath, args, cwd: process.cwd(), timeoutS: Number(f.timeout ?? 600), onLog: workerLog() });
+  const r = await startDetached({ id, command: cmd, rail: f.rail, chain: f.chain, cmd: process.execPath, args, cwd: process.cwd(), timeoutS: backstopS(cmd, f), onLog: workerLog() });
   if (r.kind === "final") {
     // it ended before it needed the owner (a refusal before any page, or nothing to do): the same RESULT as blocking
     const { code, result } = r.record.final;
@@ -1407,7 +1431,7 @@ if (WORKER_ID) {
       process.exit(5);
     }
     emit(5, { command: parsed.cmd, rail: f.rail, chain: f.chain, state: "unknown", url: approvalUrl, next: `superstables budget status --rail ${f.rail} --chain ${f.chain}: read whether it landed before running this again`, reason: "the background approval ran past its deadline and was stopped" });
-  }, workerDeadlineMs(Number(f.timeout ?? 600))).unref();
+  }, workerDeadlineMs(backstopS(parsed.cmd, f))).unref();
 } else if (OWNER_COMMANDS.has(parsed.cmd) && sendsNow(parsed.f)) {
   await ownerGate(parsed);
 }

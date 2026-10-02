@@ -6,6 +6,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { recoverMessageAddress, type Hex } from "viem";
 import { readBody, startServer, type TestServer } from "./servers.js";
 
+/** A wallet step after a link (`then`): the site asks the owner's wallet for it once the agent is linked. */
+export interface FakeStep {
+  index: number;
+  kind: "fund_agent" | "grant";
+  state: string;
+  tx_hash: string | null;
+  reason: string | null;
+  reason_code: string | null;
+  wallet_asked: boolean;
+  transaction: { to: string; data: string; value: string };
+}
+
 export interface FakeRequest {
   id: string;
   kind: "link" | "grant" | "revoke" | "fund_agent";
@@ -18,6 +30,8 @@ export interface FakeRequest {
   reason?: string | null;
   polls: number;
   cancels: number;
+  /** A link with `then`: its wallet steps. The test (or onPoll) moves them along, with `owner` once linked. */
+  steps?: FakeStep[];
 }
 
 export interface FakeSite extends TestServer {
@@ -33,6 +47,8 @@ export interface FakeSite extends TestServer {
   /** Answer the next POST that checks out with this status and body instead of creating a request. */
   reply?: (path: string) => { status: number; body: unknown } | undefined;
   services?: unknown;
+  /** Agents already linked, by address (lowercase), with their owner: a link with `then` for one of them is refused (409). */
+  linked?: Record<string, string>;
 }
 
 const json = (res: ServerResponse, status: number, body: unknown) => {
@@ -41,6 +57,32 @@ const json = (res: ServerResponse, status: number, body: unknown) => {
 };
 
 const FINAL = new Set(["linked", "confirmed", "failed", "rejected", "expired", "cancelled", "unknown"]);
+const STEP_FINAL = new Set(["confirmed", "failed", "rejected", "expired", "unknown", "skipped"]);
+const LINK_ENDED = new Set(["rejected", "expired", "cancelled"]);
+
+/**
+ * The state of a link with steps, as the site reports it: the link's own state until it is linked; then confirmed when
+ * every step is, else the first step that is not. Final once the link and every step are final.
+ */
+function bundleState(r: FakeRequest): { state: string; final: boolean } {
+  const steps = r.steps!;
+  if (!r.owner) return { state: r.state, final: LINK_ENDED.has(r.state) && steps.every((s) => STEP_FINAL.has(s.state)) };
+  const open = steps.find((s) => s.state !== "confirmed");
+  return { state: open ? open.state : "confirmed", final: steps.every((s) => STEP_FINAL.has(s.state)) };
+}
+
+/** Why a `then` is not valid, as the site checks it, or undefined. */
+function thenProblem(then: unknown): { step?: number; message: string } | undefined {
+  if (!Array.isArray(then) || then.length === 0 || then.length > 2) return { message: "then has 1 or 2 steps" };
+  const seen = new Set<string>();
+  for (const [i, t] of then.entries()) {
+    if (!t || !["fund_agent", "grant"].includes(t.kind) || seen.has(t.kind)) return { step: i, message: "each step is fund_agent or grant, at most once" };
+    seen.add(t.kind);
+    const x = t.transaction;
+    if (!x || !/^0x[0-9a-fA-F]{40}$/.test(x.to) || !/^0x([0-9a-fA-F]{2})*$/.test(x.data) || !/^0x[0-9a-fA-F]+$/.test(x.value)) return { step: i, message: "not a transaction" };
+  }
+  return undefined;
+}
 
 export async function startFakeSite(): Promise<FakeSite> {
   let n = 0;
@@ -48,7 +90,15 @@ export async function startFakeSite(): Promise<FakeSite> {
   site.requests = [];
   site.posts = [];
   site.owner = null;
-  const view = (r: FakeRequest) => ({ id: r.id, kind: r.kind, state: r.state, final: FINAL.has(r.state), owner: r.owner, tx_hash: r.tx_hash, reason: r.reason ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" } });
+  const stepView = (s: FakeStep) => ({ ...s, ...(s.tx_hash ? { tx_url: `https://sepolia.basescan.org/tx/${s.tx_hash}` } : {}), terms: { title: s.kind } });
+  const view = (r: FakeRequest) => {
+    if (r.steps) {
+      const { state, final } = bundleState(r);
+      const hashes = r.steps.map((s) => s.tx_hash).filter(Boolean);
+      return { id: r.id, kind: r.kind, state, final, owner: r.owner, tx_hash: null, reason: r.reason ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) } };
+    }
+    return { id: r.id, kind: r.kind, state: r.state, final: FINAL.has(r.state), owner: r.owner, tx_hash: r.tx_hash, reason: r.reason ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" } };
+  };
   const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const raw = await readBody(req);
@@ -61,15 +111,26 @@ export async function startFakeSite(): Promise<FakeSite> {
       if (custom) return json(res, custom.status, custom.body);
       const body = JSON.parse(raw);
       const link = url.pathname.endsWith("/links");
+      if (link && body.then !== undefined) {
+        const bad = thenProblem(body.then);
+        if (bad) return json(res, 400, { error: { code: "invalid_then", message: bad.message, ...(bad.step !== undefined ? { step: bad.step } : {}) } });
+        const owner = site.linked?.[String(body.agent).toLowerCase()];
+        if (owner) return json(res, 409, { error: { code: "already_linked", message: "This agent is already linked on this chain. Ask for gas and a budget with separate approvals.", owner } });
+      }
       const id = `${link ? "bl" : "ba"}_test${String(++n).padStart(4, "0")}`;
       const r: FakeRequest = { id, kind: link ? "link" : body.kind, token: `ssbt_test_${id}secret`, body, state: "awaiting_owner", owner: link ? null : site.owner, tx_hash: null, polls: 0, cancels: 0 };
+      if (link && Array.isArray(body.then)) r.steps = body.then.map((t: any, index: number) => ({ index, kind: t.kind, state: "queued", tx_hash: null, reason: null, reason_code: null, wallet_asked: false, transaction: t.transaction }));
       site.requests.push(r);
       return json(res, 201, {
         id,
         access_token: r.token,
+        kind: link ? "link" : body.kind,
+        state: "awaiting_owner",
+        final: false,
         approval: { url: `${server.url}/approve/budget/${id}#ssba_test_owner${n}`, match_code: "ABC-DEF", expires_at: new Date(Date.now() + 600_000).toISOString() },
         message_for_owner: "Open the link and pick ABC-DEF.",
         next_action: { type: "wait_for_owner", poll: `/api/v1/budget/requests/${id}` },
+        ...(r.steps ? { steps: r.steps.map(stepView) } : {}),
       });
     }
     const m = /^\/api\/v1\/budget\/requests\/([^/]+)(\/cancel)?$/.exec(url.pathname);

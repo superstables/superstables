@@ -5,15 +5,13 @@ import "./cli-guard.mjs";
 // (tests and automation only). --amount defaults to the chain's doctor.fundAgent in chains.mjs.
 // Prints the agent's native balance before and after, so the cost is exact.
 // npx tsx budget/evm/fundAgent.ts [--chain <name>] [--amount <decimal>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
-import { parseUnits, type Hex } from "viem";
-import { EVM_CHAINS } from "./chains.mjs";
+import { type Hex } from "viem";
 import { SYM, CFG, GAS, emit, arg, gasFmt, OWNER_KEY_FILE, ownerCtx, readCtx, nativeBalance, usdcBalance, usdc, readUntil, sendNative, usageError, assertRpcChain, tx } from "./lib.ts";
-import { fundInWallet, fundingTx, approvalSite } from "./owner.ts";
+import { fundInWallet, fundingTx, approvalSite, fundValue, DEFAULT_FUND_AMOUNT } from "./owner.ts";
 
-const amt = arg("amount") ?? (EVM_CHAINS as Record<string, any>)[CFG.key].doctor.fundAgent;
-if (!/^\d+(\.\d{1,18})?$/.test(amt)) usageError(`--amount "${amt}" is not a decimal amount of ${GAS.symbol}`);
-const value = parseUnits(amt, GAS.decimals);
-if (value === 0n || value > parseUnits("5", GAS.decimals)) usageError(`--amount must be above 0 and at most 5 ${GAS.symbol}`);
+const amt = arg("amount") ?? DEFAULT_FUND_AMOUNT;
+let value = 0n;
+try { value = fundValue(amt); } catch (e) { usageError((e as Error).message); }
 if (!OWNER_KEY_FILE && approvalSite() !== null) {
   try { fundingTx("0x0000000000000000000000000000000000000001", value, true); } catch (e) { usageError((e as Error).message); }
 }

@@ -7,6 +7,11 @@
 //   evm-transaction   POST /api/v1/budget/approvals   kind grant, revoke or fund_agent, and the exact transaction. The
 //                                                     owner's wallet sends it from the site; settles as sent with the hash
 //                                                     on `sent` or `confirmed`. The command still reads the chain itself.
+//   connect + then    POST /api/v1/budget/links       the link, then on the same page up to two wallet steps (fund_agent,
+//                                                     grant), in that order. `bundle` settles once the link and every step
+//                                                     are final, with each step's state and hash; the command reads each
+//                                                     transaction from the chain itself. An agent already linked on the
+//                                                     chain is refused (409 already_linked): its steps go one by one.
 //
 // Both are signed by the agent key (agentProof below): the site recovers the address and requires it to equal the agent in
 // the headers and the body. The site answers with a request id, an access token (ssbt_...) for polling, the owner's link
@@ -59,7 +64,7 @@ export type HostedKind = "grant" | "revoke" | "fund_agent";
 export const HOSTED_KIND: Record<string, HostedKind> = { grant: "grant", revoke: "revoke", "fund-agent": "fund_agent" };
 
 /** What the approval record keeps (approvals.mjs). The token is the agent's access to this one request. */
-export type HostedRecord = { site: string; requestId: string; token: string; kind: "link" | HostedKind; matchCode: string };
+export type HostedRecord = { site: string; requestId: string; token: string; kind: "link" | HostedKind; matchCode: string; /** a link with wallet steps: their kinds, in order */ then?: HostedStep["kind"][] };
 
 export interface HostedSettings {
   /** The site's origin, as recorded at setup (site.mjs siteOrigin). */
@@ -84,8 +89,29 @@ export interface HostedSettings {
   fetchImpl?: typeof fetch;
 }
 
+/** A wallet step that follows the link on the same page (`then`): the exact transaction, validated by the site like an approval. */
+export type HostedStep = { kind: "fund_agent" | "grant"; transaction: { to: string; data: string; value: string } };
+
+/** What became of one step, as the site reports it. The command reads the chain before it believes any of it. */
+export interface HostedStepOutcome {
+  kind: HostedStep["kind"];
+  /** queued, awaiting_owner, sending, sent, confirmed, failed, rejected, expired, unknown, skipped; or "stopped" when the command stopped reading. */
+  state: string;
+  hash: string | null;
+  reason: string;
+  reasonCode: string | null;
+  /** The owner's wallet was asked to send it (or a hash exists): never "nothing sent". */
+  walletAsked: boolean;
+}
+
+/** The link and its steps, once all of them are final (or the command stopped reading). */
+export interface HostedBundleOutcome {
+  link: OwnerActionOutcome;
+  steps: HostedStepOutcome[];
+}
+
 export type HostedInput =
-  | { kind: "connect"; terms: OwnerTerms; timeoutMs: number }
+  | { kind: "connect"; terms: OwnerTerms; timeoutMs: number; then?: HostedStep[] }
   | { kind: "evm-transaction"; action: string; terms: OwnerTerms; timeoutMs: number; account: string; transaction: { to: string; data: string; value: string } };
 
 export interface HostedHandle {
@@ -96,6 +122,8 @@ export interface HostedHandle {
   /** The agent was already linked on this chain: no link, no match code, `settled` is already connected. */
   alreadyLinked?: boolean;
   settled: Promise<OwnerActionOutcome>;
+  /** A link with steps (`then`): settles once the link and every step are final. `settled` then settles at the same time. */
+  bundle?: Promise<HostedBundleOutcome>;
   finish(verdict: { ok: boolean; message: string; hash?: string }): void;
 }
 
@@ -110,6 +138,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const same = (a?: string | null, b?: string | null) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 type Poll = { id: string; token: string; kind: HostedRecord["kind"]; title: string; expected?: string; localDeadline: number; siteExpiry: number; resolve: (o: OwnerActionOutcome) => void };
 const FINAL_STATES = new Set(["linked", "confirmed", "failed", "rejected", "expired", "cancelled", "unknown"]);
+const STEP_FINAL = new Set(["confirmed", "failed", "rejected", "expired", "unknown", "skipped", "cancelled"]);
+const isHash = (h: unknown): h is string => typeof h === "string" && /^0x[0-9a-fA-F]{64}$/.test(h);
+const chainFlagOf = (chain: string) => (chain === "base-sepolia" ? "" : ` --chain ${chain}`);
 
 export class HostedApprovals {
   private readonly s: HostedSettings;
@@ -117,7 +148,7 @@ export class HostedApprovals {
   /** Requests created here without a final answer yet: close() cancels them. */
   private readonly open = new Map<string, { id: string; token: string }>();
   /** Every request this client created, by id: a retry answered with duplicate_request or proof_reused keeps polling it. */
-  private readonly held = new Map<string, { linked: false; id: string; token: string; url: string; matchCode: string; expiresAt: number }>();
+  private readonly held = new Map<string, { linked: false; id: string; token: string; url: string; matchCode: string; expiresAt: number; steps?: unknown[] }>();
 
   constructor(settings: HostedSettings) {
     this.s = settings;
@@ -133,10 +164,11 @@ export class HostedApprovals {
     let path: string;
     let body: Record<string, unknown>;
     let kind: HostedRecord["kind"];
+    const then = input.kind === "connect" && input.then?.length ? input.then : undefined;
     if (input.kind === "connect") {
       path = `${BUDGET_API}/links`;
       kind = "link";
-      body = { rail: this.s.rail, chain: this.s.chain, agent, ...(this.s.label ? { label: this.s.label.slice(0, 40) } : {}) };
+      body = { rail: this.s.rail, chain: this.s.chain, agent, ...(this.s.label ? { label: this.s.label.slice(0, 40) } : {}), ...(then ? { then } : {}) };
     } else {
       const k = HOSTED_KIND[input.action];
       if (!k) throw new HostedRefusal(`"${input.action}" has no hosted approval`, "use the approval page on this computer");
@@ -145,13 +177,25 @@ export class HostedApprovals {
       body = { kind: k, rail: this.s.rail, chain: this.s.chain, agent, transaction: input.transaction };
     }
     const answer = await this.create(path, body, kind === "link" ? "bl_" : "ba_");
+    if (answer.linked && then) {
+      // the site must refuse a link with steps for an agent it already linked (409); a 200 here would skip every step
+      throw new HostedRefusal(alreadyLinkedWords(this.s.site, answer.owner), alreadyLinkedNext(this.s.chain));
+    }
     if (answer.linked) {
       // already linked on this chain: nothing to show the owner and nothing to wait for; setup checks the owner as usual
       this.audit({ id: answer.id, kind, title: input.terms.title, status: "linked", address: answer.owner });
       return { id: answer.id, url: "", expiresAt: Date.now(), matchCode: "", alreadyLinked: true, settled: Promise.resolve({ status: "connected", address: answer.owner }), finish: () => {} };
     }
     const created = answer;
-    const record: HostedRecord = { site: this.s.site, requestId: created.id, token: created.token, kind, matchCode: created.matchCode };
+    if (then) {
+      // the steps the site will ask the owner's wallet for must be exactly the ones sent, in the same order
+      const problem = stepsProblem(then, created.steps);
+      if (problem) {
+        const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
+        throw new HostedRefusal(`${this.s.site} answered with steps other than the ones asked for (${problem}). The request was ${c?.cancelled ? "cancelled" : "left to expire"}; nothing was sent`, "try again later");
+      }
+    }
+    const record: HostedRecord = { site: this.s.site, requestId: created.id, token: created.token, kind, matchCode: created.matchCode, ...(then ? { then: then.map((t) => t.kind) } : {}) };
     const expected = input.kind === "evm-transaction" ? getAddress(input.account) : undefined;
 
     // an approval: the site must act for the owner recorded here, before the owner sees a link
@@ -182,6 +226,27 @@ export class HostedApprovals {
       };
     });
     this.open.set(created.id, { id: created.id, token: created.token });
+    if (then) {
+      let settle!: (b: HostedBundleOutcome) => void;
+      const bundle = new Promise<HostedBundleOutcome>((done) => (settle = done));
+      const base = { id: created.id, token: created.token, kind, title: input.terms.title, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve };
+      const kinds = then.map((t) => t.kind);
+      void this.pollBundle({ ...base, timeoutMs: input.timeoutMs, kinds, settle }).catch((err: Error) => {
+        const reason = `the command stopped reading the request: ${siteText(err.message)}`;
+        const out: HostedBundleOutcome = { link: { status: "expired", reason, sending: true }, steps: kinds.map((k) => ({ kind: k, state: "stopped", hash: null, reason, reasonCode: null, walletAsked: true })) };
+        resolve(out.link);
+        settle(out);
+      });
+      return {
+        id: created.id,
+        url: created.url,
+        expiresAt,
+        matchCode: created.matchCode,
+        settled,
+        bundle,
+        finish: (verdict) => this.audit({ id: created.id, kind, title: input.terms.title, status: verdict.ok ? "confirmed" : "failed", reason: verdict.ok ? undefined : siteText(verdict.message), hash: verdict.hash }),
+      };
+    }
     void this.poll({ id: created.id, token: created.token, kind, title: input.terms.title, expected, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve }).catch((err: Error) =>
       resolve({ status: "expired", reason: `the command stopped reading the request: ${siteText(err.message)}`, sending: kind !== "link" }),
     );
@@ -248,6 +313,11 @@ export class HostedApprovals {
         "run the same command again after that request expires (10 minutes)",
       );
     }
+    if (res.status === 409 && code === "already_linked") {
+      // a link with steps for an agent already linked on this chain: nothing was created; gas and a budget go one by one
+      const owner = typeof json?.error?.owner === "string" ? json.error.owner : typeof json?.owner === "string" ? json.owner : null;
+      throw new HostedRefusal(alreadyLinkedWords(this.s.site, owner && isAddress(owner) ? getAddress(owner) : null), alreadyLinkedNext(this.s.chain));
+    }
     if (!res.ok) throw new HostedRefusal(`${this.s.site} did not take the request (${siteError(res.status, json)}); nothing was sent`, res.status >= 500 ? "try again later" : "read reason; fix what it names before trying again");
     // a link that already exists for this agent on this chain: an already-final request, with no link to show
     if (res.status === 200 && prefix === "bl_" && json?.state === "linked" && json?.final === true && !json?.approval) {
@@ -273,7 +343,7 @@ export class HostedApprovals {
       : !Number.isFinite(expires) || expires <= Date.now() ? "no expiry in the future"
       : "";
     if (problem) throw new HostedRefusal(`${this.s.site} answered with ${problem}; the request is not used and nothing was sent`, "try again later");
-    const created = { linked: false as const, id: id as string, token: token as string, url: url as string, matchCode: matchCode as string, expiresAt: expires };
+    const created = { linked: false as const, id: id as string, token: token as string, url: url as string, matchCode: matchCode as string, expiresAt: expires, steps: Array.isArray(json?.steps) ? (json.steps as unknown[]) : undefined };
     this.held.set(created.id, created);
     return created;
   }
@@ -376,6 +446,104 @@ export class HostedApprovals {
     }
   }
 
+  /**
+   * A link with steps: read until the site says the link and every step are final. Before the link is done the request
+   * expires like a link; once it is done, the steps get the command's own --timeout again, from that moment, and a step
+   * the wallet was asked for gets the send grace on top. Whatever is not final then is reported as it stands, and a step
+   * the wallet was asked for is never "nothing sent".
+   */
+  private async pollBundle(p: Omit<Poll, "expected"> & { timeoutMs: number; kinds: HostedStep["kind"][]; settle: (b: HostedBundleOutcome) => void }) {
+    const grace = this.s.sendingGraceMs ?? 120_000;
+    const steps: HostedStepOutcome[] = p.kinds.map((kind) => ({ kind, state: "queued", hash: null, reason: "", reasonCode: null, walletAsked: false }));
+    let owner: string | null = null;
+    let linkedAt = 0;
+    let linkState = "awaiting_owner";
+    let linkReason = "";
+    let lastState = "awaiting_owner";
+    let lastContact = Date.now();
+    let cancelTried = false;
+    let readAt = 0;
+    const asked = () => steps.some((s) => s.walletAsked);
+    const finish = (why: string | null) => {
+      this.open.delete(p.id);
+      // a step without a final state: as it stands, never "nothing sent" once the wallet was asked
+      for (const s of steps) {
+        if (STEP_FINAL.has(s.state)) continue;
+        if (s.hash) continue; // sent: the command reads it from the chain
+        if (s.walletAsked) Object.assign(s, { state: "unknown", reason: s.reason || why || "the wallet was asked to send, but no transaction came back from superstables.com" });
+        else Object.assign(s, { state: owner ? "expired" : "skipped", reason: s.reason || why || (owner ? "the step was not approved before the request ended" : "the agent was not linked, so this step was never asked") });
+      }
+      const link: OwnerActionOutcome = owner
+        ? { status: "connected", address: owner }
+        : linkState === "expired" || why
+          ? { status: "expired", reason: linkReason || why || "the approval link expired on superstables.com without a completed approval", sending: false }
+          : { status: "rejected", reason: linkReason || (linkState === "cancelled" ? "the request was cancelled on superstables.com; nothing was sent" : "the owner rejected the request on superstables.com"), sending: false };
+      this.audit({ id: p.id, kind: p.kind, title: p.title, status: owner ? "connected" : link.status, address: owner ?? undefined, reason: owner ? undefined : (link as { reason?: string }).reason });
+      for (const s of steps) this.audit({ id: p.id, kind: s.kind, title: p.title, status: s.state, reason: s.reason || undefined, hash: s.hash ?? undefined, sending: s.walletAsked || undefined });
+      p.resolve(link);
+      p.settle({ link, steps });
+    };
+    for (;;) {
+      const gap = this.s.minPollMs ?? 1000;
+      const since = Date.now() - readAt;
+      if (since < gap) await sleep(gap - since);
+      if (this.stopped) return finish("the command stopped before this request completed; check wallet activity before retrying");
+      const now = Date.now();
+      // before the link: the link's expiry. After it: --timeout again for the steps, from the moment it was linked.
+      const deadline = linkedAt ? Math.max(Math.min(p.localDeadline, p.siteExpiry), linkedAt + p.timeoutMs) : Math.min(p.localDeadline, p.siteExpiry);
+      if (now >= deadline && !cancelTried && !asked()) {
+        cancelTried = true;
+        const c = await cancelSiteRequest({ site: this.s.site, id: p.id, token: p.token, fetchImpl: this.s.fetchImpl });
+        if (c?.cancelled) {
+          linkState = owner ? linkState : "expired";
+          return finish(owner ? "the steps were not approved in time, and the request was cancelled on superstables.com; nothing more was sent" : "the approval link expired without a completed approval, and the request was cancelled on superstables.com; nothing was sent");
+        }
+        if (c?.walletAsked) for (const s of steps) if (!STEP_FINAL.has(s.state) && s.state !== "queued") s.walletAsked = true;
+      }
+      if (now > deadline + (asked() ? grace : 30_000)) return finish(`no final answer from ${this.s.site} in time; the request may still be open there`);
+      const waitS = Math.max(0, Math.min(this.s.pollWaitS ?? 20, Math.ceil((deadline - now) / 1000)));
+      readAt = Date.now();
+      const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, fetchImpl: this.s.fetchImpl });
+      if (!r.ok) {
+        if ([401, 403, 404, 410].includes(r.status ?? 0)) return finish(`${this.s.site} no longer answers for this request (${r.reason})`);
+        await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
+        continue;
+      }
+      lastContact = Date.now();
+      const v = r.view;
+      const state = String(v.state);
+      const reason = typeof v.reason === "string" && v.reason ? siteText(v.reason) : "";
+      if (!owner && typeof v.owner === "string" && isAddress(v.owner)) {
+        owner = getAddress(v.owner);
+        linkedAt = Date.now();
+      }
+      if (!owner) {
+        linkState = state;
+        linkReason = reason;
+      }
+      const seen = Array.isArray(v.steps) ? (v.steps as any[]) : [];
+      steps.forEach((s, i) => {
+        const w = seen.find((x) => x && x.index === i) ?? seen[i];
+        if (!w || w.kind !== s.kind) return;
+        const before = s.state;
+        s.state = typeof w.state === "string" ? siteText(w.state, 40) : s.state;
+        if (isHash(w.tx_hash)) s.hash = w.tx_hash;
+        if (w.wallet_asked === true || s.state === "sending" || s.hash) s.walletAsked = true;
+        s.reason = typeof w.reason === "string" ? siteText(w.reason) : s.reason;
+        s.reasonCode = typeof w.reason_code === "string" ? siteText(w.reason_code, 60) : s.reasonCode;
+        if (s.state !== before) this.audit({ id: p.id, kind: s.kind, title: p.title, status: s.state, reason: s.reason || undefined, hash: s.hash ?? undefined, sending: s.walletAsked || undefined });
+      });
+      if (state !== lastState) {
+        lastState = state;
+        this.audit({ id: p.id, kind: p.kind, title: p.title, status: state, reason: reason || undefined, address: owner ?? undefined });
+      }
+      if (v.final === true) {
+        if (!owner && state === "linked") linkReason = "superstables.com reported the link without an owner address";
+        return finish(null);
+      }
+    }
+  }
+
   private audit(line: { id: string; kind: string; title: string; status: string; reason?: string; address?: string; hash?: string; sending?: boolean }) {
     if (!this.s.auditPath) return;
     try {
@@ -385,4 +553,30 @@ export class HostedApprovals {
       // an unwritable audit file never stops the owner from deciding
     }
   }
+}
+
+/** The words for an agent already linked on this chain, when a link with steps was asked for. */
+function alreadyLinkedWords(site: string, owner: string | null): string {
+  return `this agent is already linked on ${site}${owner ? ` to the account ${owner}` : ""}, so there is nothing to link and no request was created. Gas and a budget are then asked for separately, each with its own link; nothing was sent`;
+}
+function alreadyLinkedNext(chain: string): string {
+  const c = chainFlagOf(chain);
+  return `tell the owner this agent is already linked and end your turn. Gas and a budget are separate owner steps: superstables budget fund-agent --rail evm${c}, then superstables budget grant --rail evm${c} --amount A (each one link). If this computer has no owner on record yet, superstables budget setup --rail evm${c} --hosted without --grant and --fund records it, with no link`;
+}
+
+/** Why the site's steps are not the ones asked for, or "" when they are (same kinds, order and transactions). */
+function stepsProblem(sent: HostedStep[], got: unknown[] | undefined): string {
+  if (!Array.isArray(got)) return "no steps";
+  if (got.length !== sent.length) return `${got.length} steps instead of ${sent.length}`;
+  const low = (x: unknown) => String(x ?? "").toLowerCase();
+  for (let i = 0; i < sent.length; i++) {
+    const g = got[i] as any;
+    if (!g || g.kind !== sent[i].kind) return `step ${i} is ${siteText(g?.kind ?? "missing", 40)}, not ${sent[i].kind}`;
+    const t = g.transaction;
+    if (!t) continue;
+    let value: bigint | null = null;
+    try { value = BigInt(t.value ?? "0x0"); } catch {}
+    if (low(t.to) !== low(sent[i].transaction.to) || low(t.data ?? "0x") !== low(sent[i].transaction.data) || value !== BigInt(sent[i].transaction.value)) return `step ${i} (${sent[i].kind}) has another transaction`;
+  }
+  return "";
 }

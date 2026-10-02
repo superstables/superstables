@@ -372,3 +372,150 @@ describe("find", () => {
     expect(r.result.next).toMatch(/any seller URL works too/);
   }, 30_000);
 });
+
+describe("setup --hosted --grant --fund: one link for the link, the gas and the budget", () => {
+  const AGENT = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A";
+  const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+  const FUND_HASH = `0x${"a1".repeat(32)}`;
+  const GRANT_HASH = `0x${"b2".repeat(32)}`;
+  const approve = encodeFunctionData({ abi: parseAbi(["function approve(address spender, uint256 value) returns (bool)"]), functionName: "approve", args: [AGENT, 10000n] });
+  // fund-agent's default on Base Sepolia: 0.002 ETH
+  const FUND_VALUE = 2_000_000_000_000_000n;
+
+  /** The agent key setup reuses, and a chain that shows the owner's two transactions in block 0x20 (the head is 0x10 before). */
+  const prepare = async () => {
+    mkdirSync(join(home, "keys", "budget"), { recursive: true });
+    writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=0x${"11".repeat(32)}\nB4_AGENT_ADDRESS=${AGENT}\n`, { mode: 0o600 });
+    const txs: Record<string, { to: string; input: string; value: bigint }> = {
+      [FUND_HASH]: { to: AGENT, input: "0x", value: FUND_VALUE },
+      [GRANT_HASH]: { to: USDC, input: approve, value: 0n },
+    };
+    let funded = false;
+    let granted = false;
+    const blockHash = `0x${"ef".repeat(32)}`;
+    await rpc.close();
+    rpc = await startFakeRpc(84532, (method, params) => {
+      if (method === "eth_blockNumber") return funded || granted ? "0x20" : "0x10";
+      const t = txs[params[0]];
+      if (method === "eth_getTransactionByHash" && t) return { hash: params[0], blockHash, blockNumber: "0x20", from: OWNER, to: t.to, input: t.input, value: `0x${t.value.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
+      if (method === "eth_getTransactionReceipt" && t) {
+        if (params[0] === FUND_HASH) funded = true;
+        if (params[0] === GRANT_HASH) granted = true;
+        return { transactionHash: params[0], blockHash, blockNumber: "0x20", from: OWNER, to: t.to, status: "0x1", logs: [], gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+      }
+      // allowance(owner, agent): the cap once the grant is mined
+      if (method === "eth_call" && String(params[0]?.data).startsWith("0xdd62ed3e")) return `0x${(granted ? 10000n : 0n).toString(16).padStart(64, "0")}`;
+      if (method === "eth_getBalance" && String(params[0]).toLowerCase() === AGENT.toLowerCase()) return `0x${(10n ** 18n + (funded ? FUND_VALUE : 0n)).toString(16)}`;
+      return undefined;
+    });
+  };
+
+  const start = async () => {
+    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund"]);
+    expect(first.code, first.stderr).toBe(0);
+    return first;
+  };
+
+  it("asks once, with the gas and the grant after the link; wait verifies both transactions and records everything", async () => {
+    await prepare();
+    const first = await start();
+    expect(first.result).toMatchObject({ command: "setup", state: "waiting_owner", final: false, action: "setup", matchCode: "ABC-DEF" });
+    expect(first.result.terms).toMatchObject({ title: "Link this agent, send it gas and approve a budget of 0.01 test USDC", amount: "0.01", unit: "USDC" });
+    expect(first.result.terms.summary).toMatch(/1\. Link this agent.*2\. Send 0\.002 ETH.*3\. Allow the agent to withdraw up to 0\.01 USDC/);
+    expect(first.result.terms.notEnforced.join(" ")).toMatch(/No expiry/);
+    expect(first.result.message_for_owner).toContain(first.result.url);
+    expect(first.result.message_for_owner).toContain("Link this agent, send it gas and approve a budget of 0.01 test USDC");
+    expect(first.result.message_for_owner).toContain("Match code: ABC-DEF");
+    // one request: the link, then the gas, then the grant, built as fund-agent and grant build them
+    expect(site.posts).toEqual([{ path: "/api/v1/budget/links", ok: true, why: undefined }]);
+    expect(site.requests[0].body.then).toEqual([
+      { kind: "fund_agent", transaction: { to: AGENT, data: "0x", value: `0x${FUND_VALUE.toString(16)}` } },
+      { kind: "grant", transaction: { to: USDC, data: approve, value: "0x0" } },
+    ]);
+    // the background approval knows wallet steps follow the link
+    expect(JSON.parse(readFileSync(join(approvals(), `${first.result.id}.json`), "utf8")).hosted).toMatchObject({ kind: "link", then: ["fund_agent", "grant"] });
+
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: OWNER });
+    Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND_HASH, wallet_asked: true });
+    Object.assign(r.steps![1], { state: "confirmed", tx_hash: GRANT_HASH, wallet_asked: true });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({
+      ok: true, command: "setup", state: "ok", final: true, owner: OWNER, agent: AGENT, approvals: "hosted", site: site.url, linked: true,
+      amount: "0.01", remaining: "0.01", tx: { fundAgent: FUND_HASH, grant: GRANT_HASH },
+      steps: [{ kind: "fund_agent", state: "settled", tx: FUND_HASH, amount: "0.002" }, { kind: "grant", state: "settled", tx: GRANT_HASH, amount: "0.01" }],
+    });
+    const pub = publicFile();
+    expect(pub).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
+    expect(pub).toMatch(/^APPROVALS=hosted$/m);
+    expect(pub).toMatch(new RegExp(`^SITE=${site.url}$`, "m"));
+    expect(pub).toMatch(/^B4_CAP=10000$/m);
+    expect(readFileSync(join(approvals(), `${first.result.id}.json`), "utf8")).not.toContain("ssbt_");
+  }, 180_000);
+
+  it("a grant the owner rejects after the link: the link and the gas are recorded and reported, the budget is not", async () => {
+    await prepare();
+    const first = await start();
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: OWNER });
+    Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND_HASH, wallet_asked: true });
+    Object.assign(r.steps![1], { state: "rejected", reason: "The owner rejected this in their wallet.", reason_code: "owner_rejected" });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(3);
+    expect(done.result).toMatchObject({
+      ok: false, state: "refused_precheck", final: true, owner: OWNER, linked: true, approvals: "hosted", tx: { fundAgent: FUND_HASH },
+      steps: [{ kind: "fund_agent", state: "settled", tx: FUND_HASH }, { kind: "grant", state: "refused_precheck", reasonCode: "owner_rejected" }],
+    });
+    expect(done.result.reason).toMatch(/^linked: yes; gas: 0\.002 ETH sent; budget: nothing was sent: rejected: The owner rejected this in their wallet\.$/);
+    expect(done.result.amount).toBeUndefined();
+    expect(done.result.next).toMatch(/the agent is linked and has gas\. Tell the owner .* only if the owner asks: superstables budget grant --rail evm --amount A$/);
+    const pub = publicFile();
+    expect(pub).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
+    expect(pub).toMatch(/^APPROVALS=hosted$/m);
+    expect(pub).not.toMatch(/^B4_CAP=/m);
+  }, 180_000);
+
+  it("a step the site cannot account for is unknown (exit 5), never nothing sent; the link is still recorded", async () => {
+    await prepare();
+    const first = await start();
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: OWNER });
+    Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND_HASH, wallet_asked: true });
+    Object.assign(r.steps![1], { state: "unknown", wallet_asked: true, reason: "The wallet was asked and never answered." });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(5);
+    expect(done.result).toMatchObject({ state: "unknown", linked: true, owner: OWNER, steps: [{ kind: "fund_agent", state: "settled" }, { kind: "grant", state: "unknown" }] });
+    expect(done.result.next).toMatch(/^superstables budget status --rail evm and the owner's wallet activity/);
+    expect(publicFile()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
+    expect(publicFile()).not.toMatch(/^B4_CAP=/m);
+  }, 180_000);
+
+  it("--grant or --fund without --hosted is refused before anything runs; without them setup is unchanged", async () => {
+    for (const extra of [["--grant", "5"], ["--fund"], ["--fund", "0.001"]]) {
+      const r = await budget(["setup", "--rail", "evm", ...extra]);
+      expect(r.code, extra.join(" ")).toBe(2);
+      expect(r.result.reason).toMatch(/^--grant and --fund go with --hosted/);
+    }
+    const bad = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0"]);
+    expect(bad.code).toBe(2);
+    expect(site.posts).toEqual([]);
+    // plain setup --hosted sends no then
+    const plain = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
+    expect(plain.result.state).toBe("waiting_owner");
+    expect(site.requests[0].body.then).toBeUndefined();
+    site.requests[0].state = "expired";
+    expect((await budget(["wait", "--shown", "--id", plain.result.id, "--timeout", "30"])).code).toBe(3);
+  }, 120_000);
+
+  it("an agent already linked on the chain: refused, with gas and a budget asked for separately", async () => {
+    await prepare();
+    site.linked = { [AGENT.toLowerCase()]: OWNER };
+    const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result.state).toBe("refused_precheck");
+    expect(r.result.reason).toMatch(/this agent is already linked on .* to the account 0x2222.*nothing was sent/);
+    expect(r.result.next).toMatch(/superstables budget fund-agent --rail evm, then superstables budget grant --rail evm --amount A/);
+    expect(r.approve).toBeNull();
+  }, 60_000);
+});
