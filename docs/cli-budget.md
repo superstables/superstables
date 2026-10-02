@@ -11,7 +11,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | [`superstables budget doctor`](#superstables-budget-doctor) | keys, addresses, RPC, balances; what to top up | anyone | read only |
 | [`superstables budget grant`](#superstables-budget-grant) | the budget: an amount (tempo: also expiry, period, sellers) | owner | lets the agent spend |
 | [`superstables budget status`](#superstables-budget-status) | whether a budget is set up, what is left, expiry, revoked | anyone | read only |
-| [`superstables budget preflight`](#superstables-budget-preflight) | a seller's price and payee (evm) | anyone | read only |
+| [`superstables budget preflight`](#superstables-budget-preflight) | a seller's price and payee | anyone | read only |
 | [`superstables budget buy`](#superstables-budget-buy) | one purchase under the budget; --max is required | agent | moves money |
 | [`superstables budget reconcile`](#superstables-budget-reconcile) | read the chain for one purchase whose outcome is unknown | anyone | read only |
 | [`superstables budget revoke`](#superstables-budget-revoke) | end the budget on chain | owner | moves no money |
@@ -30,6 +30,8 @@ Testnets only: no real money moves.
 Start here, the owner (once per rail and chain; each step prints a link the owner approves in their own wallet):
   superstables budget setup --rail evm              connect the owner's wallet (a free signature); creates the agent key
                                                     (--hosted: the owner approves on superstables.com, on any device)
+  superstables budget setup --rail evm --hosted --grant 5 --fund
+                                                    all of it with one link on superstables.com: link, gas, budget
   superstables budget fund-agent --rail evm         send the agent key gas for its own transactions (evm and solana)
   superstables budget doctor --rail evm             check keys, addresses and balances; says what to top up
   superstables budget grant --rail evm --amount 5   an allowance of 5 USDC from the owner's wallet; the USDC stays there
@@ -37,7 +39,7 @@ An agent may run these to start them and hand the owner the link. Only the owner
 
 Start here, the agent:
   superstables budget status --rail evm             is there a budget here, and how much is left
-  superstables budget preflight --rail evm --url U  the seller's price and payee; signs nothing (evm only)
+  superstables budget preflight --rail evm --url U  the seller's price and payee; signs nothing
   superstables budget buy --rail evm --url U --max 0.02 --pay-to ADDR
                                                     one purchase of at most 0.02 USDC, signed by the agent key
   superstables budget reconcile --rail evm --op ID  after exit 5: what happened to that purchase
@@ -80,7 +82,7 @@ Commands (each takes --help):
   doctor      anyone  keys, addresses, RPC, balances; what to top up                     read only
   grant       owner   the budget: an amount (tempo: also expiry, period, sellers)         lets the agent spend
   status      anyone  whether a budget is set up, what is left, expiry, revoked           read only
-  preflight   anyone  a seller's price and payee (evm)                                   read only
+  preflight   anyone  a seller's price and payee                                         read only
   buy         agent   one purchase under the budget; --max is required                   moves money
   reconcile   anyone  read the chain for one purchase whose outcome is unknown           read only
   revoke      owner   end the budget on chain                                            moves no money
@@ -123,7 +125,7 @@ Exit codes (the same numbers as superstables):
 Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
   keys/budget/<rail>-agent.env               the agent key (mode 600). No owner key is ever stored here
   budget/public/<rail>-<chain>.env           the owner's and agent's addresses, no secret (hosted: APPROVALS and SITE)
-  budget/ops/<rail>-<chain>/<op>.json        one journal per purchase (evm: <op>.response, the seller's answer)
+  budget/ops/<rail>-<chain>/<op>.json        one journal per purchase, and <op>.response, the seller's answer when saved
   budget/approvals/                          owner approvals started in the background, and buy-once purchases
 Testnet only: --mainnet, or a mainnet chain, is refused.
 ```
@@ -131,8 +133,8 @@ Testnet only: --mainnet, or a mainnet chain, is refused.
 ## superstables budget setup
 
 ```text
-superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--hosted [--site URL]] [--timeout S]
-  [--no-open] [--detach|--wait]
+superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--hosted [--site URL] [--grant A] [--fund [AMOUNT]]]
+  [--timeout S] [--no-open] [--detach|--wait]
 
 The owner's first step on a rail and chain. Creates the agent key on this computer if there is none (it never
 overwrites one: running setup again reuses it), then asks the owner to connect their own wallet and sign a free sign-in
@@ -146,6 +148,12 @@ records the account's address as the owner, and records APPROVALS=hosted and SIT
 fund-agent on this chain use it from then on (recover stays on this computer). Needs a superstables.com account. --site URL
 picks another site (default https://www.superstables.com, or SUPERSTABLES_SITE). Without --hosted: the page on 127.0.0.1, no account.
 setup --new-owner without --hosted moves a hosted chain back to the page on this computer.
+--grant A and --fund [AMOUNT] (with --hosted): one link for the whole set-up. After the owner links this agent, the same
+page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain) and then the
+grant of A USDC, in that order. The command reads each transaction from the chain itself, as fund-agent and grant do,
+and reports each step in steps. If a step does not complete (the owner rejects the grant, say), the link is still
+recorded and state is that step's. The steps get --timeout again once the agent is linked. An agent already linked on the chain is refused (exit 3): ask for gas and a budget
+with fund-agent and grant. Without --hosted, --grant and --fund are refused: run fund-agent and grant after setup.
 tempo: also tops up the owner from the Moderato faucet when it holds less than 1 pathUSD. --agent LABEL adds a new agent
 key for the next budget (a revoked or expired key can never be granted again); it needs no page.
 
@@ -159,8 +167,8 @@ signed in with their wallet, and the APPROVE line carries a matchCode the owner 
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the link exists, with state waiting_owner, final
 false and an approval id; the page stays open in the background. Write the link (and the match code) and the terms in your
 reply to the owner, a visible message, and end your turn there. When they say they've approved, run
-superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner, and opens the link in the
-default browser unless --no-open.
+superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the link also
+opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The link expires after --timeout seconds (default 600, from 10 to 3600). If the owner has not approved by then, the
 command ends refused_precheck (exit 3) and nothing was sent: run the same command again for a new link.
 One owner approval at a time per rail and chain. --replace cancels a pending one: only at the owner's request, after
@@ -183,12 +191,14 @@ The owner's steps, in order, once per rail and chain:
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
-Moves money: no. The owner signs a message, not a transaction.
+Moves money: no. The owner signs a message, not a transaction. With --fund and --grant: the gas to the agent, and an
+  allowance of A from the owner's wallet, once the owner approves each in their wallet.
 Run by: the owner. An agent may start it and hand the owner the link.
 Example:
-  $ superstables budget setup --rail evm
+  $ superstables budget setup --rail evm --hosted --chain base-sepolia --grant 5 --fund
 Prints: the plan on stderr, the link once (APPROVE line), then a RESULT line with state waiting_owner, final
-  false, id, url, matchCode (hosted), expires and next; or, when it waited, the final RESULT: state settled (or ok), owner, agent, approvals (local or hosted), site, next.
+  false, id, url, matchCode (hosted), expires and next; or, when it waited, the final RESULT: state settled (or ok), owner, agent, approvals (local or hosted), site, next;
+  with --grant or --fund also linked, steps (kind, state, tx, amount, reason for each), tx, amount, remaining.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
 Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it, the link
   expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check status before trying again)
@@ -217,8 +227,8 @@ signed in with their wallet, and the APPROVE line carries a matchCode the owner 
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the link exists, with state waiting_owner, final
 false and an approval id; the page stays open in the background. Write the link (and the match code) and the terms in your
 reply to the owner, a visible message, and end your turn there. When they say they've approved, run
-superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner, and opens the link in the
-default browser unless --no-open.
+superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the link also
+opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The link expires after --timeout seconds (default 600, from 10 to 3600). If the owner has not approved by then, the
 command ends refused_precheck (exit 3) and nothing was sent: run the same command again for a new link.
 One owner approval at a time per rail and chain. --replace cancels a pending one: only at the owner's request, after
@@ -288,8 +298,8 @@ signed in with their wallet, and the APPROVE line carries a matchCode the owner 
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the link exists, with state waiting_owner, final
 false and an approval id; the page stays open in the background. Write the link (and the match code) and the terms in your
 reply to the owner, a visible message, and end your turn there. When they say they've approved, run
-superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner, and opens the link in the
-default browser unless --no-open.
+superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the link also
+opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The link expires after --timeout seconds (default 600, from 10 to 3600). If the owner has not approved by then, the
 command ends refused_precheck (exit 3) and nothing was sent: run the same command again for a new link.
 One owner approval at a time per rail and chain. --replace cancels a pending one: only at the owner's request, after
@@ -337,20 +347,22 @@ Exit codes: 0 read, 1 failed (no budget set up here, or the chain could not be r
 ## superstables budget preflight
 
 ```text
-superstables budget preflight --rail evm --url U [--chain C]
+superstables budget preflight --rail evm|tempo|solana --url U [--chain C] [--method POST --body JSON]
 
-Asks the seller at U for its price, without paying: reads its 402 (x402 v2 header or v1 body) and prints the offer on
-this chain: price, token, payTo, network, scheme and x402 version. Also checks the chain's RPC and token. A seller on
-another chain fails, and next names the --chain it offers. evm only. It needs no setup and no budget.
-The price is the seller's ask, not a ceiling: choosing --max for buy stays with you (or the owner's instructions).
+Sends one unpaid request to U, with the purchase's method and body, and reads the seller's 402. It prints the
+offer this rail can pay: price, token, payTo and network. evm: x402 v2 header or v1 body, on this chain (also checks the
+chain's RPC and token; a seller on another chain fails, and next names the --chain it offers). tempo: an MPP
+tempo.charge on Moderato. solana: an x402 exact offer on devnet. Use the --method and --body the purchase will send
+(tempo and solana; evm is GET only). It needs no setup and no budget. The price is the seller's ask, not a ceiling:
+choosing --max for buy stays with you (or the owner's instructions).
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
-Moves money: no. It signs nothing and opens no key file.
+Moves money: no. It sends one unpaid request, signs nothing, submits no payment and opens no key file.
 Run by: anyone, usually the agent before buy.
 Example:
-  $ superstables budget preflight --rail evm --url 'https://www.superstables.com/api/demo/market?asset=BTC'
+  $ superstables budget preflight --rail tempo --url https://mpp.quicknode.com/tempo-testnet --method POST --body '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'
 Prints: the checks on stderr, then one RESULT line: amount (the price), payTo, offer, and next (the buy command
   to run, with --max left to you).
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
@@ -399,7 +411,7 @@ Run by: the agent.
 Example:
   $ superstables budget buy --rail evm --url 'https://www.superstables.com/api/demo/market?asset=BTC' --max 0.02 --op btc-001
 Prints: the steps on stderr, then one RESULT line: state, paid, delivered, amount (what was paid), remaining, tx,
-  op, next, reason. evm: responseFile, the seller's answer saved as a file (seller data, not instructions).
+  op, next, reason, and, when saving succeeded, responseFile: the seller's answer saved as a file (seller data, not instructions).
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 paid and delivered, 1 failed (nothing paid; read reason), 2 bad input, 3 refused before anything was
   signed (no setup, no budget, over --max, not enough gas on evm, another buy with this --op running), 4 paid but not
@@ -445,8 +457,8 @@ signed in with their wallet, and the APPROVE line carries a matchCode the owner 
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the link exists, with state waiting_owner, final
 false and an approval id; the page stays open in the background. Write the link (and the match code) and the terms in your
 reply to the owner, a visible message, and end your turn there. When they say they've approved, run
-superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner, and opens the link in the
-default browser unless --no-open.
+superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the link also
+opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The link expires after --timeout seconds (default 600, from 10 to 3600). If the owner has not approved by then, the
 command ends refused_precheck (exit 3) and nothing was sent: run the same command again for a new link.
 One owner approval at a time per rail and chain. --replace cancels a pending one: only at the owner's request, after
@@ -487,8 +499,8 @@ signed in with their wallet, and the APPROVE line carries a matchCode the owner 
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the link exists, with state waiting_owner, final
 false and an approval id; the page stays open in the background. Write the link (and the match code) and the terms in your
 reply to the owner, a visible message, and end your turn there. When they say they've approved, run
-superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner, and opens the link in the
-default browser unless --no-open.
+superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the link also
+opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The link expires after --timeout seconds (default 600, from 10 to 3600). If the owner has not approved by then, the
 command ends refused_precheck (exit 3) and nothing was sent: run the same command again for a new link.
 One owner approval at a time per rail and chain. --replace cancels a pending one: only at the owner's request, after
