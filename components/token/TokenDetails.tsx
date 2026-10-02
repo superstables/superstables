@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CopyBtn } from "@/components/app/ui";
+import CopyValue from "@/components/CopyValue";
 import { explorerTokenUrl, token, uniswapPoolUrl } from "@/content/token";
 import AddToWallet from "./AddToWallet";
 import VerifiedMark from "./VerifiedMark";
@@ -17,12 +17,11 @@ export default function TokenDetails({ address, onTreasury = false }: { address:
         <span>
           <b>Contract address</b>
           {address ? (
-            <p className="mono contract-line"><VerifiedMark />{address}</p>
+            <p><CopyValue value={address} label="Copy contract address" before={<VerifiedMark />} /></p>
           ) : (
             <p>Contract address unavailable.</p>
           )}
         </span>
-        {address && <CopyBtn text={address} className="btn sm" />}
       </div>
       <div className="settings-row">
         <span>

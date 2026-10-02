@@ -12,7 +12,10 @@ concurrency:
 jobs:
   test:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, X64, superstables-ci]
+    # The private repo runs on the self-hosted runner on the Superstables VPS. That runner never
+    # serves public repos (anyone can open a pull request there), so the public copy of this
+    # workflow runs on GitHub's machines instead.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","Linux","X64","superstables-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

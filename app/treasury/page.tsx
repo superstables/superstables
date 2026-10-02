@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
-import { CopyBtn } from "@/components/app/ui";
+import CopyValue from "@/components/CopyValue";
 import TokenDetails from "@/components/token/TokenDetails";
 import { tokenContract as staticTokenContract } from "@/content/site";
 import { getSetting, TOKEN_CONTRACT_KEY } from "@/lib/settings";
@@ -56,10 +56,9 @@ export default async function TreasuryPage() {
             <div className="settings-row" key={w.address}>
               <span>
                 <b>{w.label}</b>
-                <p className="mono" style={{ wordBreak: "break-all" }}>{w.address}</p>
+                <p><CopyValue value={w.address} label={`Copy ${w.label.toLowerCase()} address`} /></p>
                 <p>{w.role}{" "}{w.link && <a className="link" href={w.link.href} target="_blank" rel="noopener noreferrer">{w.link.label}</a>}</p>
               </span>
-              <CopyBtn text={w.address} className="btn sm" />
             </div>
           ))}
         </div>

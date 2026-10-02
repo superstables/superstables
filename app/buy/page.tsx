@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
-import { CopyBtn } from "@/components/app/ui";
+import CopyValue from "@/components/CopyValue";
 import PriceChart from "@/components/token/PriceChart";
 import TickerBar from "@/components/token/TickerBar";
 import TokenDetails from "@/components/token/TokenDetails";
@@ -51,6 +51,7 @@ export default async function BuyPage() {
   return (
     <>
       <Nav current="/buy" />
+      {address && <TickerBar address={address} compact />}
       <main className="wrap" style={{ paddingTop: 56, paddingBottom: 96 }}>
         <div className="buy-hero">
           <div className="buy-copy">
@@ -66,13 +67,12 @@ export default async function BuyPage() {
               {address && (
                 <div className="buy-actions">
                   <a className="btn primary lg" href={uniswapSwapUrl(address)} {...ext}>Buy on Uniswap</a>
-                  <CopyBtn text={address} className="btn lg" />
                 </div>
               )}
             </div>
             {address && (
               <p className="buy-address" id="buy-contract">
-                <VerifiedMark /><span>Contract</span> <code className="mono">{address}</code>
+                <span>Contract</span> <CopyValue value={address} label="Copy contract address" before={<VerifiedMark />} />
               </p>
             )}
             <PriceChart coinId={token.coingeckoId} />

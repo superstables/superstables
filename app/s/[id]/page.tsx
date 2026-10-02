@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
-import { CopyBtn } from "@/components/app/ui";
+import CopyValue from "@/components/CopyValue";
 import { getService } from "@/lib/directory/query";
 import "../../app.css";
 import { SITE } from "@/lib/site";
@@ -67,7 +67,7 @@ export default async function ServicePage({ params }: Props) {
         </p>
 
         <div className="panel" style={{ marginTop: 24 }}>
-          <div className="settings-row"><span><b>Endpoint</b><p className="mono" style={{ wordBreak: "break-all" }}>{s.endpoint}</p></span><CopyBtn text={s.endpoint} className="btn sm" /></div>
+          <div className="settings-row"><span><b>Endpoint</b><p><CopyValue value={s.endpoint} label="Copy endpoint" /></p></span></div>
           <div className="settings-row"><span><b>Status</b></span>{s.live === true ? <span className="pill ok">■ Live</span> : s.live === false ? <span className="pill">□ Not responding</span> : <span className="pill soft">Not yet probed</span>}</div>
           {s.price.display && <div className="settings-row"><span><b>Price</b></span><span className="mono">{s.price.display}</span></div>}
           {s.facilitator && <div className="settings-row"><span><b>Facilitator</b></span><span className="mono">{s.facilitator}</span></div>}
