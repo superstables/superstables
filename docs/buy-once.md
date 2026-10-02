@@ -163,10 +163,13 @@ must keep running until the owner decides, so start it detached and read the lin
 nohup npx superstables pay <quote-id> --json > pay.json 2> pay.log < /dev/null &
 ```
 
-Read `pay.log` for the attempt id (its first line) and the approval link. Show the owner the link
-exactly as printed, with the price and the recipient. Then poll
-`npx superstables status <attempt-id> --json` until `final` is `true`, and follow the outcomes table
-above. `pay.json` holds the same result once `pay` ends. Do not use a short `--wait`:
+Read `pay.log` for the attempt id (its first line) and the approval link. Write the link exactly
+as printed, with the price and the recipient, in a reply to the owner, and end your turn there:
+some agent hosts show the owner nothing of a turn until it ends, and `pay` keeps the page open in
+the background. When the owner says they have approved or rejected it, run
+`npx superstables status <attempt-id> --json` and follow the outcomes table above; if `final` is
+still `false`, say so in one line and end your turn again. `pay.json` holds the same result once
+`pay` ends. Do not use a short `--wait`:
 it ends the attempt as `abandoned` before the owner can act.
 
 With MCP, the `pay` tool returns the link at once and the server keeps the page open;
