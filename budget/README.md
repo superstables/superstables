@@ -145,7 +145,7 @@ In each block, run `doctor` first: it lists what is missing and which address to
    ```
 
 2. Fund your wallet with faucets, then give the agent gas. `fund-agent` opens the approval page for one plain transfer from your wallet. `doctor` checks these minimums:
-   - Base Sepolia: your wallet needs at least 0.01 USDC ([faucet.circle.com](https://faucet.circle.com), pick Base Sepolia) and 0.0025 ETH (any Base Sepolia ETH faucet). The agent needs at least 0.0001 ETH, enough for one purchase: `npx superstables budget fund-agent --rail evm` sends 0.002, about 20 purchases. Network fees vary; check the wallet estimate.
+   - Base Sepolia: your wallet needs at least 0.01 USDC ([faucet.circle.com](https://faucet.circle.com), pick Base Sepolia) and 0.00003 ETH (any Base Sepolia ETH faucet; 0.0003 is a comfortable amount). The agent needs at least 0.00003 ETH: `npx superstables budget fund-agent --rail evm` sends 0.0001. Network fees vary; check the wallet estimate.
    - Arc Testnet: gas is USDC, so there is no second token. Your wallet needs at least 0.2 USDC after funding the agent, and the agent at least 0.01 USDC. Get 0.4 USDC from [faucet.circle.com](https://faucet.circle.com) (pick Arc Testnet), then `npx superstables budget fund-agent --rail evm --chain arc-testnet` sends 0.1. Network fees vary; check the wallet estimate.
    - Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia: `npx superstables budget doctor --rail evm --chain <key>` prints the minimums and where to get each token. Then `npx superstables budget fund-agent --rail evm --chain <key>`.
 

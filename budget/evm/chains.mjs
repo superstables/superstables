@@ -15,8 +15,6 @@
 //              failure would need (a pull also needs cancel + return). Doctor sizes its minimums from the same limits.
 //              minAgent: a floor under that check (it covers what the limits leave out, such as Base's L1 data fee).
 //              topUp: the least recover sends an agent that cannot pay for its steps.
-//              Base Sepolia and Arbitrum Sepolia: doctor.fundAgent (what fund-agent sends by default) is 0.002 ETH, about 20
-//              purchases even at 1 gwei, so the owner approves a top-up rarely. The website accepts a fund-agent request up to 0.05.
 //   logRange   optional: the RPC's eth_getLogs block-range cap, where known (reconcile searches in windows of this size; it also
 //              shrinks a window the RPC refuses, so a missing value only costs extra calls).
 //   doctor     minimum balances for one grant, a few purchases and a revoke, and where to get them (decimal strings). The
@@ -39,7 +37,7 @@ export const EVM_CHAINS = {
     token: { address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
     legacy: ["base-sepolia"], logRange: 1000,
     gas: { symbol: "ETH", decimals: 18, isToken: false, limits: FIAT_TOKEN_GAS, minAgent: "0.000002", topUp: "0.00003" },
-    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.002", tokenFaucet: "faucet.circle.com, Base Sepolia", gasFaucet: "a Base Sepolia ETH faucet" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.circle.com, Base Sepolia", gasFaucet: "a Base Sepolia ETH faucet" },
   },
   // Circle's Arc Testnet. USDC is the native gas token: the native balance has 18 decimals, the ERC-20 at 0x3600... shows the
   // same balance in 6-decimal units (native / 1e12, rounded down; checked by preflight). Gas: a pull used 55,514 (0x2a19bdf7);
@@ -61,7 +59,7 @@ export const EVM_CHAINS = {
     token: { address: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", symbol: "USDC", decimals: 6, domain: { name: "USD Coin", version: "2" } },
     legacy: [],
     gas: { symbol: "ETH", decimals: 18, isToken: false, limits: { pull: 115000, cancel: 115000, return: 85000, selfRevoke: 85000, approve: 100000, revoke: 75000 }, minAgent: "0.000005", topUp: "0.00003" },
-    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.002", tokenFaucet: "faucet.circle.com, Arbitrum Sepolia", gasFaucet: "an Arbitrum Sepolia ETH faucet" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.circle.com, Arbitrum Sepolia", gasFaucet: "an Arbitrum Sepolia ETH faucet" },
   },
   // Amoy's USDC costs about 1.27 times FiatToken's gas: pull 86,860 (0x54d66858, 0x36fbbf2d), selfRevoke 61,040 (0xd4dfffc6), return
   // 56,207 (0x02c85b2a), approve 66,345 (0x54dd6ebc), revoke 44,421 (0x6781bcaf). No cancel was ever sent here: its limit assumes

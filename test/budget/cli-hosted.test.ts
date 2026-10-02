@@ -379,8 +379,8 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
   const FUND_HASH = `0x${"a1".repeat(32)}`;
   const GRANT_HASH = `0x${"b2".repeat(32)}`;
   const approve = encodeFunctionData({ abi: parseAbi(["function approve(address spender, uint256 value) returns (bool)"]), functionName: "approve", args: [AGENT, 10000n] });
-  // fund-agent's default on Base Sepolia: 0.002 ETH
-  const FUND_VALUE = 2_000_000_000_000_000n;
+  // fund-agent's default on Base Sepolia: 0.0001 ETH
+  const FUND_VALUE = 100_000_000_000_000n;
 
   /** The agent key setup reuses, and a chain that shows the owner's two transactions in block 0x20 (the head is 0x10 before). */
   const prepare = async () => {
