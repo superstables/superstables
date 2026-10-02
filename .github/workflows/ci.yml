@@ -4,8 +4,8 @@
 # The tests never reach the network (they stand up their own servers on loopback), so CI needs
 # no keys, no funded wallet and no facilitator.
 #
-# The install job installs the client the four ways people do (the packed tarball, a checkout, a
-# checkout without dev packages, a git URL) and runs it, with scripts/install-check.mjs. Its
+# The install job installs the client the five ways people do (the packed tarball, a global
+# install, a checkout, a checkout without dev packages, a git URL) and runs it, with scripts/install-check.mjs. Its
 # `budget doctor` reads a public testnet RPC; everything else stays local.
 
 name: CI
@@ -92,7 +92,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
-      - name: Install four ways and run
+      - name: Install five ways and run
         run: node scripts/install-check.mjs
         env:
           TMPDIR: ${{ runner.temp }}

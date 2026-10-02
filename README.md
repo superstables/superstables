@@ -279,6 +279,11 @@ local policy and what a compromised agent or client process could do.
 - A receipt records payment and service outcomes separately. A settled payment does not
   guarantee a successful service response. If the facilitator has not returned a transaction
   hash, the receipt records its pending reference instead.
+- Hosted approvals (`superstables budget setup --hosted`), `superstables budget buy-once` and
+  `superstables budget find` need superstables.com, or a compatible deployment the owner names
+  with `--site` or `SUPERSTABLES_SITE`. Everything else, local approvals and budgets on every rail
+  included, works with no account. What a compatible site must do is in
+  [budget/CLI.md](budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).
 
 ## Run the seller yourself
 
@@ -358,7 +363,8 @@ link). `superstables budget find` lists the services superstables.com says a bud
 the network its listing names: Base Sepolia, Tempo Moderato or Solana devnet; `find --once` lists them). The default flow stores only the agent key in `~/.superstables/keys/budget/`. An agent may start an owner
 command and hand the owner the link; only the owner approves. Run by an agent, an owner command returns at once with
 the link and an approval id. The agent writes the link in its reply to the owner and ends its turn; when the owner says
-they have approved, it runs `superstables budget wait --id <id> --shown` until `final` is `true`.
+they have approved, it runs `superstables budget wait --id <id> --shown`; if the approval is still open, it says so and
+ends its turn again, rather than polling.
 `waiting_owner` is not approval or settlement. A link that expires before the owner approves ends the command refused,
 with nothing sent; running the command again gives a new link. Every command ends with one
 `RESULT {json}` line (with `--json`, the object alone) and a fixed exit code, so an agent can act on it. EVM and Solana allowances have no automatic expiry or seller restriction. Revoke stops
