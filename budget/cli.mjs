@@ -962,7 +962,7 @@ function budgetSpent(f, rail) {
   const why = `${rail.reason ?? ""}`;
   const net = f.rail === "tempo" ? "Tempo testnet (Moderato)" : f.rail === "solana" ? "Solana devnet" : EVM_CHAINS[f.chain]?.label ?? f.chain;
   const unit = f.rail === "tempo" ? "pathUSD" : "test USDC";
-  const m = /price ([0-9.]+) exceeds the (?:allowance|remaining budget) ([0-9.]+)/.exec(why);
+  const m = /price ([0-9.]+)(?: [A-Za-z]+)? exceeds the (?:allowance|remaining budget) ([0-9.]+)/.exec(why);
   if (m) return { budget_spent: true, message_for_owner: `The budget left on ${net} (${m[2]} ${unit}) doesn't cover this purchase (${m[1]} ${unit}). Nothing was paid. ${TESTNET_LINE}` };
   if (/allowance is 0|no delegate|no_budget/i.test(why)) return { budget_spent: true, message_for_owner: `There is no budget left on ${net} (it is spent, revoked or was never granted). Nothing was paid. ${TESTNET_LINE}` };
   return {};
