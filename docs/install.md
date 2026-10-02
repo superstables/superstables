@@ -1,59 +1,115 @@
-# Installing
+# Install the client
 
-Node 20 or newer, and MetaMask in your browser. Everything runs on your machine except the paid
-service, the public facilitators, the Base Sepolia RPC and the Superstables index.
+The Superstables client is a command, `superstables`, with an MCP server (`superstables mcp`) and a
+TypeScript SDK built from the same code. It pays for services in two ways: [buy once](buy-once.md),
+where the owner approves each payment, and [budget](budget.md), where the owner grants an on-chain
+budget once. Testnet only: test USDC, or pathUSD for Tempo budgets. No real money.
+
+## What you need
+
+- Node 20 or newer.
+- Linux or macOS. On Windows, use WSL: `superstables budget` refuses to run on native Windows.
+- For the owner, a browser wallet on the computer that runs the client: MetaMask or another EVM
+  browser wallet, or a Solana wallet for a Solana budget. The approval pages are served on
+  `127.0.0.1`, so the wallet is a browser extension on that computer. Over SSH, the owner forwards
+  the page's port first (`ssh -L PORT:127.0.0.1:PORT user@host`, with the port from the link and your SSH destination).
+
+The client runs on your computer and contacts sellers, the facilitators that settle x402 payments,
+testnet RPCs, the Superstables index and, when switched on, the hosted demo catalogue.
+
+## Install
+
+Pick one. All three run the same commands on the same state, in `~/.superstables`.
+
+**From a checkout.** The examples on these pages are written this way, from the repository root:
 
 ```bash
 git clone https://github.com/superstables/superstables-client.git
 cd superstables-client
-npm install
+npm ci
 npm run build
-npx superstables setup
+npx superstables --version
 ```
 
 `npx superstables …` works from the repository root because npm resolves this package's own
-`bin`. To get the command on your PATH everywhere, run `npm link` once, then use
-`superstables …`.
+`bin`. To have `superstables` on your PATH everywhere, run `npm link` once.
 
-`setup` is idempotent. It creates `~/.superstables`, writes `policy.yaml` from the example if
-there is none, and prints the MetaMask steps and the exact command for your agent. It creates no
-key: in the default mode there is no key on this machine.
+**With npm, from git.** In any folder:
 
-## There is no process to start
+```bash
+npm install github:superstables/superstables-client
+npx superstables --version
+```
 
-The client signs with MetaMask. The agent starts the MCP server, that server binds
-`127.0.0.1:4412` the first time a payment needs approval, and it hands the agent a link of the
-form `http://127.0.0.1:4412/approve/<id>`. You open the link, connect MetaMask, and sign. The
-port is released when the server stops. If another payment is already waiting on 4412 (a second
-agent, or a `superstables pay` in another terminal), the page takes a free port instead, and the
-link names it.
+npm clones the repository, builds it and installs the result, `superstables budget` included.
 
-So the only preparation is in the browser:
+**The agent skill, with the whole CLI bundled.** `npm run skill` in a checkout builds
+`build/superstables-payments-skill-<version>.zip`, and releases attach the same zip. Unzip it
+into your agent's skills folder, `~/.claude/skills/` for Claude Code or `~/.agents/skills/` for
+Codex. It unpacks to `superstables-payments/`, and needs only Node:
 
-1. Install MetaMask: <https://metamask.io/download>.
-2. Add the Base Sepolia network. The approval page offers to add or switch to it the first time
-   you connect, so you can also skip this and say yes when asked.
-3. Fund your MetaMask account with test USDC on Base Sepolia at <https://faucet.circle.com>.
-   Copy the address out of MetaMask; that is the account that pays. You do not need ETH:
-   facilitators submit the transfer and pay the gas.
+```bash
+node ~/.claude/skills/superstables-payments/scripts/superstables.mjs --version
+```
 
-Check the machine with `npx superstables doctor`. In this mode it checks that the home
-directory and policy are in place, which account last connected, and that the approval port is
-free:
+Use that path wherever these pages say `superstables`. `scripts/THIRD_PARTY_NOTICES.txt` lists
+the bundled packages and their licences.
+
+`superstables --version` names the build that is running.
+
+## Set up
+
+For buy once, the owner runs `setup` once. It creates `~/.superstables`, writes a starting spend
+policy (`policy.yaml`, at most 0.05 USDC per payment and 1 USDC per day) and prints the command
+that connects an agent. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
+again keeps the existing policy.
+
+```bash
+npx superstables setup
+npx superstables doctor
+```
+
+`doctor` checks the machine, one line per item:
 
 ```
-  client version           0.1.0
-  home                     ~/.superstables
+  client version           0.3.0
+  home                     /home/you/.superstables
 
-✓ home directory           ~/.superstables (writable)
-✓ spend policy             ~/.superstables/policy.yaml: up to 0.05 USDC per payment, 1 USDC per day
+✓ home directory           /home/you/.superstables (writable)
+✓ spend policy             /home/you/.superstables/policy.yaml: up to 0.05 USDC per payment, 1 USDC per day
 ✓ browser wallet           no account connected yet: MetaMask connects when the first approval link opens
 ✓ approval page            http://127.0.0.1:4412 is free; the agent serves the page itself
+✓ demo service             https://www.superstables.com/api/demo/market asks for payment (HTTP 402)
+✓ Superstables index       https://www.superstables.com/api/v1/services answered HTTP 200
+✓ facilitator.x402.rs      settles exact payments on Base Sepolia (testnet)
+✓ facilitator.payai.network settles exact payments on Base Sepolia (testnet)
+✓ x402.org                 settles exact payments on Base Sepolia (testnet)
+
+Everything this machine needs is in place.
 ```
 
-Not having connected an account yet is fine and is not a failure.
+Not having connected an account yet is fine and is not a failure. A budget has its own setup:
+see [Budget](budget.md).
 
-## Claude Code
+In browser mode there is no approval process to start. When a payment needs approval, the process that asked for it (the
+MCP server, or `superstables pay`) serves the approval page on `127.0.0.1:4412` and hands the agent
+a link of the form `http://127.0.0.1:4412/approve/<id>`. If another payment is already waiting on
+4412, the page takes a free port instead, and the link names it.
+
+## Connect an agent
+
+An agent can use the client in two ways: through the skill and a shell, or through MCP.
+
+**The skill.** `superstables-payments` guides an agent through finding a service, pricing it and
+both ways to pay, with their safety rules. Use the skill zip installed above, or link the
+`skills/superstables-payments/` folder from a checkout into your agent's skills folder. Keep
+`SKILL.md`, `references/` and `agents/openai.yaml` together. The agent needs a shell. Budgets need
+the CLI: the MCP server has no budget tools.
+
+**MCP.** The server has six tools for buy once: `find_services`, `quote`, `pay`,
+`payment_status`, `wallet_status` and `list_receipts`.
+
+### Claude Code
 
 From the repository root:
 
@@ -61,13 +117,12 @@ From the repository root:
 claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- node "$(pwd)/dist/mcp/main.js"
 ```
 
-`superstables setup` prints this line with the absolute path already filled in. Then, in Claude
+`superstables setup` prints an equivalent command with the absolute paths filled in. Then, in Claude
 Code, run `/mcp`: `superstables` should be listed as connected, with six tools. If it is not,
 `claude mcp list` shows the configured command, and the server logs to stderr — start it by hand
 with `node dist/mcp/main.js` to see what it says.
 
-To keep the server's state somewhere else, or to use the local wallet, pass the environment
-through:
+To keep the server's state somewhere else, pass `SUPERSTABLES_HOME` through:
 
 ```bash
 claude mcp add superstables --env SUPERSTABLES_HOME=/path/to/home -- node "$(pwd)/dist/mcp/main.js"
@@ -76,7 +131,7 @@ claude mcp add superstables --env SUPERSTABLES_HOME=/path/to/home -- node "$(pwd
 Claude Code has been tested end to end with the MetaMask flow: find, quote, approve, pay,
 receipt, and a rejected payment that signs nothing.
 
-## Any other MCP client
+### Any other MCP client
 
 The MCP server is part of the CLI: `superstables mcp` runs it on stdio. Any MCP client that can
 start a local stdio server can use it. Most take a JSON entry like this one; where the file lives
@@ -119,13 +174,13 @@ The server logs to stderr only, because stdout is the protocol. Its first line s
 is running, where its state lives and which signer it is using:
 
 ```
-superstables client 0.1.0 · home /Users/you/.superstables · wallet browser
+superstables client 0.3.0 · home /Users/you/.superstables · wallet browser
 ```
 
 ### Which build is running
 
-After an update, restart the client so it starts the server again: a client that keeps the old
-server process running keeps answering with the old build. Then ask the agent for the wallet
+After an update, restart the Superstables MCP server from your MCP client: a server process that
+keeps running keeps answering with the old build. Then ask the agent for the wallet
 status. The answer carries `client_version` and `home`: the first must be the version you just
 built or installed, the second the directory you expect (`~/.superstables` unless you changed it).
 `superstables --version` and `superstables doctor` answer the same question from a terminal.
@@ -137,8 +192,7 @@ Releases are tagged `v<version>` on GitHub, with the release notes taken from
 
 The demo buys from a small x402 service Superstables hosts at
 `https://www.superstables.com/api/demo/market` (`HOSTED_DEMO_SERVICE_URL` in
-`src/core/discovery.ts`), so there is something to buy without anyone running a seller. Nothing
-has to be started for the quick start to work.
+`src/core/discovery.ts`), so there is something to buy without anyone running a seller.
 
 The seller is in this repository too, and `superstables demo-service` runs it, which is worth
 doing to watch the seller's side of a payment. `SUPERSTABLES_DEMO_SERVICE_URL` then points the
@@ -173,8 +227,8 @@ npx superstables --wallet local wallet serve   # leave it running
 ```
 
 It binds `127.0.0.1:4411`, prints an approval URL of the form
-`http://127.0.0.1:4411/#<owner-secret>`, and opens it in your browser. The secret is in the URL
-fragment, so it never reaches the server; keep that link to yourself.
+`http://127.0.0.1:4411/#<owner-secret>`, and opens it in your browser. The browser leaves the fragment out of the page request; the page then sends the secret to the
+wallet process in an Authorization header, so the owner can approve. Keep that link to yourself.
 
 | Option | Meaning |
 | --- | --- |
@@ -184,7 +238,7 @@ fragment, so it never reaches the server; keep that link to yourself.
 
 Every other command needs `--wallet local` too, or `SUPERSTABLES_WALLET=local` in the
 environment — including the one that starts the MCP server, which is how an agent gets it.
-Fund the address it prints from the same faucet. Stopping the wallet is the off switch: with no
+Fund the address it prints with test USDC on Base Sepolia from <https://faucet.circle.com>. Stopping the wallet is the off switch: with no
 wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 
 ## Environment variables
@@ -192,7 +246,7 @@ wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `SUPERSTABLES_HOME` | `~/.superstables` | Where the policy, the records and the remembered account live |
-| `SUPERSTABLES_WALLET` | `browser` | Who signs: `browser` (MetaMask) or `local` (the wallet process) |
+| `SUPERSTABLES_WALLET` | `browser` | Who signs: `browser` (a browser wallet) or `local` (the local wallet process) |
 | `SUPERSTABLES_APPROVE_PORT` | unset: `4412`, or a free port when 4412 is busy | Fixes the approval page's port, browser mode. A fixed port that is busy fails at once, without asking the owner or using up the quote. `0` picks a free port |
 | `SUPERSTABLES_POLICY` | `$SUPERSTABLES_HOME/policy.yaml` | Read the policy from somewhere else |
 | `SUPERSTABLES_WALLET_URL` | `http://127.0.0.1:4411` | Where the client looks for the local wallet |
@@ -219,14 +273,26 @@ rather than during one. The CLI's `--home <dir>` sets it for you, and `--wallet 
 | 4411 | the local wallet | `--wallet local` only | `127.0.0.1` |
 | 4402 | the demo service | only if you run the seller yourself; the hosted one needs no port | `127.0.0.1` |
 
-None of them is reachable from another machine. If a port is busy, move it with the matching
+With these defaults, none is reachable from another machine; `SUPERSTABLES_DEMO_HOST` can bind
+the demo service to another interface. If a port is busy, move it with the matching
 variable or `--port`. The approval page moves by itself: a busy 4412 usually means another
 payment is waiting there for its owner, so leave that process running.
 
 ## Uninstalling
 
-Remove the MCP server (`claude mcp remove superstables`, or delete its entry from your MCP
-client's configuration) and delete `~/.superstables`. In the default mode that directory holds no key — your
-funds are in MetaMask and are not affected. With `--wallet local` it holds
-`wallet/key`, so deleting it makes any funds that key holds unreachable; they are testnet
-funds, but check before you delete.
+Revoke each budget first: deleting an agent key does not end its allowance on chain. Run
+`superstables budget revoke --rail <rail> --chain <chain> --wait` for each budget's rail and chain,
+have the owner approve it, then check that `superstables budget status --rail <rail> --chain <chain>`
+says `revoked: true`. For a named Tempo key, add `--agent <label>` to both.
+
+Then remove the MCP server (`claude mcp remove superstables`, or delete its entry from your MCP
+client's configuration), delete the skill folder if you installed it, and delete `~/.superstables`
+(or your `SUPERSTABLES_HOME`).
+
+With buy once in the default mode, that directory holds no key, and your funds in your wallet are
+not affected. It can hold keys in two cases, and deleting it makes any funds those keys hold
+unreachable. They are testnet funds, but check before you delete:
+
+- `wallet/key`, with `--wallet local`;
+- `keys/budget/`, the agent keys of `superstables budget`, which can hold gas the owner sent with
+  `fund-agent`.
