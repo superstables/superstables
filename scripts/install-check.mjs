@@ -2,8 +2,9 @@
 // Installs the client the ways people install it, each in an empty folder, and runs it there.
 //
 //   checkout   a copy of this checkout (tracked and untracked files, uncommitted changes included): npm ci, npm run build,
-//              then the command through `npm exec` in the checkout, the way its docs say (npx superstables ...)
+//              then the command through `npm exec` in the checkout, with --no, so npx never downloads a package of that name
 //   tarball    npm pack in that checkout, then npm install <tgz> in an empty folder
+//   global     the same tarball, npm install -g into an empty prefix, the way the README installs it from npm
 //   omit-dev   the same checkout after npm prune --omit=dev: no tsx, no budget-only packages, so budget runs dist/budget
 //   git        npm install git+file://...#<commit> in an empty folder: npm clones, installs the dev packages, runs
 //              `prepare` (the build) and installs what it packs. It installs HEAD, committed changes only.
@@ -14,7 +15,7 @@
 //                                            a RESULT line and exit 0 or 1, never a crash)
 // and checks what the route must and must not install. Every command has a time limit, so nothing can hang.
 //
-// node scripts/install-check.mjs [checkout] [tarball] [omit-dev] [git] [--keep]   (no route named: all four)
+// node scripts/install-check.mjs [checkout] [tarball] [global] [omit-dev] [git] [--keep]   (no route named: all five)
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -23,7 +24,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ROUTES = ["checkout", "tarball", "omit-dev", "git"];
+const ROUTES = ["checkout", "tarball", "global", "omit-dev", "git"];
 const args = process.argv.slice(2);
 const keep = args.includes("--keep");
 const unknown = args.filter((a) => a !== "--keep" && !ROUTES.includes(a));
@@ -97,13 +98,16 @@ function exercise(route, superstables, { version, cwd }) {
   check(route, "superstables budget doctor --rail evm", (r.status === 0 || r.status === 1) && result?.command === "doctor", `exit ${r.status ?? r.signal}, ${result ? `RESULT state ${result.state}` : "no RESULT line"}`);
 }
 
-/** Checks an installed @superstables/client under node_modules: dist/budget with its notices, no budget-only packages. */
-function checkInstalled(route, dir) {
-  const pkg = join(dir, "node_modules", "@superstables", "client");
+/**
+ * Checks an installed @superstables/client: dist/budget with its notices, no budget-only packages. `nodeModules` is the
+ * node_modules it was installed into; a global install puts the package's own dependencies in its own node_modules.
+ */
+function checkInstalled(route, nodeModules) {
+  const pkg = join(nodeModules, "@superstables", "client");
   check(route, "the package has dist/budget/cli.mjs", existsSync(join(pkg, "dist", "budget", "cli.mjs")));
   check(route, "the package has dist/budget/THIRD_PARTY_NOTICES.txt", existsSync(join(pkg, "dist", "budget", "THIRD_PARTY_NOTICES.txt")));
   check(route, "the package has no budget/ sources", !existsSync(join(pkg, "budget")));
-  const present = BUDGET_ONLY.filter((p) => existsSync(join(dir, "node_modules", p)));
+  const present = BUDGET_ONLY.filter((p) => existsSync(join(nodeModules, p)) || existsSync(join(pkg, "node_modules", p)));
   check(route, "no budget-only package installed", present.length === 0, present.join(", "));
 }
 
@@ -131,6 +135,17 @@ function prepareCheckout() {
 }
 const inCheckout = ["npm", "exec", "--prefix", checkoutDir, "--no", "--", "superstables"];
 
+let tarball = null;
+/** npm pack in the checkout copy, once: the file npm publish would upload. */
+function packCheckout() {
+  if (tarball) return tarball;
+  prepareCheckout();
+  const packs = emptyDir("packs");
+  sh("npm", ["pack", "--pack-destination", packs], checkoutDir);
+  tarball = join(packs, readdirSync(packs).find((f) => f.endsWith(".tgz")));
+  return tarball;
+}
+
 const version = JSON.parse(execFileSync("node", ["-p", "JSON.stringify(require('./package.json').version)"], { cwd: root, encoding: "utf8" }));
 
 for (const route of routes) {
@@ -141,14 +156,18 @@ for (const route of routes) {
       exercise(route, inCheckout, { version: /\(checkout: runs the TypeScript sources with tsx/, cwd: emptyDir("run-checkout") });
     }
     if (route === "tarball") {
-      prepareCheckout();
-      const packs = emptyDir("packs");
-      sh("npm", ["pack", "--pack-destination", packs], checkoutDir);
-      const tgz = readdirSync(packs).find((f) => f.endsWith(".tgz"));
+      const tgz = packCheckout();
       const dir = emptyDir("install-tarball");
-      sh("npm", ["install", "--no-audit", "--no-fund", join(packs, tgz)], dir);
-      checkInstalled(route, dir);
+      sh("npm", ["install", "--no-audit", "--no-fund", tgz], dir);
+      checkInstalled(route, join(dir, "node_modules"));
       exercise(route, [join(dir, "node_modules", ".bin", "superstables")], { version: new RegExp(`^superstables budget ${version.replace(/\./g, "\\.")} \\(standalone build`), cwd: emptyDir("run-tarball") });
+    }
+    if (route === "global") {
+      const tgz = packCheckout();
+      const prefix = emptyDir("install-global");
+      sh("npm", ["install", "--global", "--prefix", prefix, "--no-audit", "--no-fund", tgz], emptyDir("from-global"));
+      checkInstalled(route, join(prefix, "lib", "node_modules"));
+      exercise(route, [join(prefix, "bin", "superstables")], { version: new RegExp(`^superstables budget ${version.replace(/\./g, "\\.")} \\(standalone build`), cwd: emptyDir("run-global") });
     }
     if (route === "omit-dev") {
       prepareCheckout();
@@ -171,7 +190,7 @@ for (const route of routes) {
       sh("git", ["branch", "install-check", sha], src);
       const dir = emptyDir("install-git");
       sh("npm", ["install", "--no-audit", "--no-fund", `git+${pathToFileURL(src).href}#install-check`], dir);
-      checkInstalled(route, dir);
+      checkInstalled(route, join(dir, "node_modules"));
       exercise(route, [join(dir, "node_modules", ".bin", "superstables")], { version: new RegExp(`^superstables budget ${version.replace(/\./g, "\\.")} \\(standalone build, commit ${sha.slice(0, 7)}`), cwd: emptyDir("run-git") });
     }
   } catch (err) {

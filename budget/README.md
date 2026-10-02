@@ -16,7 +16,7 @@ Three ideas hold it together:
 
 The **owner** grants a budget from their own wallet: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) on `evm`, any EVM browser wallet that can add a custom network on `tempo`, and any Solana wallet (Phantom, Solflare, Backpack, ...) on `solana`. The **agent** buys within it using a separate key. The default flow stores only the agent key in the CLI home. Owner transactions require the owner's wallet signature. Keep owner key files out of the agent's environment.
 
-Below, command names are shorthand for `npx superstables budget <command> --rail evm`. Add `--chain arc-testnet` for Arc Testnet; the default is Base Sepolia.
+Below, command names are shorthand for `superstables budget <command> --rail evm`. Add `--chain arc-testnet` for Arc Testnet; the default is Base Sepolia.
 
 The steps use the `evm` rail. On `tempo` (access key) and `solana` (SPL delegate) the owner commands work the same way, and the agent pays from the owner's account directly, with no pull first; see their quickstarts.
 
@@ -82,7 +82,7 @@ You need Node 20 or newer and a browser wallet: any EVM browser wallet (MetaMask
 
 Install. Pick one; all run the same commands on the same keys and state.
 
-- **With the client.** An npm install of the client (its package, or `npm install github:superstables/superstables-client`) includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone: `superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+- **With the client.** An npm install of the client (`npm install -g @superstables/client`, or `npm install github:superstables/superstables-client`) includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone: `superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 - **From a checkout of this repository.** At the repository root:
 
   ```sh
@@ -90,8 +90,8 @@ Install. Pick one; all run the same commands on the same keys and state.
   npm run build
   ```
 
-  Then `npx superstables budget ...` runs the tool from its TypeScript sources. `node budget/cli.mjs ...` does the same without the build. Without the dev packages (`npm ci --omit=dev`), both run the checkout's `dist/budget` build instead, and `--version` says so. Every command below is written this way and runs from the repository root.
-- **The standalone skill zip.** `npm run skill` in a checkout builds `build/superstables-payments-skill-<version>.zip`. Unzip it into your agent's skills folder, `~/.claude/skills/` for Claude Code or `~/.agents/skills/` for Codex: it unpacks to `superstables-payments/`. Then `node ~/.claude/skills/superstables-payments/scripts/superstables.mjs budget ...` (or the `~/.agents` path) runs the tool with Node alone, with no checkout and no `npm install`: `scripts/` holds the whole `superstables` CLI, bundled. Use it in place of `npx superstables budget` below. `--version` names the build, and `scripts/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+  Then `npm link` puts `superstables` on your PATH, and `superstables budget ...` runs the tool from the checkout's TypeScript sources. `node budget/cli.mjs ...` does the same without the build or the link. Without the dev packages (`npm ci --omit=dev`), both run the checkout's `dist/budget` build instead, and `--version` says so. Don't use `npx superstables` outside the repository root: npx would download whatever package the npm registry has under that name.
+- **The standalone skill zip.** `npm run skill` in a checkout builds `build/superstables-payments-skill-<version>.zip`. Unzip it into your agent's skills folder, `~/.claude/skills/` for Claude Code or `~/.agents/skills/` for Codex: it unpacks to `superstables-payments/`. Then `node ~/.claude/skills/superstables-payments/scripts/superstables.mjs budget ...` (or the `~/.agents` path) runs the tool with Node alone, with no checkout and no `npm install`: `scripts/` holds the whole `superstables` CLI, bundled. Use it in place of `superstables budget` below. `--version` names the build, and `scripts/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 
 Where things live. `SUPERSTABLES_HOME` is the client's home, `~/.superstables` unless you set it:
 
@@ -111,31 +111,31 @@ In each block, run `doctor` first: it lists what is missing and which address to
 1. Set up. This creates the agent key file (it never overwrites one) and opens the approval page. Connect your wallet there and sign the short message. It proves the address is yours, sends nothing and costs nothing.
 
    ```sh
-   npx superstables budget setup --rail evm                       # Base Sepolia
-   npx superstables budget setup --rail evm --chain arc-testnet   # each other chain (here Arc): its own public file, same agent key
+   superstables budget setup --rail evm                       # Base Sepolia
+   superstables budget setup --rail evm --chain arc-testnet   # each other chain (here Arc): its own public file, same agent key
    ```
 
    Run `setup` once per chain you use; without it, `doctor --chain <key>` fails on the public file. It prints the next steps.
 
 2. Fund your wallet with faucets, then give the agent gas. `fund-agent` opens the approval page for one plain transfer from your wallet. `doctor` checks these minimums:
-   - Base Sepolia: your wallet needs at least 0.01 USDC ([faucet.circle.com](https://faucet.circle.com), pick Base Sepolia) and 0.00003 ETH (any Base Sepolia ETH faucet; 0.0003 is a comfortable amount). The agent needs at least 0.00003 ETH: `npx superstables budget fund-agent --rail evm` sends 0.0001. Network fees vary; check the wallet estimate.
-   - Arc Testnet: gas is USDC, so there is no second token. Your wallet needs at least 0.2 USDC after funding the agent, and the agent at least 0.01 USDC. Get 0.4 USDC from [faucet.circle.com](https://faucet.circle.com) (pick Arc Testnet), then `npx superstables budget fund-agent --rail evm --chain arc-testnet` sends 0.1. Network fees vary; check the wallet estimate.
-   - Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia: `npx superstables budget doctor --rail evm --chain <key>` prints the minimums and where to get each token. Then `npx superstables budget fund-agent --rail evm --chain <key>`.
+   - Base Sepolia: your wallet needs at least 0.01 USDC ([faucet.circle.com](https://faucet.circle.com), pick Base Sepolia) and 0.00003 ETH (any Base Sepolia ETH faucet; 0.0003 is a comfortable amount). The agent needs at least 0.00003 ETH: `superstables budget fund-agent --rail evm` sends 0.0001. Network fees vary; check the wallet estimate.
+   - Arc Testnet: gas is USDC, so there is no second token. Your wallet needs at least 0.2 USDC after funding the agent, and the agent at least 0.01 USDC. Get 0.4 USDC from [faucet.circle.com](https://faucet.circle.com) (pick Arc Testnet), then `superstables budget fund-agent --rail evm --chain arc-testnet` sends 0.1. Network fees vary; check the wallet estimate.
+   - Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia: `superstables budget doctor --rail evm --chain <key>` prints the minimums and where to get each token. Then `superstables budget fund-agent --rail evm --chain <key>`.
 
    Gas prices move. `doctor` also asks the agent for twice what one purchase plus the cleanup of a failed one (pull, cancel, return) costs at the current fee, and prints that cost. `buy` checks the same thing before it signs. You can also send the agent gas from any wallet: `doctor` prints its address and the amount.
 3. Then:
 
    ```sh
-   npx superstables budget doctor    --rail evm
-   npx superstables budget preflight --rail evm --url https://tollbooth-hello-testnet.sjwilliams8.workers.dev/hello   # price and address; signs nothing
-   npx superstables budget grant  --rail evm --amount 0.01           # approve it in your wallet
-   npx superstables budget buy    --rail evm --url https://tollbooth-hello-testnet.sjwilliams8.workers.dev/hello \
+   superstables budget doctor    --rail evm
+   superstables budget preflight --rail evm --url https://tollbooth-hello-testnet.sjwilliams8.workers.dev/hello   # price and address; signs nothing
+   superstables budget grant  --rail evm --amount 0.01           # approve it in your wallet
+   superstables budget buy    --rail evm --url https://tollbooth-hello-testnet.sjwilliams8.workers.dev/hello \
                       --max 0.002 --pay-to 0xb3e7993Ed2FC2C79FFF220620240f298BBa9bF5B
-   npx superstables budget status --rail evm
-   npx superstables budget revoke --rail evm                         # approve it in your wallet
+   superstables budget status --rail evm
+   superstables budget revoke --rail evm                         # approve it in your wallet
    ```
 
-   In a terminal, `grant` and `revoke` wait until you approve or reject in your wallet. Run by an agent, they return at once with the link and an approval id, and the agent polls `npx superstables budget wait --id <id>`.
+   In a terminal, `grant` and `revoke` wait until you approve or reject in your wallet. Run by an agent, they return at once with the link and an approval id, and the agent polls `superstables budget wait --id <id>`.
 
    Your wallet may offer to change the spending cap on the grant. Keep the requested cap. A changed cap may take effect on chain even if `grant` refuses to record it locally. If that happens, revoke the allowance before granting again.
 
@@ -148,49 +148,49 @@ In each block, run `doctor` first: it lists what is missing and which address to
 1. Set up. This creates the agent key file and opens the approval page. Connect your wallet there and sign the short message. It sends nothing and costs nothing.
 
    ```sh
-   npx superstables budget setup --rail tempo
+   superstables budget setup --rail tempo
    ```
 
 2. Fund. If your wallet holds less than 1 pathUSD, `setup` tops it up from the Tempo faucet (test pathUSD, not USDC). `npx tsx budget/tempo/setup.ts --fund-only` does it again. The agent needs no funds and no gas: its key spends your pathUSD, and the fees come from you. So there is no `fund-agent` on Tempo.
 3. Then:
 
    ```sh
-   npx superstables budget doctor --rail tempo
-   npx superstables budget grant  --rail tempo --amount 0.05 --expiry 2026-10-01T12:00:00Z   # approve it in your wallet
-   npx superstables budget buy    --rail tempo --url https://mpp.quicknode.com/tempo-testnet --method POST \
+   superstables budget doctor --rail tempo
+   superstables budget grant  --rail tempo --amount 0.05 --expiry 2026-10-01T12:00:00Z   # approve it in your wallet
+   superstables budget buy    --rail tempo --url https://mpp.quicknode.com/tempo-testnet --method POST \
                       --body '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
                       --max 0.001 --pay-to 0xFD24114C3981Aba78aE2441991B1BdB89329c556
-   npx superstables budget status --rail tempo
-   npx superstables budget revoke --rail tempo                                             # approve it in your wallet
+   superstables budget status --rail tempo
+   superstables budget revoke --rail tempo                                             # approve it in your wallet
    ```
 
    `--expiry` defaults to 24 hours from now. `grant` also takes `--period SECONDS` (the limit refills each period; the plan and the page show the true maximum by expiry) and `--sellers a,b` (the only addresses the key may pay). The page shows all of it before your wallet opens.
 
-A revoked or expired Tempo key can never be granted again. For the next budget make a new key, `npx superstables budget setup --rail tempo --agent LABEL`, and pass `--agent LABEL` to `grant`, `status`, `buy` and `revoke`.
+A revoked or expired Tempo key can never be granted again. For the next budget make a new key, `superstables budget setup --rail tempo --agent LABEL`, and pass `--agent LABEL` to `grant`, `status`, `buy` and `revoke`.
 
 ### solana (devnet)
 
 1. Set up. Switch your wallet to Solana devnet (for example, in Phantom: Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet). Then run `setup`: it creates the agent key file and opens the approval page. Connect your wallet there and sign the short message. It sends nothing and costs nothing.
 
    ```sh
-   npx superstables budget setup --rail solana
+   superstables budget setup --rail solana
    ```
 
 2. Fund. Your wallet needs some devnet SOL ([faucet.solana.com](https://faucet.solana.com); `doctor` wants at least 0.01) and devnet USDC ([faucet.circle.com](https://faucet.circle.com), Solana devnet; at least 0.05). Then give the agent SOL for fees, for the sellers whose facilitator does not pay them (`doctor` wants at least 0.005):
 
    ```sh
-   npx superstables budget fund-agent --rail solana                  # sends 0.01 SOL; approve it in your wallet
+   superstables budget fund-agent --rail solana                  # sends 0.01 SOL; approve it in your wallet
    ```
 
 3. Then:
 
    ```sh
-   npx superstables budget doctor --rail solana
-   npx superstables budget grant  --rail solana --amount 0.05         # approve it in your wallet
-   npx superstables budget buy    --rail solana --url https://api.urbangametheory.xyz/agent/oracle/facts \
+   superstables budget doctor --rail solana
+   superstables budget grant  --rail solana --amount 0.05         # approve it in your wallet
+   superstables budget buy    --rail solana --url https://api.urbangametheory.xyz/agent/oracle/facts \
                       --max 0.01 --pay-to AMbsiP9F8YY2y8n9uFdqtw7yNZZHvTWFEWSQGHKtmkoQ
-   npx superstables budget status --rail solana
-   npx superstables budget revoke --rail solana                       # approve it in your wallet
+   superstables budget status --rail solana
+   superstables budget revoke --rail solana                       # approve it in your wallet
    ```
 
 An SPL token account has one delegate slot. A new grant would overwrite a live one, so `grant` refuses while a delegate with a remaining amount is set: revoke first. Each Solana purchase carries a memo `rb:<op>` so `reconcile` can find it on chain.
