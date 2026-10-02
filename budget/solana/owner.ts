@@ -7,10 +7,10 @@
 //      nothing is built before the click.
 //   2. The wallet only signs (solana:signTransaction). solana:signAndSendTransaction is not used: in the 28 Sep Phantom build it
 //      threw after approval and nothing landed, and this way the command knows for certain whether anything was sent.
-//   3. submit() refuses, and sends nothing, unless the signed message is byte for byte the one it built and the one signature
-//      is the owner's; it logs the program ids of anything a wallet added. Then it sends the signed bytes itself.
+//   3. submit() refuses, and sends nothing, unless the signed message is unchanged apart from bounded wallet-added
+//      compute-budget instructions, and the one signature is the owner's. Then it sends the signed bytes itself.
 // The command then reads the chain (confirmSent, then the token account) before its RESULT.
-import { PublicKey, Transaction, VersionedMessage, type Connection, type TransactionInstruction } from "@solana/web3.js";
+import { ComputeBudgetProgram, Message, PublicKey, Transaction, VersionedMessage, type Connection, type TransactionInstruction } from "@solana/web3.js";
 import bs58 from "bs58";
 import type { OwnerChain, OwnerTerms, SolanaTransactionPort } from "../../src/core/signer/owner-approval-server.ts";
 import { verifyEd25519 } from "../../src/core/signer/owner-approval-server.ts";
@@ -68,11 +68,61 @@ function programIds(message: Buffer): string[] {
   }
 }
 
+/** Phantom may prepend fee instructions before signing. Accept only those bounded additions, with every original effect intact. */
+function sameTransactionWithWalletFee(builtBytes: Buffer, signedBytes: Buffer, owner: PublicKey): boolean {
+  let built: Message, signed: Message;
+  try {
+    const a = VersionedMessage.deserialize(builtBytes);
+    const b = VersionedMessage.deserialize(signedBytes);
+    if (!(a instanceof Message) || !(b instanceof Message)) return false;
+    built = a;
+    signed = b;
+  } catch {
+    return false;
+  }
+  if (signed.recentBlockhash !== built.recentBlockhash ||
+      signed.header.numRequiredSignatures !== 1 ||
+      !signed.accountKeys[0]?.equals(owner) ||
+      signed.instructions.length !== built.instructions.length + 2) return false;
+
+  const budgetId = ComputeBudgetProgram.programId.toBase58();
+  const originalKeys = new Set(built.accountKeys.map((key) => key.toBase58()));
+  if (originalKeys.has(budgetId) || signed.accountKeys.length !== built.accountKeys.length + 1) return false;
+  for (let i = 0; i < built.accountKeys.length; i++) {
+    const key = built.accountKeys[i].toBase58();
+    const at = signed.accountKeys.findIndex((candidate) => candidate.toBase58() === key);
+    if (at < 0 || signed.isAccountSigner(at) !== built.isAccountSigner(i) ||
+        signed.isAccountWritable(at) !== built.isAccountWritable(i)) return false;
+  }
+  const budgetAt = signed.accountKeys.findIndex((key) => key.toBase58() === budgetId);
+  if (budgetAt < 0 || signed.isAccountSigner(budgetAt) || signed.isAccountWritable(budgetAt) ||
+      signed.accountKeys.some((key) => !originalKeys.has(key.toBase58()) && key.toBase58() !== budgetId)) return false;
+
+  const feeInstructions = signed.instructions.slice(0, 2);
+  if (feeInstructions.some((ix) => ix.programIdIndex !== budgetAt || ix.accounts.length)) return false;
+  const feeData = feeInstructions.map((ix) => Buffer.from(bs58.decode(ix.data)));
+  const limitData = feeData.find((data) => data.length === 5 && data[0] === 2);
+  const priceData = feeData.find((data) => data.length === 9 && data[0] === 3);
+  if (!limitData || !priceData) return false;
+  const units = limitData.readUInt32LE(1);
+  const microLamports = priceData.readBigUInt64LE(1);
+  // This caps the owner's extra priority fee at 0.001 SOL, above Phantom's observed 0.00008 SOL estimate.
+  if (units < 10_000 || units > 1_400_000 || (BigInt(units) * microLamports + 999_999n) / 1_000_000n > 1_000_000n) return false;
+
+  const instruction = (message: Message, ix: Message["instructions"][number]) => JSON.stringify({
+    program: message.accountKeys[ix.programIdIndex]?.toBase58(),
+    accounts: ix.accounts.map((at) => message.accountKeys[at]?.toBase58()),
+    data: ix.data,
+  });
+  return built.instructions.every((ix, i) => instruction(built, ix) === instruction(signed, signed.instructions[i + 2]));
+}
+
 export type Issued = { signature: string; blockhash: string; lastValidBlockHeight: number };
 
 /**
  * The owner page's Solana port for one action: builds `instructions()` with a fresh blockhash on each Approve, and sends only
- * a transaction whose signed message is exactly the one it built, signed by `owner`. `sent()` is what it sent last.
+ * a transaction whose signed message preserves every original effect, with only bounded wallet-added fee instructions,
+ * signed by `owner`. `sent()` is what it sent last.
  */
 export function transactionPort(conn: Connection, owner: PublicKey, instructions: () => TransactionInstruction[], log: (s: string) => void = console.log) {
   let issued: { message: Buffer; blockhash: string; lastValidBlockHeight: number } | null = null;
@@ -97,7 +147,7 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
         return refused("The wallet returned something that is not a transaction.");
       }
       const message = raw.subarray(at + 64 * count);
-      if (!message.equals(want.message)) {
+      if (!message.equals(want.message) && !sameTransactionWithWalletFee(want.message, message, owner)) {
         const ours = programIds(want.message);
         const theirs = programIds(message);
         log(`REFUSED: the wallet changed the transaction. Built: ${ours.join(", ")}. Signed: ${theirs.join(", ")}. Nothing was sent.`);
@@ -169,7 +219,7 @@ export async function confirmSent(conn: Connection, s: Issued, waitMs = 120_000)
 // ── terms ────────────────────────────────────────────────────────────────────────────────────────────────
 
 const walletNote =
-  "Check the terms before signing. The command submits only an unchanged transaction with your signature, then checks the chain. If the wallet cannot show or simulate the effects, reject if you cannot verify them.";
+  "Check the terms before signing. The command preserves the original transaction effects and permits only bounded wallet-added fee instructions, then checks the chain. If the wallet cannot show or simulate the effects, reject if you cannot verify them.";
 
 export function grantTerms(p: { owner: string; agent: string; ata: string; cap: bigint; held: bigint }): OwnerTerms {
   const amt = `${formatUnits(p.cap)} USDC`;
