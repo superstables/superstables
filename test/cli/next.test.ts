@@ -42,6 +42,9 @@ describe("the commands find prints for a listing", () => {
       "superstables pay <quote-id>",
     ]);
     expect(pay.note).toBe("asset: BTC, ETH");
+    // a third-party catalogue listing cannot be bought once: pay comes first there
+    const third = listingCommands({ ...service, operator: "Third party (not operated by Superstables)" });
+    expect(third.map((c) => c.way)).toEqual(["pay", "budget"]);
     expect(commands[2]).toMatchObject({ rail: "evm", chain: "base-sepolia" });
     expect(commands[2].run).toEqual([
       "superstables budget preflight --rail evm --chain base-sepolia --url 'https://seller.example/market?asset=BTC'",

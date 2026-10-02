@@ -46,9 +46,9 @@ export function listingCommands(service: ServiceListing): ListingCommands[] {
     ? "the index does not list the request parameters: put the seller's in place of <parameters>"
     : choices || undefined;
 
-  // A Superstables catalogue listing can be bought once on superstables.com: the owner approves from any device, with no
+  // A catalogue listing Superstables operates can be bought once on superstables.com (third-party ones cannot): the owner approves from any device, with no
   // page on this computer. Small models followed the first way listed (pay, a 127.0.0.1 page), so it comes first.
-  if (service.actionable && service.source === "demo-catalogue") {
+  if (service.actionable && service.source === "demo-catalogue" && /^Superstables\b/.test(service.operator ?? "")) {
     commands.push({
       way: "buy-once",
       run: [buyOnceCommand(service)],
