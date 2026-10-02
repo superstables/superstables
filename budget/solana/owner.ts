@@ -219,7 +219,7 @@ export async function confirmSent(conn: Connection, s: Issued, waitMs = 120_000)
 // ── terms ────────────────────────────────────────────────────────────────────────────────────────────────
 
 const walletNote =
-  "Check the terms before signing. The command preserves the original transaction effects and permits only bounded wallet-added fee instructions, then checks the chain. If the wallet cannot show or simulate the effects, reject if you cannot verify them.";
+  "Check the terms before signing. The command allows only small network fee additions before sending your signed transaction, then checks the result on Solana. If the wallet cannot show or simulate the effects, reject if you cannot verify them.";
 
 export function grantTerms(p: { owner: string; agent: string; ata: string; cap: bigint; held: bigint }): OwnerTerms {
   const amt = `${formatUnits(p.cap)} USDC`;
