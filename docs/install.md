@@ -58,14 +58,19 @@ checkout's command, it downloads whatever package the npm registry has under tha
 
 ### With npm, from git
 
-In any folder:
+In any folder, with `<commit>` replaced by the full commit hash of the version you want (a
+release's page on GitHub names its commit):
 
 ```bash
-npm install github:superstables/superstables-client
+npm install github:superstables/superstables-client#<commit>
 npx --no superstables --version
 ```
 
-npm clones the repository, builds it and installs the result, `superstables budget` included.
+npm clones the repository at that commit, installs its development packages, builds the client
+on your computer with them and installs the result, `superstables budget` included. That build
+runs the repository's build scripts and the TypeScript compiler on your machine; installing the
+published package from npm does not build the client locally. Name a commit hash: without one, npm installs whatever the default branch holds
+at that moment, and a branch or tag name can later point somewhere else.
 Run it as `npx --no superstables …` in that folder, or as `node_modules/.bin/superstables …`.
 
 ### The agent skill, with the whole CLI bundled

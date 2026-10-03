@@ -105,7 +105,7 @@ You need Node 20 or newer and a browser wallet: any EVM browser wallet (MetaMask
 
 Install. Pick one; all run the same commands on the same keys and state.
 
-- **With the client.** An npm install of the client (`npm install -g @superstables/client`, or `npm install github:superstables/superstables-client`) includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone: `superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+- **With the client.** An npm install of the client (`npm install -g @superstables/client`, or `npm install github:superstables/superstables-client#<commit>`, which builds it on your computer) includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone: `superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 - **From a checkout of this repository.** At the repository root:
 
   ```sh

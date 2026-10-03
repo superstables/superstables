@@ -9,20 +9,27 @@
 // scripts/THIRD_PARTY_NOTICES.txt the bundled packages and their licences.
 //
 // Only files git tracks in skills/superstables-payments/ are copied, so nothing left in the folder by hand (a key, a
-// scratch file) can ship. There is one SKILL.md. The zip's copy differs in one paragraph, between the <!-- run: --> and
-// <!-- /run --> markers: how to run the tool. The zip is written with fflate, so no zip program is needed (Windows has
+// scratch file) can ship. The release builds this from a `git archive` export, which has no .git and so no `git ls-files` --
+// but a tree that came out of `git archive` holds exactly the commit's files and nothing else, so the same rule holds
+// without git: see trackedFiles in scripts/package-root.mjs.
+//
+// SUPERSTABLES_SKILL_FROM_ARCHIVE=1 is a promise by the caller, not something this build checks: it says the folder is an
+// unmodified `git archive` export of the commit named in SUPERSTABLES_BUILD_COMMIT (which it then requires). The build
+// cannot verify that; a file added to the export afterwards would ship. Set it only on a fresh export, as the release
+// script does, and never in a checkout or a folder anyone has worked in. There is one SKILL.md. The zip's copy differs in one paragraph, between the <!-- run: -->
+// and <!-- /run --> markers: how to run the tool. The zip is written with fflate, so no zip program is needed (Windows has
 // none by default).
 //
 // node scripts/skill.mjs [--dev]   --dev stamps the build's version with the commit (<version>-dev.<commits>+g<sha>,
 // see scripts/dev-version.mjs); package.json is not changed.
 
-import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zipSync } from "fflate";
 import { buildCli } from "./cli-build.mjs";
 import { devVersion, revisionOf } from "./dev-version.mjs";
+import { trackedFiles } from "./package-root.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const NAME = "superstables-payments"; // the folder the zip unpacks to, and the skill's name in SKILL.md
@@ -38,7 +45,8 @@ const version = process.argv.includes("--dev") ? devVersion(pkg.version, revisio
 rmSync(outRoot, { recursive: true, force: true });
 const { version: stamp } = await buildCli(join(out, "scripts"), version);
 
-const tracked = execFileSync("git", ["ls-files", "-z", "--", "."], { cwd: source, encoding: "utf8" }).split("\0").filter(Boolean);
+// Tracked files only; outside the package's own checkout, only with the archive promise above. See package-root.mjs.
+const tracked = trackedFiles(root, join("skills", NAME));
 if (!tracked.includes("SKILL.md")) throw new Error(`skills/${NAME}/SKILL.md is not tracked by git; only tracked files are copied into the skill`);
 for (const f of tracked) {
   if (f === "SKILL.md") continue;
