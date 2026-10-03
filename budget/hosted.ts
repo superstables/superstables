@@ -43,7 +43,9 @@ import { dirname } from "node:path";
 import { getAddress, isAddress, recoverMessageAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { OwnerActionOutcome, OwnerTerms } from "../src/core/signer/owner-approval-server.ts";
-import { BUDGET_API, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, siteError, siteName, siteText } from "./site.mjs";
+import { BUDGET_API, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailure, siteName, siteText, siteWord } from "./site.mjs";
+
+export { scrub, siteWord };
 
 // ── agent proof v2 ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -282,9 +284,54 @@ export interface HostedHandle {
 
 /** A request the site did not take: nothing was requested, so nothing can be sent. */
 export class HostedRefusal extends Error {
-  constructor(message: string, readonly next: string) {
-    super(message);
+  readonly next: string;
+  /** The site reports the owner's wallet was asked: the outcome is unknown (exit 5), never "nothing sent". */
+  readonly sending: boolean;
+  constructor(message: string, next: string, opts: { sending?: boolean } = {}) {
+    super(scrub(message));
+    this.next = scrub(next);
+    this.sending = opts.sending === true;
   }
+}
+
+/** The next step after a refusal whose outcome is unknown (the dispatcher names the rail's own status command). */
+const CHECK_CHAIN = "read whether anything landed (superstables budget status) before running this again";
+/** Site states that say the owner's wallet was asked, or a transaction exists. */
+const WALLET_STATES = new Set(["sending", "sent", "confirmed", "failed", "unknown"]);
+/**
+ * What this client may say after it cancelled a request no link was shown for: "nothing was sent" only when the site
+ * confirms the cancel; an unknown outcome when the site reports the wallet was asked; otherwise only what it knows.
+ */
+function afterCancel(c: { cancelled?: boolean; walletAsked?: boolean; state?: string | null } | null): { words: string; sending: boolean } {
+  if (c?.cancelled) return { words: "The request was cancelled on the site before the wallet was asked; nothing was sent", sending: false };
+  if (c?.walletAsked || (c?.state && WALLET_STATES.has(c.state))) {
+    return { words: `The site would not cancel it: it reports the owner's wallet was asked${c.state ? ` (state ${siteWord("state", c.state)})` : ""}, so a transaction may have been sent`, sending: true };
+  }
+  return { words: "This command did not show an approval link. Check wallet activity before retrying", sending: false };
+}
+
+/**
+ * The shortest piece of a token's secret that counts as carrying it. The site's secrets are 43 base64url characters (256
+ * random bits); 12 characters are 72 bits, so an accidental 12-character match anywhere in a link of about a hundred
+ * characters has a chance near 100 x 32 / 64^12, about 7e-19. A shorter secret (a test one) counts whole.
+ */
+export const TOKEN_PIECE = 12;
+/**
+ * Whether a link carries `token`: the whole token, or any TOKEN_PIECE characters of its secret part (after ssbt_ and
+ * test_), anywhere in the link, or a fragment that is itself part of the secret.
+ */
+function carriesToken(link: URL, token: string): boolean {
+  const secret = token.replace(/^ssbt_(?:test_)?/, "");
+  const fragment = link.hash.slice(1);
+  if (link.href.includes(token) || secret.includes(fragment)) return true;
+  const n = Math.min(TOKEN_PIECE, secret.length);
+  for (let i = 0; i + n <= secret.length; i++) if (link.href.includes(secret.slice(i, i + n))) return true;
+  return false;
+}
+/** The site's reason for a state, as its documented code in this client's words, or "" when it gave none. */
+function siteReason(site: string, v: any): string {
+  if (v?.reason_code === undefined || v?.reason_code === null) return "";
+  return `${site} gives the reason ${siteWord("code", v.reason_code)}`;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -382,7 +429,8 @@ export class HostedApprovals {
       const problem = stepsProblem(then, created.steps);
       if (problem) {
         const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
-        throw new HostedRefusal(`${this.s.site} answered with steps other than the ones asked for (${problem}). The request was ${c?.cancelled ? "cancelled" : "left to expire"}; nothing was sent`, "try again later");
+        const a = afterCancel(c);
+        throw new HostedRefusal(`${this.s.site} answered with steps other than the ones asked for (${problem}). ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
       }
     }
     const record: HostedRecord = { site: this.s.site, requestId: created.id, token: created.token, kind, matchCode: created.matchCode, ...(then ? { then: then.map((t) => t.kind) } : {}) };
@@ -390,14 +438,29 @@ export class HostedApprovals {
 
     // an approval: the site must act for the owner recorded here, before the owner sees a link
     if (expected) {
-      const first = await readSiteRequest({ site: this.s.site, id: created.id, token: created.token, wait: 0, fetchImpl: this.s.fetchImpl });
+      const read = () => readSiteRequest({ site: this.s.site, id: created.id, token: created.token, wait: 0, fetchImpl: this.s.fetchImpl });
+      let first = await read();
+      if (!first.ok) {
+        await sleep(1000);
+        first = await read();
+      }
       const owner = first.ok ? first.view.owner : null;
-      if (typeof owner === "string" && !this.w.same(owner, expected)) {
+      // the site names the account the approval is for; one that names none (or cannot be read) is not shown to anyone
+      if (typeof owner !== "string" || !owner) {
         const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
-        this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: `owner mismatch: the site acts for ${owner}` });
+        const why = first.ok ? `${this.name} did not say which account would approve this` : `${this.name} could not be read back (${siteFailure(first.status, null)})`;
+        this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: first.ok ? "no owner: the site named no account" : "no owner: the request could not be read" });
+        const a = afterCancel(c);
+        throw new HostedRefusal(`${why}, so the command cannot check it is the owner recorded on this computer (${expected}). ${a.words}`, a.sending ? CHECK_CHAIN : first.ok ? "try again later; if it repeats, check which account this agent is linked to on the account page" : "try again later", { sending: a.sending });
+      }
+      if (!this.w.same(owner, expected)) {
+        const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
+        this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: `owner mismatch: the site acts for ${this.w.owner(owner) ?? "an account that is not an address"}` });
+        const a = afterCancel(c);
         throw new HostedRefusal(
-          `${this.name} would ask ${siteText(owner, 44)} to approve this, but the owner recorded on this computer is ${expected}. The request was ${c?.cancelled ? "cancelled" : "left to expire"}; nothing was sent`,
-          `check which ${this.name} account this agent is linked to (the account page lists it). If the owner changed, run superstables budget setup ${railFlags(this.s.rail, this.s.chain)} --hosted --new-owner (refused while a budget is live)`,
+          `${this.name} would ask ${this.w.owner(owner) ?? "an account that is not an address"} to approve this, but the owner recorded on this computer is ${expected}. ${a.words}`,
+          a.sending ? CHECK_CHAIN : `check which ${this.name} account this agent is linked to (the account page lists it). If the owner changed, run superstables budget setup ${railFlags(this.s.rail, this.s.chain)} --hosted --new-owner (refused while a budget is live)`,
+          { sending: a.sending },
         );
       }
     }
@@ -422,7 +485,7 @@ export class HostedApprovals {
       const base = { id: created.id, token: created.token, kind, title: input.terms.title, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve };
       const kinds = then.map((t) => t.kind);
       void this.pollBundle({ ...base, timeoutMs: input.timeoutMs, kinds, settle }).catch((err: Error) => {
-        const reason = `the command stopped reading the request: ${siteText(err.message)}`;
+        const reason = `the command stopped reading the request: ${scrub(siteText(err.message))}`;
         const out: HostedBundleOutcome = { link: { status: "expired", reason, sending: true }, steps: kinds.map((k) => ({ kind: k, state: "stopped", hash: null, reason, reasonCode: null, walletAsked: true })) };
         resolve(out.link);
         settle(out);
@@ -435,11 +498,11 @@ export class HostedApprovals {
         link: { id: created.id, code: created.matchCode },
         settled,
         bundle,
-        finish: (verdict) => this.audit({ id: created.id, kind, title: input.terms.title, status: verdict.ok ? "confirmed" : "failed", reason: verdict.ok ? undefined : siteText(verdict.message), hash: verdict.hash }),
+        finish: (verdict) => this.audit({ id: created.id, kind, title: input.terms.title, status: verdict.ok ? "confirmed" : "failed", reason: verdict.ok ? undefined : scrub(siteText(verdict.message)), hash: verdict.hash }),
       };
     }
     void this.poll({ id: created.id, token: created.token, kind, title: input.terms.title, expected, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve }).catch((err: Error) =>
-      resolve({ status: "expired", reason: `the command stopped reading the request: ${siteText(err.message)}`, sending: kind !== "link" }),
+      resolve({ status: "expired", reason: `the command stopped reading the request: ${scrub(siteText(err.message))}`, sending: kind !== "link" }),
     );
     return {
       id: created.id,
@@ -449,7 +512,7 @@ export class HostedApprovals {
       ...(kind === "link" ? { link: { id: created.id, code: created.matchCode } } : {}),
       settled,
       // the site reads the receipt itself; this only records the command's own verdict locally
-      finish: (verdict) => this.audit({ id: created.id, kind, title: input.terms.title, status: verdict.ok ? "confirmed" : "failed", reason: verdict.ok ? undefined : siteText(verdict.message), hash: verdict.hash }),
+      finish: (verdict) => this.audit({ id: created.id, kind, title: input.terms.title, status: verdict.ok ? "confirmed" : "failed", reason: verdict.ok ? undefined : scrub(siteText(verdict.message)), hash: verdict.hash }),
     };
   }
 
@@ -520,7 +583,7 @@ export class HostedApprovals {
       if (held) return held;
       const what = code === "proof_reused" ? "with the same signed proof" : "with the same request key";
       throw new HostedRefusal(
-        `${this.s.site} already has request ${siteText(otherId ?? "(no id)", 80)}${typeof json?.state === "string" ? ` (${siteText(json.state, 30)})` : ""}, created ${what} by an earlier attempt whose answer never arrived here (${siteError(res.status, json)}). It cannot be approved without its link, which only that answer carried; it expires by itself in 10 minutes, and the owner can see it on their ${this.name} account page. Nothing was sent`,
+        `${this.s.site} already has request ${isSiteRequestId(otherId) ? otherId : "(no usable id)"}${typeof json?.state === "string" ? ` (${siteWord("state", json.state)})` : ""}, created ${what} by an earlier attempt whose answer never arrived here (${siteFailure(res.status, json)}). It cannot be approved without its link, which only that answer carried; it expires by itself in 10 minutes, and the owner can see it on their ${this.name} account page. Nothing was sent`,
         "run the same command again after that request expires (10 minutes)",
       );
     }
@@ -529,7 +592,7 @@ export class HostedApprovals {
       const owner = this.w.owner(json?.error?.owner) ?? this.w.owner(json?.owner);
       throw new HostedRefusal(alreadyLinkedWords(this.s.site, owner, this.s.rail), alreadyLinkedNext(this.s.rail, this.s.chain));
     }
-    if (!res.ok) throw new HostedRefusal(`${this.s.site} did not take the request (${siteError(res.status, json)}); nothing was sent`, res.status >= 500 ? "try again later" : "read reason; fix what it names before trying again");
+    if (!res.ok) throw new HostedRefusal(`${this.s.site} did not take the request (${siteFailure(res.status, json)}); nothing was sent`, res.status >= 500 ? "try again later" : "read reason; fix what it names before trying again");
     // a link that already exists for this agent on this chain: an already-final request, with no link to show
     if (res.status === 200 && prefix === "bl_" && json?.state === "linked" && json?.final === true && !json?.approval) {
       const owner = this.w.owner(json.owner);
@@ -553,10 +616,19 @@ export class HostedApprovals {
       : !isSiteToken(token) ? "no access token"
       : !link || link.origin !== this.s.site ? "an approval link on another site"
       : link.pathname !== `/approve/budget/${id}` || link.search || !/^#[A-Za-z0-9_-]{8,256}$/.test(link.hash) ? "an approval link that is not /approve/budget/<its id>#<token>"
+      // the link is shown to the owner and printed: it must not carry the agent's access token, whole or in part
+      : carriesToken(link, token) ? "an approval link that carries the request's access token"
       : typeof matchCode !== "string" || !/^[A-Z0-9]{2,8}(-[A-Z0-9]{2,8}){0,3}$/.test(matchCode) ? "no match code"
       : !Number.isFinite(expires) || expires <= Date.now() ? "no expiry in the future"
       : "";
-    if (problem) throw new HostedRefusal(`${this.s.site} answered with ${problem}; the request is not used and nothing was sent`, "try again later");
+    if (problem) {
+      // the site may still have made the request: cancel it whenever its id and token are usable, so it does not wait for an
+      // owner who never sees it
+      const c = isSiteRequestId(id) && isSiteToken(token) ? await cancelSiteRequest({ site: this.s.site, id, token, fetchImpl: this.s.fetchImpl }) : null;
+      // no id and token: nothing can be cancelled, and no link was shown
+      const a = c ? afterCancel(c) : { words: "This command did not show an approval link. Check wallet activity before retrying", sending: false };
+      throw new HostedRefusal(`${this.s.site} answered with ${problem}; the request is not used. ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
+    }
     const created = { linked: false as const, id: id as string, token: token as string, url: link!.href, matchCode: matchCode as string, expiresAt: expires, steps: Array.isArray(json?.steps) ? (json.steps as unknown[]) : undefined };
     this.held.set(created.id, created);
     return created;
@@ -572,7 +644,8 @@ export class HostedApprovals {
     let lastContact = Date.now();
     let cancelTried = false;
     let readAt = 0;
-    const end = (status: "rejected" | "expired", reason: string, sending: boolean) => {
+    const end = (status: "rejected" | "expired", why: string, sending: boolean) => {
+      const reason = scrub(why);
       this.open.delete(p.id);
       this.audit({ id: p.id, kind: p.kind, title: p.title, status, reason, hash: hash ?? undefined, sending: sending || undefined });
       p.resolve({ status, reason, sending });
@@ -604,7 +677,7 @@ export class HostedApprovals {
       readAt = Date.now();
       const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, fetchImpl: this.s.fetchImpl });
       if (!r.ok) {
-        if ([401, 403, 404, 410].includes(r.status ?? 0)) return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx);
+        if ([401, 403, 404, 410].includes(r.status ?? 0)) return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${siteFailure(r.status, null)})`, tx);
         await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
         continue;
       }
@@ -617,17 +690,19 @@ export class HostedApprovals {
         walletAsked = true;
       }
       const owner = this.w.owner(v.owner);
-      const reason = typeof v.reason === "string" && v.reason ? siteText(v.reason) : "";
+      const reason = siteReason(this.name, v);
       if (state !== lastState) {
         lastState = state;
-        this.audit({ id: p.id, kind: p.kind, title: p.title, status: state, reason: reason || undefined, address: owner ?? undefined, hash: hash ?? undefined, sending: walletAsked || undefined });
+        this.audit({ id: p.id, kind: p.kind, title: p.title, status: siteWord("state", state), reason: reason || undefined, address: owner ?? undefined, hash: hash ?? undefined, sending: walletAsked || undefined });
       }
-      // the site acts for another address than the owner recorded here: refuse. Once a transaction exists, the command
-      // reads it from the chain instead, where the other sender is a mismatch.
-      if (p.expected && owner && !this.w.same(owner, p.expected) && !hash) {
+      // the site acts for another address than the owner recorded here, or names none (or none readable): refuse, on
+      // every read. Once a transaction exists, the command reads it from the chain instead, where the sender must be the
+      // owner recorded here.
+      if (p.expected && !hash && (!owner || !this.w.same(owner, p.expected))) {
         const c = FINAL_STATES.has(state) ? null : await cancelSiteRequest({ site: this.s.site, id: p.id, token: p.token, fetchImpl: this.s.fetchImpl });
         if (c?.walletAsked) walletAsked = true;
-        return end("rejected", `${this.name} acts for ${owner}, not the owner recorded on this computer (${p.expected}); the request was ${c?.cancelled ? "cancelled" : "not used"}`, walletAsked);
+        const who = owner ? `acts for ${owner}` : "no longer names the account this approval is for";
+        return end("rejected", `${this.name} ${who}, not the owner recorded on this computer (${p.expected}); the request was ${c?.cancelled ? "cancelled" : "not used"}`, walletAsked);
       }
       switch (state) {
         case "awaiting_owner":
@@ -661,7 +736,7 @@ export class HostedApprovals {
           if (hash && tx) return done({ status: "sent", address: owner ?? p.expected!, hash });
           return end("expired", reason || `${this.name} cannot tell whether the wallet sent the transaction; the chain must be checked`, true);
       }
-      if (v.final === true) return end("rejected", `${this.name} ended the request in state "${siteText(state, 40)}"${reason ? `: ${reason}` : ""}`, tx);
+      if (v.final === true) return end("rejected", `${this.name} ended the request in state "${siteWord("state", state)}"${reason ? `: ${reason}` : ""}`, tx);
     }
   }
 
@@ -691,11 +766,11 @@ export class HostedApprovals {
         const w = seen.find((x) => x && x.index === i) ?? seen[i];
         if (!w || w.kind !== s.kind) return;
         const before = s.state;
-        s.state = typeof w.state === "string" ? siteText(w.state, 40) : s.state;
+        s.state = typeof w.state === "string" ? siteWord("state", w.state) : s.state;
         if (this.w.isTx(w.tx_hash)) s.hash = w.tx_hash;
         if (w.wallet_asked === true || s.state === "sending" || s.hash) s.walletAsked = true;
-        s.reason = typeof w.reason === "string" ? siteText(w.reason) : s.reason;
-        s.reasonCode = typeof w.reason_code === "string" ? siteText(w.reason_code, 60) : s.reasonCode;
+        s.reason = siteReason(this.name, w) || s.reason;
+        s.reasonCode = typeof w.reason_code === "string" ? siteWord("code", w.reason_code) : s.reasonCode;
         if (s.state !== before) this.audit({ id: p.id, kind: s.kind, title: p.title, status: s.state, reason: s.reason || undefined, hash: s.hash ?? undefined, sending: s.walletAsked || undefined });
       });
     const finish = (why: string | null) => {
@@ -717,6 +792,8 @@ export class HostedApprovals {
           : { status: "rejected", reason: linkReason || (linkState === "cancelled" ? `the request was cancelled on ${this.name}; nothing was sent` : `the owner rejected the request on ${this.name}`), sending: refusedLink ? steps.some((s) => s.walletAsked || s.state === "unknown") : false };
       this.audit({ id: p.id, kind: p.kind, title: p.title, status: owner ? "connected" : link.status, address: owner ?? undefined, reason: owner ? undefined : (link as { reason?: string }).reason });
       for (const s of steps) this.audit({ id: p.id, kind: s.kind, title: p.title, status: s.state, reason: s.reason || undefined, hash: s.hash ?? undefined, sending: s.walletAsked || undefined });
+      if ("reason" in link) link.reason = scrub(link.reason);
+      for (const s of steps) s.reason = scrub(s.reason);
       p.resolve(link);
       p.settle({ link, steps });
     };
@@ -750,14 +827,14 @@ export class HostedApprovals {
       readAt = Date.now();
       const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, fetchImpl: this.s.fetchImpl });
       if (!r.ok) {
-        if ([401, 403, 404, 410].includes(r.status ?? 0)) return finish(`${this.s.site} no longer answers for this request (${r.reason})`);
+        if ([401, 403, 404, 410].includes(r.status ?? 0)) return finish(`${this.s.site} no longer answers for this request (${siteFailure(r.status, null)})`);
         await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
         continue;
       }
       lastContact = Date.now();
       const v = r.view;
       const state = String(v.state);
-      const reason = typeof v.reason === "string" && v.reason ? siteText(v.reason) : "";
+      const reason = siteReason(this.name, v);
       const named: string | null = owner ? null : this.w.owner(v.owner);
       if (named) {
         // the owner is recorded only with their own signature over this link; without it the steps are withdrawn
@@ -782,7 +859,7 @@ export class HostedApprovals {
       absorb(Array.isArray(v.steps) ? (v.steps as any[]) : []);
       if (state !== lastState) {
         lastState = state;
-        this.audit({ id: p.id, kind: p.kind, title: p.title, status: state, reason: reason || undefined, address: owner ?? undefined });
+        this.audit({ id: p.id, kind: p.kind, title: p.title, status: siteWord("state", state), reason: reason || undefined, address: owner ?? undefined });
       }
       if (v.final === true) {
         if (!owner && state === "linked") linkReason = `${this.name} reported the link without an owner address`;
@@ -795,7 +872,8 @@ export class HostedApprovals {
     if (!this.s.auditPath) return;
     try {
       mkdirSync(dirname(this.s.auditPath), { recursive: true, mode: 0o700 });
-      appendFileSync(this.s.auditPath, `${JSON.stringify({ at: new Date().toISOString(), site: this.s.site, ...line })}\n`, { mode: 0o600 });
+      // a second layer: nothing shaped like an access token reaches the audit file, whatever a line carries
+      appendFileSync(this.s.auditPath, `${scrub(JSON.stringify({ at: new Date().toISOString(), site: this.s.site, ...line }))}\n`, { mode: 0o600 });
     } catch {
       // an unwritable audit file never stops the owner from deciding
     }
@@ -820,26 +898,33 @@ function alreadyLinkedNext(rail: HostedRail, chain: string): string {
   return `tell the owner this agent is already linked and end your turn. ${steps}. If this computer has no owner on record yet, superstables budget setup ${r} --hosted without ${rail === "tempo" ? "--grant" : "--grant and --fund"} records it, with no link`;
 }
 
-/** Why the site's steps are not the ones asked for, or "" when they are (same kinds, order and transactions or amounts). */
-function stepsProblem(sent: HostedStep[], got: unknown[] | undefined): string {
+/**
+ * Why the site's steps are not the ones asked for, or "" when they are: same kinds and order, and for each step the same
+ * transaction (to, data and value, each present and in the site's format: a 20-byte 0x address, 0x hex data, a 0x hex
+ * quantity) or, on Solana, the same amount (a string of digits, as sent). Anything missing or of another type is refused.
+ */
+export function stepsProblem(sent: HostedStep[], got: unknown[] | undefined): string {
   if (!Array.isArray(got)) return "no steps";
   if (got.length !== sent.length) return `${got.length} steps instead of ${sent.length}`;
-  const low = (x: unknown) => String(x ?? "").toLowerCase();
   for (let i = 0; i < sent.length; i++) {
     const g = got[i] as any;
-    if (!g || g.kind !== sent[i].kind) return `step ${i} is ${siteText(g?.kind ?? "missing", 40)}, not ${sent[i].kind}`;
+    if (!g || typeof g !== "object" || g.kind !== sent[i].kind) return `step ${i} is ${g?.kind === "fund_agent" || g?.kind === "grant" ? g.kind : g?.kind === undefined ? "missing" : "unexpected"}, not ${sent[i].kind}`;
     const want = sent[i];
     if (want.solana) {
-      // solana: the site builds the transaction later; the amount it echoes must be the one asked for
+      // solana: the site builds the transaction later; it must echo the amount asked for, as the same string of digits
       const amount = g.solana?.amount_atomic;
-      if (amount !== undefined && String(amount) !== want.solana.amount_atomic) return `step ${i} (${want.kind}) has another amount`;
+      if (amount === undefined || amount === null) return `step ${i} (${want.kind}) has no amount`;
+      if (typeof amount !== "string" || !/^\d+$/.test(amount)) return `step ${i} (${want.kind}) has an amount that is not a string of digits`;
+      if (amount !== want.solana.amount_atomic) return `step ${i} (${want.kind}) has another amount`;
       continue;
     }
+    if (!want.transaction) continue;
     const t = g.transaction;
-    if (!t || !want.transaction) continue;
-    let value: bigint | null = null;
-    try { value = BigInt(t.value ?? "0x0"); } catch {}
-    if (low(t.to) !== low(want.transaction.to) || low(t.data ?? "0x") !== low(want.transaction.data) || value !== BigInt(want.transaction.value)) return `step ${i} (${want.kind}) has another transaction`;
+    if (!t || typeof t !== "object") return `step ${i} (${want.kind}) has no transaction`;
+    if (typeof t.to !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(t.to) || typeof t.data !== "string" || !/^0x([0-9a-fA-F]{2})*$/.test(t.data) || typeof t.value !== "string" || !/^0x[0-9a-fA-F]{1,64}$/.test(t.value)) {
+      return `step ${i} (${want.kind}) has an incomplete transaction (to, data and value must each be 0x hex)`;
+    }
+    if (t.to.toLowerCase() !== want.transaction.to.toLowerCase() || t.data.toLowerCase() !== want.transaction.data.toLowerCase() || BigInt(t.value) !== BigInt(want.transaction.value)) return `step ${i} (${want.kind}) has another transaction`;
   }
   return "";
 }

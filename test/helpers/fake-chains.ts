@@ -125,9 +125,10 @@ export interface FakeSolana extends TestServer {
    * signature. `signer` is signer 0 (the fee payer): the owner, unless a test says otherwise. The transaction carries the
    * real instruction (ApproveChecked, Revoke or a SystemProgram transfer, for `amount`), then `extra` instructions (a lying
    * site), and `budget` compute-budget instruction datas first (a wallet's fee). `instructionAmount` puts another amount in
-   * the instruction than the one applied.
+   * the instruction than the one applied. `signers` requires more signatures than the owner's; `lookupTable` makes it a
+   * version 0 transaction that loads accounts from that address lookup table.
    */
-  land(t: { kind: "grant" | "revoke" | "fund_agent"; owner: string; agent: string; amount?: bigint; signer?: string; slot?: number; extra?: { program: string; accounts: string[]; data: Buffer }[]; budget?: Buffer[]; instructionAmount?: bigint }): string;
+  land(t: { kind: "grant" | "revoke" | "fund_agent"; owner: string; agent: string; amount?: bigint; signer?: string; slot?: number; extra?: { program: string; accounts: string[]; data: Buffer }[]; budget?: Buffer[]; instructionAmount?: bigint; signers?: number; lookupTable?: string }): string;
 }
 
 /** A compute-budget SetComputeUnitLimit (2) or SetComputeUnitPrice (3) instruction's data. */
@@ -193,11 +194,17 @@ export async function startFakeSolana(): Promise<FakeSolana> {
     txs.set(sig, {
       slot,
       blockTime: Math.floor(Date.now() / 1000),
-      version: "legacy",
-      meta: { err: null, fee: 5000, preBalances: pre.map(Number), postBalances: post.map(Number), innerInstructions: [], logMessages: [], preTokenBalances: [], postTokenBalances: [], rewards: [], status: { Ok: null }, loadedAddresses: { writable: [], readonly: [] }, computeUnitsConsumed: 1000 },
+      version: t.lookupTable ? 0 : "legacy",
+      meta: { err: null, fee: 5000 * (t.signers ?? 1), preBalances: pre.map(Number), postBalances: post.map(Number), innerInstructions: [], logMessages: [], preTokenBalances: [], postTokenBalances: [], rewards: [], status: { Ok: null }, loadedAddresses: { writable: [], readonly: t.lookupTable ? [USDC_MINT.toBase58()] : [] }, computeUnitsConsumed: 1000 },
       transaction: {
-        signatures: [sig],
-        message: { accountKeys: keys, header: { numRequiredSignatures: 1, numReadonlySignedAccounts: 0, numReadonlyUnsignedAccounts: 1 }, instructions: ixs.map((ix) => ({ programIdIndex: keys.indexOf(ix.program), accounts: ix.accounts.map((a) => keys.indexOf(a)), data: bs58.encode(ix.data), stackHeight: null })), recentBlockhash: bs58.encode(Buffer.alloc(32, 9)) },
+        signatures: [sig, ...Array.from({ length: (t.signers ?? 1) - 1 }, (_, i) => bs58.encode(Buffer.alloc(64, 200 + i)))],
+        message: {
+          accountKeys: keys,
+          header: { numRequiredSignatures: t.signers ?? 1, numReadonlySignedAccounts: 0, numReadonlyUnsignedAccounts: 1 },
+          instructions: ixs.map((ix) => ({ programIdIndex: keys.indexOf(ix.program), accounts: ix.accounts.map((a) => keys.indexOf(a)), data: bs58.encode(ix.data), stackHeight: null })),
+          recentBlockhash: bs58.encode(Buffer.alloc(32, 9)),
+          ...(t.lookupTable ? { addressTableLookups: [{ accountKey: t.lookupTable, writableIndexes: [], readonlyIndexes: [0] }] } : {}),
+        },
       },
     });
     return sig;

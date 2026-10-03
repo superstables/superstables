@@ -270,6 +270,22 @@ describe("solana, hosted", () => {
     expect(r.result.reason).toMatch(/its instruction is not the one planned/);
   }, 90_000);
 
+  it("a lying site: a grant that needs a second signer, or loads accounts from a lookup table, is a mismatch (exit 3)", async () => {
+    hostedSolana();
+    site.owner = SOL_OWNER;
+    site.onPoll = ownerSends("solana", { signers: 2 });
+    const two = await budget(["grant", "--rail", "solana", "--amount", "0.05", "--wait", "--no-open"]);
+    expect(two.code, two.stderr).toBe(3);
+    expect(two.result.reason).toMatch(/it has 2 signers, not one \(the owner\)/);
+
+    // the first grant did land on the fake chain: clear its delegate, so the second is judged on its transaction alone
+    solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: null, delegated: 0n });
+    site.onPoll = ownerSends("solana", { lookupTable: SOL_OTHER });
+    const table = await budget(["grant", "--rail", "solana", "--amount", "0.05", "--wait", "--no-open"]);
+    expect(table.code, table.stderr).toBe(3);
+    expect(table.result.reason).toMatch(/it loads accounts from address lookup tables/);
+  }, 120_000);
+
   it("a wallet's bounded compute-budget instructions are accepted; an unbounded priority fee is not", async () => {
     hostedSolana();
     site.owner = SOL_OWNER;

@@ -3,7 +3,8 @@
 // (EIP-191 for an EVM agent, ed25519 for a Solana agent) naming this site's own origin, the agent in the headers and the
 // body, the timestamp, and a nonce never seen before for that agent. When a link is linked, it answers with the owner's
 // link proof, signed with that owner's test key (OWNER_KEYS), unless a test sets another `owner_proof`. Requests move
-// through their states when a test (or `onPoll`) says so. No network, no real key. The texts are spelled out here from the
+// through their states when a test (or `onPoll`) says so; one still awaiting the owner at its expires_at
+// (`expiresInMs`) is expired. A read needs the request's access token (401 without it, 404 for no such request). No network, no real key. The texts are spelled out here from the
 // protocol, not taken from the client, so a client that drifts from the protocol fails these tests.
 import { createHash, createPrivateKey, createPublicKey, sign as signBytes, verify } from "node:crypto";
 import { Keypair } from "@solana/web3.js";
@@ -74,12 +75,18 @@ export interface FakeRequest {
   tx_hash: string | null;
   wallet_asked?: boolean;
   reason?: string | null;
+  /** The documented code for `reason`, as the site sends it with every reason. */
+  reason_code?: string | null;
+  /** Whether the site calls the request final; by default, from its state. */
+  final?: boolean;
   polls: number;
   cancels: number;
   /** A link with `then`: its wallet steps. The test (or onPoll) moves them along, with `owner` once linked. */
   steps?: FakeStep[];
   /** The match code this link showed. */
   matchCode?: string;
+  /** When the site ends the request by itself (ms since the epoch): a request still awaiting the owner then is expired. */
+  expiresAt?: number;
   /**
    * The owner link proof the site answers with once linked: undefined signs one with the owner's test key; null leaves it
    * out; anything else is sent as it is.
@@ -95,17 +102,25 @@ export interface FakeSite extends TestServer {
   origin: string;
   /** The headers of each POST, as received. */
   headers: Record<string, string>[];
-  /** The account the next request belongs to (approvals: the owner from the first read). */
+  /** The account the next request belongs to (approvals: the owner from the first read; null names none, which breaks the contract). */
   owner: string | null;
+  /** How long a new request lives on the site (its approval.expires_at), in ms. Default 10 minutes. */
+  expiresInMs?: number;
+  /** Change the site's answer to a request it created (a site whose answer is malformed); the request stays on the site. */
+  answerCreated?: (body: Record<string, any>) => Record<string, any>;
+  /** The steps the site answers a link with `then` with, in place of the ones it stored (a site that answers other steps). */
+  answerSteps?: (steps: Record<string, unknown>[]) => unknown[];
   /** Called on every read, before the answer: move the request along. */
   onPoll?: (r: FakeRequest) => void;
   /** Answer POSTs with this status and error instead (a refusal). */
-  refuse?: { status: number; error: string };
+  refuse?: { status: number; error: string | { code: string; message?: string; reason?: string } };
   /** Answer the next POST that checks out with this status and body instead of creating a request. */
   reply?: (path: string) => { status: number; body: unknown } | undefined;
   services?: unknown;
   /** Agents already linked, by address (lowercase), with their owner: a link with `then` for one of them is refused (409). */
   linked?: Record<string, string>;
+  /** Answer a cancel with this status and body instead (a site whose answer carries anything at all). */
+  cancelAnswer?: (r: FakeRequest) => { status: number; body: unknown } | undefined;
   /** Answer every cancel with a 503, as a site that can't be reached at that moment. */
   cancelFails?: boolean;
   /** The approval URL the site answers with, instead of its own /approve/budget/<id>#<token>. */
@@ -178,7 +193,7 @@ export async function startFakeSite(): Promise<FakeSite> {
       const hashes = r.steps.map((s) => s.tx_hash).filter(Boolean);
       return { id: r.id, kind: r.kind, state, final, owner: r.owner, ...(await proofOf(r)), tx_hash: null, reason: r.reason ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) } };
     }
-    return { id: r.id, kind: r.kind, state: r.state, final: FINAL.has(r.state), owner: r.owner, ...(r.state === "linked" ? await proofOf(r) : {}), tx_hash: r.tx_hash, reason: r.reason ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" } };
+    return { id: r.id, kind: r.kind, state: r.state, final: r.final ?? FINAL.has(r.state), owner: r.owner, ...(r.state === "linked" ? await proofOf(r) : {}), tx_hash: r.tx_hash, reason: r.reason ?? null, reason_code: r.reason_code ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" } };
   };
   const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -205,28 +220,39 @@ export async function startFakeSite(): Promise<FakeSite> {
         if (owner) return json(res, 409, { error: { code: "already_linked", message: "This agent is already linked on this chain. Ask for gas and a budget with separate approvals.", owner } });
       }
       const id = `${link ? "bl" : "ba"}_test${String(++n).padStart(4, "0")}`;
-      const r: FakeRequest = { id, kind: link ? "link" : body.kind, token: `ssbt_test_${id}secret`, body, state: "awaiting_owner", owner: link ? null : site.owner, tx_hash: null, polls: 0, cancels: 0, matchCode: "ABC-DEF" };
+      const expiresAt = Date.now() + (site.expiresInMs ?? 600_000);
+      const r: FakeRequest = { id, kind: link ? "link" : body.kind, token: `ssbt_test_${id}secret`, body, state: "awaiting_owner", owner: link ? null : site.owner, tx_hash: null, polls: 0, cancels: 0, matchCode: "ABC-DEF", expiresAt };
       if (link && Array.isArray(body.then)) r.steps = body.then.map((t: any, index: number) => ({ index, kind: t.kind, state: "queued", tx_hash: null, reason: null, reason_code: null, wallet_asked: false, ...(t.solana ? { solana: t.solana } : { transaction: t.transaction }) }));
       site.requests.push(r);
       nonces.set(`${req.headers["superstables-agent"]}:${req.headers["superstables-agent-nonce"]}`, id);
-      return json(res, 201, {
+      const created: Record<string, any> = {
         id,
         access_token: r.token,
         kind: link ? "link" : body.kind,
         state: "awaiting_owner",
         final: false,
-        approval: { url: site.approvalUrl?.(id) ?? `${server.url}/approve/budget/${id}#ssba_test_owner${n}`, match_code: "ABC-DEF", expires_at: new Date(Date.now() + 600_000).toISOString() },
+        approval: { url: site.approvalUrl?.(id) ?? `${server.url}/approve/budget/${id}#ssba_test_owner${n}`, match_code: "ABC-DEF", expires_at: new Date(expiresAt).toISOString() },
         message_for_owner: "Open the link and pick ABC-DEF.",
         next_action: { type: "wait_for_owner", poll: `/api/v1/budget/requests/${id}` },
-        ...(r.steps ? { steps: r.steps.map(stepView) } : {}),
-      });
+        ...(r.steps ? { steps: site.answerSteps ? site.answerSteps(r.steps.map(stepView)) : r.steps.map(stepView) } : {}),
+      };
+      return json(res, 201, site.answerCreated ? site.answerCreated(created) : created);
     }
     const m = /^\/api\/v1\/budget\/requests\/([^/]+)(\/cancel)?$/.exec(url.pathname);
     if (m) {
       const r = site.requests.find((x) => x.id === m[1]);
-      if (!r || req.headers.authorization !== `Bearer ${r.token}`) return json(res, 404, { error: "no such request" });
+      if (!r) return json(res, 404, { error: { code: "not_found", message: "no such request" } });
+      if (req.headers.authorization !== `Bearer ${r.token}`) return json(res, 401, { error: { code: "unauthorized", message: "a wrong access token" } });
+      // expires_at limits the request: one still awaiting the owner, whose wallet was not asked, ends as expired; a link
+      // with steps that was never linked ends with it, and its steps, never asked for, are skipped
+      if (r.expiresAt !== undefined && Date.now() >= r.expiresAt && r.state === "awaiting_owner" && !r.wallet_asked && !(r.steps && r.owner)) {
+        Object.assign(r, { state: "expired", reason: "the approval link expired" });
+        for (const st of r.steps ?? []) if (st.state === "queued") Object.assign(st, { state: "skipped", reason: "the link expired before the owner linked this agent", reason_code: "link_expired" });
+      }
       if (m[2] && req.method === "POST") {
         r.cancels++;
+        const custom = site.cancelAnswer?.(r);
+        if (custom) return json(res, custom.status, custom.body);
         if (site.cancelFails) return json(res, 503, { error: { code: "unavailable", message: "try again" } });
         if (r.steps && r.owner) {
           // linked: the steps the wallet was not asked for are withdrawn; the others stay, as possibly sent

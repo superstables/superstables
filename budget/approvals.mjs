@@ -4,7 +4,7 @@
 // soon as the worker has a link, and the caller polls with `superstables budget wait --id <id> --shown`.
 //
 //   startDetached            the caller's side: register an id, start the worker, return once it has a link or has ended.
-//   recordLink, recordFinal  the worker's side: each link as soon as it exists, then the final RESULT and exit code.
+//   recordLink, recordFinal  the worker's side: each link once its words for the owner are logged (linkGate), then the final RESULT and exit code.
 //   waitFor                  `superstables budget wait`: the current state, within a timeout. It never signs or sends.
 //   findPending, claim       one owner approval at a time on a rail and chain.
 //
@@ -31,16 +31,14 @@
 // (POST /cancel): only a page that confirms the wallet was never asked is stopped.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
 import { groupAlive as groupOf, processStart, sameProcess } from "./procs.mjs";
-import { cancelSiteRequest, readSiteRequest } from "./site.mjs";
+import { cancelSiteRequest, readSiteRequest, siteWord } from "./site.mjs";
 
 /** A lock younger than this is never taken over, whatever its processes look like (startup: the record is being written). */
 export const STARTUP_GRACE_MS = 30_000;
-/** A takeover mutex older than this belongs to a process that died while breaking a stale lock. */
-const BREAK_STALE_MS = 10_000;
 
 /** Set in the worker's environment: the id of the approval it runs. */
 export const WORKER_ENV = "SUPERSTABLES_BUDGET_APPROVAL_ID";
@@ -79,20 +77,148 @@ export function readApproval(id) {
 
 /** Store a record (mode 600). A buy-once purchase has no worker: its record is made here (once.mjs). */
 export function saveApproval(record) {
-  return writeApproval(record);
+  return withRecordLock(record.id, () => {
+    // a final record stays final: a whole new record that is not final does not replace it
+    const now = readApproval(record.id);
+    if (now?.final && !record.final) return now;
+    return writeApproval(record);
+  });
 }
 
+/**
+ * Tests only: a function called inside a record's lock, before the write (to force an interleaving).
+ * @type {{ inLock: null | ((id: string) => void) }}
+ */
+export const recordTestHook = { inLock: null };
+
+const pauseSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+/** The record's lock file. */
+export const recordLockFile = (id) => `${recordFile(id)}.lock`;
+/** How long a change to a record waits for its lock before it fails with a clear error. Tests may shorten it. */
+export const recordLockOptions = { timeoutMs: 15_000 };
+/** A short pause after every attempt that did not get a lock file, so a waiter never spins. */
+const LOCK_RETRY_MS = 10;
+
+// ── locks held for a moment (a record's read and write, the break of a dead holder's lock) ──────────────────
+// The design of src/core/lock.ts, synchronous here because every caller writes a record synchronously (a RESULT is
+// recorded and the process exits). A lock or mutex file holds { pid, pidStart, owner }: the holder's pid, that process's
+// start identity and a random owner id, written whole to a temporary file and hard-linked into place, so it exists
+// complete or not at all. It is taken over only from a holder that is gone (no process with that pid and start runs),
+// never because it is old: a live holder may be paused for any time. A dead holder's lock is broken under a mutex that
+// follows the same rules, and only if it is still that exact lock; a lock is released only by its owner. A file that
+// cannot be read as a holder (the whole-file write does not make one) is waited for, never taken, and named in the
+// error at the deadline. A synchronous wait blocks this process's timers; the locks are held for a read and a write only.
+
+const lockOwnerText = () => JSON.stringify({ pid: process.pid, pidStart: startOf(process.pid), owner: randomBytes(8).toString("hex") });
+
+/** What a lock or mutex file says about its holder. */
+function lockHolder(path) {
+  let text = null;
+  try {
+    text = readFileSync(path, "utf8");
+    const holder = JSON.parse(text);
+    return { text, holder: holder && typeof holder === "object" ? holder : null };
+  } catch {
+    return { text, holder: null };
+  }
+}
+
+/** Remove `path` if it still holds exactly `text`. */
+function removeIfSame(path, text) {
+  try {
+    if (readFileSync(path, "utf8") === text) unlinkSync(path);
+  } catch {}
+}
+
+/**
+ * Create `path` holding `me` (temp file + hard link), waiting until `deadline`. A file there whose holder is gone is
+ * removed first: by `breakDead` (a lock, broken under its mutex), else only if it still holds the text judged dead (the
+ * mutex itself). Throws at the deadline, naming the holder or the unreadable file.
+ */
+function acquireSync(path, me, deadline, breakDead) {
+  const mine = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(mine, me, { mode: 0o600, flag: "wx" });
+  try {
+    for (;;) {
+      try {
+        linkSync(mine, path);
+        return;
+      } catch (err) {
+        if (err.code !== "EEXIST") throw err;
+      }
+      const { text, holder } = lockHolder(path);
+      if (text !== null && holder && !alive(Number(holder.pid), holder.pidStart)) {
+        if (breakDead) breakDead(path, text, deadline);
+        else removeIfSame(path, text);
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(holder
+          ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}, which is still running`
+          : text === null ? `the lock ${path} could not be taken in time`
+            : `the lock ${path} cannot be read; if no superstables budget command is running, remove it`);
+      }
+      pauseSync(LOCK_RETRY_MS);
+    }
+  } finally {
+    try { unlinkSync(mine); } catch {}
+  }
+}
+
+/** Tests only: called while a break holds its mutex, before it reads the lock again (to force the interleavings). */
+export const breakTestHook = { holdingMutex: null };
+
+/** Remove a dead holder's lock under the break mutex, and only if it is still that same lock. */
+function breakDeadLock(path, dead, deadline) {
+  const mutex = `${path}.break`;
+  const me = lockOwnerText();
+  acquireSync(mutex, me, deadline);
+  try {
+    breakTestHook.holdingMutex?.(path);
+    removeIfSame(path, dead);
+  } finally {
+    removeIfSame(mutex, me);
+  }
+}
+
+/**
+ * Run `fn` holding the record's lock: the worker, the caller, `wait` and `--replace` all change a record by reading it
+ * and writing it back, so each change is made whole, one process at a time.
+ */
+function withRecordLock(id, fn) {
+  ensureDir();
+  const path = recordLockFile(id);
+  const me = lockOwnerText();
+  acquireSync(path, me, Date.now() + recordLockOptions.timeoutMs, breakDeadLock);
+  try {
+    return fn();
+  } finally {
+    removeIfSame(path, me);
+  }
+}
+
+/** Write a record whole (call it holding its lock). A final record never keeps an access token, whoever wrote it. */
 function writeApproval(record) {
   ensureDir();
-  const tmp = `${recordFile(record.id)}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(record, null, 2) + "\n", { mode: 0o600 });
-  renameSync(tmp, recordFile(record.id));
-  return record;
+  const out = record.final && record.hosted?.token ? { ...record, hosted: { ...record.hosted, token: undefined } } : record;
+  const tmp = `${recordFile(out.id)}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(out, null, 2) + "\n", { mode: 0o600 });
+  renameSync(tmp, recordFile(out.id));
+  return JSON.parse(JSON.stringify(out));
 }
 
+/** Change a record under its lock: `patch`, or a function of the record that returns the patch (null: no change). */
 function update(id, patch) {
-  const record = readApproval(id);
-  return record ? writeApproval({ ...record, ...patch }) : null;
+  if (!isApprovalId(id)) return null;
+  return withRecordLock(id, () => {
+    const record = readApproval(id);
+    if (!record) return null;
+    const p = typeof patch === "function" ? patch(record) : patch;
+    if (!p) return record;
+    // a final record changes only by another final result (recordFinal): no write makes it not final again
+    if (record.final && !p.final) return record;
+    recordTestHook.inLock?.(id);
+    return writeApproval({ ...record, ...p });
+  });
 }
 
 /** The start identity to record with a pid (procs.mjs), or null when it cannot be read. */
@@ -155,10 +281,12 @@ function readLock(rail, chain) {
     const lock = JSON.parse(text);
     if (lock && typeof lock.id === "string") return { ...lock, text };
   } catch {}
-  // an older plain-id lock, or something unreadable: its age comes from the file
+  // an older plain-id lock: its approval's record says whether it is held; its age comes from the file
   let createdAt = Date.now();
   try { createdAt = statSync(activeFile(rail, chain)).mtimeMs; } catch {}
-  return { id: text.trim(), pid: null, createdAt, text };
+  if (isApprovalId(text.trim())) return { id: text.trim(), pid: null, createdAt, text };
+  // anything else cannot be read as a lock: it is held, never taken over, and named so a person can remove it
+  return { id: "unreadable", pid: null, createdAt, text, unreadable: activeFile(rail, chain) };
 }
 
 /**
@@ -166,6 +294,7 @@ function readLock(rail, chain) {
  * is older than STARTUP_GRACE_MS and neither the process that claimed it nor any process of its approval is alive.
  */
 function lockHeld(lock) {
+  if (lock.unreadable) return true;
   const record = readApproval(lock.id);
   if (record?.final) return false;
   if (alive(lock.pid, lock.pidStart)) return true;
@@ -174,7 +303,9 @@ function lockHeld(lock) {
 }
 
 /** What a refusal can say about the holder: its record, or what the lock alone knows while it starts. */
-const holderOf = (lock, rail, chain) => readApproval(lock.id) ?? { id: lock.id, rail, chain, command: "an owner command (starting)" };
+const holderOf = (lock, rail, chain) => lock.unreadable
+  ? { id: "unknown", rail, chain, command: `an unreadable lock (${lock.unreadable}); if no superstables budget command is running, remove that file` }
+  : readApproval(lock.id) ?? { id: lock.id, rail, chain, command: "an owner command (starting)" };
 
 /** The approval that holds this rail and chain, or null. */
 export function findPending(rail, chain) {
@@ -183,17 +314,17 @@ export function findPending(rail, chain) {
   return holderOf(lock, rail, chain);
 }
 
-/** Remove a stale lock, but only the one judged stale: a takeover mutex keeps two claimers from removing a fresh lock. */
+/**
+ * Remove a stale lock, but only the one judged stale, under the takeover mutex. The mutex follows the record lock's rules
+ * (acquireSync: whole file, holder identity, taken over only from a holder that is gone, never by age). Returns false
+ * when the mutex could not be had within a moment (another claimer is breaking it): the caller reports the holder.
+ */
 function breakStale(rail, chain, stale) {
   const mutex = `${activeFile(rail, chain)}.break`;
-  let fd;
+  const me = lockOwnerText();
   try {
-    fd = openSync(mutex, "wx", 0o600);
-  } catch (err) {
-    if (err.code !== "EEXIST") throw err;
-    try {
-      if (Date.now() - statSync(mutex).mtimeMs > BREAK_STALE_MS) unlinkSync(mutex);
-    } catch {}
+    acquireSync(mutex, me, Date.now() + 2_000);
+  } catch {
     return false;
   }
   try {
@@ -201,8 +332,7 @@ function breakStale(rail, chain, stale) {
     if (now && now.text === stale.text && !lockHeld(now)) unlinkSync(activeFile(rail, chain));
     return true;
   } finally {
-    closeSync(fd);
-    try { unlinkSync(mutex); } catch {}
+    removeIfSame(mutex, me);
   }
 }
 
@@ -225,9 +355,12 @@ export function claim(rail, chain, id, { pid = process.pid } = {}) {
         if (err.code !== "EEXIST") throw err;
       }
       const lock = readLock(rail, chain);
-      if (!lock) continue; // released meanwhile
-      if (lockHeld(lock)) return { ok: false, pending: holderOf(lock, rail, chain) };
-      if (!breakStale(rail, chain, lock)) return { ok: false, pending: holderOf(lock, rail, chain) };
+      if (lock) {
+        if (lockHeld(lock)) return { ok: false, pending: holderOf(lock, rail, chain) };
+        if (!breakStale(rail, chain, lock)) return { ok: false, pending: holderOf(lock, rail, chain) };
+      }
+      // released or broken meanwhile: a short pause before the next attempt, never a spin
+      pauseSync(LOCK_RETRY_MS);
     }
     const lock = readLock(rail, chain);
     return { ok: false, pending: lock ? holderOf(lock, rail, chain) : { id: "unknown", rail, chain, command: "an owner command" } };
@@ -249,7 +382,7 @@ export function release(rail, chain, id) {
  * is refused and can point at its link. `railPgid` is added when its rail script starts (setRailGroup).
  */
 export function startForeground({ id, command, rail, chain }) {
-  writeApproval({ id, command, rail, chain, state: "running", foreground: true, createdAt: new Date().toISOString(), pid: process.pid, pidStart: startOf(process.pid), deadline: null });
+  saveApproval({ id, command, rail, chain, state: "running", foreground: true, createdAt: new Date().toISOString(), pid: process.pid, pidStart: startOf(process.pid), deadline: null });
 }
 
 /** The process group of a blocking command's rail script (its page and chain reads run there). */
@@ -266,22 +399,79 @@ export function adoptWorker(id) {
 // ── the worker's side ──────────────────────────────────────────────────────────────────────────────────
 
 /** A link exists (the rail's APPROVE line): the approval now waits for the owner. A later link replaces it (recover asks twice). */
-export function recordLink(id, approve) {
-  const record = readApproval(id);
-  if (!record) return null;
-  // a later local link (recover on a hosted chain) is not the hosted request any more
-  const hosted = record.hosted && approve.matchCode ? record.hosted : undefined;
-  return writeApproval({
-    ...record,
+export function recordLink(id, approve, { wordsLogged = true } = {}) {
+  return update(id, (record) => ({
     state: "waiting_owner",
     action: approve.action,
     url: approve.url,
     expires: approve.expires,
     terms: approve.terms,
     matchCode: typeof approve.matchCode === "string" ? approve.matchCode : undefined,
-    hosted,
+    // a later local link (recover on a hosted chain) is not the hosted request any more
+    hosted: record.hosted && approve.matchCode ? record.hosted : undefined,
     links: (record.links ?? 0) + 1,
-  });
+    // the rail's words for the owner did not reach the log with this link (linkGate): the caller must say so
+    wordsMissing: wordsLogged ? undefined : true,
+  }));
+}
+
+/**
+ * The most a worker waits for the rail's words for the owner before it records a link without them (a rail that printed
+ * a link and no words is a fault). Below LINK_WAIT_MS, so the caller still gets the link, marked wordsMissing.
+ */
+export const LINK_TEXT_WAIT_MS = 60_000;
+
+/**
+ * The worker's side of a link: record it (recordLink) only once the rail's words for the owner, which carry the link's
+ * URL on stderr, have been written to this process's stderr (the worker's log). The caller returns as soon as the record
+ * has a link and copies the log once more first, so the words are in what it copies. stdout and stderr are separate
+ * pipes: the words may come before the APPROVE line, or after it. If the rail ends (`flush()`) or `waitMs` passes without
+ * them, the link is recorded with wordsMissing, and the caller says so instead of returning without them.
+ */
+/**
+ * Whether `text` names `url` as a whole token: preceded by the start, whitespace or a quote, and followed by the end,
+ * whitespace or a quote, never by more URL characters (so neither a longer URL nor the URL with a suffix counts).
+ */
+export function namesUrl(text, url) {
+  if (typeof text !== "string" || typeof url !== "string" || !url) return false;
+  for (let at = text.indexOf(url); at >= 0; at = text.indexOf(url, at + 1)) {
+    const before = at === 0 ? "" : text[at - 1];
+    const after = text[at + url.length] ?? "";
+    if ((before === "" || /[\s"'`<(]/.test(before)) && (after === "" || /[\s"'`>]/.test(after))) return true;
+  }
+  return false;
+}
+
+export function linkGate(id, { waitMs = LINK_TEXT_WAIT_MS, record = recordLink } = {}) {
+  let pending = null;
+  let seen = "";
+  let timer = null;
+  const commit = (wordsLogged) => {
+    if (!pending) return;
+    clearTimeout(timer);
+    timer = null;
+    const approve = pending;
+    pending = null;
+    seen = "";
+    record(id, approve, { wordsLogged });
+  };
+  return {
+    /** The rail printed an APPROVE line. */
+    link(approve) {
+      commit(false);
+      pending = approve;
+      if (typeof approve?.url !== "string") return commit(false);
+      if (namesUrl(seen, approve.url)) return commit(true);
+      timer = setTimeout(() => commit(false), waitMs);
+    },
+    /** The rail wrote `text` to stderr, and this process has written it on. */
+    shown(text) {
+      seen = (seen + text).slice(-32_000);
+      if (pending && namesUrl(seen, pending.url)) commit(true);
+    },
+    /** The rail ended: record any link still waiting, as without its words. */
+    flush: () => commit(false),
+  };
 }
 
 /**
@@ -290,41 +480,52 @@ export function recordLink(id, approve) {
  */
 export function recordHosted(id, hosted) {
   if (!isApprovalId(id)) return null;
-  return update(id, { hosted: { site: hosted.site, requestId: hosted.requestId, kind: hosted.kind, matchCode: hosted.matchCode, token: hosted.token, ...(hosted.then?.length ? { then: hosted.then } : {}) } });
+  // a final approval keeps no access token: checked and written under the record's lock, in one step
+  return update(id, (record) => record.final ? null : { hosted: { site: hosted.site, requestId: hosted.requestId, kind: hosted.kind, matchCode: hosted.matchCode, token: hosted.token, ...(hosted.then?.length ? { then: hosted.then } : {}) } });
 }
 
-/** The command ended: store its RESULT and exit code for every later `wait`, and free the chain. The access token goes. */
+/**
+ * The approval ended, whichever way (approved, rejected, expired, cancelled or replaced, stopped by a timeout, or failed):
+ * store its RESULT and exit code for every later `wait`, and free the chain. The access token goes. Every final result is
+ * recorded here, and only here.
+ */
 export function recordFinal(id, code, result) {
-  const before = readApproval(id);
-  const hosted = before?.hosted ? { ...before.hosted, token: undefined } : undefined;
-  const record = update(id, { state: "final", endedAt: new Date().toISOString(), final: { code, result }, ...(hosted ? { hosted } : {}) });
+  // one locked change: the result, and the hosted request without its access token (writeApproval enforces it too)
+  const record = update(id, (before) => ({ state: "final", endedAt: new Date().toISOString(), final: { code, result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) }));
   if (record) release(record.rail, record.chain, id);
   return record;
 }
 
 // ── the caller's side ──────────────────────────────────────────────────────────────────────────────────
 
-/** Copy what the worker logged since `offset` to `onLog`; returns the new offset. */
-function forwardLog(id, offset, onLog) {
-  if (!onLog) return offset;
+/**
+ * Copy what the worker logged since `at.offset` to `onLog`, and keep the tail of it in `at.text`. A log file that was
+ * replaced (another inode) or truncated (shorter than the offset) is read again from its start; nothing follows a rotation.
+ */
+function forwardLog(id, at, onLog) {
+  if (!onLog) return;
   let fd;
   try {
     fd = openSync(logFile(id), "r");
   } catch {
-    return offset;
+    return;
   }
   try {
+    const st = fstatSync(fd);
+    if ((at.ino !== undefined && st.ino !== at.ino) || st.size < at.offset) at.offset = 0;
+    at.ino = st.ino;
     const buf = Buffer.alloc(64 * 1024);
     for (;;) {
-      const n = readSync(fd, buf, 0, buf.length, offset);
+      const n = readSync(fd, buf, 0, buf.length, at.offset);
       if (n <= 0) break;
-      onLog(buf.subarray(0, n).toString("utf8"));
-      offset += n;
+      const text = buf.subarray(0, n).toString("utf8");
+      onLog(text);
+      at.text = (at.text + text).slice(-256 * 1024);
+      at.offset += n;
     }
   } finally {
     closeSync(fd);
   }
-  return offset;
 }
 
 /**
@@ -333,7 +534,7 @@ function forwardLog(id, offset, onLog) {
  * The caller must hold the chain (claim) first.
  */
 export async function startDetached({ id, command, rail, chain, cmd, args, cwd, env = process.env, timeoutS = 600, onLog = null, linkWaitMs = LINK_WAIT_MS }) {
-  writeApproval({
+  saveApproval({
     id, command, rail, chain, state: "starting", createdAt: new Date().toISOString(),
     deadline: Date.now() + linkWaitMs + workerDeadlineMs(timeoutS), pid: null,
   });
@@ -351,26 +552,39 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
   const childStart = child.pid ? startOf(child.pid) : null;
   if (child.pid) update(id, { pid: child.pid, pidStart: childStart });
   const until = Date.now() + linkWaitMs;
-  let offset = 0;
+  const at = { offset: 0, ino: undefined, text: "" };
   for (;;) {
-    offset = forwardLog(id, offset, onLog);
+    forwardLog(id, at, onLog);
     const record = readApproval(id);
-    if (record?.final) { child.unref(); return { kind: "final", record }; }
-    if (record?.url) { child.unref(); return { kind: "waiting", record }; }
+    // the worker writes the record and its log separately: once the record is there, forward what the log gained
+    // meanwhile (the words for the owner come with the link), so the caller never returns without them
+    if (record?.final) { forwardLog(id, at, onLog); child.unref(); return { kind: "final", record }; }
+    if (record?.url) {
+      forwardLog(id, at, onLog);
+      child.unref();
+      // the words for the owner name the link (the APPROVE line does not count); if what was forwarded does not (a log cut
+      // short or replaced), say so
+      const words = at.text.split("\n").filter((l) => !/^(APPROVE|RESULT) \{/.test(l)).join("\n");
+      if (onLog && !record.wordsMissing && !namesUrl(words, record.url)) return { kind: "waiting", record: update(id, { wordsMissing: true }) ?? { ...record, wordsMissing: true } };
+      return { kind: "waiting", record };
+    }
     if (exited) {
       await sleep(100);
-      forwardLog(id, offset, onLog);
+      forwardLog(id, at, onLog);
       const last = readApproval(id);
       if (last?.final) return { kind: "final", record: last };
       // no link was ever shown, so no wallet was asked: stop anything left in its group before freeing the chain
       if (!(await stopGroup(child.pid, { start: childStart }))) return { kind: "failed", record: last, reason: `the background approval stopped before it opened a page, but process group ${child.pid} would not stop; the chain stays held` };
+      const reason = spawnError ? `the background approval could not start: ${spawnError.message}` : "the background approval stopped before it opened a page";
+      // final (recordFinal frees the chain and removes any access token the worker had recorded)
+      recordFinal(id, 1, { ok: false, command, rail, chain, state: "failed", id, next: "check wallet activity and budget status before retrying", reason });
       release(rail, chain, id);
-      return { kind: "failed", record: last, reason: spawnError ? `the background approval could not start: ${spawnError.message}` : "the background approval stopped before it opened a page" };
+      return { kind: "failed", record: readApproval(id), reason };
     }
     if (Date.now() > until) {
       if (!(await stopGroup(child.pid, { start: childStart }))) return { kind: "failed", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s, and process group ${child.pid} would not stop; the chain stays held` };
+      recordFinal(id, 1, { ok: false, command, rail, chain, state: "failed", id, next: "check wallet activity and budget status before retrying", reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s` });
       release(rail, chain, id);
-      update(id, { state: "final", final: { code: 1, result: { ok: false, command, rail, chain, state: "failed", id, next: "check wallet activity and budget status before retrying", reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s` } } });
       return { kind: "failed", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s; the background approval was stopped` };
     }
     await sleep(150);
@@ -392,7 +606,7 @@ export async function pageStateOf(record) {
     // a link with wallet steps: once linked, the request's state is its current step's
     const linked = Array.isArray(r.view?.steps) && typeof r.view.owner === "string";
     const stepAsked = linked && r.view.steps.some((s) => s?.wallet_asked === true || typeof s?.tx_hash === "string");
-    return r.ok ? { status: `hosted:${r.view.state}`, linked, walletAsked: r.view.wallet_asked === true || typeof r.view.tx_hash === "string" || stepAsked } : { status: "hosted:unreachable" };
+    return r.ok ? { status: `hosted:${siteWord("state", r.view.state)}`, linked, walletAsked: r.view.wallet_asked === true || typeof r.view.tx_hash === "string" || stepAsked } : { status: "hosted:unreachable" };
   }
   return pageState(record?.url);
 }
@@ -543,7 +757,7 @@ export async function replacePending(record, byId) {
   // hosted: the site cancels only while the wallet was not asked, in one step, like the loopback page
   const h = record.hosted?.token ? record.hosted : null;
   const answer = h
-    ? await cancelSiteRequest({ site: h.site, id: h.requestId, token: h.token }).then((c) => c && { cancelled: c.cancelled, status: c.state, sending: c.walletAsked === true })
+    ? await cancelSiteRequest({ site: h.site, id: h.requestId, token: h.token }).then((c) => c && { cancelled: c.cancelled, status: siteWord("state", c.state), sending: c.walletAsked === true })
     : await cancelPage(record.url, byId);
   if (!answer?.cancelled) {
     const why = !record.url ? "has no page yet" : !answer ? (h ? `is not answering on ${h.site}` : "is not answering") : answer.sending ? "already asked the wallet to send" : `is ${answer.status}`;

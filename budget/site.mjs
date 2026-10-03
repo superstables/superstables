@@ -92,6 +92,97 @@ export function chosenSite(flag) {
  */
 export const siteText = (s, max = 300) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "").trim().slice(0, max);
 
+/**
+ * The words the site's budget API documents, by kind. The site's own sentences (an error message, a reason) are never
+ * repeated in a log, an audit line or a RESULT: only one of these words, or "unexpected", inside this client's sentences.
+ * Taken from the website's budget API on its staging and budget-proof-v2 branches (lib/budget: errors thrown with
+ * budgetError, flow.ts REASONS, proof.ts ProofReason; app/api/v1/budget and app/api/budget routes), October 2026.
+ */
+export const SITE_WORDS = {
+  state: new Set(["awaiting_owner", "sending", "linked", "sent", "confirmed", "failed", "rejected", "expired", "cancelled", "unknown", "queued", "skipped"]),
+  code: new Set([
+    // errors (budgetError codes)
+    "agent_mismatch", "agent_not_linked", "agent_proof", "agent_proof_invalid", "agent_proof_missing", "agent_proof_stale", "allowance_live",
+    "already_linked", "amount_above_limit", "amount_zero", "blockhash_expired", "body_too_large", "cap_above_limit", "cap_zero", "chain_unavailable",
+    "duplicate_request", "expiry_passed", "idempotency_conflict", "idempotency_key_expired", "idempotency_key_reused", "internal_error",
+    "invalid_idempotency_key", "invalid_json", "invalid_kind", "invalid_label", "invalid_solana", "invalid_solana_owner", "invalid_step",
+    "invalid_then", "invalid_transaction", "invalid_tx_hash", "linked_elsewhere", "match_code_mismatch", "missing_token", "network_refused",
+    "no_token_account", "not_a_link", "not_a_transaction", "not_awaiting_owner", "not_for_solana", "not_found", "not_linked_yet", "not_open",
+    "not_sending", "not_solana", "nothing_to_revoke", "other_account", "other_delegate", "owner_frozen", "owner_proof_invalid",
+    "owner_proof_required", "proof_reused", "rate_limited", "request_open", "sign_in_required", "solana_owner_unproven", "tx_hash_used",
+    "unknown_chain", "unknown_parameter", "unlimited_refused", "unsupported_chain", "unsupported_media_type", "unsupported_rail",
+    "value_not_zero", "wallet_asked", "wrong_amount", "wrong_call", "wrong_recipient", "wrong_signer", "wrong_spender", "wrong_target",
+    "wallet_changed_transaction",
+    // reasons a request or step ended (flow.ts REASONS)
+    "agent_cancelled", "agent_removed", "another_open", "approval_expired", "earlier_step", "link_not_done", "mismatch", "no_start_block",
+    "not_landed", "not_requested", "not_signed", "owner_rejected", "owner_stopped", "reverted", "stale_tx", "wallet_timeout",
+  ]),
+  // agent request proof: error.reason of an agent_proof refusal (proof.ts ProofReason)
+  proof: new Set(["missing", "malformed", "stale", "nonce", "replayed", "signature", "agent_mismatch"]),
+};
+/** A value the site sent, as one of the words its API documents for `kind`, or "unexpected". */
+export const siteWord = (kind, v) => (typeof v === "string" && SITE_WORDS[kind].has(v) ? v : "unexpected");
+/** Anything shaped like an access token (ssbt_, ssba_, sspt_, sspa_) taken out of a text this client prints or stores. */
+export const scrub = (text) => String(text ?? "").replace(/ss[bp][ta]_[A-Za-z0-9_-]*/g, "[token]");
+/**
+ * The agent's access tokens (ssbt_, sspt_) taken out of a line the dispatcher prints. An owner's approval link carries
+ * its own token (ssba_, sspa_) after # on purpose, so those stay.
+ */
+export const scrubAgentTokens = (text) => String(text ?? "").replace(/ss[bp]t_[A-Za-z0-9_-]*/g, "[token]");
+
+/** The longest run of token characters held back between two chunks; a longer run is a token and is dropped whole. */
+const TOKEN_HOLD_MAX = 512;
+/**
+ * scrubAgentTokens over a stream cut at any point (a pipe's chunks): push() returns what is safe to write now and holds
+ * back a tail that could be the start of a token (an "s", "ss", "ssb", "sspt", ... or a token not yet ended), to be read
+ * with the next chunk; end() returns the rest. A token split between chunks is still taken out whole.
+ */
+export function agentTokenScrubber() {
+  let held = "";
+  let inToken = false;
+  return {
+    push(text) {
+      let s = String(text ?? "");
+      if (inToken) {
+        // the rest of a token already replaced by [token]
+        const m = /^[A-Za-z0-9_-]*/.exec(s);
+        s = s.slice(m[0].length);
+        if (!s) return "";
+        inToken = false;
+      }
+      let buf = held + s;
+      held = "";
+      const open = /ss[bp]t_[A-Za-z0-9_-]*$/.exec(buf);
+      const start = open ? open.index : ["sspt", "ssbt", "ssp", "ssb", "ss", "s"].reduce((at, p) => (at < 0 && buf.endsWith(p) ? buf.length - p.length : at), -1);
+      if (start >= 0) {
+        held = buf.slice(start);
+        buf = buf.slice(0, start);
+        if (held.length > TOKEN_HOLD_MAX) {
+          held = "";
+          inToken = true;
+          return scrubAgentTokens(buf) + "[token]";
+        }
+      }
+      return scrubAgentTokens(buf);
+    },
+    end() {
+      const out = scrubAgentTokens(held);
+      held = "";
+      inToken = false;
+      return out;
+    },
+  };
+}
+
+/** A failed answer in this client's words: the HTTP status, and the error code and proof reason when documented. */
+export function siteFailure(status, body) {
+  if (!status) return "no answer";
+  const b = body && typeof body === "object" ? body : {};
+  const code = [b.error?.code, b.code, b.reason_code].find((c) => typeof c === "string");
+  const why = typeof b.error?.reason === "string" ? b.error.reason : undefined;
+  return `HTTP ${Number(status) | 0}${code === undefined ? "" : ` ${siteWord("code", code)}`}${why === undefined ? "" : ` (${siteWord("proof", why)})`}`;
+}
+
 /** The error the site gave, in one line: { error: "..." }, { error: { message } }, { message }, or the HTTP status. */
 export function siteError(status, body) {
   const e = body && typeof body === "object" ? body : {};
@@ -129,7 +220,7 @@ export async function readSiteRequest({ site, id, token, wait = 0, fetchImpl }) 
   const w = Math.max(0, Math.min(20, Math.floor(wait)));
   const r = await call(`${site}${BUDGET_API}/requests/${id}?wait=${w}`, { headers: { authorization: `Bearer ${token}`, accept: "application/json" } }, (w + 15) * 1000, fetchImpl);
   if (r.ok && r.body && typeof r.body === "object" && typeof r.body.state === "string") return { ok: true, view: r.body };
-  return { ok: false, status: r.status, reason: r.network ? `${site} did not answer (${r.network})` : r.ok ? "the site's answer has no state" : siteError(r.status, r.body) };
+  return { ok: false, status: r.status, reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : siteFailure(r.status, r.body) };
 }
 
 /**
@@ -141,13 +232,14 @@ export async function cancelSiteRequest({ site, id, token, fetchImpl }) {
   if (!isSiteRequestId(id)) return null;
   const r = await call(`${site}${BUDGET_API}/requests/${id}/cancel`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" }, body: "{}" }, 15_000, fetchImpl);
   if (r.status === 0) return null;
-  const state = typeof r.body?.state === "string" ? r.body.state : null;
+  // a documented state, or "unexpected": the site's text is never repeated
+  const state = typeof r.body?.state === "string" ? siteWord("state", r.body.state) : null;
   // a link with steps that is linked answers with the request as it stands, steps included: `view`
   const view = r.ok && Array.isArray(r.body?.steps) ? r.body : undefined;
   if (r.ok && (state === null || state === "cancelled")) return { cancelled: true, state: "cancelled", view };
   // refused (the wallet may have been asked, or the request already ended), or steps the wallet was already asked for
   const walletAsked = r.body?.wallet_asked === true || typeof r.body?.tx_hash === "string";
-  return { cancelled: false, state, walletAsked, reason: siteError(r.status, r.body), view };
+  return { cancelled: false, state, walletAsked, reason: siteFailure(r.status, r.body), view };
 }
 
 // ---- find: GET /api/v1/budget/services ------------------------------------------------------------------------------
@@ -190,8 +282,8 @@ function serviceOf(s, chainByNetwork) {
 /** @param {{ site: string, chainByNetwork?: Record<string, string>, fetchImpl?: typeof fetch }} args */
 export async function listSiteServices({ site, chainByNetwork = {}, fetchImpl }) {
   const r = await call(`${site}${BUDGET_API}/services`, { headers: { accept: "application/json" } }, 15_000, fetchImpl);
-  if (r.status === 404 || r.status === 405 || r.status === 501) return { ok: false, absent: true, reason: `${site} has no budget service list yet (${siteError(r.status, r.body)})` };
-  if (!r.ok) return { ok: false, absent: false, reason: r.network ? `${site} did not answer (${r.network})` : siteError(r.status, r.body) };
+  if (r.status === 404 || r.status === 405 || r.status === 501) return { ok: false, absent: true, reason: `${site} has no budget service list yet (${siteFailure(r.status, r.body)})` };
+  if (!r.ok) return { ok: false, absent: false, reason: r.network ? `${site} did not answer (${r.network})` : siteFailure(r.status, r.body) };
   const list = Array.isArray(r.body) ? r.body : Array.isArray(r.body?.services) ? r.body.services : Array.isArray(r.body?.data) ? r.body.data : null;
   if (!list) return { ok: false, absent: false, reason: `${site} answered without a list of services` };
   return { ok: true, services: list.slice(0, 500).map((s) => serviceOf(s, chainByNetwork)).filter(Boolean) };
