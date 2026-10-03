@@ -90,8 +90,24 @@ export function approvalsPath(dir: string = recordsDir()): string {
 export function walletUrl(): string {
   const raw = (process.env.SUPERSTABLES_WALLET_URL ?? "").trim();
   // Same caveat as SUPERSTABLES_HOME: an unexpanded "${...}" placeholder is not a URL.
-  const configured = raw !== "" && !/\$\{[^}]*\}/.test(raw) ? raw : `http://127.0.0.1:${DEFAULT_WALLET_PORT}`;
-  return configured.replace(/\/$/, "");
+  if (raw === "" || /\$\{[^}]*\}/.test(raw)) return `http://127.0.0.1:${DEFAULT_WALLET_PORT}`;
+  const configured = raw.replace(/\/$/, "");
+  // The client attaches the wallet's bearer token to whatever this names, and that token can read
+  // every payment request the wallet has, including the signed authorization. So only loopback, or
+  // https: an origin the operator did not choose must not be able to collect the credential.
+  let url: URL;
+  try {
+    url = new URL(configured);
+  } catch {
+    throw new Error(`SUPERSTABLES_WALLET_URL is not a URL (got "${raw}")`);
+  }
+  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new Error(
+      `SUPERSTABLES_WALLET_URL must be https, or plain http on 127.0.0.1 or localhost, because the client's wallet token is sent there (got "${raw}")`,
+    );
+  }
+  return configured;
 }
 
 export function ensureDir(path: string): string {

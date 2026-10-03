@@ -9,7 +9,7 @@ import { EVM_CHAINS } from "./chains.mjs";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { delegatedCall } from "./delegation.ts";
-import { CFG, GAS, SYM, USDC, USDC_DECIMALS, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentEnv, need } from "./lib.ts";
+import { CFG, GAS, SYM, USDC, USDC_DECIMALS, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need } from "./lib.ts";
 
 export { closeOwnerPage };
 export const OWNER_CHAIN: OwnerChain = {
@@ -46,8 +46,13 @@ export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   hostedSite: approvalSite,
   hosted: () => {
     const site = approvalSite()!;
+    const agentFile = agentFileValues();
+    if (agentFile.problem !== undefined) {
+      console.log(`REFUSED: ${agentFile.problem}. Nothing was requested.`);
+      process.exit(emit("owner", 3, { state: "refused_precheck", reason: agentFile.problem, next: `make ${AGENT_ENV} a regular file only you can read (chmod 600), then run the command again` }));
+    }
     // the agent key signs each request to the site; it must be the agent this chain's public file names
-    const agentKey = need(agentEnv(), "B4_AGENT_KEY", AGENT_ENV) as Hex;
+    const agentKey = need(agentFile.env, "B4_AGENT_KEY", AGENT_ENV) as Hex;
     const agent = privateKeyToAccount(agentKey).address;
     const recorded = publicEnv().B4_AGENT_ADDRESS;
     if (recorded && recorded.toLowerCase() !== agent.toLowerCase()) {

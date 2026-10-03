@@ -4,7 +4,7 @@
 //   owner  approve(agent, cap)               (setBudget), approve(agent, 0) (revokeBudget)
 //   agent  USDC.transferFrom(owner, agent, price), then pays the seller with its own EIP-3009 signature
 //   agent  USDC.transferFrom(owner, owner, n)  (selfRevoke): lowers its own allowance without moving money
-import { readFileSync, appendFileSync, existsSync, writeFileSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import {
   createPublicClient, createWalletClient, http, parseAbi, encodeFunctionData, formatUnits, parseUnits, keccak256, isAddress,
@@ -14,6 +14,7 @@ import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { CFG, type GasOp } from "./chains.ts";
 import { EVM_CHAINS } from "./chains.mjs";
 import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
+import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 
 export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
@@ -84,16 +85,50 @@ export const posInt = (name: string, def: string, max = 3650 * 86400) => {
 };
 
 // ---- env files (parse only what is asked; never print values) ----
-export function parseLines(path: string): Record<string, string> {
+function parseText(text: string): Record<string, string> {
   const out: Record<string, string> = {};
-  if (!existsSync(path)) return out;
-  for (const line of readFileSync(path, "utf8").split("\n")) {
+  for (const line of text.split("\n")) {
     const m = line.match(/^(?:export\s+)?([A-Z0-9_]+)=(.*)$/);
     if (m) out[m[1]] = m[2].trim().replace(/^['"]|['"]$/g, "");
   }
   return out;
 }
-export const agentEnv = () => parseLines(AGENT_ENV);
+export function parseLines(path: string): Record<string, string> {
+  if (!existsSync(path)) return {};
+  return parseText(readFileSync(path, "utf8"));
+}
+/**
+ * A key file's lines, or {} when it is absent. Refuses (throws) a file other users can read, or anything that is not a
+ * regular file, checked on the file actually opened (../secret-file.mjs).
+ */
+export function parseSecretLines(path: string, what: string): Record<string, string> {
+  let text: string;
+  try {
+    text = readSecretFile(path, what);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw err;
+  }
+  return parseText(text);
+}
+/**
+ * The agent key file's values for a command that must refuse cleanly rather than throw: `{ env }` ({} when there is no
+ * file), or `{ problem }` when the file must not be used. Checked on the file actually read; ask again after any wait.
+ */
+export function agentFileValues(): { env: Record<string, string>; problem?: undefined } | { env?: undefined; problem: string } {
+  try {
+    return { env: agentEnv() };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === UNSAFE_SECRET_FILE) return { problem: (err as Error).message };
+    throw err;
+  }
+}
+/** The agent key file. Every reader of the key goes through here, so each one refuses a file other users can read. */
+export const agentEnv = () =>
+  // Mode 600 is set when the file is written, but that is a fact about that moment: a restore, a `cp` without -p, or
+  // an editor can leave it readable by other users, and every signature from here on (a purchase, or a hosted request
+  // to the site) would then be made with a key this machine no longer keeps to itself. Refuse rather than re-tighten.
+  parseSecretLines(AGENT_ENV, "the agent key file");
 export const publicEnv = () => parseLines(PUBLIC_ENV);
 export function need(env: Record<string, string>, k: string, file: string): string {
   if (!env[k]) {
@@ -101,17 +136,6 @@ export function need(env: Record<string, string>, k: string, file: string): stri
     process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 1, { state: "failed", reason: `missing ${k} in ${file}`, next: "run superstables budget setup --rail evm" }));
   }
   return env[k];
-}
-/** Append KEY=VALUE lines to a key file (created mode 600) for keys that are not there yet. Never prints. */
-export function appendEnvTo(path: string, pairs: Record<string, string>) {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const cur = parseLines(path);
-  let add = "";
-  for (const [k, v] of Object.entries(pairs)) if (!cur[k]) add += `${k}=${v}\n`;
-  if (!add) return;
-  if (!existsSync(path)) writeFileSync(path, "", { mode: 0o600 });
-  const text = readFileSync(path, "utf8");
-  appendFileSync(path, (text === "" || text.endsWith("\n") ? "" : "\n") + add, { mode: 0o600 });
 }
 /** Set B4_* keys in the public state file (no secrets), keeping every other line. Atomic. */
 export function writePublic(updates: Record<string, string>, drop: string[] = []) {
@@ -402,7 +426,7 @@ export function readCtx(): Pub {
 }
 export async function agentCtx() {
   const pub = readCtx();
-  const env = agentEnv();
+  const env = agentEnv(); // refuses a key file other users can read
   const key = need(env, "B4_AGENT_KEY", AGENT_ENV) as Hex;
   const agent = walletFor(key);
   if (agent.account.address.toLowerCase() !== pub.agent.toLowerCase()) throw new Error(`the agent key in ${AGENT_ENV} does not match the agent address in the public file, ${pub.agent}`);
@@ -416,7 +440,11 @@ export function ownerKeyEnv(): Record<string, string> {
   if (!path) usageError("this step needs the owner: approve it in your wallet (the default), or pass --owner-key-file <path> for tests and automation");
   if (!existsSync(path)) usageError(`--owner-key-file ${path} does not exist`);
   if ((statSync(path).mode & 0o077) !== 0) usageError(`--owner-key-file ${path} can be read by other users: chmod 600 ${path}`);
-  return parseLines(path);
+  try {
+    return parseSecretLines(path, "--owner-key-file");
+  } catch (err) {
+    usageError((err as Error).message);
+  }
 }
 export async function ownerCtx() {
   const pub = readCtx();

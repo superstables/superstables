@@ -14,6 +14,7 @@
 // (default 600). Each rail binds these helpers to its chain with ownerPageFor (evm/owner.ts, tempo/owner.ts, solana/owner.ts).
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
+import { UNSAFE_SECRET_FILE, readSecretFile } from "./secret-file.mjs";
 import {
   OwnerApprovalServer,
   type OwnerActionHandle,
@@ -57,6 +58,15 @@ export function checkOwnerKeyFile(path: string): void {
   }
   if ((statSync(path).mode & 0o077) !== 0) {
     process.stderr.write(`error: --owner-key-file ${path} can be read by other users: chmod 600 ${path}\n`);
+    process.exit(2);
+  }
+  // The same single-open checks the loader makes (a regular file, mode 600, key-sized), so a FIFO or a directory is bad
+  // input here (exit 2), as it is on evm, rather than a failure in the loader.
+  try {
+    readSecretFile(path, "--owner-key-file");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== UNSAFE_SECRET_FILE) throw err;
+    process.stderr.write(`error: ${(err as Error).message}\n`);
     process.exit(2);
   }
 }

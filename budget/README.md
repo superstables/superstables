@@ -285,6 +285,7 @@ Always pass `--max`, and `--pay-to` when you know the seller's address. It comes
   - `evm`: `USDC.approve(agent, 0)`. The next pull reverts. Not covered: a pull already mined, and USDC sitting in the agent key (0 between purchases). `superstables budget recover` returns it.
   - `tempo`: `AccountKeychain.revokeKey`. Every payment by that key is refused from the block it lands in. Not covered: payment sessions the key opened elsewhere (`superstables budget` never opens one; the revoke lists any it finds).
   - `solana`: the SPL `Revoke`. Once it takes effect, this delegate can no longer spend from the selected USDC account.
+- Replacing an agent key: supported on `tempo` (`setup --agent LABEL`, grant it, revoke the old key), not yet on `evm` or `solana`, where a revoke stops the key but does not retire it. See [Replacing a key](../docs/security.md#replacing-a-key).
 - Revocation does not reverse confirmed payments. For a pending transaction, ordering on chain matters. An EVM payment can still settle from funds already pulled; revoke stops new pulls.
 
 Development runs have exercised these flows with wallet harnesses and chain readbacks. They do not verify the approval experience in real wallets, for example MetaMask or Phantom. Those wallet checks remain necessary.

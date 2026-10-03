@@ -226,8 +226,7 @@ Usage: superstables wallet init [options]
 create this machine's wallet key, or import one
 
 Options:
-  --import-key <0xhex>      import a private key instead of generating one
-  --import-key-file <path>  import a private key from a file
+  --import-key-file <path>  import a private key from a file (mode 600)
   --force                   replace an existing key (the old key cannot be
                             recovered)
   -h, --help                display help for command
@@ -260,7 +259,8 @@ Moves money: yes: it signs a payment when, and only when, the owner approves it 
 Run by: the owner, in a terminal of their own. Agents never run it.
 Example:
   $ superstables --wallet local wallet serve
-Prints: where it listens and the owner's approval link, then runs until Ctrl-C.
+Prints: where it listens, the page's address, its launcher file and where the owner secret is (never
+  the secret itself), then runs until Ctrl-C.
 Exit codes: 0 stopped, 1 could not start (a port in use, no key: run `superstables wallet init`)
   (the full table: superstables --help)
 ```

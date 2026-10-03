@@ -35,9 +35,9 @@ import { dirname } from 'node:path'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 import { decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, parseEnvFile, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
-import { readFileSync } from 'node:fs'
+import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
+import { UNSAFE_SECRET_FILE } from '../secret-file.mjs'
 import type { HostedStep, HostedStepOutcome, PriorLink } from '../hosted.ts'
 import { chosenSite, isSiteRequestId, siteOrigin } from '../site.mjs'
 import { KEYCHAIN, approvalSite, askConnect, checkGrantSent, closeOwnerPage, emit, endUnapproved, grantCalldata, iso, tokenBalance, useApprovalSite, useHostedAgent, type GrantPlan, type SentCheck } from './owner.ts'
@@ -141,6 +141,25 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
   process.exit(result(0, { state: 'ok', owner, agent: address, linked: true, next: `superstables budget grant --rail tempo --agent ${label} --amount A (the owner approves it on ${host}, in their wallet)` }))
 }
 
+function refuseAgentFile(reason: string): never {
+  console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`)
+  process.exit(result(3, { state: 'refused_precheck', reason, next: `make ${AGENT_ENV_PATH} a regular file only you can read (chmod 600), then run setup again` }))
+}
+/** The agent file's text ("" when there is none), or a refusal (exit 3) when other users can read it or it is not a regular file. */
+function agentFileTextOrRefuse(): string {
+  const file = agentFileText()
+  return file.problem === undefined ? file.text : refuseAgentFile(file.problem)
+}
+/** Runs a helper that reads and rewrites the agent file; its refusal of an unsafe file becomes this command's refusal. */
+function refuseAgentFileErrors<T>(fn: () => T): T {
+  try {
+    return fn()
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === UNSAFE_SECRET_FILE) refuseAgentFile((err as Error).message)
+    throw err
+  }
+}
+
 async function main() {
   const pub = loadPublicEnv()
 
@@ -150,10 +169,15 @@ async function main() {
     process.exit(result(0, { state: 'ok', owner: pub.OWNER_ADDRESS, next: 'superstables budget doctor --rail tempo' }))
   }
 
+  // Every path below reads or rewrites the agent key file, through agentFileTextOrRefuse or a helper that checks the same
+  // way. Reusing a file other users can read would hand the owner's budget to a key they may already hold, and the file
+  // can change while setup waits for the owner, so it is read again, never kept.
+  agentFileTextOrRefuse()
+
   if (typeof args.agent === 'string') {
     const label = args.agent
     if (!pub.OWNER_ADDRESS || !existsSync(AGENT_ENV_PATH)) process.exit(result(3, { state: 'refused_precheck', reason: 'run setup without --agent first: no owner is recorded yet', next: 'superstables budget setup --rail tempo' }))
-    const { address, created } = appendExtraAgent(label)
+    const { address, created } = refuseAgentFileErrors(() => appendExtraAgent(label))
     console.log(`${created ? 'created' : 'reusing'} agent key AGENT${label} in ${AGENT_ENV_PATH}: ${address}`)
     if (approvalSite()) await linkExtraAgent(label, address, pub.OWNER_ADDRESS as Address)
     process.exit(result(0, { state: 'ok', owner: pub.OWNER_ADDRESS, agent: address, next: `superstables budget grant --rail tempo --agent ${label} --amount A (you approve it in your wallet)` }))
@@ -164,7 +188,7 @@ async function main() {
   let agent: Address
   let agentOwner: string | undefined
   if (existsSync(AGENT_ENV_PATH)) {
-    const env = parseEnvFile(readFileSync(AGENT_ENV_PATH, 'utf8'))
+    const env = parseEnvFile(agentFileTextOrRefuse())
     if (!env.AGENT_PRIVATE_KEY) process.exit(result(3, { state: 'refused_precheck', reason: `${AGENT_ENV_PATH} has no AGENT_PRIVATE_KEY`, next: `move ${AGENT_ENV_PATH} away if you mean to start over` }))
     agent = privateKeyToAddress(env.AGENT_PRIVATE_KEY as `0x${string}`)
     agentOwner = env.OWNER_ADDRESS
@@ -188,7 +212,7 @@ async function main() {
   const recorded = (agentOwner ?? (pub.OWNER_ADDRESS && same(pub.AGENT_ADDRESS, agent) ? pub.OWNER_ADDRESS : undefined)) as Address | undefined
   if (newOwner && recorded) {
     // never move the owner while any agent key can still spend from the old one
-    const env = parseEnvFile(readFileSync(AGENT_ENV_PATH, 'utf8'))
+    const env = parseEnvFile(agentFileTextOrRefuse())
     const keys = Object.entries(env).filter(([k, v]) => /^AGENT\d*[A-Za-z0-9]*_ADDRESS$/.test(k) && /^0x[0-9a-fA-F]{40}$/.test(v)).map(([, v]) => v as Address)
     for (const key of keys) {
       const k = await readKey(recorded, key).catch(() => null)
@@ -318,7 +342,7 @@ async function main() {
   // 3. the owner's public address, in the agent file (buy binds the access key to it) and the public file. Hosted: APPROVALS
   // and SITE. Asked on this computer: neither.
   const asked = !OWNER_KEY_FILE && !(pub.OWNER_ADDRESS && same(pub.AGENT_ADDRESS, agent) && !newOwner && !HOSTED)
-  setAgentPublic({ OWNER_ADDRESS: owner })
+  refuseAgentFileErrors(() => setAgentPublic({ OWNER_ADDRESS: owner })) // checked again after the wait for the owner
   if (HOSTED && !linked) throw new Error('a hosted link without its id and code')
   // hosted: APPROVALS, SITE, and the link the owner signed (LINK_ID, LINK_CODE: a later "already linked" answer is checked
   // against them)

@@ -30,6 +30,7 @@ import { HOME, approvalsDir, opsDir, publicFile } from "./paths.mjs";
 import { HOLDER_ENV, WORKER_ENV, adoptWorker, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { lockOp, railResult } from "./buy-guard.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
+import { UNSAFE_SECRET_FILE, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin } from "./site.mjs";
 import { customRpc, refusedRpcEnv } from "./rpc.mjs";
@@ -712,6 +713,15 @@ function parse(argv) {
   if (f.timeout !== undefined && !(/^\d+$/.test(f.timeout) && Number(f.timeout) >= 10 && Number(f.timeout) <= 3600)) badInput(ctx, "--timeout must be a whole number of seconds from 10 to 3600");
   if (f.yes && !f["owner-key-file"]) badInput(ctx, "write the approval link in your reply to the owner, and run wait --shown when they say they have approved: drop --yes. --yes only goes with --owner-key-file PATH (unattended tests only)");
   if (f["owner-key-file"] !== undefined && !existsSync(f["owner-key-file"])) badInput(ctx, `--owner-key-file ${f["owner-key-file"]} does not exist`);
+  // the rails' own check, made here so every rail answers an unusable owner key file the same way, before any of them runs:
+  // bad input (exit 2), for a file other users can read, a FIFO, a directory or anything else that is not a key file
+  if (f["owner-key-file"] !== undefined) {
+    try {
+      readSecretFile(f["owner-key-file"], "--owner-key-file");
+    } catch (err) {
+      badInput(ctx, err && err.code === UNSAFE_SECRET_FILE ? err.message : `--owner-key-file ${f["owner-key-file"]} cannot be read: ${err?.message ?? err}`);
+    }
+  }
   if (f.wait && f.detach) badInput(ctx, "--wait and --detach cannot go together");
   if (cmd === "setup" && (f.grant !== undefined || f.fund !== undefined)) {
     // one link for the whole set-up: hosted only. On this computer the steps stay separate.
@@ -1113,9 +1123,16 @@ async function preflight({ f, ctx }) {
   });
 }
 
+/** A key or state file that must not be used, as a refusal (exit 3) with nothing signed: the same answer every rail gives. */
+function refuseUnsafeFile(ctx, f, problem, extra = {}) {
+  log(`superstables budget: refused: ${problem}. Nothing was signed or paid.`);
+  return emit(3, { ...ctx, ...extra, state: "refused_precheck", remaining: null, next: `fix the file that reason names (each must be a regular file; a key file also readable by you only: chmod 600), then run the command again; superstables budget doctor --rail ${f.rail}${chainFlag(f)} checks the files`, reason: problem });
+}
+
 async function status({ f, ctx }) {
   // No setup here: say that first, and who does what next, before anything reads the chain.
   const gaps = setupGaps(f);
+  if (gaps.problem) return refuseUnsafeFile(ctx, f, gaps.problem);
   if (gaps.missing.length) {
     const reason = noBudgetWords(f, gaps);
     // Which home it read, and that another one is the user's to name: an agent must not go looking in other homes.
@@ -1164,6 +1181,7 @@ async function buy({ f, ctx }) {
   // so nothing is signed and nothing is left behind that looks like a purchase. The grant itself is on chain: the rail
   // reads it before it signs.
   const gaps = setupGaps(f);
+  if (gaps.problem) return refuseUnsafeFile(ctx, f, gaps.problem, { op: f.op, paid: false, delivered: false, amount: "0", tx: {} });
   if (gaps.missing.length) {
     const reason = `${noBudgetWords(f, gaps)}. Nothing was signed or paid`;
     log(`superstables budget: refused: ${reason}.`);

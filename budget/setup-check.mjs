@@ -5,8 +5,9 @@
 //
 // Variable names per rail are the ones the setup scripts write (evm/setup.ts, tempo/setup.ts, solana/setup.ts) and
 // doctor.mjs checks.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { agentKeyFile, publicFile } from "./paths.mjs";
+import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 
 const VARS = {
   evm: (label) => ({ key: "B4_AGENT_KEY", owner: "B4_OWNER_ADDRESS", agent: "B4_AGENT_ADDRESS", ownerInAgentFile: false, label }),
@@ -15,32 +16,41 @@ const VARS = {
   solana: (label) => ({ key: "SOLANA_AGENT_SECRET_BASE58", owner: "SOLANA_OWNER_ADDRESS", agent: "SOLANA_AGENT_ADDRESS", ownerInAgentFile: true, label }),
 };
 
-function readEnv(path) {
+// Each file is opened once, non-blocking, and must be a regular file of a sane size (../secret-file.mjs): a FIFO in place of
+// a key file would otherwise hang status and buy. The agent key file must also be readable by this user only, as every
+// rail requires before it signs. What is wrong comes back as `problem`; a missing or unreadable file is just empty.
+function readEnv(path, what, secret) {
   const out = {};
   let text;
   try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    return out;
+    text = secret ? readSecretFile(path, what) : readRegularFile(path, what);
+  } catch (err) {
+    if (err && err.code === UNSAFE_SECRET_FILE) return { env: out, problem: err.message };
+    return { env: out };
   }
   for (const line of text.split("\n")) {
     const m = /^\s*(?:export\s+)?([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
     if (m && m[2] !== "") out[m[1]] = m[2].replace(/^(['"])(.*)\1$/, "$2");
   }
-  return out;
+  return { env: out };
 }
 
 /**
  * What setup has not done yet for this rail and chain (tempo: and agent label), in plain words; [] when both the agent key
- * and the owner are recorded. `agentKey` and `publicFile` are the paths it looked at.
- * @returns {{ missing: string[], agentKey: string, publicFile: string }}
+ * and the owner are recorded. `agentKey` and `publicFile` are the paths it looked at. `problem`, when set, is a file that
+ * must not be used (an agent key file other users can read, or either file not a regular file): the caller refuses.
+ * @returns {{ missing: string[], problem?: string, agentKey: string, publicFile: string }}
  */
 export function setupGaps({ rail, chain, agent }) {
   const v = VARS[rail](agent ?? "");
   const keyPath = agentKeyFile(rail);
   const pubPath = publicFile(rail, chain);
-  const keys = readEnv(keyPath);
-  const pub = readEnv(pubPath);
+  const k = readEnv(keyPath, "the agent key file", true);
+  const p = readEnv(pubPath, "the public file", false);
+  const keys = k.env;
+  const pub = p.env;
+  const problem = k.problem ?? p.problem;
+  if (problem) return { missing: [], problem, agentKey: keyPath, publicFile: pubPath };
   const missing = [];
   if (!existsSync(keyPath)) missing.push("no agent key on this computer");
   else if (!keys[v.key]) missing.push(v.label ? `no agent key for --agent ${v.label}` : "the agent key file holds no key");

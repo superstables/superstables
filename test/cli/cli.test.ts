@@ -6,9 +6,9 @@
 // Nothing here touches the network: SUPERSTABLES_DOCTOR_OFFLINE=1 makes doctor skip the remote
 // checks, and the wallet URL points at a port nothing is listening on.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
@@ -117,6 +117,30 @@ describe("the superstables CLI", () => {
     expect(twice.code).toBe(1);
     expect(twice.stderr).toContain("--force");
   });
+
+  it("imports a key only from a regular file only its owner can read", async () => {
+    const key = `0x${"22".repeat(32)}`;
+    const file = join(home, "import.key");
+    writeFileSync(file, `${key}\n`, { mode: 0o600 });
+    chmodSync(file, 0o644);
+    const readable = await run(["wallet", "init", "--import-key-file", file]);
+    expect(readable.code).toBe(1);
+    expect(readable.stderr).toMatch(/can be read by other users on this machine: chmod 600/);
+    expect(existsSync(join(home, "wallet", "key"))).toBe(false);
+
+    // a FIFO would make a plain read wait for a writer forever
+    const fifo = join(home, "import.fifo");
+    execFileSync("mkfifo", ["-m", "600", fifo]);
+    const piped = await run(["wallet", "init", "--import-key-file", fifo]);
+    expect(piped.code).toBe(1);
+    expect(piped.stderr).toMatch(/is not a regular file/);
+
+    chmodSync(file, 0o600);
+    const imported = await run(["wallet", "init", "--import-key-file", file]);
+    expect(imported.code, imported.stderr).toBe(0);
+    expect(imported.stdout).toContain("The wallet key was imported.");
+    expect(statSync(join(home, "wallet", "key")).mode & 0o777).toBe(0o600);
+  }, 30_000);
 
   it("diagnoses a machine with no key and no wallet, without touching the network", async () => {
     const empty = await run(["--wallet", "local", "doctor", "--json"]);

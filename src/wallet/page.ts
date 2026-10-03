@@ -3,9 +3,11 @@
 // authorise a payment should be readable in full, in one file, by anyone who wants to check
 // what it does before clicking "Approve".
 //
-// The owner secret never reaches the server as part of a URL: it lives in the location
-// fragment (http://127.0.0.1:4411/#<secret>), which browsers do not send, and the page puts
-// it in an Authorization header itself.
+// The owner secret never reaches the server as part of a URL. It arrives in the location
+// fragment (http://127.0.0.1:4411/#<secret>, from the launcher file the wallet writes), which
+// browsers do not send, or the owner pastes it into the page. The page keeps it in this tab's
+// sessionStorage, takes it out of the address bar and history, and puts it in an
+// Authorization header itself.
 //
 // Two rules the markup follows everywhere: every value that came from outside is escaped
 // before it is inserted, and anything the agent said about the payment is shown in its own
@@ -27,14 +29,34 @@ const WALLET_STYLE = `
   td.mono { font-size: 12.5px; }
   td:nth-child(-n+3) { white-space: nowrap; }
   tbody tr:last-child td { border-bottom: 0; }
+  #unlock { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  #unlock[hidden] { display: none; }
+  #unlock label { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); }
+  #unlock input { flex: 1; min-width: 16em; font-family: var(--mono); font-size: 13px; padding: 9px 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg-2); color: var(--ink); }
   .status-signed { color: var(--good); }
   .status-denied, .status-rejected, .status-expired { color: var(--bad); }
 `;
 
-/** The page's own script. The owner secret comes from the location fragment, never from the server. */
+/** The page's own script. The owner secret comes from the location fragment or the owner's paste, never from the server. */
 export const WALLET_PAGE_SCRIPT = `
 (function () {
-  var secret = location.hash.replace(/^#/, "");
+  var KEY = "superstables-owner-secret";
+  function remember(value) { try { sessionStorage.setItem(KEY, value); } catch (e) { /* storage off: this load only */ } }
+  function forget() { try { sessionStorage.removeItem(KEY); } catch (e) { /* nothing stored */ } }
+  // A secret in the fragment is kept for this tab and taken out of the address bar and the history.
+  function fromFragment() {
+    var value = location.hash.replace(/^#/, "");
+    if (!value) return "";
+    remember(value);
+    history.replaceState(null, "", location.pathname + location.search);
+    return value;
+  }
+  var secret = fromFragment();
+  if (!secret) {
+    try { secret = sessionStorage.getItem(KEY) || ""; } catch (e) { secret = ""; }
+  }
+  var unlock = document.getElementById("unlock");
+  var secretInput = document.getElementById("secret-input");
   var notice = document.getElementById("notice");
   var pendingEl = document.getElementById("pending");
   var historyEl = document.getElementById("history");
@@ -128,16 +150,47 @@ export const WALLET_PAGE_SCRIPT = `
     historyEl.innerHTML = rest.length ? historyTable(rest) : '<p class="empty">Nothing yet.</p>';
   }
 
+  function askForSecret(message) {
+    unlock.hidden = false;
+    say(message, Boolean(secret));
+  }
+
+  // the launcher link opened in a tab that already shows this page: same document, so no new load
+  window.addEventListener("hashchange", function () {
+    var value = fromFragment();
+    if (!value) return;
+    secret = value;
+    unlock.hidden = true;
+    clear();
+    refresh();
+  });
+
+  unlock.addEventListener("submit", function (event) {
+    event.preventDefault();
+    // the whole launcher URL works too: only what follows "#" is the secret
+    secret = secretInput.value.trim().replace(/^[^#]*#/, "");
+    secretInput.value = "";
+    if (!secret) return;
+    remember(secret);
+    unlock.hidden = true;
+    clear();
+    refresh();
+  });
+
   function refresh() {
     if (!secret) {
-      say("This page needs the owner secret in the address bar. Open the link the wallet printed when it started: it ends with #<secret>.", true);
+      if (!unlock.hidden) return Promise.resolve(); // already asking; keep what the notice says
+      askForSecret("Paste the owner secret to see and decide payments. It is in the wallet's owner-secret file; the wallet printed where when it started.");
       return Promise.resolve();
     }
     return ask("/owner/requests").then(function (response) {
       if (response.status === 401 || response.status === 403) {
-        say("That owner secret is not right. Open the link the wallet printed when it started.", true);
+        forget();
+        askForSecret("That owner secret is not right. Paste the one in the wallet's owner-secret file.");
+        secret = "";
         return null;
       }
+      unlock.hidden = true;
       if (!response.ok) {
         say("The wallet answered with HTTP " + response.status + ".", true);
         return null;
@@ -189,6 +242,11 @@ export function walletPage(look: PageLook = pageLook()): string {
     style: WALLET_STYLE,
     body: `
   <div id="notice" class="note" hidden></div>
+  <form id="unlock" hidden autocomplete="off">
+    <label for="secret-input">Owner secret</label>
+    <input id="secret-input" type="password" autocomplete="off" spellcheck="false">
+    <button class="primary" type="submit">Open</button>
+  </form>
 
   <h2 class="section">Pending</h2>
   <div id="pending"><p class="empty">No payment is waiting for approval.</p></div>
