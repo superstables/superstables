@@ -200,7 +200,7 @@ Straight from a checkout, with the absolute path to it:
 }
 ```
 
-Leave out `SUPERSTABLES_DEMO_SERVICES` to list only real sellers, and add `SUPERSTABLES_HOME` or
+Leave out `SUPERSTABLES_DEMO_SERVICES` to leave out the hosted catalogue, and add `SUPERSTABLES_HOME` or
 `SUPERSTABLES_WALLET` to `env` to change where state lives or which signer is used (see
 [Environment](#environment-variables)).
 

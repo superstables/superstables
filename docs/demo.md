@@ -14,8 +14,8 @@ npm install -g @superstables/client
 superstables setup
 ```
 
-Connect the agent with the demo services switch on, so the prepared demo services are listed
-next to the real sellers:
+Connect the agent with the demo services switch on, so Superstables' testnet services from the
+hosted catalogue are listed next to the other sellers:
 
 ```bash
 claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- superstables mcp
@@ -55,8 +55,8 @@ needs to be running.
 
 It calls `find_services` and comes back with the demo market data service: 0.01 USDC per
 request, Base Sepolia (testnet), live, actionable. Index listings appear underneath, marked as
-not callable with the reason. The hosted catalogue's prepared demo services (simulated answers,
-marked as such) show up only when the question matches what they sell.
+not callable with the reason. The hosted catalogue's other services, most of them marked simulated
+(prepared sample output), show up only when the question matches what they sell.
 
 **2. Ask what it costs.**
 
