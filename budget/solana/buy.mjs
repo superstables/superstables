@@ -290,7 +290,10 @@ updateOp(
 
 // --- 5. build and sign ---------------------------------------------------------------------------
 const instructions = [
-  ComputeBudgetProgram.setComputeUnitLimit({ units: 20_000 }),
+  // The memo includes a caller-supplied operation id (up to 64 ASCII bytes). A 51-byte
+  // memo plus the transfer already uses 20,119 CU on devnet, so the old 20,000 cap
+  // rejected valid UUID ids. Allow the longest memo and token-account creation too.
+  ComputeBudgetProgram.setComputeUnitLimit({ units: 50_000 }),
   ComputeBudgetProgram.setComputeUnitPrice({ microLamports: identity.microLamports }),
 ];
 if (!sellerAtaBefore) {

@@ -383,6 +383,9 @@ npm run build
 npm run install-check   # installs the client four ways (tarball, checkout, no dev packages, git URL) and runs it
 ```
 
+`npm run test:live` checks real testnet sellers. Paid checks require explicit
+test wallet homes; see [Live testnet checks](test/live/README.md).
+
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE). The built `dist/budget` in the npm package also contains
