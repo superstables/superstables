@@ -122,10 +122,19 @@ export interface FakeSolana extends TestServer {
   usdc: Map<string, { amount: bigint; delegate: string | null; delegated: bigint }>;
   /**
    * The owner's wallet signed what the site built and the site sent it: land it in the next slot, apply it, and return its
-   * signature. `signer` is signer 0 (the fee payer): the owner, unless a test says otherwise.
+   * signature. `signer` is signer 0 (the fee payer): the owner, unless a test says otherwise. The transaction carries the
+   * real instruction (ApproveChecked, Revoke or a SystemProgram transfer, for `amount`), then `extra` instructions (a lying
+   * site), and `budget` compute-budget instruction datas first (a wallet's fee). `instructionAmount` puts another amount in
+   * the instruction than the one applied.
    */
-  land(t: { kind: "grant" | "revoke" | "fund_agent"; owner: string; agent: string; amount?: bigint; signer?: string; slot?: number }): string;
+  land(t: { kind: "grant" | "revoke" | "fund_agent"; owner: string; agent: string; amount?: bigint; signer?: string; slot?: number; extra?: { program: string; accounts: string[]; data: Buffer }[]; budget?: Buffer[]; instructionAmount?: bigint }): string;
 }
+
+/** A compute-budget SetComputeUnitLimit (2) or SetComputeUnitPrice (3) instruction's data. */
+export const computeUnitLimit = (units: number) => { const b = Buffer.alloc(5); b[0] = 2; b.writeUInt32LE(units, 1); return b; };
+export const computeUnitPrice = (microLamports: bigint) => { const b = Buffer.alloc(9); b[0] = 3; b.writeBigUInt64LE(microLamports, 1); return b; };
+export const COMPUTE_BUDGET = "ComputeBudget111111111111111111111111111111";
+export const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
 export async function startFakeSolana(): Promise<FakeSolana> {
   const chain = {} as FakeSolana;
@@ -140,23 +149,46 @@ export async function startFakeSolana(): Promise<FakeSolana> {
     const sig = bs58.encode(Buffer.alloc(64, txs.size + 1));
     const ata = ataOf(t.owner).toBase58();
     const acc = chain.usdc.get(t.owner) ?? { amount: 0n, delegate: null, delegated: 0n };
-    let keys: string[];
+    const u64 = (n: bigint) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(n); return b; };
+    const ixAmount = t.instructionAmount ?? t.amount ?? 0n;
+    // the instruction as the client builds it: program, accounts in order, data
+    let main: { program: string; accounts: string[]; data: Buffer };
     let pre: bigint[];
     let post: bigint[];
     if (t.kind === "fund_agent") {
       const had = chain.balances.get(t.agent) ?? 0n;
       chain.balances.set(t.agent, had + t.amount!);
       chain.balances.set(t.owner, (chain.balances.get(t.owner) ?? 0n) - t.amount! - 5000n);
-      keys = [signer, t.agent, SYSTEM_PROGRAM];
-      pre = [10n ** 9n, had, 1n];
-      post = [10n ** 9n - t.amount! - 5000n, had + t.amount!, 1n];
+      const d = Buffer.alloc(12);
+      d.writeUInt32LE(2, 0);
+      d.writeBigUInt64LE(ixAmount, 4);
+      main = { program: SYSTEM_PROGRAM, accounts: [t.owner, t.agent], data: d };
+      pre = [10n ** 9n, had];
+      post = [10n ** 9n - t.amount! - 5000n, had + t.amount!];
     } else {
       if (t.kind === "grant") Object.assign(acc, { delegate: t.agent, delegated: t.amount! });
       else Object.assign(acc, { delegate: null, delegated: 0n });
       chain.usdc.set(t.owner, acc);
-      keys = [signer, ata, ...(t.kind === "grant" ? [USDC_MINT.toBase58(), t.agent] : []), TOKEN_PROGRAM.toBase58()];
+      main = t.kind === "grant"
+        ? { program: TOKEN_PROGRAM.toBase58(), accounts: [ata, USDC_MINT.toBase58(), t.agent, t.owner], data: Buffer.concat([Buffer.from([13]), u64(ixAmount), Buffer.from([6])]) }
+        : { program: TOKEN_PROGRAM.toBase58(), accounts: [ata, t.owner], data: Buffer.from([5]) };
+      pre = [];
+      post = [];
+    }
+    const ixs = [...(t.budget ?? []).map((data) => ({ program: COMPUTE_BUDGET, accounts: [] as string[], data })), main, ...(t.extra ?? [])];
+    // the account list: the signer first, then every other account named, then the programs
+    const keys: string[] = [signer];
+    const add = (k: string) => { if (!keys.includes(k)) keys.push(k); };
+    for (const ix of ixs) ix.accounts.forEach(add);
+    for (const ix of ixs) add(ix.program);
+    const balances = (list: bigint[]) => keys.map((k, i) => (k === t.owner || i === 0 ? list[0] ?? 10n ** 9n - 5000n : k === t.agent && list[1] !== undefined ? list[1] : 10n ** 9n));
+    if (!pre.length) {
       pre = keys.map(() => 10n ** 9n);
       post = keys.map((_, i) => (i === 0 ? 10n ** 9n - 5000n : 10n ** 9n));
+    } else {
+      const p0 = pre, q0 = post;
+      pre = balances(p0);
+      post = balances(q0);
     }
     txs.set(sig, {
       slot,
@@ -165,7 +197,7 @@ export async function startFakeSolana(): Promise<FakeSolana> {
       meta: { err: null, fee: 5000, preBalances: pre.map(Number), postBalances: post.map(Number), innerInstructions: [], logMessages: [], preTokenBalances: [], postTokenBalances: [], rewards: [], status: { Ok: null }, loadedAddresses: { writable: [], readonly: [] }, computeUnitsConsumed: 1000 },
       transaction: {
         signatures: [sig],
-        message: { accountKeys: keys, header: { numRequiredSignatures: 1, numReadonlySignedAccounts: 0, numReadonlyUnsignedAccounts: 1 }, instructions: [{ programIdIndex: keys.length - 1, accounts: [0, 1], data: bs58.encode(Buffer.from([1])), stackHeight: null }], recentBlockhash: bs58.encode(Buffer.alloc(32, 9)) },
+        message: { accountKeys: keys, header: { numRequiredSignatures: 1, numReadonlySignedAccounts: 0, numReadonlyUnsignedAccounts: 1 }, instructions: ixs.map((ix) => ({ programIdIndex: keys.indexOf(ix.program), accounts: ix.accounts.map((a) => keys.indexOf(a)), data: bs58.encode(ix.data), stackHeight: null })), recentBlockhash: bs58.encode(Buffer.alloc(32, 9)) },
       },
     });
     return sig;

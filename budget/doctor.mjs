@@ -12,19 +12,15 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
+import { DEFAULT_RPC, jsonRpc, rpcFromEnv } from "./rpc.mjs";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
 
-const rpcEnv = (name, fallback) => (/^https?:\/\/\S+$/.test(process.env[name]?.trim() ?? "") ? process.env[name].trim() : fallback);
-const SOLANA = { rpc: rpcEnv("SUPERSTABLES_SOLANA_RPC", "https://api.devnet.solana.com"), usdcMint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", minOwnerSol: 0.01, minOwnerUsdc: 0.05, minAgentSol: 0.005 };
-const TEMPO = { rpc: rpcEnv("SUPERSTABLES_TEMPO_RPC", "https://rpc.moderato.tempo.xyz"), chainId: 42431, pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
+const rpcEnv = (name, fallback) => rpcFromEnv(name, fallback).url;
+const SOLANA = { rpc: rpcEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana), usdcMint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", minOwnerSol: 0.01, minOwnerUsdc: 0.05, minAgentSol: 0.005 };
+const TEMPO = { rpc: rpcEnv("SUPERSTABLES_TEMPO_RPC", DEFAULT_RPC.tempo), chainId: 42431, pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
 
-async function rpc(url, method, params = []) {
-  const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(15_000) });
-  const j = await res.json();
-  if (j.error) throw new Error(j.error.message ?? JSON.stringify(j.error));
-  return j.result;
-}
+const rpc = (url, method, params = []) => jsonRpc(url, method, params);
 const erc20Balance = async (url, token, addr, decimals = 6) => Number(BigInt(await rpc(url, "eth_call", [{ to: token, data: "0x70a08231" + addr.slice(2).toLowerCase().padStart(64, "0") }, "latest"]))) / 10 ** decimals;
 const nativeBalance = async (url, addr) => Number(BigInt(await rpc(url, "eth_getBalance", [addr, "latest"]))) / 1e18;
 // The fee cap the next transaction would carry, in wei: base fee x 1.2 plus the tip (viem's default), else the legacy gas price.
@@ -63,7 +59,7 @@ const splBalance = async (addr) => {
 const RAILS = {
   evm: ({ chain }) => {
     // B4_RPC replaces the chain's RPC, as it does for the rail scripts (evm/chains.ts)
-    const c = { ...EVM_CHAINS[chain], rpc: process.env.B4_RPC?.trim() || EVM_CHAINS[chain].rpc }, d = c.doctor, tok = c.token, g = c.gas, L = g.limits;
+    const c = { ...EVM_CHAINS[chain], rpc: rpcFromEnv("B4_RPC", EVM_CHAINS[chain].rpc).url }, d = c.doctor, tok = c.token, g = c.gas, L = g.limits;
     const flag = ` --chain ${chain}`;
     return {
       ownerVars: null, agentVars: ["B4_AGENT_KEY"], ownerSecrets: ["B4_OWNER_KEY"], agentKeyVar: "B4_AGENT_KEY",

@@ -9,46 +9,180 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { recoverMessageAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { agentProof, agentProofText, bodyHash, HostedApprovals, HostedRefusal, type HostedRecord, type SolanaAgentKey } from "../../budget/hosted.js";
-import { cancelSiteRequest, chosenSite, listSiteServices, siteOrigin } from "../../budget/site.mjs";
-import { startFakeSite, type FakeSite } from "../helpers/fake-site.js";
+import { agentProof, agentProofText, bodyHash, HostedApprovals, HostedRefusal, ownerProofProblem, ownerProofText, type HostedRecord, type SolanaAgentKey } from "../../budget/hosted.js";
+import { cancelSiteRequest, chosenSite, listSiteServices, siteName, siteOrigin, siteText } from "../../budget/site.mjs";
+import { agentProofV2Text, evmOwner, evmOwnerKey, linkProofText, signLinkProof, solanaOwner, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import { startServer } from "../helpers/servers.js";
 
 const KEY = `0x${"11".repeat(32)}` as const;
 const AGENT = privateKeyToAccount(KEY).address;
-const OWNER = "0x2222222222222222222222222222222222222222";
-const OTHER = "0x3333333333333333333333333333333333333333";
+// owners with test keys: the fake site signs their link proofs
+const OWNER = evmOwner("22");
+const OTHER = evmOwner("33");
 const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const HASH = `0x${"ab".repeat(32)}`;
 const TERMS = { title: "Grant a spending budget", summary: "test", rows: [], enforced: [], notEnforced: [], notes: [] };
 const GRANT_TX = { to: USDC, data: "0x095ea7b3", value: "0x0" };
 
-describe("agent proof", () => {
+describe("agent proof v2", () => {
   const body = JSON.stringify({ rail: "evm", chain: "base-sepolia", agent: AGENT });
+  const NONCE = "0123456789abcdef0123456789abcdef";
+  const SITE = "https://www.superstables.com";
 
-  it("signs the exact four-line text", () => {
-    expect(agentProofText("post", "/api/v1/budget/links", body, 1790000000)).toBe(
-      `Superstables agent request\nPOST /api/v1/budget/links\n${bodyHash(body)}\n1790000000`,
+  it("signs the exact six-line text: title, the site's origin, method and path, body hash, timestamp, nonce", () => {
+    expect(agentProofText(SITE, "post", "/api/v1/budget/links", body, 1790000000, NONCE)).toBe(
+      `Superstables agent request v2\norigin: https://www.superstables.com\nPOST /api/v1/budget/links\n${bodyHash(body)}\n1790000000\n${NONCE}`,
     );
+    // the same text as the protocol spells it (the fake site's own copy)
+    expect(agentProofText(SITE, "POST", "/api/v1/budget/links", body, 1790000000, NONCE)).toBe(agentProofV2Text(SITE, "POST", "/api/v1/budget/links", body, 1790000000, NONCE));
     expect(bodyHash(body)).toBe("13ab74767264fb6bd2284b40709ed621f7c83a9f11c12196c86ab7030c96c9c2");
     // the hash is over the bytes sent, so one changed byte changes it
     expect(bodyHash(body + " ")).not.toBe(bodyHash(body));
   });
 
-  it("gives a fixed signature for a fixed key and timestamp", async () => {
-    const proof = await agentProof(KEY, "POST", "/api/v1/budget/links", body, 1790000000);
+  it("gives a fixed signature for a fixed key, site, timestamp and nonce, with the nonce header", async () => {
+    const proof = await agentProof(KEY, SITE, "POST", "/api/v1/budget/links", body, 1790000000, NONCE);
     expect(proof.headers).toEqual({
       "Superstables-Agent": "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A",
       "Superstables-Agent-Timestamp": "1790000000",
+      "Superstables-Agent-Nonce": NONCE,
       "Superstables-Agent-Signature":
-        "0x5c60ceb19a3765b05afa23cd5e68133a75aaaf66134eaf8f2e66f1314b67db1835f8462ff8f799a4183b2c8a43b2a0546e6cf11903d4e2ae390bb45d2246bbb31c",
+        "0x2b45e60e64bc05c09ea16495d9c3ffc9f8739318c45da02e2c98c9337f3e78193666d6c10b72d2478345421cba3f3c588d7ec5dd4548dad0e9c2ff59fd22d2a01c",
     });
-    const signer = await recoverMessageAddress({ message: agentProofText("POST", "/api/v1/budget/links", body, 1790000000), signature: proof.headers["Superstables-Agent-Signature"] as `0x${string}` });
+    const signer = await recoverMessageAddress({ message: agentProofText(SITE, "POST", "/api/v1/budget/links", body, 1790000000, NONCE), signature: proof.headers["Superstables-Agent-Signature"] as `0x${string}` });
     expect(signer).toBe(AGENT);
+    // signed for one site, it is not a proof for another: the text names the origin
+    const other = await recoverMessageAddress({ message: agentProofText("https://evil.example", "POST", "/api/v1/budget/links", body, 1790000000, NONCE), signature: proof.headers["Superstables-Agent-Signature"] as `0x${string}` });
+    expect(other).not.toBe(AGENT);
+  });
+
+  it("a fresh nonce for every request: 32 lowercase hex characters", async () => {
+    const a = await agentProof(KEY, SITE, "POST", "/api/v1/budget/links", body);
+    const b = await agentProof(KEY, SITE, "POST", "/api/v1/budget/links", body);
+    expect(a.headers["Superstables-Agent-Nonce"]).toMatch(/^[0-9a-f]{32}$/);
+    expect(b.headers["Superstables-Agent-Nonce"]).not.toBe(a.headers["Superstables-Agent-Nonce"]);
+    await expect(agentProof(KEY, SITE, "POST", "/x", body, 1, "ABC")).rejects.toThrow(/nonce/);
+  });
+
+  it("a site whose own origin is not the one signed refuses the request (a proof replayed to another site)", async () => {
+    const site = await startFakeSite();
+    try {
+      // the agent signs for its site URL; this site's canonical origin is another one
+      site.origin = "https://staging.superstables.com";
+      const err = await new HostedApprovals({ site: site.url, rail: "evm", chain: "base-sepolia", agentKey: KEY, pollWaitS: 0, minPollMs: 20 }).request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 }).catch((e) => e);
+      expect(err).toBeInstanceOf(HostedRefusal);
+      // the site's envelope: { error: { code: "agent_proof", reason: "signature", message } }; a wrong origin is a bad signature
+      expect(err.message).toMatch(/HTTP 401 agent_proof \(signature\): The signature does not verify for https:\/\/staging\.superstables\.com.*nothing was sent/);
+      expect(site.requests).toEqual([]);
+    } finally {
+      await site.close();
+    }
+  });
+
+  it("the site sees the four headers, and a replayed nonce is refused", async () => {
+    const site = await startFakeSite();
+    try {
+      const c = new HostedApprovals({ site: site.url, rail: "evm", chain: "base-sepolia", agentKey: KEY, pollWaitS: 0, minPollMs: 20 });
+      await c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
+      const h = site.headers[0];
+      expect(h["superstables-agent"]).toBe(AGENT);
+      expect(h["superstables-agent-nonce"]).toMatch(/^[0-9a-f]{32}$/);
+      expect(h["superstables-agent-timestamp"]).toMatch(/^\d+$/);
+      expect(h["superstables-agent-signature"]).toMatch(/^0x[0-9a-f]{130}$/);
+      // the very same signed request again: the site names the request it created (409 proof_reused), and creates no other
+      const same = (hd: Record<string, string>) => ({ ...Object.fromEntries(["superstables-agent", "superstables-agent-timestamp", "superstables-agent-nonce", "superstables-agent-signature"].map((k) => [k, hd[k]])), "content-type": "application/json" });
+      const again = await fetch(`${site.url}/api/v1/budget/links`, { method: "POST", headers: same(h), body: JSON.stringify(site.requests[0].body) });
+      expect(again.status).toBe(409);
+      expect(await again.json()).toMatchObject({ error: { code: "proof_reused", id: "bl_test0001" } });
+      // a request the site refused uses its nonce up: the same signed request again is replayed (401)
+      site.refuse = { status: 503, error: "try again" };
+      await c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 }).catch(() => null);
+      site.refuse = undefined;
+      const replay = await fetch(`${site.url}/api/v1/budget/links`, { method: "POST", headers: same(site.headers[2]), body: JSON.stringify(site.requests[0].body) });
+      expect(replay.status).toBe(401);
+      expect(await replay.json()).toMatchObject({ error: { code: "agent_proof", reason: "replayed" } });
+      expect(site.requests).toHaveLength(1);
+      await c.close();
+    } finally {
+      await site.close();
+    }
+  });
+});
+
+describe("owner link proof", () => {
+  const facts = { site: "https://www.superstables.com", owner: OWNER, agent: AGENT, rail: "evm" as const, chain: "base-sepolia", linkId: "bl_0123456789abcdef0123456789abcdef", code: "ABC-DEF" };
+
+  it("is the exact eight-line text, with the owner checksummed", () => {
+    expect(ownerProofText({ ...facts, owner: OWNER.toLowerCase() })).toBe(
+      `Superstables: link an agent to my account\nsite: https://www.superstables.com\nowner: ${OWNER}\nagent: ${AGENT}\nrail: evm\nchain: base-sepolia\nlink: bl_0123456789abcdef0123456789abcdef\ncode: ABC-DEF`,
+    );
+    expect(ownerProofText(facts)).toBe(linkProofText(facts));
+    const sol = { ...facts, owner: solanaOwner(8), agent: solanaOwner(7), rail: "solana" as const, chain: "devnet" };
+    expect(ownerProofText(sol)).toBe(linkProofText(sol));
+  });
+
+  it("accepts the owner's own signature over that text, and nothing else", async () => {
+    expect(await ownerProofProblem(await signLinkProof(facts), facts)).toBe("");
+    // missing
+    expect(await ownerProofProblem(undefined, facts)).toMatch(/no owner proof/);
+    // another scheme
+    expect(await ownerProofProblem({ ...(await signLinkProof(facts)), scheme: "ed25519" }, facts)).toMatch(/not eip191/);
+    // signed by someone else
+    expect(await ownerProofProblem(await signLinkProof(facts, { key: evmOwnerKey("33") }), facts)).toMatch(new RegExp(`signed by ${OTHER}, not ${OWNER}`));
+    // a proof for another link id, another code, another agent, another site or another chain
+    for (const over of [{ linkId: "bl_ffffffffffffffffffffffffffffffff" }, { code: "XYZ-UVW" }, { agent: OTHER }, { site: "https://staging.superstables.com" }, { chain: "arc-testnet" }]) {
+      expect(await ownerProofProblem(await signLinkProof({ ...facts, ...over }), facts), JSON.stringify(over)).toMatch(/for another link/);
+    }
+    // a signed message that is not the text: refused even though the signature is the owner's
+    expect(await ownerProofProblem(await signLinkProof(facts, { message: "hello" }), facts)).toMatch(/for another link/);
+    // the same text with a trailing newline is another text
+    expect(await ownerProofProblem(await signLinkProof(facts, { message: `${linkProofText(facts)}\n` }), facts)).toMatch(/for another link/);
+  });
+
+  it("solana: ed25519 by the base58 owner", async () => {
+    const sol = { ...facts, owner: solanaOwner(8), agent: solanaOwner(7), rail: "solana" as const, chain: "devnet" };
+    expect(await ownerProofProblem(await signLinkProof(sol), sol)).toBe("");
+    expect(await ownerProofProblem(await signLinkProof(sol, { key: (await import("../helpers/fake-site.js")).solanaOwnerKeypair(9).secretKey }), sol)).toMatch(/not signed by/);
+    expect(await ownerProofProblem({ ...(await signLinkProof(sol)), scheme: "eip191" }, sol)).toMatch(/not ed25519/);
   });
 });
 
 describe("site URL", () => {
+  it("takes superstables.com, its subdomains and this computer; another site only with the owner's exact opt-in", () => {
+    const before = process.env.SUPERSTABLES_ALLOW_SITE;
+    try {
+      delete process.env.SUPERSTABLES_ALLOW_SITE;
+      expect(siteOrigin("https://superstables.com").origin).toBe("https://superstables.com");
+      expect(siteOrigin("https://staging.superstables.com").origin).toBe("https://staging.superstables.com");
+      expect(siteOrigin("https://localhost:8443").origin).toBe("https://localhost:8443");
+      for (const bad of ["https://evil.example", "https://superstables.com.evil.example", "https://evilsuperstables.com", "https://xn--superstables-xyz.com"]) {
+        expect(siteOrigin(bad).error, bad).toMatch(/is not superstables\.com.*SUPERSTABLES_ALLOW_SITE=.*an agent never sets it/);
+      }
+      process.env.SUPERSTABLES_ALLOW_SITE = "https://approvals.example.org";
+      expect(siteOrigin("https://approvals.example.org").origin).toBe("https://approvals.example.org");
+      expect(siteOrigin("https://approvals.example.org:8443").error).toMatch(/is not superstables\.com/);
+      expect(siteOrigin("https://evil.example").error).toMatch(/is not superstables\.com/);
+      // the opt-in never makes plain http acceptable off this computer
+      process.env.SUPERSTABLES_ALLOW_SITE = "http://approvals.example.org";
+      expect(siteOrigin("http://approvals.example.org").error).toMatch(/https/);
+      expect(chosenSite(undefined).origin).toBe("https://www.superstables.com");
+    } finally {
+      if (before === undefined) delete process.env.SUPERSTABLES_ALLOW_SITE;
+      else process.env.SUPERSTABLES_ALLOW_SITE = before;
+    }
+  });
+
+  it("names the site: superstables.com for the default, else its host", () => {
+    expect(siteName("https://www.superstables.com")).toBe("superstables.com");
+    expect(siteName("https://staging.superstables.com")).toBe("staging.superstables.com");
+    expect(siteName("http://127.0.0.1:4000")).toBe("127.0.0.1:4000");
+  });
+
+  it("site text loses control, zero-width and bidi characters", () => {
+    expect(siteText("a\u001b[31mb\nc")).toBe("a [31mb c");
+    expect(siteText("pay\u202eevil\u202c to \u200bme\u2066x\u2069\ufeff")).toBe("payevil to mex");
+  });
+
   it("takes an https origin, or http on this computer only", () => {
     expect(siteOrigin("https://www.superstables.com").origin).toBe("https://www.superstables.com");
     expect(siteOrigin("https://www.superstables.com/").origin).toBe("https://www.superstables.com");
@@ -99,7 +233,10 @@ describe("hosted approvals", () => {
     const h = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
     expect(h.url).toMatch(new RegExp(`^${site.url}/approve/budget/bl_test0001#ssba_`));
     expect(h.matchCode).toBe("ABC-DEF");
+    expect(h.link).toEqual({ id: "bl_test0001", code: "ABC-DEF" });
     expect(await h.settled).toEqual({ status: "connected", address: OWNER });
+    // the site sent the owner's proof over this very link, and the client checked it
+    expect(site.requests[0].owner_proof).toMatchObject({ scheme: "eip191", message: linkProofText({ site: site.url, owner: OWNER, agent: AGENT, rail: "evm", chain: "base-sepolia", linkId: "bl_test0001", code: "ABC-DEF" }) });
     expect(site.posts).toEqual([{ path: "/api/v1/budget/links", ok: true, why: undefined }]);
     expect(site.requests[0].body).toEqual({ rail: "evm", chain: "base-sepolia", agent: AGENT });
     // the token goes to the record, never to the audit file
@@ -107,15 +244,60 @@ describe("hosted approvals", () => {
     expect(readFileSync(join(dir, "audit.jsonl"), "utf8")).not.toContain("ssbt_");
   });
 
-  it("an agent already linked on this chain: no link, no wait, the site's owner as the outcome", async () => {
-    site.reply = (path) => path.endsWith("/links") ? { status: 200, body: { id: "bl_test0042", access_token: "ssbt_test_bl_test0042secret", state: "linked", final: true, owner: OWNER, approval: null, next_action: { type: "none" } } } : undefined;
-    const h = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
-    expect(h).toMatchObject({ id: "bl_test0042", url: "", matchCode: "", alreadyLinked: true });
-    expect(await h.settled).toEqual({ status: "connected", address: OWNER });
-    expect(site.posts[0]).toMatchObject({ path: "/api/v1/budget/links", ok: true });
-    // nothing to poll, nothing stored
-    expect(site.requests).toEqual([]);
-    expect(records).toEqual([]);
+  describe("an agent already linked on this chain", () => {
+    const LINK = "bl_test0042";
+    const CODE = "QRS-TUV";
+    const facts = () => ({ site: site.url, owner: OWNER, agent: AGENT, rail: "evm", chain: "base-sepolia", linkId: LINK, code: CODE });
+    const answer = (owner: string, owner_proof: unknown) => () => ({ status: 200, body: { id: LINK, access_token: "ssbt_test_bl_test0042secret", state: "linked", final: true, owner, owner_proof, approval: null, next_action: { type: "none" } } });
+    const connect = (over: Record<string, unknown> = {}) => client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, ...over } as any);
+
+    it("accepted for the owner recorded here, with a proof over the link recorded here: no link, no wait", async () => {
+      site.reply = answer(OWNER, await signLinkProof(facts()));
+      const h = await connect({ prior: { owner: OWNER, linkId: LINK, linkCode: CODE } });
+      expect(h).toMatchObject({ id: LINK, url: "", matchCode: "", alreadyLinked: true, link: { id: LINK, code: CODE } });
+      expect(await h.settled).toEqual({ status: "connected", address: OWNER });
+      expect(site.posts[0]).toMatchObject({ path: "/api/v1/budget/links", ok: true });
+      // nothing to poll, nothing stored
+      expect(site.requests).toEqual([]);
+      expect(records).toEqual([]);
+    });
+
+    it("refused when no owner is recorded here: the site's word alone makes no owner", async () => {
+      site.reply = answer(OWNER, await signLinkProof(facts()));
+      const err = await connect().catch((e) => e);
+      expect(err).toBeInstanceOf(HostedRefusal);
+      expect(err.message).toMatch(/already linked to .*but this computer has no record of that link.*nothing was recorded or sent\. The owner removes it on their .* account page and links it again/);
+      expect(err.next).toMatch(/remove this agent from their account.*fresh link/);
+    });
+
+    it("refused with --new-owner, even with a valid proof", async () => {
+      site.reply = answer(OWNER, await signLinkProof(facts()));
+      const err = await connect({ prior: { owner: OWNER, linkId: LINK, linkCode: CODE }, newOwner: true }).catch((e) => e);
+      expect(err).toBeInstanceOf(HostedRefusal);
+      expect(err.message).toMatch(/a new owner is recorded only from a fresh link the owner signs/);
+    });
+
+    it("refused for another owner than the one recorded, even with that owner's valid proof", async () => {
+      site.reply = answer(OTHER, await signLinkProof({ ...facts(), owner: OTHER }));
+      const err = await connect({ prior: { owner: OWNER, linkId: LINK, linkCode: CODE } }).catch((e) => e);
+      expect(err).toBeInstanceOf(HostedRefusal);
+      expect(err.message).toMatch(new RegExp(`this computer records the owner ${OWNER}`));
+    });
+
+    it("refused without a proof, with a proof for another link or code, or signed by someone else", async () => {
+      const prior = { owner: OWNER, linkId: LINK, linkCode: CODE };
+      for (const [proof, why] of [
+        [undefined, /no owner proof/],
+        [await signLinkProof({ ...facts(), linkId: "bl_test0043" }), /for another link/],
+        [await signLinkProof({ ...facts(), code: "ABC-DEF" }), /for another link/],
+        [await signLinkProof(facts(), { key: evmOwnerKey("33") }), /signed by/],
+      ] as const) {
+        site.reply = answer(OWNER, proof);
+        const err = await connect({ prior }).catch((e) => e);
+        expect(err, String(why)).toBeInstanceOf(HostedRefusal);
+        expect(err.message).toMatch(why);
+      }
+    });
   });
 
   it("an already-linked answer without an owner is refused", async () => {
@@ -140,6 +322,34 @@ describe("hosted approvals", () => {
     expect(err.message).toMatch(/already has request ba_test0999, created with the same request key by an earlier attempt.*Nothing was sent/);
   });
 
+  it("a lost answer to a request the site refused: the retry's nonce is used up (replayed), so it signs again with a new one", async () => {
+    site.owner = OWNER;
+    const sent: Record<string, string>[] = [];
+    let calls = 0;
+    // the first POST reaches the site, which refuses it (its nonce is now used), and the answer is lost on the way back
+    site.refuse = { status: 503, error: "busy" };
+    const lossy: typeof fetch = async (input, init) => {
+      if (init?.method === "POST" && String(input).endsWith("/approvals")) {
+        sent.push({ ...(init.headers as Record<string, string>) });
+        const res = await fetch(input, init);
+        if (++calls === 1) {
+          site.refuse = undefined;
+          throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+        }
+        return res;
+      }
+      return fetch(input, init);
+    };
+    const h = await grant(client({ fetchImpl: lossy }));
+    expect(h.id).toBe("ba_test0001");
+    expect(sent).toHaveLength(3);
+    // the retry re-sent the very same proof; the site refused it as replayed; the third is signed anew
+    expect(sent[1]).toEqual(sent[0]);
+    expect(site.posts.map((x) => x.why)).toEqual([undefined, "replayed", undefined]);
+    expect(sent[2]["Superstables-Agent-Nonce"]).not.toBe(sent[0]["Superstables-Agent-Nonce"]);
+    expect(sent[2]["idempotency-key"]).toBe(sent[0]["idempotency-key"]);
+  });
+
   it("a lost answer, then 409 proof_reused on the retry of the same proof: refused with guidance, nothing sent", async () => {
     site.owner = OWNER;
     const sent: Record<string, string>[] = [];
@@ -150,14 +360,12 @@ describe("hosted approvals", () => {
         sent.push({ ...(init.headers as Record<string, string>) });
         calls++;
         const res = await fetch(input, init);
-        if (calls === 1) {
-          site.reply = () => ({ status: 409, body: { error: "this proof was used", reason_code: "proof_reused", id: site.requests[0].id, kind: "grant", state: "awaiting_owner" } });
-          throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
-        }
+        if (calls === 1) throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
         return res;
       }
       return fetch(input, init);
     };
+    // the site answers the exact resend of the request it created with 409 proof_reused and that request's id
     const err = await grant(client({ fetchImpl: lossy })).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
     expect(err.message).toMatch(/already has request ba_test0001 \(awaiting_owner\), created with the same signed proof by an earlier attempt/);
@@ -301,7 +509,7 @@ describe("hosted approvals", () => {
     site.owner = OTHER;
     const err = await grant(client()).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
-    expect(err.message).toMatch(/owner recorded on this computer is 0x2222/);
+    expect(err.message).toMatch(new RegExp(`owner recorded on this computer is ${OWNER}`));
     expect(err.message).toMatch(/nothing was sent/);
     expect(site.requests[0]).toMatchObject({ state: "cancelled", cancels: 1 });
     expect(records).toEqual([]);
@@ -337,9 +545,61 @@ describe("hosted approvals", () => {
 
   it("refuses a link to another site in the answer", async () => {
     // the fake names its own origin (127.0.0.1) in the link; asked under another name, that link is foreign
-    const err = await client({ site: site.url.replace("127.0.0.1", "localhost") }).request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 }).catch((e) => e);
+    site.origin = site.url.replace("127.0.0.1", "localhost");
+    const err = await client({ site: site.origin }).request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 }).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
     expect(err.message).toMatch(/approval link on another site/);
+  });
+
+  it("refuses a link with control characters, or not /approve/budget/<its id>#<token>; uses the link re-serialized", async () => {
+    for (const [url, why] of [
+      [(id: string) => `${site.url}/approve/budget/${id}#ssba_test\nRESULT {"ok":true}`, /another site/],
+      [(id: string) => `${site.url}/approve/budget/${id}#ssba_\u001b[2Jtest`, /another site/],
+      [(id: string) => `${site.url}/approve/budget/${id}\u202e#ssba_testtest`, /another site/],
+      [(id: string) => `${site.url}/approve/budget/ba_other#ssba_testtest`, /not \/approve\/budget\/<its id>#<token>/],
+      [(id: string) => `${site.url}/approve/budget/${id}?next=https://evil.example#ssba_testtest`, /not \/approve\/budget\/<its id>#<token>/],
+      [(id: string) => `${site.url}/approve/budget/${id}`, /not \/approve\/budget\/<its id>#<token>/],
+    ] as const) {
+      site.approvalUrl = url;
+      const err = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 }).catch((e) => e);
+      expect(err, String(why)).toBeInstanceOf(HostedRefusal);
+      expect(err.message).toMatch(why);
+    }
+    // an origin spelled in capitals is the same origin: the link is used as the URL parser writes it
+    site.approvalUrl = (id) => `${site.url.replace("http://", "HTTP://")}/approve/budget/${id}#ssba_test_owner`;
+    const h = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
+    expect(h.url).toBe(`${site.url}/approve/budget/${h.id}#ssba_test_owner`);
+  });
+
+  it("a link the site reports without a valid owner proof records no owner", async () => {
+    for (const proof of [null, { scheme: "eip191", message: "Superstables: link an agent to my account", signature: `0x${"11".repeat(65)}` }]) {
+      site.onPoll = (r) => {
+        if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER, owner_proof: proof });
+      };
+      const h = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
+      const o = await h.settled;
+      expect(o).toMatchObject({ status: "rejected", sending: false });
+      expect(o.status === "rejected" && o.reason).toMatch(new RegExp(`reported the link to ${OWNER}, but the (site sent no owner proof|owner proof is for another link).*Nothing was recorded`));
+    }
+    // signed by another wallet than the owner the site names
+    site.onPoll = async (r) => {
+      if (r.polls >= 2 && r.state !== "linked") Object.assign(r, { state: "linked", owner: OWNER, owner_proof: await signLinkProof({ site: site.url, owner: OWNER, agent: AGENT, rail: "evm", chain: "base-sepolia", linkId: r.id, code: "ABC-DEF" }, { key: evmOwnerKey("33") }) });
+    };
+    const h = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
+    const o = await h.settled;
+    expect(o.status === "rejected" && o.reason).toMatch(/signed by/);
+  });
+
+  it("a link with steps whose owner proof is wrong: no owner, the steps are withdrawn on the site", async () => {
+    const then = [{ kind: "grant" as const, transaction: GRANT_TX }];
+    const h = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, then });
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: OWNER, owner_proof: await signLinkProof({ site: site.url, owner: OWNER, agent: AGENT, rail: "evm", chain: "base-sepolia", linkId: r.id, code: "XYZ-UVW" }) });
+    const b = await h.bundle!;
+    expect(b.link).toMatchObject({ status: "rejected", sending: false });
+    expect(b.link.status === "rejected" && b.link.reason).toMatch(/owner proof is for another link.*steps were withdrawn/);
+    expect(r.cancels).toBe(1);
+    expect(b.steps).toMatchObject([{ kind: "grant", state: "cancelled" }]);
   });
 
   it("close() cancels a request still open on the site", async () => {
@@ -356,8 +616,8 @@ describe("hosted approvals on tempo and solana", () => {
   // Solana: the agent key is ed25519, the owner a base58 address, a transaction id a base58 signature
   const SOL_KP = Keypair.fromSeed(new Uint8Array(32).fill(7));
   const SOL_KEY: SolanaAgentKey = { ed25519: SOL_KP.secretKey, address: SOL_KP.publicKey.toBase58() };
-  const SOL_OWNER = Keypair.fromSeed(new Uint8Array(32).fill(8)).publicKey.toBase58();
-  const SOL_OTHER = Keypair.fromSeed(new Uint8Array(32).fill(9)).publicKey.toBase58();
+  const SOL_OWNER = solanaOwner(8);
+  const SOL_OTHER = solanaOwner(9);
   const SIG = bs58.encode(new Uint8Array(64).fill(5));
   const KEYCHAIN = "0xaAAAaaAA00000000000000000000000000000000";
   let site: FakeSite;
@@ -377,21 +637,25 @@ describe("hosted approvals on tempo and solana", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("the Solana agent proof is ed25519 over the same four-line text, 0x and 128 hex, from the base58 key", async () => {
+  it("the Solana agent proof is ed25519 over the same six-line text, 0x and 128 hex, from the base58 key", async () => {
     const body = JSON.stringify({ rail: "solana", chain: "devnet", agent: SOL_KEY.address });
-    const proof = await agentProof(SOL_KEY, "POST", "/api/v1/budget/links", body, 1790000000);
+    const SITE = "https://www.superstables.com";
+    const NONCE = "fedcba9876543210fedcba9876543210";
+    const proof = await agentProof(SOL_KEY, SITE, "POST", "/api/v1/budget/links", body, 1790000000, NONCE);
     expect(proof.agent).toBe(SOL_KEY.address);
     expect(proof.headers["Superstables-Agent"]).toBe(SOL_KEY.address);
     expect(proof.headers["Superstables-Agent-Timestamp"]).toBe("1790000000");
+    expect(proof.headers["Superstables-Agent-Nonce"]).toBe(NONCE);
     const sig = proof.headers["Superstables-Agent-Signature"];
     expect(sig).toMatch(/^0x[0-9a-f]{128}$/);
     const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: Buffer.from(SOL_KP.publicKey.toBytes()).toString("base64url") }, format: "jwk" });
-    const text = Buffer.from(agentProofText("POST", "/api/v1/budget/links", body, 1790000000), "utf8");
+    const text = Buffer.from(agentProofText(SITE, "POST", "/api/v1/budget/links", body, 1790000000, NONCE), "utf8");
     expect(verify(null, text, key, Buffer.from(sig.slice(2), "hex"))).toBe(true);
-    // ed25519 is deterministic: the same key, text and time give the same signature
-    expect((await agentProof(SOL_KEY, "POST", "/api/v1/budget/links", body, 1790000000)).headers["Superstables-Agent-Signature"]).toBe(sig);
-    // one changed byte of the body, and it no longer verifies
-    expect(verify(null, Buffer.from(agentProofText("POST", "/api/v1/budget/links", body + " ", 1790000000), "utf8"), key, Buffer.from(sig.slice(2), "hex"))).toBe(false);
+    // ed25519 is deterministic: the same key, text, time and nonce give the same signature
+    expect((await agentProof(SOL_KEY, SITE, "POST", "/api/v1/budget/links", body, 1790000000, NONCE)).headers["Superstables-Agent-Signature"]).toBe(sig);
+    // one changed byte of the body, or another site, and it no longer verifies
+    expect(verify(null, Buffer.from(agentProofText(SITE, "POST", "/api/v1/budget/links", body + " ", 1790000000, NONCE), "utf8"), key, Buffer.from(sig.slice(2), "hex"))).toBe(false);
+    expect(verify(null, Buffer.from(agentProofText("https://staging.superstables.com", "POST", "/api/v1/budget/links", body, 1790000000, NONCE), "utf8"), key, Buffer.from(sig.slice(2), "hex"))).toBe(false);
   });
 
   it("solana: links the agent; the owner is the base58 Solana address the site records", async () => {

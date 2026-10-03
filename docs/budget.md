@@ -209,7 +209,10 @@ the site's page; that address is the owner on record, and it signs each transact
 
 This is optional. Approvals on this computer remain the default and need no account. Hosted
 approvals need a superstables.com account, or a compatible deployment the owner names with `--site`
-or `SUPERSTABLES_SITE`; what such a site must do is in
+or `SUPERSTABLES_SITE`. An origin outside superstables.com and its subdomains also needs the owner to
+set `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own environment; an agent never sets it.
+After picking the match code, the owner signs the link in their wallet, and the command checks that
+signature before it records anyone as the owner. What such a site must do is in
 [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).
 
 ## From an agent

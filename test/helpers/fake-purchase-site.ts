@@ -1,7 +1,9 @@
 // A stand-in for superstables.com's hosted purchase API (/api/v1/purchase/services, /api/v1/purchases), for the buy-once
 // tests. It follows the site's published shape (docs/purchase.md): a listing with inputs and a price, a purchase made with an
 // Idempotency-Key, an access token that reads and cancels it, and the owner's link and match code. A test moves a purchase
-// along by changing its state, as the owner and the seller would. No network.
+// along by changing its state, as the owner and the seller would. A payment it reports is also put on its fake chain
+// (`chainUrl`: one JSON-RPC server answering as Base Sepolia, Tempo Moderato and Solana devnet), where the CLI reads it
+// before it says paid; a test can make the site lie by reporting a payment the chain does not show. No network.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readBody, startServer, type TestServer } from "./servers.js";
@@ -55,9 +57,22 @@ export interface FakePurchaseSite extends TestServer {
   approvalBase?: string;
   /** Changes what the next POST creates, before it is stored (a different recipient, another price). */
   tweak?: (p: FakePurchase) => void;
-  /** The owner signed and the seller answered: the purchase settles (on Base Sepolia unless `paid` names the tx and payer). */
-  settle(p: FakePurchase, result?: unknown, paid?: { transaction: string; payer: string }): void;
+  /**
+   * The owner signed and the seller answered: the purchase settles (on Base Sepolia unless `paid` names the tx and payer),
+   * and the payment lands on the fake chain, unless `paid.chain` is false (a site that lies) or changes what landed.
+   */
+  settle(p: FakePurchase, result?: unknown, paid?: Paid): void;
+  /** Put a purchase's payment on the fake chain (as settle does). */
+  pay(p: FakePurchase, paid?: Paid): void;
+  /** The fake chain's JSON-RPC URL: B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC point at it. */
+  chainUrl: string;
 }
+
+/** A payment as the site reports it, and what the chain shows for it: false for nothing, or other values. */
+export type Paid = { transaction: string; payer: string; chain?: false | { amount?: bigint; payTo?: string; asset?: string; failed?: boolean; at?: number } };
+
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const word = (addr: string) => `0x${addr.slice(2).toLowerCase().padStart(64, "0")}`;
 
 export const MARKET: Service = {
   id: "demo-market-data",
@@ -133,9 +148,53 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
     ...(p.reason ? { reason: p.reason } : {}), ...(p.reason_code ? { reason_code: p.reason_code } : {}),
     message: `purchase ${p.state}`, next: "see state", next_action: { type: p.final ? "done" : "wait_for_owner" },
   });
+  // the fake chain: payments by transaction id
+  const landed = new Map<string, { evm: boolean; payer: string; payTo: string; asset: string; amount: bigint; failed: boolean; at: number; block: number }>();
+  site.pay = (p, paid = { transaction: TX, payer: PAYER }) => {
+    if (paid.chain === false) return;
+    const c = paid.chain ?? {};
+    landed.set(paid.transaction, {
+      evm: !(p.service.network ?? "").startsWith("solana:"),
+      payer: paid.payer,
+      payTo: c.payTo ?? p.service.payTo ?? SELLER,
+      asset: c.asset ?? p.service.asset,
+      amount: c.amount ?? BigInt(atomic(p.service.amount)),
+      failed: c.failed === true,
+      at: c.at ?? Math.floor(Date.now() / 1000),
+      block: 16 + landed.size,
+    });
+  };
   site.settle = (p, result = { asset: "BTC", price_usd: 65000 }, paid = { transaction: TX, payer: PAYER }) => {
     Object.assign(p, { state: "settled", final: true, payment: { status: "paid", payer: paid.payer, transaction: paid.transaction, chain: { status: "confirmed", block: 7 } }, delivery: { status: "delivered", http_status: 200, result } });
+    site.pay(p, paid);
   };
+  const chain = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const body = JSON.parse(await readBody(req));
+    const answer = (method: string, params: any[]): unknown => {
+      const t = landed.get(params[0]);
+      switch (method) {
+        case "eth_getTransactionReceipt":
+          if (!t || !t.evm) return null;
+          return { transactionHash: params[0], status: t.failed ? "0x0" : "0x1", blockNumber: `0x${t.block.toString(16)}`, logs: [{ address: t.asset, topics: [TRANSFER_TOPIC, word(t.payer), word(t.payTo)], data: `0x${t.amount.toString(16).padStart(64, "0")}` }] };
+        case "eth_getBlockByNumber": {
+          const at = [...landed.values()].find((x) => x.evm && x.block === Number(params[0]))?.at ?? Math.floor(Date.now() / 1000);
+          return { number: params[0], timestamp: `0x${at.toString(16)}` };
+        }
+        case "getTransaction":
+          if (!t || t.evm) return null;
+          return {
+            slot: 100, blockTime: t.at,
+            meta: { err: t.failed ? { InstructionError: [0, "Custom"] } : null,
+              preTokenBalances: [{ accountIndex: 1, mint: t.asset, owner: t.payer, uiTokenAmount: { amount: String(5_000_000n) } }, { accountIndex: 2, mint: t.asset, owner: t.payTo, uiTokenAmount: { amount: "0" } }],
+              postTokenBalances: [{ accountIndex: 1, mint: t.asset, owner: t.payer, uiTokenAmount: { amount: String(5_000_000n - t.amount) } }, { accountIndex: 2, mint: t.asset, owner: t.payTo, uiTokenAmount: { amount: String(t.amount) } }] },
+          };
+        default:
+          return null;
+      }
+    };
+    json(res, 200, Array.isArray(body) ? body.map((c: any) => ({ jsonrpc: "2.0", id: c.id, result: answer(c.method, c.params ?? []) })) : { jsonrpc: "2.0", id: body.id, result: answer(body.method, body.params ?? []) });
+  });
+  site.chainUrl = chain.url;
   const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const raw = await readBody(req);
@@ -177,5 +236,6 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
     }
     json(res, 404, { error: { code: "not_found", message: "not found" } });
   });
-  return Object.assign(site, server);
+  const closeSite = server.close.bind(server);
+  return Object.assign(site, server, { close: async () => { await closeSite(); await chain.close(); } });
 }

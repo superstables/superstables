@@ -15,21 +15,70 @@
 export const DEFAULT_SITE = "https://www.superstables.com";
 export const BUDGET_API = "/api/v1/budget";
 
+/**
+ * The owner's opt-in for a site outside superstables.com: the exact origin (or a comma list of origins), set by the owner in
+ * their own environment. An agent never sets it. Without it, only superstables.com, its subdomains and this computer count.
+ */
+export const ALLOW_SITE_ENV = "SUPERSTABLES_ALLOW_SITE";
+
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
+/** superstables.com itself or one of its subdomains (www.superstables.com, staging.superstables.com). */
+const isSuperstables = (host) => host === "superstables.com" || host.endsWith(".superstables.com");
 
 /**
  * The site's origin, or { error }. https only, except plain http on this computer (a local site for development and tests).
- * No path, query or credentials: every route is under /api/v1/budget/ on that origin.
+ * No path, query or credentials: every route is under /api/v1/budget/ on that origin. Only superstables.com, its subdomains
+ * and this computer are accepted, unless the owner named that exact origin in SUPERSTABLES_ALLOW_SITE: an agent told to use
+ * another site would otherwise send the owner's approvals there.
  */
 export function siteOrigin(value) {
   const raw = String(value ?? "").trim();
+  const shown = siteText(raw, 120);
   let u;
-  try { u = new URL(raw); } catch { return { error: `"${raw}" is not a URL (for example ${DEFAULT_SITE})` }; }
+  try { u = new URL(raw); } catch { return { error: `"${shown}" is not a URL (for example ${DEFAULT_SITE})` }; }
   if (u.username || u.password) return { error: "the site URL must not carry a user name or password" };
-  if (u.protocol !== "https:" && !(u.protocol === "http:" && LOOPBACK.has(u.hostname))) return { error: `the site must be an https URL (plain http only on 127.0.0.1 or localhost); got "${raw}"` };
-  if ((u.pathname !== "/" && u.pathname !== "") || u.search || u.hash) return { error: `the site is an origin only, such as ${DEFAULT_SITE}, with no path (got "${raw}")` };
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && LOOPBACK.has(u.hostname))) return { error: `the site must be an https URL (plain http only on 127.0.0.1 or localhost); got "${shown}"` };
+  if ((u.pathname !== "/" && u.pathname !== "") || u.search || u.hash) return { error: `the site is an origin only, such as ${DEFAULT_SITE}, with no path (got "${shown}")` };
+  if (!LOOPBACK.has(u.hostname) && !isSuperstables(u.hostname) && !ownerAllowed(u.origin)) {
+    return { error: `${u.origin} is not superstables.com: only https://superstables.com, its subdomains and 127.0.0.1 are used, unless the owner sets ${ALLOW_SITE_ENV}=${u.origin} in their own environment (an agent never sets it)` };
+  }
   return { origin: u.origin };
 }
+
+/** The owner named this exact https origin in SUPERSTABLES_ALLOW_SITE. */
+function ownerAllowed(origin) {
+  const v = process.env[ALLOW_SITE_ENV]?.trim();
+  if (!v) return false;
+  return v.split(",").some((s) => {
+    try {
+      const u = new URL(s.trim());
+      return u.protocol === "https:" && !u.username && !u.password && (u.pathname === "/" || u.pathname === "") && !u.search && !u.hash && u.origin === origin;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * The site in words: "superstables.com" for the default site, else its host (and port), so the owner always sees which site
+ * a link, a refusal or a log line is about when it is not www.superstables.com.
+ */
+export function siteName(origin) {
+  try {
+    const u = new URL(origin);
+    return u.origin === DEFAULT_SITE ? "superstables.com" : u.host;
+  } catch {
+    return siteText(origin, 80);
+  }
+}
+/** The site is not www.superstables.com: its host is named to the owner wherever the link is. */
+export const isOtherSite = (origin) => {
+  try {
+    return new URL(origin).origin !== DEFAULT_SITE;
+  } catch {
+    return true;
+  }
+};
 
 /** The site for a command: --site, else SUPERSTABLES_SITE, else superstables.com. { origin } or { error }. */
 export function chosenSite(flag) {
@@ -37,15 +86,20 @@ export function chosenSite(flag) {
   return siteOrigin(v);
 }
 
-/** Text from the site on one line, without control characters, at most `max` characters. It is data, never a command. */
-export const siteText = (s, max = 300) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim().slice(0, max);
+/**
+ * Text from the site on one line, without control characters and without the invisible characters that reorder or hide
+ * text (zero-width, bidi embeddings and isolates), at most `max` characters. It is data, never a command.
+ */
+export const siteText = (s, max = 300) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "").trim().slice(0, max);
 
 /** The error the site gave, in one line: { error: "..." }, { error: { message } }, { message }, or the HTTP status. */
 export function siteError(status, body) {
   const e = body && typeof body === "object" ? body : {};
   const msg = typeof e.error === "string" ? e.error : typeof e.error?.message === "string" ? e.error.message : typeof e.message === "string" ? e.message : typeof e.reason === "string" ? e.reason : "";
   const code = typeof e.reason_code === "string" ? e.reason_code : typeof e.code === "string" ? e.code : typeof e.error?.code === "string" ? e.error.code : "";
-  return siteText(`HTTP ${status}${code ? ` ${code}` : ""}${msg ? `: ${msg}` : ""}`);
+  // { error: { code: "agent_proof", reason: "replayed", message } }: the reason too
+  const why = typeof e.error?.reason === "string" ? e.error.reason : "";
+  return siteText(`HTTP ${status}${code ? ` ${code}` : ""}${why ? ` (${why})` : ""}${msg ? `: ${msg}` : ""}`);
 }
 
 /** A request id the site made: bl_ (a link) or ba_ (an approval), then letters, digits, _ or -. */

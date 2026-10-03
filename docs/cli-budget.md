@@ -103,11 +103,14 @@ the owner and end your turn; when they say they've approved, run superstables bu
 expires after --timeout seconds (default 600): the command then ends refused (exit 3), nothing sent; run it again.
 
 --site URL is accepted by every command. Where a site is recorded (setup --hosted) and it differs, the command refuses
-(exit 2); where it does not matter, it is ignored.
+(exit 2); where it does not matter, it is ignored. A site is superstables.com, one of its subdomains or 127.0.0.1;
+another origin only when the owner sets SUPERSTABLES_ALLOW_SITE to it in their own environment (an agent never does).
+B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC: https, or http on 127.0.0.1 only;
+RESULT names one in use as rpc.
 
 Output: logs go to stderr. stdout ends with one line
-  RESULT {"ok","command","rail","chain","op","state","final","paid","delivered","amount","remaining","tx","id","url","matchCode",
-          "message_for_owner","budget_spent","next","reason"}
+  RESULT {"ok","command","rail","chain","op","state","final","paid","delivered","amount","remaining","tx","rpc","id","url",
+          "matchCode","message_for_owner","budget_spent","next","reason"}
 Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false only
 while an owner approval is open (state waiting_owner). next is the command to run next, or none.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
@@ -128,7 +131,8 @@ Exit codes (the same numbers as superstables):
 
 Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
   keys/budget/<rail>-agent.env               the agent key (mode 600). No owner key is ever stored here
-  budget/public/<rail>-<chain>.env           the owner's and agent's addresses, no secret (hosted: APPROVALS and SITE)
+  budget/public/<rail>-<chain>.env           the owner's and agent's addresses, no secret (hosted: APPROVALS, SITE, LINK_ID
+                                             and LINK_CODE)
   budget/ops/<rail>-<chain>/<op>.json        one journal per purchase, and <op>.response, the seller's answer when saved
   budget/approvals/                          owner approvals started in the background, and buy-once purchases
 Testnet only: --mainnet, or a mainnet chain, is refused.
@@ -147,11 +151,14 @@ or stored: the owner's key stays in their wallet.
 A trusted step: whoever connects becomes the owner on record. The owner runs it, or watches it run.
 --new-owner replaces a recorded owner with the wallet that connects; refused while a budget is live (revoke first).
 --hosted: the owner approves on superstables.com instead of a page on this computer. Setup then links this agent to the
-owner's superstables.com account (the owner signs in there with their wallet and picks the match code), records the
-account's address as the owner, and records APPROVALS=hosted and SITE in the public file: grant, revoke and fund-agent on
-this chain use it from then on (recover stays on this computer). solana: the owner also connects a Solana wallet there,
-and that address is the owner. Needs a superstables.com account. --site URL picks another site (default
-https://www.superstables.com, or SUPERSTABLES_SITE). Without --hosted: the page on 127.0.0.1, no account.
+owner's superstables.com account (the owner signs in there with their wallet, picks the match code and signs the link),
+checks the owner's signature over the link, records that address as the owner, and records APPROVALS=hosted, SITE,
+LINK_ID and LINK_CODE in the public file: grant, revoke and fund-agent on this chain use it from then on (recover stays
+on this computer). solana: the owner also connects a Solana wallet there, and that address is the owner. Needs a
+superstables.com account. --site URL picks another site (default https://www.superstables.com, or SUPERSTABLES_SITE): a
+superstables.com subdomain, or another origin only when the owner set SUPERSTABLES_ALLOW_SITE to it. Without --hosted:
+the page on 127.0.0.1, no account. An agent already linked is taken only for the owner recorded here, with that owner's
+signed link; otherwise the owner removes the agent on the site's account page and links it again.
 setup --new-owner without --hosted moves a hosted chain back to the page on this computer.
 --grant A and --fund [AMOUNT] (with --hosted): one link for the whole set-up. After the owner links this agent, the same
 page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain; not on tempo) and
@@ -597,7 +604,8 @@ reasoning or a tool call, and end your turn there. The first link the owner open
 (a message, no fee). Not in a terminal (an agent), or with --detach: returns at once with state waiting_owner and an
 approval id; when the owner says they've approved, run superstables budget wait --id ID --shown. In a terminal, or with
 --wait: blocks until the purchase ends. One buy-once purchase open at a time; --replace cancels the open one, only while
-the owner has not signed.
+the owner has not signed. Paid is never the site's word alone: the command reads the payment from the chain (exactly the
+amount, to the listed recipient, in the listed token); one the chain does not show is unknown (exit 5).
 --site: the site (default https://www.superstables.com, or SUPERSTABLES_SITE, or the SITE that setup --hosted recorded).
 
 Moves money: yes: the service's price, at most --max, from the owner's wallet, once the owner approves it on superstables.com.

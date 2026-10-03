@@ -81,18 +81,72 @@ export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved 
 });
 
 /**
- * Hosted: read a signature the site reported. The site built and sent the transaction, so the command checks what it can
- * know: confirmed with no error, signer 0 (the fee payer) the owner, in a slot after the request started. Anything else in
- * `problems` makes the command a mismatch. "unknown" when the chain does not show it within the wait.
+ * Hosted: read a signature the site reported. The site built and sent the transaction, so the command checks it on chain:
+ * confirmed with no error, one signer, signer 0 (the fee payer) the owner, in a slot after the request started, no address
+ * lookup tables, and its instructions exactly `planned` (the instruction the command builds for the page on this computer:
+ * ApproveChecked, Revoke or the SOL transfer, same program, accounts and data), plus at most the bounded compute-budget
+ * instructions a wallet may add (computeBudgetProblem). Anything else in `problems` makes the command a mismatch.
+ * "unknown" when the chain does not show it within the wait.
  */
-export async function confirmHosted(conn: Connection, signature: string, owner: string, afterSlot: number, waitMs = 120_000): Promise<Confirmed & { problems: string[] }> {
+export async function confirmHosted(conn: Connection, signature: string, owner: string, afterSlot: number, planned: TransactionInstruction[], waitMs = 120_000): Promise<Confirmed & { problems: string[] }> {
   const c = await confirmSent(conn, { signature, blockhash: "", lastValidBlockHeight: Number.MAX_SAFE_INTEGER }, waitMs);
   const problems: string[] = [];
   if (c.status === "success" || c.status === "failed") {
     if (c.signer !== owner) problems.push(`it was signed and paid for by ${c.signer}, not the owner ${owner}`);
     if (c.slot !== undefined && c.slot <= afterSlot) problems.push(`it landed in slot ${c.slot}, before this request started (slot ${afterSlot})`);
+    problems.push(...instructionProblems(c, planned));
   }
   return { ...c, problems };
+}
+
+const BUDGET_PROGRAM = ComputeBudgetProgram.programId.toBase58();
+/** The least and most compute units a wallet-added limit may set (the page on this computer accepts the same). */
+export const COMPUTE_UNITS = { min: 10_000, max: 1_400_000 };
+/** The most a wallet-added priority fee may cost the owner: 0.001 SOL, above Phantom's observed 0.00008 SOL estimate. */
+export const MAX_PRIORITY_LAMPORTS = 1_000_000n;
+
+/** The priority fee, in lamports, of `units` at `microLamports` per unit, rounded up. */
+const priorityLamports = (units: number, microLamports: bigint) => (BigInt(units) * microLamports + 999_999n) / 1_000_000n;
+
+/**
+ * Why these compute-budget instruction datas are not a bounded wallet fee addition, or "": at most one SetComputeUnitLimit
+ * (2) within COMPUTE_UNITS and at most one SetComputeUnitPrice (3), whose fee at that limit (else the most units a
+ * transaction can use) is at most MAX_PRIORITY_LAMPORTS. Nothing else from the compute-budget program.
+ */
+export function computeBudgetProblem(datas: Buffer[]): string {
+  let units: number | null = null;
+  let price: bigint | null = null;
+  for (const d of datas) {
+    if (d.length === 5 && d[0] === 2 && units === null) units = d.readUInt32LE(1);
+    else if (d.length === 9 && d[0] === 3 && price === null) price = d.readBigUInt64LE(1);
+    else return "a compute-budget instruction other than one unit limit and one unit price";
+  }
+  if (units !== null && (units < COMPUTE_UNITS.min || units > COMPUTE_UNITS.max)) return `a compute unit limit of ${units}, outside ${COMPUTE_UNITS.min} to ${COMPUTE_UNITS.max}`;
+  if (price !== null && priorityLamports(units ?? COMPUTE_UNITS.max, price) > MAX_PRIORITY_LAMPORTS) return `a priority fee above ${sol(MAX_PRIORITY_LAMPORTS)} SOL`;
+  return "";
+}
+
+/** Why the transaction on chain is not `planned` plus bounded compute-budget instructions, in words (none when it is). */
+function instructionProblems(c: Confirmed, planned: TransactionInstruction[]): string[] {
+  if (!c.instructions) return ["its instructions could not be read"];
+  const out: string[] = [];
+  if (c.lookups) out.push("it loads accounts from address lookup tables");
+  if (c.signers !== 1) out.push(`it has ${c.signers} signers, not one (the owner)`);
+  const shape = (ix: { program: string; accounts: string[]; data: Buffer }) => `${ix.program}|${ix.accounts.join(",")}|${ix.data.toString("hex")}`;
+  const want = planned.map((ix) => shape({ program: ix.programId.toBase58(), accounts: ix.keys.map((k) => k.pubkey.toBase58()), data: Buffer.from(ix.data) }));
+  const budget = c.instructions.filter((ix) => ix.program === BUDGET_PROGRAM);
+  const rest = c.instructions.filter((ix) => ix.program !== BUDGET_PROGRAM);
+  if (budget.some((ix) => ix.accounts.length)) out.push("a compute-budget instruction that names accounts");
+  else {
+    const p = computeBudgetProblem(budget.map((ix) => ix.data));
+    if (p) out.push(p);
+  }
+  const got = rest.map(shape);
+  if (got.length !== want.length || got.some((g, i) => g !== want[i])) {
+    const extra = rest.filter((ix, i) => shape(ix) !== want[i]).map((ix) => ix.program);
+    out.push(got.length === want.length ? `its instruction is not the one planned (program ${extra.join(", ")}: other accounts, amount or data)` : `it has ${got.length} instructions besides compute budget, not ${want.length} (programs ${rest.map((ix) => ix.program).join(", ") || "none"})`);
+  }
+  return out;
 }
 
 /** A fee for one signature, and a margin: the owner must hold at least this much SOL to approve anything. */
@@ -152,13 +206,9 @@ function sameTransactionWithWalletFee(builtBytes: Buffer, signedBytes: Buffer, o
   const feeInstructions = signed.instructions.slice(0, 2);
   if (feeInstructions.some((ix) => ix.programIdIndex !== budgetAt || ix.accounts.length)) return false;
   const feeData = feeInstructions.map((ix) => Buffer.from(bs58.decode(ix.data)));
-  const limitData = feeData.find((data) => data.length === 5 && data[0] === 2);
-  const priceData = feeData.find((data) => data.length === 9 && data[0] === 3);
-  if (!limitData || !priceData) return false;
-  const units = limitData.readUInt32LE(1);
-  const microLamports = priceData.readBigUInt64LE(1);
-  // This caps the owner's extra priority fee at 0.001 SOL, above Phantom's observed 0.00008 SOL estimate.
-  if (units < 10_000 || units > 1_400_000 || (BigInt(units) * microLamports + 999_999n) / 1_000_000n > 1_000_000n) return false;
+  // exactly one unit limit and one unit price, within the bounds a hosted transaction gets too (computeBudgetProblem)
+  if (!feeData.some((data) => data.length === 5 && data[0] === 2) || !feeData.some((data) => data.length === 9 && data[0] === 3)) return false;
+  if (computeBudgetProblem(feeData)) return false;
 
   const instruction = (message: Message, ix: Message["instructions"][number]) => JSON.stringify({
     program: message.accountKeys[ix.programIdIndex]?.toBase58(),
@@ -235,7 +285,20 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
   return { port, sent: () => last };
 }
 
-export type Confirmed = { status: "success" | "failed" | "expired" | "unknown"; slot?: number; err?: unknown; signer?: string; meta?: any; accountKeys?: string[] };
+export type Confirmed = {
+  status: "success" | "failed" | "expired" | "unknown";
+  slot?: number;
+  err?: unknown;
+  signer?: string;
+  meta?: any;
+  accountKeys?: string[];
+  /** Its instructions as compiled: program, accounts (by address) and data. */
+  instructions?: { program: string; accounts: string[]; data: Buffer }[];
+  /** How many signatures it requires. */
+  signers?: number;
+  /** How many address lookup tables it loads accounts from. */
+  lookups?: number;
+};
 
 /**
  * Read a transaction the command sent: confirmed with no error, and signer 0 the owner. "expired" means its blockhash ran out
@@ -253,8 +316,10 @@ export async function confirmSent(conn: Connection, s: Issued, waitMs = 120_000)
       txRead = false;
     }
     if (tx) {
-      const keys = tx.transaction.message.getAccountKeys().staticAccountKeys.map((k) => k.toBase58());
-      return { status: tx.meta?.err ? "failed" : "success", slot: tx.slot, err: tx.meta?.err ?? undefined, signer: keys[0], meta: tx.meta, accountKeys: keys };
+      const m = tx.transaction.message;
+      const keys = m.staticAccountKeys.map((k: PublicKey) => k.toBase58());
+      const instructions = m.compiledInstructions.map((ix: { programIdIndex: number; accountKeyIndexes: number[]; data: Uint8Array }) => ({ program: keys[ix.programIdIndex] ?? `#${ix.programIdIndex}`, accounts: ix.accountKeyIndexes.map((i: number) => keys[i] ?? `#${i}`), data: Buffer.from(ix.data) }));
+      return { status: tx.meta?.err ? "failed" : "success", slot: tx.slot, err: tx.meta?.err ?? undefined, signer: keys[0], meta: tx.meta, accountKeys: keys, instructions, signers: m.header.numRequiredSignatures, lookups: m.addressTableLookups.length };
     }
     const height = txRead ? await retryRead(() => conn.getBlockHeight("confirmed")).catch(() => null) : null;
     if (height !== null && height > s.lastValidBlockHeight + 10) {

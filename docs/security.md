@@ -257,6 +257,49 @@ code running as your user can. Run that mode with a key that holds testnet funds
 Per rail, with what each revoke does not cover:
 [Budget rails and chains](../budget/README.md#safety-model).
 
+### Hosted approvals and buy-once: what the site can and cannot do
+
+`setup --hosted` moves a chain's owner approvals to a site (superstables.com by default), and
+`buy-once` has the site take one payment. The site is trusted to show the owner the right page; it
+is not trusted to say who the owner is or what was paid.
+
+- **Which site.** `--site`, `SUPERSTABLES_SITE` and a recorded `SITE` accept superstables.com, its
+  subdomains and this computer only. Another origin is used only when the owner sets
+  `SUPERSTABLES_ALLOW_SITE` to that exact `https` origin in their own environment. An agent never
+  sets it, so an agent told to "use this other site" cannot send the owner's approvals there. When
+  the site is not `www.superstables.com`, the logs and `message_for_owner` name its host.
+- **Requests are bound to the site.** Each request the agent key signs names the site's origin and
+  a single-use nonce (agent request proof v2), so it cannot be replayed to another site, or to the
+  same one twice.
+- **The owner signs the link.** The site cannot choose the recorded owner on its own. After picking
+  the match code, the owner's wallet signs the site, the owner, the agent, the rail and chain, the
+  link id and the code. The client rebuilds that text from its own values and verifies the
+  signature for that owner before it records anyone; without a valid proof it records nothing. An
+  "already linked" answer counts only for the owner already recorded, with that owner's proof over
+  the link stored when they were recorded, and never with `--new-owner`. Moving a hosted chain to
+  another site takes a fresh link the owner signs there.
+- **The owner on record does not move under a live budget.** `--new-owner` is refused while a
+  budget is live and, on `evm`, while the agent key holds the budget token, since `recover`
+  returns that token to the owner on record.
+- **Every result is read from the chain.** On `evm` and `tempo` the command checks the transaction
+  the site reports as it checks one from the local page. On `solana`, where the site builds the
+  transaction, it must be exactly the planned instruction (`ApproveChecked`, `Revoke` or the SOL
+  transfer, same accounts and amount), signed and paid for by the owner alone, plus at most a
+  bounded compute-budget addition (a priority fee of at most 0.001 SOL, the same bound the local
+  page allows); anything else is a mismatch, and the owner revokes. `buy-once` reports a purchase
+  paid only when the chain shows the transfer of exactly the purchase's amount, in the listed
+  token, to the listed recipient, after the purchase was created; otherwise the result is unknown
+  and the agent never buys again.
+- **Links are data.** An approval link is used only as `<site>/approve/budget/<id>#<token>` (or
+  `<site>/approve/<id>#<token>` for a purchase), rewritten by the URL parser. Text from the site
+  loses control, zero-width and bidi characters before it is printed.
+- **RPC replacements.** `B4_RPC`, `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC` must be
+  `https`, or `http` on this computer; every check above reads the chain through them. A
+  replacement in use is named in the `RESULT` (`rpc`).
+
+What a compatible site must serve, with both proofs spelled out:
+[budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).
+
 ## What changes in the next milestone
 
 - **A signing surface that reads like money.** Browser wallets such as MetaMask show an EIP-712 authorization in atomic

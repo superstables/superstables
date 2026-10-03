@@ -11,6 +11,7 @@ import { chmodSync, readFileSync, renameSync, unlinkSync, writeFileSync, existsS
 import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
+import { DEFAULT_RPC, rpcFromEnv } from "../rpc.mjs";
 import {
   Connection,
   Keypair,
@@ -37,13 +38,13 @@ process.on("unhandledRejection", async (err) => {
   process.exit(1);
 });
 
-// SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL (tests point it at a local fake; you can point it at your own node). Anything but an http(s) URL is ignored, with a warning.
+// SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL (tests point it at a local fake; you can point it at your own node).
+// https, or http on this computer only (../rpc.mjs): anything else is ignored here with a warning, and the dispatcher refuses
+// the command before it runs a script.
 export const RPC_URL = (() => {
-  const v = process.env.SUPERSTABLES_SOLANA_RPC?.trim();
-  if (!v) return "https://api.devnet.solana.com";
-  if (/^https?:\/\/[^\s]+$/.test(v)) return v;
-  process.stderr.write("warning: SUPERSTABLES_SOLANA_RPC is not an http(s) URL; using https://api.devnet.solana.com\n");
-  return "https://api.devnet.solana.com";
+  const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana);
+  if (r.error) process.stderr.write(`warning: ${r.error}; using ${DEFAULT_RPC.solana}\n`);
+  return r.url;
 })();
 export const EXPLORER_CLUSTER = "?cluster=devnet";
 export const USDC_MINT = new PublicKey(

@@ -149,18 +149,25 @@ and removes the Claude Desktop bundle.
 ### Security
 
 - **Requests to the site are bound to it.** Each request the agent key signs for a hosted
-  approval names the site's origin and a single-use nonce, so it cannot be replayed to another
-  site or sent twice.
-- **The owner's link is verified.** Before `setup --hosted` records an owner, it verifies a
-  proof that the owner's account linked this agent, and records nothing if it does not verify.
-- **`--site` is limited.** It accepts superstables.com, its subdomains and loopback addresses.
-  Another origin is accepted only when the owner names it in an environment setting of their
-  own.
-- **Buy once checks the chain.** `buy-once` reports a purchase as paid only after it has read
-  the settlement on chain.
-- **Hosted Solana transactions are checked instruction by instruction** before the command
-  reports success.
-- **RPC overrides on Tempo and Solana must use `https`.**
+  approval names the site's origin and a nonce, and the site accepts each nonce once, so a
+  request cannot be replayed to another site or sent twice.
+- **The owner's link is verified.** After picking the match code, the owner signs the link in
+  their wallet. Before `setup --hosted` records an owner, it rebuilds that message and verifies
+  the signature, and records nothing if it does not verify. When the site says the agent is
+  already linked, `setup` accepts that only for the owner already recorded, with that owner's
+  signature over the stored link, and never with `--new-owner`.
+- **`--site` is limited.** `--site`, `SUPERSTABLES_SITE` and a recorded site accept
+  superstables.com, its subdomains and loopback addresses. Another origin is accepted only when
+  the owner sets `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own environment.
+- **Buy once checks the chain.** `buy-once` reports a purchase as paid only after it has read,
+  on chain, a transfer of exactly the purchase's amount to the listed recipient. Otherwise the
+  result is `unknown` (exit 5).
+- **Hosted Solana transactions are checked instruction by instruction.** A transaction the site
+  built must be exactly the planned instruction, plus at most a bounded network-fee addition;
+  anything else is reported as a mismatch.
+- **RPC overrides must use `https`, or `http` on this computer.** This applies to `B4_RPC`,
+  `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC`; an override in use is named in the
+  `RESULT` as `rpc`.
 
 ### Breaking changes
 

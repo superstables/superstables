@@ -18,7 +18,7 @@ The owner approves a spending cap once, in their own wallet. You then buy from s
 
 ## A hosted budget on superstables.com
 
-For an owner who wants to approve from any device, such as their phone, and has or will make an account on superstables.com. Otherwise use the default, a page on this computer with no account ([The owner's steps per rail](#the-owners-steps-per-rail)); fall back to it too when `--hosted` fails or the owner has no account. One link does the whole hosted set-up: the owner links this agent to their superstables.com account, then, on the same page, approves the agent's gas and the budget in their wallet. They open it on any device where they are signed in with their wallet; they need an account there, and the first link they open asks them to sign in (a message, no fee). Write the link as SKILL.md's safety rule 10 says.
+For an owner who wants to approve from any device, such as their phone, and has or will make an account on superstables.com. Otherwise use the default, a page on this computer with no account ([The owner's steps per rail](#the-owners-steps-per-rail)); fall back to it too when `--hosted` fails or the owner has no account. One link does the whole hosted set-up: the owner links this agent to their superstables.com account, then, on the same page, approves the agent's gas and the budget in their wallet. They open it on any device where they are signed in with their wallet; they need an account there, and the first link they open asks them to sign in (a message, no fee). After they pick the code, their wallet signs the link too (a message, no fee): the command checks that signature before it records anyone as the owner. Write the link as SKILL.md's safety rule 10 says.
 
 1. **Ask which network and how much test USDC to allow, together**, in one reply. The default network is Base Sepolia.
    - **Arc Testnet** (`--chain arc-testnet`): one faucet covers both. Test USDC from faucet.circle.com (choose Arc Testnet) is the budget and pays the fees.
@@ -30,12 +30,13 @@ For an owner who wants to approve from any device, such as their phone, and has 
    - `ok`: the agent is linked, has gas, and has a budget of A. That account's address is the owner on record. Confirm with `superstables budget status --rail evm --chain C`.
    - Any other state, with `linked: true`: the link is recorded, but a step did not complete. `state` is the first such step's, and `reason` says what happened to each, for example that the owner rejected the budget. Tell the owner in one reply and end your turn. Start `superstables budget grant` (or `fund-agent`) later only if the owner asks. `unknown` (exit 5): the wallet may have sent it; run `superstables budget status` and ask the owner to check wallet activity.
    - `refused_precheck` saying the agent is already linked: nothing was asked. Gas and a budget are then separate steps, one link each (below).
+   - `refused_precheck` saying the owner proof is missing or for another link, or that this computer has no record of that link: nothing was recorded. Tell the owner in one reply that the site did not prove who linked this agent; to link it again, they remove the agent on their account page on the site, then you run the same setup again. Do not retry on your own.
 
 **Later changes, one link each.** `superstables budget fund-agent --rail evm --chain C` sends the agent more gas; check with `superstables budget doctor --rail evm --chain C`. `superstables budget grant --rail evm --chain C --amount A` grants a budget, for example after a revoke. `superstables budget setup --rail evm --hosted --chain C` without `--grant` and `--fund` only links the agent. Reply with `message_for_owner` for each, as usual.
 
 On a hosted chain every later owner command (`grant`, `revoke`, `fund-agent`) asks through superstables.com, and refuses (exit 3, nothing sent) if the site would ask a different account than the owner on record. `recover` still uses the page on this computer. Buying does not change: `superstables budget buy` never contacts the site. `superstables budget find` lists the services superstables.com says a budget can pay; any other seller URL works too.
 
-Without `--hosted` the owner approves on a page on this computer instead, with no account; `setup --new-owner` without `--hosted` moves a hosted chain back to it. The site is superstables.com unless the owner chose a compatible one (`--site`, or `SUPERSTABLES_SITE` in their environment); never set either yourself (SKILL.md's safety rule 9).
+Without `--hosted` the owner approves on a page on this computer instead, with no account; `setup --new-owner` without `--hosted` moves a hosted chain back to it. The site is superstables.com unless the owner chose a compatible one (`--site`, or `SUPERSTABLES_SITE` in their environment); an origin outside superstables.com and its subdomains also needs `SUPERSTABLES_ALLOW_SITE` set to it, by the owner, in their own environment. Never set `SUPERSTABLES_SITE` or `SUPERSTABLES_ALLOW_SITE` yourself (SKILL.md's safety rule 9). If a command says a site "is not superstables.com", tell the owner and stop; do not look for a way around it. When the site is not www.superstables.com, `message_for_owner` names its host: send it as it is.
 
 ## The rails and what the chain enforces
 
@@ -174,7 +175,7 @@ Under `$SUPERSTABLES_HOME` (default `~/.superstables`):
 | Path | What |
 | --- | --- |
 | `keys/budget/<rail>-agent.env` | The agent key (mode 600). The only secret here; never print it |
-| `budget/public/<rail>-<chain>.env` | The owner's and agent's addresses and budget terms; on a hosted chain also `APPROVALS=hosted` and `SITE`; no secret |
+| `budget/public/<rail>-<chain>.env` | The owner's and agent's addresses and budget terms; on a hosted chain also `APPROVALS=hosted`, `SITE`, and the link the owner signed (`LINK_ID`, `LINK_CODE`); no secret |
 | `budget/ops/<rail>-<chain>/<op>.json` | One journal per purchase; `<op>.response` is the seller's answer, when it was saved |
 | `budget/approvals/` | Owner approvals started in the background, and `buy-once` purchases |
 | `budget/owner-approvals.jsonl` | The approval page log (no signatures) |

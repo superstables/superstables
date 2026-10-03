@@ -38,8 +38,8 @@ import { decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
 import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, parseEnvFile, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
 import { readFileSync } from 'node:fs'
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
-import type { HostedStep, HostedStepOutcome } from '../hosted.ts'
-import { chosenSite } from '../site.mjs'
+import type { HostedStep, HostedStepOutcome, PriorLink } from '../hosted.ts'
+import { chosenSite, isSiteRequestId, siteOrigin } from '../site.mjs'
 import { KEYCHAIN, approvalSite, askConnect, checkGrantSent, closeOwnerPage, emit, endUnapproved, grantCalldata, iso, tokenBalance, useApprovalSite, useHostedAgent, type GrantPlan, type SentCheck } from './owner.ts'
 import { chainHead, readKey } from './lib/chain.ts'
 
@@ -108,7 +108,13 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
   const site = approvalSite()!
   const host = new URL(site).host.replace(/^www\./, '')
   useHostedAgent(address)
-  const { outcome } = await askConnect('setup', {
+  // this key's own link, when it was linked before (AGENT<label>_LINK_ID and _LINK_CODE): an "already linked" answer is
+  // checked against it; without it only a fresh link the owner signs counts
+  const pub = loadPublicEnv()
+  const id = pub[`AGENT${label}_LINK_ID`]
+  const code = pub[`AGENT${label}_LINK_CODE`]
+  const prior: PriorLink | null = isSiteRequestId(id) && code ? { owner, linkId: id, linkCode: code } : null
+  const { outcome, link } = await askConnect('setup', {
     title: `Link this agent's new key to your ${host} account`,
     summary: `Sign in to ${host} with your wallet and link the agent's new key ${address}, so you can grant it a budget there. This does not grant a budget or send a transaction.`,
     rows: [
@@ -119,7 +125,7 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
     enforced: [],
     notEnforced: [],
     notes: [`You pick the match code your agent shows you before anything is linked. The agent key stays on this computer; ${host} does not receive it.`],
-  }, '')
+  }, '', undefined, undefined, { prior })
   if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent: address, linked: false })
   if (outcome.status !== 'connected') throw new Error(`unexpected approval outcome ${outcome.status}`)
   if (!same(outcome.address, owner)) {
@@ -129,6 +135,8 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
     process.exit(result(3, { state: 'refused_precheck', reason, owner, agent: address, next: `remove this key from that account on ${host}; grant only from the account ${owner}` }))
   }
   await closeOwnerPage(0)
+  if (!link) throw new Error('a hosted link without its id and code')
+  writePublicEnv({ [`AGENT${label}_LINK_ID`]: link.id, [`AGENT${label}_LINK_CODE`]: link.code })
   console.log(`${host} linked the key ${address} to the account ${owner}`)
   process.exit(result(0, { state: 'ok', owner, agent: address, linked: true, next: `superstables budget grant --rail tempo --agent ${label} --amount A (the owner approves it on ${host}, in their wallet)` }))
 }
@@ -193,6 +201,12 @@ async function main() {
     }
     console.log(`replacing the recorded owner ${recorded} (no key is live on it): the new owner connects on the page`)
   }
+  // The link recorded with the owner (setup --hosted), on this same site: an "already linked" answer is checked against it.
+  // None with --new-owner, or when the site changes: then only a fresh link the owner signs records an owner.
+  const recordedSite = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE).origin : undefined
+  const prior: PriorLink | null = recorded && !newOwner && SITE && recordedSite === SITE && isSiteRequestId(pub.LINK_ID) && pub.LINK_CODE ? { owner: recorded, linkId: pub.LINK_ID, linkCode: pub.LINK_CODE } : null
+  if (HOSTED && recordedSite && recordedSite !== SITE) console.log(`this chain's approvals are hosted on ${recordedSite}; moving them to ${SITE} takes a fresh link that the owner signs there`)
+  let linked: { id: string; code: string } | undefined
 
   // --hosted --grant: the grant after the link, built exactly as grant builds it, and the block it must be mined after
   let then: HostedStep[] | undefined
@@ -252,8 +266,9 @@ async function main() {
         `You pick the match code your agent shows you before anything is linked or sent. The agent key stays on this computer; ${HOST} does not receive it.`,
         ...(plan ? ['You pay the network fee in your wallet. To end the budget at any time: superstables budget revoke --rail tempo.'] : [`Grants and revokes for this agent are then approved on ${HOST}, in your wallet.`]),
       ],
-    }, '', newOwner ? recorded : undefined, then)
+    }, '', newOwner ? recorded : undefined, then, { prior, newOwner })
     bundle = r.bundle
+    linked = r.link
     const outcome = r.outcome
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent, linked: false })
     if (outcome.status !== 'connected') throw new Error(`unexpected approval outcome ${outcome.status}`)
@@ -304,7 +319,10 @@ async function main() {
   // and SITE. Asked on this computer: neither.
   const asked = !OWNER_KEY_FILE && !(pub.OWNER_ADDRESS && same(pub.AGENT_ADDRESS, agent) && !newOwner && !HOSTED)
   setAgentPublic({ OWNER_ADDRESS: owner })
-  writePublicEnv({ OWNER_ADDRESS: owner, AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: 'hosted', SITE: SITE! } : {}) }, asked && !HOSTED ? ['APPROVALS', 'SITE'] : [])
+  if (HOSTED && !linked) throw new Error('a hosted link without its id and code')
+  // hosted: APPROVALS, SITE, and the link the owner signed (LINK_ID, LINK_CODE: a later "already linked" answer is checked
+  // against them)
+  writePublicEnv({ OWNER_ADDRESS: owner, AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: 'hosted', SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, asked && !HOSTED ? ['APPROVALS', 'SITE', 'LINK_ID', 'LINK_CODE'] : replaced && !HOSTED ? ['LINK_ID', 'LINK_CODE'] : [])
   console.log(`wrote ${PUBLIC_ENV_PATH} (no secret) and the owner's address into ${AGENT_ENV_PATH}.${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ''}`)
 
   // 4. test pathUSD for the owner, if it has too little
@@ -348,7 +366,7 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
   let done: SentCheck | undefined
   for (const s of steps) {
     if (s.hash) {
-      console.log(`${s.kind}: superstables.com reports transaction ${s.hash} (${s.state}); checking it on chain`)
+      console.log(`${s.kind}: ${HOST} reports transaction ${s.hash} (${s.state}); checking it on chain`)
       const c = await checkGrantSent(s.hash as Hex, { owner, plan, afterBlock: startBlock })
       if (c.state === 'settled') done = c
       reports.push({ kind: s.kind, state: c.state, tx: c.tx, txUrl: explorerTx(c.tx), amount, reason: c.reason })

@@ -24,8 +24,8 @@ import {
 } from "../src/core/signer/owner-approval-server.ts";
 import { ownerApprovalsLog } from "./paths.mjs";
 import { HOLDER_ENV, recordHosted } from "./approvals.mjs";
-import { HOSTED_KIND, HostedApprovals, HostedRefusal, type HostedBundleOutcome, type HostedSettings, type HostedStep } from "./hosted.ts";
-import { siteOrigin } from "./site.mjs";
+import { HOSTED_KIND, HostedApprovals, HostedRefusal, type HostedBundleOutcome, type HostedSettings, type HostedStep, type PriorLink } from "./hosted.ts";
+import { isOtherSite, siteName, siteOrigin } from "./site.mjs";
 
 const argv = process.argv.slice(2);
 const argValue = (name: string) => {
@@ -137,8 +137,9 @@ export function ownerPageFor(rail: OwnerRail) {
     const terms = { title: t.title, amount: t.amount, unit: t.unit, summary: t.summary, enforced: t.enforced, notEnforced: t.notEnforced };
     console.log(`APPROVE ${JSON.stringify({ action, url: h.url, expires: new Date(h.expiresAt).toISOString(), terms, ...(h.matchCode ? { matchCode: h.matchCode } : {}) })}`);
     if (site) {
-      const host = new URL(site).host.replace(/^www\./, "");
-      console.error(`\nWrite this link, the match code ${h.matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call: the page asks them to pick the code. The link opens on any device where the owner is signed in to ${host} with their wallet (${rail.hostedWalletWords ?? rail.walletWords}):\n\n  ${h.url}\n\n  match code: ${h.matchCode}\n\nThe first link they open asks them to sign in with their wallet (a message, no fee). It expires in ${inMinutes(h.expiresAt)}. ${h.bundle ? `After the link, the same page asks their wallet for each transaction in the terms, one after the other.` : `Setup links this agent to their ${host} account and sends no transaction. Other actions ask their wallet for a transaction.`} Testnet only: test USDC, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
+      const host = siteName(site);
+      const other = isOtherSite(site) ? ` The site is ${host}, not www.superstables.com: say so to the owner.` : "";
+      console.error(`\nWrite this link, the match code ${h.matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call: the page asks them to pick the code. The link opens on any device where the owner is signed in to ${host} with their wallet (${rail.hostedWalletWords ?? rail.walletWords}):\n\n  ${h.url}\n\n  match code: ${h.matchCode}\n\nThe first link they open asks them to sign in with their wallet (a message, no fee). It expires in ${inMinutes(h.expiresAt)}. ${h.bundle ? `After the link, the same page asks their wallet for each transaction in the terms, one after the other.` : `Setup links this agent to their ${host} account: after the code, their wallet signs the link (a message, no fee), and no transaction is sent. Other actions ask their wallet for a transaction.`} Testnet only: test USDC, no real money.${other} End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
     } else {
       console.error(`\nWrite this link and its terms in your reply to the owner, a visible message, not only in your reasoning or a tool call. Only the owner should use the page, in the browser with their wallet (${rail.walletWords}):\n\n  ${h.url}\n\nThe link works on this computer only (over SSH, the owner first forwards the port: ssh -L ${new URL(h.url).port}:127.0.0.1:${new URL(h.url).port} user@this-host) and expires in ${inMinutes(h.expiresAt)}; after that, run the command again for a new link. Setup asks for a message signature. Other actions ask for a transaction approval. Testnet only: test USDC, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
     }
@@ -175,19 +176,19 @@ export function ownerPageFor(rail: OwnerRail) {
      * setup --new-owner replaces, shown on the page. Hosted: the owner links this agent to their account instead.
      * `then` (hosted only): wallet steps on the same page after the link; `bundle` is what became of the link and each step.
      */
-    async askConnect(action: string, terms: OwnerTerms, signIn: string, replacing?: string, then?: HostedStep[]): Promise<{ handle: { finish(v: { ok: boolean; message: string; hash?: string }): void }; outcome: OwnerActionOutcome; bundle?: HostedBundleOutcome }> {
+    async askConnect(action: string, terms: OwnerTerms, signIn: string, replacing?: string, then?: HostedStep[], linkOpts: { prior?: PriorLink | null; newOwner?: boolean } = {}): Promise<{ handle: { finish(v: { ok: boolean; message: string; hash?: string }): void }; outcome: OwnerActionOutcome; bundle?: HostedBundleOutcome; link?: { id: string; code: string } }> {
       const hosted = hostedSettings(action, "connect");
       if (then?.length && !hosted) throw new Error("wallet steps after the link need hosted approvals");
       if (hosted) {
-        const handle = await hostedFor(hosted).request({ kind: "connect", terms, timeoutMs: OWNER_TIMEOUT_MS, then }).catch((e) => refusedBySite(action, e));
-        // already linked on this chain: no link to show and nothing to wait for
-        if (handle.alreadyLinked) console.error(`\nThis agent is already linked on ${hosted.site}; no link is needed.\n`);
+        const handle = await hostedFor(hosted).request({ kind: "connect", terms, timeoutMs: OWNER_TIMEOUT_MS, then, prior: linkOpts.prior ?? null, newOwner: linkOpts.newOwner === true }).catch((e) => refusedBySite(action, e));
+        // already linked on this chain, with the owner's proof over the link recorded here: no link to show, nothing to wait for
+        if (handle.alreadyLinked) console.error(`\nThis agent is already linked on ${hosted.site}, to the owner recorded on this computer (checked against that owner's signed link); no link is needed.\n`);
         else announce(action, handle, terms, hosted.site);
         if (handle.bundle) {
           const bundle = await handle.bundle;
-          return { handle, outcome: bundle.link, bundle };
+          return { handle, outcome: bundle.link, bundle, link: handle.link };
         }
-        return { handle, outcome: await handle.settled };
+        return { handle, outcome: await handle.settled, link: handle.link };
       }
       const s = await page();
       const handle = s.request({ kind: "connect", chain: rail.chain, terms, signIn, recordedOwner: replacing, timeoutMs: OWNER_TIMEOUT_MS });

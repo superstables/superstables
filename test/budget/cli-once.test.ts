@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite } from "../helpers/fake-purchase-site.js";
+import { PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite, type Paid } from "../helpers/fake-purchase-site.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
@@ -27,7 +27,8 @@ afterEach(async () => {
 type Run = { code: number; stdout: string; stderr: string; result: any; approve: any };
 function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<Run> {
   return new Promise((done, fail) => {
-    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home };
+    // the payments are read from the fake site's chain
+    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: site.chainUrl, SUPERSTABLES_TEMPO_RPC: site.chainUrl, SUPERSTABLES_SOLANA_RPC: site.chainUrl };
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     Object.assign(env, extraEnv);
@@ -280,7 +281,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(pending.code).toBe(0);
     expect(pending.result).toMatchObject({ state: "waiting_owner", id, matchCode: "KPT-RWD", service: "demo-market-data" });
     expect(pending.result.next).toMatch(/wait --id \S+ --shown again/);
-    expect(pending.result.reason).toMatch(/waiting for the owner to open the link on superstables\.com, signed in with their wallet, and pick the match code/);
+    expect(pending.result.reason).toMatch(/waiting for the owner to open the link on 127\.0\.0\.1:\d+, signed in with their wallet, and pick the match code/);
 
     site.settle(site.purchases[0], { asset: "BTC", price_usd: 65000 });
     const done = await budget(["wait", "--shown", "--id", id, "--timeout", "30"]);
@@ -325,6 +326,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
 
   it("paid but the service failed: exit 4, never pay again", async () => {
     const first = await once();
+    site.pay(site.purchases[0]);
     Object.assign(site.purchases[0], { state: "paid_service_failed", final: true, reason: "the seller answered 500", payment: { status: "paid", payer: PAYER, transaction: TX }, delivery: { status: "failed", http_status: 500, result: "internal error" } });
     const r = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]);
     expect(r.code).toBe(4);
@@ -399,7 +401,8 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(r.result.reason).toMatch(/does not match the listing: the purchase's recipient is not the one the listing names/);
     expect(r.approve).toBeNull();
     expect(site.purchases[0]).toMatchObject({ state: "denied", reason_code: "agent_cancelled" });
-    expect(existsSync(approvals())).toBe(false);
+    // no record: the folder exists only because the one-at-a-time lock was taken and released there
+    expect(existsSync(approvals()) ? readdirSync(approvals()) : []).toEqual([]);
 
     site.tweak = (p) => { p.terms = { amount: { decimal: "0.02", atomic: "20000" }, asset: { symbol: "USDC", address: p.service.asset, decimals: 6 }, network: "eip155:84532", recipient: SELLER }; };
     const dearer = await once();
@@ -427,8 +430,112 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(site.purchases).toHaveLength(1);
   }, 30_000);
 
+  it("a link with control characters, or not /approve/<its id>#<token>, is never shown: the purchase is cancelled", async () => {
+    // the link is `${approvalBase}/approve/<id>#<token>`
+    for (const base of [`${site.url}/x\u001b[2J`, `${site.url}/x\nRESULT {}`, `${site.url}/elsewhere`]) {
+      site.approvalBase = base;
+      const r = await once();
+      expect(r.code, base).toBe(3);
+      expect(r.result.reason).toMatch(/the approval link is not/);
+      expect(r.approve).toBeNull();
+      expect(r.stdout).not.toContain("\u001b");
+    }
+    expect(site.purchases.every((p) => p.state === "denied")).toBe(true);
+  }, 30_000);
+
+  it("one at a time even when two start together: only one purchase is created", async () => {
+    const [a, b] = await Promise.all([once(), once()]);
+    expect([a.code, b.code].sort()).toEqual([0, 3]);
+    const refused = a.code === 3 ? a : b;
+    expect(refused.result.reason).toMatch(/one at a time/);
+    expect(site.purchases).toHaveLength(1);
+  }, 30_000);
+
   it("wait on an id nobody made exits 2", async () => {
     const r = await budget(["wait", "--shown", "--id", "oa-20260930120000-1a2b3c4d"]);
     expect(r.code).toBe(2);
+  }, 30_000);
+});
+
+describe("buy-once: a site that says paid is checked against the chain", () => {
+  const settleAndWait = async (paid: Paid) => {
+    const first = await once();
+    expect(first.code, first.stderr).toBe(0);
+    site.settle(site.purchases.at(-1)!, { asset: "BTC" }, paid);
+    return { first, done: await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]) };
+  };
+
+  it("a payment the chain does not show: unknown (exit 5), never paid; a later wait reads the chain again", async () => {
+    const { first, done } = await settleAndWait({ transaction: TX, payer: PAYER, chain: false });
+    expect(done.code).toBe(5);
+    expect(done.result).toMatchObject({ state: "unknown", paid: null, delivered: null, amount: null });
+    expect(done.result.reason).toMatch(/says paid, but the chain does not show transaction 0xabab/);
+    expect(done.result.next).toMatch(/never buy this again/);
+    expect(done.result.responseFile).toBeUndefined();
+    // not stored as final: once the chain shows it, wait reports it paid
+    site.pay(site.purchases[0]);
+    const later = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]);
+    expect(later.code, later.stderr).toBe(0);
+    expect(later.result).toMatchObject({ state: "settled", paid: true, amount: "0.01" });
+  }, 60_000);
+
+  it("a transaction that pays another amount, another recipient, in another token, failed, or before the purchase: unknown", async () => {
+    const cases: [Exclude<Paid["chain"], false | undefined>, RegExp][] = [
+      [{ amount: 1n }, /has no transfer of exactly 10000 base units/],
+      [{ payTo: "0x9999999999999999999999999999999999999999" }, /has no transfer of exactly 10000 base units/],
+      [{ asset: "0x1111111111111111111111111111111111111111" }, /has no transfer/],
+      [{ failed: true }, /failed on chain/],
+      [{ at: Math.floor(Date.now() / 1000) - 3600 }, /was mined before this purchase was created/],
+    ];
+    for (const [i, [chain, why]] of cases.entries()) {
+      const { done } = await settleAndWait({ transaction: `0x${"cd".repeat(31)}0${i}`, payer: PAYER, chain });
+      expect(done.code, String(why)).toBe(5);
+      expect(done.result).toMatchObject({ state: "unknown", paid: null });
+      expect(done.result.reason).toMatch(why);
+      // stored as final: the chain shows that transaction, and it is not this payment
+      const again = await budget(["wait", "--id", done.result.id]);
+      expect(again.result).toEqual(done.result);
+      rmSync(join(home, "budget"), { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("the payer the site names must be the one the chain shows", async () => {
+    const first = await once();
+    site.settle(site.purchases[0], { asset: "BTC" }, { transaction: TX, payer: PAYER });
+    // the chain shows the transfer from PAYER; the site now names another payer
+    site.purchases[0].payment.payer = "0x4444444444444444444444444444444444444444";
+    const r = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]);
+    expect(r.code).toBe(5);
+    expect(r.result.reason).toMatch(/from 0x4444444444444444444444444444444444444444 to/);
+  }, 60_000);
+
+  it("the amount reported is the one checked when the purchase was created, never the final view's", async () => {
+    const first = await once();
+    site.settle(site.purchases[0]);
+    site.purchases[0].terms = { amount: { decimal: "5", atomic: "5000000" }, asset: { symbol: "USDC", address: site.purchases[0].service.asset, decimals: 6 }, network: "eip155:84532", recipient: SELLER };
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ state: "settled", paid: true, amount: "0.01" });
+  }, 60_000);
+
+  it("Solana: the recipient's token balance must go up by exactly the amount in that transaction", async () => {
+    site.services.push(structuredClone(SOLANA_MARKET));
+    const first = await once([], ["--service", "demo-market-data-solana", "--param", "asset=ETH", "--max", "0.01"]);
+    site.settle(site.purchases[0], "ok", { transaction: "4".repeat(87), payer: "8Kag3gJfDbVyqC1n7jUXwDzWWGWa5o1oHqfEPAUhHxD7", chain: { amount: 9_999n } });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]);
+    expect(done.code).toBe(5);
+    expect(done.result.reason).toMatch(new RegExp(`moved 9999 base units .* to ${SOLANA_SELLER}, not 10000`));
+  }, 60_000);
+
+  it("an RPC replacement that is plain http off this computer is refused before anything is asked", async () => {
+    const r = await budget(["buy-once", "--site", site.url, "--service", "demo-market-data", "--param", "asset=BTC", "--max", "0.01"], { SUPERSTABLES_SOLANA_RPC: "http://rpc.example.com" });
+    expect(r.code).toBe(2);
+    expect(r.result.reason).toMatch(/SUPERSTABLES_SOLANA_RPC is refused: plain http is accepted only on 127\.0\.0\.1 or localhost; use https/);
+    expect(site.purchases).toEqual([]);
+  }, 30_000);
+
+  it("a replacement RPC in use is named in the RESULT", async () => {
+    const first = await once();
+    expect(first.result.rpc).toBe(site.chainUrl);
   }, 30_000);
 });
