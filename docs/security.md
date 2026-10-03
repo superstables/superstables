@@ -206,6 +206,34 @@ facilitator sees the signed authorization, so it learns who paid whom and how mu
 alter the amount or the recipient, because those are inside what was signed. The client's facilitator helper tries the next facilitator when one cannot be
 reached, and stops when one refuses. Other sellers choose their own facilitators.
 
+On buy once, the seller reports the settlement and names a transaction. The client then reads
+that transaction's receipt from Base Sepolia (`SUPERSTABLES_RPC_URL`, https or this computer only)
+and records `chain`:
+
+- `verified`: the transaction succeeded, and the USDC contract logged both the use of the nonce
+  the owner signed and a transfer of exactly the signed amount from the payer to the checked
+  recipient.
+- `unchecked`: the chain could not say (no hash, not mined yet, the RPC did not answer). The
+  payment rests on the seller's report; `superstables status` and `payment_status` check again.
+- `mismatch`: the transaction is something else. The attempt becomes `uncertain`: it is not
+  confirmed and not refuted, and it is never retried.
+
+`verified` means the RPC the client read returned a receipt with those logs. The client does not
+run a node: a dishonest or compromised RPC can answer with a receipt that never happened. HTTPS
+authenticates the connection to that RPC, not the chain behind it. Use an RPC you trust
+(`SUPERSTABLES_RPC_URL`) when that matters. The budget rails read the chain too.
+
+The per-day cap (`caps.per_day`): a payment counts on the day it ended, and on every day while it
+is still open (signed and in flight until its authorization expires, or waiting for the owner
+within its approval window). `pay`
+reserves the amount under a lock shared by the processes on this computer before the owner is
+asked.
+
+Text from sellers and listings reaches the agent as data. The MCP server names those fields in
+`untrusted_data` in each result, and the text form of the result carries them in separate blocks
+marked "Untrusted data". The CLI prints them on one line, without control or invisible
+characters.
+
 ## The local wallet mode
 
 `--wallet local` (or `SUPERSTABLES_WALLET=local`) replaces the browser wallet with a wallet process that

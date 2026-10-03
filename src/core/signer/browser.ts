@@ -53,6 +53,10 @@ interface RememberedAccount {
 export class BrowserWalletSigner implements Signer {
   readonly kind = "browser" as const;
 
+  get approvalWindowMs(): number {
+    return this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  }
+
   private readonly options: BrowserWalletSignerOptions;
   private readonly server: ApprovalServer;
   private readonly home: string;
@@ -155,7 +159,8 @@ export class BrowserWalletSigner implements Signer {
       asset: judged.terms.asset,
       // What this machine has already paid today, from its own receipts: the per-day cap is
       // checked again here, at the gate, and not only when the quote was taken.
-      spentTodayDecimal: this.records.spentToday(judged.terms.asset),
+      // The attempt being signed has already reserved its amount (pay.ts): it is left out, so it does not count twice.
+      spentTodayDecimal: this.records.spentToday(judged.terms.asset, new Date(), { exclude: req.context?.attemptId }),
     });
     // A payment the owner's policy refuses never becomes an approval: nobody is asked, and
     // there is no link to open.
@@ -170,6 +175,9 @@ export class BrowserWalletSigner implements Signer {
       // crash, and one that leaves the quote usable.
       throw new SignRefused("approval_page", err instanceof Error ? err.message : String(err));
     }
+    // Last word before the page exists: the page's start may have taken long enough for the caller's cap reservation
+    // to lapse (pay.ts renews it, or refuses).
+    await hooks?.beforeAsk?.();
     const verified: VerifiedTerms = {
       ...judged.terms,
       payer: (this.remembered ?? this.readRemembered())?.address ?? "",

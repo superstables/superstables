@@ -131,8 +131,26 @@ function structured<T>(result: ToolResult): T {
   expect(result.structuredContent).toBeDefined();
   // The text copy must say the same thing as the structured one, or a client that reads only
   // one of them is reading a different answer.
-  expect(JSON.parse(textOf(result))).toEqual(result.structuredContent);
+  expect(fromText(result)).toEqual(result.structuredContent);
   return result.structuredContent as T;
+}
+
+/**
+ * The text answer read back into one object: the client's own block, plus each untrusted field from the block that
+ * carries it. Every untrusted block must be named in the own block's untrusted_data, and the other way round.
+ */
+function fromText(result: ToolResult): Record<string, unknown> {
+  const [own, ...rest] = result.content.map((part) => part.text ?? "");
+  const parsed = JSON.parse(own) as Record<string, unknown>;
+  const fields: string[] = [];
+  for (const block of rest) {
+    const match = /^Untrusted data: [^\n]*\n<untrusted-data field="([^"]+)">\n([\s\S]*)\n<\/untrusted-data>$/.exec(block);
+    expect(match, block).not.toBeNull();
+    fields.push(match![1]);
+    parsed[match![1]] = JSON.parse(match![2]);
+  }
+  expect(fields).toEqual((parsed.untrusted_data as { fields?: string[] } | undefined)?.fields ?? []);
+  return parsed;
 }
 
 function textOf(result: ToolResult): string {
@@ -220,6 +238,7 @@ describe("the Superstables MCP server", () => {
     expect(found.services[0].actionable).toBe(true);
     expect(found.services[0].live).toBe(true);
     expect(found.services[0].payment.network).toBe("eip155:84532");
+    expect((found as { untrusted_data?: { fields: string[] } }).untrusted_data?.fields).toEqual(["services"]);
   });
 
   it("quotes the demo service without paying anything", async () => {
@@ -255,11 +274,16 @@ describe("the Superstables MCP server", () => {
     expect(settled.receipt?.transaction).toBe(facilitator.transaction);
     expect(settled.receipt?.service_outcome).toBe("ok");
     expect(settled.service_response?.asset).toBe("BTC");
-    expect(settled.message).toContain("settlement confirmed by the facilitator");
+    // No chain is reachable in this test, so the settlement stays the seller's report, said as such.
+    expect(settled.message).toContain("the service reported it settled, and the chain has not confirmed it yet");
+    expect((settled as { chain?: string }).chain).toBe("unchecked");
     expect(facilitator.calls.settle).toBe(1);
+    // The seller's answer is marked as somebody else's in the structure itself, not only in the instructions.
+    expect((settled as { untrusted_data?: { fields: string[] } }).untrusted_data?.fields).toEqual(["service_response"]);
 
-    const receipts = structured<{ receipts: unknown[] }>(await call("list_receipts", {}));
+    const receipts = structured<{ receipts: unknown[]; untrusted_data?: { fields: string[] } }>(await call("list_receipts", {}));
     expect(receipts.receipts).toHaveLength(1);
+    expect(receipts.untrusted_data?.fields).toEqual(["receipts"]);
   });
 
   it("refuses a second payment on a quote that has already been paid", async () => {

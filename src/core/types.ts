@@ -1,8 +1,10 @@
 // The shared vocabulary of the client: what discovery returns, what a quote is, how a
 // payment attempt moves through its states, and what a receipt records. Every surface
-// (SDK, CLI, MCP, wallet) speaks these types; nothing below imports from the surfaces.
+// (SDK, CLI, MCP, wallet) speaks these types; nothing below
+// imports from the surfaces.
 
 import type { PaymentRequirements, SettleResponse } from "@x402/core/types";
+import type { ChainState } from "./settlement.js";
 
 // ── Discovery ────────────────────────────────────────────────────────────────────────────
 
@@ -198,6 +200,30 @@ export interface Attempt {
   serviceStatus?: number;
   /** The service's response body, capped, once there is one. */
   serviceBody?: string;
+  /** The service's own reason a payment did not settle, as it gave it: the seller's words, never the client's. */
+  serviceReason?: string;
+  /**
+   * When this attempt reserved its amount against the daily cap, before the owner was asked (pay.ts, reserve). While
+   * the attempt waits for the owner the reservation counts toward the cap; once signed, the signed states count it;
+   * an attempt that ends unsigned releases it.
+   */
+  reservedAt?: string;
+  /** Until when that reservation counts if the attempt is still waiting then: the signer's approval window, and a minute. */
+  reservedUntil?: string;
+  /**
+   * The EIP-3009 validBefore the owner signed, as an ISO time: after it the authorization can no longer be settled, so
+   * any money this payment could move has moved by then (the daily cap reads it).
+   */
+  authorizationValidBefore?: string;
+  /** The EIP-3009 nonce the owner signed: what ties a transaction on chain to this payment. */
+  authorizationNonce?: string;
+  /**
+   * What the chain says about a settlement the seller reported: "verified" (the transaction is this payment),
+   * "mismatch" (it is not; the attempt is then uncertain), or "unchecked" (the chain could not say yet).
+   */
+  chain?: ChainState;
+  /** Why, for mismatch and unchecked. */
+  chainReason?: string;
   receiptId?: string;
   history: AttemptTransition[];
 }
@@ -223,6 +249,9 @@ export interface Receipt {
   network: string;
   /** What the facilitator reported, verbatim minus nothing: success, payer, transaction, network. */
   settlement: Pick<SettleResponse, "success" | "payer" | "transaction" | "network" | "errorReason">;
+  /** What the chain says about the settlement: see Attempt.chain. Absent on receipts written before it was read. */
+  chain?: ChainState;
+  chainReason?: string;
   /** Payment success and service success are two different facts. */
   serviceOutcome: ServiceOutcome;
   serviceStatus?: number;

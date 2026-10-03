@@ -8,7 +8,7 @@ are what you read to find out how a payment ended, including when its outcome is
 ```
 ~/.superstables/records/quotes.jsonl      what a seller said a call would cost
 ~/.superstables/records/attempts.jsonl    what happened when we tried to pay
-~/.superstables/records/receipts.jsonl    payments the seller reported as settled
+~/.superstables/records/receipts.jsonl    payments the seller reported as settled, each with chain: verified, unchecked or mismatch after a later check
 ~/.superstables/records/approvals.jsonl   what the owner was asked, and what they answered
 ```
 
@@ -93,12 +93,17 @@ awaiting_approval ──┼── the owner says no ─────────�
 | `abandoned` | yes | Nobody decided: whoever was waiting for the owner stopped first (`pay --wait` ran out, `pay` was interrupted, or the process serving the approval page stopped). Not a rejection. Nothing was submitted |
 | `failed` | yes | The client stopped before sending a payment, or the seller reported that it was not paid. The
 client does not check the chain for this. See `reason`; `refusal` says which check refused when one did (`policy`, `invalid`, `unavailable`, `approval_page`) |
-| `settled` | yes | The seller reported that settlement succeeded, and the service answered 2xx. A receipt exists |
-| `paid_service_failed` | yes | The seller reported that settlement succeeded, and the service answered a non-2xx status. A receipt exists |
-| `uncertain` | yes | The credential may have been sent, and the outcome is unknown. **Never retried automatically** |
+| `settled` | yes | The seller reported that settlement succeeded, and the service answered 2xx. A receipt exists. `chain` says whether the client confirmed it on chain |
+| `paid_service_failed` | yes | The seller reported that settlement succeeded, and the service answered a non-2xx status or its answer did not arrive in full. A receipt exists. `chain` as for `settled` |
+| `uncertain` | yes | The credential may have been sent, and the outcome is unknown, including when the chain shows the seller's transaction is not this payment (`chain: "mismatch"`). **Never retried automatically** |
 
-A final state is never overwritten. Once an attempt has an ending, that ending is what the
-record says.
+`chain` on a paid attempt and its receipt: `verified` when the client read the transaction on Base
+Sepolia and it used the nonce the owner signed and transferred exactly the signed amount to the
+checked recipient; `unchecked` (with `chainReason`) when the chain could not say yet. `superstables
+status` reads the chain again for an unchecked attempt.
+
+A later chain check can change `settled` or `paid_service_failed` to `uncertain` and mark its
+receipt `mismatch`. The history retains the earlier state. This never starts another payment.
 
 ### Why `failed` and `uncertain` are different
 
@@ -157,8 +162,10 @@ before an approval is created.
 ## Receipts
 
 A receipt is written when the seller's settlement response reports success, for `settled` and for
-`paid_service_failed`. Its id is the attempt's id. The client does not check the transfer on chain
-itself: the transaction link is how you check it.
+`paid_service_failed`. Its id is the attempt's id. Its `chain` says whether the client confirmed the
+transfer on chain (`verified`), has not confirmed it (`unchecked`), or found a mismatch on a later
+check (`mismatch`); the transaction link is how you check it
+yourself.
 
 It records the terms that were paid, the payer (the account that signed — your MetaMask
 account, in the default mode), the transaction and its explorer URL, selected fields of the settlement response (success, payer, transaction, network, error
@@ -182,7 +189,17 @@ pretending to a hash it does not have.
 
 ## What the daily cap counts
 
-`caps.per_day` is checked against the receipts in this directory for today (UTC), per asset:
+`caps.per_day` is checked against the records in this directory, per asset and UTC day. A payment
+counts on the day it ended, and on every day while it is still open (signed and in flight until its
+authorization expires, or waiting for the owner within its approval window). So a receipt counts on its own day, an
+`uncertain` attempt on the day it became uncertain, an `approved` or `submitting` one on every day
+until it ends or its signed authorization expires (`authorizationValidBefore`; after that, on the
+day it was signed; an older record without it counts every day until it ends), and one waiting for the owner until its reservation (`reservedAt`, `reservedUntil`)
+ends: the signer's approval window and one minute of grace. A reservation that lapses before the
+owner is asked, or before a signature is sent, is checked against the cap again and renewed, or the
+payment stops there. Before the owner is asked, `pay` checks the cap and reserves the amount under a lock every
+`pay` process on this computer shares, so two payments started at once cannot both pass. A payment
+that ends unsigned releases its reservation. Each payment counts once. It is checked
 once when a quote is taken, and again at the gate, before anyone is asked to approve. (With the
 local wallet there is a second count, from the wallet's own audit log of what it signed today.)
 These are local files, not chain history. Delete them and the count starts again.

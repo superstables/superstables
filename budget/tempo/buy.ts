@@ -56,6 +56,7 @@ import { judge, waitForOutcome } from './lib/resolve.ts'
 import { BLOCKING, OPS_DIR, newOpId, printResult, readOp, writeOp, type Op, type OpState } from './lib/ops.ts'
 import { readCapped, saveResponse } from '../response.mjs'
 import { budgetShortfall, precheckCharge, recipientsOutsideScope } from './lib/precheck.ts'
+import { CHALLENGE_OPTIONS, sellerInit } from './lib/seller.ts'
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
 
@@ -151,15 +152,13 @@ async function main() {
     methods: [tempo.charge({ account: agent, expectedChainId: CHAIN_ID, ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
     polyfill: false,
   })
-  const reqInit = (): RequestInit => ({
-    method,
-    ...(body !== undefined ? { body, headers: { 'content-type': 'application/json' } } : {}),
-  })
+  // no redirects on either request to the seller (lib/seller.ts says why)
+  const reqInit = (): RequestInit => sellerInit(method, body)
 
   // 3. Quote: an unpaid request. Nothing is signed.
   let prepared: Awaited<ReturnType<typeof mppx.prepareRequest>>
   try {
-    prepared = await mppx.prepareRequest(url, { ...reqInit(), signal: AbortSignal.timeout(30_000) }, { requirePayment: true })
+    prepared = await mppx.prepareRequest(url, { ...reqInit(), signal: AbortSignal.timeout(30_000) }, CHALLENGE_OPTIONS)
   } catch (err) {
     const msg = oneLine((err as Error)?.message ?? err)
     console.log(`\nREFUSED before signing: could not get a usable ${TOKEN_LABEL} tempo.charge challenge: ${msg}`)

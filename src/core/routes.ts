@@ -62,6 +62,34 @@ export function routesFor(rails: string[] | undefined, chains: string[]): PayRou
   return { pay: x402 && names.some((n) => PAY_CHAIN_NAMES.has(n)), budget };
 }
 
+/** Mainnet names a listing may use, so a refusal can say which mainnet it is on. */
+const MAINNET_NAMES = new Set([
+  "base", "ethereum", "solana", "polygon", "arbitrum", "optimism", "avalanche", "bsc", "sei", "iotex", "peaq",
+  "xlayer", "abstract", "skale", "tempo", "stellar", "near", "sui", "aptos",
+]);
+
+const KNOWN_CHAIN_NAMES = new Set([
+  ...PAY_CHAIN_NAMES,
+  ...Object.values(EVM_BUDGET_CHAINS).flat(),
+  ...TEMPO_NAMES,
+  ...SOLANA_DEVNET_NAMES,
+  ...MAINNET_NAMES,
+]);
+
+/**
+ * A listing's chain name, when the client knows it: one of the names above, or a CAIP-2 id of the usual shape. The
+ * client repeats only these in its own sentences; anything else a listing calls a chain is not repeated.
+ */
+export function isKnownChainName(name: string): boolean {
+  const n = name.toLowerCase();
+  return KNOWN_CHAIN_NAMES.has(n) || /^eip155:\d{1,12}$/.test(n) || /^solana:[1-9a-z]{1,44}$/.test(n);
+}
+
+/** A listing's rail (protocol) name, when the client knows it. */
+export function isKnownRail(name: string): boolean {
+  return ["x402", "mpp"].includes(name.toLowerCase());
+}
+
 /** "evm base-sepolia, solana devnet", or "no" when no budget rail serves the listing. */
 export function describeBudgetRoutes(routes: PayRoutes | undefined): string {
   if (!routes || routes.budget.length === 0) return "no";

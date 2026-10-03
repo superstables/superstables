@@ -16,12 +16,16 @@
 import { EventEmitter } from "node:events";
 import { decodePaymentResponseHeader, encodePaymentSignatureHeader } from "@x402/core/http";
 import type { PaymentRequirements, SettleResponse } from "@x402/core/types";
-import { txUrl } from "./chain.js";
+import { isAddress, txUrl } from "./chain.js";
 import { getQuote } from "./quote.js";
-import { NotPaidEndpointError, parseChallenge, sameTerms, termsFor, type Challenge } from "./x402.js";
+import { MAX_CHALLENGE_BYTES, NotPaidEndpointError, parseChallenge, readBody, readCapped, sameTerms, termsFor, type Challenge } from "./x402.js";
+import { untrustedText } from "./text.js";
+import { checkSettlement, type ChainCheck } from "./settlement.js";
 import { Records } from "./records.js";
 import { SignRefused, type Signer } from "./signer/types.js";
-import type { Policy } from "./policy.js";
+import { evaluatePolicy, type Policy } from "./policy.js";
+import { withFileLock } from "./lock.js";
+import { join } from "node:path";
 import type { AbandonCause, Attempt, AttemptState, PaymentTerms, Quote, Receipt, ServiceOutcome } from "./types.js";
 import { FINAL_ATTEMPT_STATES } from "./types.js";
 
@@ -29,6 +33,8 @@ import { FINAL_ATTEMPT_STATES } from "./types.js";
 export const SERVICE_BODY_LIMIT = 4_000;
 /** The seller settles the payment inside this request, so it may take a while. */
 const SUBMIT_TIMEOUT_MS = 120_000;
+/** How much of a paid answer is read, kept or not, to see it end: 10 MB. */
+const PAID_ANSWER_DRAIN = 10_000_000;
 /** Default ceiling for waitForAttempt: longer than the wallet's own approval timeout. */
 const DEFAULT_WAIT_MS = 140_000;
 
@@ -39,6 +45,12 @@ export interface PaymentEngineOptions {
   signer: Signer;
   /** Injected in tests; the global fetch otherwise. */
   fetchImpl?: typeof fetch;
+  /** How long each exchange with the seller may take, answer included. Shortened in tests; two minutes otherwise. */
+  timeoutMs?: number;
+  /** The Base Sepolia RPC a settlement is read through. Tests point it at a fake chain; settlementRpc() otherwise. */
+  rpcUrl?: string;
+  /** The clock the cap reservation reads. Tests move it; Date.now otherwise. */
+  now?: () => number;
 }
 
 /**
@@ -70,6 +82,9 @@ export class PaymentEngine {
   private readonly policy: Policy;
   private readonly signer: Signer;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
+  private readonly rpcUrl?: string;
+  private readonly now: () => number;
   /** Attempts this process is running, so a caller sees the live state without a file read. */
   private readonly live = new Map<string, Attempt>();
 
@@ -78,6 +93,9 @@ export class PaymentEngine {
     this.policy = options.policy;
     this.signer = options.signer;
     this.fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
+    this.timeoutMs = options.timeoutMs ?? SUBMIT_TIMEOUT_MS;
+    this.rpcUrl = options.rpcUrl;
+    this.now = options.now ?? Date.now;
   }
 
   /**
@@ -141,6 +159,37 @@ export class PaymentEngine {
       const timer = setTimeout(() => finish(this.getAttempt(id) ?? current), timeoutMs);
       this.events.on("transition", onTransition);
     });
+  }
+
+  /** Is this attempt's cap reservation still running? */
+  private reservationOpen(attempt: Attempt): boolean {
+    const until = attempt.reservedUntil ? Date.parse(attempt.reservedUntil) : NaN;
+    return Number.isFinite(until) && this.now() < until;
+  }
+
+  /**
+   * Check the cap for this attempt and, if it allows it, reserve (or renew) the amount until the signer's approval
+   * window and a minute have passed. Call it holding the cap lock.
+   */
+  private reserve(attempt: Attempt, quote: Quote): { allowed: boolean; reason?: string } {
+    const now = this.now();
+    const judged = evaluatePolicy(this.policy, {
+      domain: hostOf(quote.url),
+      amountDecimal: quote.terms.amountDecimal,
+      asset: quote.terms.asset,
+      spentTodayDecimal: this.records.spentToday(quote.terms.asset, new Date(now), { exclude: attempt.id }),
+    });
+    if (judged.allowed) {
+      attempt.reservedAt = new Date(now).toISOString();
+      attempt.reservedUntil = new Date(now + (this.signer.approvalWindowMs ?? DEFAULT_APPROVAL_WINDOW_MS) + RESERVATION_GRACE_MS).toISOString();
+      this.records.saveAttempt(attempt);
+    }
+    return judged;
+  }
+
+  /** Read the chain again for a paid attempt whose settlement is not yet checked: see recheckChain below. */
+  async recheckChain(id: string): Promise<Attempt | undefined> {
+    return recheckChain(this.records, id, this.rpcUrl);
   }
 
   getAttempt(id: string): Attempt | undefined {
@@ -214,6 +263,30 @@ export class PaymentEngine {
     // is left to show the owner a link, so the owner is not asked.
     if (isFinal(attempt.state)) return;
 
+    // Reserve the amount against the daily cap before anyone is asked. Two `pay` processes (or MCP servers) asking at
+    // once would each pass a cap check that does not see the other, so the check and the reservation happen together
+    // under a lock shared by every process on this computer, held only for that moment. The reservation counts until
+    // the owner signs (then the signed states count it) or the attempt ends unsigned (then it is released).
+    let verdict: { allowed: boolean; reason?: string };
+    try {
+      verdict = await withFileLock(join(this.records.dir, CAP_LOCK), () => this.reserve(attempt, quote));
+    } catch (err) {
+      const reopened = this.reopenQuote(quote.id);
+      this.settleState(attempt, "failed", {
+        refusal: "unavailable",
+        reason: `the daily cap could not be checked (${message(err)}). Nothing was signed${reopened ? `, and quote ${quote.id} can still be paid` : ""}`,
+      });
+      return;
+    }
+    if (!verdict.allowed) {
+      this.settleState(attempt, "failed", {
+        refusal: "policy",
+        reason: `the local spend policy refuses this payment: ${verdict.reason ?? "no reason given"}`,
+      });
+      return;
+    }
+    if (isFinal(attempt.state)) return;
+
     // 2. Ask the owner. Nothing has left this machine yet.
     let asked = false;
     let signed;
@@ -233,6 +306,16 @@ export class PaymentEngine {
           },
         },
         {
+          // Right before the owner is asked: a reservation that lapsed while the signer started (a slow page start, a
+          // slow wallet) is checked against the cap again and renewed, or the payment stops with nobody asked.
+          beforeAsk: async () => {
+            const renewed = await withFileLock(join(this.records.dir, CAP_LOCK), () =>
+              this.reservationOpen(attempt) ? { allowed: true } : this.reserve(attempt, quote),
+            );
+            if (!renewed.allowed) {
+              throw new SignRefused("policy", `the local spend policy refuses this payment: ${renewed.reason ?? "no reason given"}`);
+            }
+          },
           onPending: (walletRequestId, approvalUrl) => {
             asked = true;
             this.transition(attempt, "awaiting_approval", {
@@ -270,28 +353,72 @@ export class PaymentEngine {
     // already been told nothing was submitted, and that has to stay true.
     if (isFinal(attempt.state)) return;
 
-    this.transition(attempt, "approved", { payer: signed.signer });
+    // What the owner signed, recorded before it leaves: the nonce ties a transaction on chain to this payment, and
+    // validBefore is when the authorization stops being able to move money (the daily cap reads it).
+    const signedNonce = authorizationNonce(signed.payload);
+    const validBefore = authorizationValidBefore(signed.payload);
+    // The signature is accepted under the cap lock: if the reservation lapsed while the owner decided, the cap is
+    // checked again first, and a payment it now refuses is never sent (the signed authorization stays here, unused).
+    // Otherwise the attempt becomes `approved` in the same step, and its signed state counts it from then on.
+    let accepted: { allowed: boolean; reason?: string };
+    try {
+      accepted = await withFileLock(join(this.records.dir, CAP_LOCK), () => {
+        const judged = this.reservationOpen(attempt) ? { allowed: true } : this.reserve(attempt, quote);
+        if (judged.allowed) {
+          this.transition(attempt, "approved", {
+            payer: signed.signer,
+            ...(signedNonce ? { authorizationNonce: signedNonce } : {}),
+            ...(validBefore ? { authorizationValidBefore: validBefore } : {}),
+          });
+        }
+        return judged;
+      });
+    } catch (err) {
+      accepted = { allowed: false, reason: `the daily cap could not be checked (${message(err)})` };
+    }
+    if (!accepted.allowed) {
+      this.settleState(attempt, "failed", {
+        payer: signed.signer,
+        refusal: "policy",
+        reason: `the owner signed, but the payment was not sent: ${accepted.reason ?? "the local spend policy refuses it"}. Nothing was submitted`,
+      });
+      return;
+    }
     this.transition(attempt, "submitting");
 
     // 3. Replay the request with the credential. From here on the credential has left this
     //    machine, so every failure is a known-unknown, not a clean failure.
     const header = credentialHeader(challenge.version, offer.requirement, signed.payload);
     let res: Response;
+    const deadline = Date.now() + this.timeoutMs;
     try {
       res = await this.fetchImpl(quote.url, {
         method: "GET",
+        // The credential is on this request, so it goes to the seller this quote named and nowhere else:
+        // a redirect would carry it to a host the operator never chose.
+        redirect: "error",
         headers: { ...header, accept: "application/json, */*" },
-        signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
+      // A redirect is refused rather than followed, so this is also where a seller that answers with one lands:
+      // the credential may never have left. Say that, and stay `uncertain`, because nothing here can tell.
       this.settleState(attempt, "uncertain", {
         payer: signed.signer,
-        reason: `the payment credential was sent but the service could not be reached: ${message(err)}`,
+        reason: `the payment could not be completed with this service: ${message(err)}`,
       });
       return;
     }
 
-    const body = (await res.text().catch(() => "")).slice(0, SERVICE_BODY_LIMIT);
+    // Read no further than what is kept: a seller's answer is bounded before it is in memory, not after, and under
+    // the same deadline as the request. An answer that drips forever or breaks off is cut off: the settlement header,
+    // which has already arrived, still decides the payment, but whether the service delivered is then unknown.
+    // Only an answer seen to its end counts as delivered. A longer answer than is kept is read on, without keeping it,
+    // up to PAID_ANSWER_DRAIN bytes; one that is still arriving past that, or past the deadline, or that breaks off,
+    // is not a delivery.
+    const read = await readBody(res, SERVICE_BODY_LIMIT * 4, deadline - Date.now(), PAID_ANSWER_DRAIN);
+    const delivered = read.end === "eof";
+    const body = read.text.slice(0, SERVICE_BODY_LIMIT);
     const settlement = readSettlement(res, challenge.version);
 
     if (!settlement) {
@@ -314,23 +441,57 @@ export class PaymentEngine {
     }
 
     if (!settlement.success) {
+      // The reason is the service's own text (it relays the facilitator's answer). It is kept apart, in serviceReason,
+      // and the client's sentence says only what the client knows.
+      const said = settlement.errorReason ?? settlement.errorMessage;
       this.settleState(attempt, "failed", {
-        payer: settlement.payer ?? signed.signer,
+        payer: signed.signer,
         serviceStatus: res.status,
         serviceBody: body,
-        reason: `the payment did not settle: ${settlement.errorReason ?? settlement.errorMessage ?? "the facilitator gave no reason"}`,
+        reason: said ? "the service reported that the payment did not settle, and gave a reason of its own" : "the service reported that the payment did not settle, and gave no reason",
+        ...(said ? { serviceReason: said } : {}),
       });
       return;
     }
 
-    // 4. The money moved. Whether the service then did its job is a separate fact.
-    const ok = res.status >= 200 && res.status < 300;
+    // 4. The seller reports the money moved. The chain is read to check that the transaction it names is this payment
+    //    (settlement.ts); whether the service then did its job is a separate fact.
+    const nonce = authorizationNonce(signed.payload);
+    const check = await checkSettlement(
+      {
+        transaction: settlement.transaction,
+        payer: signed.signer,
+        recipient: quote.terms.recipient,
+        amountAtomic: quote.terms.amountAtomic,
+        nonce,
+      },
+      { rpcUrl: this.rpcUrl },
+    );
+    if (check.chain === "mismatch") {
+      // The chain shows that transaction, and it is not this payment. Not paid and not unpaid: unknown, never retried.
+      this.settleState(attempt, "uncertain", {
+        payer: signed.signer,
+        ...(isTxHash(settlement.transaction) ? { transaction: settlement.transaction } : {}),
+        serviceStatus: res.status,
+        serviceBody: body,
+        authorizationNonce: nonce,
+        chain: "mismatch",
+        chainReason: check.reason,
+        reason: `the service reported the payment settled, but the chain does not confirm it (${check.reason}), so whether it was paid is unknown`,
+      });
+      return;
+    }
+    // A 2xx whose body never arrived in full is not a delivery: it ends as paid but not delivered, outcome unknown.
+    const ok = res.status >= 200 && res.status < 300 && delivered;
+    const outcome: ServiceOutcome = !delivered ? "unknown" : ok ? "ok" : "failed";
     const receipt = this.writeReceipt({
+      check,
       attempt,
       quote,
       settlement,
-      payer: settlement.payer ?? signed.signer,
-      serviceOutcome: ok ? "ok" : "failed",
+      // The address that signed is this client's own fact; the seller's `payer` is only its claim.
+      payer: signed.signer,
+      serviceOutcome: outcome,
       serviceStatus: res.status,
       body,
       ms: Date.now() - started,
@@ -342,7 +503,14 @@ export class PaymentEngine {
       serviceStatus: res.status,
       serviceBody: body,
       receiptId: receipt.id,
-      reason: ok ? undefined : `the payment settled but the service answered ${res.status}`,
+      authorizationNonce: nonce,
+      chain: check.chain,
+      ...(check.reason ? { chainReason: check.reason } : {}),
+      reason: ok
+        ? undefined
+        : !delivered
+          ? "the service reported the payment settled, but its answer did not arrive in full, so whether it delivered is unknown"
+          : `the service reported the payment settled but answered ${res.status}`,
     });
   }
 
@@ -353,18 +521,21 @@ export class PaymentEngine {
    * fetch so a test (or a future proxy) can stand in for the network.
    */
   private async challengeFor(url: string): Promise<Challenge> {
+    const deadline = Date.now() + this.timeoutMs;
     const res = await this.fetchImpl(url, {
       method: "GET",
+      redirect: "error",
       headers: { accept: "application/json, */*" },
-      signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
-    const body = await res.text();
+    const body = await readCapped(res, MAX_CHALLENGE_BYTES, deadline - Date.now(), url);
     if (res.status !== 402) throw new NotPaidEndpointError(url, res.status, body.slice(0, 300));
     const header = res.headers.get("payment-required") ?? res.headers.get("x-payment-required");
     return parseChallenge({ paymentRequiredHeader: header, body });
   }
 
   private writeReceipt(input: {
+    check: ChainCheck;
     attempt: Attempt;
     quote: Quote;
     settlement: SettleResponse;
@@ -375,11 +546,14 @@ export class PaymentEngine {
     ms: number;
   }): Receipt {
     const { attempt, quote, settlement } = input;
-    const network = settlement.network ?? attempt.terms.network;
-    const transaction = settlement.transaction ?? "";
-    // A facilitator that has a hash gives one; one that has only accepted the transfer
-    // gives something else. The receipt says which, rather than pretending to a hash.
-    const kind = /^0x[0-9a-fA-F]+$/.test(transaction) ? "hash" : "pending";
+    // The network is the one the client checked in the terms, not the one the seller names in its report.
+    const network = attempt.terms.network;
+    // A facilitator that has a hash gives one; one that has only accepted the transfer gives something else. Only a
+    // well-formed transaction hash is kept as the transaction: anything else the seller put there is not repeated as
+    // a fact, and stays only in `settlement`, the seller's report as it was received.
+    const reported = settlement.transaction ?? "";
+    const kind = isTxHash(reported) ? "hash" : "pending";
+    const transaction = kind === "hash" ? reported : "";
     const receipt: Receipt = {
       id: attempt.id,
       at: new Date().toISOString(),
@@ -401,6 +575,8 @@ export class PaymentEngine {
         network: settlement.network,
         errorReason: settlement.errorReason,
       },
+      chain: input.check.chain,
+      ...(input.check.reason ? { chainReason: input.check.reason } : {}),
       serviceOutcome: input.serviceOutcome,
       serviceStatus: input.serviceStatus,
       serviceBodyPreview: input.body || undefined,
@@ -501,11 +677,162 @@ function readSettlement(res: Response, version: 1 | 2): SettleResponse | undefin
     res.headers.get(version === 1 ? "x-payment-response" : "payment-response") ??
     res.headers.get(version === 1 ? "payment-response" : "x-payment-response");
   if (!header) return undefined;
+  let decoded: SettleResponse;
   try {
-    return decodePaymentResponseHeader(header);
+    decoded = decodePaymentResponseHeader(header);
   } catch {
     return undefined;
   }
+  // The header is the service's claim about what its facilitator did; settlement.ts reads the chain to check it.
+  // Its strings are kept, displayed and repeated to an agent, so each is one bounded line.
+  const text = (value: unknown, max: number) => (value === undefined || value === null ? undefined : untrustedText(value, max));
+  return {
+    ...decoded,
+    success: decoded.success === true,
+    transaction: text(decoded.transaction, 100) ?? "",
+    network: text(decoded.network, 60) as SettleResponse["network"],
+    payer: text(decoded.payer, 100),
+    errorReason: text(decoded.errorReason, 200),
+    errorMessage: text(decoded.errorMessage, 200),
+  } as SettleResponse;
+}
+
+/**
+ * Read the chain again for a paid attempt whose settlement is not yet checked (`chain` "unchecked", or a record from
+ * before the chain was read). Verified: recorded on the attempt and its receipt. Mismatch: the attempt becomes
+ * `uncertain`, since the transaction the seller named is not this payment. Still unchecked: the new reason is recorded.
+ * Any other attempt is returned as it is. Reads records and the chain only; never starts or repeats a payment.
+ */
+export async function recheckChain(records: Records, id: string, rpcUrl?: string): Promise<Attempt | undefined> {
+  const attempt = records.getAttempt(id);
+  if (!attempt) return undefined;
+  if (attempt.state !== "settled" && attempt.state !== "paid_service_failed") return attempt;
+  if (attempt.chain === "verified" || attempt.chain === "mismatch") return attempt;
+  const check = await checkSettlement(
+    {
+      transaction: attempt.transaction,
+      payer: attempt.payer ?? "",
+      recipient: attempt.terms.recipient,
+      amountAtomic: attempt.terms.amountAtomic,
+      nonce: attempt.authorizationNonce,
+    },
+    { rpcUrl },
+  );
+  const receipt = attempt.receiptId ? records.getReceipt(attempt.receiptId) : undefined;
+  if (receipt) {
+    const { chainReason: _old, ...rest } = receipt;
+    records.saveReceipt({ ...rest, chain: check.chain, ...(check.reason ? { chainReason: check.reason } : {}) });
+  }
+  const { chainReason: _was, ...kept } = attempt;
+  const updated: Attempt = { ...kept, chain: check.chain, ...(check.reason ? { chainReason: check.reason } : {}), updatedAt: new Date().toISOString() };
+  if (check.chain === "mismatch") {
+    updated.state = "uncertain";
+    updated.reason = `the service reported the payment settled, but the chain does not confirm it (${check.reason}), so whether it was paid is unknown`;
+    updated.history = [...attempt.history, { at: updated.updatedAt, state: "uncertain", note: "the chain does not confirm the settlement the service reported" }];
+  }
+  records.saveAttempt(updated);
+  return updated;
+}
+
+/** How long a reservation outlives the signer's approval window: room for the signature to come back. */
+const RESERVATION_GRACE_MS = 60_000;
+
+/** How long a reservation counts for a signer that does not say how long it waits for the owner. */
+const DEFAULT_APPROVAL_WINDOW_MS = 10 * 60_000;
+
+/** The lock file, in the records directory, under which an attempt checks the daily cap and reserves its amount. */
+const CAP_LOCK = "cap.lock";
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
+
+/** The EIP-3009 nonce in a signed payload, when it is a bytes32. */
+function authorizationNonce(payload: { authorization: Record<string, unknown> }): string | undefined {
+  const nonce = payload.authorization?.nonce;
+  return typeof nonce === "string" && /^0x[0-9a-fA-F]{64}$/.test(nonce) ? nonce : undefined;
+}
+
+/** The EIP-3009 validBefore in a signed payload (unix seconds), as an ISO time, when it is a plain number. */
+function authorizationValidBefore(payload: { authorization: Record<string, unknown> }): string | undefined {
+  const raw = payload.authorization?.validBefore;
+  const seconds = typeof raw === "string" && /^\d{1,12}$/.test(raw) ? Number(raw) : typeof raw === "number" ? raw : NaN;
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) return undefined;
+  const at = new Date(seconds * 1000);
+  return Number.isNaN(at.getTime()) ? undefined : at.toISOString();
+}
+
+/** An EVM transaction hash: 0x and 64 hex digits. The only shape a transaction is repeated in. */
+export function isTxHash(value: unknown): value is string {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
+}
+
+/**
+ * The transaction of a receipt or an attempt as it may be shown: the hash and its explorer link when it is a well-formed
+ * hash, nothing otherwise. Checked when shown as well as when written, because records written by an earlier version
+ * kept whatever the seller sent, and the link is rebuilt from the checked network rather than taken from the record.
+ */
+export function shownTransaction(transaction: string | undefined, network: string): { hash?: string; url?: string } {
+  return isTxHash(transaction) ? { hash: transaction, url: txUrl(network, transaction) } : {};
+}
+
+/** A payer address as it may be shown: 0x and 40 hex digits, or nothing. */
+export function shownPayer(payer: string | undefined): string | undefined {
+  return typeof payer === "string" && isAddress(payer) ? payer : undefined;
+}
+
+/**
+ * An attempt as it may be printed as JSON: the transaction, its link and the payer checked as for a receipt, and the
+ * seller's own text (its answer and its reason) moved under `untrusted_seller_data`, together with any transaction,
+ * link or payer the record holds that did not pass the check (a record from an earlier version may).
+ */
+export function shownAttempt(attempt: Attempt): Omit<Attempt, "serviceBody" | "serviceReason"> & {
+  untrusted_seller_data?: { serviceBody?: string; serviceReason?: string; transaction?: string; transactionUrl?: string; payer?: string };
+} {
+  const { serviceBody, serviceReason, transaction, transactionUrl, payer, ...rest } = attempt;
+  const tx = shownTransaction(transaction, attempt.terms.network);
+  const checkedPayer = shownPayer(payer);
+  const untrusted = {
+    ...(serviceBody !== undefined ? { serviceBody } : {}),
+    ...(serviceReason !== undefined ? { serviceReason } : {}),
+    ...(transaction && !tx.hash ? { transaction } : {}),
+    ...(transactionUrl && transactionUrl !== tx.url ? { transactionUrl } : {}),
+    ...(payer && !checkedPayer ? { payer } : {}),
+  };
+  return {
+    ...rest,
+    ...(tx.hash ? { transaction: tx.hash, transactionUrl: tx.url } : {}),
+    ...(checkedPayer ? { payer: checkedPayer } : {}),
+    ...(Object.keys(untrusted).length > 0 ? { untrusted_seller_data: untrusted } : {}),
+  };
+}
+
+/**
+ * A receipt as it may be shown or printed as JSON: the transaction, its link and the payer checked as above (the link
+ * rebuilt from the checked network), and the network the client checked. The seller's settlement report, as it was
+ * received, is kept under `untrusted_seller_report`, so nothing a seller wrote sits in a field that reads as checked.
+ */
+export function shownReceipt(receipt: Receipt): Omit<Receipt, "settlement"> & {
+  settlement: { success: boolean; transaction: string; payer: string; network: string };
+  untrusted_seller_report: Receipt["settlement"];
+} {
+  const { settlement, ...rest } = receipt;
+  const tx = shownTransaction(receipt.transaction, receipt.terms.network);
+  const payer = shownPayer(receipt.payer) ?? "";
+  return {
+    ...rest,
+    transaction: tx.hash ?? "",
+    transactionKind: tx.hash ? "hash" : "pending",
+    transactionUrl: tx.url ?? "",
+    payer,
+    network: receipt.terms.network,
+    settlement: { success: settlement?.success === true, transaction: tx.hash ?? "", payer, network: receipt.terms.network },
+    untrusted_seller_report: settlement,
+  };
 }
 
 function message(err: unknown): string {

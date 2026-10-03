@@ -115,7 +115,7 @@ and the service's response:
   submitting
   settled
 
-Paid 0.01 USDC on Base Sepolia (testnet); settlement confirmed by the facilitator (transaction 0x12e62de0d1c67278c2a181a04df63a883671d648eeecf4be60e4e368c7def0e6). The service answered HTTP 200.
+Paid 0.01 USDC on Base Sepolia (testnet) (transaction 0x12e62de0d1c67278c2a181a04df63a883671d648eeecf4be60e4e368c7def0e6); checked on chain: the transaction is this payment. The service answered HTTP 200.
 
   receipt         b65773de-a08b-4c91-b5c9-0729b4675a3a
   paid            0.01 USDC

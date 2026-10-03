@@ -94,6 +94,10 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
 export class WalletSigner implements Signer {
   readonly kind = "wallet" as const;
 
+  get approvalWindowMs(): number {
+    return this.timeoutMs;
+  }
+
   private readonly wire: WalletWire;
   private readonly pollMs: number;
   private readonly timeoutMs: number;
@@ -127,6 +131,7 @@ export class WalletSigner implements Signer {
    * own policy) gave.
    */
   async sign(req: SignRequest, hooks?: SignHooks): Promise<SignResult> {
+    await hooks?.beforeAsk?.();
     const deadline = Date.now() + this.timeoutMs;
     let view = await walletRequest<WalletRequestView>(this.wire, "POST", "/requests", { sign: req });
 

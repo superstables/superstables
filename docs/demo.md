@@ -108,8 +108,8 @@ same thing underneath the amount.
 Sign. The page says **Signed. You can go back to the agent.** The agent, asked again or
 waiting, reports:
 
-> Paid 0.01 USDC on Base Sepolia (testnet); settlement confirmed by the facilitator
-> (transaction 0x…). The service answered HTTP 200.
+> Paid 0.01 USDC on Base Sepolia (testnet) (transaction 0x…); checked on chain: the transaction
+> is this payment. The service answered HTTP 200.
 
 and shows the BTC price it paid for.
 
@@ -193,7 +193,7 @@ command so the MCP server uses the same home.
 | Payment fails: "the payment did not settle" with an insufficient-funds reason | The connected account has no test USDC | Top it up at <https://faucet.circle.com>; MetaMask shows the balance |
 | Payment fails: "No facilitator could be reached" | All three public facilitators are unreachable | Check connectivity, then `superstables doctor`, which reports each facilitator separately. Check the attempt's status before paying again |
 | `find_services` shows the demo service with `live: false` | The hosted service did not answer 402 | Check connectivity; or run the seller yourself and set `SUPERSTABLES_DEMO_SERVICE_URL` to it |
-| Agent: "Payment settled … but the service answered HTTP 5xx" | The money moved and the service then failed | Do not pay again. The receipt records both facts |
+| Agent: "The service reported the payment settled … but it answered HTTP 5xx" | The seller reports the payment settled and the service then failed | Do not pay again. The receipt records both facts |
 | Agent: "The payment may or may not have settled" | The credential was sent and no answer came back | Do not retry. Follow the steps in [records.md](records.md#why-failed-and-uncertain-are-different) |
 | Claude Code `/mcp` does not list superstables | The server is not configured, or it will not start | `claude mcp list`, then run `superstables mcp` by hand and read stderr |
 | The agent does not give you the link at once | The MCP `pay` tool answers once a link exists or the attempt ends; it may still be checking the seller's terms | Wait for the tool result. After approving, ask for `payment_status` with the attempt id |

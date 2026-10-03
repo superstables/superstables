@@ -7,6 +7,7 @@
 
 import { detect, termsFor, type Challenge, type RawAccept } from "./x402.js";
 import { describeNetwork } from "./chain.js";
+import { SellerTextError, untrustedText } from "./text.js";
 import { evaluatePolicy, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
 import { Records } from "./records.js";
@@ -98,15 +99,17 @@ function firstSupported(challenge: Challenge, url: string) {
     if (judged.supported) return judged;
     refusals.push(`${describeAccept(accept)}: ${judged.reason}`);
   }
-  throw new Error(
-    `${hostOf(url)} offers no payment this client can make — ${refusals.join("; ")}`,
-  );
+  // A challenge can list any number of offers; the first few say enough.
+  const shown = refusals.slice(0, 5).join("; ") + (refusals.length > 5 ? `; and ${refusals.length - 5} more` : "");
+  // The host is the one this client called; the offers are the seller's words, kept apart as the detail.
+  throw new SellerTextError(`${hostOf(url)} offers no payment this client can make`, shown);
 }
 
 function describeAccept(accept: RawAccept): string {
-  const scheme = accept.scheme ?? "exact";
-  const network = describeNetwork(accept.network ?? "unknown network");
-  const asset = accept.extra?.name ?? accept.asset ?? "an unnamed asset";
+  // The seller's own words, each quoted as one bounded line: this sentence reaches an agent as the client's refusal.
+  const scheme = untrustedText(accept.scheme ?? "exact", 40);
+  const network = untrustedText(describeNetwork(String(accept.network ?? "unknown network")), 60);
+  const asset = untrustedText(accept.extra?.name ?? accept.asset ?? "an unnamed asset", 60);
   return `${scheme} ${asset} on ${network}`;
 }
 

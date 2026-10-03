@@ -32,7 +32,11 @@ interface Run {
 /** The budget CLI with a fresh home. stdout is a pipe, as it is for an agent's tool. */
 function budget(args: string[]): Promise<Run> {
   return new Promise((done, fail) => {
-    const child = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, SUPERSTABLES_HOME: home, DISPLAY: "" } });
+    const child = spawn(process.execPath, [CLI, ...args], {
+      // B4_RPC on this computer, where nothing listens: these commands stop before any chain is needed, and the ones
+      // that look anyway get no answer instead of reaching Base Sepolia.
+      env: { ...process.env, SUPERSTABLES_HOME: home, DISPLAY: "", B4_RPC: "http://127.0.0.1:9/" },
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += String(chunk)));

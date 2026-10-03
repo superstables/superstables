@@ -186,7 +186,10 @@ are marked simulated; the market data service returns live prices.
 value on stdout; progress, the approval link and notes go to stderr. `pay --json` and
 `status --json` print the same object: `attempt_id`, `quote_id`, `state`, `final`, `message`,
 `next`, `exit_code`, `reason`, `refusal`, `receipt`, `service_response`, `price`, `recipient` and
-`history`. `receipts --json` and `attempts --json` print the records as stored. An error under
+`history`. `attempts --json` and `receipts --json` print the records with `transaction`,
+`transactionUrl` and `payer` only when they are well formed. The seller's own text is kept apart:
+an attempt's service answer and reason under `untrusted_seller_data`, a receipt's settlement report
+as retained by the client under `untrusted_seller_report`. An error under
 `--json` prints `{"error", "exit_code"}`.
 
 `superstables budget` commands take `--json` too. Without it, a budget command ends stdout with
@@ -198,11 +201,11 @@ The exit codes are the same numbers `superstables budget` uses:
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Done. For `pay`, the payment settled and the service answered |
+| 0 | Done. For `pay`, the payment settled and the service answered; `chain` says whether the client confirmed it on chain |
 | 1 | Failed: nothing was paid. Includes an approval that expired or was abandoned, and a service or wallet that could not be reached |
 | 2 | Bad input: an unknown command or flag, a missing or wrong parameter, an unknown id, or a used or expired quote. Nothing was done |
 | 3 | Refused: the owner rejected the payment, or a spend policy refused it (for `quote`, the policy would refuse it). Nothing was paid |
-| 4 | Paid, not delivered: the payment settled but the service answered with an error. Do not pay again |
+| 4 | Paid, not delivered: the payment settled but the service answered with an error, or its answer did not arrive in full. Do not pay again |
 | 5 | Unknown: the payment may or may not have settled. Do not pay again until you have checked |
 
 `status <attempt-id>` exits with the attempt's own code, and 0 while it is not final.
@@ -216,7 +219,7 @@ The exit codes are the same numbers `superstables budget` uses:
 | `pay` | Ask you to approve a quote, returning `approval_url`; then pay it and return the service's answer |
 | `payment_status` | Wait for a payment attempt and report its state |
 | `wallet_status` | Which signer is in use; address, network, balance, policy |
-| `list_receipts` | Payments that settled on this machine |
+| `list_receipts` | Payments made from this machine, each with `chain`: verified, unchecked or mismatch after a later check |
 
 Of these tools, only `pay` can initiate a payment. It returns an `approval_url` and waits in
 `awaiting_approval` for your decision. The agent must show the complete link unchanged so you
@@ -278,7 +281,11 @@ local policy and what a compromised agent or client process could do.
 - An interrupted payment can end in `uncertain` and is never retried automatically. See
   [docs/records.md](docs/records.md) for the checks to make before trying again.
 - A receipt records payment and service outcomes separately. A settled payment does not
-  guarantee a successful service response. If the facilitator has not returned a transaction
+  guarantee a successful service response. For `pay`, the client reads the seller's transaction
+  on Base Sepolia: `chain: "verified"` when it is this payment (the signed nonce used, the exact
+  amount to the checked recipient), `"unchecked"` when the chain could not say yet
+  (`superstables status` checks again). A transaction that is not this payment makes the attempt
+  `uncertain`. If the facilitator has not returned a transaction
   hash, the receipt records its pending reference instead.
 - Hosted approvals (`superstables budget setup --hosted`), `superstables budget buy-once` and
   `superstables budget find` need superstables.com, or a compatible deployment the owner names

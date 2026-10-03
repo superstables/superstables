@@ -131,7 +131,8 @@ const refuse = (reasons, extra = {}) => {
 async function fetchOnce(u, m, body, extraHeaders, timeoutMs = 60_000) {
   const headers = { Accept: "application/json", ...extraHeaders };
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  const res = await fetch(u, { method: m, headers, body, signal: AbortSignal.timeout(timeoutMs) });
+  // No redirects: the paid request carries PAYMENT-SIGNATURE, which fetch would take to whatever host a redirect names.
+  const res = await fetch(u, { method: m, headers, body, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   const capped = await readCapped(res);
   return { res, text: capped.bytes.toString("utf8"), capped };
 }

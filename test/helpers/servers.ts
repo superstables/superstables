@@ -55,16 +55,21 @@ export function sendJson(res: ServerResponse, status: number, body: unknown, hea
 export interface FakeFacilitator extends TestServer {
   calls: { verify: number; settle: number };
   transaction: string;
+  /** The EIP-3009 authorization in the last payment it settled: what a fake chain needs to show that payment. */
+  lastAuthorization?: { from: string; to: string; value: string; nonce: string };
 }
 
 export async function startFacilitator(): Promise<FakeFacilitator> {
   const calls = { verify: 0, settle: 0 };
   const transaction = `0x${"ab".repeat(32)}`;
+  const state: { lastAuthorization?: FakeFacilitator["lastAuthorization"] } = {};
   const server = await startServer(async (req, res) => {
     const body = JSON.parse((await readBody(req)) || "{}") as {
       paymentPayload?: { payload?: { authorization?: { from?: string } } };
     };
     const payer = body.paymentPayload?.payload?.authorization?.from ?? `0x${"11".repeat(20)}`;
+    const authorization = body.paymentPayload?.payload?.authorization as FakeFacilitator["lastAuthorization"] | undefined;
+    if (req.url === "/settle" && authorization) state.lastAuthorization = authorization;
     if (req.url === "/verify") {
       calls.verify += 1;
       sendJson(res, 200, { isValid: true, payer });
@@ -77,7 +82,14 @@ export async function startFacilitator(): Promise<FakeFacilitator> {
     }
     sendJson(res, 404, { error: "not found" });
   });
-  return { ...server, calls, transaction };
+  return {
+    ...server,
+    calls,
+    transaction,
+    get lastAuthorization() {
+      return state.lastAuthorization;
+    },
+  };
 }
 
 // ── A paid endpoint ────────────────────────────────────────────────────────────────────

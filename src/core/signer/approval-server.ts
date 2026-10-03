@@ -128,13 +128,14 @@ const EIP712_DOMAIN_TYPE = [
 function buildTypedData(record: ApprovalRecord, payer: string): ApprovalTypedData {
   const requirement = record.requirement as PaymentRequirements & { maxAmountRequired?: string };
   const network = networkFor(String(requirement.network ?? "")) ?? DEFAULT_NETWORK;
-  const extra = (requirement.extra ?? {}) as { name?: string; version?: string };
   const now = Math.floor(Date.now() / 1000);
   const timeout = Number(requirement.maxTimeoutSeconds ?? 300);
   return {
     domain: {
-      name: extra.name ?? network.usdc.eip712.name,
-      version: extra.version ?? network.usdc.eip712.version,
+      // USDC's own domain, never the seller's `extra`: the wallet shows the domain name as the signing application,
+      // and quoting refuses an offer whose `extra` names another one (x402.ts, termsFor).
+      name: network.usdc.eip712.name,
+      version: network.usdc.eip712.version,
       chainId: network.chainId,
       verifyingContract: getAddress(String(requirement.asset)),
     },

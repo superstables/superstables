@@ -139,7 +139,8 @@ Environment:
                                  (most are simulated; the market data service returns live prices)
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; `off` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
-  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances and for the network MetaMask adds
+  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances, the network MetaMask adds, and the chain
+                                 check on a settlement (https, or http on this computer)
   SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, 4412 or a free one when busy
   SUPERSTABLES_WALLET_URL        where the local wallet listens (default http://127.0.0.1:4411)
   SUPERSTABLES_MCP_WAIT_MS       how long the MCP pay and payment_status tools wait (default 20000)
@@ -151,13 +152,15 @@ Output:
   and notes on stderr. An error under --json is {"error", "exit_code"} on stdout.
 
 Exit codes (the same numbers as `superstables budget`):
-  0  done: printed what was asked; for pay, the payment settled and the service answered
+  0  done: printed what was asked; for pay, the payment settled (chain: verified, or unchecked until checked
+     again) and the service answered
   1  failed: nothing was paid. Includes an approval that expired or was abandoned, and a service or
      wallet that could not be reached
   2  bad input: unknown command or flag, a missing or wrong parameter, an unknown id, or a quote
      that is used or expired. Nothing was done
   3  refused: the owner rejected the payment, or a spend policy refused it. Nothing was paid
-  4  paid, not delivered: the payment settled but the service answered with an error. Do not pay again
+  4  paid, not delivered: the payment settled (verified or unchecked) but the service answered with an error,
+     or its answer did not arrive in full. Do not pay again
   5  unknown: the payment may or may not have settled. Do not pay again until you have checked
      `superstables receipts` and the payer's account on the explorer
 ```
@@ -457,10 +460,13 @@ Retrying: a quote starts at most one attempt. After denied, expired, abandoned o
 quote and pay that, unless the Next line (next, with --json) says the same quote can still be paid
 (the owner was never asked). After uncertain or paid_service_failed, do not pay again.
 
-States: awaiting_approval, approved, submitting (not final); settled, paid_service_failed (money
-moved); denied (the owner rejected it), expired (nobody approved in the window), abandoned (the wait
-ended before anyone decided; abandoned_by says whether this process was stopped, --wait ran out or
-the page closed), failed (nothing was paid); uncertain (the payment may or may not have settled).
+States: awaiting_approval, approved, submitting (not final); settled, paid_service_failed (paid;
+chain says verified, when the client read the transaction on chain and it is this payment, or
+unchecked, when it rests on the seller's report until `superstables status` checks again); denied
+(the owner rejected it), expired (nobody approved in the window), abandoned (the wait ended before
+anyone decided; abandoned_by says whether this process was stopped, --wait ran out or the page
+closed), failed (nothing was paid); uncertain (the payment may or may not have settled, including
+when the chain shows the seller's transaction is not this payment: chain mismatch).
 
 Moves money: yes, once, and only after the owner approves it in their own wallet. Calling pay only
   asks; the agent cannot approve.
@@ -491,7 +497,8 @@ Options:
   --json      print the same object as `pay --json`
   -h, --help  display help for command
 
-Moves money: no. It reads this machine's records; it never starts or repeats a payment.
+Moves money: no. It reads this machine's records, and the chain again for a paid attempt whose chain
+  is unchecked; it never starts or repeats a payment.
 Run by: the agent or the owner.
 Example:
   $ superstables status <attempt-id>
@@ -515,14 +522,18 @@ Options:
   --json       print the receipt records as a JSON array
   -h, --help   display help for command
 
-One receipt means money moved once. A receipt records the payment and the service's answer
-separately.
+One receipt for each payment the seller reported settled. The chain column says verified when the
+client read the transaction on chain and it is this payment, unchecked when it has not yet
+(`superstables status` checks again). A later check can mark the receipt mismatch and the attempt
+uncertain. Do not pay again. A receipt records the payment and the service's answer separately.
 
 Moves money: no.
 Run by: the agent or the owner.
 Example:
   $ superstables receipts --limit 5
-Prints: a table of receipts. With --json, the receipt records as stored, newest first.
+Prints: a table of receipts. With --json, the receipt records newest first, with transaction,
+  transactionUrl and payer only when well formed; the retained settlement fields are under
+  untrusted_seller_report.
 Exit codes: 0 listed (also when there are none), 2 bad input (the full table: superstables --help)
 ```
 
@@ -542,8 +553,9 @@ Moves money: no.
 Run by: the agent or the owner.
 Example:
   $ superstables attempts --json
-Prints: a table of attempts and their states. With --json, the attempt records as stored, newest
-  first.
+Prints: a table of attempts and their states. With --json, the attempt records newest first, with
+  transaction, transactionUrl and payer only when well formed; the service's answer and reason, and
+  anything that did not pass those checks, are under untrusted_seller_data.
 Exit codes: 0 listed (also when there are none), 2 bad input (the full table: superstables --help)
 ```
 
@@ -613,6 +625,11 @@ Commands:
 policy.yaml sets caps per payment and per day, host allow and deny lists, the accepted stablecoins
 and a kill switch. It is software policy, checked by this client and again by the wallet; the chain
 does not enforce it. Budgets have their own on-chain limits instead.
+
+The per-day cap: a payment counts on the day it ended, and on every day while it is still open
+(signed and in flight until its authorization expires, or waiting for the owner within its approval
+window). pay reserves the amount before the owner is asked, so two payments started at once cannot
+both pass; one that ends unsigned releases it.
 
 Moves money: no.
 Run by: the owner writes it; anyone may read it.

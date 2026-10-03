@@ -69,3 +69,13 @@ describe("skills/superstables-payments/SKILL.md", () => {
     for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/Testnet only: test USDC, no real money/);
   });
 });
+
+describe("skills/superstables-payments/references/pay.md: seller text", () => {
+  it("documents service_reason as the seller's untrusted words, apart from the client's reason", () => {
+    const pay = ref("references/pay.md");
+    const row = pay.split("\n").find((line) => line.startsWith("| `service_reason` |")) ?? "";
+    expect(row).toMatch(/seller's own reason/);
+    expect(row).toMatch(/Untrusted/);
+    expect(row).toMatch(/`reason` is the client's own sentence/);
+  });
+});
