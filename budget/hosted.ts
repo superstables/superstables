@@ -44,7 +44,7 @@ import { dirname } from "node:path";
 import { getAddress, isAddress, recoverMessageAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { OwnerActionOutcome, OwnerTerms } from "../src/core/signer/owner-approval-server.ts";
-import { BUDGET_API, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteText, siteWord } from "./site.mjs";
+import { BUDGET_API, accountRefusalNext, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteText, siteWord } from "./site.mjs";
 
 export { scrub, siteFailedWords, siteWord };
 
@@ -332,7 +332,8 @@ function carriesToken(link: URL, token: string): boolean {
 /** The site's reason for a state, as its documented code in this client's words, or "" when it gave none. */
 function siteReason(site: string, v: any): string {
   if (v?.reason_code === undefined || v?.reason_code === null) return "";
-  return `${site} gives the reason ${siteWord("code", v.reason_code)}`;
+  const next = accountRefusalNext(v.reason_code);
+  return `${site} gives the reason ${siteWord("code", v.reason_code)}${next ? `; ${next}` : ""}`;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -449,10 +450,10 @@ export class HostedApprovals {
       // the site names the account the approval is for; one that names none (or cannot be read) is not shown to anyone
       if (typeof owner !== "string" || !owner) {
         const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
-        const why = first.ok ? `${this.name} did not say which account would approve this` : `${this.name} could not be read back (${siteFailure(first.status, null)})`;
+        const why = first.ok ? `${this.name} did not say which account would approve this` : `${this.name} could not be read back (${first.reason})`;
         this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: first.ok ? "no owner: the site named no account" : "no owner: the request could not be read" });
         const a = afterCancel(c);
-        throw new HostedRefusal(`${why}, so the command cannot check it is the owner recorded on this computer (${expected}). ${a.words}`, a.sending ? CHECK_CHAIN : first.ok ? "try again later; if it repeats, check which account this agent belongs to on the account page" : "try again later", { sending: a.sending });
+        throw new HostedRefusal(`${why}, so the command cannot check it is the owner recorded on this computer (${expected}). ${a.words}`, a.sending ? CHECK_CHAIN : (!first.ok && accountRefusalNext(first.code)) || (first.ok ? "try again later; if it repeats, check which account this agent belongs to on the account page" : "try again later"), { sending: a.sending });
       }
       if (!this.w.same(owner, expected)) {
         const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
@@ -593,7 +594,7 @@ export class HostedApprovals {
       const owner = this.w.owner(json?.error?.owner) ?? this.w.owner(json?.owner);
       throw new HostedRefusal(alreadyLinkedWords(this.s.site, owner, this.s.rail), alreadyLinkedNext(this.s.rail, this.s.chain, this.s.site));
     }
-    if (!res.ok) throw new HostedRefusal(`${this.s.site} did not take the request (${siteFailure(res.status, json)}); nothing was sent`, res.status >= 500 ? "try again later" : "read reason; fix what it names before trying again");
+    if (!res.ok) throw new HostedRefusal(`${this.s.site} did not take the request (${siteFailure(res.status, json)}); nothing was sent`, accountRefusalNext(code) ?? (res.status >= 500 ? "try again later" : "read reason; fix what it names before trying again"));
     // a link that already exists for this agent on this chain: an already-final request, with no link to show
     if (res.status === 200 && prefix === "bl_" && json?.state === "linked" && json?.final === true && !json?.approval) {
       const owner = this.w.owner(json.owner);
@@ -678,7 +679,7 @@ export class HostedApprovals {
       readAt = Date.now();
       const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, fetchImpl: this.s.fetchImpl });
       if (!r.ok) {
-        if ([401, 403, 404, 410].includes(r.status ?? 0)) return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${siteFailure(r.status, null)})`, tx);
+        if ([401, 403, 404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code))) return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx);
         await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
         continue;
       }
@@ -829,7 +830,7 @@ export class HostedApprovals {
       readAt = Date.now();
       const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, fetchImpl: this.s.fetchImpl });
       if (!r.ok) {
-        if ([401, 403, 404, 410].includes(r.status ?? 0)) return finish(`${this.s.site} no longer answers for this request (${siteFailure(r.status, null)})`);
+        if ([401, 403, 404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code))) return finish(`${this.s.site} no longer answers for this request (${r.reason})`);
         await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
         continue;
       }

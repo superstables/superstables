@@ -10,7 +10,7 @@ import bs58 from "bs58";
 import { recoverMessageAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { agentProof, agentProofText, bodyHash, HostedApprovals, HostedRefusal, ownerProofProblem, ownerProofText, scrub, siteWord, type HostedRecord, type SolanaAgentKey } from "../../budget/hosted.js";
-import { cancelSiteRequest, chosenSite, listSiteServices, siteName, siteOrigin, siteText } from "../../budget/site.mjs";
+import { accountRefusalNext, cancelSiteRequest, chosenSite, listSiteServices, siteFailure, siteName, siteOrigin, siteText } from "../../budget/site.mjs";
 import { agentProofV2Text, evmOwner, evmOwnerKey, linkProofText, signLinkProof, solanaOwner, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import { startServer } from "../helpers/servers.js";
 
@@ -23,6 +23,11 @@ const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const HASH = `0x${"ab".repeat(32)}`;
 const TERMS = { title: "Grant a spending budget", summary: "test", rows: [], enforced: [], notEnforced: [], notes: [] };
 const GRANT_TX = { to: USDC, data: "0x095ea7b3", value: "0x0" };
+const ACCOUNT_REFUSALS = [
+  [403, "ethereum_account_required", /sign in with an Ethereum wallet/],
+  [400, "owner_proof_owner_mismatch", /sign the owner-proof message with the Solana wallet they signed in with/],
+  [403, "wrong_account", /sign in with the paying Solana wallet/],
+] as const;
 
 describe("agent proof v2", () => {
   const body = JSON.stringify({ rail: "evm", chain: "base-sepolia", agent: AGENT });
@@ -794,6 +799,63 @@ describe("hosted approvals", () => {
     expect(err).toBeInstanceOf(HostedRefusal);
     expect(err.message).toMatch(/HTTP 422 cap_above_limit\); nothing was sent/);
     expect(err.message).not.toMatch(/100 USDC/);
+  });
+
+  it.each(ACCOUNT_REFUSALS)("an account refusal at creation (%i %s) keeps the code and gives recovery", async (status, code, guidance) => {
+    site.refuse = { status, error: { code, message: "untrusted ssbt_secret123456" } };
+    const err = await grant(client()).catch((e) => e);
+    expect(err).toBeInstanceOf(HostedRefusal);
+    expect(err.message).toContain(`HTTP ${status} ${code}`);
+    expect(err.message).not.toMatch(/untrusted|ssbt_/);
+    expect(err.next).toMatch(guidance);
+    expect(site.requests).toEqual([]);
+    expect(siteFailure(status, { reason_code: code })).toBe(`HTTP ${status} ${code}`);
+  });
+
+  for (const kind of ["link", "bundle", "transaction"] as const) {
+    it.each(ACCOUNT_REFUSALS)(`${kind}: a refused read (%i %s) stops and preserves the reason`, async (status, code, guidance) => {
+      site.owner = OWNER;
+      let reads = 0;
+      const c = client({ fetchImpl: async (input, init) => {
+        if (String(input).includes("/requests/") && !init?.method) {
+          reads++;
+          if (kind === "transaction" && reads === 1) return fetch(input, init);
+          return new Response(JSON.stringify({ error: { code, message: "untrusted ssbt_secret123456" } }), { status, headers: { "content-type": "application/json" } });
+        }
+        return fetch(input, init);
+      } });
+      const h = kind === "transaction" ? await grant(c) : await c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, ...(kind === "bundle" ? { then: [{ kind: "grant" as const, transaction: GRANT_TX }] } : {}) });
+      const o = await h.settled;
+      expect(o).toMatchObject({ status: kind === "link" ? "rejected" : "expired", sending: kind === "transaction" });
+      expect("reason" in o && o.reason).toContain(`HTTP ${status} ${code}`);
+      expect("reason" in o && o.reason).toMatch(guidance);
+      expect(JSON.stringify(o)).not.toMatch(/untrusted|ssbt_/);
+      if (kind === "bundle") expect((await h.bundle!).steps).toMatchObject([{ state: "skipped", walletAsked: false }]);
+      expect(reads).toBe(kind === "transaction" ? 2 : 1);
+      expect(site.requests[0]).toMatchObject({ state: "awaiting_owner", cancels: 0 });
+      await c.close();
+    });
+  }
+
+  it.each(ACCOUNT_REFUSALS)("the first account check keeps a read refusal (%i %s) and recovery", async (status, code, guidance) => {
+    const c = client({ fetchImpl: async (input, init) => {
+      if (String(input).includes("/requests/") && !init?.method) return new Response(JSON.stringify({ error: { code, message: "untrusted" } }), { status });
+      return fetch(input, init);
+    } });
+    const err = await grant(c).catch((e) => e);
+    expect(err).toBeInstanceOf(HostedRefusal);
+    expect(err.message).toContain(`HTTP ${status} ${code}`);
+    expect(err.message).not.toContain("untrusted");
+    expect(err.next).toMatch(guidance);
+    expect(site.requests[0]).toMatchObject({ state: "cancelled", cancels: 1 });
+    await c.close();
+  });
+
+  it("unknown account codes cannot select recovery through object properties", () => {
+    for (const code of ["toString", "constructor", "__proto__", "unknown ssbt_secret123456"]) {
+      expect(accountRefusalNext(code)).toBeNull();
+      expect(siteFailure(403, { error: { code } })).toBe("HTTP 403 unexpected");
+    }
   });
 
   it("refuses a link to another site in the answer", async () => {
