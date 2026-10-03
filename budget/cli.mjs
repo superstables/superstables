@@ -369,8 +369,9 @@ payment stays unknown; buy-once can start a new purchase. An agent never runs it
       usage: "superstables budget buy-once --service ID --max M [--param K=V ...] [--params JSON] [--site URL] [--wait|--detach] [--replace]",
       about: `One purchase the owner approves on superstables.com: no setup, no gas, no budget, no agent key. ${TESTNET_LINE}
 The services are the ones superstables budget find --once lists (GET /api/v1/purchase/services on the site), on Base
-Sepolia, Tempo Moderato or Solana devnet: the network comes from the listing. --max is required: the most you accept, in
-the service's token (USDC, or pathUSD on Tempo); a service that costs more is refused before anything is created.
+Sepolia, Arc Testnet, Tempo Moderato or Solana devnet: the network comes from the listing. --max is required: the most
+you accept, in the service's token (USDC, or pathUSD on Tempo); a service that costs more is refused before anything is
+created.
 --param K=V (repeatable) or --params JSON give the service's inputs.
 The command asks the site for the purchase and prints the owner's link and match code as an APPROVE line, the same as the
 owner commands. Write the link, the code and the terms in your reply to the owner, a visible message, not only in your
@@ -749,15 +750,14 @@ function parse(argv) {
  */
 function parseBuyOnce(cmd, f) {
   const ctx = { command: cmd };
-  const where = "Base Sepolia (--rail evm --chain base-sepolia), Tempo Moderato (--rail tempo) or Solana devnet (--rail solana)";
+  const where = "Base Sepolia (--rail evm --chain base-sepolia), Arc Testnet (--rail evm --chain arc-testnet), Tempo Moderato (--rail tempo) or Solana devnet (--rail solana)";
   if (f.chain !== undefined && !ONCE_CHAINS[f.chain]) {
     if (/mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet: superstables budget is testnet only`);
     return badInput(ctx, `buy-once pays on ${where}, not ${f.chain}. The network comes from the service's listing`);
   }
   if (f.rail !== undefined && !RAILS[f.rail]) return badInput(ctx, `--rail must be evm, tempo or solana (got "${f.rail}")`);
   if (f.rail !== undefined && f.chain !== undefined && ONCE_CHAINS[f.chain] !== f.rail) return badInput(ctx, `--chain ${f.chain} is not on --rail ${f.rail}`);
-  // the chain the caller named, if any: the listing must be on it
-  f.onceChain = f.chain ?? (f.rail ? Object.keys(ONCE_CHAINS).find((c) => ONCE_CHAINS[c] === f.rail) : undefined);
+  // the chain or rail the caller named, if any: the listing must be on it
   for (const r of ["service", "max"]) if (f[r] === undefined) return badInput(ctx, `missing required flag --${r}`);
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(f.service)) return badInput(ctx, "--service is a service id from superstables budget find --once (letters, digits, '.', '_' or '-')");
   if (!/^\d+(\.\d{1,6})?$/.test(f.max) || !(Number(f.max) > 0)) return badInput(ctx, `--max must be a positive decimal with at most 6 places (got "${f.max}")`);
@@ -1522,7 +1522,7 @@ const inMinutes = (iso) => { const m = Math.round((Date.parse(iso) - Date.now())
 async function buyOnce({ f, ctx }) {
   const detach = f.detach === true || (!f.wait && !process.stdout.isTTY);
   log(`\nbuy-once on ${f.site}: one purchase of ${f.service}, at most ${f.max} in the service's token, approved by the owner on ${siteName(f.site)}. ${TESTNET_LINE}`);
-  const r = await startOnce({ site: f.site, service: f.service, params: f.params, max: f.max, chain: f.onceChain, replace: f.replace === true });
+  const r = await startOnce({ site: f.site, service: f.service, params: f.params, max: f.max, chain: f.chain, rail: f.rail, replace: f.replace === true });
   if (!r.ok) {
     log(`superstables budget: ${r.code === 3 ? "refused: " : ""}${r.reason}`);
     if (r.code === 2) return emit(2, { ...ctx, service: f.service, state: "failed", ...(r.inputs ? { inputs: r.inputs } : {}), next: r.next, reason: r.reason });

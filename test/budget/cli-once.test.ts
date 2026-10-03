@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MARKET, PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite, type Paid } from "../helpers/fake-purchase-site.js";
+import { ARC_MARKET, ARC_SELLER, MARKET, PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite, type Paid } from "../helpers/fake-purchase-site.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
@@ -67,7 +67,10 @@ describe("buy-once: refusals before anything is asked", () => {
     expect(site.purchases).toEqual([]);
     const arc = await once(["--chain", "arc-testnet"]);
     expect(arc.code).toBe(2);
-    expect(arc.result.reason).toMatch(/buy-once pays on Base Sepolia .*Tempo Moderato .*Solana devnet .*not arc-testnet/);
+    expect(arc.result.reason).toMatch(/demo-market-data is on Base Sepolia \(--rail evm --chain base-sepolia\), not arc-testnet: the network comes from the listing/);
+    const other = await once(["--chain", "arbitrum-sepolia"]);
+    expect(other.code).toBe(2);
+    expect(other.result.reason).toMatch(/buy-once pays on Base Sepolia .*Arc Testnet \(--rail evm --chain arc-testnet\).*Tempo Moderato .*Solana devnet .*not arbitrum-sepolia/);
     expect((await once(["--rail", "solana", "--chain", "moderato"])).result.reason).toMatch(/--chain moderato is not on --rail solana/);
     const main = await once(["--chain", "base"]);
     expect(main.code).toBe(3);
@@ -271,7 +274,7 @@ describe("buy-once on Tempo Moderato and Solana devnet", () => {
     site.services.push({ ...structuredClone(TEMPO_MARKET), id: "elsewhere", network: "eip155:1" });
     const r = await once([], ["--service", "elsewhere", "--param", "asset=BTC", "--max", "1"]);
     expect(r.code).toBe(3);
-    expect(r.result.reason).toMatch(/elsewhere is on a network buy-once does not pay on: buy-once pays on Base Sepolia, Tempo Moderato, Solana devnet only/);
+    expect(r.result.reason).toMatch(/elsewhere is on a network buy-once does not pay on: buy-once pays on Base Sepolia, Arc Testnet, Tempo Moderato, Solana devnet only/);
     expect(site.purchases).toEqual([]);
   }, 30_000);
 });
@@ -905,4 +908,64 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
     const first = await once();
     expect(first.result.rpc).toBe(site.chainUrl);
   }, 30_000);
+});
+
+describe("buy-once on Arc Testnet", () => {
+  beforeEach(() => {
+    site.services.push(structuredClone(ARC_MARKET));
+  });
+
+  it("find --once --chain arc-testnet lists Arc's services only, with their network", async () => {
+    const r = await budget(["find", "--once", "--chain", "arc-testnet", "--site", site.url]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/demo-market-data-arc\s+0\.01 USDC\s+no\s+Arc Testnet\s+asset\*=BTC\|ETH/);
+    expect(r.result.services.map((x: any) => [x.id, x.network, x.rail, x.chain, x.unit])).toEqual([["demo-market-data-arc", "eip155:5042002", "evm", "arc-testnet", "USDC"]]);
+  }, 30_000);
+
+  it("asks the owner for one authorization in Arc's USDC, and says paid only once Arc's chain shows the transfer", async () => {
+    const first = await once([], ["--service", "demo-market-data-arc", "--param", "asset=BTC", "--max", "0.01", "--chain", "arc-testnet"]);
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.result).toMatchObject({ ok: true, command: "buy-once", rail: "evm", chain: "arc-testnet", service: "demo-market-data-arc", state: "waiting_owner" });
+    expect(first.approve.terms).toMatchObject({ title: "Buy once: demo-market-data-arc", amount: "0.01", unit: "USDC", listingName: "Demo market data (Arc)" });
+    expect(first.approve.terms.summary).toMatch(new RegExp(`One payment of 0\\.01 test USDC on Arc Testnet to ${ARC_SELLER}`));
+    expect(first.approve.terms.enforced[0]).toBe(`Your wallet signs one authorization for exactly 0.01 USDC to ${ARC_SELLER}, usable once.`);
+    expect(first.approve.terms.notEnforced[0]).toBe("The first link asks you to sign in with your wallet (a message, no fee). Your wallet may first ask to add Arc Testnet. No gas is needed: the seller's facilitator pays it.");
+    expect(first.result.message_for_owner).toMatch(/0\.01 test USDC on Arc Testnet\. Testnet only: test USDC, no real money\./);
+    expect(recordOf(first.result.id)).toMatchObject({ rail: "evm", chain: "arc-testnet" });
+    const hash = `0x${"a7".repeat(32)}`;
+    site.settle(site.purchases[0], { asset: "BTC", price_usd: 65000 }, { transaction: hash, payer: PAYER });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ ok: true, rail: "evm", chain: "arc-testnet", state: "settled", paid: true, delivered: true, amount: "0.01", tx: { settle: hash }, txUrl: `https://explorer.testnet.arc.io/tx/${hash}`, payer: PAYER });
+    expect(done.result.next).toMatch(/Paid 0\.01 test USDC on Arc Testnet/);
+  }, 60_000);
+
+  it("takes --rail evm alone for an Arc listing, and refuses --chain base-sepolia for one", async () => {
+    const wrong = await once([], ["--service", "demo-market-data-arc", "--param", "asset=BTC", "--max", "0.01", "--chain", "base-sepolia"]);
+    expect(wrong.code).toBe(2);
+    expect(wrong.result.reason).toMatch(/demo-market-data-arc is on Arc Testnet \(--rail evm --chain arc-testnet\), not base-sepolia: the network comes from the listing/);
+    expect(site.purchases).toEqual([]);
+    const evm = await once([], ["--service", "demo-market-data-arc", "--param", "asset=BTC", "--max", "0.01", "--rail", "evm"]);
+    expect(evm.code, evm.stderr).toBe(0);
+    expect(evm.result).toMatchObject({ rail: "evm", chain: "arc-testnet", state: "waiting_owner" });
+  }, 60_000);
+
+  it("is unknown, never paid, when the transaction the site names moved Base Sepolia's USDC instead of Arc's", async () => {
+    const first = await once([], ["--service", "demo-market-data-arc", "--param", "asset=BTC", "--max", "0.01"]);
+    expect(first.code, first.stderr).toBe(0);
+    site.settle(site.purchases[0], { asset: "BTC", price_usd: 65000 }, { transaction: `0x${"a8".repeat(32)}`, payer: PAYER, chain: { asset: MARKET.asset } });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30"]);
+    expect(done.code).toBe(5);
+    expect(done.result).toMatchObject({ ok: false, state: "unknown" });
+    expect(done.result.reason).toMatch(/has no transfer of exactly 10000 base units of 0x3600000000000000000000000000000000000000/);
+  }, 60_000);
+
+  it("refuses a purchase the site created on Base Sepolia for an Arc listing, before any link", async () => {
+    site.tweak = (p) => { p.terms = { amount: { decimal: "0.01", atomic: "10000" }, asset: { symbol: "USDC", address: MARKET.asset, decimals: 6 }, network: "eip155:84532", recipient: ARC_SELLER }; };
+    const r = await once([], ["--service", "demo-market-data-arc", "--param", "asset=BTC", "--max", "0.01"]);
+    expect(r.code).toBe(3);
+    expect(r.result.reason).toMatch(/the purchase is on eip155:84532, not Arc Testnet \(eip155:5042002\)/);
+    expect(r.approve).toBeNull();
+    expect(site.purchases.every((p) => p.state === "denied")).toBe(true);
+  }, 60_000);
 });

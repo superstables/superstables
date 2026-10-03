@@ -4,6 +4,7 @@
 // recipient shown, and the site pays the seller with it. The agent never signs, and holds no key for this. The network
 // comes from the service's listing:
 //   Base Sepolia (eip155:84532)   x402: the owner's wallet signs a USDC transfer authorization; the site relays it.
+//   Arc Testnet (eip155:5042002)  x402: the same, in Arc's USDC; Circle's facilitator settles it and pays the gas.
 //   Tempo Moderato (eip155:42431) MPP: the owner's wallet sends the pathUSD transfer the seller's challenge asks for.
 //   Solana devnet (solana:EtWT...) x402: the owner's Solana wallet signs the USDC transfer; the facilitator pays the fee.
 //
@@ -33,6 +34,7 @@ import { readSettlement } from "./settlement.mjs";
 /** The chain buy-once used before listings named others; the default in words when nothing else is known. */
 export const ONCE_CHAIN = "base-sepolia";
 const BASE = EVM_CHAINS[ONCE_CHAIN];
+const ARC = EVM_CHAINS["arc-testnet"];
 /**
  * The networks buy-once pays on, by the CAIP-2 id a listing names: the rail and chain (as the budget commands spell them),
  * the token the purchase must use and its decimals, how ids are spelled there, and where a transaction is shown. Every
@@ -42,6 +44,7 @@ const BASE = EVM_CHAINS[ONCE_CHAIN];
  */
 export const ONCE_NETWORKS = {
   [`eip155:${BASE.chainId}`]: { rail: "evm", chain: ONCE_CHAIN, label: BASE.label, asset: BASE.token.address, decimals: BASE.token.decimals, unit: "USDC", evm: true, tx: (h) => `${BASE.explorer}/tx/${h}` },
+  [`eip155:${ARC.chainId}`]: { rail: "evm", chain: "arc-testnet", label: ARC.label, asset: ARC.token.address, decimals: ARC.token.decimals, unit: "USDC", evm: true, tx: (h) => `${ARC.explorer}/tx/${h}` },
   [`eip155:${TEMPO_CHAIN_ID}`]: { rail: "tempo", chain: "moderato", label: "Tempo Moderato", asset: PATH_USD, decimals: PATH_USD_DECIMALS, unit: "pathUSD", evm: true, tx: (h) => `https://explore.testnet.tempo.xyz/tx/${h}` },
   "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1": { rail: "solana", chain: "devnet", label: "Solana devnet", asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", decimals: 6, unit: "USDC", evm: false, tx: (h) => `https://explorer.solana.com/tx/${h}?cluster=devnet` },
 };
@@ -278,7 +281,7 @@ function termsOf(service, created, net) {
     ? { enforced: `Your wallet sends one transfer of exactly ${amount} ${net.unit} to ${to}.`, note: "The first link asks you to sign in with your wallet (a message, no fee). Your wallet may first ask to add Tempo Moderato; you pay the network fee there." }
     : net.rail === "solana"
       ? { enforced: `Your Solana wallet signs one transfer of exactly ${amount} USDC to ${to}.`, note: "The first link asks you to sign in with your wallet (a message, no fee), then to connect a Solana wallet. No SOL is needed: the seller's facilitator pays the fee." }
-      : { enforced: `Your wallet signs one authorization for exactly ${amount} USDC to ${to}, usable once.`, note: "The first link asks you to sign in with your wallet (a message, no fee). No gas is needed: the seller's facilitator pays it." };
+      : { enforced: `Your wallet signs one authorization for exactly ${amount} USDC to ${to}, usable once.`, note: `The first link asks you to sign in with your wallet (a message, no fee).${net.chain === ONCE_CHAIN ? "" : ` Your wallet may first ask to add ${net.label}.`} No gas is needed: the seller's facilitator pays it.` };
   return {
     title: `Buy once: ${service.id}`,
     amount,
@@ -543,7 +546,7 @@ export async function startOnce(args) {
   }
 }
 
-async function startOnceLocked(recordId, { site, service: serviceId, params, max, chain, replace = false, fetchImpl }) {
+async function startOnceLocked(recordId, { site, service: serviceId, params, max, chain, rail, replace = false, fetchImpl }) {
   const refused = (reason, next, code = 3, extra = {}) => ({ ok: false, code, state: code === 2 ? "failed" : code === 3 ? "refused_precheck" : "failed", reason: scrub(reason), next: scrub(next), ...extra });
 
   const found = await findOpenOnce({ fetchImpl });
@@ -577,7 +580,9 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
   const names = Object.values(ONCE_NETWORKS).map((n) => n.label).join(", ");
   if (!net) return refused(`${service.id} is on ${service.network ? "a network buy-once does not pay on" : "an unnamed network"}: buy-once pays on ${names} only`, "superstables budget find --once lists the services it can pay");
   if (!sameAddress(service.asset, net.asset, net) || !service.price || !service.payTo) return refused(`${service.id} is not a ${net.label} ${net.unit} service: buy-once pays ${net.unit} there only`, "superstables budget find --once lists the services it can pay");
-  if (chain !== undefined && chain !== net.chain) return refused(`${service.id} is on ${net.label} (--rail ${net.rail}${net.rail === "evm" ? ` --chain ${net.chain}` : ""}), not ${chain}: the network comes from the listing`, "leave out --rail and --chain, or pick a service on that network (superstables budget find --once)", 2);
+  // --chain names one network; --rail alone, any network on that rail (evm: Base Sepolia or Arc Testnet)
+  const named = chain ?? (rail !== undefined && rail !== net.rail ? Object.keys(ONCE_CHAINS).find((c) => ONCE_CHAINS[c] === rail) ?? rail : undefined);
+  if (named !== undefined && named !== net.chain) return refused(`${service.id} is on ${net.label} (--rail ${net.rail}${net.rail === "evm" ? ` --chain ${net.chain}` : ""}), not ${named}: the network comes from the listing`, "leave out --rail and --chain, or pick a service on that network (superstables budget find --once)", 2);
   const checked = checkParams(service, params);
   if (checked.error) return refused(checked.error, "fix the --param flags; superstables budget find --once lists each service's parameters", 2, { inputs: checked.inputs });
   if (micro(service.price) > micro(max)) return refused(`${service.id} costs ${service.price} ${net.unit}, above --max ${max}`, "ask the owner whether they accept that price, then run buy-once with a --max that covers it. Never raise --max on your own");

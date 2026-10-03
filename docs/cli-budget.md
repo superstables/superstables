@@ -606,8 +606,9 @@ superstables budget buy-once --service ID --max M [--param K=V ...] [--params JS
 
 One purchase the owner approves on superstables.com: no setup, no gas, no budget, no agent key. Testnet only: test USDC, no real money.
 The services are the ones superstables budget find --once lists (GET /api/v1/purchase/services on the site), on Base
-Sepolia, Tempo Moderato or Solana devnet: the network comes from the listing. --max is required: the most you accept, in
-the service's token (USDC, or pathUSD on Tempo); a service that costs more is refused before anything is created.
+Sepolia, Arc Testnet, Tempo Moderato or Solana devnet: the network comes from the listing. --max is required: the most
+you accept, in the service's token (USDC, or pathUSD on Tempo); a service that costs more is refused before anything is
+created.
 --param K=V (repeatable) or --params JSON give the service's inputs.
 The command asks the site for the purchase and prints the owner's link and match code as an APPROVE line, the same as the
 owner commands. Write the link, the code and the terms in your reply to the owner, a visible message, not only in your

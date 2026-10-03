@@ -65,8 +65,8 @@ and removes the Claude Desktop bundle.
   service, its inputs and the most it accepts (`--max`); the owner approves that one payment in
   their wallet, after picking the match code. The result says whether it was paid and delivered,
   and the seller's answer is saved as a file. `superstables budget find --once` lists the
-  services that can be bought this way, with the network of each: Base Sepolia or Solana devnet
-  (test USDC) or Tempo Moderato (test pathUSD). Buy once needs a superstables.com account (made
+  services that can be bought this way, with the network of each: Base Sepolia, Arc Testnet or
+  Solana devnet (test USDC) or Tempo Moderato (test pathUSD). Buy once needs a superstables.com account (made
   by signing in with the wallet), or a compatible site; `pay` still needs neither.
 - **`superstables budget setup --rail tempo --fund-only`** tops up the owner on record from the
   Moderato faucet again and changes nothing else; it opens no page.
