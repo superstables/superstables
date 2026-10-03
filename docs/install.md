@@ -298,6 +298,8 @@ wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 | `SUPERSTABLES_INDEX_URL` | `https://www.superstables.com/api/v1/services` | The service index `find` reads. Point it at another index that answers the same API, or set it to `off` to list the built-in catalogue only |
 | `SUPERSTABLES_DEMO_SERVICES` | unset (off) | `on` includes Superstables' testnet services from the hosted catalogue in discovery. Most return prepared sample output, carry `mock: true` and come after the listings not marked simulated; the market data service returns live prices. The demo setup snippets set it; leave it off to list no simulated services |
 | `SUPERSTABLES_CATALOGUE_URL` | `https://www.superstables.com/api/demo/catalogue` | Where those services are published, read only when `SUPERSTABLES_DEMO_SERVICES` is on. Point it at another deployment, or set it to `off` |
+| `SUPERSTABLES_SITE` | `https://www.superstables.com` | The site `setup --hosted` uses when `--site` is not given; `budget find` and `buy-once` use it before the site a hosted setup recorded. `setup --hosted` records its site as `SITE=` in the chain's public file, and later owner commands on that chain use that one and refuse a different `--site`. The owner's approvals happen on this site. Only superstables.com, its subdomains and this computer are accepted, unless `SUPERSTABLES_ALLOW_SITE` names the origin |
+| `SUPERSTABLES_ALLOW_SITE` | unset | The owner's opt-in for a site outside superstables.com: the exact `https` origin, or a comma-separated list. Set it yourself, in your own environment, only for a site you have checked; an agent never sets it |
 | `SUPERSTABLES_DOCTOR_OFFLINE` | unset | `1` makes `doctor` skip every check that needs a network |
 
 `SUPERSTABLES_HOME` is read when state is first touched, so set it before starting a process
@@ -323,6 +325,10 @@ Revoke each budget first: deleting an agent key does not end its allowance on ch
 `superstables budget revoke --rail <rail> --chain <chain> --wait` for each budget's rail and chain,
 have the owner approve it, then check that `superstables budget status --rail <rail> --chain <chain>`
 says `revoked: true`. For a named Tempo key, add `--agent <label>` to both.
+
+For each chain you set up with `setup --hosted`, also remove the agent on your account page on that
+site: that is what unlinks it from your account, and no command does it. Revoking on chain stops the
+spending but leaves the agent linked.
 
 Then remove the MCP server (`claude mcp remove superstables`, or delete its entry from your MCP
 client's configuration), delete the skill folder if you installed it, and delete `~/.superstables`

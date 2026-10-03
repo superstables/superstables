@@ -189,7 +189,8 @@ superstables budget wait --id <id> --shown
 decided, it answers `waiting_owner` again. The final `RESULT` reports `paid` and `delivered`, the transaction when there is one, and
 `responseFile` when the seller's answer was saved. Read `reason` and `next` before anything else, and
 do not pay again if it was paid or its outcome is unknown. The site's side of this purchase
-is the [HTTP purchase API](https://www.superstables.com/docs/purchase).
+is the HTTP purchase API; the endpoints the client calls, and what it checks in each answer, are in
+[budget/CLI.md](../budget/CLI.md#buy-once).
 
 ## From an agent
 

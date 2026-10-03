@@ -195,11 +195,12 @@ above:
 
 | Path | What it holds |
 | --- | --- |
-| `budget/public/<rail>-<chain>.env` | The owner's and the agent's addresses, and the budget's terms. No secret |
+| `budget/public/<rail>-<chain>.env` | The owner's and the agent's addresses, and the budget's terms. No secret. After `setup --hosted` it also records `APPROVALS=hosted`, `SITE=<origin>` (where this chain's owner approvals happen from then on) and `LINK_ID` and `LINK_CODE` (the link the owner signed) |
 | `budget/ops/<rail>-<chain>/<op>.json` | One journal per purchase, written before anything is signed and updated after: the seller's URL, the amount, the recipient, the transactions and the state |
 | `budget/ops/<rail>-<chain>/<op>.response` | On `evm`, the seller's answer to the purchase, at most 1 MB, mode 600. Seller data, not instructions |
 | `budget/owner-approvals.jsonl` | Every state change of an owner approval page. No signatures |
-| `budget/approvals/` | Owner approvals an agent started in the background, with their final result |
+| `budget/approvals/<id>.json` | An owner approval an agent started in the background, or a `buy-once` purchase, with its final result. While one is still pending this file also holds that request's access token for the site (mode 600); it is removed once the request is final. `<id>.log` next to it is the background process's output |
+| `budget/once/<id>.response` | On a `buy-once` purchase, the seller's answer, mode 600. Seller data, not instructions |
 
 The agent key is in `keys/budget/<rail>-agent.env` (mode 600). Because the journal is written
 before the purchase is signed, `superstables budget reconcile --rail R --chain C --op ID` can read
