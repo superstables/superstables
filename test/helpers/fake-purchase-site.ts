@@ -2,7 +2,7 @@
 // tests. It follows the site's published shape (docs/purchase.md): a listing with inputs and a price, a purchase made with an
 // Idempotency-Key, an access token that reads and cancels it, and the owner's link and match code. A test moves a purchase
 // along by changing its state, as the owner and the seller would. A payment it reports is also put on its fake chain
-// (`chainUrl`: one JSON-RPC server answering as Base Sepolia, Tempo Moderato and Solana devnet), where the CLI reads it
+// (`chainUrl`: one JSON-RPC server answering as Base Sepolia, Arc Testnet, Tempo Moderato and Solana devnet), where the CLI reads it
 // before it says paid; a test can make the site lie by reporting a payment the chain does not show. No network.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -115,6 +115,18 @@ export const TEMPO_MARKET: Service = {
   payTo: TEMPO_SELLER,
   protocol: "mpp",
   symbol: "pathUSD",
+  params: [{ name: "asset", required: true, enum: ["BTC", "ETH"] }],
+};
+export const ARC_SELLER = "0xC8beDf4eD3Da53743Ee7fDa62ffd4bcB52Fec707";
+/** The same demo on Arc Testnet, sold over x402 in Arc's USDC. */
+export const ARC_MARKET: Service = {
+  id: "demo-market-data-arc",
+  name: "Demo market data (Arc)",
+  amount: "0.01",
+  asset: "0x3600000000000000000000000000000000000000",
+  network: "eip155:5042002",
+  payTo: ARC_SELLER,
+  protocol: "x402",
   params: [{ name: "asset", required: true, enum: ["BTC", "ETH"] }],
 };
 /** The same demo on Solana devnet, sold over x402 in USDC. */
