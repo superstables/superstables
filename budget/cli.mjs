@@ -33,7 +33,7 @@ import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin } from "./site.mjs";
 import { customRpc, refusedRpcEnv } from "./rpc.mjs";
-import { ONCE_CHAINS, TESTNET_LINE, listOnceServices, messageForOwner, showFirst, startOnce, waitOnce } from "./once.mjs";
+import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, messageForOwner, showFirst, startOnce, waitOnce } from "./once.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // The rail scripts run in their own folders: a relative SUPERSTABLES_HOME would point each of them somewhere else.
@@ -338,9 +338,9 @@ ${OWNER_HELP}`,
     }),
   },
   wait: {
-    flags: { id: "v", timeout: "v", shown: "b" }, required: ["id"],
+    flags: { id: "v", timeout: "v", shown: "b", abandon: "b" }, required: ["id"],
     help: helpText({
-      usage: "superstables budget wait --id ID --shown [--timeout S] [--site URL]",
+      usage: "superstables budget wait --id ID --shown [--timeout S] [--site URL] [--abandon]",
       about: `After an owner command or buy-once returned waiting_owner: waits up to S seconds (default 30, at most 300) for that
 approval, then prints its state. While the owner has not decided: state waiting_owner, final false, exit 0. That is not
 an approval. Once it ended: final true, and the owner command's (or purchase's) own final RESULT and exit code, the same
@@ -351,7 +351,10 @@ without it. An agent writes the link, ends its turn, and runs wait when the owne
 waiting_owner it says so in one line and ends its turn again.
 --site is checked against the site the approval was made on, and refused if it differs.
 When the link expired before the owner approved: state refused_precheck, exit 3, nothing sent. Run the owner command
-again for a new link (setup reuses the agent key it created).`,
+again for a new link (setup reuses the agent key it created).
+--abandon (the owner only, for a buy-once purchase the site never ends): reads the site once; if the purchase still has
+no final answer, keeps its record, marks it given up with the time, and returns state unknown, exit 5, final true. The
+payment stays unknown; buy-once can start a new purchase. An agent never runs it.`,
       money: "no. It never approves, signs or sends anything.",
       who: "anyone, usually the agent that started the owner command, after the owner says they've approved.",
       example: "superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60",
@@ -497,8 +500,9 @@ RESULT names one in use as rpc.
 Output: logs go to stderr. stdout ends with one line
   RESULT {"ok","command","rail","chain","op","state","final","paid","delivered","amount","remaining","tx","rpc","id","url",
           "matchCode","message_for_owner","budget_spent","next","reason"}
-Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false only
-while an owner approval is open (state waiting_owner). next is the command to run next, or none.
+Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
+while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read.
+next is the command to run next, or none.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
 link, the match code (hosted), the amount and network, the testnet line. The agent sends it and ends its turn.
 budget_spent: true when buy was refused because the budget cannot cover the purchase (spent, revoked, never granted).
@@ -513,7 +517,7 @@ Exit codes (the same numbers as superstables):
      Respect it; never raise --max to get around it
   4  paid, not delivered: never pay again; report it
   5  unknown: it may have paid. Purchases: superstables budget reconcile --rail R --op ID. Owner commands: status and
-     the wallet's activity. Never pay twice
+     the wallet's activity. buy-once: wait --id ID --shown while final is false. Never pay twice
 
 Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
   keys/budget/<rail>-agent.env               the agent key (mode 600). No owner key is ever stored here
@@ -550,10 +554,11 @@ let FOREGROUND = false;
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 // A worker also stores it (and the exit code) in its approval record, for every later `wait`.
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
-  // final: false only while an owner approval is still open; a script polls wait until it is true
-  fields = { ...fields, final: fields.state !== "waiting_owner" };
+  // final: false while an owner approval is still open, or while an unknown outcome is one a later wait can still read
+  // (the caller says so with final: false); a script polls wait until it is true
+  fields = { ...fields, final: fields.final === false ? false : fields.state !== "waiting_owner" };
   // an RPC other than the rail's default (B4_RPC, SUPERSTABLES_TEMPO_RPC, SUPERSTABLES_SOLANA_RPC) is named in every RESULT
   if (fields.rpc === undefined && fields.rail) fields.rpc = customRpc(fields.rail);
   const out = { ok: code === 0 };
@@ -1462,8 +1467,18 @@ async function wait({ f }) {
   // --site names the site the approval was made on: another one is a mistake, not a different request
   const madeOn = once?.hosted?.site ? siteOrigin(once.hosted.site).origin : null;
   if (f.site !== undefined && madeOn && madeOn !== f.site) return badInput({ command: "wait" }, `--site ${f.site} is not the site this approval was made on (${madeOn}): use --site ${madeOn}, or leave --site out`);
+  if (f.abandon) {
+    // the owner gives up a buy-once purchase the site does not end: the record stays, marked, and the payment stays unknown
+    if (once?.command !== "buy-once") return badInput({ command: "wait" }, `--abandon is for a buy-once purchase; ${f.id} is ${once ? `a ${once.command}` : "not one on this computer"}`);
+    if (once.final) return emit(once.final.code, once.final.result);
+    const s = await abandonOnce(once);
+    if (!s.result.abandonedAt) return emit(s.code, s.result);
+    log(`superstables budget: ${f.id} (buy-once) given up without a final answer from the site. Whether a payment left is unknown: check the wallet's activity and the account on the site. buy-once can start a new purchase.`);
+    return emit(5, s.result);
+  }
   // Nothing is polled until the caller says the owner can read the link: an agent that polls first tends to never write it.
-  if (once && !once.final && !f.shown) {
+  // a buy-once whose cancel was not confirmed has no link to show: wait reads it at once
+  if (once && !once.final && !f.shown && !once.cancelUnconfirmed) {
     log(`superstables budget: wait refused: write the link, the code and the terms in your reply to the owner first, then run: superstables budget wait --id ${f.id} --shown`);
     return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", ...approvalFields(once), next: showFirst(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
   }
@@ -1492,9 +1507,16 @@ async function buyOnce({ f, ctx }) {
   const r = await startOnce({ site: f.site, service: f.service, params: f.params, max: f.max, chain: f.onceChain, replace: f.replace === true });
   if (!r.ok) {
     log(`superstables budget: ${r.code === 3 ? "refused: " : ""}${r.reason}`);
-    const pending = r.pending ? approvalFields(r.pending) : {};
-    if (r.code === 2) return emit(2, { ...ctx, service: f.service, state: "failed", next: r.next, reason: r.reason });
-    return emit(r.code, { ...ctx, service: f.service, state: r.state, paid: false, delivered: false, amount: "0", tx: {}, ...pending, next: r.next, reason: r.reason });
+    if (r.code === 2) return emit(2, { ...ctx, service: f.service, state: "failed", ...(r.inputs ? { inputs: r.inputs } : {}), next: r.next, reason: r.reason });
+    // a purchase the site did not confirm cancelled: never "nothing paid"; its record (no link) is what wait reads
+    if (r.code === 5) return emit(5, { ...ctx, rail: r.record.rail, chain: r.record.chain, service: f.service, state: "unknown", final: false, id: r.record.id, purchase: r.record.hosted.requestId, paid: null, delivered: null, amount: null, tx: {}, next: r.next, reason: r.reason });
+    // an earlier purchase is still open: this is about not starting a new one, never a result for that one. Its fields go
+    // under pending; nothing here says whether it was paid
+    if (r.pending) {
+      const p = r.pending;
+      return emit(3, { ...ctx, service: f.service, state: "refused_pending", paid: null, delivered: null, amount: null, tx: {}, pending: { id: p.id, purchase: p.hosted?.requestId, service: p.service?.id, state: r.pendingState ?? (p.cancelUnconfirmed ? "unknown" : "waiting_owner"), ...(p.url ? { url: p.url, matchCode: p.matchCode, expires: p.expires, terms: p.terms, message_for_owner: messageForOwner(p) } : {}) }, next: r.next, reason: `no new purchase was started: ${r.reason}` });
+    }
+    return emit(r.code, { ...ctx, service: f.service, state: r.state, paid: false, delivered: false, amount: "0", tx: {}, next: r.next, reason: r.reason });
   }
   const rec = r.record;
   Object.assign(ctx, { rail: rec.rail, chain: rec.chain });
@@ -1511,7 +1533,13 @@ async function buyOnce({ f, ctx }) {
 async function waitBuyOnce(rec, f) {
   const s = await waitOnce(rec, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);
   if (s.final) return emit(s.code, s.result);
-  const words = s.unreachable ? `waiting for the owner (${rec.hosted?.site} did not answer just now)` : s.words;
+  if (rec.cancelUnconfirmed) {
+    // not cancelled, not ended: still unknown, never "waiting for the owner" (they were never shown its link)
+    const words = s.unreachable ? `${rec.hosted?.site} could not be read just now (${s.unreachable})` : s.words;
+    log(`superstables budget: ${rec.id} (buy-once) could not be cancelled and has not ended: ${words}`);
+    return emit(5, { command: "buy-once", rail: rec.rail, chain: rec.chain, service: rec.service?.id, state: "unknown", final: false, id: rec.id, purchase: rec.hosted?.requestId, paid: null, delivered: null, amount: null, tx: {}, next: `never buy this again. Do not show an approval link for it; tell the owner the payment outcome is unknown. Run superstables budget wait --id ${rec.id} --shown again later; it ends when ${siteName(rec.hosted?.site ?? "")} cancels or expires it. If it never does, only the owner may give it up: superstables budget wait --id ${rec.id} --abandon`, reason: `${words}. Not cancelled earlier: ${rec.cancelUnconfirmed}` });
+  }
+  const words = s.unreachable ? `waiting for the owner (${rec.hosted?.site} could not be read just now: ${s.unreachable})` : s.words;
   log(`superstables budget: ${rec.id} (buy-once) has no final result: ${words}. Link: ${rec.url} (match code ${rec.matchCode})`);
   emit(0, { command: "buy-once", rail: rec.rail, chain: rec.chain, service: rec.service?.id, state: "waiting_owner", purchase: rec.hosted?.requestId, ...approvalFields(rec), next: stillWaiting(rec.id), reason: words });
 }

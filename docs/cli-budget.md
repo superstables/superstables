@@ -111,8 +111,9 @@ RESULT names one in use as rpc.
 Output: logs go to stderr. stdout ends with one line
   RESULT {"ok","command","rail","chain","op","state","final","paid","delivered","amount","remaining","tx","rpc","id","url",
           "matchCode","message_for_owner","budget_spent","next","reason"}
-Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false only
-while an owner approval is open (state waiting_owner). next is the command to run next, or none.
+Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
+while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read.
+next is the command to run next, or none.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
 link, the match code (hosted), the amount and network, the testnet line. The agent sends it and ends its turn.
 budget_spent: true when buy was refused because the budget cannot cover the purchase (spent, revoked, never granted).
@@ -127,7 +128,7 @@ Exit codes (the same numbers as superstables):
      Respect it; never raise --max to get around it
   4  paid, not delivered: never pay again; report it
   5  unknown: it may have paid. Purchases: superstables budget reconcile --rail R --op ID. Owner commands: status and
-     the wallet's activity. Never pay twice
+     the wallet's activity. buy-once: wait --id ID --shown while final is false. Never pay twice
 
 Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
   keys/budget/<rail>-agent.env               the agent key (mode 600). No owner key is ever stored here
@@ -538,7 +539,7 @@ Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input,
 ## superstables budget wait
 
 ```text
-superstables budget wait --id ID --shown [--timeout S] [--site URL]
+superstables budget wait --id ID --shown [--timeout S] [--site URL] [--abandon]
 
 After an owner command or buy-once returned waiting_owner: waits up to S seconds (default 30, at most 300) for that
 approval, then prints its state. While the owner has not decided: state waiting_owner, final false, exit 0. That is not
@@ -551,6 +552,9 @@ waiting_owner it says so in one line and ends its turn again.
 --site is checked against the site the approval was made on, and refused if it differs.
 When the link expired before the owner approved: state refused_precheck, exit 3, nothing sent. Run the owner command
 again for a new link (setup reuses the agent key it created).
+--abandon (the owner only, for a buy-once purchase the site never ends): reads the site once; if the purchase still has
+no final answer, keeps its record, marks it given up with the time, and returns state unknown, exit 5, final true. The
+payment stays unknown; buy-once can start a new purchase. An agent never runs it.
 
 Moves money: no. It never approves, signs or sends anything.
 Run by: anyone, usually the agent that started the owner command, after the owner says they've approved.

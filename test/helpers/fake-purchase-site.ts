@@ -41,6 +41,8 @@ interface Service {
   payTo?: string;
   protocol?: string;
   symbol?: string;
+  /** The token's decimals the listing and the purchase name (6 when absent; null leaves them out). */
+  decimals?: number | null;
   params: { name: string; required: boolean; enum?: string[]; default?: string }[];
   available?: boolean;
   simulated?: boolean;
@@ -55,8 +57,17 @@ export interface FakePurchaseSite extends TestServer {
   onPoll?: (p: FakePurchase) => void;
   /** Answer POST /api/v1/purchases with this status and error instead of creating one. */
   refuseCreate?: { status: number; error: { code: string; message: string; allowed?: unknown } };
+  /** Answer reads of a purchase with this instead of its view (an error the site returns). */
+  readAnswer?: (p: FakePurchase) => { status: number; body: unknown } | undefined;
   /** The origin the approval link points at (default: this site). */
   approvalBase?: string;
+  /**
+   * Answer the next cancels with this instead of cancelling: a status and body (a refusal, or a 2xx that is not a
+   * cancellation), or "unreachable" to drop the connection. The purchase is left as it is.
+   */
+  cancelAnswer?: { status: number; body: unknown } | "unreachable" | ((p: FakePurchase) => { status: number; body: unknown });
+  /** The owner-token fragment of the next approval link, without the # (default: sspa_test_owner<n>). */
+  approvalFragment?: string;
   /** Changes what the next POST creates, before it is stored (a different recipient, another price). */
   tweak?: (p: FakePurchase) => void;
   /**
@@ -133,14 +144,14 @@ const listing = (s: Service) => ({
   available: s.available !== false,
   ...(s.available === false ? { unavailable_reason: "the seller is offline" } : {}),
   request: { method: "GET", endpoint: `https://seller.example/${s.id}`, params: s.params.map((p) => ({ name: p.name, in: "query", required: p.required, ...(p.enum ? { enum: p.enum } : {}), ...(p.default ? { default: p.default } : {}) })), unknown_params: "rejected" },
-  payment: { protocol: s.protocol ?? "x402", ...(s.protocol === "mpp" ? {} : { x402_version: 2, scheme: "exact" }), network: s.network ?? "eip155:84532", asset: { symbol: s.symbol ?? "USDC", address: s.asset, decimals: 6 }, amount: { decimal: s.amount, atomic: atomic(s.amount) }, pay_to: s.payTo ?? SELLER },
+  payment: { protocol: s.protocol ?? "x402", ...(s.protocol === "mpp" ? {} : { x402_version: 2, scheme: "exact" }), network: s.network ?? "eip155:84532", asset: { symbol: s.symbol ?? "USDC", address: s.asset, ...(s.decimals === null ? {} : { decimals: s.decimals ?? 6 }) }, amount: { decimal: s.amount, atomic: atomic(s.amount) }, pay_to: s.payTo ?? SELLER },
 });
 
 export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
   const site = {} as FakePurchaseSite;
   site.services = [structuredClone(MARKET), structuredClone(BRIEFING)];
   site.purchases = [];
-  const terms = (p: FakePurchase) => p.terms ?? { amount: { decimal: p.service.amount, atomic: atomic(p.service.amount) }, asset: { symbol: p.service.symbol ?? "USDC", address: p.service.asset, decimals: 6 }, network: p.service.network ?? "eip155:84532", recipient: p.service.payTo ?? SELLER, protocol: p.service.protocol ?? "x402" };
+  const terms = (p: FakePurchase) => p.terms ?? { amount: { decimal: p.service.amount, atomic: atomic(p.service.amount) }, asset: { symbol: p.service.symbol ?? "USDC", address: p.service.asset, ...(p.service.decimals === null ? {} : { decimals: p.service.decimals ?? 6 }) }, network: p.service.network ?? "eip155:84532", recipient: p.service.payTo ?? SELLER, protocol: p.service.protocol ?? "x402" };
   const view = (p: FakePurchase) => ({
     id: p.id, state: p.state, final: p.final, livemode: false,
     service: { id: p.service.id, name: p.service.name, simulated: p.service.simulated === true, testnet: true },
@@ -218,7 +229,7 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
       site.purchases.push(p);
       return json(res, 201, {
         ...view(p), access_token: p.token, replayed: false,
-        approval: { url: `${site.approvalBase ?? server.url}/approve/${id}#sspa_test_owner${site.purchases.length}`, match_code: "KPT-RWD", expires_at: new Date(Date.now() + 600_000).toISOString() },
+        approval: { url: `${site.approvalBase ?? server.url}/approve/${id}#${site.approvalFragment ?? `sspa_test_owner${site.purchases.length}`}`, match_code: "KPT-RWD", expires_at: new Date(Date.now() + 600_000).toISOString() },
         message_for_owner: "Open the link and pick KPT-RWD.",
       });
     }
@@ -228,11 +239,18 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
       if (!p || req.headers.authorization !== `Bearer ${p.token}`) return json(res, 404, { error: { code: "not_found", message: "no such purchase", money_moved: false } });
       if (m[2] && req.method === "POST") {
         p.cancels++;
+        if (site.cancelAnswer === "unreachable") { req.socket.destroy(); return; }
+        if (site.cancelAnswer) {
+          const a = typeof site.cancelAnswer === "function" ? site.cancelAnswer(p) : site.cancelAnswer;
+          return json(res, a.status, a.body);
+        }
         if (p.state !== "awaiting_approval") return json(res, 409, { error: { code: "not_awaiting_approval", message: "the purchase is no longer awaiting approval", money_moved: false } });
         Object.assign(p, { state: "denied", final: true, reason_code: "agent_cancelled", reason: "the agent cancelled it", payment: { status: "not_paid" }, delivery: { status: "not_called" } });
         return json(res, 200, view(p));
       }
       p.polls++;
+      const answer = site.readAnswer?.(p);
+      if (answer) return json(res, answer.status, answer.body);
       site.onPoll?.(p);
       return json(res, 200, view(p));
     }
