@@ -20,6 +20,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/budget-build.mjs",
     "prepare": "node scripts/prepare.mjs",
+    "prepack": "node scripts/prepare.mjs --pack",
+    "prepublishOnly": "node scripts/publish-check.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:live": "SUPERSTABLES_LIVE=1 vitest run test/live",

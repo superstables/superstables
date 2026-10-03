@@ -92,7 +92,8 @@ and removes the Claude Desktop bundle.
   `superstables budget` as a self-contained build, with `THIRD_PARTY_NOTICES.txt`, so its chain
   libraries are not installed as separate packages. It runs from a checkout (`npm ci`; a checkout
   without dev packages runs the built copy), from a package made with `npm pack`, and from git:
-  `npm install github:superstables/superstables-client` builds the client during the install.
+  `npm install github:superstables/superstables-client#<commit>`, with a full commit hash, builds
+  the client on your computer during the install.
   Linux and macOS are supported; on Windows, use WSL. `superstables budget` refuses to run on
   native Windows.
 - **The `superstables-payments` agent skill.** A skill that walks an agent through finding a
@@ -108,7 +109,7 @@ and removes the Claude Desktop bundle.
 - **Install from npm.** `npm install -g @superstables/client` installs the `superstables`
   command, with `superstables budget` and the MCP server (`superstables mcp`); the package is
   also the TypeScript SDK. Earlier releases were installed from a checkout of this repository
-  or from git (`npm install github:superstables/superstables-client`); both still work.
+  or from git (`npm install github:superstables/superstables-client#<commit>`); both still work.
 - **Help, `--json` and exit codes across the CLI.** Each command's `--help` says what it does,
   whether it can move money, who runs it, an example, what it prints and its exit codes. `find`,
   `quote`, `pay`, `status`, `receipts` and `attempts` take `--json` and print one JSON value on
