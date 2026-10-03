@@ -11,6 +11,35 @@ import { ensureDir, recordsDir } from "./home.js";
 import { round6 } from "./policy.js";
 import type { Attempt, Quote, Receipt } from "./types.js";
 
+/** How long a reservation without a recorded end counts: the longest default approval window, and more. */
+const RESERVATION_FALLBACK_MS = 10 * 60_000;
+
+/** Does an attempt without a receipt count toward the cap on `day`, judged at `now`? See Records.spentToday. */
+function countsOn(attempt: Attempt, now: Date, day: string): boolean {
+  switch (attempt.state) {
+    case "approved":
+    case "submitting": {
+      // Open: counts on every day while the signed authorization can still be settled. After its validBefore it cannot,
+      // so it counts on the day it was signed only. Without a recorded validBefore (an older record), every day.
+      const validBefore = attempt.authorizationValidBefore ? Date.parse(attempt.authorizationValidBefore) : NaN;
+      if (!Number.isFinite(validBefore) || now.getTime() < validBefore) return true;
+      const signedAt = attempt.history?.find((h) => h.state === "approved")?.at ?? attempt.updatedAt;
+      return typeof signedAt === "string" && signedAt.startsWith(day);
+    }
+    case "uncertain": {
+      const ended = [...(attempt.history ?? [])].reverse().find((h) => h.state === "uncertain")?.at ?? attempt.updatedAt;
+      return typeof ended === "string" && ended.startsWith(day);
+    }
+    case "awaiting_approval": {
+      if (typeof attempt.reservedAt !== "string") return false;
+      const until = attempt.reservedUntil ? Date.parse(attempt.reservedUntil) : Date.parse(attempt.reservedAt) + RESERVATION_FALLBACK_MS;
+      return Number.isFinite(until) && now.getTime() < until;
+    }
+    default:
+      return false;
+  }
+}
+
 /** 0600: only the owner of the machine reads their own payment history. */
 const FILE_MODE = 0o600;
 
@@ -85,20 +114,40 @@ export class Records {
   }
 
   /**
-   * What has already been paid today (UTC) in one asset, from the receipts on this machine.
-   * A receipt is written only when the money moved — a settled payment, or one where the
-   * money moved and the service then failed — so every receipt of the day counts.
+   * What counts toward the daily cap on the UTC day of `now`, in one asset. One line: a payment counts on the day it
+   * ended (a receipt's day, or the day it became uncertain), and on every day while it is still open (signed and in
+   * flight, or waiting for the owner within its approval window).
+   *
+   *   receipt                       on its own day: the seller reported the money moved, and the chain did not contradict it
+   *   uncertain, no receipt         on the day it became uncertain: signed, and whether its money moved is unknown
+   *   approved / submitting         on every day while its signed authorization can still settle (before validBefore),
+   *                                 then on the day it was signed only; every day when validBefore is not recorded
+   *   awaiting_approval, reserved   on every day until its reservation ends (reservedUntil): the owner may still sign
+   *
+   * A reservation left by a process that stopped stops counting when its approval window ends; a signed attempt left in
+   * flight stops counting on later days once its authorization has expired. Each payment counts once: an attempt with a receipt counts only through the
+   * receipt. Attempts are read before receipts, so a payment that settles between the two reads is still counted, once.
+   * `exclude` leaves out one attempt: the one being checked against the cap.
    * This is the number the per-day cap is checked against; it is a local figure, not a
    * chain balance, and it says so wherever it is shown.
    */
-  spentToday(asset: string, now: Date = new Date()): number {
+  spentToday(asset: string, now: Date = new Date(), options: { exclude?: string } = {}): number {
     const day = now.toISOString().slice(0, 10);
     const wanted = asset.toUpperCase();
+    // Attempts first, then receipts: see above.
+    const attempts = this.byId<Attempt>("attempts.jsonl");
+    const receipts = this.byId<Receipt>("receipts.jsonl");
     let total = 0;
-    for (const receipt of this.byId<Receipt>("receipts.jsonl").values()) {
+    for (const receipt of receipts.values()) {
       if (!receipt.at?.startsWith(day)) continue;
       if ((receipt.terms?.asset ?? "").toUpperCase() !== wanted) continue;
       total += receipt.terms.amountDecimal;
+    }
+    for (const attempt of attempts.values()) {
+      if (attempt.id === options.exclude) continue;
+      if (receipts.has(attempt.id) || (attempt.receiptId && receipts.has(attempt.receiptId))) continue;
+      if ((attempt.terms?.asset ?? "").toUpperCase() !== wanted) continue;
+      if (countsOn(attempt, now, day)) total += attempt.terms.amountDecimal;
     }
     return round6(total);
   }

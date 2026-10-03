@@ -19,7 +19,8 @@
 
 import { z } from "zod";
 import { describeNetwork, toCaip2 } from "./chain.js";
-import { chainName, routesFor } from "./routes.js";
+import { chainName, isKnownChainName, isKnownRail, routesFor } from "./routes.js";
+import { SellerTextError, untrustedText } from "./text.js";
 import type { ResolvedRequest, ServiceListing, ServiceParam } from "./types.js";
 
 export const DEMO_SERVICE_ID = "superstables-demo-market-data";
@@ -324,7 +325,8 @@ export function resolveRequest(service: ServiceListing, params: Record<string, s
   }
 
   if (problems.length > 0) {
-    throw new Error(`Cannot call ${service.name}: ${problems.join("; ")}.`);
+    // Parameter names and allowed values are the listing's, so they are the detail, not the client's sentence.
+    throw new SellerTextError("The parameters given do not match what this service's listing asks for", `${service.name}: ${problems.join("; ")}`);
   }
 
   const url = new URL(service.endpoint);
@@ -540,14 +542,17 @@ function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing
   const notActionableReason = !secure
     ? "the endpoint is not https, so a payment credential would travel in the clear"
     : !supported
-      ? `${networkLabel} in ${row.payment.asset} is not supported in this release`
+      ? // The catalogue's own label is not repeated: the client names the network and asset only when it knows them.
+        `${isKnownChainName(row.payment.network) ? describeNetwork(row.payment.network) : "this network"} in ${/^[A-Za-z0-9]{1,12}$/.test(row.payment.asset) ? row.payment.asset : "this asset"} is not supported in this release`
       : !configured
         ? "the seller has no payout address configured, so it cannot be paid right now"
         : undefined;
   return {
     id: row.id,
-    name: row.name,
-    description: row.description,
+    // The same rule as an index row's text: the catalogue's address can be pointed elsewhere, and what it says
+    // about a service reaches an agent that then chooses what to pay.
+    name: untrustedText(row.name, 200),
+    description: untrustedText(row.description, 500),
     endpoint: row.endpoint,
     method: "GET",
     params: row.params.map((p) => ({
@@ -612,17 +617,26 @@ async function fetchIndex(query: string, limit: number): Promise<ServiceListing[
 }
 
 function fromIndexRow(row: IndexRow): ServiceListing {
-  const chains = row.chains ?? [];
-  const rails = row.rails ?? [];
+  // The row's own words for its chains and rails end up in the listing and in the reason it cannot be paid.
+  const chains = (row.chains ?? []).map((c) => untrustedText(c, 60)).filter(Boolean);
+  const rails = (row.rails ?? []).map((r) => untrustedText(r, 60)).filter(Boolean);
   const routes = routesFor(rails, chains);
   // The network shown is the one `pay` could use when the listing offers it, not merely the
   // first one listed: ["base", "base-sepolia"] is a Base Sepolia listing as far as `pay` goes.
   const chain = chains.find((c) => toCaip2(c) === "eip155:84532") ?? chains[0] ?? "";
   const testnet = chains.some((c) => /sepolia|testnet|devnet|amoy|moderato/i.test(c));
+  // A payment credential travels to this endpoint too, so it gets the same test the hosted
+  // catalogue rows get: only https, or plain http on this machine. An index row names its own
+  // endpoint, and `chains` is the row's own claim about where it pays, so neither is a check.
+  let endpoint: URL | undefined;
+  try { endpoint = new URL(String(row.endpoint)); } catch {}
+  const secure = endpoint !== undefined && (endpoint.protocol === "https:" || (endpoint.protocol === "http:" && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(endpoint.hostname)));
   return {
-    id: String(row.id),
-    name: row.name ?? String(row.id),
-    description: row.description ?? "",
+    // Index text is whoever registered the service. It reaches an agent that then chooses what to pay and
+    // what to tell the owner, so it is flattened to one bounded line here rather than at each place it is shown.
+    id: untrustedText(row.id, 200),
+    name: untrustedText(row.name ?? row.id, 200),
+    description: untrustedText(row.description, 500),
     endpoint: String(row.endpoint),
     method: "GET",
     // The index does not record request parameters yet; an empty list says exactly that.
@@ -647,22 +661,37 @@ function fromIndexRow(row: IndexRow): ServiceListing {
     lastSeenLive: row.last_seen_live,
     testnet,
     actionable: false,
-    notActionableReason: routes.pay
-      ? "the index does not yet record the request parameters this service needs"
-      : !testnet
-        ? `mainnet only (${describeOffer(rails, chains)}); this client pays on testnets only`
-        : routes.budget.length > 0
-          ? `\`superstables pay\` pays x402 on Base Sepolia only; a \`superstables budget\` rail could pay ${describeOffer(rails, chains)}`
-          : `this client does not pay ${describeOffer(rails, chains)}`,
+    notActionableReason: !secure
+      ? endpoint === undefined
+        ? "the index records no usable endpoint for this service"
+        : "the endpoint is not https, so a payment credential would travel in the clear"
+      : routes.pay
+        ? "the index does not yet record the request parameters this service needs"
+        : !testnet
+          ? `mainnet only (${describeOffer(rails, chains)}); this client pays on testnets only`
+          : routes.budget.length > 0
+            ? `\`superstables pay\` pays x402 on Base Sepolia only; a \`superstables budget\` rail could pay ${describeOffer(rails, chains)}`
+            : `this client does not pay ${describeOffer(rails, chains)}`,
     rails,
     chains,
-    routes,
+    // routes, with `pay` off where the endpoint cannot carry a credential safely. This is the field
+    // both the CLI and the MCP server gate a payment on, so it is where the rule belongs.
+    routes: secure ? routes : { ...routes, pay: false },
   };
 }
 
+/**
+ * What a listing offers, in the client's own words: only the rail and chain names the client knows are repeated, and
+ * the rest are counted, never quoted, because this text goes into the client's sentence about the listing.
+ */
 function describeOffer(rails: string[], chains: string[]): string {
-  const protocols = rails.length > 0 ? rails.join(", ") : "an unnamed protocol";
-  return `${protocols} on ${chains.length > 0 ? chains.join(", ") : "no named chain"}`;
+  const name = (known: string[], others: number, one: string, none: string) =>
+    known.length === 0 && others === 0
+      ? none
+      : [...known, ...(others > 0 ? [`${others} other ${one}${others === 1 ? "" : "s"}`] : [])].join(", ");
+  const knownRails = rails.filter(isKnownRail);
+  const knownChains = chains.filter(isKnownChainName);
+  return `${name(knownRails, rails.length - knownRails.length, "protocol", "an unnamed protocol")} on ${name(knownChains, chains.length - knownChains.length, "chain", "no named chain")}`;
 }
 
 function message(err: unknown): string {

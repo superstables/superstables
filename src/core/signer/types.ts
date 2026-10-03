@@ -29,6 +29,11 @@ export interface SignResult {
 
 export interface SignHooks {
   /**
+   * Called right before the owner is asked (the approval page or wallet request is created). It may throw SignRefused
+   * ("policy") to stop: then nobody is asked. The payment engine renews its cap reservation here when it has expired.
+   */
+  beforeAsk?: () => Promise<void>;
+  /**
    * Called once the request has been accepted and is waiting for the owner. `approvalUrl` is
    * present when the owner approves on a page this process serves, and must be shown to them.
    */
@@ -37,6 +42,11 @@ export interface SignHooks {
 
 export interface Signer {
   readonly kind: "wallet" | "local" | "browser";
+  /**
+   * The longest this signer waits for the owner before it gives up unsigned. A payment reserves its amount against the
+   * daily cap for this long at most (pay.ts); unset, ten minutes.
+   */
+  readonly approvalWindowMs?: number;
   /** The payer address on a network (CAIP-2). Throws when there is no identity there. */
   address(network: string): Promise<string>;
   /** Sign, or refuse. A refusal throws SignRefused; nothing was signed. */

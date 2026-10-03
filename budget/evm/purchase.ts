@@ -339,8 +339,9 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
     }
   });
 
-  // one deadline per request: a seller that never answers must not hang the purchase
-  const timedFetch: typeof fetch = (input: any, init?: any) => fetch(input, { ...init, signal: AbortSignal.timeout(httpTimeoutMs) });
+  // one deadline per request: a seller that never answers must not hang the purchase. No redirects: the paid retry
+  // carries PAYMENT-SIGNATURE, which fetch would take to whatever host a redirect names.
+  const timedFetch: typeof fetch = (input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) });
   const pay = wrapFetchWithPayment(timedFetch, http);
   let r: Response;
   try {

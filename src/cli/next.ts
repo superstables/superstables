@@ -13,6 +13,7 @@
 
 import type { BudgetRoute, ServiceListing } from "../core/types.js";
 import { shellWord } from "./outcome.js";
+import { LISTING_IDENTIFIER } from "../core/text.js";
 
 /** One way to pay a listing: the commands to run, in order. */
 export interface ListingCommands {
@@ -32,14 +33,18 @@ export interface ListingCommands {
  * endpoint is not https).
  */
 export function listingCommands(service: ServiceListing): ListingCommands[] {
+  // A command is the client's own words: it is built only from a listing whose id and parameter names are plain
+  // identifiers and whose endpoint is a well-formed https URL (or http on this machine). Any other listing gets none.
+  if (!isPlainListing(service)) return [];
   // A catalogue listing on Base Sepolia that pay still cannot take is refused for a reason that
   // holds for a budget too (the endpoint is not https, the seller has no payout address).
   if (service.source === "demo-catalogue" && !service.actionable && service.routes?.pay) return [];
 
   const commands: ListingCommands[] = [];
   const unknownParams = service.source === "superstables-index";
+  // Allowed values are repeated only when every one of them is a plain identifier.
   const choices = service.params
-    .filter((p) => p.enum && p.enum.length > 1)
+    .filter((p) => p.enum && p.enum.length > 1 && p.enum.every(isPlain))
     .map((p) => `${p.name}: ${p.enum?.join(", ")}`)
     .join("; ");
   const paramsNote = unknownParams
@@ -105,6 +110,9 @@ export function listingCommands(service: ServiceListing): ListingCommands[] {
 
 /** The lines `find` prints under a listing's id: each way, then its commands. */
 export function formatListingCommands(service: ServiceListing, commands = listingCommands(service)): string[] {
+  if (!isPlainListing(service)) {
+    return ["no command shown: this listing's id, parameter names or endpoint are not in a form this client repeats"];
+  }
   if (commands.length === 0) {
     return [`not payable by this client: ${service.notActionableReason ?? "no reason recorded"}`];
   }
@@ -130,6 +138,44 @@ export function buyOnceCommand(service: ServiceListing): string {
   return `superstables budget buy-once --service ${shellWord(service.id)}${params.join("")} --max <ceiling>`;
 }
 
+/** A listing's id, parameter name or value that the client may repeat in a command of its own. */
+function isPlain(value: unknown): value is string {
+  return typeof value === "string" && LISTING_IDENTIFIER.test(value);
+}
+
+/**
+ * The listing's endpoint as a command may show it: the URL as the URL parser writes it back (control characters
+ * removed, anything else outside printable ASCII escaped), only for https, or http on this machine. Undefined otherwise.
+ */
+function shownEndpoint(service: ServiceListing): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(service.endpoint);
+  } catch {
+    return undefined;
+  }
+  const loopback = url.protocol === "http:" && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(url.hostname);
+  if (url.protocol !== "https:" && !loopback) return undefined;
+  if (url.username || url.password) return undefined;
+  return url.href;
+}
+
+/** Can the client build commands for this listing at all? Its id, every parameter name, and its endpoint. */
+export function isPlainListing(service: ServiceListing): boolean {
+  return isPlain(service.id) && service.params.every((p) => isPlain(p.name)) && shownEndpoint(service) !== undefined;
+}
+
+/**
+ * The quote command a refusal may show in the client's own sentence: the service id and required parameter names only
+ * when each is a plain identifier (LISTING_IDENTIFIER), and `<value>` for every value, since example values and allowed
+ * values are the listing's words and belong in the labelled detail. Undefined when the listing is malformed.
+ */
+export function exampleQuoteCommand(service: ServiceListing): string | undefined {
+  const required = service.params.filter((p) => p.required);
+  if (!LISTING_IDENTIFIER.test(service.id) || required.some((p) => !LISTING_IDENTIFIER.test(p.name))) return undefined;
+  return `superstables quote --service ${service.id}${required.map((p) => ` --param ${p.name}=<value>`).join("")}`;
+}
+
 /** The command that quotes a listing, with an example or a placeholder for each required parameter. */
 export function quoteCommand(service: ServiceListing): string {
   const params = service.params
@@ -144,20 +190,22 @@ export function quoteCommand(service: ServiceListing): string {
  * listings), `?<parameters>` stands in for them.
  */
 function requestUrl(service: ServiceListing): string {
-  if (service.source === "superstables-index") return `${service.endpoint}${service.endpoint.includes("?") ? "&" : "?"}<parameters>`;
+  const endpoint = shownEndpoint(service) ?? "<url>";
+  if (service.source === "superstables-index") return `${endpoint}${endpoint.includes("?") ? "&" : "?"}<parameters>`;
   const query = service.params
     .filter((p) => p.required)
     .map((p) => {
       const value = paramValue(p);
-      const known = p.example !== undefined || (p.enum?.length ?? 0) > 0;
+      const known = value !== `<${p.name}>`;
       return `${encodeURIComponent(p.name)}=${known ? encodeURIComponent(value) : value}`;
     });
-  if (query.length === 0) return service.endpoint;
-  return `${service.endpoint}${service.endpoint.includes("?") ? "&" : "?"}${query.join("&")}`;
+  if (query.length === 0) return endpoint;
+  return `${endpoint}${endpoint.includes("?") ? "&" : "?"}${query.join("&")}`;
 }
 
+/** An example value only when it is a plain identifier; otherwise a placeholder named after the parameter. */
 function paramValue(p: ServiceListing["params"][number]): string {
-  return p.example ?? p.enum?.[0] ?? `<${p.name}>`;
+  return [p.example, p.enum?.[0]].find(isPlain) ?? `<${p.name}>`;
 }
 
 function join(...parts: (string | undefined)[]): string {

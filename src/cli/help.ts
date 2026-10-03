@@ -56,13 +56,15 @@ export function wrap(text: string, indent: string, width = WIDTH): string[] {
 }
 
 export const EXIT_CODE_TABLE = `Exit codes (the same numbers as \`superstables budget\`):
-  0  done: printed what was asked; for pay, the payment settled and the service answered
+  0  done: printed what was asked; for pay, the payment settled (chain: verified, or unchecked until checked
+     again) and the service answered
   1  failed: nothing was paid. Includes an approval that expired or was abandoned, and a service or
      wallet that could not be reached
   2  bad input: unknown command or flag, a missing or wrong parameter, an unknown id, or a quote
      that is used or expired. Nothing was done
   3  refused: the owner rejected the payment, or a spend policy refused it. Nothing was paid
-  4  paid, not delivered: the payment settled but the service answered with an error. Do not pay again
+  4  paid, not delivered: the payment settled (verified or unchecked) but the service answered with an error,
+     or its answer did not arrive in full. Do not pay again
   5  unknown: the payment may or may not have settled. Do not pay again until you have checked
      \`superstables receipts\` and the payer's account on the explorer`;
 
@@ -131,7 +133,8 @@ Environment:
                                  (most are simulated; the market data service returns live prices)
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; \`off\` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
-  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances and for the network MetaMask adds
+  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances, the network MetaMask adds, and the chain
+                                 check on a settlement (https, or http on this computer)
   SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, ${DEFAULT_APPROVE_PORT} or a free one when busy
   SUPERSTABLES_WALLET_URL        where the local wallet listens (default http://127.0.0.1:${DEFAULT_WALLET_PORT})
   SUPERSTABLES_MCP_WAIT_MS       how long the MCP pay and payment_status tools wait (default 20000)
