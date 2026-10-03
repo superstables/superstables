@@ -13,7 +13,11 @@ The client pays in two ways, and they have different boundaries:
 | What a hostile agent can do | Ask for payments. With `--wallet local`, code running as the owner can also read that key | Use the agent key to spend what is left of the budget (on `evm` and `solana`, to any address), and move funds held at the agent's address |
 | How it ends | A browser approval request expires after 5 minutes; a local-wallet request after 120 seconds, by default | `superstables budget revoke`, approved in the owner's wallet |
 
-The sections below cover buy once. Budgets have their own section: [Budgets](#budgets).
+The sections below cover buy once with `pay`: the approval page on `127.0.0.1` and the owner's
+wallet. Budgets have their own section: [Budgets](#budgets). `superstables budget buy-once` and a
+budget set up with `--hosted` are approved on a website instead, superstables.com by default; what
+that site can and cannot do is in
+[Hosted approvals and buy-once](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do).
 
 ## Where the key is
 
@@ -64,6 +68,11 @@ cannot misreport the amount, the asset, the network or the recipient, so `caps.p
 rules as a convenience, not as a boundary.
 
 ## The approval link is the capability
+
+This section, and the three after it, describe the page `superstables pay` serves on `127.0.0.1`.
+`budget buy-once` and a budget set up with `--hosted` have no such page: their links are on the
+site, and the owner acts there signed in to their account with their wallet. See
+[Hosted approvals and buy-once](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do).
 
 There is no password on the approval page. The authority is the id in the URL: 128 bits of
 randomness, generated when the payment is created, and handed to the agent as part of its tool
@@ -229,7 +238,8 @@ code running as your user can. Run that mode with a key that holds testnet funds
 
 - **Two keys.** The owner's key stays in the owner's wallet. Setup asks for a message signature;
   `fund-agent`, `grant`, `revoke` and the owner's part of `recover` show their terms on a page on
-  `127.0.0.1` before the wallet is asked.
+  `127.0.0.1` before the wallet is asked; on a chain set up with `--hosted`, all but `recover` show
+  them on the site instead.
   The agent key, in `~/.superstables/keys/budget/<rail>-agent.env` (mode 600), signs purchases.
   `doctor` fails if that file holds an owner key.
 - **The chain enforces the budget.** On `evm`, the total allowance. On `solana`, the delegated
@@ -240,13 +250,22 @@ code running as your user can. Run that mode with a key that holds testnet funds
   budget, on `evm` and `solana` to any address. Keep budgets small.
 - **Setup is a trusted step.** Whoever holds the setup link, the agent included, can complete it
   with a key of their own: the page's origin check stops other websites, not local programs. So the
-  owner runs it, and checks the owner address that setup prints and every owner page shows.
+  owner runs it, and checks the owner address that setup prints and every owner page shows. Under
+  `--hosted` there is no local page and no origin check: the owner links the agent on the site, and
+  the client records an owner only with that owner's signature over the link (see
+  [Hosted approvals and buy-once](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
 - **The checks depend on the rail.** The command builds the page's terms and the transaction
   from the same plan: the command's arguments and the chain's state, not the agent's description.
   On `evm` and `tempo`, the wallet signs and submits, and the command then checks the transaction
   on chain: one that differs from the plan is reported (exit 3), naming each difference, even if it
-  already confirmed. That detects it; it cannot undo it. On `solana`, the wallet only signs, and the
-  client checks the signed bytes are the transaction it built before it submits them.
+  already confirmed. That detects it; it cannot undo it. On `solana` with local approvals, the
+  wallet only signs, and the client checks the signed bytes are the transaction it built before it
+  submits them. The one change it accepts is the pair of compute-budget instructions a wallet may
+  put first (one compute unit limit and one unit price, a priority fee of at most 0.001 SOL), with
+  every instruction it built unchanged after them. With `setup --hosted` on `solana`, the site builds and sends the transaction, so the
+  client never sees it before it is sent; it reads it from the chain afterwards and reports any
+  difference from the plan, like on `evm` (see
+  [Hosted approvals and buy-once](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
 - **Revoke ends the permission once it is confirmed on chain.** The owner approves it in their
   wallet: `approve(agent, 0)` on `evm`, `revokeKey` on `tempo`, the SPL `Revoke` on `solana`. It
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds
@@ -268,9 +287,11 @@ is not trusted to say who the owner is or what was paid.
   `SUPERSTABLES_ALLOW_SITE` to that exact `https` origin in their own environment. An agent never
   sets it, so an agent told to "use this other site" cannot send the owner's approvals there. When
   the site is not `www.superstables.com`, the logs and `message_for_owner` name its host.
-- **Requests are bound to the site.** Each request the agent key signs names the site's origin and
-  a single-use nonce (agent request proof v2), so it cannot be replayed to another site, or to the
-  same one twice.
+- **Requests name the site.** Each request the agent key signs names the site's origin and a fresh
+  nonce (agent request proof v2). A compatible site checks that the origin is its own and refuses a
+  nonce it has already seen, so a proof made for one site fails on another and a captured one fails
+  a second time. Those are the site's checks: the client cannot enforce them, and after a network
+  error it sends the same proof once more on purpose.
 - **The owner signs the link.** The site cannot choose the recorded owner on its own. After picking
   the match code, the owner's wallet signs the site, the owner, the agent, the rail and chain, the
   link id and the code. The client rebuilds that text from its own values and verifies the
@@ -288,11 +309,24 @@ is not trusted to say who the owner is or what was paid.
   bounded compute-budget addition (a priority fee of at most 0.001 SOL, the same bound the local
   page allows); anything else is a mismatch, and the owner revokes. `buy-once` reports a purchase
   paid only when the chain shows the transfer of exactly the purchase's amount, in the listed
-  token, to the listed recipient, after the purchase was created; otherwise the result is unknown
+  token, to the listed recipient, mined no more than 60 seconds before the purchase was created (an
+  allowance for clock differences); otherwise the result is unknown
   and the agent never buys again.
 - **Links are data.** An approval link is used only as `<site>/approve/budget/<id>#<token>` (or
   `<site>/approve/<id>#<token>` for a purchase), rewritten by the URL parser. Text from the site
   loses control, zero-width and bidi characters before it is printed.
+- **What the site learns.** The rail, the chain, the agent's address and what the owner is asked
+  to approve: on `evm` and `tempo` the exact transaction, on `solana` the amount. It also learns
+  which account the owner signs in with. It never receives the agent key.
+- **The access token.** The site answers each request with an access token (`ssbt_...` for an
+  approval, `sspt_...` for a purchase). It can read and cancel that one request, not approve it. It
+  is kept only in that request's record, `budget/approvals/<id>.json` (mode 600), and removed when
+  the request is final; it is never logged or printed.
+- **An unclear outcome is unknown.** Once the site reports that the owner's wallet was asked, or
+  reports a transaction, an unfinished request ends as `unknown` (exit 5), never as "nothing was
+  sent". Read the chain before trying again.
+- **`recover` stays local.** On a hosted chain, `grant`, `revoke` and `fund-agent` go through the
+  site; the owner's part of `recover` still uses the page on this computer.
 - **RPC replacements.** `B4_RPC`, `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC` must be
   `https`, or `http` on this computer; every check above reads the chain through them. A
   replacement in use is named in the `RESULT` (`rpc`).

@@ -363,7 +363,7 @@ code the agent shows you. That needs a superstables.com account. Setup records y
 approval. Over SSH, the owner forwards the local page's port first (`ssh -L PORT:127.0.0.1:PORT`, with the port from the
 link). `superstables budget find` lists the services superstables.com says a budget can pay. Without a budget,
 `superstables budget buy-once --service ID --max M` buys one listed service that you approve on superstables.com (on
-the network its listing names: Base Sepolia, Tempo Moderato or Solana devnet; `find --once` lists them). The default flow stores only the agent key in `~/.superstables/keys/budget/`. An agent may start an owner
+the network its listing names: Base Sepolia, Tempo Moderato or Solana devnet; `superstables budget find --once` lists them). The default flow stores only the agent key in `~/.superstables/keys/budget/`. An agent may start an owner
 command and hand the owner the link; only the owner approves. Run by an agent, an owner command returns at once with
 the link and an approval id. The agent writes the link in its reply to the owner and ends its turn; when the owner says
 they have approved, it runs `superstables budget wait --id <id> --shown`; if the approval is still open, it says so and
