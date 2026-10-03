@@ -1,11 +1,12 @@
 // The key file: created once, never overwritten by accident, readable by nobody else.
 
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { initKey, keyExists, keyPath, loadAccount, readOrCreateSecret } from "../../src/wallet/keystore.js";
+import { initKey, keyExists, keyPath, loadAccount, readOrCreateSecret, readSecretFile, writeSecretFile } from "../../src/wallet/keystore.js";
 
 let dir: string;
 
@@ -54,6 +55,78 @@ describe("loadAccount", () => {
   it("says what to do when there is no key yet", () => {
     expect(() => loadAccount(dir)).toThrow("no wallet key yet: run `superstables wallet init`");
   });
+
+  it("refuses to sign with a key other users on this machine can read", () => {
+    const created = initKey({ dir });
+    // Mode 600 is a fact about the moment it was written. A restore, a `cp` without -p or an editor can
+    // undo it, and the signature after that is made with a key the machine no longer keeps to itself.
+    chmodSync(keyPath(dir), 0o644);
+    expect(() => loadAccount(dir)).toThrow(/can be read by other users on this machine: chmod 600/);
+    // and it says so rather than quietly tightening it, so a copied key file is visible
+    expect(statSync(keyPath(dir)).mode & 0o777).toBe(0o644);
+    chmodSync(keyPath(dir), 0o600);
+    expect(loadAccount(dir).address).toBe(created.address);
+  });
+});
+
+describe("initKey --force over a key file others can read", () => {
+  it("puts the new key in a new 0600 file renamed into place, never into the old file", () => {
+    const old = keyPath(dir);
+    writeFileSync(old, `0x${"11".repeat(32)}\n`, { mode: 0o644 });
+    chmodSync(old, 0o644); // whatever the umask: a key restored from a backup, readable by everyone
+    const before = statSync(old).ino;
+    const created = initKey({ dir, force: true });
+    // Writing into the old file would leave the new key readable by others until a chmod after it. A rename
+    // gives the path a new inode that was 0600 from its first byte.
+    expect(statSync(old).ino).not.toBe(before);
+    expect(ownerOnly(old)).toBe(true);
+    expect(readFileSync(old, "utf8")).not.toContain("11".repeat(32));
+    expect(loadAccount(dir).address).toBe(created.address);
+    expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+});
+
+describe("writeSecretFile", () => {
+  it("keeps writing after a short write, and a write that stops short leaves the original key untouched", () => {
+    const path = keyPath(dir);
+    const trickle = ((fd: number, buf: Buffer, off: number, len: number) => writeSync(fd, buf, off, Math.min(4, len))) as unknown as typeof writeSync;
+    const key = `0x${"33".repeat(32)}\n`;
+    writeSecretFile(path, key, { writeSync: trickle });
+    expect(readFileSync(path, "utf8")).toBe(key);
+
+    let calls = 0;
+    const stuck = ((fd: number, buf: Buffer, off: number, len: number) => (calls++ === 0 ? writeSync(fd, buf, off, Math.min(5, len)) : 0)) as unknown as typeof writeSync;
+    expect(() => writeSecretFile(path, `0x${"44".repeat(32)}\n`, { writeSync: stuck })).toThrow(/short write: 5 of 67 bytes/);
+    expect(readFileSync(path, "utf8")).toBe(key);
+    expect(readdirSync(dir)).toEqual(["key"]);
+  });
+});
+
+describe("readSecretFile", () => {
+  it("reads a 0600 regular file, also through a symlink, and checks the file it opened", () => {
+    const real = join(dir, "real");
+    writeFileSync(real, "secret\n", { mode: 0o600 });
+    const link = join(dir, "link");
+    symlinkSync(real, link);
+    expect(readSecretFile(link, "the key file")).toBe("secret\n");
+    chmodSync(real, 0o644);
+    expect(() => readSecretFile(link, "the key file")).toThrow(/can be read by other users on this machine: chmod 600/);
+  });
+
+  it("refuses a FIFO at once instead of waiting for a writer, and a directory", () => {
+    const fifo = join(dir, "fifo");
+    execFileSync("mkfifo", ["-m", "600", fifo]);
+    expect(() => readSecretFile(fifo, "the key file")).toThrow(/is not a regular file/);
+    const sub = join(dir, "sub");
+    mkdirSync(sub, { mode: 0o700 });
+    expect(() => readSecretFile(sub, "the key file")).toThrow(/is not a regular file/);
+  });
+
+  it("refuses a file far larger than a key", () => {
+    const big = join(dir, "big");
+    writeFileSync(big, "0".repeat(65 * 1024), { mode: 0o600 });
+    expect(() => readSecretFile(big, "the key file")).toThrow(/larger than a key file/);
+  });
 });
 
 describe("readOrCreateSecret", () => {
@@ -63,6 +136,16 @@ describe("readOrCreateSecret", () => {
     expect(first).toMatch(/^[0-9a-f]{64}$/);
     expect(ownerOnly(path)).toBe(true);
     expect(readOrCreateSecret(path)).toBe(first);
+  });
+
+  it("makes a new secret when the file is deleted: how the owner replaces one (docs/security.md)", () => {
+    const path = join(dir, "owner-secret");
+    const first = readOrCreateSecret(path);
+    rmSync(path);
+    const second = readOrCreateSecret(path);
+    expect(second).toMatch(/^[0-9a-f]{64}$/);
+    expect(second).not.toBe(first);
+    expect(ownerOnly(path)).toBe(true);
   });
 
   it("tightens the permissions of a secret that was left readable", () => {

@@ -14,14 +14,13 @@
 // A chain set up with --hosted (APPROVALS=hosted and SITE in the public file) asks through that site instead (../hosted.ts):
 // the same transaction, sent by the owner's wallet from superstables.com; the agent key being granted or revoked signs the
 // request, and the site must act for the owner recorded here. The command reads the chain the same way afterwards.
-import { readFileSync } from 'node:fs'
 import { encodeFunctionData, getAddress, type Address, type Hex } from 'viem'
 import { privateKeyToAddress } from 'viem/accounts'
 import { Abis, Addresses } from 'viem/tempo'
 import type { OwnerChain, OwnerTerms } from '../../src/core/signer/owner-approval-server.ts'
 import { closeOwnerPage, ownerPageFor } from '../owner-page.ts'
 import { DEFAULT_SITE } from '../site.mjs'
-import { AGENT_ENV_PATH, CHAIN_ID, EXPLORER_BASE, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, fromBaseUnits, loadPublicEnv, makeClient, parseEnvFile } from './lib/common.ts'
+import { AGENT_ENV_PATH, CHAIN_ID, EXPLORER_BASE, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, fromBaseUnits, loadPublicEnv, makeClient, parseEnvFile, agentFileText } from './lib/common.ts'
 import { chainHead, rpcRead, sleep, topicOf } from './lib/chain.ts'
 
 export { closeOwnerPage }
@@ -73,7 +72,12 @@ export function useHostedAgent(agent: Address) {
 }
 /** The private key in the agent file whose address is `agent`, or undefined. */
 function agentKeyFor(agent: Address): Hex | undefined {
-  const env = parseEnvFile(readFileSync(AGENT_ENV_PATH, 'utf8'))
+  const file = agentFileText()
+  if (file.problem !== undefined) {
+    console.log(`REFUSED: ${file.problem}. Nothing was requested.`)
+    process.exit(emit('owner', 3, { state: 'refused_precheck', reason: file.problem, next: `make ${AGENT_ENV_PATH} a regular file only you can read (chmod 600), then run the command again` }))
+  }
+  const env = parseEnvFile(file.text)
   for (const [k, v] of Object.entries(env)) {
     if (!/^AGENT[A-Za-z0-9]*_PRIVATE_KEY$/.test(k) || !/^0x[0-9a-fA-F]{64}$/.test(v)) continue
     if (privateKeyToAddress(v as Hex).toLowerCase() === agent.toLowerCase()) return v as Hex

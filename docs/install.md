@@ -257,23 +257,30 @@ generates a throwaway address, prints it and warns you: anything paid there is u
 
 ## The local wallet, for a machine with no browser
 
-The second signer keeps a key in a file and serves its own approval page, protected by a secret
-carried in the URL fragment. It is the fallback, not the default.
+The second signer keeps a key in a file and serves its own approval page, protected by the owner
+secret. It is the fallback, not the default.
 
 ```bash
 superstables --wallet local setup          # creates ~/.superstables/wallet/key, prints the address
 superstables --wallet local wallet serve   # leave it running
 ```
 
-It binds `127.0.0.1:4411`, prints an approval URL of the form
-`http://127.0.0.1:4411/#<owner-secret>`, and opens it in your browser. The browser leaves the fragment out of the page request; the page then sends the secret to the
-wallet process in an Authorization header, so the owner can approve. Keep that link to yourself.
+It binds `127.0.0.1:4411` and opens the approval page in your browser, already signed in. It
+does that through a launcher file only you can read, in `~/Superstables-wallet-open/`, and
+prints its path in case the browser does not open; the file, and the folder once empty, are
+deleted once the page is open. It never prints the owner secret itself. The page sends the secret to the wallet process in an Authorization header, so the owner
+can approve.
+
+Over SSH, or with a browser that cannot open the launcher file, forward the port
+(`ssh -L 4411:127.0.0.1:4411 user@host`), open `http://127.0.0.1:4411/` and paste the owner
+secret, which `cat ~/.superstables/wallet/owner-secret` prints on the wallet's machine. Keep the
+secret to yourself: it approves payments.
 
 | Option | Meaning |
 | --- | --- |
 | `--port <n>` | Listen somewhere other than 4411. Set `SUPERSTABLES_WALLET_URL` to match |
 | `--approval-timeout <seconds>` | How long a request waits for you. Default 120 |
-| `--no-open` | Do not open a browser; print the link only |
+| `--no-open` | Do not open a browser; print where the page and the launcher are |
 
 Every other command needs `--wallet local` too, or `SUPERSTABLES_WALLET=local` in the
 environment — including the one that starts the MCP server, which is how an agent gets it.

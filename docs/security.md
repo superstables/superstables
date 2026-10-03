@@ -237,8 +237,12 @@ characters.
 ## The local wallet mode
 
 `--wallet local` (or `SUPERSTABLES_WALLET=local`) replaces the browser wallet with a wallet process that
-holds a key in `~/.superstables/wallet/key`, mode 0600. It exists for a machine with no browser,
-and it moves the boundary.
+holds a key in `~/.superstables/wallet/key`, mode 0600. At startup, it refuses to load that file when other users on the machine can read it or
+it is not a regular file. The same checks apply when importing a key with
+`wallet init --import-key-file`. A running wallet keeps its loaded key and does not recheck
+the file's permissions before signing. `wallet init --force` writes the new key to a new 0600 file and renames
+it into place, so it is never in a file others can read.
+It exists for a machine with no browser, and it moves the boundary.
 
 It generates two random 32-byte hex secrets at first start, in `~/.superstables/wallet/`:
 
@@ -249,9 +253,19 @@ It generates two random 32-byte hex secrets at first start, in `~/.superstables/
 
 Both are sent as `Authorization: Bearer …` and compared in constant time. A missing or unknown
 token gets 401; the agent token on an `/owner/…` route gets 403 — asking and approving are
-different powers, so they are different secrets. The agent API never returns the owner secret, and the wallet's HTTP log never contains it: the owner opens
-`http://127.0.0.1:4411/#<owner-secret>`, and a URL fragment is not sent to the server. The
-wallet verifies the same facts the approval page does and signs the stored requirement byte for
+different powers, so they are different secrets. The agent API never returns the owner secret, and the wallet's HTTP log never contains it.
+
+The wallet never prints the owner secret and never puts it on a command line, where every user
+on the machine could read it with `ps`. At start it writes a launcher file, mode 0600, that
+sends the browser to `http://127.0.0.1:4411/#<owner-secret>`, and gives the browser only the
+file's path. The file goes in `~/Superstables-wallet-open/`, a folder that is not hidden, so a
+browser installed as a Snap (Ubuntu's Firefox) can open it. The wallet creates that folder with
+mode 0700, and refuses one that is a symlink, belongs to someone else or has another mode: then
+it writes no launcher and opens the page without the secret. It deletes the file once the page
+has signed in with the secret, or when the wallet stops, and the folder once it is empty. A URL fragment is not sent to the server. The page keeps
+the secret in that tab's session storage and takes it out of the address bar and the history.
+Anyone opening the page another way, over SSH for example, pastes the secret from
+`wallet/owner-secret`. The wallet verifies the same facts the approval page does and signs the stored requirement byte for
 byte, and every state change goes to `wallet/audit.jsonl`.
 
 The caveat is the one browser mode removes. This is credential separation inside one operating
@@ -269,7 +283,11 @@ code running as your user can. Run that mode with a key that holds testnet funds
   `127.0.0.1` before the wallet is asked; on a chain set up with `--hosted`, all but `recover` show
   them on the site instead.
   The agent key, in `~/.superstables/keys/budget/<rail>-agent.env` (mode 600), signs purchases.
-  `doctor` fails if that file holds an owner key.
+  Setup and commands that sign with the agent key check the file before using it. If other users
+on the machine can read it, they refuse (exit 3) and say which `chmod` fixes it. An initial
+refusal happens before anything is signed. On `tempo` and `solana`, setup checks again before
+writing the owner's address into the agent key file. A refusal at this later check does not
+undo an owner signature or a transaction already sent through hosted setup. `doctor` fails if that file holds an owner key.
 - **The chain enforces the budget.** On `evm`, the total allowance. On `solana`, the delegated
   amount. On `tempo`, the access key's total or per-period limit, its expiry, and its seller list
   when one was granted. No rail enforces a per-payment maximum on chain.
@@ -361,6 +379,40 @@ is not trusted to say who the owner is or what was paid.
 
 What a compatible site must serve, with both proofs spelled out:
 [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).
+
+## Replacing a key
+
+What the client can do today when a key or secret may have been seen by someone else. Where it
+says "not supported", there is no command for it yet; do not move key files by hand.
+
+- **Budget agent key, `tempo`.** Supported. `superstables budget setup --rail tempo --agent LABEL`,
+  with a LABEL not used before (a used one reuses the key it already names), adds a new access
+  key next to the old one; on a hosted chain it also links the new key there. The owner grants it
+  with `superstables budget grant --rail tempo --agent LABEL --amount A`, then revokes the old key
+  with `superstables budget revoke --rail tempo` (add `--agent OLD` if the old key had a label).
+  A key revoked on an owner's account can never be granted again on that account. After this,
+  every `buy` and `status` for the new key needs `--agent LABEL`.
+- **Budget agent key, `evm` and `solana`.** Not supported. `--agent` is for `tempo` only, and
+  `setup` reuses the agent key file it finds. The owner's revoke stops the key from spending
+  more, even a stolen one: `approve(agent, 0)` on `evm` stops new pulls (a price already pulled
+  can still settle), the SPL `Revoke` on `solana` ends the delegate. A revoke does not retire
+  the key: the owner can grant the same key again, so after a suspected leak, don't. On `evm`,
+  `superstables budget recover --rail evm [--chain C]` (`--chain` defaults to Base Sepolia)
+  returns USDC the agent key still holds to the owner. It runs
+  where the agent key file is, needs gas in the agent key (the owner sends some first if it is
+  short), and on a chain where USDC pays for gas (Arc Testnet) it leaves the agent's gas reserve.
+- **Owner key.** It stays in the owner's wallet, which the client does not manage. `setup
+  --new-owner` changes the owner recorded for a budget; it moves no funds, and it refuses while a
+  budget is live (revoke first) or, on `evm`, while the agent key holds USDC (run `recover`
+  first). On Arc Testnet, USDC up to the agent's gas reserve does not count, because `recover`
+  leaves it there.
+- **Local wallet key.** Stop the wallet, run `superstables wallet init --force`, and start the
+  wallet again: a running wallet keeps signing with the key it loaded. The old key file is
+  replaced, and with it access to whatever its address holds; the client has no command to move
+  funds off it first.
+- **Local wallet secrets.** Stop the wallet, delete `wallet/owner-secret` or `wallet/agent-token`,
+  and start it again: it creates a new one. The client reads the agent token from its file on
+  each request; `SUPERSTABLES_WALLET_AGENT_TOKEN`, if you set it, needs the new value.
 
 ## What changes in the next milestone
 

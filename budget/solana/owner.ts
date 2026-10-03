@@ -21,7 +21,7 @@ import type { OwnerChain, OwnerTerms, SolanaTransactionPort } from "../../src/co
 import { verifyEd25519 } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { DEFAULT_SITE } from "../site.mjs";
-import { AGENT_KEY_PATH, PUBLIC_PATH, RPC_URL, USDC_MINT, formatUnits, parseEnvFile, retryRead, sleep } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, RPC_URL, USDC_MINT, agentKeyFileValues, formatUnits, parseEnvFile, retryRead, sleep } from "./lib.mjs";
 
 export { closeOwnerPage };
 
@@ -66,8 +66,13 @@ export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved 
   hostedSite: approvalSite,
   hosted: () => {
     const site = approvalSite()!;
+    const agentFile = agentKeyFileValues();
+    if (agentFile.problem !== undefined) {
+      console.log(`REFUSED: ${agentFile.problem}. Nothing was requested.`);
+      process.exit(emit("owner", 3, { state: "refused_precheck", reason: agentFile.problem, next: `make ${AGENT_KEY_PATH} a regular file only you can read (chmod 600), then run the command again` }));
+    }
     // the agent key signs each request to the site (ed25519); it must be the agent this chain's public file names
-    const secret = (parseEnvFile(AGENT_KEY_PATH) as Record<string, string>).SOLANA_AGENT_SECRET_BASE58;
+    const secret = (agentFile.env as Record<string, string>).SOLANA_AGENT_SECRET_BASE58;
     const keypair = secret ? Keypair.fromSecretKey(bs58.decode(secret)) : null;
     const recorded = (parseEnvFile(PUBLIC_PATH) as Record<string, string>).SOLANA_AGENT_ADDRESS;
     const address = keypair?.publicKey.toBase58();

@@ -35,6 +35,14 @@ describe.each(["plain", "superstables"] as const)("the approval page, %s look", 
     expect(page).toContain("Reject");
   });
 
+  it("asks for the owner secret when the address has none, and keeps it out of the address bar", () => {
+    expect(page).toContain('<form id="unlock" hidden');
+    expect(page).toContain('<input id="secret-input" type="password"');
+    expect(page).toContain("sessionStorage.setItem(KEY, value)");
+    expect(page).toContain('history.replaceState(null, "", location.pathname + location.search)');
+    expect(page).toContain('window.addEventListener("hashchange"');
+  });
+
   it("escapes everything it renders, reads the secret from the fragment and follows the system theme", () => {
     expect(page).toContain("function esc(value)");
     expect(page).toContain('location.hash.replace(/^#/, "")');

@@ -3,7 +3,7 @@
 // reports what the owner's wallet did; the fake chain shows it; the command reads the chain before it reports. No network,
 // no real key.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -161,6 +161,35 @@ describe("tempo, hosted", () => {
     expect(site.requests[1].body.transaction.data).toMatch(/^0x5ae7ab32/);
   }, 120_000);
 
+  // Rotating the agent key on tempo, as docs/security.md describes it: a new access key, a grant to it, the old one
+  // revoked. A revoked key can never be granted again, so the old one stays dead.
+  it("rotation: setup --agent adds a key, grant --agent funds it, revoke ends the old key for good", async () => {
+    hostedTempo();
+    site.owner = OWNER;
+    site.onPoll = ownerSends("tempo");
+    expect((await budget(["grant", "--rail", "tempo", "--amount", "0.05", "--wait", "--no-open"])).code).toBe(0);
+    site.onPoll = (r) => { if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER }); };
+    const added = await budget(["setup", "--rail", "tempo", "--agent", "2", "--wait", "--no-open"]);
+    expect(added.code, added.stderr).toBe(0);
+    const key2 = publicOf("tempo").match(/^AGENT2_ADDRESS=(.*)$/m)![1];
+    expect(key2).not.toBe(TEMPO_AGENT);
+    site.onPoll = ownerSends("tempo");
+    const granted = await budget(["grant", "--rail", "tempo", "--agent", "2", "--amount", "0.03", "--wait", "--no-open"]);
+    expect(granted.code, granted.stderr).toBe(0);
+    expect(granted.result).toMatchObject({ state: "settled", remaining: "0.03" });
+    const revoked = await budget(["revoke", "--rail", "tempo", "--wait", "--no-open"]);
+    expect(revoked.code, revoked.stderr).toBe(0);
+    expect(site.requests.at(-1)!.body).toMatchObject({ kind: "revoke", agent: TEMPO_AGENT });
+    const old = await budget(["status", "--rail", "tempo"]);
+    expect(old.result).toMatchObject({ revoked: true });
+    const fresh = await budget(["status", "--rail", "tempo", "--agent", "2"]);
+    expect(fresh.result).toMatchObject({ state: "ok", remaining: "0.03" });
+    // the old key cannot come back
+    const again = await budget(["grant", "--rail", "tempo", "--amount", "0.01", "--wait", "--no-open"]);
+    expect(again.code).toBe(3);
+    expect(`${again.result.reason} ${again.result.next}`).toMatch(/revoked/);
+  }, 240_000);
+
   it("setup --agent on a hosted chain links the new key, signed by that key", async () => {
     hostedTempo();
     site.onPoll = (r) => { if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER }); };
@@ -222,6 +251,26 @@ describe("solana, hosted", () => {
     expect(site.requests[0].body).toEqual({ kind: "grant", rail: "solana", chain: "devnet", agent: SOL_AGENT, solana: { amount_atomic: "50000" } });
     expect(site.posts[0].ok).toBe(true);
   }, 90_000);
+
+  // docs/security.md: a revoke ends the delegate, not the key. There is no command for a new agent key on solana, and the
+  // owner can grant the same key again, so after a suspected leak the owner does not grant it again.
+  it("a revoked agent key can be granted again: revoke is not rotation", async () => {
+    hostedSolana();
+    site.owner = SOL_OWNER;
+    site.onPoll = ownerSends("solana");
+    expect((await budget(["grant", "--rail", "solana", "--amount", "0.05", "--wait", "--no-open"])).code).toBe(0);
+    const rv = await budget(["revoke", "--rail", "solana", "--wait", "--no-open"]);
+    expect(rv.code, rv.stderr).toBe(0);
+    expect(solana.usdc.get(SOL_OWNER)!.delegate).toBeNull();
+    const again = await budget(["grant", "--rail", "solana", "--amount", "0.02", "--wait", "--no-open"]);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.result).toMatchObject({ state: "settled", remaining: "0.02" });
+    expect(site.requests.at(-1)!.body).toMatchObject({ kind: "grant", agent: SOL_AGENT });
+    // and setup --agent, which makes a new key on tempo, is refused here
+    const extra = await budget(["setup", "--rail", "solana", "--agent", "2"]);
+    expect(extra.code).toBe(2);
+    expect(extra.result.reason).toMatch(/--agent is for tempo only/);
+  }, 180_000);
 
   it("revoke and fund-agent go to the site too, each read from the chain", async () => {
     hostedSolana();
@@ -360,5 +409,70 @@ describe("solana, hosted", () => {
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.reason).toMatch(new RegExp(`already linked on .* to the account ${SOL_OWNER}.*nothing was sent`));
     expect(r.result.next).toMatch(/superstables budget fund-agent --rail solana, then superstables budget grant --rail solana --amount A/);
+  }, 60_000);
+});
+
+describe("an agent key file other users can read signs nothing", () => {
+  it("tempo: grant and setup --agent are refused before the site is asked, and the mode is left as found", async () => {
+    hostedTempo();
+    const agentFile = file("keys", "budget", "tempo-agent.env");
+    chmodSync(agentFile, 0o644);
+    site.owner = OWNER;
+    const grant = await budget(["grant", "--rail", "tempo", "--amount", "0.05", "--wait", "--no-open"]);
+    expect(grant.code, grant.stderr).toBe(3);
+    expect(grant.result).toMatchObject({ state: "refused_precheck" });
+    expect(grant.result.reason).toMatch(/tempo-agent\.env can be read by other users on this machine: chmod 600/);
+    const extra = await budget(["setup", "--rail", "tempo", "--agent", "2", "--no-open"]);
+    expect(extra.code, extra.stderr).toBe(3);
+    expect(extra.result).toMatchObject({ state: "refused_precheck" });
+    expect(site.requests).toHaveLength(0);
+    expect(readFileSync(agentFile, "utf8")).not.toMatch(/AGENT2_/);
+    expect(statSync(agentFile).mode & 0o777).toBe(0o644);
+  }, 90_000);
+
+  it("solana: grant and setup are refused before the site is asked", async () => {
+    hostedSolana();
+    chmodSync(file("keys", "budget", "solana-agent.env"), 0o644);
+    site.owner = SOL_OWNER;
+    const grant = await budget(["grant", "--rail", "solana", "--amount", "0.05", "--wait", "--no-open"]);
+    expect(grant.code, grant.stderr).toBe(3);
+    expect(grant.result).toMatchObject({ state: "refused_precheck" });
+    expect(grant.result.reason).toMatch(/solana-agent\.env can be read by other users on this machine: chmod 600/);
+    const setup = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--wait", "--no-open"]);
+    expect(setup.code, setup.stderr).toBe(3);
+    expect(setup.result).toMatchObject({ state: "refused_precheck" });
+    expect(site.requests).toHaveLength(0);
+  }, 90_000);
+
+  // setup reads the agent file again after the owner approves, to record the owner in it: a file that became readable
+  // while it waited is refused there too, not replaced by a 0600 copy that hides it
+  it("solana: setup --hosted refuses when the agent file became readable while it waited for the owner", async () => {
+    const agentFile = file("keys", "budget", "solana-agent.env");
+    write(agentFile, `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);
+    site.onPoll = (r) => {
+      if (r.polls === 1) chmodSync(agentFile, 0o644);
+      if (r.polls >= 2) Object.assign(r, { state: "linked", owner: SOL_OWNER });
+    };
+    const r = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck" });
+    expect(r.result.reason).toMatch(/solana-agent\.env can be read by other users on this machine: chmod 600/);
+    expect(statSync(agentFile).mode & 0o777).toBe(0o644);
+    expect(readFileSync(agentFile, "utf8")).not.toMatch(/SOLANA_OWNER_ADDRESS/);
+  }, 60_000);
+
+  it("tempo: setup --hosted refuses when the agent file became readable while it waited for the owner", async () => {
+    const agentFile = file("keys", "budget", "tempo-agent.env");
+    write(agentFile, `AGENT_PRIVATE_KEY=${TEMPO_KEY}\nAGENT_ADDRESS=${TEMPO_AGENT}\n`);
+    site.onPoll = (r) => {
+      if (r.polls === 1) chmodSync(agentFile, 0o644);
+      if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER });
+    };
+    const r = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck" });
+    expect(r.result.reason).toMatch(/tempo-agent\.env can be read by other users on this machine: chmod 600/);
+    expect(statSync(agentFile).mode & 0o777).toBe(0o644);
+    expect(readFileSync(agentFile, "utf8")).not.toMatch(/OWNER_ADDRESS/);
   }, 60_000);
 });

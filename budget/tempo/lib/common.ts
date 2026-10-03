@@ -5,8 +5,7 @@
 // key file is read only when a test names it with --owner-key-file (loadOwnerKeyFile), and never
 // in the same process as the agent file (contract rule 1). Never logs a private key.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, chmodSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { Account, Addresses, createClient, http } from 'viem/tempo'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
@@ -14,6 +13,7 @@ import type { Address, Hex } from 'viem'
 
 import { CHAIN_ID as CHAIN_ID_, RPC_URL as RPC_URL_, TOKEN_DECIMALS as TOKEN_DECIMALS_, TOKEN_LABEL as TOKEN_LABEL_ } from './constants.mjs'
 import { agentKeyFile, ownerKeyFile, publicFile } from '../../paths.mjs'
+import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from '../../secret-file.mjs'
 
 export const RPC_URL: string = RPC_URL_
 export const EXPLORER_BASE = 'https://explore.testnet.tempo.xyz'
@@ -64,9 +64,10 @@ export function parseEnvFile(text: string): Record<string, string> {
   return out
 }
 
-function readEnvFile(path: string, hint: string): Record<string, string> {
+/** A key file's values. Refuses (throws) a file other users can read, or anything that is not a regular file (../../secret-file.mjs). */
+function readSecretEnvFile(path: string, what: string, hint: string): Record<string, string> {
   if (!existsSync(path)) throw new Error(`${path} not found. ${hint}`)
-  return parseEnvFile(readFileSync(path, 'utf8'))
+  return parseEnvFile(readSecretFile(path, what))
 }
 
 const isAddress = (v: unknown) => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v)
@@ -76,16 +77,32 @@ const isAddress = (v: unknown) => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/
  * OWNER_ADDRESS is derived from the key; if the file also names one, it must match.
  */
 export function loadOwnerKeyFile(path: string): OwnerEnv {
-  const parsed = readEnvFile(path, 'Pass the path of a test owner key file.')
+  const parsed = readSecretEnvFile(path, '--owner-key-file', 'Pass the path of a test owner key file.')
   if (!parsed.OWNER_PRIVATE_KEY) throw new Error(`Missing OWNER_PRIVATE_KEY in ${path}`)
   const derived = privateKeyToAddress(parsed.OWNER_PRIVATE_KEY as Hex)
   if (parsed.OWNER_ADDRESS && parsed.OWNER_ADDRESS.toLowerCase() !== derived.toLowerCase()) throw new Error(`OWNER_PRIVATE_KEY in ${path} does not match its OWNER_ADDRESS`)
   return { ...parsed, OWNER_ADDRESS: derived } as OwnerEnv
 }
 
+/**
+ * The agent file's text for a command that must refuse cleanly rather than throw: `{ text }` ("" when there is no file), or
+ * `{ problem }` when the file must not be used. Mode 600 is set when the file is written, but a restore, a `cp` without -p
+ * or an editor can leave it readable by other users, and every signature from here on would then be made with a key this
+ * machine no longer keeps to itself. Checked on the file actually read; ask again after any wait.
+ */
+export function agentFileText(): { text: string; problem?: undefined } | { text?: undefined; problem: string } {
+  try {
+    return { text: readSecretFile(AGENT_ENV_PATH, 'the agent key file') }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { text: '' }
+    if ((err as NodeJS.ErrnoException).code === UNSAFE_SECRET_FILE) return { problem: (err as Error).message }
+    throw err
+  }
+}
+
 /** Agent file: access-key private keys and public addresses. It holds no owner key. For agent commands only. */
 export function loadAgentEnv(): AgentEnv {
-  const parsed = readEnvFile(AGENT_ENV_PATH, 'Run "superstables budget setup --rail tempo" to create the agent key and connect the owner.')
+  const parsed = readSecretEnvFile(AGENT_ENV_PATH, 'the agent key file', 'Run "superstables budget setup --rail tempo" to create the agent key and connect the owner.')
   if (!isAddress(parsed.OWNER_ADDRESS)) throw new Error(`OWNER_ADDRESS (public) missing in ${AGENT_ENV_PATH}`)
   if (parsed.OWNER_PRIVATE_KEY) throw new Error(`${AGENT_ENV_PATH} contains OWNER_PRIVATE_KEY. Remove it: the agent file must not hold the owner key.`)
   return parsed as AgentEnv
@@ -116,11 +133,6 @@ export function resolveAgentKeys(env: Record<string, string>, label = ''): { pri
   return { privateKey: privateKey as Hex, address: address as Address }
 }
 
-function appendLines(path: string, lines: string) {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  appendFileSync(path, lines, { mode: 0o600 })
-}
-
 /**
  * Creates a fresh agent access key for `label` ("2", "3", "V2609..."): private key + address go to
  * the agent file, the address alone to the public file. Returns the address (the existing one if the
@@ -130,7 +142,9 @@ function appendLines(path: string, lines: string) {
 export function appendExtraAgent(label: string): { address: Address; created: boolean } {
   const agentPath = AGENT_ENV_PATH
   if (!existsSync(agentPath)) throw new Error('The agent key file is missing. Run "superstables budget setup --rail tempo" first.')
-  const existing = parseEnvFile(readFileSync(agentPath, 'utf8'))
+  // read and rewritten through ../../secret-file.mjs: a file other users can read is refused, never quietly re-tightened
+  const text = readSecretFile(agentPath, 'the agent key file')
+  const existing = parseEnvFile(text)
   const addrKey = `AGENT${label}_ADDRESS`
   if (existing[addrKey]) {
     if (!loadPublicEnv()[addrKey]) writePublicEnv({ [addrKey]: existing[addrKey] })
@@ -138,8 +152,7 @@ export function appendExtraAgent(label: string): { address: Address; created: bo
   }
   const pk = generatePrivateKey()
   const address = privateKeyToAddress(pk)
-  appendLines(agentPath, `AGENT${label}_PRIVATE_KEY=${pk}\n${addrKey}=${address}\n`)
-  chmodSync(agentPath, 0o600)
+  replaceSecretFile(agentPath, `${text}${text === '' || text.endsWith('\n') ? '' : '\n'}AGENT${label}_PRIVATE_KEY=${pk}\n${addrKey}=${address}\n`)
   writePublicEnv({ [addrKey]: address })
   return { address, created: true }
 }
@@ -156,24 +169,16 @@ export function writePublicEnv(updates: Record<string, string>, drop: string[] =
 
 /** Adds or replaces public (non-secret) lines in the agent file, keeping its keys. Mode stays 600. */
 export function setAgentPublic(updates: Record<string, string>) {
-  const lines = readFileSync(AGENT_ENV_PATH, 'utf8').split('\n').filter((l) => l !== '')
+  const lines = readSecretFile(AGENT_ENV_PATH, 'the agent key file').split('\n').filter((l) => l !== '')
   for (const [k, v] of Object.entries(updates)) {
     if (/PRIVATE/i.test(k)) throw new Error(`${k} is not a public value`)
     const i = lines.findIndex((l) => l.startsWith(`${k}=`))
     if (i >= 0) lines[i] = `${k}=${v}`
     else lines.push(`${k}=${v}`)
   }
-  // the agent file holds the only copy of the agent keys: write a new file (mode 600, never an existing one) and rename it
-  // over the old in one step, so a crash or a full disk leaves the old file or the new one, never a truncated one
-  const tmp = `${AGENT_ENV_PATH}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
-  try {
-    writeFileSync(tmp, lines.join('\n') + '\n', { mode: 0o600, flag: 'wx' })
-    chmodSync(tmp, 0o600)
-    renameSync(tmp, AGENT_ENV_PATH)
-  } catch (err) {
-    try { unlinkSync(tmp) } catch {}
-    throw err
-  }
+  // the agent file holds the only copy of the agent keys: a new file (mode 600, flushed) renamed over the old in one step,
+  // so a crash or a full disk leaves the old file or the new one, never a truncated one
+  replaceSecretFile(AGENT_ENV_PATH, lines.join('\n') + '\n')
 }
 
 /** Root account for the owner from a test owner key file (--owner-key-file). Tests and automation only. */
@@ -198,14 +203,6 @@ export function agentAccessKeyAccount(env: AgentEnv, label = '') {
 /** Access-key account bound to an owner *address* (no owner private key is ever needed for this). */
 export function accessKeyAccountForOwner(ownerAddress: Address, privateKey: Hex) {
   return Account.fromSecp256k1(privateKey, { access: ownerAddress })
-}
-
-/** Writes a new env file with mode 600. Refuses to overwrite. */
-export function writeEnvFile(path: string, header: string, entries: [string, string][], mode = 0o600) {
-  if (existsSync(path)) throw new Error(`${path} already exists. Refusing to overwrite.`)
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  writeFileSync(path, `# ${header}\n` + entries.map(([k, v]) => `${k}=${v}`).join('\n') + '\n', { mode })
-  chmodSync(path, mode)
 }
 
 export function makeClient(account?: ReturnType<typeof ownerAccount> | ReturnType<typeof agentAccessKeyAccount>) {

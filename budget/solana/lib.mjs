@@ -7,10 +7,10 @@
 //   public file         public addresses only. Read commands (readBudget, reconcile) and owner commands use it.
 //   an owner key file   tests and automation only, named with --owner-key-file <path> (mode 600):
 //                       SOLANA_OWNER_SECRET_BASE58. The default path ownerKeyFile("solana") is never read.
-import { chmodSync, readFileSync, renameSync, unlinkSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
+import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret-file.mjs";
 import { DEFAULT_RPC, rpcFromEnv } from "../rpc.mjs";
 import {
   Connection,
@@ -99,14 +99,8 @@ export function explorerAddr(addr) {
 }
 
 export function parseEnvFile(path) {
-  const out = {};
-  if (!existsSync(path)) return out;
-  const text = readFileSync(path, "utf8");
-  for (const line of text.split("\n")) {
-    const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
-    if (m) out[m[1]] = m[2].trim();
-  }
-  return out;
+  if (!existsSync(path)) return {};
+  return parseEnvText(readFileSync(path, "utf8"));
 }
 
 // ---------------------------------------------------------------------------
@@ -116,9 +110,42 @@ function requireFile(path, what, hint) {
   if (!existsSync(path)) throw new Error(`${what} not found: ${path}${hint ? ` (${hint})` : ""}`);
 }
 
+export function parseEnvText(text) {
+  const out = {};
+  for (const line of text.split("\n")) {
+    const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
+    if (m) out[m[1]] = m[2].trim();
+  }
+  return out;
+}
+
+/** A key file's values. Refuses (throws) a file other users can read, or anything that is not a regular file. */
+export function parseSecretEnvFile(path, what) {
+  return parseEnvText(readSecretFile(path, what));
+}
+
+/**
+ * The agent key file's values for a command that must refuse cleanly rather than throw: `{ env }` ({} when there is no
+ * file), or `{ problem }` when the file must not be used (readable by other users, not a regular file). Read once, and
+ * checked on the file actually read, so ask again after any wait instead of keeping an earlier answer.
+ * @returns {{ env: Record<string, string>, problem?: undefined } | { env?: undefined, problem: string }}
+ */
+export function agentKeyFileValues() {
+  try {
+    return { env: parseSecretEnvFile(AGENT_KEY_PATH, "the agent key file") };
+  } catch (err) {
+    if (err && err.code === "ENOENT") return { env: {} };
+    if (err && err.code === UNSAFE_SECRET_FILE) return { problem: err.message };
+    throw err;
+  }
+}
+
 function loadKeypair(path, secretName, addressName, what) {
   requireFile(path, what);
-  const env = parseEnvFile(path);
+  // Mode 600 is set when the file is written, but a restore, a `cp` without -p or an editor can leave it
+  // readable by other users, and every purchase from here on would then be signed with a key this machine
+  // no longer keeps to itself. Refuse rather than quietly re-tighten; the check is on the file actually read.
+  const env = parseSecretEnvFile(path, what);
   const secret = env[secretName];
   if (!secret) throw new Error(`${secretName} missing from ${path}`);
   const keypair = Keypair.fromSecretKey(bs58.decode(secret));
@@ -176,15 +203,7 @@ export function sleep(ms) {
 // Replace a file that holds the only copy of a key: write a new file (mode 600, never an existing one) next to it and
 // rename it over the old in one step, so a crash or a full disk leaves the old file or the new one, never a truncated one.
 export function replaceKeyFile(path, text) {
-  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  try {
-    writeFileSync(tmp, text, { mode: 0o600, flag: "wx" });
-    chmodSync(tmp, 0o600);
-    renameSync(tmp, path);
-  } catch (err) {
-    try { unlinkSync(tmp); } catch {}
-    throw err;
-  }
+  replaceSecretFile(path, text);
 }
 
 // Seller text (its 402, its answer, its headers, its errors) on one log line: control characters, newlines included, and

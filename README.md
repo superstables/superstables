@@ -318,8 +318,8 @@ and the MCP server at your seller instance.
 ## A local wallet instead of MetaMask
 
 There is a second signer for machines with no browser: a small wallet process that holds a key
-in `~/.superstables/wallet/key` and serves its own approval page, protected by a secret in the
-URL fragment.
+in `~/.superstables/wallet/key` and serves its own approval page, protected by an owner secret
+that it never prints (see [the local wallet](docs/install.md#the-local-wallet-for-a-machine-with-no-browser)).
 
 ```bash
 superstables --wallet local setup        # creates the key, prints the address

@@ -20,11 +20,12 @@
 // signature from the chain with fund-agent's and grant's checks before it reports it.
 // npx tsx budget/solana/setup.ts [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund | --fund-amount <sol>]] [--timeout <s>] [--no-open]
 //                                [--owner-key-file <path>]
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import bs58 from "bs58";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, connection, explorerTx, formatUnits, loadOwner, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, sleep, writePublic } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, connection, explorerTx, formatUnits, loadOwner, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
+import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import type { HostedStep, HostedStepOutcome, PriorLink } from "../hosted.ts";
@@ -80,7 +81,20 @@ if (CAP === 0n) usage("--grant must be above 0");
 if (LAMPORTS !== undefined && (LAMPORTS === 0n || LAMPORTS > 1_000_000_000n)) usage("--fund must be above 0 and at most 1 SOL");
 
 // 1. the agent key
-const existing = existsSync(AGENT_KEY_PATH) ? parseEnvFile(AGENT_KEY_PATH) : {};
+// Read through here each time: reusing a key file other users can read would hand the owner's budget to a key they may
+// already hold, and the file can change while setup waits for the owner. "" when there is no file yet.
+const agentFileTextOrRefuse = (): string => {
+  try {
+    return readSecretFile(AGENT_KEY_PATH, "the agent key file");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+    if ((err as NodeJS.ErrnoException).code !== UNSAFE_SECRET_FILE) throw err;
+    const reason = (err as Error).message;
+    console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`);
+    process.exit(result(3, { state: "refused_precheck", reason, next: `make ${AGENT_KEY_PATH} a regular file only you can read (chmod 600), then run setup again` }));
+  }
+};
+const existing = parseEnvText(agentFileTextOrRefuse()) as Record<string, string>;
 let agent: string;
 if (existing.SOLANA_AGENT_SECRET_BASE58) {
   agent = Keypair.fromSecretKey(bs58.decode(existing.SOLANA_AGENT_SECRET_BASE58)).publicKey.toBase58();
@@ -234,7 +248,15 @@ if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${owner}`)
 // 3. the owner's public address, in the agent file (buy reads it) and the public file. Hosted: APPROVALS and SITE. Asked on
 // this computer: neither.
 if (bound !== owner) {
-  const lines = readFileSync(AGENT_KEY_PATH, "utf8").split("\n").filter((l) => l !== "" && !l.startsWith("SOLANA_OWNER_ADDRESS="));
+  // checked again here, after the wait for the owner: the rewrite below is mode 600 and must not quietly replace a file
+  // that other users could read in the meantime
+  const text = agentFileTextOrRefuse();
+  if (!text.includes("SOLANA_AGENT_SECRET_BASE58=")) {
+    const reason = `${AGENT_KEY_PATH} changed while setup waited: it no longer holds the agent key`;
+    console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`);
+    process.exit(result(3, { state: "refused_precheck", reason, next: `restore ${AGENT_KEY_PATH}, then run setup again` }));
+  }
+  const lines = text.split("\n").filter((l) => l !== "" && !l.startsWith("SOLANA_OWNER_ADDRESS="));
   replaceKeyFile(AGENT_KEY_PATH, `${[...lines, `SOLANA_OWNER_ADDRESS=${owner}`].join("\n")}\n`); // the only copy of the agent key: never truncated in place
 }
 const asked = !OWNER_KEY_FILE && !(pub.owner && pub.agent?.toBase58() === agent && !newOwner && !HOSTED);

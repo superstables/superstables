@@ -32,7 +32,7 @@ import { dirname } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 import { EVM_CHAINS } from "./chains.mjs";
-import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, agentEnv, publicEnv, writePublic, need, newKey, ownerKeyEnv, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, toUsdc, usageError, assertRpcChain, publicClient, tx } from "./lib.ts";
+import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, toUsdc, usageError, assertRpcChain, publicClient, tx } from "./lib.ts";
 import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, fundingTx, fundValue, DEFAULT_FUND_AMOUNT, grantTx, grantEnforced, GRANT_NOT_ENFORCED, approveRow, capWords, checkFundSent, checkGrantSent, REVOKE_HINT, type SentCheck } from "./owner.ts";
 import { NEW_OWNER } from "../owner-page.ts";
 import type { HostedStep, HostedStepOutcome, PriorLink } from "../hosted.ts";
@@ -68,8 +68,14 @@ if (FUND_AMT !== undefined) {
 
 // 1. the agent key
 let agentAddr: Address;
+const agentFile = agentFileValues();
+if (agentFile.problem !== undefined) {
+  // reusing it would hand the owner's budget to a key other users on this machine may already hold
+  console.log(`REFUSED: ${agentFile.problem}. Nothing was changed on this computer.`);
+  process.exit(emit("setup", 3, { state: "refused_precheck", reason: agentFile.problem, next: `make ${AGENT_ENV} a regular file only you can read (chmod 600), then run setup again` }));
+}
 if (existsSync(AGENT_ENV)) {
-  agentAddr = privateKeyToAccount(need(agentEnv(), "B4_AGENT_KEY", AGENT_ENV) as Hex).address;
+  agentAddr = privateKeyToAccount(need(agentFile.env, "B4_AGENT_KEY", AGENT_ENV) as Hex).address;
   console.log(`agent key file ${AGENT_ENV} exists; reusing it (agent ${agentAddr})`);
 } else {
   const key = newKey();

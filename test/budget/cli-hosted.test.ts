@@ -1,7 +1,7 @@
 // `superstables budget` with hosted approvals, as an agent meets it: the real dispatcher (budget/cli.mjs) and the real evm
 // rail scripts, against a fake superstables.com and a fake Base Sepolia RPC on 127.0.0.1. No network, no real key.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -394,6 +394,29 @@ describe("owner commands on a hosted chain", () => {
     expect(r.result.reason).not.toMatch(/nothing was sent/);
     expect(r.result.next).toMatch(/read whether it landed before running this again/);
     expect(r.approve).toBeNull();
+  }, 60_000);
+
+  it("an agent key file other users can read signs nothing: grant is refused before the site is asked", async () => {
+    hostedChain();
+    chmodSync(join(home, "keys", "budget", "evm-agent.env"), 0o644);
+    site.owner = OWNER;
+    const r = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck" });
+    expect(r.result.reason).toMatch(/evm-agent\.env can be read by other users on this machine: chmod 600/);
+    expect(site.requests).toHaveLength(0);
+    // reported, not quietly repaired
+    expect(statSync(join(home, "keys", "budget", "evm-agent.env")).mode & 0o777).toBe(0o644);
+  }, 60_000);
+
+  it("setup refuses to reuse an agent key file other users can read", async () => {
+    hostedChain();
+    chmodSync(join(home, "keys", "budget", "evm-agent.env"), 0o640);
+    const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck" });
+    expect(r.result.reason).toMatch(/can be read by other users on this machine/);
+    expect(site.requests).toHaveLength(0);
   }, 60_000);
 
   it("the site's final unknown ends the grant as unknown (exit 5): read the chain, never nothing sent", async () => {

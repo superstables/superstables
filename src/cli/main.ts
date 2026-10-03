@@ -41,7 +41,7 @@ import { startDemoService } from "../demo-service/server.js";
 import { runStdioServer, signerFor, walletModeFromEnvironment, type WalletMode } from "../mcp/main.js";
 import { attemptView, messageFor } from "../mcp/server.js";
 import { policySummary, startWallet } from "../wallet/daemon.js";
-import { initKey, keyExists, keyPath, loadAccount } from "../wallet/keystore.js";
+import { initKey, keyExists, keyPath, loadAccount, readSecretFile } from "../wallet/keystore.js";
 import { SellerTextError, UNTRUSTED_LABEL, untrustedText } from "../core/text.js";
 import { formatReport, runDoctor } from "./doctor.js";
 import { field, json, money, table, yesNo } from "./format.js";
@@ -199,14 +199,12 @@ explain(
   wallet
     .command("init")
     .description("create this machine's wallet key, or import one")
-    .option("--import-key <0xhex>", "import a private key instead of generating one")
-    .option("--import-key-file <path>", "import a private key from a file")
+    .option("--import-key-file <path>", "import a private key from a file (mode 600)")
     .option("--force", "replace an existing key (the old key cannot be recovered)")
-    .action((options: { importKey?: string; importKeyFile?: string; force?: boolean }) => {
-      if (options.importKey && options.importKeyFile) {
-        throw badInput("Give either --import-key or --import-key-file, not both.");
-      }
-      const importKey = options.importKeyFile ? readKeyFile(options.importKeyFile) : options.importKey;
+    .action((options: { importKeyFile?: string; force?: boolean }) => {
+      // A key is read from a file, never taken as an argument: an argument is in the process table, where
+      // every other user on this machine can read it, and in the shell history for good.
+      const importKey = options.importKeyFile ? readKeyFile(options.importKeyFile) : undefined;
       const result = initKey({ dir: walletDir(), importKey, force: options.force });
       console.log(result.created ? "A new wallet key was generated." : "The wallet key was imported.");
       console.log(field("address", result.address));
@@ -245,7 +243,9 @@ explain(
     money: "yes: it signs a payment when, and only when, the owner approves it on its page.",
     who: "the owner, in a terminal of their own. Agents never run it.",
     examples: ["superstables --wallet local wallet serve"],
-    prints: "where it listens and the owner's approval link, then runs until Ctrl-C.",
+    prints:
+      "where it listens, the page's address, its launcher file and where the owner secret is (never the secret " +
+      "itself), then runs until Ctrl-C.",
     exits: "0 stopped, 1 could not start (a port in use, no key: run `superstables wallet init`)",
   },
 );
@@ -1146,8 +1146,11 @@ function parseParams(pairs: string[]): Record<string, string> {
 
 function readKeyFile(path: string): string {
   try {
-    return readFileSync(path, "utf8").trim();
+    // The same rule the budget rails apply to --owner-key-file: a key other users can read is refused,
+    // not quietly copied into place. One open, checked on the file it opened: a regular file, mode 600.
+    return readSecretFile(path, "the key file").trim();
   } catch (err) {
+    if (err instanceof CliError) throw err;
     throw new CliError(`Could not read the key file ${path}: ${messageOf(err)}`);
   }
 }
