@@ -162,10 +162,18 @@ export function ownerPageFor(rail: OwnerRail) {
     return { ...rail.hosted(), site: site.origin as string };
   }
 
-  /** A request the site did not take: nothing was requested, so nothing was sent. One RESULT, then exit. */
+  /**
+   * A request refused before any link was shown. One RESULT, then exit: a refusal (exit 3), or unknown (exit 5) when the
+   * site reported the owner's wallet was asked.
+   */
   async function refusedBySite(action: string, err: unknown): Promise<never> {
     if (!(err instanceof HostedRefusal)) throw err;
     await closeOwnerPage(0);
+    if (err.sending) {
+      // the site reports the wallet was asked: unknown, never "nothing sent"
+      console.log(`UNKNOWN: ${err.message}`);
+      process.exit(rail.emit(action, 5, { state: "unknown", reason: err.message, next: `${rail.statusCommand}: read whether it landed before running this again` }));
+    }
     console.log(`REFUSED: ${err.message}`);
     process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: err.message, next: err.next }));
   }
