@@ -10,6 +10,7 @@
 import { defineChain, parseUnits, type Address, type Chain } from "viem";
 import * as viemChains from "viem/chains";
 import { EVM_CHAINS, EVM_DEFAULT_CHAIN } from "./chains.mjs";
+import { rpcFromEnv } from "../rpc.mjs";
 
 /** Gas limit of each transaction on this chain (chains.mjs `gas.limits`): the agent's pull, cancel, return and selfRevoke, the owner's approve and revoke. */
 export type GasOp = "pull" | "cancel" | "return" | "selfRevoke" | "approve" | "revoke";
@@ -71,19 +72,17 @@ export function selectedChainKey(): string {
   return key;
 }
 /**
- * B4_RPC replaces the selected chain's RPC URL (tests point it at a local fake; you can point it at your own node). Every
- * script that signs still checks the chain id it answers with first (lib.ts assertRpcChain).
+ * B4_RPC replaces the selected chain's RPC URL (tests point it at a local fake; you can point it at your own node): https, or
+ * http on this computer only (../rpc.mjs). Every script that signs still checks the chain id it answers with first (lib.ts
+ * assertRpcChain).
  */
 function rpcOverride(): string | undefined {
-  const v = process.env.B4_RPC?.trim();
-  if (!v) return undefined;
-  let ok = false;
-  try { ok = /^https?:$/.test(new URL(v).protocol); } catch {}
-  if (!ok) {
-    console.error(`error: B4_RPC must be an http(s) URL (got "${v}")`);
+  const r = rpcFromEnv("B4_RPC", "");
+  if (r.error) {
+    console.error(`error: ${r.error}`);
     process.exit(2);
   }
-  return v;
+  return r.custom ? r.url : undefined;
 }
 const KEY = selectedChainKey();
 const OVERRIDE = rpcOverride();

@@ -22,13 +22,13 @@
 //                                [--owner-key-file <path>]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import bs58 from "bs58";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, connection, explorerTx, formatUnits, loadOwner, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, sleep, writePublic } from "./lib.mjs";
-import { getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, connection, explorerTx, formatUnits, loadOwner, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, sleep, writePublic } from "./lib.mjs";
+import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
-import type { HostedStep, HostedStepOutcome } from "../hosted.ts";
-import { chosenSite } from "../site.mjs";
+import type { HostedStep, HostedStepOutcome, PriorLink } from "../hosted.ts";
+import { chosenSite, isSiteRequestId, siteOrigin } from "../site.mjs";
 import { askConnect, closeOwnerPage, confirmHosted, emit, endUnapproved, sol, useApprovalSite } from "./owner.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/setup.ts [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund | --fund-amount <sol>]]
@@ -113,6 +113,13 @@ if (newOwner && recorded) {
   }
   console.log(`replacing the recorded owner ${recorded} (no budget is live): the new owner connects on the page`);
 }
+// The link recorded with the owner (setup --hosted), on this same site: an "already linked" answer is checked against it.
+// None with --new-owner, or when the site changes: then only a fresh link the owner signs records an owner.
+const rawPub = parseEnvFile(PUBLIC_PATH) as Record<string, string>;
+const recordedSite = rawPub.APPROVALS === "hosted" && rawPub.SITE ? siteOrigin(rawPub.SITE).origin : undefined;
+const prior: PriorLink | null = recorded && !newOwner && SITE && recordedSite === SITE && isSiteRequestId(rawPub.LINK_ID) && rawPub.LINK_CODE ? { owner: recorded, linkId: rawPub.LINK_ID, linkCode: rawPub.LINK_CODE } : null;
+if (HOSTED && recordedSite && recordedSite !== SITE) console.log(`this chain's approvals are hosted on ${recordedSite}; moving them to ${SITE} takes a fresh link that the owner signs there`);
+let linked: { id: string; code: string } | undefined;
 // The steps after the link, in the order fund-agent and grant come, and the slot they must land after.
 let then: HostedStep[] | undefined;
 let startSlot = 0;
@@ -179,8 +186,9 @@ if (OWNER_KEY_FILE) {
       `You pick the match code your agent shows you before anything is linked or sent. The agent key stays on this computer; ${HOST} does not receive it.`,
       ...(what.length ? ["You pay the network fee for each transaction, shown in your wallet. To end the budget at any time: superstables budget revoke --rail solana."] : [`Grants, revokes and SOL for this agent are then approved on ${HOST}, in your Solana wallet.`]),
     ],
-  }, "", newOwner ? recorded : undefined, then);
+  }, "", newOwner ? recorded : undefined, then, { prior, newOwner });
   bundle = r.bundle;
+  linked = r.link;
   const outcome = r.outcome;
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent, linked: false });
   if (outcome.status !== "connected") throw new Error(`unexpected approval outcome ${outcome.status}`);
@@ -230,7 +238,10 @@ if (bound !== owner) {
   replaceKeyFile(AGENT_KEY_PATH, `${[...lines, `SOLANA_OWNER_ADDRESS=${owner}`].join("\n")}\n`); // the only copy of the agent key: never truncated in place
 }
 const asked = !OWNER_KEY_FILE && !(pub.owner && pub.agent?.toBase58() === agent && !newOwner && !HOSTED);
-writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE! } : {}) }, asked && !HOSTED ? ["APPROVALS", "SITE"] : []);
+if (HOSTED && !linked) throw new Error("a hosted link without its id and code");
+// hosted: APPROVALS, SITE, and the link the owner signed (LINK_ID, LINK_CODE: a later "already linked" answer is checked
+// against them)
+writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : []);
 console.log(`wrote ${PUBLIC_PATH} (no secret) and the owner's address into ${AGENT_KEY_PATH}.${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ""}`);
 
 const conn = connection();
@@ -267,8 +278,13 @@ async function finishBundle(): Promise<never> {
   for (const s of bundle?.steps ?? []) {
     const amount = s.kind === "grant" ? formatUnits(CAP!) : sol(LAMPORTS!);
     if (s.hash) {
-      console.log(`${s.kind}: superstables.com reports ${s.hash} (${s.state}); reading it from the chain`);
-      const c = await confirmHosted(conn, s.hash, owner, startSlot);
+      console.log(`${s.kind}: ${HOST} reports ${s.hash} (${s.state}); reading it from the chain`);
+      // exactly the instruction fund-agent or grant would build, plus at most a bounded wallet fee
+      const ownerPk = new PublicKey(owner);
+      const planned = s.kind === "grant"
+        ? [createApproveCheckedInstruction(getAssociatedTokenAddressSync(USDC_MINT, ownerPk), USDC_MINT, new PublicKey(agent), ownerPk, CAP!, USDC_DECIMALS)]
+        : [SystemProgram.transfer({ fromPubkey: ownerPk, toPubkey: new PublicKey(agent), lamports: LAMPORTS! })];
+      const c = await confirmHosted(conn, s.hash, owner, startSlot, planned);
       console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
       const report = (state: Report["state"], reason?: string) => reports.push({ kind: s.kind, state, tx: s.hash!, txUrl: explorerTx(s.hash!), amount, reason });
       if (c.status === "unknown") { report("unknown", "the site reported a signature the chain does not show yet"); continue; }

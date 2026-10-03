@@ -161,8 +161,10 @@ page on this computer, from any device where they sign in with their wallet. It 
 gas and no agent key. It pays on the network the service's listing names (Base Sepolia, Tempo
 Moderato or Solana devnet), for the services the site lists. It needs a superstables.com account
 (made by signing in with the wallet), or a compatible deployment the owner names with `--site` or
-`SUPERSTABLES_SITE` (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do));
-`pay`, above, needs neither:
+`SUPERSTABLES_SITE`; an origin outside superstables.com and its subdomains also needs the owner to set
+`SUPERSTABLES_ALLOW_SITE` to it (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
+A purchase is reported paid only once the command has read the payment on chain. `pay`, above,
+needs neither:
 
 ```bash
 superstables budget find --once

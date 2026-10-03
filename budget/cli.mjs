@@ -31,7 +31,8 @@ import { HOLDER_ENV, WORKER_ENV, adoptWorker, claim, findPending, forget, isAppr
 import { lockOp, railResult } from "./buy-guard.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
-import { DEFAULT_SITE, chosenSite, listSiteServices, siteOrigin } from "./site.mjs";
+import { DEFAULT_SITE, chosenSite, listSiteServices, siteName, siteOrigin } from "./site.mjs";
+import { customRpc, refusedRpcEnv } from "./rpc.mjs";
 import { ONCE_CHAINS, TESTNET_LINE, listOnceServices, messageForOwner, showFirst, startOnce, waitOnce } from "./once.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -152,11 +153,14 @@ or stored: the owner's key stays in their wallet.
 A trusted step: whoever connects becomes the owner on record. The owner runs it, or watches it run.
 --new-owner replaces a recorded owner with the wallet that connects; refused while a budget is live (revoke first).
 --hosted: the owner approves on superstables.com instead of a page on this computer. Setup then links this agent to the
-owner's superstables.com account (the owner signs in there with their wallet and picks the match code), records the
-account's address as the owner, and records APPROVALS=hosted and SITE in the public file: grant, revoke and fund-agent on
-this chain use it from then on (recover stays on this computer). solana: the owner also connects a Solana wallet there,
-and that address is the owner. Needs a superstables.com account. --site URL picks another site (default
-${DEFAULT_SITE}, or SUPERSTABLES_SITE). Without --hosted: the page on 127.0.0.1, no account.
+owner's superstables.com account (the owner signs in there with their wallet, picks the match code and signs the link),
+checks the owner's signature over the link, records that address as the owner, and records APPROVALS=hosted, SITE,
+LINK_ID and LINK_CODE in the public file: grant, revoke and fund-agent on this chain use it from then on (recover stays
+on this computer). solana: the owner also connects a Solana wallet there, and that address is the owner. Needs a
+superstables.com account. --site URL picks another site (default ${DEFAULT_SITE}, or SUPERSTABLES_SITE): a
+superstables.com subdomain, or another origin only when the owner set SUPERSTABLES_ALLOW_SITE to it. Without --hosted:
+the page on 127.0.0.1, no account. An agent already linked is taken only for the owner recorded here, with that owner's
+signed link; otherwise the owner removes the agent on the site's account page and links it again.
 setup --new-owner without --hosted moves a hosted chain back to the page on this computer.
 --grant A and --fund [AMOUNT] (with --hosted): one link for the whole set-up. After the owner links this agent, the same
 page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain; not on tempo) and
@@ -364,7 +368,8 @@ reasoning or a tool call, and end your turn there. The first link the owner open
 (a message, no fee). Not in a terminal (an agent), or with --detach: returns at once with state waiting_owner and an
 approval id; when the owner says they've approved, run superstables budget wait --id ID --shown. In a terminal, or with
 --wait: blocks until the purchase ends. One buy-once purchase open at a time; --replace cancels the open one, only while
-the owner has not signed.
+the owner has not signed. Paid is never the site's word alone: the command reads the payment from the chain (exactly the
+amount, to the listed recipient, in the listed token); one the chain does not show is unknown (exit 5).
 --site: the site (default ${DEFAULT_SITE}, or SUPERSTABLES_SITE, or the SITE that setup --hosted recorded).`,
       money: "yes: the service's price, at most --max, from the owner's wallet, once the owner approves it on superstables.com.",
       who: "the agent starts it; only the owner approves.",
@@ -471,11 +476,14 @@ the owner and end your turn; when they say they've approved, run superstables bu
 expires after --timeout seconds (default 600): the command then ends refused (exit 3), nothing sent; run it again.
 
 --site URL is accepted by every command. Where a site is recorded (setup --hosted) and it differs, the command refuses
-(exit 2); where it does not matter, it is ignored.
+(exit 2); where it does not matter, it is ignored. A site is superstables.com, one of its subdomains or 127.0.0.1;
+another origin only when the owner sets SUPERSTABLES_ALLOW_SITE to it in their own environment (an agent never does).
+B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC: https, or http on 127.0.0.1 only;
+RESULT names one in use as rpc.
 
 Output: logs go to stderr. stdout ends with one line
-  RESULT {"ok","command","rail","chain","op","state","final","paid","delivered","amount","remaining","tx","id","url","matchCode",
-          "message_for_owner","budget_spent","next","reason"}
+  RESULT {"ok","command","rail","chain","op","state","final","paid","delivered","amount","remaining","tx","rpc","id","url",
+          "matchCode","message_for_owner","budget_spent","next","reason"}
 Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false only
 while an owner approval is open (state waiting_owner). next is the command to run next, or none.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
@@ -496,7 +504,8 @@ Exit codes (the same numbers as superstables):
 
 Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
   keys/budget/<rail>-agent.env               the agent key (mode 600). No owner key is ever stored here
-  budget/public/<rail>-<chain>.env           the owner's and agent's addresses, no secret (hosted: APPROVALS and SITE)
+  budget/public/<rail>-<chain>.env           the owner's and agent's addresses, no secret (hosted: APPROVALS, SITE, LINK_ID
+                                             and LINK_CODE)
   budget/ops/<rail>-<chain>/<op>.json        one journal per purchase, and <op>.response, the seller's answer when saved
   budget/approvals/                          owner approvals started in the background, and buy-once purchases
 Testnet only: --mainnet, or a mainnet chain, is refused.`;
@@ -510,7 +519,7 @@ const JSON_OUT = process.argv.slice(3).includes("--json");
 const writeResult = (out) => writeSync(1, (JSON_OUT ? "" : "RESULT ") + JSON.stringify(out) + "\n");
 /** An APPROVE line: stdout, or stderr under --json (its link is also in the RESULT's url once the command returns). */
 const writeApprove = (line) => writeSync(JSON_OUT ? 2 : 1, line + "\n");
-const clean = (s) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim().slice(0, 300);
+const clean = (s) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "").trim().slice(0, 300);
 const log = (...a) => process.stderr.write(a.join(" ") + "\n");
 
 // A background worker for a detached owner approval (approvals.mjs) has its id in the environment.
@@ -524,10 +533,12 @@ let FOREGROUND = false;
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 // A worker also stores it (and the exit code) in its approval record, for every later `wait`.
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   // final: false only while an owner approval is still open; a script polls wait until it is true
   fields = { ...fields, final: fields.state !== "waiting_owner" };
+  // an RPC other than the rail's default (B4_RPC, SUPERSTABLES_TEMPO_RPC, SUPERSTABLES_SOLANA_RPC) is named in every RESULT
+  if (fields.rpc === undefined && fields.rail) fields.rpc = customRpc(fields.rail);
   const out = { ok: code === 0 };
   for (const k of order) if (fields[k] !== undefined) out[k] = k === "reason" ? clean(fields[k]) : fields[k];
   if (APPROVAL_ID) recordFinal(APPROVAL_ID, code, out); // frees the chain
@@ -614,6 +625,9 @@ function parse(argv) {
   }
   f.chain ??= rail.chain;
   ctx.chain = f.chain;
+  // a replacement RPC must be https, or http on this computer: every check reads the chain through it
+  const badRpc = refusedRpcEnv(f.rail);
+  if (badRpc) return badInput(ctx, `${badRpc.error}. Unset it, or point it at an https RPC (or one on 127.0.0.1)`);
   for (const r of spec.required) if (f[r] === undefined) return badInput(ctx, `missing required flag --${r}`);
   if (f.site !== undefined && !f.hosted) {
     // --site is accepted by every command. Nothing else here depends on it, so it only has to be a site, and the one this chain's
@@ -730,6 +744,9 @@ function parseBuyOnce(cmd, f) {
     put(kv.slice(0, i), kv.slice(i + 1), "--param");
   }
   if (f.wait && f.detach) return badInput(ctx, "--wait and --detach cannot go together");
+  // buy-once reads the payment from the chain of the listing's network: every replacement RPC must be usable
+  const badRpc = refusedRpcEnv();
+  if (badRpc) return badInput(ctx, `${badRpc.error}. Unset it, or point it at an https RPC (or one on 127.0.0.1)`);
   const site = resolveSite(f.site);
   if (site.error) return badInput(ctx, `--site: ${site.error}`);
   f.site = site.origin;
@@ -1394,7 +1411,7 @@ async function ownerGate({ cmd, f, ctx }) {
   const rec = r.record;
   writeApprove(`APPROVE ${JSON.stringify({ action: rec.action, url: rec.url, expires: rec.expires, terms: rec.terms, ...(rec.matchCode ? { matchCode: rec.matchCode } : {}) })}`);
   log(rec.matchCode
-    ? `\nThe request waits on superstables.com until ${rec.expires}; this command keeps reading it in the background. Write the link, the match code ${rec.matchCode} and the terms in your reply to the owner and end your turn there. When they say they've approved, run: superstables budget wait --id ${id} --shown`
+    ? `\nThe request waits on ${siteName(rec.hosted?.site ?? f.site ?? hostedSite(f) ?? DEFAULT_SITE)} until ${rec.expires}; this command keeps reading it in the background. Write the link, the match code ${rec.matchCode} and the terms in your reply to the owner and end your turn there. When they say they've approved, run: superstables budget wait --id ${id} --shown`
     : `\nThe approval page stays open in the background until ${rec.expires}. Write the link and the terms in your reply to the owner and end your turn there. When they say they've approved, run: superstables budget wait --id ${id} --shown`);
   emit(0, { ...ctx, state: "waiting_owner", ...approvalFields(rec), next: waitNext(id, rec) });
 }
@@ -1430,7 +1447,7 @@ const inMinutes = (iso) => { const m = Math.round((Date.parse(iso) - Date.now())
 
 async function buyOnce({ f, ctx }) {
   const detach = f.detach === true || (!f.wait && !process.stdout.isTTY);
-  log(`\nbuy-once on ${f.site}: one purchase of ${f.service}, at most ${f.max} in the service's token, approved by the owner on superstables.com. ${TESTNET_LINE}`);
+  log(`\nbuy-once on ${f.site}: one purchase of ${f.service}, at most ${f.max} in the service's token, approved by the owner on ${siteName(f.site)}. ${TESTNET_LINE}`);
   const r = await startOnce({ site: f.site, service: f.service, params: f.params, max: f.max, chain: f.onceChain, replace: f.replace === true });
   if (!r.ok) {
     log(`superstables budget: ${r.code === 3 ? "refused: " : ""}${r.reason}`);

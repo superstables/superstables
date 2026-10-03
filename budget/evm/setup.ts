@@ -35,8 +35,8 @@ import { EVM_CHAINS } from "./chains.mjs";
 import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, agentEnv, publicEnv, writePublic, need, newKey, ownerKeyEnv, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, toUsdc, usageError, assertRpcChain, publicClient, tx } from "./lib.ts";
 import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, fundingTx, fundValue, DEFAULT_FUND_AMOUNT, grantTx, grantEnforced, GRANT_NOT_ENFORCED, approveRow, capWords, checkFundSent, checkGrantSent, REVOKE_HINT, type SentCheck } from "./owner.ts";
 import { NEW_OWNER } from "../owner-page.ts";
-import type { HostedStep, HostedStepOutcome } from "../hosted.ts";
-import { chosenSite } from "../site.mjs";
+import type { HostedStep, HostedStepOutcome, PriorLink } from "../hosted.ts";
+import { chosenSite, isSiteRequestId, siteOrigin } from "../site.mjs";
 
 const d = (EVM_CHAINS as Record<string, any>)[CFG.key].doctor;
 const same = (x?: string, y?: string) => !!x && !!y && x.toLowerCase() === y.toLowerCase();
@@ -95,8 +95,22 @@ if (NEW_OWNER && recorded) {
     console.log(`REFUSED: ${reason}. Nothing was changed.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: live === null ? `superstables budget doctor --rail evm${chainFlag}, then setup --new-owner again` : `revoke first (superstables budget revoke --rail evm${chainFlag}, approved by ${recorded}), then setup --new-owner` }));
   }
+  // nor while the agent key holds the budget token: recover returns it to the owner on record, which would then be the new one
+  const reserve = GAS.isUsdc ? (CFG.gas.reserveMax ?? 0n) : 0n;
+  const held = await usdcBalance(agentAddr).catch(() => null);
+  if (held === null || held > reserve) {
+    const reason = held === null ? `could not read the ${SYM} the agent ${agentAddr} holds; the owner is not replaced` : `the agent ${agentAddr} holds ${usdc(held)} ${SYM} from the recorded owner's budget; recover returns it to the owner on record, so the owner is not replaced while it is there`;
+    console.log(`REFUSED: ${reason}. Nothing was changed.`);
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: held === null ? `superstables budget doctor --rail evm${chainFlag}, then setup --new-owner again` : `return it first (superstables budget recover --rail evm${chainFlag}, approved by ${recorded}), then setup --new-owner` }));
+  }
   console.log(`replacing the recorded owner ${recorded} (no budget is live): the new owner connects on the page`);
 }
+// The link recorded with the owner (setup --hosted), on this same site: an "already linked" answer is checked against it.
+// None with --new-owner, or when the site changes: then only a fresh link the owner signs records an owner.
+const recordedSite = p.APPROVALS === "hosted" && p.SITE ? siteOrigin(p.SITE).origin : undefined;
+const prior: PriorLink | null = recorded && !NEW_OWNER && SITE && recordedSite === SITE && isSiteRequestId(p.LINK_ID) && typeof p.LINK_CODE === "string" && p.LINK_CODE ? { owner: recorded, linkId: p.LINK_ID, linkCode: p.LINK_CODE } : null;
+if (HOSTED && recordedSite && recordedSite !== SITE) console.log(`this chain's approvals are hosted on ${recordedSite}; moving them to ${SITE} takes a fresh link that the owner signs there`);
+let linked: { id: string; code: string } | undefined;
 // The steps after the link, built exactly as fund-agent and grant build them, and the block they must be mined after.
 let then: HostedStep[] | undefined;
 let fundTx: ReturnType<typeof fundingTx> | undefined;
@@ -171,8 +185,9 @@ if (OWNER_KEY_FILE) {
       ...(CAP !== undefined ? [`The grant gives permission; it does not transfer the budget now. Do not change the spending cap in your wallet. To end the budget at any time: ${REVOKE_HINT}`] : []),
       "You pay the network fee for each transaction, shown in your wallet.",
     ],
-  }, "", NEW_OWNER ? recorded : undefined, then);
+  }, "", NEW_OWNER ? recorded : undefined, then, { prior, newOwner: NEW_OWNER });
   bundle = r.bundle;
+  linked = r.link;
   const outcome = r.outcome;
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent: agentAddr, linked: false });
   if (outcome.status !== "connected") throw new Error(`unexpected approval outcome ${outcome.status}`);
@@ -187,7 +202,7 @@ if (OWNER_KEY_FILE) {
   }
 } else if (HOSTED) {
   // the owner links this agent to their account on the site; the account's address becomes the owner on record
-  const { outcome } = await askConnect("setup", {
+  const r = await askConnect("setup", {
     title: `Link this agent to your ${HOST} account`,
     summary: `Sign in to ${HOST} with your wallet and link this agent to your account. Your account's address is recorded as the budget owner on this computer. This does not grant a budget or send a transaction.`,
     rows: [
@@ -201,7 +216,9 @@ if (OWNER_KEY_FILE) {
       `Grants, revokes and gas for this agent are then approved on ${HOST}, in your wallet. You pick the match code your agent shows you before anything is linked or sent.`,
       `The agent key stays on this computer; ${HOST} does not receive it. Your signing key stays in your wallet.`,
     ],
-  }, "", NEW_OWNER ? recorded : undefined);
+  }, "", NEW_OWNER ? recorded : undefined, undefined, { prior, newOwner: NEW_OWNER });
+  const outcome = r.outcome;
+  linked = r.link;
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent: agentAddr });
   if (outcome.status !== "connected") throw new Error(`unexpected approval outcome ${outcome.status}`);
   ownerAddr = outcome.address as Address;
@@ -239,11 +256,13 @@ if (same(ownerAddr, agentAddr)) {
   process.exit(emit("setup", 3, { state: "refused_precheck", reason: "the owner address is the agent's address", next: "connect the owner's own wallet" }));
 }
 
-// 3. the public file (a new owner starts with no budget terms). Hosted: APPROVALS and SITE. Asked on this computer: neither.
+// 3. the public file (a new owner starts with no budget terms). Hosted: APPROVALS, SITE, and the link the owner signed
+// (LINK_ID, LINK_CODE: a later "already linked" answer is checked against them). Asked on this computer: none of them.
 const replaced = recorded && !same(recorded, ownerAddr) ? recorded : undefined;
 const asked = !OWNER_KEY_FILE && !(recorded && !NEW_OWNER && !HOSTED);
-const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_EXPIRY", "B4_REVOKED_AT"] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE"] : [])];
-writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE! } : {}) }, drop);
+if (HOSTED && !linked) throw new Error("a hosted link without its id and code");
+const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_EXPIRY", "B4_REVOKED_AT"] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : [])];
+writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, drop);
 if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${ownerAddr}`);
 console.log(`${CFG.label}: wrote ${PUBLIC_ENV} (no secret).${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ""}`);
 // balances are for the next steps only: a slow or failing RPC does not undo the setup
@@ -284,7 +303,7 @@ async function finishBundle(): Promise<never> {
   for (const s of steps) {
     const amount = s.kind === "grant" ? usdc(CAP!) : FUND_AMT;
     if (s.hash) {
-      console.log(`${s.kind}: superstables.com reports transaction ${s.hash} (${s.state}); checking it on chain`);
+      console.log(`${s.kind}: ${HOST} reports transaction ${s.hash} (${s.state}); checking it on chain`);
       const c = s.kind === "grant"
         ? await checkGrantSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, cap: CAP!, afterBlock: startBlock })
         : await checkFundSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, t: fundTx!, value: FUND_VALUE, agentHad, afterBlock: startBlock });

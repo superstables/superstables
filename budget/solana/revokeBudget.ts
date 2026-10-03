@@ -16,6 +16,7 @@ import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseStrict, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
+import { siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort } from "./owner.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/revokeBudget.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
@@ -80,8 +81,8 @@ if (OWNER_KEY_FILE) {
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   finish = handle.finish;
   sig = local ? local.sent()!.signature : outcome.hash;
-  console.log(`${local ? "sent" : "superstables.com reports"} ${sig}; reading it from the chain`);
-  const c = local ? { ...(await confirmSent(conn, local.sent()!)), problems: [] as string[] } : await confirmHosted(conn, sig, owner.toBase58(), startSlot);
+  console.log(`${local ? "sent" : `${siteName(approvalSite()!)} reports`} ${sig}; reading it from the chain`);
+  const c = local ? { ...(await confirmSent(conn, local.sent()!)), problems: [] as string[] } : await confirmHosted(conn, sig, owner.toBase58(), startSlot, ix());
   console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
   if (c.status === "unknown") {
     handle.finish({ ok: false, message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
@@ -93,7 +94,15 @@ if (OWNER_KEY_FILE) {
     await closeOwnerPage();
     process.exit(result(1, { state: "not_revoked", tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "run revoke again" }));
   }
-  if (c.problems.length) console.log(`note: ${c.problems.join("; ")}; the delegate is read below`);
+  if (c.problems.length) {
+    // not the Revoke alone: the transaction did something else as well (or instead), so it is not reported as a revoke
+    const reason = `the transaction on chain is not the one planned: ${c.problems.join("; ")}`;
+    console.log(`MISMATCH: ${reason}`);
+    const now = await retryRead(() => getAccountOrNull(conn, ata)).catch(() => undefined);
+    handle.finish({ ok: false, message: `The chain shows something other than the planned revoke: ${c.problems.join("; ")}.`, hash: sig });
+    await closeOwnerPage();
+    process.exit(result(3, { state: "mismatch", tx: sig, ...(now !== undefined ? { remaining: formatUnits(now?.delegatedAmount ?? 0n) } : {}), reason, next: "check the owner's wallet activity, then superstables budget status --rail solana; revoke again if a delegate still reads" }));
+  }
 }
 
 let after = await retryRead(() => getAccount(conn, ata));

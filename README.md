@@ -281,7 +281,9 @@ local policy and what a compromised agent or client process could do.
   hash, the receipt records its pending reference instead.
 - Hosted approvals (`superstables budget setup --hosted`), `superstables budget buy-once` and
   `superstables budget find` need superstables.com, or a compatible deployment the owner names
-  with `--site` or `SUPERSTABLES_SITE`. Everything else, local approvals and budgets on every rail
+  with `--site` or `SUPERSTABLES_SITE`. An origin outside superstables.com and its subdomains
+  also needs the owner to set `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own
+  environment; an agent never sets it. Everything else, local approvals and budgets on every rail
   included, works with no account. What a compatible site must do is in
   [budget/CLI.md](budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).
 

@@ -11,13 +11,13 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { privateKeyToAddress } from "viem/accounts";
-import { startFakeSite, type FakeRequest, type FakeSite } from "../helpers/fake-site.js";
-import { KEYCHAIN, startFakeSolana, startFakeTempo, type FakeSolana, type FakeTempo } from "../helpers/fake-chains.js";
+import { evmOwner, startFakeSite, type FakeRequest, type FakeSite } from "../helpers/fake-site.js";
+import { KEYCHAIN, TOKEN_PROGRAM_ID, ataOf, computeUnitLimit, computeUnitPrice, startFakeSolana, startFakeTempo, type FakeSolana, type FakeTempo } from "../helpers/fake-chains.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
-const OWNER = "0x2222222222222222222222222222222222222222";
-const OTHER = "0x3333333333333333333333333333333333333333";
+const OWNER = evmOwner("22");
+const OTHER = evmOwner("33");
 const TEMPO_KEY = `0x${"44".repeat(32)}` as const;
 const TEMPO_AGENT = privateKeyToAddress(TEMPO_KEY);
 const SOL_AGENT_KP = Keypair.fromSeed(new Uint8Array(32).fill(3));
@@ -81,7 +81,7 @@ const hostedSolana = (owner = SOL_OWNER) => {
   solana.balances.set(owner, 1_000_000_000n);
 };
 /** The owner's wallet sends, on the site, whatever an approval asks for: the fake chain shows it, the site reports it. */
-const ownerSends = (rail: "tempo" | "solana", over: { signer?: string; slot?: number } = {}) => (r: FakeRequest) => {
+const ownerSends = (rail: "tempo" | "solana", over: Partial<Parameters<FakeSolana["land"]>[0]> = {}) => (r: FakeRequest) => {
   if (r.polls !== 2 || r.kind === "link") return;
   const hash = rail === "tempo"
     ? tempo.mine(r.owner!, r.body.transaction.data)
@@ -169,6 +169,9 @@ describe("tempo, hosted", () => {
     const key2 = publicOf("tempo").match(/^AGENT2_ADDRESS=(.*)$/m)![1];
     expect(r.result).toMatchObject({ state: "ok", owner: OWNER, agent: key2, approvals: "hosted" });
     expect(site.requests[0].body).toEqual({ rail: "tempo", chain: "moderato", agent: key2 });
+    // that key's own link, as the owner signed it
+    expect(publicOf("tempo")).toMatch(/^AGENT2_LINK_ID=bl_test0001$/m);
+    expect(publicOf("tempo")).toMatch(/^AGENT2_LINK_CODE=ABC-DEF$/m);
     expect(site.posts[0].ok).toBe(true);
   }, 60_000);
 });
@@ -243,6 +246,75 @@ describe("solana, hosted", () => {
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.reason).toMatch(new RegExp(`signed and paid for by ${SOL_OTHER}, not the owner ${SOL_OWNER}`));
   }, 90_000);
+
+  it("a lying site: a grant whose transaction carries another instruction too is a mismatch (exit 3), never settled", async () => {
+    hostedSolana();
+    site.owner = SOL_OWNER;
+    // the planned ApproveChecked, plus an SPL transfer out of the owner's USDC account
+    const drain = { program: TOKEN_PROGRAM_ID, accounts: [ataOf(SOL_OWNER).toBase58(), ataOf(SOL_OTHER).toBase58(), SOL_OWNER], data: Buffer.from([3, 0x40, 0x4b, 0x4c, 0, 0, 0, 0, 0]) };
+    site.onPoll = ownerSends("solana", { extra: [drain] });
+    const r = await budget(["grant", "--rail", "solana", "--amount", "0.05", "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result.state).toBe("refused_precheck") // the dispatcher reports a rail mismatch as refused_precheck (exit 3);
+    expect(r.result.reason).toMatch(/it has 2 instructions besides compute budget, not 1/);
+    expect(r.result.next).toMatch(/revoke/);
+    expect(r.result.rpc).toBe(solana.url);
+  }, 90_000);
+
+  it("a lying site: an instruction with another amount than planned is a mismatch, even when the account reads right", async () => {
+    hostedSolana();
+    site.owner = SOL_OWNER;
+    site.onPoll = ownerSends("solana", { instructionAmount: 60_000n });
+    const r = await budget(["grant", "--rail", "solana", "--amount", "0.05", "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result.reason).toMatch(/its instruction is not the one planned/);
+  }, 90_000);
+
+  it("a wallet's bounded compute-budget instructions are accepted; an unbounded priority fee is not", async () => {
+    hostedSolana();
+    site.owner = SOL_OWNER;
+    site.onPoll = ownerSends("solana", { budget: [computeUnitLimit(200_000), computeUnitPrice(1_000n)] });
+    const ok = await budget(["grant", "--rail", "solana", "--amount", "0.05", "--wait", "--no-open"]);
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(ok.result.state).toBe("settled");
+    solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: null, delegated: 0n });
+    // 1,400,000 units at 10,000,000 micro-lamports each: 0.014 SOL of priority fee
+    site.onPoll = ownerSends("solana", { budget: [computeUnitLimit(1_400_000), computeUnitPrice(10_000_000n)] });
+    const r = await budget(["grant", "--rail", "solana", "--amount", "0.05", "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result.reason).toMatch(/a priority fee above 0\.001 SOL/);
+  }, 120_000);
+
+  it("a lying site: a revoke that also does something else is a mismatch (exit 3), and fund-agent with extra instructions too", async () => {
+    hostedSolana();
+    solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: SOL_AGENT, delegated: 50_000n });
+    site.owner = SOL_OWNER;
+    const transfer = { program: "11111111111111111111111111111111", accounts: [SOL_OWNER, SOL_OTHER], data: Buffer.from([2, 0, 0, 0, 0, 0xca, 0x9a, 0x3b, 0, 0, 0, 0]) };
+    site.onPoll = ownerSends("solana", { extra: [transfer] });
+    const rv = await budget(["revoke", "--rail", "solana", "--wait", "--no-open"]);
+    expect(rv.code, rv.stderr).toBe(3);
+    expect(rv.result).toMatchObject({ state: "refused_precheck" });
+    expect(rv.result.reason).toMatch(/not the one planned/);
+    const fa = await budget(["fund-agent", "--rail", "solana", "--amount", "0.02", "--wait", "--no-open"]);
+    expect(fa.code, fa.stderr).toBe(3);
+    expect(fa.result.state).toBe("refused_precheck");
+  }, 120_000);
+
+  it("setup --hosted --grant: a step whose transaction carries another instruction is reported as a mismatch", async () => {
+    write(file("keys", "budget", "solana-agent.env"), `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);
+    const first = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--grant", "0.05"]);
+    expect(first.code, first.stderr).toBe(0);
+    const r = site.requests[0];
+    solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: null, delegated: 0n });
+    Object.assign(r, { state: "linked", owner: SOL_OWNER });
+    const extra = { program: "11111111111111111111111111111111", accounts: [SOL_OWNER, SOL_OTHER], data: Buffer.from([2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]) };
+    Object.assign(r.steps![0], { state: "confirmed", wallet_asked: true, tx_hash: solana.land({ kind: "grant", owner: SOL_OWNER, agent: SOL_AGENT, amount: 50_000n, extra: [extra] }) });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(3);
+    expect(done.result).toMatchObject({ state: "refused_precheck", linked: true, steps: [{ kind: "grant", state: "mismatch" }] });
+    // the link itself was recorded, with the link the owner signed
+    expect(publicOf("solana")).toMatch(/^LINK_ID=bl_test0001$/m);
+  }, 180_000);
 
   it("the site acts for another Solana owner: refused before any link", async () => {
     hostedSolana();

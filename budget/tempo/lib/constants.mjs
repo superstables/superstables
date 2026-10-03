@@ -1,14 +1,14 @@
 // Constants shared by the TypeScript scripts (through common.ts) and the plain .mjs helpers.
+import { DEFAULT_RPC, rpcFromEnv } from '../../rpc.mjs'
 /**
  * SUPERSTABLES_TEMPO_RPC replaces the Moderato RPC URL (tests point it at a local fake; you can point it at your own node).
- * Anything but an http(s) URL is ignored, with a warning.
+ * https, or http on this computer only (../../rpc.mjs): anything else is ignored here with a warning, and the dispatcher
+ * refuses the command before it runs a script.
  */
 export const RPC_URL = (() => {
-  const v = process.env.SUPERSTABLES_TEMPO_RPC?.trim()
-  if (!v) return 'https://rpc.moderato.tempo.xyz'
-  if (/^https?:\/\/[^\s]+$/.test(v)) return v
-  process.stderr.write(`warning: SUPERSTABLES_TEMPO_RPC is not an http(s) URL; using https://rpc.moderato.tempo.xyz\n`)
-  return 'https://rpc.moderato.tempo.xyz'
+  const r = rpcFromEnv('SUPERSTABLES_TEMPO_RPC', DEFAULT_RPC.tempo)
+  if (r.error) process.stderr.write(`warning: ${r.error}; using ${DEFAULT_RPC.tempo}\n`)
+  return r.url
 })()
 export const CHAIN_ID = 42431
 // pathUSD: Tempo's protocol-level reference USD stablecoin, a fixed address, 6 decimals.
