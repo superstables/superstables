@@ -28,7 +28,7 @@ import { approvalsDir, onceDir } from "./paths.mjs";
 import { claim, isApprovalId, newApprovalId, readApproval, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { CHAIN_ID as TEMPO_CHAIN_ID, TOKEN_ADDRESS as PATH_USD, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
-import { call, isOtherSite, siteName, siteText } from "./site.mjs";
+import { accountRefusalNext, call, isOtherSite, siteName, siteText } from "./site.mjs";
 import { readSettlement } from "./settlement.mjs";
 
 /** The chain buy-once used before listings named others; the default in words when nothing else is known. */
@@ -96,16 +96,16 @@ const WORDS = {
   state: new Set(["awaiting_approval", "submitting", "uncertain", "settled", "paid_service_failed", "failed", "denied", "expired"]),
   payment: new Set(["awaiting_approval", "submitting", "pending", "not_paid", "paid", "unknown", "unconfirmed", "uncertain"]),
   reason: new Set([
-    "agent_cancelled", "approval_expired", "authorization_cancelled", "match_code_mismatch", "not_landed", "not_requested", "not_settled",
-    "owner_policy", "owner_rejected", "seller_no_receipt", "seller_refused_payment", "seller_unreachable", "service_no_answer",
-    "settlement_failed", "settlement_not_on_chain", "settlement_pending", "stale_tx", "submission_interrupted", "terms_changed", "transaction_mismatch",
+    "agent_cancelled", "approval_expired", "authorization_cancelled", "ethereum_account_required", "match_code_mismatch", "not_landed", "not_requested", "not_settled",
+    "owner_policy", "owner_proof_owner_mismatch", "owner_rejected", "seller_no_receipt", "seller_refused_payment", "seller_unreachable", "service_no_answer",
+    "settlement_failed", "settlement_not_on_chain", "settlement_pending", "stale_tx", "submission_interrupted", "terms_changed", "transaction_mismatch", "wrong_account",
     "wallet_may_have_sent", "settlement_contradicted", "service_failed",
   ]),
   error: new Set([
-    "anonymous_purchases_disabled", "bad_request", "chain_unavailable", "forbidden", "idempotency_key_expired", "idempotency_key_reused",
+    "anonymous_purchases_disabled", "bad_request", "chain_unavailable", "ethereum_account_required", "forbidden", "idempotency_key_expired", "idempotency_key_reused",
     "internal_error", "invalid_idempotency_key", "invalid_params", "invalid_token", "method_not_allowed", "not_awaiting_approval", "not_found",
-    "policy_refused", "price_above_max", "purchase_unresolved", "rate_limited", "seller_error", "service_unavailable", "terms_changed",
-    "terms_mismatch", "too_many_pending", "unauthorized", "unknown_service", "would_not_settle",
+    "owner_proof_owner_mismatch", "policy_refused", "price_above_max", "purchase_unresolved", "rate_limited", "seller_error", "service_unavailable", "terms_changed",
+    "terms_mismatch", "too_many_pending", "unauthorized", "unknown_service", "would_not_settle", "wrong_account",
   ]),
 };
 /** A listing's parameter name as the command line takes it (--param NAME=VALUE). */
@@ -348,7 +348,7 @@ async function getOnceService({ site, id, fetchImpl }) {
 const errorOf = (r) => {
   const e = r.body?.error && typeof r.body.error === "object" ? r.body.error : {};
   const retry = Number(e.retry_after);
-  return { status: r.status, code: siteWord("error", e.code), reason: siteFailure(r), retryAfter: Number.isInteger(retry) && retry > 0 && retry <= 3600 ? retry : null };
+  return { status: r.status, code: siteWord("error", e.code ?? r.body?.code ?? r.body?.reason_code), reason: siteFailure(r), retryAfter: Number.isInteger(retry) && retry > 0 && retry <= 3600 ? retry : null };
 };
 
 /**
@@ -375,7 +375,7 @@ export async function readPurchase({ site, id, token, wait = 0, timeoutMs, fetch
   const w = Math.max(0, Math.min(20, Math.floor(wait)));
   const r = await call(`${site}${PURCHASES_API}/${id}?wait=${w}`, { headers: { authorization: `Bearer ${token}`, accept: "application/json" } }, timeoutMs ?? (w + 15) * 1000, fetchImpl);
   if (r.ok && r.body && typeof r.body === "object" && typeof r.body.state === "string") return { ok: true, view: r.body };
-  return { ok: false, status: r.status, body: r.body, reason: r.ok ? `${siteName(site)}'s answer has no state` : siteFailure(r, site) };
+  return { ok: false, ...errorOf(r), body: r.body, reason: r.ok ? `${siteName(site)}'s answer has no state` : siteFailure(r, site) };
 }
 
 /**
@@ -445,7 +445,7 @@ function termsOf(service, created, net) {
   const how = net.rail === "tempo"
     ? { enforced: `Your wallet sends one transfer of exactly ${amount} ${net.unit} to ${to}.`, note: "The first approval link you open asks you to sign in with your wallet (a message, no fee). Your wallet may first ask to add Tempo Moderato; you pay the network fee there." }
     : net.rail === "solana"
-      ? { enforced: `Your Solana wallet signs one transfer of exactly ${amount} USDC to ${to}.`, note: "The first approval link you open asks you to sign in with your wallet (a message, no fee), then to connect a Solana wallet. No SOL is needed: the seller's facilitator pays the fee." }
+      ? { enforced: `Your Solana wallet signs one transfer of exactly ${amount} USDC to ${to}.`, note: "The first approval link you open asks you to sign in with a Solana wallet such as Phantom or an Ethereum wallet such as MetaMask. Signing in signs a message and has no network fee. With a Solana account, pay from the Solana wallet you signed in with. With an Ethereum account, connect a separate Solana wallet. For this one-off payment on Solana devnet, you don't need SOL: the seller's facilitator pays the network fee." }
       : { enforced: `Your wallet signs one authorization for exactly ${amount} USDC to ${to}, usable once.`, note: `The first approval link you open asks you to sign in with your wallet (a message, no fee).${net.chain === ONCE_CHAIN ? "" : ` Your wallet may first ask to add ${net.label}.`} No gas is needed: the seller's facilitator pays it.` };
   return {
     title: `Buy once: ${service.id}`,
@@ -530,8 +530,8 @@ export async function findOpenOnce({ fetchImpl } = {}) {
     // an outcome that is not established yet (unknown, not final): never "waiting for the owner", never replaced
     if (!s.final && s.result) return { record: rec, unresolved: s.result.reason };
     if (!s.final) return { record: rec, unreadable: s.unreachable ?? null };
-    // the site ended it, but the answer is not one to store yet (it says paid; the chain does not show it): still open
-    if (s.result?.final === false) return { record: rec, unresolved: s.result.reason };
+    // no answer to store yet (a refused read, or payment not shown on chain): still open
+    if (s.result?.final === false) return { record: rec, unresolved: s.result.reason, next: s.result.status >= 400 && s.result.status < 500 ? s.result.next : undefined };
   }
   return null;
 }
@@ -648,8 +648,9 @@ async function finalOf(record, view, { deadline } = {}) {
     return { keep, code: 4, result: { ok: false, ...base, state: "settled", ...response, next: "paid but not delivered: never pay again; report the tx and the purchase id to the owner", reason } };
   }
   if (paid === false) {
-    const failed = view.state === "failed";
-    return { keep, code: failed ? 1 : 3, result: { ok: false, ...base, state: failed ? "failed" : "refused_precheck", tx: {}, next: failed ? `nothing was paid${reason ? ` (${reason})` : ""}. Do not retry blindly: tell the owner, and run buy-once again only if they ask` : REASONS[code] ?? "nothing was paid. Buy again only if the owner asks", reason } };
+    const accountNext = accountRefusalNext(code);
+    const failed = view.state === "failed" && !accountNext;
+    return { keep, code: failed ? 1 : 3, result: { ok: false, ...base, state: failed ? "failed" : "refused_precheck", tx: {}, next: accountNext ?? (failed ? `nothing was paid${reason ? ` (${reason})` : ""}. Do not retry blindly: tell the owner, and run buy-once again only if they ask` : REASONS[code] ?? "nothing was paid. Buy again only if the owner asks"), reason } };
   }
   const site = siteName(record.hosted?.site ?? "");
   if (chainWords) {
@@ -679,6 +680,8 @@ async function chainCheck(record, net, hash, payer, deadline) {
 
 /** What a caller waiting for the owner is told while the purchase is not final. */
 function wordsOf(view, site = "superstables.com") {
+  const next = accountRefusalNext(view.reason_code);
+  if (next) return next;
   if (view.reason_code === "owner_policy") return `the owner tried to approve and their own limits on ${site} refused it; they can change the limits and approve before the approval link expires`;
   return `waiting for the owner to open the approval link on ${site}, signed in with their wallet, and pick the match code`;
 }
@@ -740,7 +743,10 @@ function openUnknown(record, view) {
 /**
  * One read of a record's purchase. { final: true, code, result } once the purchase ended (stored, so every later call gives
  * the same answer, and the access token is gone), { final: false, record, view, words } while it goes on, or
- * { final: false, record, unreachable: reason } when the site did not answer.
+ * { final: false, record, status, errorCode, unreachable: reason } for a transient read failure. A permanent refusal
+ * stops this wait with result.final false and leaves the record open: a later wait can still read the purchase.
+ * @param {any} record
+ * @param {{ waitS?: number, fetchImpl?: typeof fetch }} [options]
  */
 export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, fetchImpl } = {}) {
   // the record as stored now, with every answer's evidence so far: never an older copy
@@ -753,9 +759,21 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
     if (r.body && typeof r.body === "object") record = accumulate(record, r.body);
     // another command finished it meanwhile: its answer, checked against the evidence this read added
     if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
+    if (r.status >= 400 && r.status < 500 && ![408, 429].includes(r.status)) {
+      const next = accountRefusalNext(r.code);
+      const possible = !mayBeUnpaid(record.seen);
+      // A refused read says nothing about an earlier submission, and asking again won't change it: stop, keep the
+      // token and the record for another read, and say a payment may have left when an earlier answer showed one.
+      return { final: true, code: next && !possible ? 3 : 5, record, result: {
+        ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, purchase: h.requestId, service: record.service?.id,
+        state: next && !possible ? "refused_precheck" : "unknown", final: false, paid: null, delivered: null, amount: null, tx: seenTx(record),
+        status: r.status, reasonCode: r.code, reason: `the purchase cannot be read: ${r.reason}${possible ? "; a payment may have left" : ""}`,
+        next: `${next ?? "ask the owner to check the purchase on their account"}; run superstables budget wait --id ${record.id} --shown again. The payment outcome is unknown; do not start another purchase for this request`,
+      } };
+    }
     // not readable now, but an earlier answer carried payment evidence: unknown, never "waiting for the owner"
-    if (!mayBeUnpaid(record.seen)) return { final: false, code: 5, result: openUnknown(record, { unreadable: r.reason }), record, unreachable: r.reason };
-    return { final: false, record, unreachable: r.reason };
+    if (!mayBeUnpaid(record.seen)) return { final: false, code: 5, result: openUnknown(record, { unreadable: r.reason }), record, status: r.status, errorCode: r.code, unreachable: r.reason };
+    return { final: false, record, status: r.status, errorCode: r.code, unreachable: r.reason };
   }
   record = accumulate(record, r.view);
   if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
@@ -846,7 +864,7 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
   const found = await findOpenOnce({ fetchImpl });
   const open = found?.record;
   if (open && found.unresolved) {
-    return refused(`buy-once purchase ${open.id} has no final answer yet (${found.unresolved}): one at a time`, `nothing was started. Run superstables budget wait --id ${open.id} --shown later to read it again; ${ABANDON(open.id)}`, 3, { pending: open, pendingState: "unknown" });
+    return refused(`buy-once purchase ${open.id} has no final answer yet (${found.unresolved}): one at a time`, found.next ?? `nothing was started. Run superstables budget wait --id ${open.id} --shown later to read it again; ${ABANDON(open.id)}`, 3, { pending: open, pendingState: "unknown" });
   }
   if (open && found.unreadable && !replace) {
     return refused(`buy-once purchase ${open.id} has no final answer and ${siteName(open.hosted.site)} could not be read just now (${found.unreadable}): one at a time`, `nothing was started. Run superstables budget wait --id ${open.id} --shown when the site answers; ${ABANDON(open.id)}`, 3, { pending: open });
@@ -918,8 +936,9 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
     // any answer, any retry, that carried payment evidence: never "nothing was paid"
     if (!mayBeUnpaid(created.seen)) return unknownWithoutId(created.seen, `${siteName(site)} did not confirm creation of the purchase (${created.reason})`);
     const s = created.status;
-    const code = s === 400 || s === 404 || s === 422 ? 2 : s === 409 ? 3 : 1;
-    const next = code === 2 ? "fix the command; superstables budget find --once lists each service's parameters and their values" : code === 3 ? (created.code === "price_above_max" ? "the price is above --max: ask the owner whether they accept it. Never raise --max on your own" : "nothing was created; read the reason and do not retry blindly") : created.retryAfter ? `the site asks you to wait ${created.retryAfter} seconds, then run buy-once again` : `nothing the owner could see was created; check ${site}, then run buy-once again`;
+    const accountNext = accountRefusalNext(created.code);
+    const code = accountNext ? 3 : s === 400 || s === 404 || s === 422 ? 2 : s === 409 ? 3 : 1;
+    const next = accountNext ?? (code === 2 ? "fix the command; superstables budget find --once lists each service's parameters and their values" : code === 3 ? (created.code === "price_above_max" ? "the price is above --max: ask the owner whether they accept it. Never raise --max on your own" : "nothing was created; read the reason and do not retry blindly") : created.retryAfter ? `the site asks you to wait ${created.retryAfter} seconds, then run buy-once again` : `nothing the owner could see was created; check ${site}, then run buy-once again`);
     return refused(`${siteName(site)} did not create the purchase (${created.reason})`, next, code);
   }
 

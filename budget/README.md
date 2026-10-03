@@ -39,7 +39,7 @@ The owner approves in one of two places. Local approvals are the default and nee
 | | Local (default) | Hosted (`setup --rail R --hosted`) |
 | --- | --- | --- |
 | Where the owner approves | A page on `127.0.0.1`, in the browser with their wallet on the computer that runs the command | superstables.com, on any device where they are signed in with their wallet |
-| Account | None | A superstables.com account (Sign-In with Ethereum) |
+| Account | None | A superstables.com account, created by signing in with an Ethereum or Solana wallet; for now, a Solana account supports only Solana agents and Solana one-off payments |
 | Rails | `evm`, `tempo`, `solana` | `evm`, `tempo`, `solana` |
 | Owner on record | The wallet that signs the setup message | The wallet that signs the owner-proof message on superstables.com (on `solana`, the Solana wallet the owner connects there); the command checks that signature before it records anyone |
 | What the agent shows the owner | The approval link and the terms | The approval link, the terms and a match code, which the owner picks on the page |

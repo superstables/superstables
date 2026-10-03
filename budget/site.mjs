@@ -104,14 +104,14 @@ export const SITE_WORDS = {
     // errors (budgetError codes)
     "agent_mismatch", "agent_not_linked", "agent_proof", "agent_proof_invalid", "agent_proof_missing", "agent_proof_stale", "allowance_live",
     "already_linked", "amount_above_limit", "amount_zero", "blockhash_expired", "body_too_large", "cap_above_limit", "cap_zero", "chain_unavailable",
-    "duplicate_request", "expiry_passed", "idempotency_conflict", "idempotency_key_expired", "idempotency_key_reused", "internal_error",
+    "duplicate_request", "ethereum_account_required", "expiry_passed", "idempotency_conflict", "idempotency_key_expired", "idempotency_key_reused", "internal_error",
     "invalid_idempotency_key", "invalid_json", "invalid_kind", "invalid_label", "invalid_solana", "invalid_solana_owner", "invalid_step",
     "invalid_then", "invalid_transaction", "invalid_tx_hash", "linked_elsewhere", "match_code_mismatch", "missing_token", "network_refused",
     "no_token_account", "not_a_link", "not_a_transaction", "not_awaiting_owner", "not_for_solana", "not_found", "not_linked_yet", "not_open",
     "not_sending", "not_solana", "nothing_to_revoke", "other_account", "other_delegate", "owner_frozen", "owner_proof_invalid",
-    "owner_proof_required", "proof_reused", "rate_limited", "request_open", "sign_in_required", "solana_owner_unproven", "tx_hash_used",
+    "owner_proof_owner_mismatch", "owner_proof_required", "proof_reused", "rate_limited", "request_open", "sign_in_required", "solana_owner_unproven", "tx_hash_used",
     "unknown_chain", "unknown_parameter", "unlimited_refused", "unsupported_chain", "unsupported_media_type", "unsupported_rail",
-    "value_not_zero", "wallet_asked", "wrong_amount", "wrong_call", "wrong_recipient", "wrong_signer", "wrong_spender", "wrong_target",
+    "value_not_zero", "wallet_asked", "wrong_account", "wrong_amount", "wrong_call", "wrong_recipient", "wrong_signer", "wrong_spender", "wrong_target",
     "wallet_changed_transaction",
     // reasons a request or step ended (flow.ts REASONS)
     "agent_cancelled", "agent_removed", "another_open", "approval_expired", "earlier_step", "link_not_done", "mismatch", "no_start_block",
@@ -122,6 +122,13 @@ export const SITE_WORDS = {
 };
 /** A value the site sent, as one of the words its API documents for `kind`, or "unexpected". */
 export const siteWord = (kind, v) => (typeof v === "string" && SITE_WORDS[kind].has(v) ? v : "unexpected");
+const ACCOUNT_REFUSALS = new Map([
+  ["ethereum_account_required", "ask the owner to sign out, then sign in with an Ethereum wallet and retry"],
+  ["owner_proof_owner_mismatch", "ask the owner to sign the owner-proof message with the Solana wallet they signed in with, then retry"],
+  ["wrong_account", "ask the owner to select the Solana wallet account they signed in with, or sign out and sign in with the paying Solana wallet, then retry"],
+]);
+/** Recovery for an account refusal, or null for other errors. */
+export const accountRefusalNext = (code) => ACCOUNT_REFUSALS.get(code) ?? null;
 /** Anything shaped like an access token (ssbt_, ssba_, sspt_, sspa_) taken out of a text this client prints or stores. */
 export const scrub = (text) => String(text ?? "").replace(/ss[bp][ta]_[A-Za-z0-9_-]*/g, "[token]");
 /**
@@ -247,7 +254,9 @@ export async function readSiteRequest({ site, id, token, wait = 0, fetchImpl }) 
   const w = Math.max(0, Math.min(20, Math.floor(wait)));
   const r = await call(`${site}${BUDGET_API}/requests/${id}?wait=${w}`, { headers: { authorization: `Bearer ${token}`, accept: "application/json" } }, (w + 15) * 1000, fetchImpl);
   if (r.ok && r.body && typeof r.body === "object" && typeof r.body.state === "string") return { ok: true, view: r.body };
-  return { ok: false, status: r.status, reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : siteFailure(r.status, r.body) };
+  const code = r.body?.error?.code ?? r.body?.code ?? r.body?.reason_code;
+  const next = accountRefusalNext(code);
+  return { ok: false, status: r.status, code: siteWord("code", code), reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : `${siteFailure(r.status, r.body)}${next ? `; ${next}` : ""}` };
 }
 
 /**
