@@ -47,7 +47,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
     expect(skill).toMatch(/wait --id ID --shown/);
   });
 
-  it("writes the link before waiting, offers buy once only for listed services, and treats a no as final", () => {
+  it("writes the link before waiting, offers Single purchase only for listed services, and treats a no as final", () => {
     expect(skill).toMatch(/Reply with `message_for_owner` and end your turn/);
     expect(skill).toMatch(/Testnet only: test USDC, no real money\./);
     expect(skill).toMatch(/so is a spent budget/);
@@ -55,7 +55,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
     expect(skill).toMatch(/A no is final/);
     expect(skill).not.toMatch(/stop after about five minutes of polling/);
     const budget = ref("references/budget.md");
-    expect(budget).toMatch(/Offer buy once only if that service is in `superstables budget find --once`/);
+    expect(budget).toMatch(/Offer single purchase only if that service is in `superstables budget find --once`/);
     expect(budget).toMatch(/say the budget is spent and end your turn/);
     expect(budget).toMatch(/## A hosted budget on superstables\.com/);
     expect(budget).not.toMatch(/Poll for about five minutes/);

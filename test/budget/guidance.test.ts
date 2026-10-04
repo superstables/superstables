@@ -15,7 +15,8 @@ const CLI = join(REPO, "budget", "cli.mjs");
 let home: string;
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "superstables-budget-guidance-"));
+  // A path can contain the internal prefix without the guidance exposing internal variable names.
+  home = mkdtempSync(join(tmpdir(), "superstables-budget-guidance-B4-"));
 });
 
 afterEach(() => {
@@ -102,7 +103,7 @@ describe("status with no budget set up here", () => {
     expect(r.stderr.split("\n")[0]).toContain("no budget has been set up here for evm on base-sepolia");
     expect(r.result.reason).toBe("no budget has been set up here for evm on base-sepolia: no agent key on this computer; no owner has connected a wallet");
     expect(r.result.next).toContain("superstables budget setup --rail evm, superstables budget fund-agent --rail evm, superstables budget doctor --rail evm, superstables budget grant --rail evm --amount A");
-    expect(`${r.stderr}${r.stdout}`).not.toMatch(/B4/);
+    expect(`${r.stderr}${r.stdout}`.replaceAll(home, "<home>")).not.toMatch(/B4/);
   });
 
   it("names the home it checked, and says to ask the user for the path when the budget is elsewhere", async () => {

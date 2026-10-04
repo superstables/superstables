@@ -9,8 +9,10 @@ Everything is testnet. No real money moves at any stage.
 
 Done once, not on stage, with Node 20 or newer and MetaMask.
 
+[Install client 0.3.0 from a checkout](install.md#from-a-checkout), including `npm link`,
+so `superstables` is on your PATH. Then:
+
 ```bash
-npm install -g @superstables/client
 superstables setup
 ```
 

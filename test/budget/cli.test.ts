@@ -87,6 +87,23 @@ describe("superstables budget on native Windows", () => {
   });
 });
 
+describe("owner approval help", () => {
+  it("keeps recovery local when other owner commands offer hosted approval", async () => {
+    const recover = await run([BUDGET, "recover", "--help"]);
+    expect(recover.code).toBe(0);
+    expect(recover.stdout).toContain("Recovery always uses this computer's local approval page");
+    expect(recover.stdout).toContain("127.0.0.1");
+    expect(recover.stdout).not.toContain("the approval link is on superstables.com");
+    expect(recover.stdout).not.toContain("matchCode");
+    expect(recover.stdout).not.toContain("match code");
+
+    const grant = await run([BUDGET, "grant", "--help"]);
+    expect(grant.code).toBe(0);
+    expect(grant.stdout).toContain("the approval link is on superstables.com");
+    expect(grant.stdout).toContain("matchCode");
+  });
+});
+
 describe("setup --fund-only", () => {
   for (const [argv, why] of [
     [["--rail", "evm"], /tempo only/],

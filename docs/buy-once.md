@@ -1,4 +1,6 @@
-# One purchase at a time
+# Single purchase
+
+<a id="one-purchase-at-a-time"></a>
 
 Use this when the owner is there to approve. The agent finds a paid service and reads its price
 without paying. It then asks for one purchase, and the owner approves or rejects it in their own
@@ -7,16 +9,25 @@ without an approval each time, see [Budget](budget.md).
 
 There are two ways:
 
-- **Hosted buy once** (`superstables budget buy-once`): the owner approves on superstables.com, on
-  Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet. See
-  [Hosted buy once](#hosted-buy-once-superstables-budget-buy-once).
-- **Approve each payment** (`pay`, the MCP tools): the owner approves on a page on this computer,
-  on Base Sepolia. See [Approve each payment on this computer](#approve-each-payment-on-this-computer-pay).
+- **Single purchase locally** (`pay`, the MCP tools): the owner approves on a page on this
+  computer, on Base Sepolia, with no account. See
+  [Single purchase on this computer](#approve-each-payment-on-this-computer-pay).
+- **Hosted single purchase** (`superstables budget buy-once`): the owner approves on superstables.com,
+  on Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet. Choose this when the owner's
+  wallet is on another device. See [Hosted single purchase](#hosted-buy-once-superstables-budget-buy-once).
 
 **Testnet only.** Test tokens on test networks: USDC, or pathUSD on Tempo Moderato. No real money
-moves.
+moves. Use the [0.3.0 client install instructions](install.md). A command-capable agent initiates
+purchases using the skill or CLI, then shows the owner the exact approval link and terms. For
+hosted requests, the owner approves and checks activity on the site; linked budget agents are
+managed there too. Local approvals use the local browser and [client records](records.md),
+with no account. For an agent unable to run
+commands, the [purchase HTTP reference](https://www.superstables.com/docs/purchase) is the
+secondary route; browsing alone cannot create a purchase.
 
-## Hosted buy once (`superstables budget buy-once`)
+<a id="hosted-buy-once-superstables-budget-buy-once"></a>
+
+## Hosted single purchase (`superstables budget buy-once`)
 
 With `superstables budget buy-once`, the owner approves one purchase on superstables.com, in their
 own wallet, from a device where they are signed in and have a compatible wallet. It needs no
@@ -26,6 +37,14 @@ pathUSD) or Solana devnet (test USDC). It needs a superstables.com account, whic
 signing in with an Ethereum wallet, or a compatible deployment the owner names with `--site` or
 `SUPERSTABLES_SITE`; an origin outside superstables.com and its subdomains also needs the owner to set
 `SUPERSTABLES_ALLOW_SITE` to it (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
+The installed CLI runs on your own machine, but the site coordinates this single purchase after
+the owner approves. This differs from a budget, whose client pays sellers directly. The six local
+payment MCP tools do not initiate hosted single purchase. Solana purchases additionally need a Solana
+wallet on the owner's device to sign the payment transaction. Solana sign-in is not supported
+in 0.3.0. Signing in does not approve a purchase. The
+[owner guide](https://www.superstables.com/docs/owner) covers the link/code handoff, sign-in
+and account checkpoints.
+
 A purchase is reported paid only once the command has read the payment on chain. To list the
 services and buy one:
 
@@ -38,7 +57,7 @@ superstables budget buy-once --service superstables-demo-market-data --param ass
 created. The command prints an `APPROVE` line with the approval link and a match code. Run by an agent (stdout is not
 a terminal), or with `--detach`, it then returns with `state: "waiting_owner"` and an approval `id`; in
 a terminal it waits for the purchase to end. Send the `RESULT`'s `message_for_owner` (the approval link, the
-code and the price) as a reply the owner can read, and end your turn there. The owner opens it, signs in with their wallet the
+code and the price) as a reply the owner can read, and end your turn there. The owner opens it, signs in with an Ethereum wallet the
 first time (a message, no fee), picks the same code on the page and approves the payment in their
 wallet. When they say they have, run:
 
@@ -55,7 +74,13 @@ do not pay again if it was paid or its outcome is unknown. The site's side of th
 is the HTTP purchase API; the endpoints the client calls, and what it checks in each answer, are in
 [budget/CLI.md](../budget/CLI.md#buy-once).
 
-## Approve each payment on this computer (`pay`)
+For an unresolved outcome, [check the original request](records.md#check-an-unresolved-outcome).
+Hosted one-off requests appear in the [site account](https://www.superstables.com/account);
+[local files](records.md#budget-records) retain the CLI's result and saved seller response.
+
+<a id="approve-each-payment-on-this-computer-pay"></a>
+
+## Single purchase on this computer (`pay`)
 
 `pay` uses x402 with the `exact` scheme and test USDC on Base Sepolia (`eip155:84532`, token
 `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, 6 decimals). If the seller offers no payment option
