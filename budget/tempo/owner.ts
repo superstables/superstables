@@ -403,7 +403,7 @@ export function grantTerms(p: GrantPlan & { owner: Address; expirySeconds: numbe
     ],
     notes: [
       `Your wallet may show "Interacting with ${KEYCHAIN.slice(0, 7)}...${KEYCHAIN.slice(-5)}" without decoding the limit. Review the terms above. Do not change the transaction; the command checks the resulting key on chain.`,
-      `Your wallet may first ask to add Tempo Testnet (Moderato). The expected fee token is ${p.feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : p.feeToken}. Check both the token and fee in your wallet. No budget funds transfer now. Later agent fees paid from your pathUSD count against its limit.`,
+      `Your wallet may first ask to add Tempo Testnet (Moderato). The expected fee token is ${p.feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : p.feeToken}. Check both the token and fee in your wallet. No budget funds transfer now. When the seller pays the network fee, only the price comes off this limit. We haven't yet verified how fees affect this limit when the seller doesn't pay them.`,
       `To end the budget at any time: superstables budget revoke --rail tempo${agentFlag(p.label)}. You approve that in your wallet too.`,
       'A revoked or expired key can never be granted again: the next budget needs a new agent key (superstables budget setup --rail tempo --agent LABEL).',
     ],

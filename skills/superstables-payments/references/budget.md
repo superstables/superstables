@@ -48,7 +48,7 @@ Without `--hosted` the owner approves on a page on this computer instead, with n
 
 | | `evm` | `tempo` | `solana` |
 | --- | --- | --- | --- |
-| Total cap | Yes | Yes (fees count against it) | Yes |
+| Total cap | Yes | Yes (only the price counts when the seller pays the fee) | Yes |
 | Expiry | No: `grant` refuses `--expiry` | Yes (default 24 hours) | No: `grant` refuses `--expiry` |
 | Period cap | No: `grant` refuses `--period` | Yes, when granted; the plan prints the true maximum by expiry | No |
 | Seller list | No: `grant` refuses `--sellers` | Yes, when granted | No |
@@ -64,7 +64,7 @@ On `evm` and `solana` a stolen agent key can pay any address up to the remaining
 | Rail | Protocol | How a purchase pays | Fees |
 | --- | --- | --- | --- |
 | `evm` | x402 `exact`, EIP-3009 | Pull then pay: the agent pulls exactly the price from the owner (`transferFrom`), then signs a standard EIP-3009 payment for the seller's facilitator. A failed purchase returns the price | The agent pays gas for the pull (the chain's gas token; USDC on Arc): about 0.0000004 ETH on Base Sepolia, about 0.00009 ETH on Ethereum Sepolia at 1.3 gwei. The facilitator pays for settlement |
-| `tempo` | MPP `tempo` charge | Direct: the access key signs a `transferWithMemo` from the owner's account | Paid by the seller's fee payer with the sellers tested; a fee the owner pays counts against the limit |
+| `tempo` | MPP `tempo` charge | Direct: the access key signs a `transferWithMemo` from the owner's account | Paid by the seller's fee payer with the sellers tested: then only the price comes off the limit. How fees affect the limit when the seller doesn't pay them is not yet verified |
 | `solana` | x402 `exact` | Direct: the agent signs `TransferChecked` as delegate; each purchase carries a memo `rb:<op>` | Paid by the seller's facilitator; `fund-agent` covers sellers that do not |
 
 On `evm`, after the pull the chain no longer binds the seller, and the price sits in the agent key for a few seconds. On Ethereum Sepolia gas is L1 ETH: a purchase that fails after the pull adds two agent transactions (cancel the authorization, return the price), about 0.00023 ETH with the pull at 1.3 gwei. The seller proven there is the Brickken sandbox (`api.sandbox.brickken.com/get-agents`), whose `ownerWalletAddress` must be the payer, the agent key.
@@ -123,7 +123,7 @@ RESULT {"ok":true,"command":"grant","state":"waiting_owner","final":false,"id":"
 
 If the user says a budget exists but status finds none, it may be under another `SUPERSTABLES_HOME` (status names the home it checked, `home` in its `RESULT`, and the files it looked for) or on another `--chain`. Say which you checked and ask. Never change `SUPERSTABLES_HOME` or point a command at another home yourself, the default `~/.superstables` included: only a path the user gives you.
 
-`buy` refuses before signing (exit 3, `refused_precheck`, `paid: false`, no `tx`) when: no setup here, no grant on chain, the price is over `--max`, the token or chain is wrong, the payee is not `--pay-to`, the price has too many decimals, the remaining budget is too small, a `tempo` seller requires a payment memo of its own (this client does not support that), the agent key cannot pay the gas at the current fee (`evm`), or another `buy` with this `--op` is running. On `tempo`, when the chain reads succeed, a price above the remaining budget or a payee outside the budget's seller list is refused before signing too; if those reads fail, the chain refuses at estimation instead (`refused_chain`, exit 1, nothing signed). Fees the seller does not pay count against a `tempo` limit as well. `next` says what to do: report and stop for a spent budget, `fund-agent` or `recover` when the owner can fix it.
+`buy` refuses before signing (exit 3, `refused_precheck`, `paid: false`, no `tx`) when: no setup here, no grant on chain, the price is over `--max`, the token or chain is wrong, the payee is not `--pay-to`, the price has too many decimals, the remaining budget is too small, a `tempo` seller requires a payment memo of its own (this client does not support that), the agent key cannot pay the gas at the current fee (`evm`), or another `buy` with this `--op` is running. On `tempo`, when the chain reads succeed, a price above the remaining budget or a payee outside the budget's seller list is refused before signing too; if those reads fail, the chain refuses at estimation instead (`refused_chain`, exit 1, nothing signed). When the seller pays the network fee, only the price comes off a `tempo` limit. How fees affect the limit when the seller doesn't pay them is not yet verified. `next` says what to do: report and stop for a spent budget, `fund-agent` or `recover` when the owner can fix it.
 
 On `evm`, before the agent signs anything, `buy` checks that the agent key can pay the gas, at the current fee, for the pull and for the cancel and return a failed purchase would need. When it cannot, `buy` exits 3 before signing and `next` names `fund-agent`: tell the owner. A gas shortage is not a refusal by the chain. `doctor` sizes its gas minimums from the current fee.
 

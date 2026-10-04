@@ -233,7 +233,7 @@ Owner request progress:
 | Rail | The chain enforces | It does not enforce |
 | --- | --- | --- |
 | `evm`, `solana` | A total cap | An expiry, a seller list, a per-payment maximum. A stolen agent key can pay any address up to the remaining cap |
-| `tempo` | A total cap (fees count), an expiry (default 24 hours); a period cap and a seller list when granted | A per-payment maximum |
+| `tempo` | A total cap (only the price counts when the seller pays the fee), an expiry (default 24 hours); a period cap and a seller list when granted | A per-payment maximum |
 
 `--max` and `--pay-to` are enforced by this CLI only, on every rail. On `evm` and `solana`, do not pass `--expiry`, `--period` or `--sellers`, and do not promise them. Per-rail details: [references/budget.md](references/budget.md).
 

@@ -7,196 +7,64 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-10-01
+## [0.3.0]
 
-An owner can now give an agent an on-chain budget once, and the agent buys within it without
-an approval per payment: `superstables budget`, on testnets, across three payment rails and
-eight chains. The client is now on npm as `@superstables/client`. The release also ships a
-standalone agent skill with the whole CLI, makes the CLI usable from its own help and exit codes,
-and removes the Claude Desktop bundle.
+Approve one purchase in your wallet on superstables.com, or give an agent an on-chain budget to buy within. This release adds `superstables budget`, hosted approvals and a standalone agent skill, with clearer CLI outcomes and payment checks.
+
+Testnet only. Mainnet chains are refused.
 
 ### Added
 
-- **On-chain budgets: `superstables budget`.** The owner grants a budget once, from their own
-  wallet. The agent then buys from sellers on its own, one purchase at a time, until the budget
-  is spent, the owner revokes it, or, on Tempo, it expires. The limit is enforced by the chain,
-  not by this software. There are three rails:
-  - `evm`: a USDC allowance (an ERC-20 approve) from the owner's wallet to an agent key, for
-    x402 sellers on Base Sepolia (the default), Arc Testnet, Arbitrum Sepolia, Polygon Amoy,
-    SKALE Base Sepolia and Ethereum Sepolia. The USDC stays in the owner's wallet until a
-    purchase pulls its price.
-  - `tempo`: an access key on Tempo Moderato, spending the owner's pathUSD, for MPP sellers. The
-    chain enforces a total cap and an expiry (24 hours by default), plus a period and a seller
-    list when the owner sets them. The agent needs no gas.
-  - `solana`: the agent key as delegate of the owner's USDC account on Solana devnet, for x402
-    sellers.
+- **Hosted buy once: `superstables budget buy-once`.** Approve one service purchase in your own wallet on superstables.com, without setting up a budget. Supported networks: Base Sepolia, Arc Testnet and Solana devnet with test USDC; Tempo Moderato with test pathUSD. `superstables budget find --once` lists eligible services. The result distinguishes payment from delivery and saves the seller’s response to a file. A site account is required; the existing local `pay` flow needs no account.
+- **On-chain budgets: `superstables budget`.** The owner grants spending permission once; the agent then buys without approval for each payment. EVM budgets use a USDC allowance, Solana budgets use a USDC token delegate, and Tempo budgets use a pathUSD access key. Local approvals open a page on `127.0.0.1`.
 
-  On `evm` and `solana` the chain enforces a total cap only: no expiry, no seller list and no
-  per-payment maximum, so a stolen agent key could pay any address up to what is left. `buy`'s
-  `--max` and `--pay-to` are checks in this CLI, made before it signs. Testnets only: mainnet
-  chains are refused.
-- **The owner approves budget steps in their own wallet.** `setup`, `fund-agent`, `grant`,
-  `revoke` and, on `evm`, `recover` open a page on `127.0.0.1` that shows the terms, including
-  what the chain enforces and what it does not. The owner approves there with any EVM browser
-  wallet on `evm`, one that can add a custom network on `tempo`, or any Wallet Standard wallet
-  (Phantom, Solflare, Backpack, ...) on `solana`. The command then reads the result back from
-  the chain and refuses a transaction that does not match the plan. No owner key is created or
-  stored on this computer. Run by an agent, an owner command returns at once with the link and an
-  approval id; `superstables budget wait --id ID --shown` reports the outcome. `wait` reads
-  nothing until the caller passes `--shown`, meaning it has written the link and the terms in a
-  reply the owner can read; without it, `wait` exits 2 with `state: "show_owner_first"`. An agent
-  can start these commands; only the owner approves. For unattended tests only,
-  `--owner-key-file PATH --yes` signs with an owner key file instead.
-- **Hosted owner approvals, optional.** `setup --rail R --hosted` links the agent to the owner's
-  superstables.com account (Sign-In with Ethereum) and records that account's address as the owner
-  (on Solana devnet, the Solana wallet the owner connects there). It works on every rail: EVM
-  chains, Tempo Moderato and Solana devnet. Grants, revokes and gas transfers on that chain are
-  then approved on superstables.com, in the owner's wallet, from any device where they are signed
-  in, after they pick the match code the agent shows them. Each request is signed by the agent key, which stays
-  on this computer, and the command still reads the chain before it reports success. A request
-  the site would put to another account than the recorded owner is refused. Hosted approvals
-  need a superstables.com account, or a compatible site the owner names with `--site` or
-  `SUPERSTABLES_SITE`. Approvals on `127.0.0.1` remain the default and need no account;
-  `recover` uses them only. Every `superstables budget` command accepts `--site`; where a site
-  is recorded and it differs, the command refuses. With `setup --hosted --grant A --fund`, one
-  link covers linking the agent, its gas and the budget.
-- **One purchase without a budget: `superstables budget buy-once`.** It buys one service the
-  owner approves on superstables.com, with no setup, no gas and no budget. The agent names the
-  service, its inputs and the most it accepts (`--max`); the owner approves that one payment in
-  their wallet, after picking the match code. The result says whether it was paid and delivered,
-  and the seller's answer is saved as a file. `superstables budget find --once` lists the
-  services that can be bought this way, with the network of each: Base Sepolia, Arc Testnet or
-  Solana devnet (test USDC) or Tempo Moderato (test pathUSD). Buy once needs a superstables.com account (made
-  by signing in with the wallet), or a compatible site; `pay` still needs neither.
-- **`superstables budget setup --rail tempo --fund-only`** tops up the owner on record from the
-  Moderato faucet again and changes nothing else; it opens no page.
-- **`superstables budget find`** lists the services superstables.com says a budget can pay, with
-  price, chain, whether the listing is marked simulated, and URL. `--rail` or `--chain` lists
-  one rail or chain, Tempo Moderato (`moderato`) and Solana devnet (`devnet`) included. Any other
-  seller URL still works.
-- **Buying within a budget.** `status` says whether a budget is set up and what is left.
-  `preflight` reads a seller's price and payee from its 402 on every rail and signs nothing.
-  `buy` checks the price against `--max`, and the token, chain and, with `--pay-to`, the payee,
-  before it signs; one `--op` id is never paid twice. On every rail it saves the seller's answer
-  next to the purchase journal (at most 1 MB, mode 600) and names it as `responseFile`. A
-  purchase refused because the budget cannot cover it carries `budget_spent: true`. On `evm`, it
-  signs nothing unless the agent key can pay the gas, at the current fee, for the purchase and
-  for the steps that return the price if it fails; otherwise it is refused (exit 3) and `next`
-  names `fund-agent`. A `buy` with no budget set up is refused with nothing signed, and names
-  the owner's steps. `reconcile` reads the chain for a purchase whose outcome is unknown,
-  without paying again. `doctor` checks keys, RPC and balances, sizing the `evm` gas minimums
-  from the current fee, and `recover` (`evm`) returns stranded USDC to the owner. Every command
-  ends with one `RESULT {json}` line, with `final` and a fixed exit code; with `--json`, stdout
-  is that object alone.
-- **Installs that include the budget.** The package npm builds from this repository includes
-  `superstables budget` as a self-contained build, with `THIRD_PARTY_NOTICES.txt`, so its chain
-  libraries are not installed as separate packages. It runs from a checkout (`npm ci`; a checkout
-  without dev packages runs the built copy), from a package made with `npm pack`, and from git:
-  `npm install github:superstables/superstables-client#<commit>`, with a full commit hash, builds
-  the client on your computer during the install.
-  Linux and macOS are supported; on Windows, use WSL. `superstables budget` refuses to run on
-  native Windows.
-- **The `superstables-payments` agent skill.** A skill that walks an agent through finding a
-  service, pricing it without paying, and paying it, with safety rules and per-rail references.
-  When the owner has not chosen how to pay, it asks once whether they want one purchase they
-  approve or a budget, and sets up a budget with approvals on this computer unless the owner
-  wants them on superstables.com. For every approval link, the agent sends the command's
-  `message_for_owner` (the link, the match code, the amount and network) as its reply and ends
-  its turn, then checks the outcome once the owner says they have approved. `npm run skill`
-  builds `superstables-payments-skill-<version>.zip`: the skill and the whole `superstables`
-  CLI, budget included, bundled into plain JavaScript that needs only Node 20 or newer
-  (`node <skill folder>/scripts/superstables.mjs`). `--version` names the build, and `THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
-- **Install from npm.** `npm install -g @superstables/client` installs the `superstables`
-  command, with `superstables budget` and the MCP server (`superstables mcp`); the package is
-  also the TypeScript SDK. Earlier releases were installed from a checkout of this repository
-  or from git (`npm install github:superstables/superstables-client#<commit>`); both still work.
-- **Help, `--json` and exit codes across the CLI.** Each command's `--help` says what it does,
-  whether it can move money, who runs it, an example, what it prints and its exit codes. `find`,
-  `quote`, `pay`, `status`, `receipts` and `attempts` take `--json` and print one JSON value on
-  stdout; an error under `--json` is `{"error", "exit_code"}`. The CLI and `superstables budget`
-  share one table of exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not
-  delivered, 5 unknown. `quote` lists each spend-policy rule it checked (`policy.checks` in
-  `--json`).
-- **`find` says how each listing could be paid.** The table shows each listing's chains, whether
-  `pay` can call it, which budget rail and chain could pay it, and whether the seller returns
-  simulated data (`yes`, `no` or `not said`). Under each listing it prints the commands to pay
-  it each way: `quote` then `pay`, and `preflight` then `buy` (or `buy` alone on `tempo` and
-  `solana`). `--budget` lists what a budget rail could pay. `SUPERSTABLES_INDEX_URL=off` turns
-  the public index off.
+  | Network | Local budget approvals | Hosted budget approvals |
+  | --- | --- | --- |
+  | Base Sepolia | Yes | Yes |
+  | Arc Testnet | Yes | Yes |
+  | Arbitrum Sepolia | Yes | Yes |
+  | Polygon Amoy | Yes | Yes |
+  | SKALE Base Sepolia | Yes | Yes |
+  | Ethereum Sepolia | Yes | No |
+  | Tempo Moderato | Yes | Yes |
+  | Solana devnet | Yes | Yes |
+
+  EVM and Solana enforce a total spending cap, with no on-chain expiry, seller restriction or per-payment maximum. A stolen agent key can spend what remains to any address. Tempo supports expiry and optional period and seller limits. `--max` and `--pay-to` are client checks. Revocation ends permission once confirmed; it does not reverse payments or return funds already transferred. An EVM purchase whose price was already pulled can still settle. On Arc Testnet, where USDC pays the network fees, `fund-agent` sends the agent native USDC as a plain transfer and checks the agent’s native balance.
+- **Hosted budget approvals: `setup --hosted`.** Add an agent to the owner’s account, then approve grants, revokes and gas transfers on superstables.com in the owner’s wallet. After picking the match code on the approval page, the owner uses **Sign with wallet** to sign an owner proof titled “Superstables: add an agent to my account”, naming the site, owner, agent, rail, chain, request ID and code. The client verifies this owner proof before recording an owner. Local approvals remain the default; EVM `recover` remains local.
+- **Budget discovery and purchase controls.** `find` filters services by rail or chain and reports whether listings are marked simulated. `preflight` reads payment terms without signing; `buy` checks the price and payment terms before signing. `status`, `doctor`, `reconcile` and EVM `recover` help inspect budgets and resolve unfinished purchases. `reconcile` checks an existing purchase without paying again.
+- **The `superstables-payments` agent skill.** The release zip bundles the CLI, including budgets, and needs Node 20 or newer. It guides agents through discovery, payment choice and owner approvals, including showing the approval link and match code before waiting. Git installs pinned to a full commit hash and checkout installs also include budgets. Budgets support Linux and macOS; Windows requires WSL.
+- **CLI help and structured output.** Command help includes examples, payment effects and exit codes. Core payment commands accept `--json`; budget commands provide a final `RESULT` object or JSON-only output. `find` shows payment routes and suggested commands, and `quote` reports the policy checks it performed.
 
 ### Changed
 
-- **A payment nobody decided ends `abandoned`.** When `pay --wait` runs out, the `pay` process
-  is stopped, or the approval page closes before the owner approves or rejects, the attempt ends
-  in the new final state `abandoned`, with `abandoned_by` (`stopped`, `wait` or `page_closed`).
-  It is not a rejection, and nothing was submitted. A signature that arrives afterwards is never
-  sent.
-- **The approval port.** When port 4412 is busy, usually because another payment is waiting for
-  its owner, `pay` and the MCP server serve the approval page on a free port and the link names
-  it. A port set with `SUPERSTABLES_APPROVE_PORT` is kept as set: when it is busy, the payment
-  is refused before the owner is asked, and the same quote can still be paid. The same holds
-  when the local wallet does not answer.
-- **`pay`'s approval page checks Host and Origin.** It answers only to `127.0.0.1:PORT` or
-  `localhost:PORT`, the address it is bound to, so a DNS name rebound to `127.0.0.1` cannot
-  reach it. Requests that change state are accepted only from the page's own origin, with a JSON
-  body.
-- **`pay` on a quote that already started a payment** names that attempt and its state, and how
-  to follow it, in the CLI and in the MCP server's `pay` tool.
+- Pending `pay` approvals that end without a decision now use `abandoned`, with a cause identifying a stopped process, expired wait or closed page. Late signatures are not submitted. A payment already being sent can instead end `uncertain`.
+- Local payment approvals use a free port when the default port, 4412, is busy. An explicitly configured busy port causes refusal before the owner is asked.
+- **Payment failure reports preserve uncertainty.** If a seller reports failure but names a payment transaction, `pay` checks it on chain and reports payment when verified, or `uncertain` otherwise. CLI and MCP output include the transaction to check instead of saying nothing was paid. No payment result says nothing was paid while it names a transaction.
+- Paying a quote that already has an attempt returns that attempt’s state and instructions for following it, in both the CLI and MCP.
 
 ### Removed
 
-- **The Claude Desktop `.mcpb` bundle**, and `npm run bundle`. It is no longer built or attached
-  to releases. The MCP server still runs with `superstables mcp`, from Claude Code or another MCP
-  client; `docs/install.md` has example configurations.
+- The Claude Desktop `.mcpb` bundle and `npm run bundle`. Configure your MCP client to run `superstables mcp`; existing bundles receive no update.
 
 ### Security
 
-- **Requests to the site are bound to it.** Each request the agent key signs for a hosted
-  approval names the site's origin and a nonce, and the site accepts each nonce once, so a
-  request cannot be replayed to another site or sent twice.
-- **The owner's link is verified.** After picking the match code, the owner signs the link in
-  their wallet. Before `setup --hosted` records an owner, it rebuilds that message and verifies
-  the signature, and records nothing if it does not verify. When the site says the agent is
-  already linked, `setup` accepts that only for the owner already recorded, with that owner's
-  signature over the stored link, and never with `--new-owner`.
-- **`--site` is limited.** `--site`, `SUPERSTABLES_SITE` and a recorded site accept
-  superstables.com, its subdomains and loopback addresses. Another origin is accepted only when
-  the owner sets `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own environment.
-- **Buy once checks the chain.** `buy-once` reports a purchase as paid only after it has read,
-  on chain, a transfer of exactly the purchase's amount to the listed recipient. Otherwise the
-  result is `unknown` (exit 5).
-- **Hosted Solana transactions are checked instruction by instruction.** A transaction the site
-  built must be exactly the planned instruction, plus at most a bounded network-fee addition;
-  anything else is reported as a mismatch.
-- **RPC overrides must use `https`, or `http` on this computer.** This applies to `B4_RPC`,
-  `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC`; an override in use is named in the
-  `RESULT` as `rpc`.
+- **Hosted request checks.** Agent signatures include the site origin and a nonce; compatible sites must enforce origin matching and nonce reuse checks. `--site`, `SUPERSTABLES_SITE` and recorded sites are limited to superstables.com, its subdomains and loopback unless the owner explicitly allows another origin through `SUPERSTABLES_ALLOW_SITE`.
+- **Buy-once amount and outcome checks.** The integer amount to be signed must match the displayed decimal amount, use six decimals and stay within `--max`. Only one purchase may remain open at a time across processes sharing the same state. An unconfirmed cancellation remains `unknown`. A purchase is reported paid only after the configured RPC shows the expected token transfer, amount and recipient.
+- **Hosted approvals preserve uncertainty.** Incomplete or mismatched site responses are refused. Once the site reports that the wallet was asked, an unfinished outcome is `unknown`. Hosted Solana transactions are checked against the planned instructions after submission; this detects differences but cannot undo them.
+- **Sponsored owner transactions.** On EVM, an owner step sent through a wallet that pays the fee for the owner (MetaMask’s sponsored transactions, relayed through MetaMask’s DelegationManager) counts only on chains where the client pins that contract’s code: Base Sepolia, Arc Testnet, Arbitrum Sepolia and Polygon Amoy. The receipt must carry exactly one `RedeemedDelegation` event from the manager, naming the owner and the transaction’s sender, and the chain must show the step’s effect. On SKALE Base Sepolia and Ethereum Sepolia, only transactions the owner sends itself count. A step the site reports as failed, or a reverted owner transaction, is never reported as settled; missing evidence is `unknown`.
+- **Untrusted output.** Seller and listing text is labelled as data in MCP and CLI output. Buy-once results do not repeat arbitrary site text, and hosted access tokens are kept out of output.
+- **Payment settlement and spending caps.** Requests carrying payment credentials refuse redirects. `pay` checks Base Sepolia settlement and reports `chain` as `verified`, `unchecked` or `mismatch`; a mismatch makes the attempt `uncertain`. These checks trust the configured RPC. The daily cap now counts pending, in-flight and uncertain payments under a cross-process lock.
+- **Key and approval-page handling.** Key loaders refuse files accessible to other users or files that are not regular files. Key writes use private temporary files and atomic replacement. The local wallet keeps the owner secret out of printed output and browser command-line arguments. Local payment approval pages check Host and Origin.
+- **Release and package checks.** The skill is built from the exact release export. `prepack` rebuilds from an empty output directory; `prepublishOnly` checks for a clean checkout, release notes, a successful build and current CLI references. These checks do not imply publication to npm.
 
 ### Breaking changes
 
-- **Exit codes.** Usage errors, such as an unknown command or option, exit 2 instead of 1, and
-  so does `superstables` with no command. `pay` exits with its outcome: 3 when the owner rejects
-  it or a spend policy refuses it, 4 when it was paid but the service failed, 5 when the outcome
-  is uncertain, and 1 when it failed, expired or was abandoned. It used to exit 1 for anything
-  but `settled`. `quote` exits 3 when the spend policy refuses the payment (it exited 0).
-  `status <attempt-id>` exits with the attempt's code, and 0 while it is not final (it exited 0
-  for any attempt it found).
-- **`status --json`** prints the same object as `pay --json` (`attempt_id`, `quote_id`,
-  `state`, `final`, `message`, `next`, `exit_code` and the rest) instead of the stored attempt
-  record. `attempts --json` still prints the records as stored.
-- **`find --json`.** Every service now carries `mock` (`true`, `false`, or `null` when the
-  listing does not say; it used to be absent unless set), `rails`, `chains`, `routes`,
-  `commands` and `next` (the first command to run, or `null` when this client cannot pay the
-  listing). The text table's columns changed to `chains`, `pay`, `budget`, `live` and
-  `simulated`.
-- **`abandoned` instead of `denied`.** An approval page that closes before anyone decides used
-  to record the attempt as `denied`. It now records `abandoned`, in the CLI, the MCP server and
-  the SDK. Code that reads `denied` as "not approved" needs to handle `abandoned` too.
-- **The approval link.** It may name a port other than 4412, and the page answers only on the
-  port in the link, on `127.0.0.1` or `localhost`. Over SSH, forward the same port number:
-  `ssh -L PORT:127.0.0.1:PORT`.
-- **No Claude Desktop bundle.** An installed `.mcpb` gets no update. Point the MCP client's
-  configuration at `superstables mcp` instead; `docs/install.md` has examples.
+- **Exit codes:** 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 5 unknown. Usage errors now exit 2. `quote` exits 3 for a policy refusal. `pay` and final `status` results use the outcome’s code; non-final `status` results exit 0.
+- **`status --json`** now returns the same outcome object as `pay --json`, rather than the stored attempt record. Use `attempts --json` for stored records.
+- **`find --json`** adds payment routes, commands and next steps. `mock` is always present as `true`, `false` or `null`. Text table columns have changed.
+- **CLI, MCP and TypeScript SDK consumers** must handle `abandoned` separately from `denied`.
+- **Approval links may use a different port.** Over SSH, forward the port shown in the link using the same local and remote port number.
+- **`wallet init --import-key` is removed.** Use `--import-key-file` with a private, regular file instead.
 
 ## [0.2.0] - 2026-09-22
 
