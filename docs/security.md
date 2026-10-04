@@ -321,10 +321,10 @@ undo an owner signature or a transaction already sent through hosted setup. `doc
   the request plus the requested amount. A wallet that pays the
   fee for the owner (MetaMask's sponsored transactions, sent by a relayer through MetaMask's
   DelegationManager) is accepted only on a chain where that contract's code is pinned in the client
-  (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy), with the manager's own
+  (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, Ethereum Sepolia), with the manager's own
   `RedeemedDelegation` event for this owner and sender in the receipt. A sponsored gas top-up leaves
   no log, so the owner's address must have run MetaMask's pinned smart-account code in that
-  transaction. On SKALE Base Sepolia and Ethereum Sepolia only the owner's own transactions count.
+  transaction. On SKALE Base Sepolia only the owner's own transactions count.
   When the chain does not answer a read this needs, the result is unknown (exit 5), never done.
   On `solana` with local approvals, the
   wallet only signs, and the client checks the signed bytes are the transaction it built before it

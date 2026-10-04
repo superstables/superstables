@@ -26,15 +26,17 @@ export const DELEGATOR_IMPLEMENTATION: Address = "0x63c0c19a282a1B52b07dD5a65b58
 
 /**
  * Where a delegated call is accepted: the keccak256 of the manager's and the implementation's runtime code on each chain,
- * read on 3 October 2026. The code embeds the chain id and its EIP-712 domain, so each chain has its own hashes. A chain
- * not listed takes the owner's own transactions only: SKALE Base Sepolia has neither contract, and Ethereum Sepolia was
- * not checked. Tempo Moderato is listed for completeness: its owner steps are plain transactions (../tempo/owner.ts).
+ * read on 3 October 2026 (Ethereum Sepolia on 4 October). The code embeds the chain id and its EIP-712 domain, so each
+ * chain has its own hashes. A chain not listed takes the owner's own transactions only: SKALE Base Sepolia has neither
+ * contract. Tempo Moderato is listed for completeness: its owner steps are plain transactions (../tempo/owner.ts).
  */
 export const DELEGATION_DEPLOYMENTS: Record<string, { manager: Hex; implementation: Hex }> = {
   "base-sepolia": { manager: "0xa6f025f7bb23ddc0e2546eec56400672c3dfac88c12963bfeb2b5e1121aeee4a", implementation: "0x83805f9ac7395294043b10c3b7c1839b7e4582a3e693028c36df84978b09d4e2" },
   "arc-testnet": { manager: "0x0384a5a10a4881213244c145d97f7fc4d4ffadcbe070ad5e5f53122f4df119ff", implementation: "0x8a03858f617a287f81741014e6d9244225a57b522bc12a3f2007a865c6baf794" },
   "arbitrum-sepolia": { manager: "0x890f38b0b962c5c171a0bebe053b14e641633b3cecb899f50ad1aec340c12204", implementation: "0x7f8a570cc9ebfd8d4dd86c7cc482bb30e9c669cc281352b131c94291747a58c8" },
   "polygon-amoy": { manager: "0x7f2a1a757879e5030b657f8d05823b96c75dfeb46633101e4d827ec2d346620c", implementation: "0xddc1c1b0583d57f3937d04c7bdacfaecb699d8aa27ee00040ab2c7b656ed239b" },
+  // Base Sepolia's code byte for byte, but for the chain id and the EIP-712 domain separator.
+  "ethereum-sepolia": { manager: "0x49c7f94924ffb53300b7e8ee613814d5ba587fd886177f1e72b3203bf17da673", implementation: "0x9270f73d98e7ed6978677bf0550038289efd510e67e700d024502d62510fc1e4" },
   moderato: { manager: "0x02e62098c4ad8843a4e80427a6f3fb586673e25245b8214547b3fd5dca6bc981", implementation: "0x18ca952e6ac1c28e535ab18e8403c9e3fcb4e7ecf7eaf4f3bf451c18f51af7d4" },
 };
 
