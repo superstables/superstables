@@ -2,8 +2,8 @@
 
 The Superstables client is a command, `superstables`, with an MCP server (`superstables mcp`) and a
 TypeScript SDK built from the same code. Start with a [budget](budget.md), where the owner
-grants an on-chain budget once, or [single purchase](buy-once.md), where the owner approves
-each purchase (hosted single purchase on superstables.com, or `pay` on a page on this computer). Testnet only: test USDC, or pathUSD on Tempo Moderato. No real money.
+grants an on-chain budget once, or [Single purchase](buy-once.md), where the owner approves
+each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet only: test USDC, or pathUSD on Tempo Moderato. No real money.
 
 ## What you need
 
@@ -18,7 +18,7 @@ each purchase (hosted single purchase on superstables.com, or `pay` on a page on
   superstables.com account, created by signing in with an Ethereum wallet; Solana also needs a
   Solana wallet for the budget or payment. An ordinary remote browser without a compatible
   wallet cannot sign. Choose [hosted budget approvals](budget.md#approve-on-superstablescom-instead)
-  or [hosted single purchase](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
+  or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 
 These instructions describe **client 0.3.0** and require that release build. Use the released
 commit and skill from [GitHub Releases](https://github.com/superstables/superstables-client/releases)
@@ -103,7 +103,7 @@ the bundled packages and their licences.
 
 ## Set up
 
-For `pay`, the owner runs `setup` once; hosted single purchase and budgets don't need it. It creates `~/.superstables`, writes a starting spend
+For `pay`, the owner runs `setup` once; Single purchase on superstables.com and budgets don't need it. It creates `~/.superstables`, writes a starting spend
 policy (`policy.yaml`, at most 0.05 USDC per payment and 1 USDC per day) and prints the command
 that sets up your agent app. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
 again keeps the existing policy.
@@ -149,7 +149,7 @@ An agent can use the client in two ways: through the skill and a shell, or throu
 **The skill.** `superstables-payments` guides an agent through finding a service, pricing it and
 both ways to pay, with their safety rules. Use the skill zip installed above, or link the
 `skills/superstables-payments/` folder from a checkout into your agent's skills folder. Keep
-`SKILL.md`, `references/` and `agents/openai.yaml` together. The agent needs a shell. Budgets and hosted single purchase need
+`SKILL.md`, `references/` and `agents/openai.yaml` together. The agent needs a shell. Budgets and Single purchase on superstables.com need
 the CLI: the MCP server has tools for local Base Sepolia payments only.
 
 **MCP.** The server has six tools for approving each payment (`pay`): `find_services`, `quote`, `pay`,

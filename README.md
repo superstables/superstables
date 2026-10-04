@@ -47,17 +47,19 @@ for each payment. The client sends the payment request directly to the seller, w
 Superstables or a third party. Budgets run on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon
 Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
 
-**Single purchase.** `superstables budget buy-once` buys one service from the Superstables service
+**Single purchase:** approve one purchase in your wallet, on your machine or on superstables.com.
+
+**Single purchase on superstables.com.** `superstables budget buy-once` buys one service from the Superstables service
 catalogue. You approve that one purchase on superstables.com, in your own wallet, after picking
-the match code the agent shows you. Hosted single purchase works on four networks: Base Sepolia (test
+the match code the agent shows you. Single purchase on superstables.com works on four chains: Base Sepolia (test
 USDC), Arc Testnet (test USDC), Tempo Moderato (test pathUSD) and Solana devnet (test USDC). It
 needs no `setup` command, budget or agent key. It requires a superstables.com account, which you
 create by signing in with an Ethereum wallet. Solana purchases also need a Solana wallet to sign
 the payment transaction. Solana sign-in is not supported in 0.3.0. `superstables budget find --once` lists the services.
 
-**Single purchase on this computer.** Local `quote`/`pay`, the payment MCP server and the SDK
+**Single purchase on your machine.** Local `quote`/`pay`, the payment MCP server and the SDK
 payment core use Base Sepolia and a local approval page. Run `setup` for that flow. See
-[Single purchase on this computer](#approve-each-payment-on-this-computer).
+[Single purchase on your machine](#approve-each-payment-on-this-computer).
 
 The tested services use x402 on EVM and Solana, and MPP on Tempo.
 
@@ -65,11 +67,11 @@ The tested services use x402 on EVM and Solana, and MPP on Tempo.
 
 Owner actions happen in your own wallet, on one of two kinds of page:
 
-- **On this computer.** `pay` and the budget owner commands open a page on `127.0.0.1`. You
-  approve there with a browser extension wallet on the same computer, with no account. Every
+- **On your machine.** `pay` and the budget owner commands open a page on `127.0.0.1`. You
+  approve there with a browser extension wallet on the same machine, with no account. Every
   budget network uses these local approvals by default, and `recover` is always local and EVM
   only.
-- **On superstables.com.** Hosted single purchase always uses the site. For a budget, `superstables budget
+- **On superstables.com.** Single purchase on superstables.com always uses the site. For a budget, `superstables budget
   setup --hosted` moves the owner approvals for that chain to the site, where you approve from a
   device where you are signed in and have a compatible wallet. Hosted budget approvals support Base Sepolia, Arc Testnet, Arbitrum
   Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
@@ -148,7 +150,7 @@ EVM funds held by an agent key have a separate [recovery step](docs/budget.md#re
 
 <a id="approve-each-payment-on-this-computer"></a>
 
-## Single purchase on this computer
+## Single purchase on your machine
 
 `pay` uses [x402](https://x402.org) with the `exact` scheme and test USDC on Base Sepolia
 (`eip155:84532`, USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`). Unsupported payment
@@ -212,8 +214,8 @@ than `~/.superstables`, and `--wallet browser|local` chooses who signs (browser 
 | Task | Approval and runtime | Networks | Start with |
 | --- | --- | --- | --- |
 | [Use a budget](docs/budget.md) | Owner grants once; client and agent key buy directly from sellers. Local approval by default; hosted approval optional | EVM/x402: Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia. Tempo/MPP: Tempo Moderato. Solana/x402: Solana devnet | `superstables budget setup --rail evm` |
-| [Single purchase on the site](docs/buy-once.md#hosted-buy-once-superstables-budget-buy-once) | Owner approves each purchase on superstables.com; the site coordinates that purchase. No budget setup or agent key | Base Sepolia, Arc Testnet, Tempo Moderato, Solana devnet | `superstables budget find --once` |
-| [Single purchase locally](docs/buy-once.md#approve-each-payment-on-this-computer-pay) | Owner approves each payment on a local page; CLI, payment MCP or SDK submits it | Base Sepolia only, test USDC, x402 `exact` | `superstables setup` |
+| [Single purchase on superstables.com](docs/buy-once.md#hosted-buy-once-superstables-budget-buy-once) | Owner approves each purchase on superstables.com; the site coordinates that purchase. No budget setup or agent key | Base Sepolia, Arc Testnet, Tempo Moderato, Solana devnet | `superstables budget find --once` |
+| [Single purchase on your machine](docs/buy-once.md#approve-each-payment-on-this-computer-pay) | Owner approves each payment on a local page; CLI, payment MCP or SDK submits it | Base Sepolia only, test USDC, x402 `exact` | `superstables setup` |
 
 All networks are testnets. Hosted budget approvals support all the budget networks above. EVM and Solana budgets use test USDC (bridged USDC on SKALE); Tempo uses test
 pathUSD. A seller must accept the selected network and protocol. See [rails, gas and faucets](budget/README.md#the-rails).
@@ -305,7 +307,7 @@ The exit codes are the same numbers `superstables budget` uses:
 | `wallet_status` | Which signer is in use; address, network, balance, policy |
 | `list_receipts` | Payments made from this machine, each with `chain`: verified, unchecked or mismatch after a later check |
 
-These six tools cover local Base Sepolia payments. Budgets and hosted single purchase use the
+These six tools cover local Base Sepolia payments. Budgets and Single purchase on superstables.com use the
 command-capable skill or CLI; they have no payment MCP tools.
 
 Of these tools, only `pay` can initiate a payment. It returns an `approval_url` and waits in
@@ -325,8 +327,8 @@ can open the correct payment request.
 ```
 
 `SUPERSTABLES_HOME` changes the base directory for this state. Hosted approvals also keep the
-budget key and purchase journals here; the site account shows linked agents and hosted one-off
-requests, not a complete ledger of budget purchases. Pending hosted request records can contain
+budget key and purchase journals here; the site account shows linked agents and Single purchase
+requests made on superstables.com, not a complete ledger of budget purchases. Pending hosted request records can contain
 access tokens; [Records](docs/records.md#budget-records) gives the full file inventory and recovery commands.
 
 ## What is enforced, and by what

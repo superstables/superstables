@@ -241,7 +241,7 @@ the site's page; that address is the owner on record, and it signs each transact
 Solana sign-in is not supported in 0.3.0.
 
 The [site account](https://www.superstables.com/account) lets the owner inspect linked agents and
-revoke budgets. It shows hosted one-off requests, not a complete history of budget purchases;
+revoke budgets. It shows Single purchase requests made on superstables.com, not a complete history of budget purchases;
 read [local budget records](records.md#budget-records) for those. After requesting a revoke, check
 `budget status` and wallet activity: the permission ends only when the transaction confirms.
 
