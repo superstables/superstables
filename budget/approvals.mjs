@@ -284,7 +284,8 @@ export function seenGrows(prev, next) {
   const addr = (a) => (typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a) ? a.toLowerCase() : a);
   const hashes = new Set((next.hashes ?? []).map(tx));
   if (!(prev.hashes ?? []).every((h) => hashes.has(tx(h)))) return false;
-  for (const flag of ["named", "paid", "moved"]) if (prev[flag] && !next[flag]) return false;
+  // every flag that was set stays set (named, paid, moved, stepOver, and any added later)
+  for (const [flag, v] of Object.entries(prev)) if (v === true && next[flag] !== true) return false;
   // payers by canonical key; two spellings of one transaction with two payers are a conflict (null), as in once.mjs
   const merged = (payers) => {
     const out = {};

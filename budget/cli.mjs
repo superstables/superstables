@@ -1438,7 +1438,7 @@ const waitNext = (id, r = {}) => {
   return `${showFirst(id, false)} Only the owner uses the page, in the browser with their wallet. It is on this computer only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. waiting_owner does not mean approved. If the approval link expires first, the command ends refused and nothing is sent: run it again for a new one. Do not start another owner command`;
 };
 /** The next step of a wait that is still waiting: poll again. A new link (recover can ask twice) is written first. */
-const stillWaiting = (id) => `the owner has not finished. Say so in one line and end your turn; run superstables budget wait --id ${id} --shown again when they say they've approved. If the url is not the one you showed, write the new approval link and code first. Not approved or paid yet; do not approve for the owner.`;
+const stillWaiting = (id) => `the owner has not finished. Say so in one line and end your turn; run superstables budget wait --id ${id} --shown again when they say they've approved. If the url is not the one you showed, write the new approval link and code first. The owner has not finished approving; do not approve for the owner.`;
 const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCode: r.matchCode, expires: r.expires, terms: r.terms, message_for_owner: messageForOwner(r) });
 
 function refusePending(ctx, pending) {
@@ -1582,7 +1582,7 @@ async function buyOnce({ f, ctx }) {
     // under pending; nothing here says whether it was paid
     if (r.pending) {
       const p = r.pending;
-      return emit(3, { ...ctx, service: f.service, state: "refused_pending", paid: null, delivered: null, amount: null, tx: {}, pending: { id: p.id, purchase: p.hosted?.requestId, service: p.service?.id, state: r.pendingState ?? (p.cancelUnconfirmed ? "unknown" : "waiting_owner"), ...(p.url ? { url: p.url, matchCode: p.matchCode, expires: p.expires, terms: p.terms, message_for_owner: messageForOwner(p) } : {}) }, next: r.next, reason: `no new purchase was started: ${r.reason}` });
+      return emit(3, { ...ctx, service: f.service, state: "refused_pending", paid: null, delivered: null, amount: null, tx: {}, pending: { id: p.id, purchase: p.hosted?.requestId, service: p.service?.id, state: r.pendingState ?? (p.cancelUnconfirmed ? "unknown" : "waiting_owner"), ...(p.url && r.pendingState !== "unknown" ? { url: p.url, matchCode: p.matchCode, expires: p.expires, terms: p.terms, message_for_owner: messageForOwner(p) } : {}) }, next: r.next, reason: `no new purchase was started: ${r.reason}` });
     }
     return emit(r.code, { ...ctx, service: f.service, state: r.state, paid: false, delivered: false, amount: "0", tx: {}, next: r.next, reason: r.reason });
   }
@@ -1594,13 +1594,15 @@ async function buyOnce({ f, ctx }) {
   if (detach) return emit(0, { ...ctx, service: f.service, state: "waiting_owner", purchase: rec.hosted.requestId, ...approvalFields(rec), next: showFirst(rec.id) });
   // blocking: read the purchase until it ends
   const s = await waitOnce(rec, Math.max(60_000, Date.parse(rec.expires) + 25 * 60_000 - Date.now()));
-  if (s.final) return emit(s.code, s.result);
+  // final, or an outcome that is not established yet (unknown): the answer as it is
+  if (s.final || s.result) return emit(s.code, s.result);
   emit(0, { ...ctx, service: f.service, state: "waiting_owner", purchase: rec.hosted.requestId, ...approvalFields(rec), next: stillWaiting(rec.id), reason: s.words ?? s.unreachable });
 }
 
 async function waitBuyOnce(rec, f) {
   const s = await waitOnce(rec, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);
-  if (s.final) return emit(s.code, s.result);
+  // final, or an outcome that is not established yet (unknown): the answer as it is, never "waiting for the owner"
+  if (s.final || s.result) return emit(s.code, s.result);
   if (rec.cancelUnconfirmed) {
     // not cancelled, not ended: still unknown, never "waiting for the owner" (they were never shown its link)
     const words = s.unreachable ? `${rec.hosted?.site} could not be read just now (${s.unreachable})` : s.words;

@@ -57,6 +57,9 @@ const EVIDENCE: [Ev, boolean][] = [
   [{ payment: { money_moved: "unknown" } }, true],
   [{ error: { code: "internal_error", message: "x", money_moved: true } }, true],
   [{ receipt: { transaction: HASH, payer: PAYER } }, true],
+  // the site saying the outcome is not known: an uncertain state, or a payment status of unknown
+  [{ state: "uncertain", reason_code: "wallet_may_have_sent" }, true],
+  [{ payment: { status: "unknown" } }, true],
 ];
 
 type Answer = { status: number; body: unknown };
@@ -97,8 +100,9 @@ const fromStart = (r: any): Outcome =>
   : r.pending ? { paid: undefined, code: r.code, text: "", about: "none" }
   // the dispatcher prints any other refusal of a purchase this command made as paid: false
   : { paid: false, code: r.code, text: `${r.reason} ${r.next}`, about: "ours" };
+// a final answer, or an open one whose outcome is not established (unknown, not final): both are about this purchase
 const fromSettle = (s: any): Outcome =>
-  s.final ? { paid: s.result.paid, code: s.code, text: `${s.result.reason ?? ""} ${s.result.next ?? ""}`, about: "ours" } : { paid: undefined, code: 0, text: "", about: "none" };
+  s.final || s.result ? { paid: s.result.paid, code: s.code, text: `${s.result.reason ?? ""} ${s.result.next ?? ""}`, about: "ours" } : { paid: undefined, code: 0, text: "", about: "none" };
 
 const ARGS = { site: "", service: "demo-market-data", params: { asset: "BTC" }, max: "0.01" };
 
@@ -202,10 +206,15 @@ async function play(seed: number): Promise<string | null> {
   }
 
   // 3. the site's final answer: not paid, with no evidence of its own
-  const end = pick(["expired", "failed", "denied"]);
+  const end = pick(["expired", "failed", "denied", "failedUnknown"]);
   log.push(`final ${end}`);
   const id = record.hosted.requestId;
-  queue.read.push(async () => ({ status: 200, body: { id, state: end, final: true, reason_code: end === "denied" ? "owner_rejected" : end === "expired" ? "approval_expired" : "not_settled", payment: { status: "not_paid" }, delivery: { status: "not_called" } } }));
+  if (end === "failedUnknown") {
+    // the site concluded with the payment unknown (no transfer found as of its last check; one could still arrive)
+    queue.read.push(async () => ({ status: 200, body: withEv({ id, state: "failed", final: true, reason_code: "not_settled", delivery: { status: "not_called" }, next_action: { type: "report_unknown" } }, { payment: { status: "unknown" } }, true) }));
+  } else {
+    queue.read.push(async () => ({ status: 200, body: { id, state: end, final: true, reason_code: end === "denied" ? "owner_rejected" : end === "expired" ? "approval_expired" : "not_settled", payment: { status: "not_paid" }, delivery: { status: "not_called" } } }));
+  }
   const fin = await once.settleOnce(record, { waitS: 0, fetchImpl });
   const o = fromSettle(fin);
   const b = check("final", o);

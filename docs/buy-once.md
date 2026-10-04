@@ -47,7 +47,9 @@ superstables budget wait --id <id> --shown
 ```
 
 `--shown` says you wrote the approval link in a reply; without it, `wait` refuses. While the owner has not
-decided, it answers `waiting_owner` again. The final `RESULT` reports `paid` and `delivered`, the transaction when there is one, and
+decided, it answers `waiting_owner` again. Once the owner's step is over but the payment outcome is not established yet (a
+transfer was prepared for the wallet, or a payment is not yet confirmed on chain), it answers `unknown` (exit 5), with `final: false` while a later read can still establish the outcome:
+do not buy again, and run `wait` again later. The final `RESULT` reports `paid` and `delivered`, the transaction when there is one, and
 `responseFile` when the seller's answer was saved. Read `reason` and `next` before anything else, and
 do not pay again if it was paid or its outcome is unknown. The site's side of this purchase
 is the HTTP purchase API; the endpoints the client calls, and what it checks in each answer, are in

@@ -54,6 +54,8 @@ const networkOfChain = (chain) => Object.values(ONCE_NETWORKS).find((n) => n.cha
 export const TESTNET_LINE = "Testnet only: test USDC, no real money.";
 const SERVICES_API = "/api/v1/purchase/services";
 const PURCHASES_API = "/api/v1/purchases";
+/** How long a wait reads on once a purchase's outcome is unknown (the owner's step is over) before it answers unknown. */
+const UNKNOWN_GRACE_MS = 60_000;
 /** The owner has 10 minutes. After the link expires the site still reconciles a signed payment; give it this long. */
 const AFTER_EXPIRY_MS = 20 * 60_000;
 
@@ -97,6 +99,7 @@ const WORDS = {
     "agent_cancelled", "approval_expired", "authorization_cancelled", "match_code_mismatch", "not_landed", "not_requested", "not_settled",
     "owner_policy", "owner_rejected", "seller_no_receipt", "seller_refused_payment", "seller_unreachable", "service_no_answer",
     "settlement_failed", "settlement_not_on_chain", "settlement_pending", "stale_tx", "submission_interrupted", "terms_changed", "transaction_mismatch",
+    "wallet_may_have_sent", "settlement_contradicted", "service_failed",
   ]),
   error: new Set([
     "anonymous_purchases_disabled", "bad_request", "chain_unavailable", "forbidden", "idempotency_key_expired", "idempotency_key_reused",
@@ -163,7 +166,12 @@ function evidenceOf(view, net) {
     payers,
     named: pairs.length > 0,
     paid: v.state === "settled" || v.state === "paid_service_failed" || p.status === "paid",
-    moved: moneyMovedOf(v, p, v.error) === "maybe",
+    // the owner's step is over (they signed, a transfer was handed to their wallet, or a payment is in flight): once seen,
+    // an unreadable or regressed answer never brings back "waiting for the owner", and it never ends as "nothing was paid"
+    stepOver: ["submitting", "uncertain", "settled", "paid_service_failed"].includes(v.state) || (v.state === "failed" && v.final !== true),
+    // money may have moved: money_moved other than false, or the site saying the outcome is not known (state uncertain,
+    // payment status unknown)
+    moved: moneyMovedOf(v, p, v.error) === "maybe" || v.state === "uncertain" || p.status === "unknown",
   };
 }
 
@@ -188,12 +196,16 @@ function unionSeen(seen, ev) {
     payers,
     named: Boolean(s.named || ev.named),
     paid: Boolean(s.paid || ev.paid),
+    stepOver: Boolean(s.stepOver || ev.stepOver),
     moved: Boolean(s.moved || ev.moved),
   };
 }
 /** The transaction a record has seen, for a result that is not final: never dropped, even when the site cannot be read. */
 const seenTx = (rec) => (rec?.seen?.hashes?.[0] ? { settle: rec.seen.hashes[0] } : {});
-const anyEvidence = (s) => Boolean(s && (s.hashes?.length || s.named || s.paid || s.moved));
+const anyEvidence = (s) => Boolean(s && (s.hashes?.length || s.named || s.paid || s.moved || s.stepOver));
+/** What an earlier answer showed, in words, for an answer that is not final. */
+const evidenceWords = (s) =>
+  s?.hashes?.length || s?.named ? "named a transaction" : s?.paid ? "said it was paid" : s?.moved ? "said money may have moved" : "showed that the purchase was no longer awaiting approval";
 
 /**
  * The one decision that a purchase may be "not paid" (paid: false, "nothing was paid"): only when its evidence -- every
@@ -358,10 +370,10 @@ async function createPurchase({ site, key, body, net, fetchImpl }) {
 }
 
 /** GET /api/v1/purchases/{id}?wait=N: { ok: true, view } or { ok: false, status, reason }. status 0: the site did not answer. */
-export async function readPurchase({ site, id, token, wait = 0, fetchImpl }) {
+export async function readPurchase({ site, id, token, wait = 0, timeoutMs, fetchImpl }) {
   if (!isPurchaseId(id) || !isPurchaseToken(token)) return { ok: false, status: 0, reason: "not a purchase id or token" };
   const w = Math.max(0, Math.min(20, Math.floor(wait)));
-  const r = await call(`${site}${PURCHASES_API}/${id}?wait=${w}`, { headers: { authorization: `Bearer ${token}`, accept: "application/json" } }, (w + 15) * 1000, fetchImpl);
+  const r = await call(`${site}${PURCHASES_API}/${id}?wait=${w}`, { headers: { authorization: `Bearer ${token}`, accept: "application/json" } }, timeoutMs ?? (w + 15) * 1000, fetchImpl);
   if (r.ok && r.body && typeof r.body === "object" && typeof r.body.state === "string") return { ok: true, view: r.body };
   return { ok: false, status: r.status, body: r.body, reason: r.ok ? `${siteName(site)}'s answer has no state` : siteFailure(r, site) };
 }
@@ -515,6 +527,8 @@ export async function findOpenOnce({ fetchImpl } = {}) {
     const s = await settleOnce(r, { waitS: 0, fetchImpl });
     // the record as it now is: with the payment evidence this read kept
     const rec = s.record ?? r;
+    // an outcome that is not established yet (unknown, not final): never "waiting for the owner", never replaced
+    if (!s.final && s.result) return { record: rec, unresolved: s.result.reason };
     if (!s.final) return { record: rec, unreadable: s.unreachable ?? null };
     // the site ended it, but the answer is not one to store yet (it says paid; the chain does not show it): still open
     if (s.result?.final === false) return { record: rec, unresolved: s.result.reason };
@@ -571,7 +585,7 @@ const REASONS = {
  * The purchase's final answer in the CLI's RESULT fields, and the exit code. `record: false` when the answer must not be
  * stored: the site says paid but the chain could not be read yet, so a later `wait` reads it again.
  */
-async function finalOf(record, view) {
+async function finalOf(record, view, { deadline } = {}) {
   const net = networkOfChain(record.chain) ?? ONCE_NETWORKS[`eip155:${BASE.chainId}`];
   const p = view.payment ?? {};
   const ended = ["denied", "expired"].includes(view.state);
@@ -599,7 +613,8 @@ async function finalOf(record, view) {
     let payerless = null;
     for (const h of candidates) {
       const who = seen.payers?.[h] ?? null;
-      const c = await chainCheck(record, net, h, who);
+      // the chain check fits in the command's deadline: one that runs out is unread, so the answer is unknown and not final
+      const c = await chainCheck(record, net, h, who, deadline);
       if (c.state === "settled" && who) { hash = h; payer = who; paid = true; break; }
       if (c.state === "settled") payerless ??= h;
       else if (c.state !== "mismatch") unresolved = true;
@@ -607,7 +622,7 @@ async function finalOf(record, view) {
     }
     if (!candidates.length) {
       // paid on the site's word, with no transaction to read: not final, a later wait reads it again
-      first = (await chainCheck(record, net, null, null)).reason;
+      first = (await chainCheck(record, net, null, null, deadline)).reason;
       unresolved = true;
     }
     if (paid !== true || !payer) {
@@ -647,27 +662,79 @@ async function finalOf(record, view) {
     // not stored (keep false): a later wait reads it again, so it is not final
     return { keep, code: 5, result: { ok: false, ...base, state: "unknown", ...(keep ? {} : { final: false }), next, reason: `${said}, but ${chainWords}` } };
   }
-  return { keep, code: 5, result: { ok: false, ...base, state: "unknown", next: `a payment may have left: never buy this again. Ask the owner to check their wallet activity and the receipts on their ${site} account`, reason: seen.named && !hash ? `${site} names a transaction this client cannot read as one on ${net.label}, so whether it was paid is unknown` : seen.paid ? `${site} said paid earlier and names no transaction to check, so whether it was paid is unknown` : seen.moved ? `${site} says money may have moved (money_moved), so whether it was paid is unknown` : reason ?? "the site cannot say whether the payment happened" } };
+  return { keep, code: 5, result: { ok: false, ...base, state: "unknown", next: `a payment may have left: never buy this again. Ask the owner to check their wallet activity and the receipts on their ${site} account`, reason: seen.named && !hash ? `${site} names a transaction this client cannot read as one on ${net.label}, so whether it was paid is unknown` : seen.paid ? `${site} said paid earlier and names no transaction to check, so whether it was paid is unknown` : view.state === "failed" && p.status === "unknown" ? `${site} found no transfer for it as of its last check, and one could still arrive, so whether it was paid is unknown` : seen.moved ? `${site} says money may have moved (money_moved, or an uncertain or unknown payment), so whether it was paid is unknown` : reason ?? "the site cannot say whether the payment happened" } };
 }
 
 /**
  * The payment on chain: the transaction the site names must move exactly the purchase's amount of the listed token to the
  * listed recipient (from the payer it names), after the purchase was created. { state: "settled" | "mismatch" | "unread", reason }.
  */
-async function chainCheck(record, net, hash, payer) {
+async function chainCheck(record, net, hash, payer, deadline) {
   const h = record.hosted ?? {};
   if (!hash) return { state: "unread", reason: "the site names no transaction for it" };
   if (!isDecimal(h.amount) || !isAddress(h.payTo, net)) return { state: "mismatch", reason: "this purchase's record has no amount or recipient to check the payment against" };
   const notBefore = Math.floor(Date.parse(record.createdAt) / 1000);
-  return readSettlement({ rail: net.rail, chain: net.chain, tx: hash, payer, payTo: h.payTo, asset: net.asset, amount: micro(h.amount), notBefore: Number.isFinite(notBefore) ? notBefore : 0 });
+  return readSettlement({ rail: net.rail, chain: net.chain, tx: hash, payer, payTo: h.payTo, asset: net.asset, amount: micro(h.amount), notBefore: Number.isFinite(notBefore) ? notBefore : 0, deadline });
 }
 
 /** What a caller waiting for the owner is told while the purchase is not final. */
 function wordsOf(view, site = "superstables.com") {
-  if (view.state === "submitting") return "the owner signed; the payment is going to the seller";
-  if (["uncertain", "failed", "settled", "paid_service_failed"].includes(view.state)) return "a signed payment was sent and the chain is still being read to confirm it; do not buy again";
   if (view.reason_code === "owner_policy") return `the owner tried to approve and their own limits on ${site} refused it; they can change the limits and approve before the approval link expires`;
   return `waiting for the owner to open the approval link on ${site}, signed in with their wallet, and pick the match code`;
+}
+
+/**
+ * Whether the owner's step is over for a purchase the site has not finished: anything but awaiting_approval (the owner
+ * signed, a transfer was prepared for their wallet, a credential was sent, or the seller reported a settlement the chain
+ * has not confirmed). Its outcome is then not established, so it is unknown until the site concludes, never "waiting for
+ * the owner".
+ */
+const ownerStepOver = (view) => view.state !== "awaiting_approval";
+
+/** What the site's open answer establishes, in this client's words: only the facts its documented state and codes give. */
+function openWords(view, site) {
+  const code = view.reason_code;
+  if (view.unreadable) return `${site} could not be read just now (${view.unreadable}), and an earlier answer for this purchase ${evidenceWords(view.seen)}`;
+  if (view.state === "awaiting_approval") return `${site} shows it open, but an earlier answer for this purchase ${evidenceWords(view.seen)}`;
+  if (view.state === "submitting") return "the owner signed and the payment is being submitted; payment is not yet confirmed";
+  if (view.state === "settled" || view.state === "paid_service_failed") return `the seller reports it paid; the chain has not confirmed the payment yet`;
+  if (view.state === "failed") {
+    // a failure the site has not concluded: what each documented reason establishes, then the generic case
+    if (code === "transaction_mismatch") return `the transaction the owner's wallet sent is not this payment${view.hash ? ` (transaction ${view.hash})` : ""}; ${site} has not concluded`;
+    if (code === "seller_refused_payment") return "the seller asked for payment again; the signed credential was sent and can still settle";
+    if (code === "settlement_failed") return "the seller's facilitator reported that the transfer did not settle; the signed credential was sent and can still settle";
+    if (code === "authorization_cancelled") return `the authorization was cancelled on chain; ${site} has not concluded`;
+    if (code === "terms_changed") return `the seller changed its terms; ${site} has not concluded`;
+    return "the seller reported no settlement, but a signed credential was sent and can still settle";
+  }
+  if (code === "wallet_may_have_sent") return "a transfer was prepared for the owner's wallet; the chain does not show it yet, and it could still arrive";
+  if (code === "submission_interrupted") return "the submission stopped before it finished; whether the payment reached the seller is not known";
+  if (code === "seller_unreachable") return "the signed credential was sent, but the seller could not be reached";
+  if (code === "seller_no_receipt") return "the seller answered without a payment receipt";
+  if (code === "settlement_pending") return "the payment was sent but is not yet confirmed on chain";
+  if (code === "settlement_not_on_chain") return "the seller named a transaction that does not show this payment";
+  if (code === "transaction_mismatch") return "the transaction the owner's wallet sent is not this payment";
+  return `${site} cannot say yet whether the payment happened`;
+}
+
+/** A reason that names the transaction once: where its words already name it, or at the end. */
+const reasonWithHash = (words, h) => (!h || words.includes(h) ? words : `${words} (transaction ${h})`);
+
+/**
+ * The answer for a purchase whose owner's step is over and whose outcome the site has not established: unknown, exit 5,
+ * paid null, with every transaction this purchase has named; final false, because a later read can still settle it.
+ * Not stored: the next read decides again.
+ */
+function openUnknown(record, view) {
+  const net = networkOfChain(record.chain);
+  const site = siteName(record.hosted?.site ?? "");
+  const h = (net ? evidenceOf(view, net).hashes[0] : undefined) ?? record.seen?.hashes?.[0];
+  return {
+    ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, purchase: record.hosted?.requestId, service: record.service?.id,
+    state: "unknown", final: false, paid: null, delivered: null, amount: null, tx: h ? { settle: h } : {}, ...(h && net ? { txUrl: net.tx(h) } : {}),
+    next: `do not buy again. Check again later with superstables budget wait --id ${record.id} --shown. Tell the owner the payment outcome is not known yet`,
+    reason: reasonWithHash(openWords({ ...view, seen: record.seen, hash: h }, site), h),
+  };
 }
 
 /**
@@ -675,23 +742,28 @@ function wordsOf(view, site = "superstables.com") {
  * the same answer, and the access token is gone), { final: false, record, view, words } while it goes on, or
  * { final: false, record, unreachable: reason } when the site did not answer.
  */
-export async function settleOnce(record, { waitS = 0, fetchImpl } = {}) {
+export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, fetchImpl } = {}) {
   // the record as stored now, with every answer's evidence so far: never an older copy
   record = accumulate(record, null);
   if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
   const h = record.hosted;
-  const r = await readPurchase({ site: h.site, id: h.requestId, token: h.token, wait: waitS, fetchImpl });
+  const r = await readPurchase({ site: h.site, id: h.requestId, token: h.token, wait: waitS, timeoutMs: readTimeoutMs, fetchImpl });
   // every answer's payment evidence is kept in the record, an error envelope's money_moved included
   if (!r.ok) {
     if (r.body && typeof r.body === "object") record = accumulate(record, r.body);
     // another command finished it meanwhile: its answer, checked against the evidence this read added
     if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
+    // not readable now, but an earlier answer carried payment evidence: unknown, never "waiting for the owner"
+    if (!mayBeUnpaid(record.seen)) return { final: false, code: 5, result: openUnknown(record, { unreadable: r.reason }), record, unreachable: r.reason };
     return { final: false, record, unreachable: r.reason };
   }
   record = accumulate(record, r.view);
   if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
+  // the owner's step is over, or an answer carried payment evidence, and the outcome is not established: unknown, not
+  // stored, never "waiting for the owner"
+  if (r.view.final !== true && (ownerStepOver(r.view) || !mayBeUnpaid(record.seen))) return { final: false, code: 5, result: openUnknown(record, r.view), record, view: r.view };
   if (r.view.final !== true) return { final: false, record, view: r.view, words: record.cancelUnconfirmed ? `the cancel was not confirmed and ${siteName(h.site)} still has the purchase open (${siteWord("state", r.view.state)}); its approval link was never shown` : wordsOf(r.view, siteName(h.site)) };
-  const { code, result, keep } = await finalOf(record, r.view);
+  const { code, result, keep } = await finalOf(record, r.view, { deadline });
   // second layer: nothing shaped like a token is printed or stored
   result.reason = scrub(result.reason);
   result.next = scrub(result.next);
@@ -715,19 +787,37 @@ export async function settleOnce(record, { waitS = 0, fetchImpl } = {}) {
  * passes. Never signs or sends anything. Past the link's expiry plus 20 minutes without an answer from the site: unknown
  * (exit 5), but nothing is recorded, so a later `wait` can still read it.
  */
-export async function waitOnce(record, timeoutMs, { fetchImpl } = {}) {
+export async function waitOnce(record, timeoutMs, { fetchImpl, unknownGraceMs = UNKNOWN_GRACE_MS } = {}) {
   const until = Date.now() + timeoutMs;
+  let unknownSince = null;
   for (;;) {
-    const left = Math.max(0, until - Date.now());
-    const s = await settleOnce(record, { waitS: Math.floor(Math.min(20_000, left) / 1000), fetchImpl });
+    // once the outcome is unknown, every read (its long-poll and its request timeout) fits in what is left of the grace
+    const grace = unknownSince === null ? Infinity : Math.max(0, unknownGraceMs - (Date.now() - unknownSince));
+    const left = Math.max(0, Math.min(until - Date.now(), grace));
+    const s = await settleOnce(record, {
+      waitS: Math.floor(Math.min(20_000, left) / 1000),
+      readTimeoutMs: grace === Infinity ? undefined : Math.max(1_000, grace),
+      // and the chain check of a final answer read then, too
+      deadline: unknownSince === null ? undefined : unknownSince + unknownGraceMs,
+      fetchImpl,
+    });
     // the next read starts from the record this one updated, with its evidence
     record = s.record ?? record;
     if (s.final) return s;
+    // an outcome that is not established (the owner's step is over): read on for a short while, since a submission
+    // usually settles in seconds, then answer unknown rather than wait for a chain the site may read for hours
+    if (s.result) {
+      unknownSince ??= Date.now();
+      if (Date.now() - unknownSince >= unknownGraceMs) return s;
+      const rest = Math.min(until, unknownSince + unknownGraceMs) - Date.now();
+      if (rest > 0) await sleep(Math.min(1000, rest)); // a site that answers at once must not spin
+    }
     if (s.unreachable && Date.now() > Date.parse(record.expires) + AFTER_EXPIRY_MS) {
       return { final: true, code: 5, record, result: { ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, purchase: record.hosted?.requestId, service: record.service?.id, state: "unknown", final: false, paid: null, delivered: null, amount: null, tx: seenTx(s.record ?? record), next: `superstables budget wait --id ${record.id} --shown again when ${record.hosted?.site} answers; never buy this again. Ask the owner to check their wallet activity and account page`, reason: `the purchase cannot be read: ${s.unreachable}` } };
     }
     if (Date.now() >= until) return s;
-    if (s.unreachable) await sleep(Math.min(3000, Math.max(0, until - Date.now()))); // a long poll that failed at once must not spin
+    // a long poll that failed at once must not spin (once unknown, the pause above already did that, within the grace)
+    if (s.unreachable && !s.result) await sleep(Math.min(3000, Math.max(0, until - Date.now())));
   }
 }
 
