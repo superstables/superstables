@@ -265,19 +265,28 @@ export function revokeTerms(owner: Address, agent: Address, allowance: bigint, h
   };
 }
 
+/**
+ * What a multi-step command (recover) completed before this owner step: `result` (its transactions) goes into every RESULT
+ * this step ends with, and `done` says it in words, so a later step that fails or expires never reads as "nothing was sent".
+ */
+export type Earlier = { result: Record<string, unknown>; done?: string; stepTx?: string };
+/** `stepTx`: the key this step's own transaction is also reported under (recover: ownerRevokeTx, gasTx), next to the earlier ones. */
+const withEarlier = (earlier: Earlier | undefined, o: Record<string, unknown>) =>
+  earlier ? { ...earlier.result, ...(earlier.stepTx && o.tx ? { [earlier.stepTx]: o.tx } : {}), ...o, ...(earlier.done ? { next: `${earlier.done}. ${o.next}` } : {}) } : o;
+
 /** Owner approve(agent, 0) through the wallet page. Returns the verified transaction hash, or exits with a RESULT. */
-export async function revokeInWallet(command: string, owner: Address, agent: Address, title?: string): Promise<Hex> {
+export async function revokeInWallet(command: string, owner: Address, agent: Address, title?: string, earlier?: Earlier): Promise<Hex> {
   const before = await allowanceOf(owner, agent);
   const held = await usdcBalance(agent);
   if (!GAS.isUsdc && (await nativeBalance(owner)) === 0n) {
     const reason = `the owner ${owner} has no ${GAS.symbol} to pay the fee for the revoke`;
     console.log(`REFUSED: ${reason}`);
-    process.exit(emit(command, 3, { state: "refused_precheck", reason, allowance: usdc(before), next: `fund the owner with ${CFG.label} ${GAS.symbol}, then revoke again` }));
+    process.exit(emit(command, 3, withEarlier(earlier, { state: "refused_precheck", reason, allowance: usdc(before), next: `fund the owner with ${CFG.label} ${GAS.symbol}, then revoke again` })));
   }
   const data = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [agent, 0n] });
   const startBlock = await publicClient.getBlockNumber();
   const { handle, outcome } = await askTransaction(command === "recover" ? "recover-revoke" : "revoke", owner, { to: USDC, data }, revokeTerms(owner, agent, before, held, title));
-  if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved(command, outcome, { allowance: usdc(before) });
+  if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved(command, outcome, { ...earlier?.result, allowance: usdc(before) }, undefined, earlier?.done);
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`);
   let sent = await readSent(outcome.hash as Hex, { from: owner, to: USDC, data, afterBlock: startBlock, siteFailed: outcome.siteFailed });
@@ -288,7 +297,7 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
   if (!sent) {
     handle.finish({ ok: false, message: "The transaction did not show up on chain. Check your wallet's activity.", hash: outcome.hash });
     await closeOwnerPage();
-    process.exit(emit(command, 5, { state: "unknown", tx: outcome.hash, reason: "the wallet reported a transaction the chain does not show (replaced, dropped or still pending)", next: `superstables budget status --rail evm${chainFlag}` }));
+    process.exit(emit(command, 5, withEarlier(earlier, { state: "unknown", tx: outcome.hash, reason: "the wallet reported a transaction the chain does not show (replaced, dropped or still pending)", next: `superstables budget status --rail evm${chainFlag}` })));
   }
   const events = approvalsIn(sent.logs, owner, agent);
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, Approval events: ${events.map((v) => usdc(v)).join(", ") || "none"} ${SYM}`);
@@ -298,7 +307,7 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     const now = await allowanceOf(owner, agent).catch(() => null);
     handle.finish({ ok: false, message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Check the allowance and revoke again: ${REVOKE_HINT}`, hash: sent.hash });
     await closeOwnerPage();
-    process.exit(emit(command, 3, { state: "mismatch", tx: sent.hash, allowance: now === null ? null : usdc(now), reason, next: `revoke again (superstables budget revoke --rail evm${chainFlag}) and check superstables budget status --rail evm${chainFlag}` }));
+    process.exit(emit(command, 3, withEarlier(earlier, { state: "mismatch", tx: sent.hash, allowance: now === null ? null : usdc(now), reason, next: `revoke again (superstables budget revoke --rail evm${chainFlag}) and check superstables budget status --rail evm${chainFlag}` })));
   }
   // Reverted: this transaction set nothing. The allowance may still read 0 (another transaction did it), but this one is
   // never reported as the revoke.
@@ -309,20 +318,20 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     console.log(`FAILED: ${reason}`);
     handle.finish({ ok: false, message: `The transaction reverted, so it revoked nothing. The allowance ${state}. ${now === 0n ? "Check that this is what you expect." : "Run the revoke again."}`, hash: sent.hash });
     await closeOwnerPage();
-    process.exit(emit(command, 1, { state: "failed", tx: sent.hash, allowance: now === null ? null : usdc(now), reason, next: now === 0n ? `superstables budget status --rail evm${chainFlag}: the allowance reads 0, set by another transaction` : "run revoke again" }));
+    process.exit(emit(command, 1, withEarlier(earlier, { state: "failed", tx: sent.hash, allowance: now === null ? null : usdc(now), reason, next: now === 0n ? `superstables budget status --rail evm${chainFlag}: the allowance reads 0, set by another transaction` : "run revoke again" })));
   }
   if (sent.status === "success" && sent.unresolved) {
     const reason = `the transaction is on chain, but whether it revoked the allowance is not known yet: ${sent.unresolved}`;
     console.log(`UNKNOWN: ${reason}`);
     handle.finish({ ok: false, message: "The transaction is on chain, but the command could not yet confirm what it did. Check the allowance before relying on it.", hash: sent.hash });
     await closeOwnerPage();
-    process.exit(emit(command, 5, { state: "unknown", tx: sent.hash, reason, next: `superstables budget status --rail evm${chainFlag}: read the allowance before running anything else` }));
+    process.exit(emit(command, 5, withEarlier(earlier, { state: "unknown", tx: sent.hash, reason, next: `superstables budget status --rail evm${chainFlag}: read the allowance before running anything else` })));
   }
   const after = await readUntil(() => allowanceOf(owner, agent), (v) => v === 0n);
   if (after !== 0n) {
     handle.finish({ ok: false, message: `The chain still shows an allowance of ${usdc(after)} ${SYM}. Run the revoke again.`, hash: sent.hash });
     await closeOwnerPage();
-    process.exit(emit(command, 1, { state: "not_revoked", tx: sent.hash, allowance: usdc(after), reason: "the allowance still reads above 0", next: "run revoke again" }));
+    process.exit(emit(command, 1, withEarlier(earlier, { state: "not_revoked", tx: sent.hash, allowance: usdc(after), reason: "the allowance still reads above 0", next: "run revoke again" })));
   }
   handle.finish({ ok: true, message: `Confirmed. This allowance is 0. Funds already withdrawn remain under the agent key. You can close this page.`, hash: sent.hash });
   await closeOwnerPage();
@@ -338,7 +347,7 @@ export function fundingTx(agent: Address, value: bigint, _hosted: boolean): { to
 }
 
 /** Owner sends the agent `value` of the gas token through the wallet page. Returns the verified hash, or exits with a RESULT. */
-export async function fundInWallet(command: string, owner: Address, agent: Address, value: bigint, amt: string, agentHas: bigint): Promise<Hex> {
+export async function fundInWallet(command: string, owner: Address, agent: Address, value: bigint, amt: string, agentHas: bigint, earlier?: Earlier): Promise<Hex> {
   const startBlock = await publicClient.getBlockNumber();
   const action = command === "recover" ? "recover-gas" : "fund-agent";
   // recover's owner steps stay on this computer, so only fund-agent can be hosted
@@ -363,21 +372,21 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
       `superstables budget recover returns recoverable ${SYM}. It leaves a gas reserve on Arc and does not return other gas tokens. Revoking a budget does not undo this transfer.`,
     ],
   });
-  if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved(command, outcome);
+  if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved(command, outcome, { ...earlier?.result }, undefined, earlier?.done);
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`);
   const c = await checkFundSent(outcome.hash as Hex, { owner, agent, t, value, agentHad: agentHas, afterBlock: startBlock, siteFailed: outcome.siteFailed });
   if (c.state === "unknown") {
     handle.finish({ ok: false, message: "The command could not confirm this transfer on chain yet. Check your wallet's activity.", hash: outcome.hash });
     await closeOwnerPage();
-    process.exit(emit(command, 5, { state: "unknown", tx: c.tx, reason: c.reason, next: "superstables budget doctor --rail evm: read the agent's gas" }));
+    process.exit(emit(command, 5, withEarlier(earlier, { state: "unknown", tx: c.tx, reason: c.reason, next: "superstables budget doctor --rail evm: read the agent's gas" })));
   }
   if (c.state !== "settled") {
     // the RESULT's reason, as a sentence for the page: a chain mismatch about the transfer, or the site's verdict as it is
     const prefix = "the transaction was not accepted as the planned step: ";
     handle.finish({ ok: false, message: c.reason!.startsWith(prefix) ? `The transfer was not confirmed as the planned step: ${c.reason!.slice(prefix.length)}.` : `${c.reason}.`, hash: c.tx });
     await closeOwnerPage();
-    process.exit(emit(command, c.state === "mismatch" ? 3 : 1, { state: c.state, tx: c.tx, reason: c.reason, next: "check wallet activity, then superstables budget doctor --rail evm" }));
+    process.exit(emit(command, c.state === "mismatch" ? 3 : 1, withEarlier(earlier, { state: c.state, tx: c.tx, reason: c.reason, next: "check wallet activity, then superstables budget doctor --rail evm" })));
   }
   handle.finish({ ok: true, message: `Done. Your agent received ${amt} ${GAS.symbol} and now has ${gasFmt(c.agentGas!)} ${GAS.symbol}. You can close this page.`, hash: c.tx });
   await closeOwnerPage();

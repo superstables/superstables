@@ -361,7 +361,7 @@ export async function sendNative(w: Wallet, to: Address, value: bigint, label: s
   const hash = await w.client.sendTransaction({ to, value, chain, account: w.account });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
-  if (r.status !== "success") throw new Error(`${label} reverted on chain: ${hash}`);
+  if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber });
   return { hash, feeWei: feeOf(r) };
 }
 /** `agent`: an agent transaction (selfRevoke, sweep): its gas is checked first (agentGasFor), and it is signed with that gas and fee. */

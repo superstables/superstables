@@ -253,20 +253,25 @@ export function ownerPageFor(rail: OwnerRail) {
     /**
      * The owner rejected, or the link expired: one clear RESULT, then exit. Nothing was sent unless the wallet had been asked.
      * `statusCommand`: the read that shows whether it landed, when it is more than the rail's (tempo: the --agent label).
+     * `earlier`: what this command already completed before this approval (recover: the revoke), said first in `next`, so
+     * "nothing was sent" is never read as the whole command; its transactions belong in `extra`.
      */
-    async endUnapproved(command: string, outcome: Unapproved, extra: Record<string, unknown> = {}, statusCommand = rail.statusCommand): Promise<never> {
+    async endUnapproved(command: string, outcome: Unapproved, extra: Record<string, unknown> = {}, statusCommand = rail.statusCommand, earlier?: string): Promise<never> {
       await closeOwnerPage(2000);
+      const before = earlier ? `${earlier}. ` : "";
       if (outcome.sending) {
         console.log(`UNKNOWN: ${outcome.reason}. The wallet may have sent it; read the chain before trying again.`);
-        process.exit(rail.emit(command, 5, { state: "unknown", reason: outcome.reason, ...extra, next: `${statusCommand}: read whether it landed before running this again` }));
+        process.exit(rail.emit(command, 5, { state: "unknown", reason: outcome.reason, ...extra, next: `${before}${statusCommand}: read whether it landed before running this again` }));
       }
       console.log(`NOT APPROVED: ${outcome.reason}`);
-      // the wallet was never asked to send: nothing was sent. An expired link is not a decision, so asking again is safe.
+      if (earlier) console.log(`ALREADY DONE: ${earlier}`);
+      // the wallet was never asked to send: this approval sent nothing. An expired link is not a decision, so asking again is safe.
       const expired = outcome.status === "expired";
       const reason = expired && !/expired/.test(outcome.reason) ? `the approval link expired: ${outcome.reason}` : outcome.reason;
+      const nothing = earlier ? "this step sent nothing" : "nothing was sent";
       const next = expired
-        ? `nothing was sent: the approval link expired before the owner approved. To try again, run the same command again for a new one${command === "setup" ? " (setup reuses the agent key it created)" : ""}`
-        : "nothing was sent. Request a new approval only if the owner asks";
+        ? `${before}${nothing}: the approval link expired before the owner approved. To try again, run the same command again for a new one${command === "setup" ? " (setup reuses the agent key it created)" : ""}`
+        : `${before}${nothing}. Request a new approval only if the owner asks`;
       process.exit(rail.emit(command, 3, { state: "refused_precheck", reason, ...extra, next }));
     },
   };
