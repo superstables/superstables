@@ -14,7 +14,8 @@
 //   * --period-seconds P: the remaining amount resets to the full `amount` whenever the chain time reaches periodEnd, and
 //     the first window starts at authorization. Every window that starts before expiry can be spent in full, so the total
 //     by expiry is amount x ceil(expirySeconds / P). The page and the log print that number before anything is sent.
-//   * Fees paid in pathUSD by the owner for the agent's payments count against the same limit.
+//   * When the seller pays the network fee, only the price comes off this limit. How fees affect it when the seller
+//     doesn't pay them has not been verified yet.
 // The script refuses (exit 3) if the agent key is already authorized or revoked: authorizeKey on a live key reverts with
 // KeyAlreadyExists and a revoked key can never be authorized again. To change a budget, revoke it and grant a fresh key.
 //

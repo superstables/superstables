@@ -222,8 +222,8 @@ async function main() {
     else if (!k.exists) noBudget = 'the agent access key is not authorized: the owner has not granted a budget'
     else if (k.expiry && k.expiry * 1000 <= Date.now()) noBudget = `the budget expired at ${new Date(k.expiry * 1000).toISOString()}`
     // The chain would refuse a payment above what is left (SpendingLimitExceeded): say so before signing, as evm does.
-    // A sponsored payment costs exactly the price; an unsponsored one also takes its fee from the same limit, which the
-    // chain still checks.
+    // When the seller pays the fee, the payment takes exactly the price from the limit. How an unsponsored payment's fee
+    // affects the limit has not been verified yet; the chain still checks the limit either way.
     else overBudget = budgetShortfall(k, amount) ?? undefined
   } catch (err) {
     console.log(`  (could not read the key state: ${String((err as Error).message).slice(0, 120)})`)

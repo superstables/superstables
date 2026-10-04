@@ -1,123 +1,181 @@
 # Superstables client
 
-![Superstables testnet payment demo in Claude Desktop with MetaMask](docs/images/client-demo-cover.png)
+Superstables connects service discovery, pricing and payment for AI agents. Approve one purchase
+in your wallet, or grant a budget the agent can spend within.
 
-**Payments belong in the agent workflow.**
+This repository is the client: the `superstables` command with its `superstables budget` tool, an
+MCP server, a TypeScript SDK and the `superstables-payments` agent skill. Agent payments use test
+tokens on test networks: USDC, or pathUSD on Tempo Moderato. There is no mainnet mode.
 
-Superstables connects service discovery, pricing and payment for AI agents. The client offers
-two ways to pay:
+## Get started
 
-- **Approve each payment.** Through MCP, a CLI or a TypeScript SDK, an agent finds a paid
-  service, retrieves its payment terms and requests your approval. Once you approve and sign
-  with your wallet, the client sends the signed request and records the payment outcome and the
-  service's response. The agent can request a payment, but it cannot approve one.
-- **Grant a budget once.** With [`superstables budget`](#on-chain-budgets-superstables-budget), a
-  separate tool, you give an agent key a spending budget on chain from your own wallet. The agent
-  then buys without asking you again, within an allowance the chain enforces, until it is spent or
-  you revoke it. On Tempo, it also expires, and can refill each period.
+Paste this line into an agent that can run commands, such as Claude Code or Codex:
 
-Both are testnet only. Per-payment approval uses [x402](https://x402.org) with the `exact`
-scheme and test USDC on Base Sepolia. Budgets run on Base Sepolia and five other EVM testnets,
-Tempo Moderato and Solana devnet. With browser-wallet approval, your signing key remains in your
-wallet; budget purchases use a separate agent key stored on this computer.
+```text
+Read and follow https://www.superstables.com/start.md to set up Superstables for me. Testnet only: test USDC, no real money.
+```
 
-## What the demo shows
+The page tells the agent to download the skill zip, check its SHA-256 checksum, install it and
+ask you what you would like to try. To install the client yourself, see [Install](#install).
+
+## What it does
+
+**Buy once.** `superstables budget buy-once` buys one service from the Superstables service
+catalogue. You approve that one purchase on superstables.com, in your own wallet, after picking
+the match code the agent shows you. Hosted buy once works on four networks: Base Sepolia (test
+USDC), Arc Testnet (test USDC), Tempo Moderato (test pathUSD) and Solana devnet (test USDC). It
+needs no `setup` command, budget or agent key. It requires a superstables.com account, which you
+create by signing in with an Ethereum wallet. `superstables budget find --once` lists the services.
+
+**Budgets.** With `superstables budget`, you grant an agent key a budget on chain once, from your
+own wallet. The agent then buys from x402 or MPP sellers without asking you again, until the budget
+is spent or you revoke it; on Tempo, it can also expire. Budget purchases need no hosted approval
+for each payment. The client sends the payment request directly to the seller, which may be
+Superstables or a third party. Budgets run on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon
+Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
+
+**Approve each payment on this computer.** Local `quote`/`pay`, the payment MCP server and the SDK
+payment core use Base Sepolia and a local approval page. Run `setup` for that flow. See
+[Approve each payment on this computer](#approve-each-payment-on-this-computer).
+
+The tested services use x402 on EVM and Solana, and MPP on Tempo.
+
+## Where you approve
+
+Owner actions happen in your own wallet, on one of two kinds of page:
+
+- **On this computer.** `pay` and the budget owner commands open a page on `127.0.0.1`. You
+  approve there with a browser extension wallet on the same computer, with no account. Every
+  budget network uses these local approvals by default, and `recover` is always local and EVM
+  only.
+- **On superstables.com.** Hosted buy once always uses the site. For a budget, `superstables budget
+  setup --hosted` moves the owner approvals for that chain to the site, where you approve from a
+  device where you are signed in and have a compatible wallet. Hosted budget approvals support Base Sepolia, Arc Testnet, Arbitrum
+  Sepolia, Polygon Amoy, SKALE Base Sepolia, Tempo Moderato and Solana devnet. Ethereum Sepolia
+  budgets use local approvals.
+
+To use hosted budget approvals, you add the agent to your account. The agent gives you an approval link
+and a match code. On the site you pick that code and choose **Sign with wallet**: your wallet signs
+an owner proof that names the site, your address, the agent, its network, the request and the
+match code. The
+client verifies that signature before it records you as the owner. Hosted budget setup can combine
+adding the agent, gas funding where needed and granting on one page. The wallet may ask for several
+approvals.
+
+In browser-wallet flows, your private key stays in your wallet. Superstables prepares requests and
+relays signed authorizations or transactions. Budget agents hold separate local spending keys.
+Check the wallet's network, token, amount, recipient and permission before signing.
+
+## Testnet only
+
+Agent payments use test tokens on test networks: USDC, or pathUSD on Tempo Moderato. Mainnet
+chains are refused, and no configuration turns them on.
+
+## Install
+
+Node 20 or newer, on Linux or macOS. On Windows, use WSL: `superstables budget` refuses to run on
+native Windows. Each route below includes `superstables budget` and the MCP server.
+
+**The agent skill.** The [0.3.0 GitHub Release](https://github.com/superstables/superstables-client/releases/tag/v0.3.0)
+attaches `superstables-payments-skill-0.3.0.zip`: the skill, with the whole CLI bundled. Unzip
+it into `~/.claude/skills/` (Claude Code) or `~/.agents/skills/` (Codex), and run the CLI by its
+path:
+
+```bash
+node ~/.claude/skills/superstables-payments/scripts/superstables.mjs --help
+```
+
+Check `scripts/VERSION.json` in the skill for the version and commit.
+
+**From git, pinned to a commit.** Replace `<commit>` with the full commit hash of a release (the
+release page names it):
+
+```bash
+npm install github:superstables/superstables-client#<commit>
+npx --no superstables --version
+```
+
+npm builds the client on your computer during the install, running this repository's build
+scripts there.
+
+**From a checkout.** `git clone`, then `npm ci`, `npm run build` and `npm link` put the
+`superstables` command on your PATH. Details for every route are in
+[docs/install.md](docs/install.md).
+
+Don't type `npx superstables` outside a checkout or a git install: npx would download whatever
+package the npm registry has under that name, which is not this client.
+
+## Security
+
+[docs/security.md](docs/security.md) is the security model: what each way to pay protects and
+what it does not, what superstables.com can and cannot do in hosted approvals, and what a
+compromised agent, client process or stolen agent key could do. EVM and Solana budgets enforce a
+remaining token amount, without an on-chain expiry or seller restriction. A stolen agent key can
+spend that remaining allowance to another address. Revocation ends future use of the permission
+once confirmed on chain; it does not reverse payments or return transferred funds.
+
+## Documentation
+
+Step by step: [docs/buy-once.md](docs/buy-once.md) for approving each payment and
+[docs/budget.md](docs/budget.md) for a budget. Every command's help is in
+[docs/cli.md](docs/cli.md) and [docs/cli-budget.md](docs/cli-budget.md). Records and recovery
+after an interrupted payment: [docs/records.md](docs/records.md). What changed in each release:
+[CHANGELOG.md](CHANGELOG.md).
+
+## Approve each payment on this computer
+
+`pay` uses [x402](https://x402.org) with the `exact` scheme and test USDC on Base Sepolia
+(`eip155:84532`, USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`). Unsupported payment
+schemes, networks and assets are rejected before approval.
 
 1. **Find.** The agent lists paid services and identifies which ones this client can call.
 2. **Quote.** The client reads the service's HTTP 402 challenge and records its payment terms.
    No payment is made and nothing is signed.
 3. **Approve.** You open the local approval page and review the amount, asset, network and
    recipient. These details come from the seller's payment requirement. Check the same
-   transfer in MetaMask before signing.
-4. **Pay.** A public facilitator submits the signed transfer and covers the gas. The client
-   returns the service's response and records a receipt with the transaction details.
-5. **Reject.** Reject a request on the approval page or in MetaMask before signing. No
+   transfer in your wallet before signing.
+4. **Pay.** The client sends the signed authorization to the seller, whose facilitator settles it
+   and pays the gas. The client returns the service's response, records a receipt and reads the
+   transaction on Base Sepolia.
+5. **Reject.** Reject a request on the approval page or in your wallet before signing. No
    signature is produced, no payment is submitted, and the paid service request is not sent.
    The agent reports the rejection.
 
-## What it looks like
-
-The owner approves on a page the client serves on `127.0.0.1`. The amount, recipient and network on
-the left come from the seller's payment requirement; MetaMask shows the same `TransferWithAuthorization`
-it is about to sign on the right.
-
-![The approval page next to MetaMask's signature request](docs/images/2-approve.png)
-
-After the signature, the facilitator settles the transfer and the agent returns the service's answer
-with the transaction on the explorer.
-
-![The agent reporting the price paid for and the transaction link](docs/images/3-result.png)
-
-## What this release supports
-
-| | |
-| --- | --- |
-| Rail | x402, `exact` scheme |
-| Network | Base Sepolia testnet (`eip155:84532`) |
-| Asset | Test USDC (`0x036CbD53842c5426634e7929541eC2318f3dCF7e`, 6 decimals) |
-| Approval | MetaMask signs each payment, on an approval page the client serves on `127.0.0.1`. This flow has no unattended mode |
-| Budgets | `superstables budget`: the owner approves a grant once in their own wallet, and the agent pays within it without further approval. EVM testnets, Tempo Moderato and Solana devnet. See [On-chain budgets](#on-chain-budgets-superstables-budget) |
-| Alternative | A local wallet process that holds a key in a file, for a browser-free machine: `--wallet local` |
-| Clients | Claude Code, tested end to end with the MetaMask flow. The server uses MCP over stdio and starts with `superstables mcp`, so other MCP clients can run it too |
-| Also usable as | a CLI (`superstables`) and a TypeScript SDK |
-
-Unsupported payment schemes, networks and assets are rejected before approval. This includes
-mainnet.
-
-## Quick start
-
-You need MetaMask in your browser and Node 20 or newer. Install the client from npm:
+With the `superstables` command on your PATH (a checkout after `npm link`), set it up and register
+it with Claude Code as an MCP server:
 
 ```bash
-npm install -g @superstables/client
 superstables setup
-```
-
-`setup` creates `~/.superstables`, writes a starting `policy.yaml`, and prints the connection
-steps with your local paths. In the default MetaMask mode, it does not create a signing key.
-To run the client from a checkout of this repository instead, see
-[docs/install.md](docs/install.md#from-a-checkout).
-
-**Set up your agent app.** Claude Code:
-
-```bash
 claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- superstables mcp
 ```
 
-Another MCP client: point its configuration at `superstables mcp`.
-[docs/install.md](docs/install.md#any-other-mcp-client) has example entries.
+`setup` creates `~/.superstables`, writes a starting `policy.yaml`, and prints the connection
+steps with your local paths. In the default browser-wallet mode, it does not create a signing key.
+Another MCP client: point its configuration at `superstables mcp`;
+[docs/install.md](docs/install.md#any-other-mcp-client) has example entries. Fund your wallet
+address with test USDC on Base Sepolia from <https://faucet.circle.com>. You do not need ETH for
+this flow because the facilitator covers the gas.
 
-**Get MetaMask ready.** Install it from <https://metamask.io/download> if needed. Add Base
-Sepolia, or accept the approval page's network prompt when you first connect. Fund your
-MetaMask address with test USDC from <https://faucet.circle.com>. You do not need ETH for this
-demo flow because the facilitator covers the gas.
-
-**Talk to the agent**, in your own words:
+Then ask the agent, in your own words:
 
 > Find a paid service for BTC market data, quote it, tell me the price, and pay it if I say yes.
 
-When you say yes, the agent answers with an approval link like `http://127.0.0.1:4412/approve/<id>` (another
-port if a second payment is already waiting on 4412). Open it. Press **Connect wallet**, then **Review in wallet**, and check the recipient and the
-amount in MetaMask's popup before you sign. The agent reports the transaction and the data it
-paid for.
+When you say yes, the agent answers with an approval link like
+`http://127.0.0.1:4412/approve/<id>` (another port if a second payment is already waiting on
+4412). Open it, press **Connect wallet**, then **Review in wallet**, and check the recipient and
+the amount in your wallet before you sign. The agent reports the transaction and the data it paid
+for.
 
 The built-in catalogue points to the demo seller hosted by Superstables at
 `https://www.superstables.com/api/demo/market`. You do not need to start a separate seller.
 To run it locally, see [Run the seller yourself](#run-the-seller-yourself).
 
-Full details, including every environment variable, are in [docs/install.md](docs/install.md).
-Step by step: [docs/buy-once.md](docs/buy-once.md) for approving each payment and
-[docs/budget.md](docs/budget.md) for a budget. Every command's help is in
-[docs/cli.md](docs/cli.md) and [docs/cli-budget.md](docs/cli-budget.md), and the security model in
-[docs/security.md](docs/security.md). The presenter's script is in [docs/demo.md](docs/demo.md).
-What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
-
 ## The CLI
 
-After `npm install -g @superstables/client`, run it as `superstables …`. In a checkout, run
-`npm link` once to put the same command on your PATH. Don't type `npx superstables` outside a
-checkout: npx would download whatever package the npm registry has under that name, which is not
-this client. `superstables --help` and each command's `--help` are written to be enough on their own:
+In a checkout, run `npm link` once to put `superstables` on your PATH; from a git install, run
+`npx --no superstables …` in that folder; from the skill, run
+`node <skill folder>/scripts/superstables.mjs …`. The examples below write it as `superstables …`.
+`superstables --help` and each command's `--help` are written to be enough on their own:
 what the command does, whether it can move money, who runs it, an example, what it prints and
 its exit codes. Two options go before the command: `--home <dir>` puts all state somewhere other
 than `~/.superstables`, and `--wallet browser|local` chooses who signs (browser by default;
@@ -202,9 +260,9 @@ The exit codes are the same numbers `superstables budget` uses:
 | Code | Meaning |
 | --- | --- |
 | 0 | Done. For `pay`, the payment settled and the service answered; `chain` says whether the client confirmed it on chain |
-| 1 | Failed: nothing was paid. Includes an approval that expired or was abandoned, and a service or wallet that could not be reached |
+| 1 | Failed. Includes an approval that expired or was abandoned, and a service or wallet that could not be reached. After a payment was sent, `failed` can rest on the seller's report that it did not settle: read `reason` before saying nothing was paid |
 | 2 | Bad input: an unknown command or flag, a missing or wrong parameter, an unknown id, or a used or expired quote. Nothing was done |
-| 3 | Refused: the owner rejected the payment, or a spend policy refused it (for `quote`, the policy would refuse it). Nothing was paid |
+| 3 | Refused: the owner rejected the payment, or a spend policy refused it (for `quote`, the policy would refuse it). For a budget owner command, an owner-transaction mismatch can be detected after the transaction has landed: check the reported reason, transaction identifier and chain status before claiming nothing was sent |
 | 4 | Paid, not delivered: the payment settled but the service answered with an error, or its answer did not arrive in full. Do not pay again |
 | 5 | Unknown: the payment may or may not have settled. Do not pay again until you have checked |
 
@@ -265,7 +323,9 @@ local policy and what a compromised agent or client process could do.
 
 ## Limitations
 
-- Testnet only: Base Sepolia, test USDC and the x402 `exact` scheme. There is no mainnet mode.
+- Testnet only: agent payments use test tokens on test networks, USDC or pathUSD on Tempo
+  Moderato. `pay` supports Base Sepolia, test USDC and the x402 `exact` scheme. There is no
+  mainnet mode.
 - MetaMask displays the amount in USDC's smallest unit: `10000` represents 0.01 USDC. The
   approval page shows the conversion. Check the amount and recipient in MetaMask before signing.
 - In browser mode, an approval link opens one payment request and expires after five minutes.
@@ -335,8 +395,9 @@ rather than in MetaMask, so processes running as your user can read it.
 
 `superstables budget` is a separate testnet tool with its own agent key. The owner grants an
 agent key a budget on chain once, from their own wallet. The agent then buys from x402 or MPP sellers with no approval
-per payment, until the budget runs out, expires on Tempo, or the owner revokes it. The chain enforces the cap; no
-Superstables server is in the path of a purchase. The tool has three rails: `evm`, a USDC `approve` on
+per payment, until the budget runs out, expires on Tempo, or the owner revokes it. The chain enforces the cap. Budget
+purchases need no hosted approval for each payment: the client sends the payment request directly to the seller, which
+may be Superstables or a third party. The tool has three rails: `evm`, a USDC `approve` on
 Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia or Ethereum Sepolia; `tempo`, an access key on Tempo Moderato with a cap, expiry and
 optional period and seller list enforced on chain; and `solana`, an SPL token delegate on Solana devnet.
 
@@ -356,17 +417,20 @@ each chain (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Bas
 `evm`; Tempo Moderato is `tempo`; Solana devnet is `solana`), the owner's steps per rail, exit codes and where state lives. Each
 command's `--help` says what it does, whether it can move money, who runs it, an example, what it prints and its exit
 codes. On `evm`, `fund-agent` sends the agent key a little of the chain's gas token, and the grant is an allowance: the
-USDC stays in the owner's wallet until a purchase pulls exactly its price. `--max` is the most one purchase may cost, in
+USDC stays in the owner's wallet until a purchase pulls exactly its price to the agent address, before settlement.
+Gas reserves, refunds or interrupted purchases can leave USDC at the agent address; the owner's `recover` attempts to
+return it. `--max` is the most one purchase may cost, in
 the budget token (`--max 0.002` is 0.002 USDC). A `buy` before setup and grant is refused (exit 3) with nothing signed,
 and its `next` names the owner's commands.
 
-An npm install of the client (`npm install -g @superstables/client`) includes it as a
-self-contained build, and it runs from a checkout of this repository too, after `npm ci` and `npm run build`. It runs on Linux and macOS; on Windows, run it in WSL. Owner actions use a local page on `127.0.0.1` and a
-browser extension wallet on the same computer: any EVM browser wallet (MetaMask, Rabby, Coinbase
-Wallet, ...) on `evm`, any EVM browser wallet that can add a custom network on `tempo`, and any
-Solana wallet (Phantom, Solflare, Backpack, ...) on `solana`, with no account. On any rail, `setup --hosted` moves them to
-superstables.com instead: you approve from any device where you are signed in with your wallet, after picking the match
-code the agent shows you. That needs a superstables.com account. Setup records your address; grants, revokes and funding require wallet
+Every [install](#install) includes it: the skill bundles it, and a git install or a checkout (after `npm ci` and
+`npm run build`) builds it as a self-contained copy. It runs on Linux and macOS; on Windows, run it in WSL. Owner actions use a local page on `127.0.0.1` and a
+compatible browser extension wallet on the same computer: an EVM wallet such as MetaMask, Rabby or Coinbase Wallet on
+`evm`; an EVM wallet that can add a custom network on `tempo`; and a Solana Wallet Standard wallet such as Phantom,
+Solflare or Backpack on `solana`, with no account. `setup --hosted` moves them to
+superstables.com instead, on every network except Ethereum Sepolia, after you add the agent to your account (see
+[Where you approve](#where-you-approve)): you approve from a device where you are signed in and have a compatible
+wallet, after picking the match code the agent shows you. That needs a superstables.com account. Setup records your address; grants, revokes and funding require wallet
 approval. Over SSH, the owner forwards the local page's port first (`ssh -L PORT:127.0.0.1:PORT`, with the port from the
 approval link). `superstables budget find` lists the services superstables.com says a budget can pay. Without a budget,
 `superstables budget buy-once --service ID --max M` buys one listed service that you approve on superstables.com (on
@@ -377,10 +441,21 @@ they have approved, it runs `superstables budget wait --id <id> --shown`; if the
 ends its turn again, rather than polling.
 `waiting_owner` is not approval or settlement. An approval link that expires before the owner's wallet is asked to send ends the command refused,
 and that approval sent nothing (an earlier step of `recover`, or of a hosted setup with `--grant` or `--fund`, may have
-completed); running the command again gives a new one. Every command ends with one
+completed); running the command again gives a new one. An expired approval link does not cancel a
+wallet request or transaction: once the wallet was asked, an unfinished outcome is `unknown` (exit 5), so check the
+result, chain status and wallet activity before requesting another approval. Every command ends with one
 `RESULT {json}` line (with `--json`, the object alone) and a fixed exit code, so an agent can act on it. EVM and Solana allowances have no automatic expiry or seller restriction. Revoke stops
 further use of the permission once it takes effect on chain; it does not reverse confirmed
 transfers. Setup, funding, wallet verification limits, the safety model and the agent skill are in [budget/README.md](budget/README.md).
+
+## Earlier release (0.2.0)
+
+0.2.0 was a demo of approving each payment from Claude Desktop, through a `.mcpb` bundle that 0.3.0 removes. These
+screenshots are from that release. The approval page is the one `pay` still serves on `127.0.0.1`.
+
+![0.2.0: the approval page next to MetaMask's signature request](docs/images/2-approve.png)
+
+![0.2.0: Claude Desktop reporting the price paid for and the transaction link](docs/images/3-result.png)
 
 ## Development
 
@@ -396,6 +471,6 @@ test wallet homes; see [Live testnet checks](test/live/README.md).
 
 ## Licence
 
-Apache-2.0. See [LICENSE](LICENSE). The built `dist/budget` in the npm package also contains
-third-party packages under their own licences, one of them LGPL-3.0; `dist/budget/THIRD_PARTY_NOTICES.txt`
-lists them with their licence texts.
+Apache-2.0. See [LICENSE](LICENSE). The built `dist/budget` also contains third-party packages under their own
+licences, one of them LGPL-3.0; `dist/budget/THIRD_PARTY_NOTICES.txt` lists them with their licence texts. The skill
+zip lists the packages it bundles in `scripts/THIRD_PARTY_NOTICES.txt`.

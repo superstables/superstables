@@ -1,14 +1,66 @@
-# Buy once
+# One purchase at a time
 
 Use this when the owner is there to approve. The agent finds a paid service and reads its price
-without paying. It then asks for one payment, and the owner approves or rejects it in their own
-wallet. Nothing is paid without that approval, and every payment needs a new one. For purchases
+without paying. It then asks for one purchase, and the owner approves or rejects it in their own
+wallet. Nothing is paid without that approval, and every purchase needs a new one. For purchases
 without an approval each time, see [Budget](budget.md).
 
-**Testnet only.** x402 with the `exact` scheme, test USDC on Base Sepolia (`eip155:84532`, token
-`0x036CbD53842c5426634e7929541eC2318f3dCF7e`, 6 decimals). No real money moves. If the seller offers no payment option the client supports, it is refused before the owner is asked.
+There are two ways:
 
-## What you need
+- **Hosted buy once** (`superstables budget buy-once`): the owner approves on superstables.com, on
+  Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet. See
+  [Hosted buy once](#hosted-buy-once-superstables-budget-buy-once).
+- **Approve each payment** (`pay`, the MCP tools): the owner approves on a page on this computer,
+  on Base Sepolia. See [Approve each payment on this computer](#approve-each-payment-on-this-computer-pay).
+
+**Testnet only.** Test tokens on test networks: USDC, or pathUSD on Tempo Moderato. No real money
+moves.
+
+## Hosted buy once (`superstables budget buy-once`)
+
+With `superstables budget buy-once`, the owner approves one purchase on superstables.com, in their
+own wallet, from a device where they are signed in and have a compatible wallet. It needs no
+`setup` command, budget or agent key. It pays on the network the service's listing names, for the
+services the site lists: Base Sepolia (test USDC), Arc Testnet (test USDC), Tempo Moderato (test
+pathUSD) or Solana devnet (test USDC). It needs a superstables.com account, which you create by
+signing in with an Ethereum wallet, or a compatible deployment the owner names with `--site` or
+`SUPERSTABLES_SITE`; an origin outside superstables.com and its subdomains also needs the owner to set
+`SUPERSTABLES_ALLOW_SITE` to it (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
+A purchase is reported paid only once the command has read the payment on chain. To list the
+services and buy one:
+
+```bash
+superstables budget find --once
+superstables budget buy-once --service superstables-demo-market-data --param asset=BTC --max 0.01
+```
+
+`--max` is the most you accept, in the service's token (USDC, or pathUSD on Tempo): a service that costs more is refused before anything is
+created. The command prints an `APPROVE` line with the approval link and a match code. Run by an agent (stdout is not
+a terminal), or with `--detach`, it then returns with `state: "waiting_owner"` and an approval `id`; in
+a terminal it waits for the purchase to end. Send the `RESULT`'s `message_for_owner` (the approval link, the
+code and the price) as a reply the owner can read, and end your turn there. The owner opens it, signs in with their wallet the
+first time (a message, no fee), picks the same code on the page and approves the payment in their
+wallet. When they say they have, run:
+
+```bash
+superstables budget wait --id <id> --shown
+```
+
+`--shown` says you wrote the approval link in a reply; without it, `wait` refuses. While the owner has not
+decided, it answers `waiting_owner` again. The final `RESULT` reports `paid` and `delivered`, the transaction when there is one, and
+`responseFile` when the seller's answer was saved. Read `reason` and `next` before anything else, and
+do not pay again if it was paid or its outcome is unknown. The site's side of this purchase
+is the HTTP purchase API; the endpoints the client calls, and what it checks in each answer, are in
+[budget/CLI.md](../budget/CLI.md#buy-once).
+
+## Approve each payment on this computer (`pay`)
+
+`pay` uses x402 with the `exact` scheme and test USDC on Base Sepolia (`eip155:84532`, token
+`0x036CbD53842c5426634e7929541eC2318f3dCF7e`, 6 decimals). If the seller offers no payment option
+the client supports, it is refused before the owner is asked. Local `pay` needs no account and no
+site.
+
+### What you need
 
 - The client, installed and set up: [Install the client](install.md). Commands below use the
   installed `superstables` command.
@@ -17,7 +69,7 @@ without an approval each time, see [Budget](budget.md).
   <https://faucet.circle.com> (pick Base Sepolia). No ETH is needed: the facilitator that settles
   the payment pays the gas.
 
-## 1. Find a service (agent)
+### 1. Find a service (agent)
 
 The output below comes from separate runs on Base Sepolia, shortened: a browser-wallet approval
 request, and a payment approved with the local wallet. Use the quote id, attempt id and approval
@@ -38,11 +90,11 @@ The Superstables demo market data service is built in and returns live prices.
 `SUPERSTABLES_DEMO_SERVICES=on` adds the services from Superstables' hosted catalogue. Most
 return prepared sample output and are marked simulated; the market data service returns live
 prices. Under the table, `find` prints the commands to pay
-each listing, buy once first. `pay yes` means
+each listing. `pay yes` means
 this way of paying can call it. With `--json`, each service has `commands`; `next` is the first command to run, or `null` when
 this client cannot pay the listing.
 
-## 2. Price it without paying (agent)
+### 2. Price it without paying (agent)
 
 ```bash
 superstables quote --service superstables-demo-market-data --param asset=BTC
@@ -70,7 +122,7 @@ A quote reads the seller's HTTP 402 answer and records its exact terms, without 
 It expires after 10 minutes. To quote a URL directly, run `superstables quote '<url>'` with its
 query parameters; the seller must accept GET and offer the payment terms above.
 
-## 3. Ask the owner (agent)
+### 3. Ask the owner (agent)
 
 If your shell tool cannot show output while a command runs, use the detached command in
 [From an agent](#from-an-agent) instead of the one below.
@@ -91,7 +143,7 @@ Open this approval link and approve the payment in your browser wallet:
 policy again before it serves the approval page.
 Then it waits until the owner decides, for up to 5 minutes. The page works only while `pay` runs.
 
-## 4. Approve or reject (owner)
+### 4. Approve or reject (owner)
 
 Open the approval link in the browser that has your wallet, on the same computer. The page shows the
 amount, the recipient and the network, worked out from the seller's payment terms, not from what
@@ -104,7 +156,7 @@ the agent says. What the agent says the payment is for is shown apart, under "Re
 3. Sign with your wallet, or reject the request on the page or in the wallet. Rejecting before
    signing produces no signature and no payment, and the client sends nothing more to the service.
 
-## 5. Read the outcome (agent)
+### 5. Read the outcome (agent)
 
 After the owner signs, the client sends the request again with the signed payment authorization.
 The seller has a facilitator settle the payment and answers. On success, `pay` prints the receipt
@@ -140,7 +192,7 @@ superstables status b65773de-a08b-4c91-b5c9-0729b4675a3a
 superstables receipts --limit 5
 ```
 
-## Outcomes
+### Outcomes
 
 | State | What happened | Exit | What next |
 | --- | --- | --- | --- |
@@ -148,7 +200,7 @@ superstables receipts --limit 5
 | `denied` | The owner rejected it; the client submitted no payment | 3 | Ask again only if the owner wants to |
 | `expired` | Nobody decided within 5 minutes. Nothing was paid | 1 | A new quote, then `pay` |
 | `abandoned` | `pay` stopped before anyone decided (it was stopped, or `--wait` ran out). Not a rejection. Nothing was paid | 1 | A new quote, then `pay`, with no short `--wait` |
-| `failed` | Nothing was paid, and that is known: the policy refused it, the terms changed, or the payment did not settle. `reason` says which | 1 or 3 | Read `reason` and `next` |
+| `failed` | The policy refused it, the terms changed, or the seller reported that the payment did not settle. `reason` says which; a seller's report is not a check on chain | 1 or 3 | Read `reason` and `next` |
 | `paid_service_failed` | Paid, but the service answered with an error | 4 | Do not pay again. Report the receipt |
 | `uncertain` | The payment may or may not have settled | 5 | Do not pay again. Follow [Quotes, attempts and receipts](records.md#why-failed-and-uncertain-are-different) |
 
@@ -156,43 +208,7 @@ superstables receipts --limit 5
 `superstables status <attempt-id>`. If the approval page could not start or the local wallet was
 not running, `next` says the same quote can still be paid.
 
-## Or approve on superstables.com
-
-With `superstables budget buy-once`, the owner approves the payment on superstables.com instead of a
-page on this computer, from any device where they sign in with their wallet. It needs no setup, no
-gas and no agent key. It pays on the network the service's listing names (Base Sepolia, Tempo
-Moderato or Solana devnet), for the services the site lists. It needs a superstables.com account
-(made by signing in with the wallet), or a compatible deployment the owner names with `--site` or
-`SUPERSTABLES_SITE`; an origin outside superstables.com and its subdomains also needs the owner to set
-`SUPERSTABLES_ALLOW_SITE` to it (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
-A purchase is reported paid only once the command has read the payment on chain. `pay`, above,
-needs neither:
-
-```bash
-superstables budget find --once
-superstables budget buy-once --service superstables-demo-market-data --param asset=BTC --max 0.01
-```
-
-`--max` is the most you accept, in the service's token (USDC, or pathUSD on Tempo): a service that costs more is refused before anything is
-created. The command prints an `APPROVE` line with the approval link and a match code. Run by an agent (stdout is not
-a terminal), or with `--detach`, it then returns with `state: "waiting_owner"` and an approval `id`; in
-a terminal it waits for the purchase to end. Send the `RESULT`'s `message_for_owner` (the approval link, the
-code and the price) as a reply the owner can read, and end your turn there. The owner opens it, signs in with their wallet the
-first time (a message, no fee), picks the same code on the page and approves the payment in their
-wallet. When they say they have, run:
-
-```bash
-superstables budget wait --id <id> --shown
-```
-
-`--shown` says you wrote the approval link in a reply; without it, `wait` refuses. While the owner has not
-decided, it answers `waiting_owner` again. The final `RESULT` reports `paid` and `delivered`, the transaction when there is one, and
-`responseFile` when the seller's answer was saved. Read `reason` and `next` before anything else, and
-do not pay again if it was paid or its outcome is unknown. The site's side of this purchase
-is the HTTP purchase API; the endpoints the client calls, and what it checks in each answer, are in
-[budget/CLI.md](../budget/CLI.md#buy-once).
-
-## From an agent
+### From an agent
 
 An agent's shell tool often shows output only when a command ends, and stops long commands. `pay`
 must keep running until the owner decides, so start it detached and read the approval link from its log:
@@ -213,7 +229,7 @@ it ends the attempt as `abandoned` before the owner can act.
 With MCP, the `pay` tool returns the approval link at once and the server keeps the page open;
 `payment_status` reports the outcome. The `superstables-payments` skill covers both ways.
 
-## Limits
+### Limits
 
 - The spend policy (`policy.yaml`) caps each payment and each UTC day, and can allow or deny hosts.
   It is a check in this client, not a limit the chain enforces. See the

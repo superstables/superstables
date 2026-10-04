@@ -3,17 +3,17 @@
 Superstables client 0.3.0 makes testnet payments only. This page says what each way to pay protects
 and what it does not.
 
-The client pays in two ways, and they have different boundaries:
+These payment flows have different boundaries:
 
-| | Buy once (`pay`, the MCP tools) | Budget (`superstables budget`) |
-| --- | --- | --- |
-| Who approves | The owner, in their own wallet, for every payment | The owner, in their own wallet, once, for the whole budget |
-| Keys the client holds | None with a browser wallet; `--wallet local` stores a signing key | The agent key, which signs purchases. The owner's key stays in their wallet |
-| What limits spending | The owner's decision on each payment. The spend policy is a check in this client | The chain: the allowance (`evm`), the delegated amount (`solana`), the access key's limits (`tempo`) |
-| What a hostile agent can do | Ask for payments. With `--wallet local`, code running as the owner can also read that key | Use the agent key to spend what is left of the budget (on `evm` and `solana`, to any address), and move funds held at the agent's address |
-| How it ends | A browser approval request expires after 5 minutes; a local-wallet request after 120 seconds, by default | `superstables budget revoke`, approved in the owner's wallet |
+| | Approve each payment (`pay`, the MCP tools) | Hosted buy once (`superstables budget buy-once`) | Budget (`superstables budget`) |
+| --- | --- | --- | --- |
+| Who approves | The owner, in their own wallet, for every payment | The owner, in their own wallet on the site, for one purchase | The owner, in their own wallet, once, for the whole budget |
+| Keys the client holds | None with a browser wallet; `--wallet local` stores a signing key | None | The agent key, which signs purchases. The owner's key stays in their wallet |
+| What limits spending | The owner's decision on each payment. The spend policy is a check in this client | The owner's decision on that purchase. The client checks `--max` and the listing price against the integer amount reported by the site; these checks do not constrain a compromised client or site | The chain: the allowance (`evm`), the delegated amount (`solana`), the access key's limits (`tempo`) |
+| What a hostile agent can do | Ask for payments. With `--wallet local`, code running as the owner can also read that key | Ask for purchases, but cannot approve them without the owner's wallet. The one-open-purchase check applies only to this client's shared state | Use the agent key to spend what is left of the budget (on `evm` and `solana`, to any address), and move funds held at the agent's address |
+| How it ends | A browser approval request expires after 5 minutes; a local-wallet request after 120 seconds, by default | The initial approval window is ten minutes. Expiry does not cancel a wallet request or transaction already underway | `superstables budget revoke`, approved in the owner's wallet |
 
-The sections below cover buy once with `pay`: the approval page on `127.0.0.1` and the owner's
+The sections below cover `pay`: the approval page on `127.0.0.1` and the owner's
 wallet. Budgets have their own section: [Budgets](#budgets). `superstables budget buy-once` and a
 budget set up with `--hosted` are approved on a website instead, superstables.com by default; what
 that site can and cannot do is in
@@ -21,7 +21,7 @@ that site can and cannot do is in
 
 ## Where the key is
 
-In the default buy-once flow, the owner's signing key stays in their browser wallet. The client
+In the default `pay` flow, the owner's signing key stays in their browser wallet. The client
 does not generate, read or store it. That does not mean the computer holds no keys: the browser
 wallet keeps its own, and the local wallet mode and budgets store separate keys.
 
@@ -190,13 +190,14 @@ does not mean your account cannot sign more. The only limits that survive a comp
 are the ones inside what you sign — the amount and the recipient in the authorization — and the
 balance of the account, which is why this release is testnet only.
 
-The browser signer counts the daily cap from the receipts in this directory; the local wallet
-counts the authorizations in its own `wallet/audit.jsonl`. Neither reads chain history: delete
+The browser signer counts the daily cap from receipts and attempt records in this directory,
+including pending, in-flight and uncertain payments; the local wallet counts the authorizations in
+its own `wallet/audit.jsonl`. Neither reads chain history: delete
 those records and the count starts again.
 
 ## Testnet only
 
-Buy once supports one network (`eip155:84532`, Base Sepolia), one asset (test USDC at
+`pay` supports one network (`eip155:84532`, Base Sepolia), one asset (test USDC at
 `0x036CbD53842c5426634e7929541eC2318f3dCF7e`), one scheme (x402 `exact`). A requirement naming
 anything else is refused before anyone is asked. There is no configuration that turns on
 mainnet.
@@ -206,7 +207,7 @@ facilitator sees the signed authorization, so it learns who paid whom and how mu
 alter the amount or the recipient, because those are inside what was signed. The client's facilitator helper tries the next facilitator when one cannot be
 reached, and stops when one refuses. Other sellers choose their own facilitators.
 
-On buy once, the seller reports the settlement and names a transaction. The client then reads
+With `pay`, the seller reports the settlement and names a transaction. The client then reads
 that transaction's receipt from Base Sepolia (`SUPERSTABLES_RPC_URL`, https or this computer only)
 and records `chain`:
 
@@ -234,6 +235,12 @@ Text from sellers and listings reaches the agent as data. The MCP server names t
 marked "Untrusted data". The CLI prints them on one line, without control or invisible
 characters.
 
+**Where the signed payment goes.** `pay` sends the signed authorization only to the URL it quoted:
+it refuses a redirect, and the attempt then ends `uncertain`, because the client cannot tell whether
+the seller acted on it. A listing from the index or the catalogue is payable only when its endpoint
+is `https`, or `http` on this computer. Reading a seller's 402 challenge has a deadline and a size
+limit and follows no redirect.
+
 ## The local wallet mode
 
 `--wallet local` (or `SUPERSTABLES_WALLET=local`) replaces the browser wallet with a wallet process that
@@ -242,6 +249,9 @@ it is not a regular file. The same checks apply when importing a key with
 `wallet init --import-key-file`. A running wallet keeps its loaded key and does not recheck
 the file's permissions before signing. `wallet init --force` writes the new key to a new 0600 file and renames
 it into place, so it is never in a file others can read.
+The client sends the agent token to `SUPERSTABLES_WALLET_URL`, so it accepts only `https`, or
+`http` on `127.0.0.1`, `localhost` or `[::1]`. The wallet daemon accepts only the Host values
+`127.0.0.1:PORT` or `localhost:PORT`, like the approval page.
 It exists for a machine with no browser, and it moves the boundary.
 
 It generates two random 32-byte hex secrets at first start, in `~/.superstables/wallet/`:
@@ -372,6 +382,15 @@ is not trusted to say who the owner is or what was paid.
   token, to the listed recipient, mined no more than 60 seconds before the purchase was created (an
   allowance for clock differences); otherwise the result is unknown
   and the agent never buys again.
+- **Buy once checks the site's reported amounts.** The site states each amount twice, as a decimal
+  for display and as an integer in token units. They must agree, the token must have 6 decimals,
+  and `--max` and the listing price are compared with the integer. These are checks on the site's
+  response; the owner must still check the wallet request before signing. Only one purchase may
+  remain open at a time across processes sharing the same state directory. A cancel the site does
+  not confirm leaves the purchase `unknown` and blocks the next `buy-once`. If the site never
+  resolves it, the owner can use `budget wait --id ID --abandon` to release that local block; the
+  payment remains unknown. Purchase ids must be UUIDs. Purchase results do not repeat arbitrary
+  site text; discovery presents listing text as data.
 - **Approval links are data.** An approval link is used only as `<site>/approve/budget/<id>#<token>` (or
   `<site>/approve/<id>#<token>` for a purchase), rewritten by the URL parser. Text from the site
   loses control, zero-width and bidi characters before it is printed.
@@ -393,6 +412,15 @@ is not trusted to say who the owner is or what was paid.
 
 What a compatible site must serve, with both proofs spelled out:
 [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).
+
+## What you install
+
+The 0.3.0 GitHub Release attaches the agent skill zip, built from the released commit;
+`scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
+checksum with a published value checks that the downloaded bytes match that value; when both come
+from the same site, it is not an independent check of a compromised site. Installing from git with
+a full commit hash builds the client on your computer and runs the repository's build scripts
+there; without a hash, npm installs whatever the default branch holds.
 
 ## Replacing a key
 

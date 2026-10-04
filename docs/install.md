@@ -1,9 +1,10 @@
 # Install the client
 
 The Superstables client is a command, `superstables`, with an MCP server (`superstables mcp`) and a
-TypeScript SDK built from the same code. It pays for services in two ways: [buy once](buy-once.md),
-where the owner approves each payment, and [budget](budget.md), where the owner grants an on-chain
-budget once. Testnet only: test USDC, or pathUSD for Tempo budgets. No real money.
+TypeScript SDK built from the same code. It pays for services in two ways:
+[one purchase at a time](buy-once.md), where the owner approves each purchase (hosted buy once on
+superstables.com, or `pay` on a page on this computer), and [budget](budget.md), where the owner
+grants an on-chain budget once. Testnet only: test USDC, or pathUSD for Tempo budgets. No real money.
 
 ## What you need
 
@@ -21,17 +22,14 @@ testnet RPCs, the Superstables index and, when switched on, the hosted demo cata
 
 Pick one. All of them run the same commands on the same state, in `~/.superstables`.
 
-**From npm.** The examples on these pages are written this way:
+**The agent skill, from Get started.** The one-line prompt on superstables.com's Get started page
+has the agent download the skill zip, check its SHA-256 checksum and install it. The skill bundles
+the whole CLI; [The agent skill](#the-agent-skill-with-the-whole-cli-bundled) below installs it by
+hand.
 
-```bash
-npm install -g @superstables/client
-superstables --version
-```
-
-This puts the `superstables` command on your PATH, `superstables budget` and the MCP server
-included. `npm install -g @superstables/client@latest` updates it;
-[Which build is running](#which-build-is-running) says how to check that an agent picked up the
-update.
+The examples on these pages write the command as `superstables`. A checkout with `npm link` puts
+that command on your PATH. For a git install pinned to a commit, use `npx --no superstables …` in
+the installation folder, as shown below.
 
 Don't type `npx superstables` to run the client. Where npx doesn't find this client's command, it
 downloads whatever package the npm registry has under the name `superstables`, which is not this
@@ -68,8 +66,7 @@ npx --no superstables --version
 
 npm clones the repository at that commit, installs its development packages, builds the client
 on your computer with them and installs the result, `superstables budget` included. That build
-runs the repository's build scripts and the TypeScript compiler on your machine; installing the
-published package from npm does not build the client locally. Name a commit hash: without one, npm installs whatever the default branch holds
+runs the repository's build scripts and the TypeScript compiler on your machine. Name a commit hash: without one, npm installs whatever the default branch holds
 at that moment, and a branch or tag name can later point somewhere else.
 Run it as `npx --no superstables …` in that folder, or as `node_modules/.bin/superstables …`.
 
@@ -91,7 +88,7 @@ the bundled packages and their licences.
 
 ## Set up
 
-For buy once, the owner runs `setup` once. It creates `~/.superstables`, writes a starting spend
+For `pay`, the owner runs `setup` once; hosted buy once and budgets don't need it. It creates `~/.superstables`, writes a starting spend
 policy (`policy.yaml`, at most 0.05 USDC per payment and 1 USDC per day) and prints the command
 that sets up your agent app. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
 again keeps the existing policy.
@@ -140,7 +137,7 @@ both ways to pay, with their safety rules. Use the skill zip installed above, or
 `SKILL.md`, `references/` and `agents/openai.yaml` together. The agent needs a shell. Budgets need
 the CLI: the MCP server has no budget tools.
 
-**MCP.** The server has six tools for buy once: `find_services`, `quote`, `pay`,
+**MCP.** The server has six tools for approving each payment (`pay`): `find_services`, `quote`, `pay`,
 `payment_status`, `wallet_status` and `list_receipts`.
 
 ### Claude Code
@@ -176,8 +173,7 @@ The MCP server is part of the CLI: `superstables mcp` runs it on stdio. Any MCP 
 start a local stdio server can use it. Most take a JSON entry like this one; where the file lives
 and what the top-level key is called depend on the client, so check its documentation.
 
-With `superstables` on your PATH (after `npm install -g @superstables/client`, or `npm link` in
-a checkout):
+With `superstables` on your PATH (after `npm link` in a checkout):
 
 ```json
 {
@@ -339,10 +335,10 @@ spending but leaves the agent on your account.
 
 Then remove the MCP server (`claude mcp remove superstables`, or delete its entry from your MCP
 client's configuration), delete the skill folder if you installed it, and delete `~/.superstables`
-(or your `SUPERSTABLES_HOME`). If you installed the client from npm (or linked
-a checkout with `npm link`), remove the command with `npm uninstall -g @superstables/client`.
+(or your `SUPERSTABLES_HOME`). If you linked a checkout with `npm link`, remove the
+command with `npm uninstall -g @superstables/client`.
 
-With buy once in the default mode, that directory holds no key, and your funds in your wallet are
+With `pay` in the default browser mode, that directory holds no key, and your funds in your wallet are
 not affected. It can hold keys in two cases, and deleting it makes any funds those keys hold
 unreachable. They are testnet funds, but check before you delete:
 
