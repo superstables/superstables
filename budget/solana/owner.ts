@@ -56,6 +56,18 @@ export function approvalSite(): string | null {
   return p.APPROVALS === "hosted" ? p.SITE || DEFAULT_SITE : null;
 }
 
+/**
+ * A hosted revoke cannot use the agent key file, which signs every request to the site: where the owner can revoke
+ * without it. Nothing waits on the file; the command ends here.
+ */
+function revokeWithoutAgentKey(site: string, reason: string): never {
+  const host = new URL(site).host.replace(/^www\./, "");
+  const owner = (parseEnvFile(PUBLIC_PATH) as Record<string, string>).SOLANA_OWNER_ADDRESS ?? "on record";
+  const next = `revoke without the agent key: with Revoke on the owner's account page on ${host}, or ask the owner ${owner} to sign a transaction in their wallet on Solana devnet that removes the agent's spending permission from their associated USDC token account (mint ${USDC_MINT.toBase58()}), using a tool that supports the SPL Token Revoke instruction. Then restore ${AGENT_KEY_PATH} (a regular file only you can read) before any other hosted request`;
+  console.log(`REFUSED: ${reason}; a hosted revoke is signed by the agent key, so nothing was requested.`);
+  process.exit(emit("revokeBudget", 3, { state: "refused_precheck", reason: `${reason}; a hosted revoke is signed by the agent key, so nothing was requested`, next }));
+}
+
 export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved } = ownerPageFor({
   chain: SOLANA_OWNER_CHAIN,
   walletWords: "any Solana wallet, such as Phantom, Solflare or Backpack",
@@ -64,20 +76,35 @@ export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved 
   emit,
   railFlag: "--rail solana",
   hostedSite: approvalSite,
-  hosted: () => {
+  hosted: (action) => {
     const site = approvalSite()!;
-    const agentFile = agentKeyFileValues();
+    let agentFile: ReturnType<typeof agentKeyFileValues>;
+    try {
+      agentFile = agentKeyFileValues();
+    } catch (err) {
+      agentFile = { problem: `${AGENT_KEY_PATH} cannot be read (${(err as NodeJS.ErrnoException).code ?? (err as Error).message})` };
+    }
     if (agentFile.problem !== undefined) {
+      if (action === "revoke") revokeWithoutAgentKey(site, agentFile.problem);
       console.log(`REFUSED: ${agentFile.problem}. Nothing was requested.`);
       process.exit(emit("owner", 3, { state: "refused_precheck", reason: agentFile.problem, next: `make ${AGENT_KEY_PATH} a regular file only you can read (chmod 600), then run the command again` }));
     }
     // the agent key signs each request to the site (ed25519); it must be the agent this chain's public file names
     const secret = (agentFile.env as Record<string, string>).SOLANA_AGENT_SECRET_BASE58;
-    const keypair = secret ? Keypair.fromSecretKey(bs58.decode(secret)) : null;
+    let keypair: Keypair | null = null;
+    try {
+      keypair = secret ? Keypair.fromSecretKey(bs58.decode(secret)) : null;
+    } catch {
+      const reason = `${AGENT_KEY_PATH} holds a SOLANA_AGENT_SECRET_BASE58 that is not a key`;
+      if (action === "revoke") revokeWithoutAgentKey(site, reason);
+      console.log(`REFUSED: ${reason}. Nothing was requested.`);
+      process.exit(emit("owner", 3, { state: "refused_precheck", reason, next: "restore the agent key file, or set this chain up again" }));
+    }
     const recorded = (parseEnvFile(PUBLIC_PATH) as Record<string, string>).SOLANA_AGENT_ADDRESS;
     const address = keypair?.publicKey.toBase58();
     if (!keypair || (recorded && recorded !== address)) {
       const reason = !keypair ? `${AGENT_KEY_PATH} has no SOLANA_AGENT_SECRET_BASE58` : `the agent key in ${AGENT_KEY_PATH} is ${address}, not the agent ${recorded} this chain was set up with`;
+      if (action === "revoke") revokeWithoutAgentKey(site, reason);
       console.log(`REFUSED: ${reason}. Nothing was requested.`);
       process.exit(emit("owner", 3, { state: "refused_precheck", reason, next: "restore the agent key file, or set this chain up again" }));
     }

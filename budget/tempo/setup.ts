@@ -34,7 +34,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
-import { decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
+import { LABEL, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
 import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
 import { UNSAFE_SECRET_FILE } from '../secret-file.mjs'
@@ -163,6 +163,49 @@ function refuseAgentFileErrors<T>(fn: () => T): T {
   }
 }
 
+/** An agent file's key line (AGENT_PRIVATE_KEY, AGENT<label>_PRIVATE_KEY) and an address line in either file, by label. */
+const KEY_LINE = new RegExp(`^AGENT(${LABEL})?_PRIVATE_KEY$`)
+const ADDRESS_LINE = new RegExp(`^AGENT(${LABEL})?_ADDRESS$`)
+const isAddressValue = (v: unknown): v is Address => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v)
+
+/** The access keys the public file records, by label ('' for the default key): what revoke [--agent LABEL] acts on. */
+function publicKeys(pub: Record<string, string>): { label: string; address: Address }[] {
+  return Object.entries(pub).flatMap(([k, v]) => {
+    const m = ADDRESS_LINE.exec(k)
+    return m && isAddressValue(v) ? [{ label: m[1] ?? '', address: v }] : []
+  })
+}
+
+/**
+ * Every access key either file records: the agent file's keys, by the address derived from each private key, its address
+ * lines without a key, and the public file's key addresses. A stored address line that is missing or names another
+ * address than its key is a refusal: the owner is never replaced on the strength of a line that does not match the key it
+ * stands for.
+ */
+function recordedKeys(pub: Record<string, string>): Address[] {
+  const env = parseEnvFile(agentFileTextOrRefuse())
+  const keys: Address[] = []
+  const add = (a: Address) => { if (!keys.some((k) => same(k, a))) keys.push(a) }
+  for (const [k, v] of Object.entries(env)) {
+    const m = KEY_LINE.exec(k)
+    if (!m) continue
+    const line = `AGENT${m[1] ?? ''}_ADDRESS`
+    let derived: Address | null = null
+    try { derived = privateKeyToAddress(v as `0x${string}`) } catch {}
+    const problem = !derived ? `${k} is not a private key` : !env[line] ? `${line} is missing for its key ${derived}` : !same(env[line], derived) ? `${line} is ${env[line]}, not the address of its key (${derived})` : ''
+    if (problem) {
+      const reason = `the agent key file does not match its keys: ${problem}; the owner is not replaced`
+      console.log(`REFUSED: ${reason}. Nothing was changed.`)
+      process.exit(result(3, { state: 'refused_precheck', reason, next: `${derived ? `put ${line}=${derived} in ${AGENT_ENV_PATH}` : `restore ${AGENT_ENV_PATH}`}, then run the same command again` }))
+    }
+    add(derived!)
+  }
+  // address lines without their key, in either file: still checked (the key may be elsewhere)
+  for (const [k, v] of Object.entries(env)) if (ADDRESS_LINE.test(k) && isAddressValue(v)) add(v)
+  for (const { address } of publicKeys(pub)) add(address)
+  return keys
+}
+
 async function main() {
   const pub = loadPublicEnv()
 
@@ -180,6 +223,26 @@ async function main() {
   if (typeof args.agent === 'string') {
     const label = args.agent
     if (!pub.OWNER_ADDRESS || !existsSync(AGENT_ENV_PATH)) process.exit(result(3, { state: 'refused_precheck', reason: 'run setup without --agent first: no owner is recorded yet', next: 'superstables budget setup --rail tempo' }))
+    // a new key for the owner on record only: an agent key file bound to another owner is a conflict, not a choice
+    const boundTo = parseEnvFile(agentFileTextOrRefuse()).OWNER_ADDRESS
+    if (boundTo && !same(boundTo, pub.OWNER_ADDRESS)) {
+      const reason = `the owner files disagree: ${PUBLIC_ENV_PATH} records the owner ${pub.OWNER_ADDRESS}, and ${AGENT_ENV_PATH} is bound to ${boundTo}`
+      console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`)
+      const site = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE).origin : undefined
+      process.exit(result(3, { state: 'refused_precheck', reason, owner: pub.OWNER_ADDRESS, next: `${newOwnerCmd(site)} records one owner again (refused while a budget is live on either), then superstables budget setup --rail tempo --agent ${label}` }))
+    }
+    // unbound (an interrupted setup, a backup): bind it to the owner on record, so a later setup cannot replace that owner
+    // without --new-owner
+    // a label the public file already records names that key for good: a grant may be live on it, and revoke --agent LABEL
+    // finds it there. Never replaced by a new key under the same label.
+    const recordedKey = pub[`AGENT${label}_ADDRESS`]
+    const heldKey = parseEnvFile(agentFileTextOrRefuse())[`AGENT${label}_ADDRESS`]
+    if (recordedKey && !(heldKey && same(heldKey, recordedKey))) {
+      const reason = `${PUBLIC_ENV_PATH} already records the access key ${recordedKey} under the label ${label}, and ${heldKey ? `${AGENT_ENV_PATH} holds another key (${heldKey}) under it` : `${AGENT_ENV_PATH} holds no key for it`}; setup --agent never replaces a recorded key`
+      console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`)
+      process.exit(result(3, { state: 'refused_precheck', reason, owner: pub.OWNER_ADDRESS, agent: recordedKey, next: `pick another label (superstables budget setup --rail tempo --agent OTHER). If ${recordedKey} may still hold a budget, revoke it: superstables budget revoke --rail tempo --agent ${label}, approved by ${pub.OWNER_ADDRESS}` }))
+    }
+    if (!boundTo) refuseAgentFileErrors(() => setAgentPublic({ OWNER_ADDRESS: pub.OWNER_ADDRESS! }))
     const { address, created } = refuseAgentFileErrors(() => appendExtraAgent(label))
     console.log(`${created ? 'created' : 'reusing'} agent key AGENT${label} in ${AGENT_ENV_PATH}: ${address}`)
     if (approvalSite()) await linkExtraAgent(label, address, pub.OWNER_ADDRESS as Address)
@@ -193,7 +256,11 @@ async function main() {
   if (existsSync(AGENT_ENV_PATH)) {
     const env = parseEnvFile(agentFileTextOrRefuse())
     if (!env.AGENT_PRIVATE_KEY) process.exit(result(3, { state: 'refused_precheck', reason: `${AGENT_ENV_PATH} has no AGENT_PRIVATE_KEY`, next: `move ${AGENT_ENV_PATH} away if you mean to start over` }))
-    agent = privateKeyToAddress(env.AGENT_PRIVATE_KEY as `0x${string}`)
+    try {
+      agent = privateKeyToAddress(env.AGENT_PRIVATE_KEY as `0x${string}`)
+    } catch {
+      process.exit(result(3, { state: 'refused_precheck', reason: `${AGENT_ENV_PATH} holds an AGENT_PRIVATE_KEY that is not a key`, next: `restore ${AGENT_ENV_PATH} from a copy that has the agent key, or move it away if you mean to start over` }))
+    }
     agentOwner = env.OWNER_ADDRESS
     console.log(`agent key file ${AGENT_ENV_PATH} exists; reusing it (agent ${agent})`)
   } else {
@@ -211,26 +278,44 @@ async function main() {
   useHostedAgent(agent) // hosted: this agent key signs the link request
 
   // 2. the owner address
+  // The owner is on record when either file names it: the public file (for this agent, or with no agent named), or the
+  // owner binding in the agent key file. An unbound agent key file (an interrupted setup, a backup, an edit) does not make
+  // the public file's owner replaceable, and the binding alone (an interrupted first setup) is an owner too. Only
+  // --new-owner replaces it, with its live-key check. Two files that name different owners are a conflict: refused, and
+  // --new-owner checks both for a live key.
   const newOwner = NEW_OWNER
-  const recorded = (agentOwner ?? (pub.OWNER_ADDRESS && same(pub.AGENT_ADDRESS, agent) ? pub.OWNER_ADDRESS : undefined)) as Address | undefined
+  const publicOwner = pub.OWNER_ADDRESS && (!pub.AGENT_ADDRESS || same(pub.AGENT_ADDRESS, agent)) ? (pub.OWNER_ADDRESS as Address) : undefined
+  const recorded = (publicOwner ?? agentOwner) as Address | undefined
+  const recordedSite = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE).origin : undefined
+  if (agentOwner && publicOwner && !same(agentOwner, publicOwner) && !newOwner) {
+    const reason = `the owner files disagree: ${PUBLIC_ENV_PATH} records the owner ${publicOwner}, and ${AGENT_ENV_PATH} is bound to ${agentOwner}`
+    console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`)
+    process.exit(result(3, { state: 'refused_precheck', reason, owner: publicOwner, next: `${newOwnerCmd(recordedSite)} records one owner again (refused while a budget is live on either)` }))
+  }
   if (newOwner && recorded) {
-    // never move the owner while any agent key can still spend from the old one
-    const env = parseEnvFile(agentFileTextOrRefuse())
-    const keys = Object.entries(env).filter(([k, v]) => /^AGENT\d*[A-Za-z0-9]*_ADDRESS$/.test(k) && /^0x[0-9a-fA-F]{40}$/.test(v)).map(([, v]) => v as Address)
-    for (const key of keys) {
-      const k = await readKey(recorded, key).catch(() => null)
-      const live = k === null ? null : k.exists && k.expiry * 1000 > Date.now()
-      if (live !== false) {
-        const reason = live === null ? `could not read access key ${key} on the recorded owner ${recorded}; the owner is not replaced` : `a budget is live: access key ${key} is authorized on the recorded owner ${recorded} until ${new Date(k!.expiry * 1000).toISOString()}`
-        console.log(`REFUSED: ${reason}. Nothing was changed.`)
-        process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: live === null ? `superstables budget doctor --rail tempo, then ${newOwnerCmd(SITE)} again` : `revoke it first (superstables budget revoke --rail tempo, approved by ${recorded}), then ${newOwnerCmd(SITE)}` }))
+    // never move the owner while any agent key can still spend from a recorded one
+    const keys = recordedKeys(pub)
+    const owners = [publicOwner, agentOwner].filter((o, i, all): o is Address => Boolean(o) && all.findIndex((x) => x && same(x, o!)) === i)
+    for (const was of owners) {
+      for (const key of keys) {
+        const k = await readKey(was, key).catch(() => null)
+        const live = k === null ? null : k.exists && k.expiry * 1000 > Date.now()
+        if (live !== false) {
+          const reason = live === null ? `could not read access key ${key} on the recorded owner ${was}; the owner is not replaced` : `a budget is live: access key ${key} is authorized on the recorded owner ${was} until ${new Date(k!.expiry * 1000).toISOString()}`
+          // superstables budget revoke [--agent LABEL] acts for the public file's owner and the key the public file records
+          // under that label, and refuses while the files disagree: only when it reaches exactly this owner and key is it
+          // the way out; otherwise the owner signs the revoke in their own wallet
+          const label = publicKeys(pub).find((p) => same(p.address, key))?.label
+          const viaRevoke = publicOwner && same(was, publicOwner) && !(agentOwner && !same(agentOwner, publicOwner)) && label !== undefined
+          console.log(`REFUSED: ${reason}. Nothing was changed.`)
+          process.exit(result(3, { state: 'refused_precheck', reason, owner: was, next: live === null ? `superstables budget doctor --rail tempo, then ${newOwnerCmd(SITE)} again` : viaRevoke ? `revoke it first (superstables budget revoke --rail tempo${label ? ` --agent ${label}` : ''}, approved by ${was}), then ${newOwnerCmd(SITE)}` : `ask the owner ${was} to sign a transaction in their wallet on Tempo Moderato that revokes access key ${key}, using a tool that can call AccountKeychain.revokeKey(${key}) at ${KEYCHAIN}; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then ${newOwnerCmd(SITE)}` }))
+        }
       }
     }
     console.log(`replacing the recorded owner ${recorded} (no key is live on it): the new owner connects on the page`)
   }
   // The link recorded with the owner (setup --hosted), on this same site: an "already linked" answer is checked against it.
   // None with --new-owner, or when the site changes: then only a fresh link the owner signs records an owner.
-  const recordedSite = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE).origin : undefined
   const prior: PriorLink | null = recorded && !newOwner && SITE && recordedSite === SITE && isSiteRequestId(pub.LINK_ID) && pub.LINK_CODE ? { owner: recorded, linkId: pub.LINK_ID, linkCode: pub.LINK_CODE } : null
   if (HOSTED && recordedSite && recordedSite !== SITE) console.log(`this chain's approvals are hosted on ${recordedSite}; moving them to ${SITE} means adding the agent there, with a new owner proof`)
   let linked: { id: string; code: string } | undefined
@@ -270,8 +355,8 @@ async function main() {
     checkOwnerKeyFile(OWNER_KEY_FILE)
     owner = loadOwnerKeyFile(OWNER_KEY_FILE).OWNER_ADDRESS
     console.log(`owner address from --owner-key-file: ${owner}`)
-  } else if (pub.OWNER_ADDRESS && same(pub.AGENT_ADDRESS, agent) && !newOwner && !HOSTED) {
-    owner = pub.OWNER_ADDRESS as Address
+  } else if (publicOwner && !newOwner && !HOSTED) {
+    owner = publicOwner
     console.log(`${PUBLIC_ENV_PATH} already records owner ${owner} for this agent; not asking again. If this isn't your wallet, stop: ${newOwnerCmd(recordedSite)} replaces it`)
   } else if (HOSTED) {
     // the owner links this agent to their account on the site; the account's address becomes the owner on record
@@ -334,17 +419,20 @@ async function main() {
     await closeOwnerPage()
     process.exit(result(3, { state: 'refused_precheck', reason: "the owner address is the agent's address", next: "connect the owner's own wallet" }))
   }
-  if (agentOwner && !same(agentOwner, owner) && !newOwner) {
-    finish?.({ ok: false, message: `This agent is already bound to another owner (${agentOwner}). Nothing was changed.` })
+  // every way an owner arrives (the key file, the page, the site): another owner than the one on record needs --new-owner
+  if (recorded && !same(recorded, owner) && !newOwner) {
+    const reason = `another owner (${recorded}) is recorded for this agent`
+    finish?.({ ok: false, message: `This computer records another owner for this agent (${recorded}). Nothing was changed.` })
     await closeOwnerPage()
-    process.exit(result(3, { state: 'refused_precheck', reason: `the agent key file is bound to another owner (${agentOwner})`, owner: agentOwner, next: `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }))
+    console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this computer.`)
+    process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }))
   }
   const replaced = recorded && !same(recorded, owner) ? recorded : undefined
   if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${owner}`)
 
   // 3. the owner's public address, in the agent file (buy binds the access key to it) and the public file. Hosted: APPROVALS
   // and SITE. Asked on this computer: neither.
-  const asked = !OWNER_KEY_FILE && !(pub.OWNER_ADDRESS && same(pub.AGENT_ADDRESS, agent) && !newOwner && !HOSTED)
+  const asked = !OWNER_KEY_FILE && !(publicOwner && !newOwner && !HOSTED)
   refuseAgentFileErrors(() => setAgentPublic({ OWNER_ADDRESS: owner })) // checked again after the wait for the owner
   if (HOSTED && !linked) throw new Error('an add-agent request without its id and code')
   // hosted: APPROVALS, SITE, and the link the owner signed (LINK_ID, LINK_CODE: a later "already linked" answer is checked

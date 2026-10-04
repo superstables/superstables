@@ -354,6 +354,18 @@ describe("setup --hosted", () => {
     }
   }, 90_000);
 
+  it("--owner-key-file: a public file that records an owner but names no agent still keeps that owner without --new-owner", async () => {
+    mkdirSync(join(home, "keys", "budget"), { recursive: true });
+    writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=0x${"11".repeat(32)}\nB4_AGENT_ADDRESS=0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A\n`, { mode: 0o600 });
+    mkdirSync(join(home, "budget", "public"), { recursive: true });
+    writeFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\n`);
+    writeFileSync(join(home, "other.env"), `B4_OWNER_KEY=${evmOwnerKey("33")}\n`, { mode: 0o600 });
+    const r = await budget(["setup", "--rail", "evm", "--owner-key-file", join(home, "other.env")]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", owner: OWNER });
+    expect(publicFile()).toBe(`B4_OWNER_ADDRESS=${OWNER}\n`);
+  }, 60_000);
+
   it("a later setup without --hosted keeps the recorded owner and the hosted mode", async () => {
     site.onPoll = (r) => {
       if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER });

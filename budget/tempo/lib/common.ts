@@ -146,6 +146,9 @@ export function appendExtraAgent(label: string): { address: Address; created: bo
   const text = readSecretFile(agentPath, 'the agent key file')
   const existing = parseEnvFile(text)
   const addrKey = `AGENT${label}_ADDRESS`
+  // a key address the public file records is never replaced (setup refuses first; this is the last guard)
+  const recorded = loadPublicEnv()[addrKey]
+  if (recorded && recorded.toLowerCase() !== (existing[addrKey] ?? '').toLowerCase()) throw new Error(`${PUBLIC_ENV_PATH} already records ${addrKey}=${recorded}; it is never replaced`)
   if (existing[addrKey]) {
     if (!loadPublicEnv()[addrKey]) writePublicEnv({ [addrKey]: existing[addrKey] })
     return { address: existing[addrKey] as Address, created: false }

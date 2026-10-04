@@ -369,7 +369,13 @@ is not trusted to say who the owner is or what was paid.
   Moving a hosted chain to another site means adding the agent there, with a new owner proof.
 - **The owner on record does not move under a live budget.** `--new-owner` is refused while a
   budget is live and, on `evm`, while the agent key holds the budget token, since `recover`
-  returns that token to the owner on record.
+  returns that token to the owner on record. On `solana` and `tempo` the agent key file also
+  records the owner. An owner named by either file counts, so an agent key file without that line
+  (an interrupted setup, a backup) does not let another owner in without `--new-owner`. Files
+  that name different owners are refused, by setup and by `revoke`, until `--new-owner` records
+  one again. `--new-owner` checks both owners for a live budget (on `tempo`, every key either file
+  records, the agent file's by the address of its private key) and names the owner who must
+  revoke it. `revoke` never waits on the agent key file: one it cannot read is ignored there.
 - **Every result is read from the chain.** On `evm` and `tempo` the command checks the transaction
   the site reports as it checks one from the local page. A step the site reports as failed is never
   reported as settled by the client, even if it succeeded on chain: it is a mismatch (exit 3),
@@ -406,6 +412,11 @@ is not trusted to say who the owner is or what was paid.
   sent". Read the chain before trying again.
 - **`recover` stays local.** On a hosted chain, `grant`, `revoke` and `fund-agent` go through the
   site; the owner's part of `recover` still uses the page on this computer.
+- **A hosted revoke needs the agent key.** The agent key signs every request to the site. On
+  `solana` and `tempo`, if a hosted `revoke` needs approval but the agent key file is missing,
+  readable by others, not a regular file or holds no usable key, it refuses (exit 3, nothing
+  requested) and names the other ways to revoke: Revoke on the owner's account page on the site,
+  or a revoke transaction the owner signs in their own wallet.
 - **RPC replacements.** `B4_RPC`, `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC` must be
   `https`, or `http` on this computer; every check above reads the chain through them. A
   replacement in use is named in the `RESULT` (`rpc`).

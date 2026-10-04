@@ -14,9 +14,10 @@
 // owner rejected or the link expired, no SOL for the fee), 5 unknown (read the chain).
 import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseStrict, readPublic, retryRead, sleep } from "./lib.mjs";
+import { AGENT_KEY_PATH, connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseEnvText, parseStrict, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { mismatchPage, mismatchReason, siteName } from "../site.mjs";
+import { readRegularFile } from "../secret-file.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort } from "./owner.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/revokeBudget.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
@@ -41,6 +42,15 @@ const conn = connection();
 const pub = readPublic();
 if (!pub.owner) refuse("the public file names no owner", "superstables budget setup --rail solana");
 const owner: PublicKey = pub.owner;
+// The agent key file also records the owner. While it names another, this command (which acts for the public file's
+// owner) says nothing about either: "nothing to revoke" for one could hide the other's live budget. Read for that one
+// public line only, through the bounded reader that never waits on a FIFO; an agent key file it cannot read (missing, not
+// a regular file, too large) never stops the revoke.
+{
+  let bound: string | undefined;
+  try { bound = (parseEnvText(readRegularFile(AGENT_KEY_PATH, "the agent key file")) as Record<string, string>).SOLANA_OWNER_ADDRESS; } catch {}
+  if (bound && bound !== owner.toBase58()) refuse(`the owner files disagree: the public file records the owner ${owner.toBase58()}, and the agent key file is bound to ${bound}`, "superstables budget setup --rail solana --new-owner checks both owners for a live budget and names the owner who must revoke it, and how");
+}
 const ata = getAssociatedTokenAddressSync(USDC_MINT, owner);
 let before: Awaited<ReturnType<typeof getAccountOrNull>>;
 try {

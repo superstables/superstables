@@ -95,7 +95,9 @@ if (p.B4_AGENT_ADDRESS && !same(p.B4_AGENT_ADDRESS, agentAddr)) {
 }
 
 // 2. the owner address
-const recorded = p.B4_OWNER_ADDRESS && same(p.B4_AGENT_ADDRESS, agentAddr) ? (p.B4_OWNER_ADDRESS as Address) : undefined;
+// on record for this agent: a public file that names another agent was refused above; one that names no agent (an edit)
+// still records its owner, which only --new-owner replaces
+const recorded = p.B4_OWNER_ADDRESS && (!p.B4_AGENT_ADDRESS || same(p.B4_AGENT_ADDRESS, agentAddr)) ? (p.B4_OWNER_ADDRESS as Address) : undefined;
 if (NEW_OWNER && recorded) {
   // never move the owner while the agent can still spend from the old one
   const live = await allowanceOf(recorded, agentAddr).catch(() => null);

@@ -22,6 +22,7 @@ import { closeOwnerPage, ownerPageFor } from '../owner-page.ts'
 import { DEFAULT_SITE, mismatchReason } from '../site.mjs'
 import { AGENT_ENV_PATH, CHAIN_ID, EXPLORER_BASE, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, fromBaseUnits, loadPublicEnv, makeClient, parseEnvFile, agentFileText } from './lib/common.ts'
 import { chainHead, rpcRead, sleep, topicOf } from './lib/chain.ts'
+import { LABEL } from './lib/args.mjs'
 
 export { closeOwnerPage }
 
@@ -70,17 +71,41 @@ let hostedAgent: Address | undefined
 export function useHostedAgent(agent: Address) {
   hostedAgent = agent
 }
+/**
+ * A hosted revoke cannot use the agent key file, which signs every request to the site: where the owner can revoke
+ * `key` without it. Nothing waits on the file; the command ends here.
+ */
+function revokeWithoutAgentKey(site: string, key: Address | undefined, reason: string): never {
+  const host = new URL(site).host.replace(/^www\./, '')
+  const owner = loadPublicEnv().OWNER_ADDRESS ?? 'on record'
+  const next = `revoke without the agent key: with Revoke on the owner's account page on ${host}, or ask the owner ${owner} to sign a transaction in their wallet on Tempo Moderato that revokes access key ${key ?? '(the agent key)'}, using a tool that can call AccountKeychain.revokeKey(${key ?? 'agent key'}) at ${KEYCHAIN}. Then restore ${AGENT_ENV_PATH} (a regular file only you can read) before any other hosted request`
+  console.log(`REFUSED: ${reason}; a hosted revoke is signed by the agent key, so nothing was requested.`)
+  process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason: `${reason}; a hosted revoke is signed by the agent key, so nothing was requested`, next }))
+}
+
+/** An agent file's key line: AGENT_PRIVATE_KEY, or AGENT<label>_PRIVATE_KEY with the label syntax every command takes. */
+const KEY_LINE = new RegExp(`^AGENT(${LABEL})?_PRIVATE_KEY$`)
 /** The private key in the agent file whose address is `agent`, or undefined. */
-function agentKeyFor(agent: Address): Hex | undefined {
-  const file = agentFileText()
+function agentKeyFor(agent: Address, action: string, site: string): Hex | undefined {
+  let file: ReturnType<typeof agentFileText>
+  try {
+    file = agentFileText()
+  } catch (err) {
+    file = { problem: `${AGENT_ENV_PATH} cannot be read (${(err as NodeJS.ErrnoException).code ?? (err as Error).message})` }
+  }
   if (file.problem !== undefined) {
+    if (action === 'revoke') revokeWithoutAgentKey(site, agent, file.problem)
     console.log(`REFUSED: ${file.problem}. Nothing was requested.`)
     process.exit(emit('owner', 3, { state: 'refused_precheck', reason: file.problem, next: `make ${AGENT_ENV_PATH} a regular file only you can read (chmod 600), then run the command again` }))
   }
   const env = parseEnvFile(file.text)
   for (const [k, v] of Object.entries(env)) {
-    if (!/^AGENT[A-Za-z0-9]*_PRIVATE_KEY$/.test(k) || !/^0x[0-9a-fA-F]{64}$/.test(v)) continue
-    if (privateKeyToAddress(v as Hex).toLowerCase() === agent.toLowerCase()) return v as Hex
+    if (!KEY_LINE.test(k) || !/^0x[0-9a-fA-F]{64}$/.test(v)) continue
+    // 32 bytes are not always a key: 0 and anything from the curve order up are not (privateKeyToAddress throws on them),
+    // and such a line is skipped, so a hosted revoke still ends with where to revoke instead of an error
+    let address: string
+    try { address = privateKeyToAddress(v as Hex) } catch { continue }
+    if (address.toLowerCase() === agent.toLowerCase()) return v as Hex
   }
   return undefined
 }
@@ -92,13 +117,14 @@ export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   emit,
   railFlag: '--rail tempo',
   hostedSite: approvalSite,
-  hosted: () => {
+  hosted: (action) => {
     const site = approvalSite()!
     // the agent key signs each request to the site: the key this command grants or revokes, which must be on this computer
     const agent = (hostedAgent ?? loadPublicEnv().AGENT_ADDRESS) as Address | undefined
-    const agentKey = agent ? agentKeyFor(agent) : undefined
+    const agentKey = agent ? agentKeyFor(agent, action, site) : undefined
     if (!agent || !agentKey) {
       const reason = `the agent key ${agent ?? '(none recorded)'} is not in ${AGENT_ENV_PATH}, so it cannot sign the request to ${site}`
+      if (action === 'revoke') revokeWithoutAgentKey(site, agent, reason)
       console.log(`REFUSED: ${reason}. Nothing was requested.`)
       process.exit(emit('owner', 3, { state: 'refused_precheck', reason, next: 'restore the agent key file, or set this chain up again' }))
     }
