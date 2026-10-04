@@ -51,8 +51,7 @@ Owner actions happen in your own wallet, on one of two kinds of page:
 - **On superstables.com.** Hosted buy once always uses the site. For a budget, `superstables budget
   setup --hosted` moves the owner approvals for that chain to the site, where you approve from a
   device where you are signed in and have a compatible wallet. Hosted budget approvals support Base Sepolia, Arc Testnet, Arbitrum
-  Sepolia, Polygon Amoy, SKALE Base Sepolia, Tempo Moderato and Solana devnet. Ethereum Sepolia
-  budgets use local approvals.
+  Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
 
 To use hosted budget approvals, you add the agent to your account. The agent gives you an approval link
 and a match code. On the site you pick that code and choose **Sign with wallet**: your wallet signs
@@ -428,7 +427,7 @@ Every [install](#install) includes it: the skill bundles it, and a git install o
 compatible browser extension wallet on the same computer: an EVM wallet such as MetaMask, Rabby or Coinbase Wallet on
 `evm`; an EVM wallet that can add a custom network on `tempo`; and a Solana Wallet Standard wallet such as Phantom,
 Solflare or Backpack on `solana`, with no account. `setup --hosted` moves them to
-superstables.com instead, on every network except Ethereum Sepolia, after you add the agent to your account (see
+superstables.com instead, after you add the agent to your account (see
 [Where you approve](#where-you-approve)): you approve from a device where you are signed in and have a compatible
 wallet, after picking the match code the agent shows you. That needs a superstables.com account. Setup records your address; grants, revokes and funding require wallet
 approval. Over SSH, the owner forwards the local page's port first (`ssh -L PORT:127.0.0.1:PORT`, with the port from the
