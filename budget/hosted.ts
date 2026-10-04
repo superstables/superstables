@@ -44,9 +44,9 @@ import { dirname } from "node:path";
 import { getAddress, isAddress, recoverMessageAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { OwnerActionOutcome, OwnerTerms } from "../src/core/signer/owner-approval-server.ts";
-import { BUDGET_API, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailure, siteName, siteText, siteWord } from "./site.mjs";
+import { BUDGET_API, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteText, siteWord } from "./site.mjs";
 
-export { scrub, siteWord };
+export { scrub, siteFailedWords, siteWord };
 
 // ── agent proof v2 ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -723,7 +723,8 @@ export class HostedApprovals {
         case "confirmed":
         case "failed":
           if (!tx) break;
-          if (hash) return done({ status: "sent", address: owner ?? p.expected!, hash });
+          // a hash the site reported as failed is still read from the chain, but it never settles there
+          if (hash) return done({ status: "sent", address: owner ?? p.expected!, hash, ...(state === "failed" ? { siteFailed: siteFailedWords(this.name, v.reason_code) } : {}) });
           if (state === "failed") return end("rejected", reason || `${this.name} reports the transaction failed, without a hash`, true);
           continue;
         case "rejected":

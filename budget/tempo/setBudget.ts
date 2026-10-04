@@ -32,8 +32,9 @@ import { chainHead, readKey, rpcRead, sleep } from './lib/chain.ts'
 import { OWNER_KEY_FILE, OWNER_TIMEOUT_MS, checkOwnerKeyFile } from '../owner-page.ts'
 import {
   KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, grantCalldata,
-  grantTerms, iso, maxByExpiry, readSent, readUntilMatches, tokenBalance, useHostedAgent, type GrantPlan,
+  grantTerms, iso, maxByExpiry, readSent, readUntilMatches, revertedReceiptOf, tokenBalance, useHostedAgent, type GrantPlan,
 } from './owner.ts'
+import { mismatchPage, mismatchReason } from '../site.mjs'
 
 const { values: args } = parseCli({
   name: 'setBudget.ts',
@@ -100,15 +101,22 @@ async function main() {
     plan = { agent, limit, expiry: head.timestamp + expirySeconds, period, sellers }
     console.log(`  expiry: ${new Date(plan.expiry * 1000).toISOString()} (unix ${plan.expiry}, chain time + ${expirySeconds}s)`)
     const scopes = sellers ? [Scopes.tip20(TOKEN_ADDRESS).transfer({ recipients: sellers }), Scopes.tip20(TOKEN_ADDRESS).transferWithMemo({ recipients: sellers })] : undefined
-    const { receipt } = await makeClient(account).accessKey.authorizeSync({
+    // the SDK raises on a reverted receipt: that transaction was mined and granted nothing, so it is failed with its hash,
+    // whatever the key reads afterwards (another transaction may have set it)
+    const sentOrReverted = await makeClient(account).accessKey.authorizeSync({
       accessKey: { address: agent, type: 'secp256k1' },
       expiry: plan.expiry,
       limits: [{ token: TOKEN_ADDRESS, limit, period }],
       scopes,
+    }).then(({ receipt }) => receipt, (err) => {
+      const reverted = revertedReceiptOf(err)
+      if (!reverted) throw err
+      return { transactionHash: reverted.transactionHash, status: 'reverted' as const, blockNumber: 0n }
     })
-    hash = receipt.transactionHash
+    const receipt = sentOrReverted
+    hash = receipt.transactionHash as Hex
     console.log(`\ntx hash: ${hash}\nexplorer: ${explorerTx(hash)}\nstatus: ${receipt.status}`)
-    if (receipt.status !== 'success') process.exit(result(1, { state: 'failed', tx: hash, reason: 'the authorizeKey transaction reverted', next: 'superstables budget status --rail tempo' }))
+    if (receipt.status !== 'success') process.exit(result(1, { state: 'failed', tx: hash, reason: 'the authorizeKey transaction reverted on chain; it granted nothing', next: `superstables budget status --rail tempo${agentFlag(label)}` }))
     const block = await rpcRead('eth_getBlockByNumber', ['0x' + receipt.blockNumber.toString(16), false]).catch(() => null)
     authorizedAt = block?.timestamp ? parseInt(block.timestamp, 16) : undefined
   } else {
@@ -130,13 +138,13 @@ async function main() {
     if (outcome.status !== 'sent') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     finish = handle.finish
     console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`)
-    let sent = await readSent(outcome.hash as Hex, { from: owner, data, afterBlock: head.number })
+    let sent = await readSent(outcome.hash as Hex, { from: owner, data, afterBlock: head.number, siteFailed: outcome.siteFailed })
     if (!sent) {
       // replaced ("speed up") or dropped: look for the keychain's own event for this key
       const alt = await findKeyEvent('authorized', owner, agent, head.number).catch(() => null)
       if (alt) {
         console.log(`the reported transaction is not on chain, but ${alt} authorized the key after this request started; reading that one`)
-        sent = await readSent(alt, { from: owner, data, afterBlock: head.number })
+        sent = await readSent(alt, { from: owner, data, afterBlock: head.number, siteFailed: outcome.siteFailed })
       }
     }
     if (!sent) {
@@ -155,9 +163,9 @@ async function main() {
     }
     // Any difference from the plan is a mismatch, whatever the key reads afterwards: the wallet already sent it.
     if (sent.problems.length) {
-      const reason = `the transaction on chain is not the one planned: ${sent.problems.join('; ')}`
+      const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash)
       console.log(`MISMATCH: ${reason}`)
-      handle.finish({ ok: false, message: `The chain shows a different transaction than planned (${sent.problems.join('; ')}). Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
+      handle.finish({ ok: false, message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
       await closeOwnerPage()
       process.exit(result(3, { state: 'mismatch', tx: hash, reason, next: `revoke it (superstables budget revoke --rail tempo${agentFlag(label)}), then grant a new key` }))
     }

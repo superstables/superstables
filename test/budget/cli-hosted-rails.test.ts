@@ -12,6 +12,7 @@ import bs58 from "bs58";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { privateKeyToAddress } from "viem/accounts";
 import { evmOwner, startFakeSite, type FakeRequest, type FakeSite } from "../helpers/fake-site.js";
+import { readBody, startServer } from "../helpers/servers.js";
 import { KEYCHAIN, TOKEN_PROGRAM_ID, ataOf, computeUnitLimit, computeUnitPrice, startFakeSolana, startFakeTempo, type FakeSolana, type FakeTempo } from "../helpers/fake-chains.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -89,6 +90,14 @@ const ownerSends = (rail: "tempo" | "solana", over: Partial<Parameters<FakeSolan
   Object.assign(r, { state: "confirmed", tx_hash: hash, wallet_asked: true });
 };
 
+/** The same, but the site then judges the transaction failed, with its hash: the command must never settle it. */
+const ownerSendsSiteFails = (rail: "tempo" | "solana") => (r: FakeRequest) => {
+  ownerSends(rail)(r);
+  if (r.state === "confirmed") Object.assign(r, { state: "failed", reason: "The transaction is not the one planned.", reason_code: "mismatch" });
+};
+const SITE_FAILED = /^127\.0\.0\.1:\d+ reported this step as failed \(reason: mismatch\), so it is not counted as done \(transaction \S+\)$/;
+const SITE_FAILED_REVERTED = /reported this step as failed \(reason: reverted\), so it is not counted as done/;
+
 describe("tempo, hosted", () => {
   it("setup --hosted --new-owner refused while a key is live: the retry names --hosted and the recorded site", async () => {
     hostedTempo();
@@ -146,6 +155,127 @@ describe("tempo, hosted", () => {
     expect(site.requests[0].body).toMatchObject({ kind: "grant", rail: "tempo", chain: "moderato", agent: TEMPO_AGENT, transaction: { to: KEYCHAIN, value: "0x0" } });
     expect(site.requests[0].body.transaction.data).toMatch(/^0x980a6025/);
     expect(r.stderr).toMatch(/readback: type 0, expiry \d+, limits true, remaining 0\.05/);
+  }, 90_000);
+
+  it("the site judged the grant failed: never settled, standalone or after the link, though the key is on chain as planned", async () => {
+    hostedTempo();
+    site.owner = OWNER;
+    site.onPoll = ownerSendsSiteFails("tempo");
+    const g = await budget(["grant", "--rail", "tempo", "--amount", "0.05", "--wait", "--no-open"]);
+    expect(g.code, g.stderr).toBe(3);
+    expect(g.result.ok).toBe(false);
+    expect(g.result.reason).toMatch(SITE_FAILED);
+
+    rmSync(file("budget", "public", "tempo-moderato.env"));
+    write(file("keys", "budget", "tempo-agent.env"), `AGENT_PRIVATE_KEY=${TEMPO_KEY}\nAGENT_ADDRESS=${TEMPO_AGENT}\n`);
+    tempo.keys.clear();
+    site.onPoll = undefined;
+    const first = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--grant", "0.05"]);
+    expect(first.code, first.stderr).toBe(0);
+    const r = site.requests.at(-1)!;
+    Object.assign(r, { state: "linked", owner: OWNER });
+    Object.assign(r.steps![0], { state: "failed", tx_hash: tempo.mine(OWNER, r.body.then[0].transaction.data), wallet_asked: true, reason: "The transaction is not the one planned.", reason_code: "mismatch" });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(3);
+    expect(done.result).toMatchObject({ ok: false, linked: true, steps: [{ kind: "grant", state: "mismatch" }] });
+    expect(done.result.steps[0].reason).toMatch(SITE_FAILED);
+  }, 180_000);
+
+  it("a revoke that reverted is never settled, even when another transaction already revoked the key", async () => {
+    hostedTempo();
+    site.owner = OWNER;
+    const live = () => tempo.keys.set(`${OWNER.toLowerCase()}:${TEMPO_AGENT.toLowerCase()}`, { expiry: BigInt(Math.floor(Date.now() / 1000) + 86400), limit: 50_000n, period: 0n, periodEnd: 0n, revoked: false, scoped: false });
+    for (const [what, verdict] of [["the site judged it failed", { state: "failed", reason: "It reverted.", reason_code: "reverted" }], ["the site confirmed it", { state: "confirmed" }]] as const) {
+      live();
+      site.onPoll = (r) => {
+        if (r.polls !== 2 || r.kind === "link") return;
+        // another transaction revokes the key first; the one the site reports then reverts
+        tempo.mine(OWNER, r.body.transaction.data);
+        Object.assign(r, { ...verdict, tx_hash: tempo.mine(OWNER, r.body.transaction.data, { reverted: true }), wallet_asked: true });
+      };
+      const r = await budget(["revoke", "--rail", "tempo", "--wait", "--no-open"]);
+      expect(r.code, `${what}: ${r.stderr}`).toBe(1);
+      expect(r.result.ok, what).toBe(false);
+      expect(r.result.state, what).toBe("failed");
+      expect(r.result.reason, what).toMatch(/the revoke transaction reverted on chain.*the key reads revoked on chain, but not by this transaction/);
+      if (verdict.state === "failed") expect(r.result.reason).toMatch(SITE_FAILED_REVERTED);
+      // the key does read revoked, and the RESULT says so, but not as this transaction's doing
+      expect(r.result.revoked, what).toBe(true);
+      expect(r.result.tx, what).toEqual({ revoke: expect.stringMatching(/^0x/) });
+    }
+    // reverted while the key is still live: failed, and revoke again
+    live();
+    site.onPoll = (r) => {
+      if (r.polls !== 2 || r.kind === "link") return;
+      Object.assign(r, { state: "failed", reason_code: "reverted", tx_hash: tempo.mine(OWNER, r.body.transaction.data, { reverted: true }), wallet_asked: true });
+    };
+    const still = await budget(["revoke", "--rail", "tempo", "--wait", "--no-open"]);
+    expect(still.code, still.stderr).toBe(1);
+    expect(still.result).toMatchObject({ ok: false, state: "failed", revoked: false });
+    expect(still.result.next).toMatch(/run superstables budget revoke again/);
+  }, 180_000);
+
+  it("--owner-key-file: a revoke or grant whose transaction reverted is failed with its hash, whatever the key reads", async () => {
+    hostedTempo();
+    const id = `${OWNER.toLowerCase()}:${TEMPO_AGENT.toLowerCase()}`;
+    const keyFor = (revoked: boolean) => ({ expiry: BigInt(Math.floor(Date.now() / 1000) + 86400), limit: 50_000n, period: 0n, periodEnd: 0n, revoked, scoped: false });
+    const HASH = `0x${"ab".repeat(32)}`;
+    const tempoUrl = tempo.url;
+    let onSend = () => {};
+    // the real SDK signs and sends through this RPC: the send answers with a reverted receipt, after another transaction
+    // has changed the key the way this one meant to
+    const rpc = await startServer(async (req, res) => {
+      const body = JSON.parse(await readBody(req));
+      const one = async (r: { id: number; method: string }) => {
+        if (r.method === "eth_getTransactionCount") return { jsonrpc: "2.0", id: r.id, result: "0x0" };
+        if (r.method === "eth_estimateGas") return { jsonrpc: "2.0", id: r.id, result: "0x100000" };
+        if (r.method === "eth_gasPrice" || r.method === "eth_maxPriorityFeePerGas") return { jsonrpc: "2.0", id: r.id, result: "0x1" };
+        if (r.method === "eth_sendRawTransactionSync") {
+          onSend();
+          return { jsonrpc: "2.0", id: r.id, result: { transactionHash: HASH, status: "0x0", blockNumber: "0x3ea", blockHash: `0x${"cd".repeat(32)}`, transactionIndex: "0x0", from: OWNER, to: KEYCHAIN, logs: [], gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", logsBloom: `0x${"0".repeat(512)}`, type: "0x76", contractAddress: null } };
+        }
+        const v = await (await fetch(tempoUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(r) })).json();
+        if (r.method === "eth_getBlockByNumber" && v.result) Object.assign(v.result, { baseFeePerGas: "0x1", gasLimit: "0x1000000", gasUsed: "0x0" });
+        return v;
+      };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(Array.isArray(body) ? await Promise.all(body.map(one)) : await one(body)));
+    });
+    Object.defineProperty(tempo, "url", { value: rpc.url, configurable: true });
+    write(file("owner.env"), `OWNER_PRIVATE_KEY=0x${"22".repeat(32)}\n`);
+    try {
+      tempo.keys.set(id, keyFor(false));
+      onSend = () => { tempo.keys.get(id)!.revoked = true; };
+      const r = await budget(["revoke", "--rail", "tempo", "--owner-key-file", file("owner.env"), "--yes"]);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.result).toMatchObject({ ok: false, state: "failed", revoked: true, tx: { revoke: HASH } });
+      expect(r.result.reason).toMatch(/the revoke transaction reverted on chain; the key reads revoked on chain, but not by this transaction/);
+
+      tempo.keys.clear();
+      onSend = () => { tempo.keys.set(id, keyFor(false)); };
+      const g = await budget(["grant", "--rail", "tempo", "--amount", "0.05", "--owner-key-file", file("owner.env"), "--yes"]);
+      expect(g.code, g.stderr).toBe(1);
+      expect(g.result).toMatchObject({ ok: false, state: "failed" });
+      expect(g.result.reason).toMatch(/the authorizeKey transaction reverted on chain; it granted nothing/);
+      expect(JSON.stringify(g.result.tx)).toContain(HASH);
+    } finally {
+      Object.defineProperty(tempo, "url", { value: tempoUrl, configurable: true });
+      await rpc.close();
+    }
+  }, 120_000);
+
+  it("a grant that reverted is failed, never set, even when the key already reads as planned", async () => {
+    hostedTempo();
+    site.owner = OWNER;
+    site.onPoll = (r) => {
+      if (r.polls !== 2 || r.kind === "link") return;
+      tempo.mine(OWNER, r.body.transaction.data);
+      Object.assign(r, { state: "failed", reason_code: "reverted", tx_hash: tempo.mine(OWNER, r.body.transaction.data, { reverted: true }), wallet_asked: true });
+    };
+    const g = await budget(["grant", "--rail", "tempo", "--amount", "0.05", "--wait", "--no-open"]);
+    expect(g.code, g.stderr).toBe(1);
+    expect(g.result).toMatchObject({ ok: false, state: "failed" });
+    expect(g.result.reason).toMatch(/reverted on chain/);
   }, 90_000);
 
   it("grant: refused when the site acts for another owner, before any link", async () => {
@@ -307,6 +437,34 @@ describe("solana, hosted", () => {
     expect(site.requests[1].body).toEqual({ kind: "fund_agent", rail: "solana", chain: "devnet", agent: SOL_AGENT, solana: { amount_atomic: "20000000" } });
   }, 120_000);
 
+  it("the site judged a step failed: never settled, standalone or after the link, though the chain shows the plan", async () => {
+    hostedSolana();
+    site.owner = SOL_OWNER;
+    site.onPoll = ownerSendsSiteFails("solana");
+    for (const command of [["grant", "--rail", "solana", "--amount", "0.05"], ["fund-agent", "--rail", "solana", "--amount", "0.02"]]) {
+      const r = await budget([...command, "--wait", "--no-open"]);
+      expect(r.code, `${command[0]}: ${r.stderr}`).toBe(3);
+      expect(r.result.ok).toBe(false);
+      expect(r.result.reason, command[0]).toMatch(SITE_FAILED);
+    }
+
+    rmSync(file("budget", "public", "solana-devnet.env"));
+    write(file("keys", "budget", "solana-agent.env"), `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);
+    solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: null, delegated: 0n });
+    site.onPoll = undefined;
+    const first = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--grant", "0.05", "--fund"]);
+    expect(first.code, first.stderr).toBe(0);
+    const r = site.requests.at(-1)!;
+    Object.assign(r, { state: "linked", owner: SOL_OWNER });
+    const failed = { state: "failed", wallet_asked: true, reason: "The transaction is not the one planned.", reason_code: "mismatch" };
+    Object.assign(r.steps![0], { ...failed, tx_hash: solana.land({ kind: "fund_agent", owner: SOL_OWNER, agent: SOL_AGENT, amount: 10_000_000n }) });
+    Object.assign(r.steps![1], { ...failed, tx_hash: solana.land({ kind: "grant", owner: SOL_OWNER, agent: SOL_AGENT, amount: 50_000n }) });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(3);
+    expect(done.result).toMatchObject({ ok: false, linked: true, steps: [{ kind: "fund_agent", state: "mismatch" }, { kind: "grant", state: "mismatch" }] });
+    for (const step of done.result.steps) expect(step.reason).toMatch(SITE_FAILED);
+  }, 240_000);
+
   it("a grant signed by another wallet than the owner on record is a mismatch (exit 3), never settled", async () => {
     hostedSolana();
     site.owner = SOL_OWNER;
@@ -379,7 +537,7 @@ describe("solana, hosted", () => {
     const rv = await budget(["revoke", "--rail", "solana", "--wait", "--no-open"]);
     expect(rv.code, rv.stderr).toBe(3);
     expect(rv.result).toMatchObject({ state: "refused_precheck" });
-    expect(rv.result.reason).toMatch(/not the one planned/);
+    expect(rv.result.reason).toMatch(/^the transaction was not accepted as the planned step: /);
     const fa = await budget(["fund-agent", "--rail", "solana", "--amount", "0.02", "--wait", "--no-open"]);
     expect(fa.code, fa.stderr).toBe(3);
     expect(fa.result.state).toBe("refused_precheck");

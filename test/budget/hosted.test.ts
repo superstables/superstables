@@ -434,6 +434,22 @@ describe("hosted approvals", () => {
     expect(site.requests[0].kind).toBe("revoke");
   });
 
+  it("a transaction the site judged failed keeps its hash for the chain read, with the site's verdict: never a plain sent", async () => {
+    site.owner = OWNER;
+    site.onPoll = (r) => {
+      if (r.polls >= 2) Object.assign(r, { state: "failed", tx_hash: HASH, reason: "the owner's account did not make the planned call", reason_code: "mismatch", wallet_asked: true });
+    };
+    const h = await client().request({ kind: "evm-transaction", action: "grant", account: OWNER, transaction: { ...GRANT_TX }, terms: TERMS, timeoutMs: 60_000 });
+    const host = new URL(site.url).host;
+    expect(await h.settled).toEqual({ status: "sent", address: OWNER, hash: HASH, siteFailed: `${host} reported this step as failed (reason: mismatch), so it is not counted as done` });
+    // a code the client does not know is named as unexpected, never passed through
+    site.onPoll = (r) => {
+      if (r.polls >= 2) Object.assign(r, { state: "failed", tx_hash: HASH, reason_code: "something new" });
+    };
+    const other = await client().request({ kind: "evm-transaction", action: "grant", account: OWNER, transaction: { ...GRANT_TX }, terms: TERMS, timeoutMs: 60_000 });
+    expect(((await other.settled) as { siteFailed?: string }).siteFailed).toBe(`${host} reported this step as failed (reason: unexpected), so it is not counted as done`);
+  });
+
   it("a rejection before the wallet was asked: nothing sent", async () => {
     site.owner = OWNER;
     site.onPoll = (r) => {

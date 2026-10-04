@@ -304,7 +304,19 @@ undo an owner signature or a transaction already sent through hosted setup. `doc
   from the same plan: the command's arguments and the chain's state, not the agent's description.
   On `evm` and `tempo`, the wallet signs and submits, and the command then checks the transaction
   on chain: one that differs from the plan is reported (exit 3), naming each difference, even if it
-  already confirmed. That detects it; it cannot undo it. On `solana` with local approvals, the
+  already confirmed. That detects it; it cannot undo it. On `evm` the step counts only when the
+  owner's account made exactly the planned call. For a grant or revoke, the receipt must show the
+  token's `Approval(owner, agent, amount)`; for a token top-up, `Transfer(owner, agent, amount)`.
+  For a gas top-up, a separate balance read must show the agent holds at least its balance before
+  the request plus the requested amount. A wallet that pays the
+  fee for the owner (MetaMask's sponsored transactions, sent by a relayer through MetaMask's
+  DelegationManager) is accepted only on a chain where that contract's code is pinned in the client
+  (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy), with the manager's own
+  `RedeemedDelegation` event for this owner and sender in the receipt. A sponsored gas top-up leaves
+  no log, so the owner's address must have run MetaMask's pinned smart-account code in that
+  transaction. On SKALE Base Sepolia and Ethereum Sepolia only the owner's own transactions count.
+  When the chain does not answer a read this needs, the result is unknown (exit 5), never done.
+  On `solana` with local approvals, the
   wallet only signs, and the client checks the signed bytes are the transaction it built before it
   submits them. The one change it accepts is the pair of compute-budget instructions a wallet may
   put first (one compute unit limit and one unit price, a priority fee of at most 0.001 SOL), with
@@ -349,8 +361,10 @@ is not trusted to say who the owner is or what was paid.
   budget is live and, on `evm`, while the agent key holds the budget token, since `recover`
   returns that token to the owner on record.
 - **Every result is read from the chain.** On `evm` and `tempo` the command checks the transaction
-  the site reports as it checks one from the local page. On `solana`, where the site builds the
-  transaction, it must be exactly the planned instruction (`ApproveChecked`, `Revoke` or the SOL
+  the site reports as it checks one from the local page. A step the site reports as failed is never
+  reported as settled by the client, even if it succeeded on chain: it is a mismatch (exit 3),
+  failed if it reverted, or unknown when the chain does not show it. On `solana`, where the site
+  builds the transaction, it must be exactly the planned instruction (`ApproveChecked`, `Revoke` or the SOL
   transfer, same accounts and amount), signed and paid for by the owner alone, plus at most a
   bounded compute-budget addition (a priority fee of at most 0.001 SOL, the same bound the local
   page allows); anything else is a mismatch, and the owner revokes. `buy-once` reports a purchase

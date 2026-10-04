@@ -91,17 +91,20 @@ export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved 
  * lookup tables, and its instructions exactly `planned` (the instruction the command builds for the page on this computer:
  * ApproveChecked, Revoke or the SOL transfer, same program, accounts and data), plus at most the bounded compute-budget
  * instructions a wallet may add (computeBudgetProblem). Anything else in `problems` makes the command a mismatch.
+ * `siteFailed`: the site reported this transaction as failed, in words; it is a problem too, so such a step is never settled.
  * "unknown" when the chain does not show it within the wait.
  */
-export async function confirmHosted(conn: Connection, signature: string, owner: string, afterSlot: number, planned: TransactionInstruction[], waitMs = 120_000): Promise<Confirmed & { problems: string[] }> {
+export async function confirmHosted(conn: Connection, signature: string, owner: string, afterSlot: number, planned: TransactionInstruction[], siteFailed?: string, waitMs = 120_000): Promise<Confirmed & { problems: string[]; siteFailed?: string }> {
   const c = await confirmSent(conn, { signature, blockhash: "", lastValidBlockHeight: Number.MAX_SAFE_INTEGER }, waitMs);
   const problems: string[] = [];
   if (c.status === "success" || c.status === "failed") {
     if (c.signer !== owner) problems.push(`it was signed and paid for by ${c.signer}, not the owner ${owner}`);
     if (c.slot !== undefined && c.slot <= afterSlot) problems.push(`it landed in slot ${c.slot}, before this request started (slot ${afterSlot})`);
     problems.push(...instructionProblems(c, planned));
+    // the site reported this transaction as failed: never settled here, whatever the chain shows
+    if (siteFailed) problems.push(siteFailed);
   }
-  return { ...c, problems };
+  return { ...c, problems, ...(siteFailed ? { siteFailed } : {}) };
 }
 
 const BUDGET_PROGRAM = ComputeBudgetProgram.programId.toBase58();

@@ -22,6 +22,7 @@ import "./cli-guard.mjs";
 import { encodeFunctionData, type Hex } from "viem";
 import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, erc20Abi, USDC, publicClient, assertRpcChain, tx } from "./lib.ts";
 import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, tokenRow, approveRow, capWords, REVOKE_HINT, grantTx, grantEnforced, GRANT_NOT_ENFORCED } from "./owner.ts";
+import { mismatchPage, mismatchReason } from "../site.mjs";
 
 const cap = toUsdc(arg("cap")!);
 if (cap === 0n) { console.error("error: --cap must be above 0 (use revoke.ts to end a budget)"); process.exit(2); }
@@ -90,13 +91,13 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   finishPage = handle.finish;
   console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`);
-  let sent = await readSent(outcome.hash as Hex, { from: pub.owner, to: USDC, data, afterBlock: startBlock });
+  let sent = await readSent(outcome.hash as Hex, { from: pub.owner, to: USDC, data, afterBlock: startBlock, siteFailed: outcome.siteFailed });
   if (!sent) {
     // replaced ("speed up") or dropped: look for the approval itself
     const alt = await findApproval(pub.owner, pub.agent, startBlock);
     if (alt) {
       console.log(`the reported transaction is not on chain, but ${alt.hash} approved the agent after this request started; reading that one`);
-      sent = await readSent(alt.hash, { from: pub.owner, to: USDC, data, afterBlock: startBlock });
+      sent = await readSent(alt.hash, { from: pub.owner, to: USDC, data, afterBlock: startBlock, siteFailed: outcome.siteFailed });
     }
   }
   if (!sent) {
@@ -115,12 +116,19 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   // Any difference from the plan is a mismatch, whatever the allowance reads now: an edited higher allowance can be spent
   // down to the requested cap before the readback. The wallet already sent it, so the owner has to revoke it.
   if (sent.problems.length) {
-    const reason = `the transaction on chain is not the one planned: ${sent.problems.join("; ")}. The budget was not recorded.`;
+    const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}. The budget was not recorded.`;
     console.log(`MISMATCH: ${reason}`);
     const now = await allowanceOf(pub.owner, pub.agent).catch(() => null);
-    handle.finish({ ok: false, message: `The chain shows a different transaction than planned (${sent.problems.join("; ")}). The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: sent.hash });
+    handle.finish({ ok: false, message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: sent.hash });
     await closeOwnerPage();
     process.exit(result(3, { state: "mismatch", tx: sent.hash, reason, requested: usdc(cap), allowance: now === null ? null : usdc(now), next: "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" }));
+  }
+  if (sent.unresolved) {
+    const reason = `the transaction is on chain, but whether it set the allowance is not known yet: ${sent.unresolved}. The budget was not recorded.`;
+    console.log(`UNKNOWN: ${reason}`);
+    handle.finish({ ok: false, message: "The transaction is on chain, but the command could not yet confirm what it did. The budget was not recorded; the command reports it as unknown.", hash: sent.hash });
+    await closeOwnerPage();
+    process.exit(result(5, { state: "unknown", tx: sent.hash, reason, requested: usdc(cap), next: "superstables budget status --rail evm: read the allowance before granting again" }));
   }
 }
 
