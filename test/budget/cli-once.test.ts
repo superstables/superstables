@@ -345,16 +345,18 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(r.result.responseType).toBe("text/plain");
   }, 60_000);
 
-  it("while the owner is signing or the chain is read: waiting_owner with the words, never a result", async () => {
+  it("once the owner signed and the outcome is not established: unknown, not final, never waiting for the owner", async () => {
     const first = await once();
     const id = first.result.id;
     site.purchases[0].state = "submitting";
     const a = await budget(["wait", "--shown", "--id", id, "--timeout", "0"]);
-    expect(a.result).toMatchObject({ state: "waiting_owner" });
-    expect(a.result.reason).toMatch(/the owner signed; the payment is going to the seller/);
+    expect(a.code).toBe(5);
+    expect(a.result).toMatchObject({ state: "unknown", final: false, paid: null });
+    expect(a.result.reason).toMatch(/the owner signed and the payment is being submitted/);
     Object.assign(site.purchases[0], { state: "uncertain", payment: { status: "unconfirmed" } });
     const b = await budget(["wait", "--shown", "--id", id, "--timeout", "0"]);
-    expect(b.result.reason).toMatch(/do not buy again/);
+    expect(b.result).toMatchObject({ state: "unknown", final: false, paid: null });
+    expect(b.result.next).toMatch(/^do not buy again/);
     site.settle(site.purchases[0]);
     expect((await budget(["wait", "--shown", "--id", id, "--timeout", "10"])).result.state).toBe("settled");
   }, 60_000);
@@ -427,8 +429,9 @@ describe("buy-once: the owner approves, the agent polls", () => {
     site.purchases[1].state = "submitting";
     const fourth = await once(["--replace"]);
     expect(fourth.code).toBe(3);
-    expect(fourth.result).toMatchObject({ state: "refused_pending", paid: null, amount: null, pending: { id: third.result.id } });
-    expect(fourth.result.reason).toMatch(/could not be cancelled/);
+    expect(fourth.result).toMatchObject({ state: "refused_pending", paid: null, amount: null, pending: { id: third.result.id, state: "unknown" } });
+    expect(fourth.result.pending.url).toBeUndefined();
+    expect(fourth.result.reason).toMatch(/has no final answer yet \(the owner signed and the payment is being submitted/);
     expect(site.purchases).toHaveLength(2);
   }, 120_000);
 
@@ -588,11 +591,12 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(blocked.result).toMatchObject({ state: "refused_pending", pending: { id: first.result.id } });
     expect(site.purchases[0].polls).toBeGreaterThan(polls);
     expect(site.purchases).toHaveLength(1);
-    // the site ends it: the next buy-once reads that, records it, and starts
+    // the site ends it: the next buy-once reads that, records it, and starts. The site said uncertain before, so its later
+    // "not paid" ends it unknown (exit 5), never "nothing was paid"
     Object.assign(site.purchases[0], { state: "failed", final: true, reason: "the authorization was never used", payment: { status: "not_paid" }, delivery: { status: "not_called" } });
     const next = await once();
     expect(next.code, next.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(file, "utf8")).final).toMatchObject({ code: 1 });
+    expect(JSON.parse(readFileSync(file, "utf8")).final).toMatchObject({ code: 5, result: { state: "unknown", paid: null } });
   }, 90_000);
 
   it("wait --abandon on a purchase that already ended checks its stored answer against the evidence, as wait does", async () => {
@@ -920,7 +924,7 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
     // a read while it is open names the transaction: kept
     Object.assign(p, { state: "submitting", final: false, payment: { status: "unconfirmed", transaction: hash, payer: PAYER } });
     const r0 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "0"]);
-    expect(r0.result.state).toBe("waiting_owner");
+    expect(r0.result).toMatchObject({ state: "unknown", final: false, paid: null, tx: { settle: hash } });
     // wait 1: final, names the transaction, the chain does not show it yet: unknown, not stored as final
     Object.assign(p, { state: "failed", final: true, payment: { status: "not_paid", transaction: hash, payer: PAYER }, delivery: { status: "not_called" } });
     const r1 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
@@ -960,7 +964,8 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
     Object.assign(p, { payment: { status: "awaiting_approval", transaction: h, payer: PAYER } });
     const again = await once(["--replace"]);
     expect(again.code, again.stderr).toBe(3);
-    expect(again.result.reason).toMatch(/may already have been paid/);
+    expect(again.result.reason).toMatch(/has no final answer yet \(.*an earlier answer for this purchase named a transaction/);
+    expect(again.result.pending).toMatchObject({ state: "unknown" });
     expect(site.purchases).toHaveLength(1);
     expect(p.cancels).toBe(0);
     // the site then ends it as not paid, without the transaction: unknown, with the hash
@@ -976,7 +981,7 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
     const p = site.purchases.at(-1)!;
     site.readAnswer = () => ({ status: 503, body: { error: { code: "internal_error", message: "x" }, money_moved: true } });
     const r1 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "0"]);
-    expect(r1.result.state).toBe("waiting_owner");
+    expect(r1.result).toMatchObject({ state: "unknown", final: false, paid: null });
     site.readAnswer = undefined;
     Object.assign(p, { state: "expired", final: true, payment: { status: "not_paid" }, delivery: { status: "not_called" } });
     const r2 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
@@ -1005,7 +1010,7 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
     const a = await once();
     const p = site.purchases.at(-1)!;
     Object.assign(p, { state: "submitting", final: false, payment: { status: "unconfirmed", transaction: h, payer: PAYER } });
-    expect((await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "0"])).result.state).toBe("waiting_owner");
+    expect((await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "0"])).result).toMatchObject({ state: "unknown", final: false, paid: null });
     // the chain shows h moving the right amount to the right recipient, but from another address; the site then omits both
     site.pay(p, { transaction: h, payer: other });
     Object.assign(p, { state: "failed", final: true, payment: { status: "not_paid" }, delivery: { status: "not_called" } });
@@ -1032,7 +1037,7 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
     const a = await once();
     const p = site.purchases.at(-1)!;
     Object.assign(p, { state: "submitting", final: false, payment: { status: "unconfirmed", transaction: h1, payer: PAYER } });
-    expect((await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "0"])).result.state).toBe("waiting_owner");
+    expect((await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "0"])).result).toMatchObject({ state: "unknown", final: false, paid: null });
     // the final answer names h2, which the chain shows paying another amount; h1 is not on chain yet
     site.pay(p, { transaction: h2, payer: PAYER, chain: { amount: 1n } });
     Object.assign(p, { state: "failed", final: true, payment: { status: "not_paid", transaction: h2, payer: PAYER }, delivery: { status: "not_called" } });

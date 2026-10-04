@@ -36,7 +36,7 @@ The final `RESULT` has `state`, `paid`, `delivered`, `amount`, `service`, `purch
 | 5 | `unknown` | A payment may have left: the site cannot tell yet, or it names a transaction (`tx`) the chain does not show as this payment. With `final: false`, `wait --id ID --shown` can still read it | Never buy again. The owner checks their wallet activity and their account page |
 | 1 | `failed` | Nothing was paid (`paid: false`, no `tx`): the purchase failed with no transaction, or the site refused or did not answer before a purchase existed. A `tx` in the result means SKILL.md's safety rule 12 applies | Read `reason`. Do not retry blindly |
 
-While `wait` still returns `waiting_owner`, its `reason` says where it is: waiting for the owner, the owner signed and the payment is going to the seller, or the chain is still being read. In the last two, do not buy again.
+`wait` returns `waiting_owner` only while the owner has not approved. Once the owner's step is over and the outcome is not established (the payment is being submitted, a transfer was prepared for the owner's wallet, or the chain does not show the payment yet), it returns `unknown` (exit 5), with `final: false` while a later read can still establish the outcome: do not buy again, tell the owner the outcome is not known yet, and run `wait --id ID --shown` again later.
 
 ## After the purchase
 
