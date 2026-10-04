@@ -35,7 +35,7 @@ import { EVM_CHAINS } from "./chains.mjs";
 import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, toUsdc, usageError, assertRpcChain, publicClient, tx } from "./lib.ts";
 import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, fundingTx, fundValue, DEFAULT_FUND_AMOUNT, grantTx, grantEnforced, GRANT_NOT_ENFORCED, approveRow, capWords, checkFundSent, checkGrantSent, REVOKE_HINT, type SentCheck } from "./owner.ts";
 import { NEW_OWNER } from "../owner-page.ts";
-import type { HostedStep, HostedStepOutcome, PriorLink } from "../hosted.ts";
+import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
 import { chosenSite, isSiteRequestId, siteOrigin } from "../site.mjs";
 
 const d = (EVM_CHAINS as Record<string, any>)[CFG.key].doctor;
@@ -313,9 +313,11 @@ async function finishBundle(): Promise<never> {
     const amount = s.kind === "grant" ? usdc(CAP!) : FUND_AMT;
     if (s.hash) {
       console.log(`${s.kind}: ${HOST} reports transaction ${s.hash} (${s.state}); checking it on chain`);
+      // a step the site reported as failed is read too, but never settled
+      const siteFailed = s.state === "failed" ? siteFailedWords(HOST, s.reasonCode) : undefined;
       const c = s.kind === "grant"
-        ? await checkGrantSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, cap: CAP!, afterBlock: startBlock })
-        : await checkFundSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, t: fundTx!, value: FUND_VALUE, agentHad, afterBlock: startBlock });
+        ? await checkGrantSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, cap: CAP!, afterBlock: startBlock, siteFailed })
+        : await checkFundSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, t: fundTx!, value: FUND_VALUE, agentHad, afterBlock: startBlock, siteFailed });
       if (s.kind === "grant" && c.state === "settled") grantDone = c;
       reports.push({ kind: s.kind, state: c.state, tx: c.tx, txUrl: tx(c.tx), amount, reason: c.reason });
     } else if (s.walletAsked || s.state === "unknown") {

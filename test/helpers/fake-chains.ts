@@ -24,20 +24,24 @@ export interface FakeTempo extends TestServer {
   head: { number: bigint; timestamp: number };
   /** Access keys by `${owner}:${key}` (lowercase). */
   keys: Map<string, TempoKey>;
-  /** The owner's wallet sent `data` to the keychain: mine it in the next block, apply it to the keychain, return its hash. */
-  mine(from: string, data: Hex): Hex;
+  /**
+   * The owner's wallet sent `data` to the keychain: mine it in the next block, apply it to the keychain, return its hash.
+   * `reverted`: it reverted on chain, so the keychain is left as it was.
+   */
+  mine(from: string, data: Hex, opts?: { reverted?: boolean }): Hex;
 }
 
 export async function startFakeTempo(): Promise<FakeTempo> {
   const chain = {} as FakeTempo;
   chain.head = { number: 1000n, timestamp: Math.floor(Date.now() / 1000) };
   chain.keys = new Map();
-  const txs = new Map<string, { from: string; input: Hex; block: bigint }>();
+  const txs = new Map<string, { from: string; input: Hex; block: bigint; reverted: boolean }>();
   const id = (owner: string, key: string) => `${owner.toLowerCase()}:${key.toLowerCase()}`;
-  chain.mine = (from, data) => {
+  chain.mine = (from, data, opts = {}) => {
     chain.head = { number: chain.head.number + 1n, timestamp: chain.head.timestamp + 1 };
     const hash = `0x${(txs.size + 1).toString(16).padStart(64, "c")}` as Hex;
-    txs.set(hash, { from, input: data, block: chain.head.number });
+    txs.set(hash, { from, input: data, block: chain.head.number, reverted: opts.reverted === true });
+    if (opts.reverted) return hash;
     const call = decodeFunctionData({ abi: Abis.accountKeychain, data });
     const args = call.args as unknown as any[];
     if (call.functionName === "authorizeKey") {
@@ -86,7 +90,7 @@ export async function startFakeTempo(): Promise<FakeTempo> {
       }
       case "eth_getTransactionReceipt": {
         const t = txs.get(params[0]);
-        return t ? { transactionHash: params[0], status: "0x1", blockNumber: hex(t.block), from: t.from, to: KEYCHAIN, logs: [], gasUsed: "0x1" } : null;
+        return t ? { transactionHash: params[0], status: t.reverted ? "0x0" : "0x1", blockNumber: hex(t.block), from: t.from, to: KEYCHAIN, logs: [], gasUsed: "0x1" } : null;
       }
       case "eth_getLogs": return [];
       default: return null;

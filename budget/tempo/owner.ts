@@ -19,7 +19,7 @@ import { privateKeyToAddress } from 'viem/accounts'
 import { Abis, Addresses } from 'viem/tempo'
 import type { OwnerChain, OwnerTerms } from '../../src/core/signer/owner-approval-server.ts'
 import { closeOwnerPage, ownerPageFor } from '../owner-page.ts'
-import { DEFAULT_SITE } from '../site.mjs'
+import { DEFAULT_SITE, mismatchReason } from '../site.mjs'
 import { AGENT_ENV_PATH, CHAIN_ID, EXPLORER_BASE, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, fromBaseUnits, loadPublicEnv, makeClient, parseEnvFile, agentFileText } from './lib/common.ts'
 import { chainHead, rpcRead, sleep, topicOf } from './lib/chain.ts'
 
@@ -254,7 +254,19 @@ export async function readUntilMatches(owner: Address, agent: Address, plan: Gra
   return { key, problems }
 }
 
-export type Sent = { hash: Hex; status: 'success' | 'reverted'; blockNumber: bigint; blockTimestamp?: number; type: string; feePayer?: string; feeToken?: string; problems: string[] }
+/**
+ * The reverted receipt inside an error from the SDK's *Sync calls (TransactionReceiptRevertedError, possibly wrapped), or
+ * null when the error is something else. A reverted transaction did nothing, but it was mined: its hash is the answer.
+ */
+export function revertedReceiptOf(err: unknown): { transactionHash: Hex } | null {
+  for (let e: any = err, i = 0; e && i < 8; e = e.cause, i++) {
+    const r = e.receipt
+    if (r && typeof r.transactionHash === 'string' && r.status === 'reverted') return { transactionHash: r.transactionHash as Hex }
+  }
+  return null
+}
+
+export type Sent = { hash: Hex; status: 'success' | 'reverted'; blockNumber: bigint; blockTimestamp?: number; type: string; feePayer?: string; feeToken?: string; problems: string[]; siteFailed?: string }
 
 /** Transaction types the owner's wallet may use: a plain root-signed transaction (the design sends type 2). */
 const OWNER_TX_TYPES = ['0x0', '0x1', '0x2']
@@ -265,9 +277,9 @@ const OWNER_TX_TYPES = ['0x0', '0x1', '0x2']
  * changed calldata, a value, another chain, a block before the request, a transaction type other than a plain root-signed one
  * (a Tempo 0x76 can carry another fee payer or an access key's signature), or a fee payer other than the owner. A plain
  * transaction's receipt may name no fee payer: then the sender paid, by definition. `status` says whether it reverted.
- * Null when the chain never shows the hash.
+ * `siteFailed`: the site reported this transaction as failed, in words; it is a problem too. Null when the chain never shows the hash.
  */
-export async function readSent(hash: Hex, want: { from: Address; data: Hex; afterBlock: bigint }, waitMs = 120_000): Promise<Sent | null> {
+export async function readSent(hash: Hex, want: { from: Address; data: Hex; afterBlock: bigint; siteFailed?: string }, waitMs = 120_000): Promise<Sent | null> {
   const until = Date.now() + waitMs
   let t: any = null
   while (!t && Date.now() < until) {
@@ -293,10 +305,12 @@ export async function readSent(hash: Hex, want: { from: Address; data: Hex; afte
   if (!OWNER_TX_TYPES.includes(type)) problems.push(`it is a transaction of type ${type}, not a plain owner transaction (type 0x2)`)
   if (t.signature?.keyId) problems.push(`it was signed by access key ${t.signature.keyId}, not the owner's own key`)
   if (r.feePayer && !same(r.feePayer, want.from)) problems.push(`its fee was paid by ${r.feePayer}, not the owner`)
+  // the site reported this transaction as failed: never settled here, whatever the chain shows
+  if (want.siteFailed) problems.push(want.siteFailed)
   const block = await rpcRead('eth_getBlockByNumber', [r.blockNumber, false]).catch(() => null)
   return {
     hash, status: r.status === '0x1' ? 'success' : 'reverted', blockNumber: BigInt(r.blockNumber), blockTimestamp: block?.timestamp ? parseInt(block.timestamp, 16) : undefined,
-    type, feePayer: r.feePayer, feeToken: r.feeToken ?? t.feeToken ?? undefined, problems,
+    type, feePayer: r.feePayer, feeToken: r.feeToken ?? t.feeToken ?? undefined, problems, ...(want.siteFailed ? { siteFailed: want.siteFailed } : {}),
   }
 }
 
@@ -321,21 +335,21 @@ export type SentCheck = { state: 'settled' | 'mismatch' | 'failed' | 'unknown'; 
  * exactly the plan afterwards. A hash the chain never shows (a wallet's "speed up") is looked up as the keychain's own
  * KeyAuthorized event for this key since `afterBlock`. Any difference from the plan is a mismatch: the owner revokes it.
  */
-export async function checkGrantSent(hash: Hex, o: { owner: Address; plan: GrantPlan; afterBlock: bigint }): Promise<SentCheck> {
+export async function checkGrantSent(hash: Hex, o: { owner: Address; plan: GrantPlan; afterBlock: bigint; siteFailed?: string }): Promise<SentCheck> {
   const data = grantCalldata(o.plan)
-  let sent = await readSent(hash, { from: o.owner, data, afterBlock: o.afterBlock })
+  let sent = await readSent(hash, { from: o.owner, data, afterBlock: o.afterBlock, siteFailed: o.siteFailed })
   if (!sent) {
     const alt = await findKeyEvent('authorized', o.owner, o.plan.agent, o.afterBlock).catch(() => null)
     if (alt) {
       console.log(`the reported transaction is not on chain, but ${alt} authorized the key after this request started; reading that one`)
-      sent = await readSent(alt, { from: o.owner, data, afterBlock: o.afterBlock })
+      sent = await readSent(alt, { from: o.owner, data, afterBlock: o.afterBlock, siteFailed: o.siteFailed })
     }
   }
   if (!sent) return { state: 'unknown', tx: hash, reason: 'the wallet reported a transaction the chain does not show (replaced, dropped or still pending)' }
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a (the sender)'}`)
   if (sent.status !== 'success') return { state: 'failed', tx: sent.hash, reason: 'the authorizeKey transaction reverted on chain' }
   if (sent.problems.length) {
-    const reason = `the transaction on chain is not the one planned: ${sent.problems.join('; ')}`
+    const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash)
     console.log(`MISMATCH: ${reason}`)
     return { state: 'mismatch', tx: sent.hash, reason }
   }

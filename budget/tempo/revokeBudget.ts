@@ -22,7 +22,8 @@ import { explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient,
 import { chainHead, readKey, sleep } from './lib/chain.ts'
 import { closeGracePeriod, findOpenChannels, type OpenChannel } from './lib/channels.ts'
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
-import { KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, readSent, revokeCalldata, revokeTerms, tokenBalance, useHostedAgent } from './owner.ts'
+import { KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, readSent, revertedReceiptOf, revokeCalldata, revokeTerms, tokenBalance, useHostedAgent } from './owner.ts'
+import { mismatchPage, mismatchReason } from '../site.mjs'
 
 const { values: args } = parseCli({
   name: 'revokeBudget.ts',
@@ -79,6 +80,20 @@ async function main() {
   let hash: Hex | null = null
   let finish: ((v: { ok: boolean; message: string; hash?: string }) => void) | null = null
 
+  /**
+   * The owner's revoke transaction reverted: it revoked nothing. The key may still read revoked, because another
+   * transaction did it, but this one is never reported as the revoke: failed, with its hash, before any readback.
+   */
+  async function revertedRevoke(tx: Hex, problems: string[]): Promise<never> {
+    const now = await readKey(owner, agentAddress).catch(() => null)
+    const state = now === null ? 'could not be read' : now.revoked ? 'reads revoked on chain, but not by this transaction' : 'does not read as revoked on chain'
+    const reason = `the revoke transaction reverted on chain${problems.length ? ` (${problems.join('; ')})` : ''}; the key ${state}`
+    console.log(`FAILED: ${reason}`)
+    finish?.({ ok: false, message: `The transaction reverted, so it revoked nothing. The key ${state}. ${now?.revoked ? 'Check that this is what you expect.' : 'Run the revoke again.'}`, hash: tx })
+    await closeOwnerPage()
+    process.exit(emit('revokeBudget', 1, { state: 'failed', tx, revoked: now ? now.revoked : null, reason, next: now?.revoked ? `superstables budget status --rail tempo${agentFlag(agentLabel)}: the key reads revoked, by another transaction` : 'run revoke again' }))
+  }
+
   if (before.revoked) console.log('The key is already revoked; nothing to send.')
   else if (!before.exists) {
     console.log('REFUSED: the key was never authorized on this owner; there is nothing to revoke. Nothing was sent.')
@@ -90,14 +105,19 @@ async function main() {
       console.log(`REFUSED: the key in ${OWNER_KEY_FILE} is not the recorded owner ${owner}. Nothing was sent.`)
       process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason: 'the owner key file is not the recorded owner', next: 'pass the owner key file of the recorded owner' }))
     }
+    let reverted: Hex | null = null
     try {
       const { receipt } = await makeClient(account).accessKey.revokeSync({ accessKey: agentAddress })
       hash = receipt.transactionHash
       console.log(`\ntx hash: ${hash}\nexplorer: ${explorerTx(hash)}\nstatus: ${receipt.status}`)
+      if (receipt.status !== 'success') reverted = hash
     } catch (err) {
-      // An error here does not mean the revoke failed: the transaction may have landed. Read the chain.
-      console.log(`\nThe send raised an error (${String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 160)}). Reading the chain to see whether the revoke landed.`)
+      // the SDK raises on a reverted receipt: that transaction was mined and did nothing
+      reverted = revertedReceiptOf(err)?.transactionHash ?? null
+      // Any other error does not mean the revoke failed: the transaction may have landed. Read the chain.
+      if (!reverted) console.log(`\nThe send raised an error (${String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 160)}). Reading the chain to see whether the revoke landed.`)
     }
+    if (reverted) await revertedRevoke(reverted, [])
   } else {
     let feeToken: Address
     try {
@@ -120,10 +140,10 @@ async function main() {
     if (outcome.status !== 'sent') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     finish = handle.finish
     console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`)
-    let sent = await readSent(outcome.hash as Hex, { from: owner, data, afterBlock: headStart.number })
+    let sent = await readSent(outcome.hash as Hex, { from: owner, data, afterBlock: headStart.number, siteFailed: outcome.siteFailed })
     if (!sent) {
       const alt = await findKeyEvent('revoked', owner, agentAddress, headStart.number).catch(() => null)
-      if (alt) sent = await readSent(alt, { from: owner, data, afterBlock: headStart.number })
+      if (alt) sent = await readSent(alt, { from: owner, data, afterBlock: headStart.number, siteFailed: outcome.siteFailed })
     }
     if (!sent) {
       handle.finish({ ok: false, message: "The transaction did not show up on chain. Check your wallet's activity.", hash: outcome.hash })
@@ -134,13 +154,15 @@ async function main() {
     console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a (the sender)'}, fee token ${sent.feeToken ?? 'n/a'}`)
     console.log(`explorer: ${explorerTx(hash)}`)
     if (sent.status === 'success' && sent.problems.length) {
-      const reason = `the transaction on chain is not the one planned: ${sent.problems.join('; ')}`
+      const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash)
       console.log(`MISMATCH: ${reason}`)
       const now = await readKey(owner, agentAddress).catch(() => null)
-      handle.finish({ ok: false, message: `The chain shows a different transaction than planned (${sent.problems.join('; ')}). Check the key and revoke again.`, hash })
+      handle.finish({ ok: false, message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Check the key and revoke again.`, hash })
       await closeOwnerPage()
       process.exit(emit('revokeBudget', 3, { state: 'mismatch', tx: hash, revoked: now ? now.revoked : null, reason, next: `revoke again (superstables budget revoke --rail tempo${agentFlag(agentLabel)}) and check superstables budget status --rail tempo${agentFlag(agentLabel)}` }))
     }
+    // Reverted: this transaction revoked nothing. The site's failed verdict travels in the problems above, or here.
+    if (sent.status !== 'success') await revertedRevoke(hash, sent.problems)
   }
 
   let after = await readKey(owner, agentAddress)

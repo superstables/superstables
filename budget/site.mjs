@@ -194,6 +194,33 @@ export function siteError(status, body) {
 }
 
 /** A request id the site made: bl_ (a link) or ba_ (an approval), then letters, digits, _ or -. */
+/**
+ * The words for a transaction the site reported as failed (a step in state `failed`, with a hash). The command adds them
+ * to the problems it finds on chain, so the step is never settled, whatever the chain shows.
+ */
+export function siteFailedWords(site, reasonCode) {
+  const code = typeof reasonCode === "string" && reasonCode ? siteWord("code", reasonCode) : "";
+  return `${site} reported this step as failed${code ? ` (reason: ${code})` : ""}, so it is not counted as done`;
+}
+
+/**
+ * Why a transaction was not accepted as the planned step, for a RESULT reason. `problems` are the reader's problems, the
+ * site's verdict (`siteFailed`) among them when there is one. The verdict alone never claims the chain shows something
+ * else: it is said in its own words, with the transaction.
+ */
+export function mismatchReason(problems, siteFailed, hash) {
+  const chain = problems.filter((p) => p !== siteFailed);
+  if (!chain.length && siteFailed) return `${siteFailed} (transaction ${hash})`;
+  return `the transaction was not accepted as the planned step: ${problems.join("; ")}`;
+}
+
+/** The same for the owner's page, a sentence: "The transaction was not accepted as the planned step (...)." */
+export function mismatchPage(problems, siteFailed, hash, what = "transaction") {
+  const chain = problems.filter((p) => p !== siteFailed);
+  if (!chain.length && siteFailed) return `${siteFailed} (transaction ${hash}).`;
+  return what === "transfer" ? `The transfer was not confirmed as the planned step: ${problems.join("; ")}.` : `The transaction was not accepted as the planned step (${problems.join("; ")}).`;
+}
+
 export const isSiteRequestId = (id) => typeof id === "string" && /^b[la]_[A-Za-z0-9_-]{4,128}$/.test(id);
 /** An agent access token: ssbt_... */
 export const isSiteToken = (t) => typeof t === "string" && /^ssbt_[A-Za-z0-9_-]{8,256}$/.test(t);

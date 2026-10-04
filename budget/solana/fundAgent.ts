@@ -12,7 +12,7 @@
 import { SystemProgram, Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { connection, loadOwner, explorerTx, parseUnits, parseStrict, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
-import { siteName } from "../site.mjs";
+import { mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort } from "./owner.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
@@ -77,7 +77,7 @@ if (OWNER_KEY_FILE) {
   finish = handle.finish;
   sig = local ? local.sent()!.signature : outcome.hash;
   console.log(`${local ? "sent" : `${siteName(approvalSite()!)} reports`} ${sig}; reading it from the chain`);
-  const c = local ? { ...(await confirmSent(conn, local.sent()!)), problems: [] as string[] } : await confirmHosted(conn, sig, owner.toBase58(), startSlot, ix());
+  const c = local ? { ...(await confirmSent(conn, local.sent()!)), problems: [] as string[] } : await confirmHosted(conn, sig, owner.toBase58(), startSlot, ix(), outcome.siteFailed);
   console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
   if (c.status === "unknown") {
     handle.finish({ ok: false, message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
@@ -90,9 +90,9 @@ if (OWNER_KEY_FILE) {
     process.exit(result(1, { state: "failed", tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget doctor --rail solana" }));
   }
   if (c.problems.length) {
-    const reason = `the transaction on chain is not the one planned: ${c.problems.join("; ")}`;
+    const reason = mismatchReason(c.problems, c.siteFailed, sig);
     console.log(`MISMATCH: ${reason}`);
-    handle.finish({ ok: false, message: `The chain shows something other than planned: ${c.problems.join("; ")}.`, hash: sig });
+    handle.finish({ ok: false, message: mismatchPage(c.problems, c.siteFailed, sig, "transfer"), hash: sig });
     await closeOwnerPage();
     process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "check the owner's wallet activity, then superstables budget doctor --rail solana" }));
   }
@@ -108,7 +108,7 @@ for (let i = 0; i < 8 && after < agentHas + amount; i++) {
 console.log(`agent ${sol(after)} SOL${delta !== null ? ` (this transaction added ${sol(delta)})` : ""}. explorer: ${explorerTx(sig)}`);
 if ((delta !== null && delta !== amount) || after < agentHas + amount) {
   const why = delta !== null && delta !== amount ? `the transaction moved ${sol(delta)} SOL to the agent, not ${sol(amount)}` : "the agent's balance did not go up by the amount";
-  finish?.({ ok: false, message: `The chain shows something other than planned: ${why}.`, hash: sig });
+  finish?.({ ok: false, message: `The transfer was not confirmed as the planned step: ${why}.`, hash: sig });
   await closeOwnerPage();
   process.exit(result(1, { state: "failed", tx: sig, reason: why, next: "superstables budget doctor --rail solana" }));
 }

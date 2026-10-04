@@ -28,8 +28,8 @@ import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, connection, expl
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
-import type { HostedStep, HostedStepOutcome, PriorLink } from "../hosted.ts";
-import { chosenSite, isSiteRequestId, siteOrigin } from "../site.mjs";
+import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
+import { chosenSite, isSiteRequestId, mismatchReason, siteOrigin } from "../site.mjs";
 import { askConnect, closeOwnerPage, confirmHosted, emit, endUnapproved, sol, useApprovalSite } from "./owner.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/setup.ts [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund | --fund-amount <sol>]]
@@ -310,12 +310,13 @@ async function finishBundle(): Promise<never> {
       const planned = s.kind === "grant"
         ? [createApproveCheckedInstruction(getAssociatedTokenAddressSync(USDC_MINT, ownerPk), USDC_MINT, new PublicKey(agent), ownerPk, CAP!, USDC_DECIMALS)]
         : [SystemProgram.transfer({ fromPubkey: ownerPk, toPubkey: new PublicKey(agent), lamports: LAMPORTS! })];
-      const c = await confirmHosted(conn, s.hash, owner, startSlot, planned);
+      // a step the site reported as failed is read too, but never settled
+      const c = await confirmHosted(conn, s.hash, owner, startSlot, planned, s.state === "failed" ? siteFailedWords(HOST, s.reasonCode) : undefined);
       console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
       const report = (state: Report["state"], reason?: string) => reports.push({ kind: s.kind, state, tx: s.hash!, txUrl: explorerTx(s.hash!), amount, reason });
       if (c.status === "unknown") { report("unknown", "the site reported a signature the chain does not show yet"); continue; }
       if (c.status !== "success") { report("failed", `it failed on chain (${JSON.stringify(c.err)})`); continue; }
-      if (c.problems.length) { report("mismatch", `the transaction on chain is not the one planned: ${c.problems.join("; ")}`); continue; }
+      if (c.problems.length) { report("mismatch", mismatchReason(c.problems, c.siteFailed, s.hash)); continue; }
       if (s.kind === "fund_agent") {
         const i = c.accountKeys?.indexOf(agent) ?? -1;
         const delta = i >= 0 ? BigInt(c.meta.postBalances[i]) - BigInt(c.meta.preBalances[i]) : null;

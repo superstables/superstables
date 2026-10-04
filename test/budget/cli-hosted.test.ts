@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { encodeFunctionData, parseAbi } from "viem";
+import { encodeFunctionData, pad, parseAbi, toEventSelector } from "viem";
 import { evmOwner, evmOwnerKey, signLinkProof, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import type { TestServer } from "../helpers/servers.js";
 
@@ -49,6 +49,14 @@ function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<
     });
   });
 }
+
+/** The Approval(owner, spender, value) log a token's approve leaves in its receipt: the effect the client checks for. */
+const approvalLog = (token: string, owner: string, spender: string, value: bigint, blockNumber: string) => ({
+  address: token,
+  topics: [toEventSelector("Approval(address,address,uint256)"), pad(owner.toLowerCase() as `0x${string}`), pad(spender.toLowerCase() as `0x${string}`)],
+  data: `0x${value.toString(16).padStart(64, "0")}`,
+  blockNumber, logIndex: "0x0", transactionIndex: "0x0", removed: false,
+});
 
 const publicFile = () => readFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), "utf8");
 const publicFileOrNull = () => { try { return publicFile(); } catch { return null; } };
@@ -528,7 +536,7 @@ describe("owner commands on a hosted chain", () => {
     rpc = await startFakeRpc(84532, (method) => {
       if (method === "eth_blockNumber") return "0x64";
       if (method === "eth_getTransactionByHash") return { hash: HASH, blockHash, blockNumber: "0x32", from: OWNER, to: USDC, input: data, value: "0x0", gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
-      if (method === "eth_getTransactionReceipt") return { transactionHash: HASH, blockHash, blockNumber: "0x32", from: OWNER, to: USDC, status: "0x1", logs: [], gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+      if (method === "eth_getTransactionReceipt") return { transactionHash: HASH, blockHash, blockNumber: "0x32", from: OWNER, to: USDC, status: "0x1", logs: [approvalLog(USDC, OWNER, AGENT, 10000n, "0x32")], gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
       return undefined;
     });
     site.owner = OWNER;
@@ -538,8 +546,83 @@ describe("owner commands on a hosted chain", () => {
     const r = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.state).toBe("refused_precheck");
-    expect(r.result.reason).toBe("the transaction on chain is not the one planned: it was mined in block 50, before this request started (block 100). The budget was not recorded.");
+    expect(r.result.reason).toBe("the transaction was not accepted as the planned step: it was mined in block 50, before this request started (block 100). The budget was not recorded.");
     expect(publicFile()).not.toMatch(/^B4_CAP=/m);
+  }, 60_000);
+
+  it("the site judged the transaction failed: grant, fund-agent and revoke never settle, even when the chain shows exactly the plan", async () => {
+    hostedChain();
+    const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+    const AGENT = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A";
+    const approve = encodeFunctionData({ abi: parseAbi(["function approve(address spender, uint256 value) returns (bool)"]), functionName: "approve", args: [AGENT, 10000n] });
+    const revoke = encodeFunctionData({ abi: parseAbi(["function approve(address spender, uint256 value) returns (bool)"]), functionName: "approve", args: [AGENT, 0n] });
+    const GRANT = `0x${"c1".repeat(32)}`;
+    const FUND = `0x${"c2".repeat(32)}`;
+    const REVOKE = `0x${"c3".repeat(32)}`;
+    const txs: Record<string, { to: string; input: string; value: bigint; logs: unknown[] }> = {
+      [GRANT]: { to: USDC, input: approve, value: 0n, logs: [approvalLog(USDC, OWNER, AGENT, 10000n, "0x65")] },
+      [FUND]: { to: AGENT, input: "0x", value: 100_000_000_000_000n, logs: [] },
+      [REVOKE]: { to: USDC, input: revoke, value: 0n, logs: [approvalLog(USDC, OWNER, AGENT, 0n, "0x65")] },
+    };
+    // the allowance: 0 before the grant, 10000 after it; 10000 before the revoke, 0 after it
+    let revoking = false;
+    const blockHash = `0x${"ef".repeat(32)}`;
+    let mined = false;
+    await rpc.close();
+    // the owner's own transactions, mined after the request started, with the allowance and the agent's gas as planned
+    rpc = await startFakeRpc(84532, (method, params) => {
+      if (method === "eth_blockNumber") return "0x64";
+      const t = txs[params[0]];
+      if (t) mined = true;
+      if (method === "eth_getTransactionByHash" && t) return { hash: params[0], blockHash, blockNumber: "0x65", from: OWNER, to: t.to, input: t.input, value: `0x${t.value.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
+      if (method === "eth_getTransactionReceipt" && t) return { transactionHash: params[0], blockHash, blockNumber: "0x65", from: OWNER, to: t.to, status: "0x1", logs: t.logs, gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+      if (method === "eth_call" && String(params[0]?.data).startsWith("0xdd62ed3e")) return `0x${(mined !== revoking ? 10000n : 0n).toString(16).padStart(64, "0")}`;
+      if (method === "eth_getBalance" && String(params[0]).toLowerCase() === AGENT.toLowerCase()) return `0x${(10n ** 18n + (mined ? 100_000_000_000_000n : 0n)).toString(16)}`;
+      return undefined;
+    });
+    site.owner = OWNER;
+    for (const [command, hash] of [[["grant", "--rail", "evm", "--amount", "0.01"], GRANT], [["fund-agent", "--rail", "evm"], FUND], [["revoke", "--rail", "evm"], REVOKE]] as const) {
+      mined = false;
+      revoking = hash === REVOKE;
+      site.onPoll = (r) => {
+        if (r.polls >= 2) Object.assign(r, { state: "failed", tx_hash: hash, wallet_asked: true, reason: "The transaction is not the one planned.", reason_code: "mismatch" });
+      };
+      const r = await budget([...command, "--wait", "--no-open"]);
+      expect(r.code, `${command[0]}: ${r.stderr}`).toBe(3);
+      expect(r.result.ok).toBe(false);
+      expect(r.result.reason, command[0]).toBe(`${new URL(site.url).host} reported this step as failed (reason: mismatch), so it is not counted as done (transaction ${hash})${command[0] === "grant" ? ". The budget was not recorded." : ""}`);
+    }
+    expect(publicFile()).not.toMatch(/^B4_CAP=/m);
+  }, 120_000);
+
+  it("a revoke that reverted is never settled, even when another transaction already set the allowance to 0", async () => {
+    hostedChain();
+    const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+    const AGENT = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A";
+    const revoke = encodeFunctionData({ abi: parseAbi(["function approve(address spender, uint256 value) returns (bool)"]), functionName: "approve", args: [AGENT, 0n] });
+    const HASH = `0x${"c4".repeat(32)}`;
+    const blockHash = `0x${"ef".repeat(32)}`;
+    let mined = false;
+    await rpc.close();
+    // the reported revoke reverted (no Approval), but the allowance reads 0 afterwards: another transaction revoked it
+    rpc = await startFakeRpc(84532, (method, params) => {
+      if (method === "eth_blockNumber") return "0x64";
+      if (params[0] === HASH) mined = true;
+      if (method === "eth_getTransactionByHash" && params[0] === HASH) return { hash: HASH, blockHash, blockNumber: "0x65", from: OWNER, to: USDC, input: revoke, value: "0x0", gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
+      if (method === "eth_getTransactionReceipt" && params[0] === HASH) return { transactionHash: HASH, blockHash, blockNumber: "0x65", from: OWNER, to: USDC, status: "0x0", logs: [], gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+      if (method === "eth_call" && String(params[0]?.data).startsWith("0xdd62ed3e")) return `0x${(mined ? 0n : 10000n).toString(16).padStart(64, "0")}`;
+      return undefined;
+    });
+    site.owner = OWNER;
+    site.onPoll = (r) => {
+      if (r.polls >= 2) Object.assign(r, { state: "confirmed", tx_hash: HASH, wallet_asked: true });
+    };
+    const r = await budget(["revoke", "--rail", "evm", "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.result.ok).toBe(false);
+    expect(r.result.state).not.toBe("settled");
+    expect(r.result.reason).toMatch(/the revoke reverted on chain; the allowance reads 0, but not because of this transaction/);
+    expect(publicFile()).not.toMatch(/^B4_REVOKED_AT=/m);
   }, 60_000);
 
   it("a lying site: a confirmed grant whose transaction approves another spender, another amount or other calldata is refused", async () => {
@@ -569,7 +652,7 @@ describe("owner commands on a hosted chain", () => {
       };
       const r = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"]);
       expect(r.code, `${what}: ${r.stderr}`).toBe(3);
-      expect(r.result.reason, what).toMatch(/the transaction on chain is not the one planned.*The budget was not recorded/);
+      expect(r.result.reason, what).toMatch(/^the transaction was not accepted as the planned step: .*The budget was not recorded\.$/);
       expect(publicFile()).not.toMatch(/^B4_CAP=/m);
     }
   }, 120_000);
@@ -787,9 +870,9 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
   const prepare = async () => {
     mkdirSync(join(home, "keys", "budget"), { recursive: true });
     writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=0x${"11".repeat(32)}\nB4_AGENT_ADDRESS=${AGENT}\n`, { mode: 0o600 });
-    const txs: Record<string, { to: string; input: string; value: bigint }> = {
+    const txs: Record<string, { to: string; input: string; value: bigint; logs?: unknown[] }> = {
       [FUND_HASH]: { to: AGENT, input: "0x", value: FUND_VALUE },
-      [GRANT_HASH]: { to: USDC, input: approve, value: 0n },
+      [GRANT_HASH]: { to: USDC, input: approve, value: 0n, logs: [approvalLog(USDC, OWNER, AGENT, 10000n, "0x20")] },
     };
     let funded = false;
     let granted = false;
@@ -802,7 +885,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
       if (method === "eth_getTransactionReceipt" && t) {
         if (params[0] === FUND_HASH) funded = true;
         if (params[0] === GRANT_HASH) granted = true;
-        return { transactionHash: params[0], blockHash, blockNumber: "0x20", from: OWNER, to: t.to, status: "0x1", logs: [], gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+        return { transactionHash: params[0], blockHash, blockNumber: "0x20", from: OWNER, to: t.to, status: "0x1", logs: t.logs ?? [], gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
       }
       // allowance(owner, agent): the cap once the grant is mined
       if (method === "eth_call" && String(params[0]?.data).startsWith("0xdd62ed3e")) return `0x${(granted ? 10000n : 0n).toString(16).padStart(64, "0")}`;
@@ -862,9 +945,9 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     const arcApprove = encodeFunctionData({ abi: parseAbi(["function approve(address spender, uint256 value) returns (bool)"]), functionName: "approve", args: [AGENT, 10000n] });
     mkdirSync(join(home, "keys", "budget"), { recursive: true });
     writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=0x${"11".repeat(32)}\nB4_AGENT_ADDRESS=${AGENT}\n`, { mode: 0o600 });
-    const txs: Record<string, { to: string; input: string; value: bigint }> = {
+    const txs: Record<string, { to: string; input: string; value: bigint; logs?: unknown[] }> = {
       [FUND_HASH]: { to: AGENT, input: "0x", value: ARC_FUND },
-      [GRANT_HASH]: { to: ARC_USDC, input: arcApprove, value: 0n },
+      [GRANT_HASH]: { to: ARC_USDC, input: arcApprove, value: 0n, logs: [approvalLog(ARC_USDC, OWNER, AGENT, 10000n, "0x20")] },
     };
     let funded = false;
     let granted = false;
@@ -877,7 +960,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
       if (method === "eth_getTransactionReceipt" && t) {
         if (params[0] === FUND_HASH) funded = true;
         if (params[0] === GRANT_HASH) granted = true;
-        return { transactionHash: params[0], blockHash, blockNumber: "0x20", from: OWNER, to: t.to, status: "0x1", logs: [], gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+        return { transactionHash: params[0], blockHash, blockNumber: "0x20", from: OWNER, to: t.to, status: "0x1", logs: t.logs ?? [], gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
       }
       if (method === "eth_call" && String(params[0]?.data).startsWith("0xdd62ed3e")) return `0x${(granted ? 10000n : 0n).toString(16).padStart(64, "0")}`;
       // the agent's native balance: 18 decimals, up by exactly the top-up once it is mined
@@ -920,6 +1003,23 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     expect(pub).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
     expect(pub).toMatch(/^APPROVALS=hosted$/m);
     expect(pub).not.toMatch(/^B4_CAP=/m);
+  }, 180_000);
+
+  it("steps the site judged failed are never settled, even when the chain shows exactly the plan; the link is still recorded", async () => {
+    await prepare();
+    const first = await start();
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: OWNER });
+    Object.assign(r.steps![0], { state: "failed", tx_hash: FUND_HASH, wallet_asked: true, reason: "The transaction is not the one planned.", reason_code: "mismatch" });
+    Object.assign(r.steps![1], { state: "failed", tx_hash: GRANT_HASH, wallet_asked: true, reason: "The transaction is not the one planned.", reason_code: "mismatch" });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(3);
+    expect(done.result).toMatchObject({ ok: false, linked: true, owner: OWNER, steps: [{ kind: "fund_agent", state: "mismatch", tx: FUND_HASH }, { kind: "grant", state: "mismatch", tx: GRANT_HASH }] });
+    for (const step of done.result.steps) expect(step.reason).toBe(`${new URL(site.url).host} reported this step as failed (reason: mismatch), so it is not counted as done (transaction ${step.tx})${step.kind === "grant" ? ". The budget was not recorded." : ""}`);
+    expect(done.result.cap).toBeUndefined();
+    expect(done.result.sent).toBeUndefined();
+    expect(publicFile()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
+    expect(publicFile()).not.toMatch(/^B4_CAP=/m);
   }, 180_000);
 
   it("a step the site cannot account for is unknown (exit 5), never nothing sent; the link is still recorded", async () => {

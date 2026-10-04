@@ -38,7 +38,7 @@ import { decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
 import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
 import { UNSAFE_SECRET_FILE } from '../secret-file.mjs'
-import type { HostedStep, HostedStepOutcome, PriorLink } from '../hosted.ts'
+import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from '../hosted.ts'
 import { chosenSite, isSiteRequestId, siteOrigin } from '../site.mjs'
 import { KEYCHAIN, approvalSite, askConnect, checkGrantSent, closeOwnerPage, emit, endUnapproved, grantCalldata, iso, tokenBalance, useApprovalSite, useHostedAgent, type GrantPlan, type SentCheck } from './owner.ts'
 import { chainHead, readKey } from './lib/chain.ts'
@@ -394,7 +394,8 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
   for (const s of steps) {
     if (s.hash) {
       console.log(`${s.kind}: ${HOST} reports transaction ${s.hash} (${s.state}); checking it on chain`)
-      const c = await checkGrantSent(s.hash as Hex, { owner, plan, afterBlock: startBlock })
+      // a step the site reported as failed is read too, but never settled
+      const c = await checkGrantSent(s.hash as Hex, { owner, plan, afterBlock: startBlock, siteFailed: s.state === 'failed' ? siteFailedWords(HOST, s.reasonCode) : undefined })
       if (c.state === 'settled') done = c
       reports.push({ kind: s.kind, state: c.state, tx: c.tx, txUrl: explorerTx(c.tx), amount, reason: c.reason })
     } else if (s.walletAsked || s.state === 'unknown') {

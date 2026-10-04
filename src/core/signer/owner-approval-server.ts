@@ -99,7 +99,11 @@ export interface OwnerActionInput {
 
 export type OwnerActionOutcome =
   | { status: "connected"; address: string }
-  | { status: "sent"; address: string; hash: string }
+  /**
+   * `siteFailed` (hosted approvals only): the site reported this transaction as failed, in words. The command still reads the
+   * chain, but never reports such a step as settled.
+   */
+  | { status: "sent"; address: string; hash: string; siteFailed?: string }
   | { status: "rejected" | "expired"; reason: string; /** the wallet had been asked to send */ sending: boolean };
 
 export interface OwnerActionHandle {

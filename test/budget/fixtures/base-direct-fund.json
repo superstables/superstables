@@ -1,0 +1,61 @@
+{
+ "chain": "https://sepolia.base.org",
+ "hash": "0x99c8aa04934b2415d07f54c09776df682fe3f6641e98b418aeed13326162c015",
+ "tx": {
+  "type": "0x2",
+  "chainId": "0x14a34",
+  "nonce": "0x2",
+  "gas": "0x5208",
+  "maxFeePerGas": "0xf3aed0",
+  "maxPriorityFeePerGas": "0xecd10",
+  "to": "0xcef1fac5270ad5f173e8c38f6034c27d93ff04a2",
+  "value": "0x5af3107a4000",
+  "accessList": [],
+  "input": "0x",
+  "r": "0xe374c8361fbee5ace1f0056bf6d1c68c5069fec010b91965d8bf5c5c5fe0cb34",
+  "s": "0x12c0649a0492411a066db7f8b5b7c8806f8f942ca4cc533c69a66fdcb9c7d295",
+  "yParity": "0x1",
+  "v": "0x1",
+  "hash": "0x99c8aa04934b2415d07f54c09776df682fe3f6641e98b418aeed13326162c015",
+  "blockHash": "0x30f14a88c4f16218340a8fd0a00929fda96bcac2f761697cee1b94d466f483ca",
+  "blockNumber": "0x2d717d5",
+  "transactionIndex": "0x7",
+  "blockTimestamp": "0x6ac18e8a",
+  "from": "0x37dedeea845a7772bd4decfe573eaabf660ad537",
+  "gasPrice": "0x5b1850"
+ },
+ "receipt": {
+  "type": "0x2",
+  "status": "0x1",
+  "cumulativeGasUsed": "0x2fe675",
+  "logs": [],
+  "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "transactionHash": "0x99c8aa04934b2415d07f54c09776df682fe3f6641e98b418aeed13326162c015",
+  "transactionIndex": "0x7",
+  "blockHash": "0x30f14a88c4f16218340a8fd0a00929fda96bcac2f761697cee1b94d466f483ca",
+  "blockNumber": "0x2d717d5",
+  "gasUsed": "0x5208",
+  "effectiveGasPrice": "0x5b1850",
+  "blobGasUsed": "0xae38",
+  "from": "0x37dedeea845a7772bd4decfe573eaabf660ad537",
+  "to": "0xcef1fac5270ad5f173e8c38f6034c27d93ff04a2",
+  "contractAddress": null,
+  "l1GasPrice": "0x41540f9f",
+  "l1GasUsed": "0x640",
+  "l1Fee": "0x15f04aa0b",
+  "l1BaseFeeScalar": "0x44d",
+  "l1BlobBaseFee": "0x39359fa",
+  "l1BlobBaseFeeScalar": "0xa118b",
+  "daFootprintGasScalar": "0x1be"
+ },
+ "balances": {
+  "0xcef1fac5270ad5f173e8c38f6034c27d93ff04a2": {
+   "before": "0x0",
+   "after": "0x5af3107a4000"
+  },
+  "0x37dedeea845a7772bd4decfe573eaabf660ad537": {
+   "before": "0x2275fab865f172",
+   "after": "0x221ae91844a4e7"
+  }
+ }
+}
