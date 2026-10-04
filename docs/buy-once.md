@@ -7,14 +7,16 @@ without paying. It then asks for one purchase, and the owner approves or rejects
 wallet. Nothing is paid without that approval, and every purchase needs a new one. For purchases
 without an approval each time, see [Budget](budget.md).
 
+**Single purchase:** approve one purchase in your wallet, on your machine or on superstables.com.
+
 There are two ways:
 
-- **Single purchase locally** (`pay`, the MCP tools): the owner approves on a page on this
-  computer, on Base Sepolia, with no account. See
-  [Single purchase on this computer](#approve-each-payment-on-this-computer-pay).
-- **Hosted single purchase** (`superstables budget buy-once`): the owner approves on superstables.com,
+- **Single purchase on your machine** (`pay`, the MCP tools): the owner approves on a page on this
+  machine, on Base Sepolia, with no account. See
+  [Single purchase on your machine](#approve-each-payment-on-this-computer-pay).
+- **Single purchase on superstables.com** (`superstables budget buy-once`): the owner approves on superstables.com,
   on Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet. Choose this when the owner's
-  wallet is on another device. See [Hosted single purchase](#hosted-buy-once-superstables-budget-buy-once).
+  wallet is on another device. See [Single purchase on superstables.com](#hosted-buy-once-superstables-budget-buy-once).
 
 **Testnet only.** Test tokens on test networks: USDC, or pathUSD on Tempo Moderato. No real money
 moves. Use the [0.3.0 client install instructions](install.md). A command-capable agent initiates
@@ -27,7 +29,7 @@ secondary route; browsing alone cannot create a purchase.
 
 <a id="hosted-buy-once-superstables-budget-buy-once"></a>
 
-## Hosted single purchase (`superstables budget buy-once`)
+## Single purchase on superstables.com (`superstables budget buy-once`)
 
 With `superstables budget buy-once`, the owner approves one purchase on superstables.com, in their
 own wallet, from a device where they are signed in and have a compatible wallet. It needs no
@@ -39,7 +41,7 @@ signing in with an Ethereum wallet, or a compatible deployment the owner names w
 `SUPERSTABLES_ALLOW_SITE` to it (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
 The installed CLI runs on your own machine, but the site coordinates this single purchase after
 the owner approves. This differs from a budget, whose client pays sellers directly. The six local
-payment MCP tools do not initiate hosted single purchase. Solana purchases additionally need a Solana
+payment MCP tools do not initiate Single purchase on superstables.com. Solana purchases additionally need a Solana
 wallet on the owner's device to sign the payment transaction. Solana sign-in is not supported
 in 0.3.0. Signing in does not approve a purchase. The
 [owner guide](https://www.superstables.com/docs/owner) covers the link/code handoff, sign-in
@@ -75,12 +77,12 @@ is the HTTP purchase API; the endpoints the client calls, and what it checks in 
 [budget/CLI.md](../budget/CLI.md#buy-once).
 
 For an unresolved outcome, [check the original request](records.md#check-an-unresolved-outcome).
-Hosted one-off requests appear in the [site account](https://www.superstables.com/account);
+Single purchase requests made on superstables.com appear in the [site account](https://www.superstables.com/account);
 [local files](records.md#budget-records) retain the CLI's result and saved seller response.
 
 <a id="approve-each-payment-on-this-computer-pay"></a>
 
-## Single purchase on this computer (`pay`)
+## Single purchase on your machine (`pay`)
 
 `pay` uses x402 with the `exact` scheme and test USDC on Base Sepolia (`eip155:84532`, token
 `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, 6 decimals). If the seller offers no payment option

@@ -7,7 +7,7 @@ An owner gives an AI agent a spending budget once. The agent then buys from paid
 There are two ways to pay, and an agent can offer both:
 
 - **A budget.** The owner approves a spending cap once, and the agent buys within it with no approval per purchase. Follow the [local-first budget guide](../docs/budget.md); the rest of this file is the detailed budget reference.
-- **Single purchase.** The owner approves one purchase on superstables.com, in their own wallet. No setup or budget: `superstables budget buy-once`. See [Single purchase](#buy-once).
+- **Single purchase on superstables.com.** The owner approves one purchase on superstables.com, in their own wallet. No setup or budget: `superstables budget buy-once`. See [Single purchase on superstables.com](#buy-once).
 
 Three ideas hold it together:
 
@@ -235,7 +235,7 @@ An SPL token account has one delegate slot. A new grant would overwrite a live o
 
 <a id="buy-once"></a>
 
-## Single purchase
+## Single purchase on superstables.com
 
 `superstables budget buy-once` asks superstables.com for one purchase of a service it lists for this, and the owner approves it there, signed in with an Ethereum wallet. Solana purchases additionally need a Solana wallet to sign the payment transaction; Solana sign-in is not supported in 0.3.0. There is no setup, no budget or agent key: the owner's wallet approves one payment of exactly the amount, to the recipient, the page shows. It runs on the network the service's listing names: Base Sepolia, Arc Testnet or Solana devnet (test USDC, from faucet.circle.com; the seller's facilitator pays the fee), or Tempo Moderato (test pathUSD; the owner pays the fee).
 

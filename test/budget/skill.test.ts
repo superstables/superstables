@@ -66,7 +66,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
     expect(skill).toMatch(/A no is final/);
     expect(skill).not.toMatch(/stop after about five minutes of polling/);
     const budget = ref("references/budget.md");
-    expect(budget).toMatch(/Offer single purchase only if that service is in `superstables budget find --once`/);
+    expect(budget).toMatch(/Offer Single purchase on superstables.com only if that service is in `superstables budget find --once`/);
     expect(budget).toMatch(/say the budget is spent and end your turn/);
     expect(budget).toMatch(/## A hosted budget on superstables\.com/);
     expect(budget).toMatch(/Use the network the owner named; otherwise propose Base Sepolia/);

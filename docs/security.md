@@ -5,7 +5,7 @@ and what it does not.
 
 These payment flows have different boundaries:
 
-| | Single purchase (`pay`, the MCP tools) | Hosted single purchase (`superstables budget buy-once`) | Budget (`superstables budget`) |
+| | Single purchase on your machine (`pay`, the MCP tools) | Single purchase on superstables.com (`superstables budget buy-once`) | Budget (`superstables budget`) |
 | --- | --- | --- | --- |
 | Who approves | The owner, in their own wallet, for every payment | The owner, in their own wallet on the site, for one purchase | The owner, in their own wallet, once, for the whole budget |
 | Keys the client holds | None with a browser wallet; `--wallet local` stores a signing key | None | The agent key, which signs purchases. The owner's key stays in their wallet |
@@ -17,7 +17,7 @@ The sections below cover `pay`: the approval page on `127.0.0.1` and the owner's
 wallet. Budgets have their own section: [Budgets](#budgets). `superstables budget buy-once` and a
 budget set up with `--hosted` are approved on a website instead, superstables.com by default; what
 that site can and cannot do is in
-[Hosted approvals and single purchase](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do).
+[Budget approvals and Single purchase on superstables.com](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do).
 
 ## Where the key is
 
@@ -72,7 +72,7 @@ rules as a convenience, not as a boundary.
 This section, and the three after it, describe the page `superstables pay` serves on `127.0.0.1`.
 `budget buy-once` and a budget set up with `--hosted` have no such page: their approval links are
 on the site, and the owner acts there signed in to their account with their wallet. See
-[Hosted approvals and single purchase](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do).
+[Budget approvals and Single purchase on superstables.com](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do).
 
 There is no password on the approval page. The authority is the id in the URL: 128 bits of
 randomness, generated when the payment is created, and handed to the agent as part of its tool
@@ -309,7 +309,7 @@ undo an owner signature or a transaction already sent through hosted setup. `doc
   owner runs it, and checks the owner address that setup prints and every owner page shows. Under
   `--hosted` there is no local page and no origin check: the owner adds the agent on the site, and
   the client records an owner only with that owner's signature over the add-agent request (see
-  [Hosted approvals and single purchase](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
+  [Budget approvals and Single purchase on superstables.com](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
 - **The checks depend on the rail.** The command builds the page's terms and the transaction
   from the same plan: the command's arguments and the chain's state, not the agent's description.
   On `evm` and `tempo`, the wallet signs and submits, and the command then checks the transaction
@@ -333,7 +333,7 @@ undo an owner signature or a transaction already sent through hosted setup. `doc
   every instruction it built unchanged after them. With `setup --hosted` on `solana`, the site builds and sends the transaction, so the
   client never sees it before it is sent; it reads it from the chain afterwards and reports any
   difference from the plan, like on `evm` (see
-  [Hosted approvals and single purchase](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
+  [Budget approvals and Single purchase on superstables.com](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
 - **Revoke ends the permission once it is confirmed on chain.** The owner approves it in their
   wallet: `approve(agent, 0)` on `evm`, `revokeKey` on `tempo`, the SPL `Revoke` on `solana`. It
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds
@@ -346,7 +346,7 @@ Per rail, with what each revoke does not cover:
 
 <a id="hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do"></a>
 
-### Hosted approvals and single purchase: what the site can and cannot do
+### Budget approvals and Single purchase on superstables.com: what the site can and cannot do
 
 `setup --hosted` moves a chain's owner approvals to a site (superstables.com by default), and
 `buy-once` has the site take one payment. The site is trusted to show the owner the right page; it
@@ -390,7 +390,7 @@ is not trusted to say who the owner is or what was paid.
   token, to the listed recipient, mined no more than 60 seconds before the purchase was created (an
   allowance for clock differences); otherwise the result is unknown
   and the agent never buys again.
-- **Single purchase checks the site's reported amounts.** The site states each amount twice, as a decimal
+- **Single purchase on superstables.com checks the site's reported amounts.** The site states each amount twice, as a decimal
   for display and as an integer in token units. They must agree, the token must have 6 decimals,
   and `--max` and the listing price are compared with the integer. These are checks on the site's
   response; the owner must still check the wallet request before signing. Only one purchase may
