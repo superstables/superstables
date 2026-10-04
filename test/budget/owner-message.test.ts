@@ -25,7 +25,7 @@ describe("message_for_owner", () => {
     const m = messageForOwner({ url: "https://staging.superstables.com/approve/budget/ba_1#ssba_test_x", matchCode: "QRS-TUV", chain: "base-sepolia", terms: { title: "Approve a budget", amount: "0.2", unit: "USDC" } });
     expect(m!.split("\n").slice(0, 3)).toEqual([
       "Review and approve in your wallet: Approve a budget",
-      "This link is on staging.superstables.com, not www.superstables.com.",
+      "This approval link is on staging.superstables.com, not www.superstables.com.",
       "https://staging.superstables.com/approve/budget/ba_1#ssba_test_x",
     ]);
   });

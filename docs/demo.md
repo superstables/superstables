@@ -14,7 +14,7 @@ npm install -g @superstables/client
 superstables setup
 ```
 
-Connect the agent with the demo services switch on, so Superstables' testnet services from the
+Set up the agent app with the demo services switch on, so Superstables' testnet services from the
 hosted catalogue are listed next to the other sellers:
 
 ```bash
@@ -71,13 +71,13 @@ quoted.
 
 > Go ahead and pay it.
 
-It calls `pay` and answers with a link:
+It calls `pay` and answers with an approval link:
 
 > The owner has been asked to approve 0.01 USDC to 0x… on Base Sepolia (testnet). Open this
-> link to review and sign in MetaMask: http://127.0.0.1:4412/approve/… Nothing is signed yet.
+> approval link to review and sign in MetaMask: http://127.0.0.1:4412/approve/… Nothing is signed yet.
 
 
-**4. Open the link.**
+**4. Open the approval link.**
 
 The page shows, in large type:
 
@@ -131,7 +131,7 @@ held its key, and that a facilitator paid the gas.
 
 > Quote it again for ETH and pay it.
 
-The agent quotes, calls `pay`, and hands you a new link. Open it.
+The agent quotes, calls `pay`, and hands you a new approval link. Open it.
 
 **9. Refuse.** Either way works, and both are worth showing if there is time:
 
@@ -161,7 +161,7 @@ approves once and the agent then buys on its own, is a separate tool: see [Budge
 - **Let one expire.** Ask for a payment and do nothing. After five minutes the page and the agent report `expired`. Cancel any open wallet prompt
   before asking for another payment.
 - **Set a cap it will break.** Set `per_call: 0.005 USDC` under `caps:` in `~/.superstables/policy.yaml` and
-  try to pay 0.01. The refusal happens before you are asked: there is no link, because there is
+  try to pay 0.01. The refusal happens before you are asked: there is no approval link, because there is
   nothing to approve. Say plainly that this is software policy, not a chain limit — see
   [security.md](security.md).
 - **Pay the same quote twice.** Ask the agent to pay the quote it already paid. It is refused:
@@ -184,10 +184,10 @@ command so the MCP server uses the same home.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| The page says "MetaMask (or another browser wallet) is needed" | No `window.ethereum` in this browser | Install MetaMask, or open the link in the browser that has it. The Reject button still works |
+| The page says "MetaMask (or another browser wallet) is needed" | No `window.ethereum` in this browser | Install MetaMask, or open the approval link in the browser that has it. The Reject button still works |
 | MetaMask never opens when you press Connect | Its popup was suppressed, or it is locked | Open the MetaMask extension, unlock it, and press Connect again |
 | The value in MetaMask looks a million times too big | It is in USDC's smallest unit | `10000` is 0.01 USDC. The page prints the conversion under the amount |
-| The page says "This link is unavailable" | The link was already used, rejected, or expired, or the agent restarted | Ask the agent for the original attempt's `payment_status` first. Do not pay again if it settled or is uncertain |
+| The page says "This approval link is unavailable" | The approval link was already used, rejected, or expired, or the agent restarted | Ask the agent for the original attempt's `payment_status` first. Do not pay again if it settled or is uncertain |
 | Agent: "the approval page could not start" and names a port | `SUPERSTABLES_APPROVE_PORT` fixes a port that is busy, probably with another payment waiting for its owner | Leave that process running. Unset `SUPERSTABLES_APPROVE_PORT`, or set it to a free port, then pay the same quote again |
 | The page's countdown runs out while you look at MetaMask | Five minutes passed | Cancel the open wallet prompt and check the attempt's status. Quote again only once it has ended without a payment |
 | Payment fails: "the payment did not settle" with an insufficient-funds reason | The connected account has no test USDC | Top it up at <https://faucet.circle.com>; MetaMask shows the balance |
@@ -196,4 +196,4 @@ command so the MCP server uses the same home.
 | Agent: "The service reported the payment settled … but it answered HTTP 5xx" | The seller reports the payment settled and the service then failed | Do not pay again. The receipt records both facts |
 | Agent: "The payment may or may not have settled" | The credential was sent and no answer came back | Do not retry. Follow the steps in [records.md](records.md#why-failed-and-uncertain-are-different) |
 | Claude Code `/mcp` does not list superstables | The server is not configured, or it will not start | `claude mcp list`, then run `superstables mcp` by hand and read stderr |
-| The agent does not give you the link at once | The MCP `pay` tool answers once a link exists or the attempt ends; it may still be checking the seller's terms | Wait for the tool result. After approving, ask for `payment_status` with the attempt id |
+| The agent does not give you the approval link at once | The MCP `pay` tool answers once an approval link exists or the attempt ends; it may still be checking the seller's terms | Wait for the tool result. After approving, ask for `payment_status` with the attempt id |

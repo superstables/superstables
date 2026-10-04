@@ -78,7 +78,7 @@ steps with your local paths. In the default MetaMask mode, it does not create a 
 To run the client from a checkout of this repository instead, see
 [docs/install.md](docs/install.md#from-a-checkout).
 
-**Connect an agent.** Claude Code:
+**Set up your agent app.** Claude Code:
 
 ```bash
 claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- superstables mcp
@@ -96,7 +96,7 @@ demo flow because the facilitator covers the gas.
 
 > Find a paid service for BTC market data, quote it, tell me the price, and pay it if I say yes.
 
-When you say yes, the agent answers with a link like `http://127.0.0.1:4412/approve/<id>` (another
+When you say yes, the agent answers with an approval link like `http://127.0.0.1:4412/approve/<id>` (another
 port if a second payment is already waiting on 4412). Open it. Press **Connect wallet**, then **Review in wallet**, and check the recipient and the
 amount in MetaMask's popup before you sign. The agent reports the transaction and the data it
 paid for.
@@ -143,7 +143,7 @@ within a limit the owner set. `superstables setup` prepares `pay` only.
 | `doctor` | Check everything `pay` needs and print ✓/✗ per item | either | no |
 | `find [query]` | List services, their chains, whether `pay` or a budget rail could pay each, and the commands to pay it each way, pay first (`--budget`, `--all`, `--limit`) | either | no |
 | `quote <url>` / `quote --service <id> --param k=v` | Retrieve payment terms and show each policy rule they were checked against. Nothing is signed | either | no |
-| `pay <quote-id>` | Ask the owner to approve a quote, print the link once, then pay and print the service's answer (`--wait`) | agent | yes, after the owner approves |
+| `pay <quote-id>` | Ask the owner to approve a quote, print the approval link once, then pay and print the service's answer (`--wait`) | agent | yes, after the owner approves |
 | `status <attempt-id>` | Where a payment attempt got to, the service's answer, and what to run next | either | no |
 | `receipts` / `attempts` | List payment receipts or attempts (`--limit`) | either | no |
 | `policy show` / `policy init` | Read or create `policy.yaml` | either / owner | no |
@@ -158,7 +158,7 @@ approval page, which `pay` itself serves on `127.0.0.1` and which stops working 
 not a rejection; `denied` means the owner rejected it and `expired` means nobody approved in time.
 None of the three moved money. A quote starts at most one attempt, so to ask again, take a new
 quote. An agent whose tool shows output only when a command ends should run `pay` in the
-background and read the link from its output, or use the MCP server, which returns the link at
+background and read the approval link from its output, or use the MCP server, which returns it at
 once.
 
 ### Discovery and self-hosted indexes
@@ -222,7 +222,7 @@ The exit codes are the same numbers `superstables budget` uses:
 | `list_receipts` | Payments made from this machine, each with `chain`: verified, unchecked or mismatch after a later check |
 
 Of these tools, only `pay` can initiate a payment. It returns an `approval_url` and waits in
-`awaiting_approval` for your decision. The agent must show the complete link unchanged so you
+`awaiting_approval` for your decision. The agent must show the complete approval link unchanged so you
 can open the correct payment request.
 
 ## Where state lives
@@ -269,7 +269,7 @@ local policy and what a compromised agent or client process could do.
 - MetaMask displays the amount in USDC's smallest unit: `10000` represents 0.01 USDC. The
   approval page shows the conversion. Check the amount and recipient in MetaMask before signing.
 - In browser mode, an approval link opens one payment request and expires after five minutes.
-  The page is served on `127.0.0.1`, and signing still requires MetaMask. Treat the link as
+  The page is served on `127.0.0.1`, and signing still requires MetaMask. Treat it as
   access to that request.
 - Each payment through the MCP tools and `pay` requires approval. There is no unattended mode
   in that flow. On-chain budgets for an agent that buys on its own are a separate testnet tool,
@@ -368,15 +368,16 @@ Solana wallet (Phantom, Solflare, Backpack, ...) on `solana`, with no account. O
 superstables.com instead: you approve from any device where you are signed in with your wallet, after picking the match
 code the agent shows you. That needs a superstables.com account. Setup records your address; grants, revokes and funding require wallet
 approval. Over SSH, the owner forwards the local page's port first (`ssh -L PORT:127.0.0.1:PORT`, with the port from the
-link). `superstables budget find` lists the services superstables.com says a budget can pay. Without a budget,
+approval link). `superstables budget find` lists the services superstables.com says a budget can pay. Without a budget,
 `superstables budget buy-once --service ID --max M` buys one listed service that you approve on superstables.com (on
 the network its listing names: Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet; `superstables budget find --once` lists them). The default flow stores only the agent key in `~/.superstables/keys/budget/`. An agent may start an owner
-command and hand the owner the link; only the owner approves. Run by an agent, an owner command returns at once with
-the link and an approval id. The agent writes the link in its reply to the owner and ends its turn; when the owner says
+command and hand the owner the approval link; only the owner approves. Run by an agent, an owner command returns at once with
+the approval link and an approval id. The agent writes it in its reply to the owner and ends its turn; when the owner says
 they have approved, it runs `superstables budget wait --id <id> --shown`; if the approval is still open, it says so and
 ends its turn again, rather than polling.
-`waiting_owner` is not approval or settlement. A link that expires before the owner approves ends the command refused,
-with nothing sent; running the command again gives a new link. Every command ends with one
+`waiting_owner` is not approval or settlement. An approval link that expires before the owner's wallet is asked to send ends the command refused,
+and that approval sent nothing (an earlier step of `recover`, or of a hosted setup with `--grant` or `--fund`, may have
+completed); running the command again gives a new one. Every command ends with one
 `RESULT {json}` line (with `--json`, the object alone) and a fixed exit code, so an agent can act on it. EVM and Solana allowances have no automatic expiry or seller restriction. Revoke stops
 further use of the permission once it takes effect on chain; it does not reverse confirmed
 transfers. Setup, funding, wallet verification limits, the safety model and the agent skill are in [budget/README.md](budget/README.md).

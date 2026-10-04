@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { OPS_DIR, SYM, oneLine, arg, flag, agentCtx, toUsdc, usdc, usdcBalance, nativeBalance, gasFmt, tx, usageError, posInt, CFG, GAS } from "./lib.ts";
 import { purchase, MAX_RESPONSE_BYTES } from "./purchase.ts";
 import { checkOpId, newOpId, resultLine, type ResponseInfo } from "./ops.ts";
+import { refusedChainWords } from "../next-steps.mjs";
 
 const url = arg("url")!;
 try { new URL(url); } catch { usageError(`--url "${url}" is not a URL`); }
@@ -56,7 +57,8 @@ if (j.reason) console.log(`reason: ${oneLine(j.reason, 1000)}`);
 if (j.state === "settled" && j.delivered) console.log("PURCHASE OK.");
 else if (j.state === "settled") console.log("PURCHASE SETTLED ON CHAIN BUT THE SELLER DID NOT DELIVER. Not paying again.");
 else if (j.state === "quoted") console.log("QUOTE OK. Nothing was signed or sent.");
-else if (j.state === "refused_precheck" || j.state === "refused_chain") console.log("PURCHASE REFUSED. Nothing was paid.");
+else if (j.state === "refused_chain") console.log(refusedChainWords(j.pullTx).line);
+else if (j.state === "refused_precheck") console.log("PURCHASE REFUSED. Nothing was paid.");
 else if (j.state === "failed" && j.returned) console.log(`PURCHASE DID NOT SETTLE. The pulled ${j.returned} ${SYM} was returned to the owner. Never re-paid.`);
 else console.log("PURCHASE OUTCOME NOT CONFIRMED (or it failed). Not retrying. Read the RESULT line, then reconcile.ts.");
 if (j.next && j.next !== "none") console.log(`next: ${oneLine(j.next, 1000)}`);

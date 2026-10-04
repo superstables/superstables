@@ -153,8 +153,8 @@ describe("budget/CLI.md against the hosted proofs the client makes and checks", 
     expect(documented.sort()).toEqual(Object.keys(headers).sort());
   });
 
-  it("the owner link proof text", () => {
-    const doc = blockAfter("### Owner link proof");
+  it("the owner proof text", () => {
+    const doc = blockAfter("### Owner proof");
     expect(doc[0]).toBe(OWNER_PROOF_TITLE);
     const f = { site: "https://www.superstables.com", owner: "0x1111111111111111111111111111111111111111", agent: "0x2222222222222222222222222222222222222222", rail: "evm", chain: "base-sepolia", linkId: "bl_test1234", code: "AB-CD" } as const;
     const real = ownerProofText(f).split("\n");
@@ -165,7 +165,7 @@ describe("budget/CLI.md against the hosted proofs the client makes and checks", 
         "the agent, as in Superstables-Agent": f.agent,
         "evm, tempo or solana": f.rail,
         "the chain key, such as base-sepolia, moderato or devnet": f.chain,
-        "the link request id the agent created": f.linkId,
+        "the add-agent request ID the agent created": f.linkId,
         "the match code shown to the agent": f.code,
       }),
     );

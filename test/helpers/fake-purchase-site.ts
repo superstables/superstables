@@ -242,7 +242,7 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
       return json(res, 201, {
         ...view(p), access_token: p.token, replayed: false,
         approval: { url: `${site.approvalBase ?? server.url}/approve/${id}#${site.approvalFragment ?? `sspa_test_owner${site.purchases.length}`}`, match_code: "KPT-RWD", expires_at: new Date(Date.now() + 600_000).toISOString() },
-        message_for_owner: "Open the link and pick KPT-RWD.",
+        message_for_owner: "Open the approval link and pick KPT-RWD.",
       });
     }
     const m = /^\/api\/v1\/purchases\/([^/]+)(\/cancel)?$/.exec(url.pathname);

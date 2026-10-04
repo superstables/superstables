@@ -131,9 +131,9 @@ explain(
       if (mode === "browser") {
         console.log(field("signing", "MetaMask, on an approval page this client serves on 127.0.0.1"));
         console.log("");
-        console.log("There is nothing else to start. When an agent asks to pay, it prints a link:");
+        console.log("There is nothing else to start. When an agent asks to pay, it prints an approval link:");
         console.log("  1. Install MetaMask in your browser: https://metamask.io/download");
-        console.log("  2. Open the link the agent gives you and press Connect wallet.");
+        console.log("  2. Open the approval link the agent gives you and press Connect wallet.");
         console.log("  3. Add or switch to the Base Sepolia network when MetaMask asks.");
         console.log("  4. Check the amount and the recipient on the page, then approve in MetaMask.");
         console.log("");
@@ -153,7 +153,7 @@ explain(
         console.log("  superstables wallet serve");
       }
       console.log("");
-      console.log("Connect an agent over MCP (Claude Code shown; other MCP hosts take the same command):");
+      console.log("Set up your agent app over MCP (Claude Code shown; other MCP hosts take the same command):");
       console.log(`  claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- ${mcpCommand()}`);
       console.log("  The switch adds Superstables' testnet services from the hosted catalogue. Most return");
       console.log("  prepared sample output and are marked simulated; the market data service returns live prices.");
@@ -543,7 +543,7 @@ explain(
       "stop waiting for the owner's decision after this many seconds (default: until the approval window closes)",
       toNumber,
     )
-    .option("--json", "print the outcome as one JSON object; progress and the link go to stderr")
+    .option("--json", "print the outcome as one JSON object; progress and the approval link go to stderr")
     .action(async (quoteId: string, options: { wait?: number; json?: boolean }) => {
       const say = options.json ? (line: string) => console.error(line) : (line: string) => console.log(line);
       const { records, engine, signer } = context();
@@ -560,7 +560,7 @@ explain(
           linkShown = true;
           say(`  awaiting_approval: waiting for the owner on the approval page (it closes when this command stops)`);
           say("");
-          say("Open this link and approve the payment in your browser wallet:");
+          say("Open this approval link and approve the payment in your browser wallet:");
           say(`  ${attempt.approvalUrl}`);
           const movedFrom = signer instanceof BrowserWalletSigner ? signer.movedFrom : undefined;
           if (movedFrom !== undefined) {
@@ -656,9 +656,9 @@ explain(
   {
     notes: [
       "How it runs: pay asks the seller for its price again, then asks the owner. In browser mode " +
-        "(the default) it serves the approval page itself on 127.0.0.1 and prints the link; the page " +
+        "(the default) it serves the approval page itself on 127.0.0.1 and prints its approval link; the page " +
         "works only while this command runs, and only in a browser on this machine (over SSH, forward " +
-        `the port the link names: ssh -L ${DEFAULT_APPROVE_PORT}:127.0.0.1:${DEFAULT_APPROVE_PORT}). With --wallet local the ` +
+        `the port the approval link names: ssh -L ${DEFAULT_APPROVE_PORT}:127.0.0.1:${DEFAULT_APPROVE_PORT}). With --wallet local the ` +
         "request goes to the wallet process, whose page outlives this command; approving there after " +
         "pay has stopped pays nothing, because nothing is left to submit it.",
       `How long it waits: with no --wait, until the attempt ends: the browser page gives the owner ` +
@@ -668,14 +668,14 @@ explain(
         "by then, the attempt ends `abandoned`, which is not a rejection. Once the owner has approved, " +
         "pay waits for the settlement whatever --wait says.",
       `Ports: the page uses port ${DEFAULT_APPROVE_PORT}. When another pay on this machine is already waiting ` +
-        "there for its owner, this one takes a free port and says so under the link; two payments can " +
+        "there for its owner, this one takes a free port and says so under the approval link; two payments can " +
         "wait at once. Never stop another pay process to free a port: it is someone's payment waiting " +
         "for an answer. SUPERSTABLES_APPROVE_PORT=<port> fixes the port instead (0 picks any free one); " +
         "a fixed port that is busy fails at once, the owner is not asked and the quote can still be paid.",
-      "For agents: the link is printed as soon as it exists, but pay keeps running until the owner " +
+      "For agents: the approval link is printed as soon as it exists, but pay keeps running until the owner " +
         "decides. If your tool shows output only when a command ends, run pay in the background with its " +
-        "output going to a file and show the owner the link from that file, or use the MCP server " +
-        "(`superstables mcp`), whose pay tool returns the link at once.",
+        "output going to a file and show the owner the approval link from that file, or use the MCP server " +
+        "(`superstables mcp`), whose pay tool returns it at once.",
       "Where the answer is: the service's response is printed after the receipt (up to " +
         `${SERVICE_BODY_LIMIT.toLocaleString("en")} characters are kept); with --json it is service_response. ` +
         "`superstables status <attempt-id>` shows it again later.",
@@ -698,9 +698,9 @@ explain(
     prints:
       "each state as it happens, the approval link once, the outcome in one sentence, the receipt, the " +
       "service's response and the next command. With --json, one object: attempt_id, quote_id, state, " +
-      "final, message, next, reason, refusal, receipt, service_response, history.",
+      "final, message, next, reason, refusal, receipt (or transaction, for a payment without one), service_response, history.",
     exits:
-      "0 paid and delivered, 1 nothing was paid (failed, expired, abandoned), 2 bad input (unknown, used " +
+      "0 paid and delivered, 1 failed, expired or abandoned; nothing was paid only when no transaction is reported, 2 bad input (unknown, used " +
       "or expired quote), 3 refused (the owner rejected it, or a spend policy refused it), 4 paid but the " +
       "service failed, 5 unknown",
   },

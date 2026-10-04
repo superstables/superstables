@@ -50,11 +50,11 @@ const { values: args } = parseCli({
     agent: { type: 'string', metavar: 'label', desc: 'Add a new agent key AGENT<label> (for the next budget after a revoke)', check: labelCheck },
     'fund-only': { type: 'boolean', desc: 'Fund the recorded owner from the Moderato faucet, change no file' },
     'new-owner': { type: 'boolean', desc: 'Replace the recorded owner with the wallet that connects (refused while a key is live)' },
-    hosted: { type: 'boolean', desc: 'The owner approves on superstables.com (links this agent to their account) instead of a page here' },
+    hosted: { type: 'boolean', desc: 'The owner approves on superstables.com (adds this agent to their account) instead of a page here' },
     site: { type: 'string', metavar: 'url', desc: 'With --hosted: the site (default superstables.com, or SUPERSTABLES_SITE)' },
     grant: { type: 'string', metavar: 'amount', desc: `With --hosted: on the same page, a budget of this many ${TOKEN_LABEL} in total for 24 hours`, check: decimalCheck(6) },
     timeout: { type: 'string', metavar: 'seconds', desc: 'How long the approval link stays open (default 600)', check: intCheck(1) },
-    'no-open': { type: 'boolean', desc: 'Do not open the link in the default browser' },
+    'no-open': { type: 'boolean', desc: 'Do not open the approval link in the default browser' },
     'owner-key-file': { type: 'string', metavar: 'path', desc: 'Tests and automation only: record this owner key file\'s address instead of asking the wallet' },
   },
   examples: ['npx tsx budget/tempo/setup.ts', 'npx tsx budget/tempo/setup.ts --agent 2', 'npx tsx budget/tempo/setup.ts --hosted --grant 1'],
@@ -92,11 +92,14 @@ const HOSTED = args.hosted === true
 let SITE: string | null = null
 if (HOSTED) {
   if (OWNER_KEY_FILE) usage('--hosted asks the owner on the site; with --owner-key-file there is no owner to ask')
-  if (typeof args.agent === 'string') usage('--agent on a hosted chain links the new key on the site by itself: drop --hosted')
+  if (typeof args.agent === 'string') usage('--agent on a hosted chain adds the new key on the site by itself: drop --hosted')
   const s = chosenSite(typeof args.site === 'string' ? args.site : undefined)
   if (s.error) usage(`--site: ${s.error}`)
   SITE = s.origin as string
 } else if (typeof args.site === 'string') usage('--site goes with --hosted')
+// The setup command that replaces the owner. On a hosted chain it names --hosted and the exact site: without them, setup
+// would ask on the page on this computer and move the chain's approvals there, or take SUPERSTABLES_SITE.
+const newOwnerCmd = (site: string | null | undefined) => `superstables budget setup --rail tempo${site ? ` --hosted --site ${site}` : ''} --new-owner`
 const GRANT = typeof args.grant === 'string' ? args.grant : undefined
 if (GRANT !== undefined && !HOSTED) usage('--grant goes with --hosted: without it, run setup, then grant')
 const LIMIT = GRANT !== undefined ? toBaseUnits(GRANT) : undefined
@@ -115,8 +118,8 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
   const code = pub[`AGENT${label}_LINK_CODE`]
   const prior: PriorLink | null = isSiteRequestId(id) && code ? { owner, linkId: id, linkCode: code } : null
   const { outcome, link } = await askConnect('setup', {
-    title: `Link this agent's new key to your ${host} account`,
-    summary: `Sign in to ${host} with your wallet and link the agent's new key ${address}, so you can grant it a budget there. This does not grant a budget or send a transaction.`,
+    title: `Add this agent's new key to your ${host} account`,
+    summary: `Sign in to ${host} with your wallet and add the agent's new key ${address} to your account, so you can grant it a budget there. This does not grant a budget or send a transaction.`,
     rows: [
       { label: 'New agent key', value: address, mono: true },
       { label: 'Chain', value: 'Tempo Testnet (Moderato)' },
@@ -124,20 +127,20 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
     ],
     enforced: [],
     notEnforced: [],
-    notes: [`You pick the match code your agent shows you before anything is linked. The agent key stays on this computer; ${host} does not receive it.`],
+    notes: [`You pick the match code your agent shows you before the key is added. The agent key stays on this computer; ${host} does not receive it.`],
   }, '', undefined, undefined, { prior })
   if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent: address, linked: false })
   if (outcome.status !== 'connected') throw new Error(`unexpected approval outcome ${outcome.status}`)
   if (!same(outcome.address, owner)) {
     await closeOwnerPage(0)
-    const reason = `${host} linked the key ${address} to ${outcome.address}, but this computer records the owner ${owner}`
+    const reason = `${host} added the key ${address} to the account ${outcome.address}, but this computer records the owner ${owner}`
     console.log(`REFUSED: ${reason}.`)
     process.exit(result(3, { state: 'refused_precheck', reason, owner, agent: address, next: `remove this key from that account on ${host}; grant only from the account ${owner}` }))
   }
   await closeOwnerPage(0)
-  if (!link) throw new Error('a hosted link without its id and code')
+  if (!link) throw new Error('an add-agent request without its id and code')
   writePublicEnv({ [`AGENT${label}_LINK_ID`]: link.id, [`AGENT${label}_LINK_CODE`]: link.code })
-  console.log(`${host} linked the key ${address} to the account ${owner}`)
+  console.log(`Key ${address} added to the ${host} account ${owner}`)
   process.exit(result(0, { state: 'ok', owner, agent: address, linked: true, next: `superstables budget grant --rail tempo --agent ${label} --amount A (the owner approves it on ${host}, in their wallet)` }))
 }
 
@@ -220,7 +223,7 @@ async function main() {
       if (live !== false) {
         const reason = live === null ? `could not read access key ${key} on the recorded owner ${recorded}; the owner is not replaced` : `a budget is live: access key ${key} is authorized on the recorded owner ${recorded} until ${new Date(k!.expiry * 1000).toISOString()}`
         console.log(`REFUSED: ${reason}. Nothing was changed.`)
-        process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: live === null ? 'superstables budget doctor --rail tempo, then setup --new-owner again' : `revoke it first (superstables budget revoke --rail tempo, approved by ${recorded}), then setup --new-owner` }))
+        process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: live === null ? `superstables budget doctor --rail tempo, then ${newOwnerCmd(SITE)} again` : `revoke it first (superstables budget revoke --rail tempo, approved by ${recorded}), then ${newOwnerCmd(SITE)}` }))
       }
     }
     console.log(`replacing the recorded owner ${recorded} (no key is live on it): the new owner connects on the page`)
@@ -229,7 +232,7 @@ async function main() {
   // None with --new-owner, or when the site changes: then only a fresh link the owner signs records an owner.
   const recordedSite = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE).origin : undefined
   const prior: PriorLink | null = recorded && !newOwner && SITE && recordedSite === SITE && isSiteRequestId(pub.LINK_ID) && pub.LINK_CODE ? { owner: recorded, linkId: pub.LINK_ID, linkCode: pub.LINK_CODE } : null
-  if (HOSTED && recordedSite && recordedSite !== SITE) console.log(`this chain's approvals are hosted on ${recordedSite}; moving them to ${SITE} takes a fresh link that the owner signs there`)
+  if (HOSTED && recordedSite && recordedSite !== SITE) console.log(`this chain's approvals are hosted on ${recordedSite}; moving them to ${SITE} means adding the agent there, with a new owner proof`)
   let linked: { id: string; code: string } | undefined
 
   // --hosted --grant: the grant after the link, built exactly as grant builds it, and the block it must be mined after
@@ -257,7 +260,7 @@ async function main() {
     startBlock = head!.number
     plan = { agent, limit: LIMIT, expiry: head!.timestamp + GRANT_SECONDS }
     then = [{ kind: 'grant', transaction: { to: KEYCHAIN, data: grantCalldata(plan), value: '0x0' } }]
-    console.log(`one link: the owner links this agent, then their wallet authorizes a budget of ${GRANT} ${TOKEN_LABEL} until ${iso(plan.expiry)}. The transaction is checked from block ${startBlock + 1n} on.`)
+    console.log(`one approval link: the owner adds this agent, then their wallet authorizes a budget of ${GRANT} ${TOKEN_LABEL} until ${iso(plan.expiry)}. The transaction is checked from block ${startBlock + 1n} on.`)
   }
 
   let owner: Address
@@ -269,16 +272,16 @@ async function main() {
     console.log(`owner address from --owner-key-file: ${owner}`)
   } else if (pub.OWNER_ADDRESS && same(pub.AGENT_ADDRESS, agent) && !newOwner && !HOSTED) {
     owner = pub.OWNER_ADDRESS as Address
-    console.log(`${PUBLIC_ENV_PATH} already records owner ${owner} for this agent; not asking again. If this isn't your wallet, stop: superstables budget setup --rail tempo --new-owner replaces it`)
+    console.log(`${PUBLIC_ENV_PATH} already records owner ${owner} for this agent; not asking again. If this isn't your wallet, stop: ${newOwnerCmd(recordedSite)} replaces it`)
   } else if (HOSTED) {
     // the owner links this agent to their account on the site; the account's address becomes the owner on record
     const amt = GRANT !== undefined ? `${fromBaseUnits(LIMIT!)} ${TOKEN_LABEL}` : ''
     const r = await askConnect('setup', {
-      title: plan ? `Link this agent and approve a budget of ${amt}` : `Link this agent to your ${HOST} account`,
+      title: plan ? `Add this agent and approve a budget of ${amt}` : `Add this agent to your ${HOST} account`,
       ...(plan ? { amount: fromBaseUnits(LIMIT!), unit: TOKEN_LABEL } : {}),
       summary: plan
-        ? `1. Link this agent to your ${HOST} account: your account's address is recorded as the budget owner on this computer. 2. Allow the agent key to spend up to ${amt} from your account in total until ${iso(plan.expiry)}. Your wallet asks you to approve the transaction.`
-        : `Sign in to ${HOST} with your wallet and link this agent to your account. Your account's address is recorded as the budget owner on this computer. This does not grant a budget or send a transaction.`,
+        ? `1. Add this agent to your ${HOST} account: your account's address is recorded as the budget owner on this computer. 2. Allow the agent key to spend up to ${amt} from your account in total until ${iso(plan.expiry)}. Your wallet asks you to approve the transaction.`
+        : `Sign in to ${HOST} with your wallet and add this agent to your account. Your account's address is recorded as the budget owner on this computer. This does not grant a budget or send a transaction.`,
       rows: [
         { label: 'Your agent', value: agent, mono: true },
         { label: 'Chain', value: 'Tempo Testnet (Moderato)' },
@@ -287,7 +290,7 @@ async function main() {
       enforced: plan ? [`A total limit of ${amt}.`, `The expiry. After ${iso(plan.expiry)} every payment the key signs is refused.`] : [],
       notEnforced: plan ? ['No call or seller restriction. Whoever holds the key can make other calls as your account, subject to the keychain limits.', 'No per-payment limit. The CLI checks --max, but anyone using the key outside the CLI can skip it.'] : [],
       notes: [
-        `You pick the match code your agent shows you before anything is linked or sent. The agent key stays on this computer; ${HOST} does not receive it.`,
+        `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on this computer; ${HOST} does not receive it.`,
         ...(plan ? ['You pay the network fee in your wallet. To end the budget at any time: superstables budget revoke --rail tempo.'] : [`Grants and revokes for this agent are then approved on ${HOST}, in your wallet.`]),
       ],
     }, '', newOwner ? recorded : undefined, then, { prior, newOwner })
@@ -297,13 +300,13 @@ async function main() {
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent, linked: false })
     if (outcome.status !== 'connected') throw new Error(`unexpected approval outcome ${outcome.status}`)
     owner = outcome.address as Address
-    console.log(`${HOST} linked this agent to the account ${owner}`)
+    console.log(`Agent added to the ${HOST} account ${owner}`)
     if (recorded && !same(recorded, owner) && !newOwner) {
       await closeOwnerPage(0)
       const sent = bundle?.steps.filter((s) => s.hash).map((s) => `${s.kind} ${s.hash}`) ?? []
-      const reason = `${HOST} linked this agent to ${owner}, but this computer records the owner ${recorded}. Nothing was changed on this computer${sent.length ? `; that account's wallet reported ${sent.join(', ')}` : ''}`
+      const reason = `${HOST} added this agent to the account ${owner}, but this computer records the owner ${recorded}. Nothing was changed on this computer${sent.length ? `; that account's wallet reported ${sent.join(', ')}` : ''}`
       console.log(`REFUSED: ${reason}.`)
-      process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: `if ${owner} is the right owner: superstables budget setup --rail tempo --hosted --new-owner (refused while a budget is live). If not, remove this agent from that account on ${HOST}${sent.length ? ", and check that account's wallet activity" : ''}` }))
+      process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: `if ${owner} is the right owner: ${newOwnerCmd(SITE)} (refused while a budget is live). If not, remove this agent from that account on ${HOST}${sent.length ? ", and check that account's wallet activity" : ''}` }))
     }
   } else {
     const { handle, outcome } = await askConnect('setup', {
@@ -334,7 +337,7 @@ async function main() {
   if (agentOwner && !same(agentOwner, owner) && !newOwner) {
     finish?.({ ok: false, message: `This agent is already bound to another owner (${agentOwner}). Nothing was changed.` })
     await closeOwnerPage()
-    process.exit(result(3, { state: 'refused_precheck', reason: `the agent key file is bound to another owner (${agentOwner})`, owner: agentOwner, next: 'superstables budget setup --rail tempo --new-owner replaces it (refused while a budget is live)' }))
+    process.exit(result(3, { state: 'refused_precheck', reason: `the agent key file is bound to another owner (${agentOwner})`, owner: agentOwner, next: `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }))
   }
   const replaced = recorded && !same(recorded, owner) ? recorded : undefined
   if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${owner}`)
@@ -343,7 +346,7 @@ async function main() {
   // and SITE. Asked on this computer: neither.
   const asked = !OWNER_KEY_FILE && !(pub.OWNER_ADDRESS && same(pub.AGENT_ADDRESS, agent) && !newOwner && !HOSTED)
   refuseAgentFileErrors(() => setAgentPublic({ OWNER_ADDRESS: owner })) // checked again after the wait for the owner
-  if (HOSTED && !linked) throw new Error('a hosted link without its id and code')
+  if (HOSTED && !linked) throw new Error('an add-agent request without its id and code')
   // hosted: APPROVALS, SITE, and the link the owner signed (LINK_ID, LINK_CODE: a later "already linked" answer is checked
   // against them)
   writePublicEnv({ OWNER_ADDRESS: owner, AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: 'hosted', SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, asked && !HOSTED ? ['APPROVALS', 'SITE', 'LINK_ID', 'LINK_CODE'] : replaced && !HOSTED ? ['LINK_ID', 'LINK_CODE'] : [])
@@ -399,8 +402,8 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
     } else {
       const why = s.state === 'rejected'
         ? s.reasonCode === 'cap_above_limit' ? `refused: the budget is above the limit set on the owner's ${HOST} account${s.reason ? ` (${s.reason})` : ''}` : `rejected${s.reason ? `: ${s.reason}` : ' by the owner'}`
-        : s.state === 'skipped' ? 'not asked, because the link did not complete'
-        : s.state === 'expired' ? 'not approved before the link expired'
+        : s.state === 'skipped' ? 'not asked, because the agent was not added'
+        : s.state === 'expired' ? 'not approved before the approval link expired'
         : s.state === 'cancelled' ? 'withdrawn on superstables.com when this command stopped waiting, before the owner\'s wallet was asked'
         : `${s.state}${s.reason ? `: ${s.reason}` : ''}`
       reports.push({ kind: s.kind, state: 'refused_precheck', amount, reason: `nothing was sent: ${why}`, reasonCode: s.reasonCode ?? undefined })
@@ -411,15 +414,15 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
   console.log(`  budget: ${r.state === 'settled' ? `${amount} ${TOKEN_LABEL} authorized until ${iso(plan.expiry)} (tx ${r.tx})` : `${r.state}${r.tx ? ` (tx ${r.tx})` : ''}: ${r.reason}`}`)
   const base = { owner, agent, linked: true, steps: reports, tx: r.tx ? { grant: r.tx } : {}, cap: done ? amount : undefined, allowance: done?.key ? fromBaseUnits(done.key.remaining) : undefined, expiry: done?.key ? iso(done.key.expiry) : undefined, publicFile: PUBLIC_ENV_PATH, agentKeyFile: AGENT_ENV_PATH }
   if (r.state === 'settled') {
-    console.log(`\nDone with one link: the agent is linked and has a budget of ${amount} ${TOKEN_LABEL} until ${iso(plan.expiry)}.`)
+    console.log(`\nDone with one approval link: the agent was added to the account and has a budget of ${amount} ${TOKEN_LABEL} until ${iso(plan.expiry)}.`)
     process.exit(result(0, { state: 'ok', ...base, next: 'none: the agent can buy under the budget. superstables budget status --rail tempo shows what is left' }))
   }
-  const summary = `linked: yes; budget: ${r.state === 'refused_precheck' ? (r.reason ?? '').slice(0, 120) : `${r.state}, ${(r.reason ?? '').slice(0, 110)}`}`
+  const summary = `agent added: yes; budget: ${r.state === 'refused_precheck' ? (r.reason ?? '').slice(0, 120) : `${r.state}, ${(r.reason ?? '').slice(0, 110)}`}`
   const next = r.state === 'unknown'
-    ? "superstables budget status --rail tempo and the owner's wallet activity: read whether the grant landed before running anything again. The agent is linked"
+    ? "superstables budget status --rail tempo and the owner's wallet activity: read whether the grant landed before running anything again. The agent has been added to the account"
     : r.state === 'mismatch'
       ? 'the chain shows another key than planned: the owner revokes it (superstables budget revoke --rail tempo); grant again only with a new key (setup --agent LABEL), and only if the owner asks'
-      : 'the agent is linked. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: superstables budget grant --rail tempo --amount A'
+      : 'the agent has been added to the account. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: superstables budget grant --rail tempo --amount A'
   process.exit(result(r.state === 'unknown' ? 5 : r.state === 'failed' ? 1 : 3, { state: r.state, ...base, reason: summary, next }))
 }
 

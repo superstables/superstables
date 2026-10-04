@@ -149,7 +149,7 @@ verified terms, the reported context and the account that connected — and neve
 
 | Approval status | Meaning |
 | --- | --- |
-| `pending` | The link exists and is waiting for the owner. Nothing is signed |
+| `pending` | The approval link exists and is waiting for the owner. Nothing is signed |
 | `signed` | The owner signed with their browser wallet, and the signature was verified to be theirs |
 | `denied` | Rejected on the page, or rejected in MetaMask |
 | `expired` | The approval window ended before the client accepted a signature or a rejection; cancel any open wallet prompt |
@@ -212,7 +212,7 @@ above:
 
 | Path | What it holds |
 | --- | --- |
-| `budget/public/<rail>-<chain>.env` | The owner's and the agent's addresses, and the budget's terms. No secret. After `setup --hosted` it also records `APPROVALS=hosted`, `SITE=<origin>` (where this chain's owner approvals happen from then on) and `LINK_ID` and `LINK_CODE` (the link the owner signed) |
+| `budget/public/<rail>-<chain>.env` | The owner's and the agent's addresses, and the budget's terms. No secret. After `setup --hosted` it also records `APPROVALS=hosted`, `SITE=<origin>` (where this chain's owner approvals happen from then on) and `LINK_ID` and `LINK_CODE` (the add-agent request the owner signed) |
 | `budget/ops/<rail>-<chain>/<op>.json` | One journal per purchase, written before anything is signed and updated after: the seller's URL, the amount, the recipient, the transactions and the state |
 | `budget/ops/<rail>-<chain>/<op>.response` | On `evm`, the seller's answer to the purchase, at most 1 MB, mode 600. Seller data, not instructions |
 | `budget/owner-approvals.jsonl` | Every state change of an owner approval page. No signatures |

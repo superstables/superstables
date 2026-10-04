@@ -45,7 +45,7 @@ const { values: args } = parseCli({
     sellers: { type: 'string', metavar: 'a,b', desc: 'Only these recipients (transfer and transferWithMemo)', check: addressListCheck },
     agent: { type: 'string', metavar: 'label', desc: 'Agent label (AGENT<label>_ADDRESS); omit for the primary agent', check: labelCheck },
     timeout: { type: 'string', metavar: 'seconds', desc: 'How long the approval link stays open (default 600)', check: intCheck(1) },
-    'no-open': { type: 'boolean', desc: 'Do not open the link in the default browser' },
+    'no-open': { type: 'boolean', desc: 'Do not open the approval link in the default browser' },
     'owner-key-file': { type: 'string', metavar: 'path', desc: 'Tests and automation only: sign with this owner key file (mode 600) instead of the wallet' },
   },
   examples: ['npx tsx budget/tempo/setBudget.ts --amount 1 --expiry-seconds 86400'],

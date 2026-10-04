@@ -2,7 +2,7 @@
 // request the way the protocol says the site does (agent request proof v2): the signature over the exact six-line text
 // (EIP-191 for an EVM agent, ed25519 for a Solana agent) naming this site's own origin, the agent in the headers and the
 // body, the timestamp, and a nonce never seen before for that agent. When a link is linked, it answers with the owner's
-// link proof, signed with that owner's test key (OWNER_KEYS), unless a test sets another `owner_proof`. Requests move
+// proof, signed with that owner's test key (OWNER_KEYS), unless a test sets another `owner_proof`. Requests move
 // through their states when a test (or `onPoll`) says so; one still awaiting the owner at its expires_at
 // (`expiresInMs`) is expired. A read needs the request's access token (401 without it, 404 for no such request). No network, no real key. The texts are spelled out here from the
 // protocol, not taken from the client, so a client that drifts from the protocol fails these tests.
@@ -25,7 +25,7 @@ export const solanaOwnerKeypair = (n: number) => Keypair.fromSeed(new Uint8Array
 /** A Solana owner's base58 address, from solanaOwnerKeypair(n). */
 export const solanaOwner = (n: number) => solanaOwnerKeypair(n).publicKey.toBase58();
 
-/** The owners the fake site can sign a link proof for, by address (EVM lowercase, Solana base58). */
+/** The owners the fake site can sign an owner proof for, by address (EVM lowercase, Solana base58). */
 export const OWNER_KEYS = new Map<string, Hex | Uint8Array>([
   ...["22", "33", "55", "66", "77", "88"].map((b) => [evmOwner(b).toLowerCase(), evmOwnerKey(b)] as [string, Hex]),
   ...Array.from({ length: 12 }, (_, i) => [solanaOwner(i + 1), solanaOwnerKeypair(i + 1).secretKey] as [string, Uint8Array]),
@@ -33,10 +33,10 @@ export const OWNER_KEYS = new Map<string, Hex | Uint8Array>([
 
 export type LinkFacts = { site: string; owner: string; agent: string; rail: string; chain: string; linkId: string; code: string };
 
-/** The owner link proof's text, exactly as the protocol spells it. */
+/** The owner proof's text, exactly as the protocol spells it. */
 export function linkProofText(f: LinkFacts): string {
   const owner = f.rail === "solana" ? f.owner : getAddress(f.owner);
-  return `Superstables: link an agent to my account\nsite: ${f.site}\nowner: ${owner}\nagent: ${f.agent}\nrail: ${f.rail}\nchain: ${f.chain}\nlink: ${f.linkId}\ncode: ${f.code}`;
+  return `Superstables: add an agent to my account\nsite: ${f.site}\nowner: ${owner}\nagent: ${f.agent}\nrail: ${f.rail}\nchain: ${f.chain}\nrequest: ${f.linkId}\ncode: ${f.code}`;
 }
 
 /** The owner's wallet signs the link: { scheme, message, signature }, with the owner's test key (or `key`). */
@@ -88,7 +88,7 @@ export interface FakeRequest {
   /** When the site ends the request by itself (ms since the epoch): a request still awaiting the owner then is expired. */
   expiresAt?: number;
   /**
-   * The owner link proof the site answers with once linked: undefined signs one with the owner's test key; null leaves it
+   * The owner proof the site answers with once linked: undefined signs one with the owner's test key; null leaves it
    * out; anything else is sent as it is.
    */
   owner_proof?: unknown;
@@ -217,7 +217,7 @@ export async function startFakeSite(): Promise<FakeSite> {
         const bad = thenProblem(body.then, body.rail);
         if (bad) return json(res, 400, { error: { code: "invalid_then", message: bad.message, ...(bad.step !== undefined ? { step: bad.step } : {}) } });
         const owner = site.linked?.[body.rail === "solana" ? String(body.agent) : String(body.agent).toLowerCase()];
-        if (owner) return json(res, 409, { error: { code: "already_linked", message: "This agent is already linked on this chain. Ask for gas and a budget with separate approvals.", owner } });
+        if (owner) return json(res, 409, { error: { code: "already_linked", message: "This agent already belongs to an account on this chain. Ask for gas and a budget with separate approvals.", owner } });
       }
       const id = `${link ? "bl" : "ba"}_test${String(++n).padStart(4, "0")}`;
       const expiresAt = Date.now() + (site.expiresInMs ?? 600_000);
@@ -232,7 +232,7 @@ export async function startFakeSite(): Promise<FakeSite> {
         state: "awaiting_owner",
         final: false,
         approval: { url: site.approvalUrl?.(id) ?? `${server.url}/approve/budget/${id}#ssba_test_owner${n}`, match_code: "ABC-DEF", expires_at: new Date(expiresAt).toISOString() },
-        message_for_owner: "Open the link and pick ABC-DEF.",
+        message_for_owner: "Open the approval link and pick ABC-DEF.",
         next_action: { type: "wait_for_owner", poll: `/api/v1/budget/requests/${id}` },
         ...(r.steps ? { steps: site.answerSteps ? site.answerSteps(r.steps.map(stepView)) : r.steps.map(stepView) } : {}),
       };
@@ -247,7 +247,7 @@ export async function startFakeSite(): Promise<FakeSite> {
       // with steps that was never linked ends with it, and its steps, never asked for, are skipped
       if (r.expiresAt !== undefined && Date.now() >= r.expiresAt && r.state === "awaiting_owner" && !r.wallet_asked && !(r.steps && r.owner)) {
         Object.assign(r, { state: "expired", reason: "the approval link expired" });
-        for (const st of r.steps ?? []) if (st.state === "queued") Object.assign(st, { state: "skipped", reason: "the link expired before the owner linked this agent", reason_code: "link_expired" });
+        for (const st of r.steps ?? []) if (st.state === "queued") Object.assign(st, { state: "skipped", reason: "the approval link expired before the owner added this agent", reason_code: "link_expired" });
       }
       if (m[2] && req.method === "POST") {
         r.cancels++;

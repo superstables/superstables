@@ -45,7 +45,7 @@ const WALLET_HINT = "Start the wallet with `superstables wallet serve`";
 
 /** What an agent is told in browser mode. There is nothing to start, so it is not a fix. */
 const BROWSER_HINT =
-  "MetaMask signs each payment on the approval page; connect it when the link opens";
+  "MetaMask signs each payment on the approval page; connect it when the approval link opens";
 
 export interface SuperstablesServerDeps {
   records: Records;
@@ -76,7 +76,7 @@ Before calling pay, tell the person the price, the network and the recipient add
 
 Only the states "settled" and "paid_service_failed" mean a payment was made. Their chain field says how far that is checked: "verified" means the client read the transaction on chain and it is this payment; "unchecked" means it rests on the seller's report so far (say so, never call it confirmed; payment_status checks again). A transaction the chain shows is not this payment ends as "uncertain" with chain "mismatch". Treat settled and paid_service_failed as paid and never call pay a second time for the same work. "uncertain" means it is unknown whether money moved (see below). Do not report success in other states. While submitting, the outcome is pending. A failed attempt can reflect the seller's report without a chain check; report that limitation rather than asserting that no money moved. "awaiting_approval" means the owner has been asked in their wallet and nothing has been signed: call payment_status with the attempt_id to wait for their decision. "denied" means the owner rejected it; "expired" means nobody approved within the wallet's window; "abandoned" means the wait ended before anyone decided (for example, this server stopped); abandoned_by says what ended it. None of them moved money. Report them plainly, never call "expired" or "abandoned" a rejection, and do not retry unless asked. "uncertain" means the payment may or may not have settled: say so, and do not pay again.
 
-When pay returns an approval_url, show that link to the person exactly as it is written, on its own. It is the only way for them to see the payment and sign it, and a link you paraphrase or shorten does not open.
+When pay returns an approval_url, show that approval link to the person exactly as it is written, on its own. It is the only way for them to see the payment and sign it, and an approval link you paraphrase or shorten does not open.
 
 If wallet_status says the wallet is not running, ask the person to start it before quoting or paying.
 
@@ -300,6 +300,8 @@ export function attemptView(
 ): Record<string, unknown> {
   const receipt = attempt.receiptId ? deps.records.getReceipt(attempt.receiptId) : undefined;
   const body = serviceResponse(attempt.serviceBody);
+  // a transaction the attempt names without a receipt (an uncertain payment): the hash to check, never "nothing was paid"
+  const tx = !receipt && attempt.transaction ? shownTransaction(attempt.transaction, attempt.terms.network) : undefined;
   return {
     attempt_id: attempt.id,
     quote_id: attempt.quoteId,
@@ -310,6 +312,7 @@ export function attemptView(
     ...(attempt.serviceReason ? { service_reason: attempt.serviceReason } : {}),
     ...chainView(attempt),
     ...(receipt ? { receipt: receiptView(receipt) } : {}),
+    ...(tx?.hash ? { transaction: tx.hash, ...(tx.url ? { transaction_url: tx.url } : {}) } : {}),
     ...(attempt.reason ? { reason: attempt.reason } : {}),
     ...(attempt.refusal ? { refusal: attempt.refusal } : {}),
     ...(attempt.abandonedBy ? { abandoned_by: attempt.abandonedBy } : {}),
@@ -372,7 +375,7 @@ export function messageFor(attempt: Attempt, receipt?: Receipt, surface: Surface
       // sentence the model repeats has to carry it.
       return attempt.approvalUrl && surface === "mcp"
         ? `The owner has been asked to approve ${amount} to ${terms.recipient} on ${terms.networkLabel}. ` +
-          `Open this link to review and sign in MetaMask: ${attempt.approvalUrl}. Nothing is signed yet. ` +
+          `Open this approval link to review and sign in MetaMask: ${attempt.approvalUrl}. Nothing is signed yet. ` +
           `${check} to wait for the decision.`
         : `The owner has been asked to approve ${amount} to ${terms.recipient} on ${terms.networkLabel} ` +
           `in their wallet. Nothing is signed yet. ${check}${surface === "mcp" ? " to wait for the decision" : ""}.`;
@@ -387,7 +390,7 @@ export function messageFor(attempt: Attempt, receipt?: Receipt, surface: Surface
     case "abandoned":
       return (
         `Nobody decided: ${attempt.reason ?? "the wait for the owner ended before they approved or rejected this payment"}. ` +
-        "This is not a rejection. Nothing was submitted and nothing was paid, and approving through the old link now pays nothing."
+        "This is not a rejection. Nothing was submitted and nothing was paid, and approving through the old approval link now pays nothing."
       );
     case "settled":
       return `Paid ${amount} on ${terms.networkLabel} (${transaction}); ${chainSentence(attempt, surface)}. The service answered HTTP ${status}.`;
@@ -404,6 +407,8 @@ export function messageFor(attempt: Attempt, receipt?: Receipt, surface: Surface
         `But the service answered HTTP ${status}. Do not pay again; report this.`
       );
     case "failed":
+      // a record that names a transaction is never "did not happen" (an earlier version could keep one on a failure)
+      if (hash) return `Whether the payment settled is unknown: ${attempt.reason ?? "no reason was recorded"}, but it names ${transaction}. It was not retried. Check the transaction before trying again.`;
       return `Payment did not happen: ${attempt.reason ?? "no reason was recorded"}.`;
     case "uncertain":
       return (

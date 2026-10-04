@@ -267,7 +267,7 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
         issued = null;
         return refused("That took too long: the transaction expired before it was signed.");
       }
-      if (!broadcasting()) return refused("The link expired while the wallet was signing.");
+      if (!broadcasting()) return refused("The approval link expired while the wallet was signing.");
       const sig = bs58.encode(signature);
       last = { signature: sig, blockhash: want.blockhash, lastValidBlockHeight: want.lastValidBlockHeight };
       issued = null;

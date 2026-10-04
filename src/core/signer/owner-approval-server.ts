@@ -397,7 +397,7 @@ export class OwnerApprovalServer {
     const leaf = match?.[2];
     if (!record) {
       if (!leaf && method === "GET") return this.html(res, 404, ownerNotFoundPage());
-      return this.json(res, 404, { error: "nothing is waiting under this link" });
+      return this.json(res, 404, { error: "nothing is waiting under this approval link" });
     }
     if (!leaf && method === "GET") return this.html(res, 200, ownerApprovalPage(this.facts(record), record.terms));
     if (leaf === "/state" && method === "GET") {
@@ -461,7 +461,7 @@ export class OwnerApprovalServer {
     }
 
     if (leaf === "/connect") {
-      if (record.kind !== "connect") return this.json(res, 404, { error: "this link is for a transaction, not a connect" });
+      if (record.kind !== "connect") return this.json(res, 404, { error: "this approval link is for a transaction, not a wallet sign-in" });
       if (record.status !== "pending") return this.json(res, 409, { error: `this is already ${record.status}` });
       const signature = typeof body.signature === "string" ? body.signature : "";
       const message = signInMessage(record.signIn!, record.id);

@@ -420,7 +420,7 @@ export class ApprovalServer {
         this.sendHtml(res, 404, approvalNotFoundPage());
         return;
       }
-      this.sendJson(res, 404, { error: "there is no payment waiting under this link" });
+      this.sendJson(res, 404, { error: "there is no payment waiting under this approval link" });
       return;
     }
 

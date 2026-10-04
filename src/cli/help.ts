@@ -88,12 +88,12 @@ Start here, pay:
   superstables doctor                                  check what a payment needs
   superstables find "btc price"                        what can be bought, and the commands to pay it
   superstables quote --service <id> --param k=v        the price and the policy checks; nothing is signed
-  superstables pay <quote-id>                          prints a link; the owner approves in their wallet
+  superstables pay <quote-id>                          prints an approval link; the owner approves in their wallet
   superstables status <attempt-id>                     where a payment got to
 
 Start here, budget: superstables budget setup --rail evm
   \`superstables setup\` is for pay only. Budgets are a separate tool; each subcommand takes --help.
-  An owner command prints an approval link: an agent may start it and hand the link to the owner,
+  An owner command prints an approval link: an agent may start it and hand it to the owner,
   but only the owner approves, in their own wallet. Typical evm order: setup, fund-agent, doctor,
   grant, then buy.
     setup       owner  connect the owner's wallet (a free signature) and create the agent key

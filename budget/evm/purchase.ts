@@ -17,6 +17,7 @@ import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
+import { refusedChainWords } from "../next-steps.mjs";
 import {
   SYM, oneLine,
   sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, chainReason, publicClient, sleep,
@@ -351,7 +352,7 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
     res.error = String(e.message ?? e).split("\n")[0];
     if (st?.kind === "quote") { log(st.reason); return finish("quoted", st.reason, "buy again without --quote-only to purchase"); }
     if (st?.kind === "precheck" && !j.pullTx) { log(st.reason); return finish("refused_precheck", st.reason, st.next ?? "nothing was signed or sent"); }
-    if (st?.kind === "chain") { log(st.reason); return finish("refused_chain", st.reason, "nothing moved; the chain refused the pull"); }
+    if (st?.kind === "chain") { log(st.reason); return finish("refused_chain", st.reason, refusedChainWords(j.pullTx).next); }
     if (st?.kind === "reconciled" || j.pullTx) {
       // something went wrong after the pull was sent (or the chain could not confirm it): read the chain, never re-pay
       if (st?.kind === "reconciled" && !j.pulled && j.state !== "settled") { j.reason = st.reason; writeJournal(j); }

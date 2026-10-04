@@ -9,7 +9,7 @@ import { EVM_CHAINS } from "./chains.mjs";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { delegatedCall } from "./delegation.ts";
-import { CFG, GAS, SYM, USDC, USDC_DECIMALS, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need } from "./lib.ts";
+import { CFG, GAS, SYM, USDC, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need } from "./lib.ts";
 
 export { closeOwnerPage };
 export const OWNER_CHAIN: OwnerChain = {
@@ -280,16 +280,12 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
 }
 
 /**
- * How the owner sends the agent `value` of the gas token. A plain transfer, except where the gas token is the budget token
- * (Arc) and the approval is hosted: there the site takes the token's own transfer(agent, amount), so the command sends that.
- * It moves the same balance: Arc's native balance is the ERC-20 balance in 18 decimals.
+ * How the owner sends the agent `value` of the gas token: a plain transfer of the chain's native token, on this computer and
+ * on the site alike. On Arc that is native USDC (18 decimals), which wallets show as USDC; the ERC-20 at 0x3600... is the
+ * same balance in 6 decimals, but a wallet asked for its transfer() shows an unknown token.
  */
-export function fundingTx(agent: Address, value: bigint, hosted: boolean): { to: Address; data?: Hex; value?: bigint; words: string } {
-  if (!(hosted && GAS.isUsdc)) return { to: agent, value, words: "" };
-  const scale = 10n ** BigInt(GAS.decimals - USDC_DECIMALS);
-  if (value % scale !== 0n) throw new Error(`on ${CFG.label} a hosted fund-agent sends ${SYM} with at most ${USDC_DECIMALS} decimals`);
-  const atomic = value / scale;
-  return { to: USDC, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [agent, atomic] }), words: `${SYM}.transfer(${agent}, ${atomic})` };
+export function fundingTx(agent: Address, value: bigint, _hosted: boolean): { to: Address; data?: Hex; value?: bigint; words: string } {
+  return { to: agent, value, words: "" };
 }
 
 /** Owner sends the agent `value` of the gas token through the wallet page. Returns the verified hash, or exits with a RESULT. */

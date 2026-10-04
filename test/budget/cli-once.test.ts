@@ -290,9 +290,9 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(first.result).toMatchObject({ ok: true, command: "buy-once", rail: "evm", chain: "base-sepolia", service: "demo-market-data", state: "waiting_owner", matchCode: "KPT-RWD", url: first.approve.url });
     expect(first.result.id).toMatch(/^oa-\d{14}-[0-9a-f]{8}$/);
     expect(first.result.purchase).toBe(site.purchases[0].id);
-    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id ${first.result.id} --shown\\. .*Testnet only: test USDC, no real money\\.$`));
+    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the approval link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id ${first.result.id} --shown\\. .*Testnet only: test USDC, no real money\\.$`));
     expect(first.stderr).toMatch(/match code: KPT-RWD/);
-    expect(first.stderr).toMatch(/first link they open asks them to sign in with their wallet \(a message, no fee\)/);
+    expect(first.stderr).toMatch(/first approval link they open asks them to sign in with their wallet \(a message, no fee\)/);
     expect(first.stderr).toMatch(/Testnet only: test USDC, no real money\./);
     // the site was asked for exactly the purchase, with a key and a ceiling
     expect(site.purchases[0].body).toEqual({ service_id: "demo-market-data", params: { asset: "BTC" }, max_amount: "0.01" });
@@ -309,14 +309,14 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const refused = await budget(["wait", "--id", id, "--timeout", "0"]);
     expect(refused.code).toBe(2);
     expect(refused.result).toMatchObject({ ok: false, command: "wait", state: "show_owner_first", id, matchCode: "KPT-RWD", url: first.approve.url, service: "demo-market-data" });
-    expect(refused.result.next).toMatch(/^reply to the owner with message_for_owner, word for word \(it has the link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id \S+ --shown\./);
+    expect(refused.result.next).toMatch(/^reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id \S+ --shown\./);
     expect(site.purchases[0].polls).toBe(0);
 
     const pending = await budget(["wait", "--shown", "--id", id, "--timeout", "0"]);
     expect(pending.code).toBe(0);
     expect(pending.result).toMatchObject({ state: "waiting_owner", id, matchCode: "KPT-RWD", service: "demo-market-data" });
     expect(pending.result.next).toMatch(/wait --id \S+ --shown again/);
-    expect(pending.result.reason).toMatch(/waiting for the owner to open the link on 127\.0\.0\.1:\d+, signed in with their wallet, and pick the match code/);
+    expect(pending.result.reason).toMatch(/waiting for the owner to open the approval link on 127\.0\.0\.1:\d+, signed in with their wallet, and pick the match code/);
 
     site.settle(site.purchases[0], { asset: "BTC", price_usd: 65000 });
     const done = await budget(["wait", "--shown", "--id", id, "--timeout", "30"]);
@@ -595,6 +595,22 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(JSON.parse(readFileSync(file, "utf8")).final).toMatchObject({ code: 1 });
   }, 90_000);
 
+  it("wait --abandon on a purchase that already ended checks its stored answer against the evidence, as wait does", async () => {
+    const first = await once();
+    Object.assign(site.purchases[0], { state: "failed", final: true, reason_code: "not_settled", payment: { status: "not_paid" }, delivery: { status: "not_called" } });
+    const ended = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]);
+    expect(ended.result).toMatchObject({ state: "failed", paid: false });
+    // evidence for the purchase arrives after that answer was stored (another command's read said money may have moved)
+    const file = join(approvals(), `${first.result.id}.json`);
+    writeFileSync(file, JSON.stringify({ ...recordOf(first.result.id), seen: { hashes: [], payers: {}, named: false, paid: false, moved: true } }, null, 2), { mode: 0o600 });
+    for (const args of [["--abandon"], ["--shown"]]) {
+      const r = await budget(["wait", "--id", first.result.id, ...args]);
+      expect(r.code, args.join(" ")).toBe(5);
+      expect(r.result, args.join(" ")).toMatchObject({ state: "unknown", paid: null });
+      expect(r.stdout + r.stderr, args.join(" ")).not.toMatch(/nothing was paid/i);
+    }
+  }, 60_000);
+
   it("wait --abandon: the owner gives up a record the site never ends; it is kept, marked, unknown, and no longer blocks", async () => {
     const first = await once();
     Object.assign(site.purchases[0], { state: "uncertain", final: false, payment: { status: "unknown" } });
@@ -835,6 +851,209 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
     return { first, done: await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]) };
   };
 
+  it("a site that names a transaction but says not paid: the chain decides, never 'nothing was paid'", async () => {
+    // the payment landed, but the site's final answer says failed / not_paid (and, in its own words, that nothing was paid)
+    const a = await once();
+    expect(a.code, a.stderr).toBe(0);
+    site.pay(site.purchases.at(-1)!, { transaction: TX, payer: PAYER });
+    Object.assign(site.purchases.at(-1)!, { state: "failed", final: true, reason: "nothing was paid", reason_code: "not_settled", payment: { status: "not_paid", payer: PAYER, transaction: TX }, delivery: { status: "not_called" } });
+    const ra = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
+    expect(ra.code, ra.stderr).toBe(4);
+    expect(ra.result).toMatchObject({ state: "settled", paid: true, amount: "0.01", tx: { settle: TX } });
+    expect(ra.stdout + ra.stderr).not.toMatch(/nothing was paid/i);
+    rmSync(join(home, "budget"), { recursive: true, force: true });
+
+    // the transaction it names is not on the chain (yet): unknown with the hash, never paid: false
+    const other = `0x${"ef".repeat(32)}`;
+    const b = await once();
+    expect(b.code, b.stderr).toBe(0);
+    Object.assign(site.purchases.at(-1)!, { state: "expired", final: true, reason_code: "approval_expired", payment: { status: "not_paid", transaction: other }, delivery: { status: "not_called" } });
+    const rb = await budget(["wait", "--shown", "--id", b.result.id, "--timeout", "10"]);
+    expect(rb.code, rb.stderr).toBe(5);
+    expect(rb.result).toMatchObject({ state: "unknown", paid: null, amount: null, tx: { settle: other } });
+    expect(rb.result.reason).toMatch(/names transaction 0xefef.* but does not say it was paid, but the chain does not show transaction/);
+    expect(rb.stdout + rb.stderr).not.toMatch(/nothing was paid/i);
+  }, 90_000);
+
+  it("money_moved other than false is never 'nothing was paid': in the payment, the purchase, or a cancel answer", async () => {
+    const ended = { state: "failed", final: true, reason_code: "not_settled", delivery: { status: "not_called" } };
+    for (const moved of [true, null, "unknown"]) {
+      const a = await once();
+      expect(a.code, a.stderr).toBe(0);
+      Object.assign(site.purchases.at(-1)!, { ...ended, payment: { status: "not_paid", money_moved: moved } });
+      const r = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
+      expect(r.code, `money_moved ${String(moved)}: ${r.stderr}`).toBe(5);
+      expect(r.result).toMatchObject({ state: "unknown", paid: null, amount: null });
+      expect(r.result.reason).toMatch(/money_moved/);
+      expect(r.stdout + r.stderr).not.toMatch(/nothing was paid/i);
+      rmSync(join(home, "budget"), { recursive: true, force: true });
+    }
+    // on the purchase itself
+    const b = await once();
+    site.readAnswer = (p) => ({ status: 200, body: { id: p.id, state: "expired", final: true, money_moved: true, payment: { status: "not_paid" }, delivery: { status: "not_called" } } });
+    const rb = await budget(["wait", "--shown", "--id", b.result.id, "--timeout", "10"]);
+    site.readAnswer = undefined;
+    expect(rb.code, rb.stderr).toBe(5);
+    expect(rb.result).toMatchObject({ state: "unknown", paid: null });
+    rmSync(join(home, "budget"), { recursive: true, force: true });
+    // money_moved false, no transaction, an explicit not-paid end: nothing was paid
+    const c = await once();
+    Object.assign(site.purchases.at(-1)!, { ...ended, payment: { status: "not_paid", money_moved: false } });
+    const rc = await budget(["wait", "--shown", "--id", c.result.id, "--timeout", "10"]);
+    expect(rc.code, rc.stderr).toBe(1);
+    expect(rc.result).toMatchObject({ state: "failed", paid: false });
+    rmSync(join(home, "budget"), { recursive: true, force: true });
+    // a cancel answer that says money may have moved is not a cancellation with nothing paid
+    site.tweak = (p) => { p.terms = { amount: { decimal: "0.02", atomic: "20000" }, asset: { symbol: "USDC", address: p.service.asset, decimals: 6 }, network: "eip155:84532", recipient: SELLER }; };
+    site.cancelAnswer = (p) => ({ status: 200, body: { id: p.id, state: "denied", final: true, reason_code: "agent_cancelled", money_moved: true, payment: { status: "not_paid" } } });
+    const d = await once();
+    expect(d.code, d.stderr).toBe(5);
+    expect(d.result).toMatchObject({ state: "unknown", paid: null });
+    expect(d.stdout + d.stderr).not.toMatch(/nothing was paid/i);
+  }, 120_000);
+
+  it("a transaction seen once is never dropped: a later answer that omits it and says not paid stays unknown, then paid", async () => {
+    const hash = `0x${"c4".repeat(32)}`;
+    const a = await once();
+    expect(a.code, a.stderr).toBe(0);
+    const p = site.purchases.at(-1)!;
+    // a read while it is open names the transaction: kept
+    Object.assign(p, { state: "submitting", final: false, payment: { status: "unconfirmed", transaction: hash, payer: PAYER } });
+    const r0 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "0"]);
+    expect(r0.result.state).toBe("waiting_owner");
+    // wait 1: final, names the transaction, the chain does not show it yet: unknown, not stored as final
+    Object.assign(p, { state: "failed", final: true, payment: { status: "not_paid", transaction: hash, payer: PAYER }, delivery: { status: "not_called" } });
+    const r1 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
+    expect(r1.code, r1.stderr).toBe(5);
+    expect(r1.result).toMatchObject({ state: "unknown", final: false, tx: { settle: hash } });
+    // wait 2: the site's final answer omits it and says not paid: unknown, with the hash kept
+    Object.assign(p, { state: "failed", final: true, payment: { status: "not_paid" }, delivery: { status: "not_called" } });
+    const r2 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
+    expect(r2.code, r2.stderr).toBe(5);
+    expect(r2.result).toMatchObject({ state: "unknown", paid: null, tx: { settle: hash } });
+    expect(r2.stdout + r2.stderr).not.toMatch(/nothing was paid/i);
+    // the transaction lands: the next wait reads it from the chain and reports it paid, though the site still says not paid
+    site.pay(p, { transaction: hash, payer: PAYER });
+    const r3 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
+    expect(r3.result).toMatchObject({ state: "settled", paid: true, amount: "0.01", tx: { settle: hash } });
+    expect(r3.stdout + r3.stderr).not.toMatch(/nothing was paid/i);
+  }, 90_000);
+
+  it("a creation answer that names a transaction outweighs a later cancel answer without one", async () => {
+    const hash = `0x${"d7".repeat(32)}`;
+    site.tweak = (p) => {
+      p.terms = { amount: { decimal: "0.02", atomic: "20000" }, asset: { symbol: "USDC", address: p.service.asset, decimals: 6 }, network: "eip155:84532", recipient: SELLER };
+      p.payment = { status: "awaiting_approval", transaction: hash };
+    };
+    const r = await once();
+    expect(r.code, r.stderr).toBe(5);
+    expect(r.result).toMatchObject({ state: "unknown", paid: null, tx: { settle: hash } });
+    expect(r.stdout + r.stderr).not.toMatch(/nothing was paid/i);
+  }, 60_000);
+
+  it("--replace keeps the evidence its first read found: the old purchase is not replaced, and later reads stay unknown", async () => {
+    const h = `0x${"a1".repeat(32)}`;
+    const first = await once();
+    expect(first.code, first.stderr).toBe(0);
+    const p = site.purchases[0];
+    // the read --replace makes first names a transaction; a cancel would still be confirmed without it
+    Object.assign(p, { payment: { status: "awaiting_approval", transaction: h, payer: PAYER } });
+    const again = await once(["--replace"]);
+    expect(again.code, again.stderr).toBe(3);
+    expect(again.result.reason).toMatch(/may already have been paid/);
+    expect(site.purchases).toHaveLength(1);
+    expect(p.cancels).toBe(0);
+    // the site then ends it as not paid, without the transaction: unknown, with the hash
+    Object.assign(p, { state: "denied", final: true, reason_code: "agent_cancelled", payment: { status: "not_paid" }, delivery: { status: "not_called" } });
+    const old = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]);
+    expect(old.code, old.stderr).toBe(5);
+    expect(old.result).toMatchObject({ state: "unknown", paid: null, tx: { settle: h } });
+    expect(old.stdout + old.stderr).not.toMatch(/nothing was paid/i);
+  }, 90_000);
+
+  it("evidence in an error answer is kept: a read error's money_moved, and a replace cancel's transaction", async () => {
+    const a = await once();
+    const p = site.purchases.at(-1)!;
+    site.readAnswer = () => ({ status: 503, body: { error: { code: "internal_error", message: "x" }, money_moved: true } });
+    const r1 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "0"]);
+    expect(r1.result.state).toBe("waiting_owner");
+    site.readAnswer = undefined;
+    Object.assign(p, { state: "expired", final: true, payment: { status: "not_paid" }, delivery: { status: "not_called" } });
+    const r2 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
+    expect(r2.code, r2.stderr).toBe(5);
+    expect(r2.result).toMatchObject({ state: "unknown", paid: null });
+    rmSync(join(home, "budget"), { recursive: true, force: true });
+
+    // a --replace whose cancel answer names a transaction and says money may have moved: not replaced, and kept
+    const h = `0x${"b2".repeat(32)}`;
+    const b = await once();
+    const q = site.purchases.at(-1)!;
+    site.cancelAnswer = () => ({ status: 409, body: { error: { code: "not_awaiting_approval", message: "x", money_moved: true }, payment: { transaction: h, payer: PAYER } } });
+    const c = await once(["--replace"]);
+    expect(c.code, c.stderr).toBe(3);
+    site.cancelAnswer = undefined;
+    Object.assign(q, { state: "expired", final: true, payment: { status: "not_paid" }, delivery: { status: "not_called" } });
+    const rb = await budget(["wait", "--shown", "--id", b.result.id, "--timeout", "10"]);
+    expect(rb.code, rb.stderr).toBe(5);
+    expect(rb.result).toMatchObject({ state: "unknown", paid: null, tx: { settle: h } });
+    expect(rb.stdout + rb.stderr).not.toMatch(/nothing was paid/i);
+  }, 90_000);
+
+  it("each stored hash is checked against the payer it was named with: a transfer from someone else is not this payment", async () => {
+    const h = `0x${"e3".repeat(32)}`;
+    const other = `0x${"77".repeat(20)}`;
+    const a = await once();
+    const p = site.purchases.at(-1)!;
+    Object.assign(p, { state: "submitting", final: false, payment: { status: "unconfirmed", transaction: h, payer: PAYER } });
+    expect((await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "0"])).result.state).toBe("waiting_owner");
+    // the chain shows h moving the right amount to the right recipient, but from another address; the site then omits both
+    site.pay(p, { transaction: h, payer: other });
+    Object.assign(p, { state: "failed", final: true, payment: { status: "not_paid" }, delivery: { status: "not_called" } });
+    const r = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
+    expect(r.code, r.stderr).toBe(5);
+    expect(r.result).toMatchObject({ state: "unknown", paid: null, tx: { settle: h } });
+  }, 60_000);
+
+  it("a creation answer with no usable id that names a payment ends unknown with its hash, stored for wait", async () => {
+    const h = `0x${"f4".repeat(32)}`;
+    site.tweak = (p) => { p.payment = { status: "paid", transaction: h, payer: PAYER }; p.id = "not-a-purchase-id"; };
+    const r = await once();
+    expect(r.code, r.stderr).toBe(5);
+    expect(r.result).toMatchObject({ state: "unknown", paid: null, amount: null, tx: { settle: h } });
+    expect(r.stdout + r.stderr).not.toMatch(/nothing was paid/i);
+    const again = await budget(["wait", "--id", r.result.id]);
+    expect(again.code).toBe(5);
+    expect(again.result).toMatchObject({ state: "unknown", tx: { settle: h } });
+  }, 60_000);
+
+  it("final only when every stored hash is resolved: a mismatching hash does not close one the chain has not shown yet", async () => {
+    const h1 = `0x${"91".repeat(32)}`;
+    const h2 = `0x${"92".repeat(32)}`;
+    const a = await once();
+    const p = site.purchases.at(-1)!;
+    Object.assign(p, { state: "submitting", final: false, payment: { status: "unconfirmed", transaction: h1, payer: PAYER } });
+    expect((await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "0"])).result.state).toBe("waiting_owner");
+    // the final answer names h2, which the chain shows paying another amount; h1 is not on chain yet
+    site.pay(p, { transaction: h2, payer: PAYER, chain: { amount: 1n } });
+    Object.assign(p, { state: "failed", final: true, payment: { status: "not_paid", transaction: h2, payer: PAYER }, delivery: { status: "not_called" } });
+    const r1 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
+    expect(r1.code, r1.stderr).toBe(5);
+    expect(r1.result).toMatchObject({ state: "unknown", final: false, paid: null });
+    // h1 lands: the next wait reads it and reports it paid
+    site.pay(p, { transaction: h1, payer: PAYER });
+    const r2 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
+    expect(r2.result).toMatchObject({ state: "settled", paid: true, tx: { settle: h1 } });
+  }, 90_000);
+
+  it("a cancel answer that names a transaction is not a cancellation with nothing paid", async () => {
+    site.tweak = (p) => { p.terms = { amount: { decimal: "0.02", atomic: "20000" }, asset: { symbol: "USDC", address: p.service.asset, decimals: 6 }, network: "eip155:84532", recipient: SELLER }; };
+    site.cancelAnswer = (p) => ({ status: 200, body: { id: p.id, state: "denied", final: true, reason_code: "agent_cancelled", payment: { status: "not_paid", transaction: TX } } });
+    const r = await once();
+    expect(r.code, r.stderr).toBe(5);
+    expect(r.result).toMatchObject({ state: "unknown", paid: null, amount: null });
+    expect(r.stdout + r.stderr).not.toMatch(/nothing was paid/i);
+  }, 60_000);
+
   it("a payment the chain does not show: unknown (exit 5), never paid; a later wait reads the chain again", async () => {
     const { first, done } = await settleAndWait({ transaction: TX, payer: PAYER, chain: false });
     expect(done.code).toBe(5);
@@ -929,7 +1148,7 @@ describe("buy-once on Arc Testnet", () => {
     expect(first.approve.terms).toMatchObject({ title: "Buy once: demo-market-data-arc", amount: "0.01", unit: "USDC", listingName: "Demo market data (Arc)" });
     expect(first.approve.terms.summary).toMatch(new RegExp(`One payment of 0\\.01 test USDC on Arc Testnet to ${ARC_SELLER}`));
     expect(first.approve.terms.enforced[0]).toBe(`Your wallet signs one authorization for exactly 0.01 USDC to ${ARC_SELLER}, usable once.`);
-    expect(first.approve.terms.notEnforced[0]).toBe("The first link asks you to sign in with your wallet (a message, no fee). Your wallet may first ask to add Arc Testnet. No gas is needed: the seller's facilitator pays it.");
+    expect(first.approve.terms.notEnforced[0]).toBe("The first approval link you open asks you to sign in with your wallet (a message, no fee). Your wallet may first ask to add Arc Testnet. No gas is needed: the seller's facilitator pays it.");
     expect(first.result.message_for_owner).toMatch(/0\.01 test USDC on Arc Testnet\. Testnet only: test USDC, no real money\./);
     expect(recordOf(first.result.id)).toMatchObject({ rail: "evm", chain: "arc-testnet" });
     const hash = `0x${"a7".repeat(32)}`;

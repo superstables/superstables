@@ -440,7 +440,9 @@ export class PaymentEngine {
       return;
     }
 
-    if (!settlement.success) {
+    // A failure that names a transaction is never "nothing was paid": the chain says whether it is this payment.
+    const failedWithTx = !settlement.success && isTxHash(settlement.transaction);
+    if (!settlement.success && !failedWithTx) {
       // The reason is the service's own text (it relays the facilitator's answer). It is kept apart, in serviceReason,
       // and the client's sentence says only what the client knows.
       const said = settlement.errorReason ?? settlement.errorMessage;
@@ -467,6 +469,24 @@ export class PaymentEngine {
       },
       { rpcUrl: this.rpcUrl },
     );
+    if (failedWithTx && check.chain !== "verified") {
+      // The service says the payment did not settle, but names a transaction the chain does not confirm as this payment
+      // (yet): not paid and not unpaid. Unknown, never retried.
+      const said = settlement.errorReason ?? settlement.errorMessage;
+      this.settleState(attempt, "uncertain", {
+        payer: signed.signer,
+        transaction: settlement.transaction,
+        serviceStatus: res.status,
+        serviceBody: body,
+        authorizationNonce: nonce,
+        chain: check.chain,
+        chainReason: check.reason,
+        reason: `the service reported that the payment did not settle, but named transaction ${settlement.transaction}, and the chain does not confirm it is this payment (${check.reason}), so whether it was paid is unknown`,
+        ...(said ? { serviceReason: said } : {}),
+      });
+      return;
+    }
+    // From here the money moved: the service says so, or it said not but the chain shows this payment's transaction.
     if (check.chain === "mismatch") {
       // The chain shows that transaction, and it is not this payment. Not paid and not unpaid: unknown, never retried.
       this.settleState(attempt, "uncertain", {

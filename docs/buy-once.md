@@ -83,7 +83,7 @@ superstables pay b54cdbae-339a-4c84-965c-2d146ee5a945
 Paying quote b54cdbae-339a-4c84-965c-2d146ee5a945 (attempt b65773de-a08b-4c91-b5c9-0729b4675a3a).
   awaiting_approval: waiting for the owner on the approval page (it closes when this command stops)
 
-Open this link and approve the payment in your browser wallet:
+Open this approval link and approve the payment in your browser wallet:
   http://127.0.0.1:4412/approve/324a415688aa0b48d2ee25a8a1e9326e
 ```
 
@@ -93,7 +93,7 @@ Then it waits until the owner decides, for up to 5 minutes. The page works only 
 
 ## 4. Approve or reject (owner)
 
-Open the link in the browser that has your wallet, on the same computer. The page shows the
+Open the approval link in the browser that has your wallet, on the same computer. The page shows the
 amount, the recipient and the network, worked out from the seller's payment terms, not from what
 the agent says. What the agent says the payment is for is shown apart, under "Reported by the agent
 (not verified)".
@@ -174,10 +174,10 @@ superstables budget buy-once --service superstables-demo-market-data --param ass
 ```
 
 `--max` is the most you accept, in the service's token (USDC, or pathUSD on Tempo): a service that costs more is refused before anything is
-created. The command prints an `APPROVE` line with the link and a match code. Run by an agent (stdout is not
+created. The command prints an `APPROVE` line with the approval link and a match code. Run by an agent (stdout is not
 a terminal), or with `--detach`, it then returns with `state: "waiting_owner"` and an approval `id`; in
-a terminal it waits for the purchase to end. Send the `RESULT`'s `message_for_owner` (the link, the
-code and the price) as a reply the owner can read, and end your turn there. The owner opens the link, signs in with their wallet the
+a terminal it waits for the purchase to end. Send the `RESULT`'s `message_for_owner` (the approval link, the
+code and the price) as a reply the owner can read, and end your turn there. The owner opens it, signs in with their wallet the
 first time (a message, no fee), picks the same code on the page and approves the payment in their
 wallet. When they say they have, run:
 
@@ -185,7 +185,7 @@ wallet. When they say they have, run:
 superstables budget wait --id <id> --shown
 ```
 
-`--shown` says you wrote the link in a reply; without it, `wait` refuses. While the owner has not
+`--shown` says you wrote the approval link in a reply; without it, `wait` refuses. While the owner has not
 decided, it answers `waiting_owner` again. The final `RESULT` reports `paid` and `delivered`, the transaction when there is one, and
 `responseFile` when the seller's answer was saved. Read `reason` and `next` before anything else, and
 do not pay again if it was paid or its outcome is unknown. The site's side of this purchase
@@ -195,13 +195,13 @@ is the HTTP purchase API; the endpoints the client calls, and what it checks in 
 ## From an agent
 
 An agent's shell tool often shows output only when a command ends, and stops long commands. `pay`
-must keep running until the owner decides, so start it detached and read the link from its log:
+must keep running until the owner decides, so start it detached and read the approval link from its log:
 
 ```bash
 nohup superstables pay <quote-id> --json > pay.json 2> pay.log < /dev/null &
 ```
 
-Read `pay.log` for the attempt id (its first line) and the approval link. Write the link exactly
+Read `pay.log` for the attempt id (its first line) and the approval link. Write it exactly
 as printed, with the price and the recipient, in a reply to the owner, and end your turn there:
 some agent hosts show the owner nothing of a turn until it ends, and `pay` keeps the page open in
 the background. When the owner says they have approved or rejected it, run
@@ -210,7 +210,7 @@ still `false`, say so in one line and end your turn again. `pay.json` holds the 
 `pay` ends. Do not use a short `--wait`:
 it ends the attempt as `abandoned` before the owner can act.
 
-With MCP, the `pay` tool returns the link at once and the server keeps the page open;
+With MCP, the `pay` tool returns the approval link at once and the server keeps the page open;
 `payment_status` reports the outcome. The `superstables-payments` skill covers both ways.
 
 ## Limits
@@ -218,7 +218,7 @@ With MCP, the `pay` tool returns the link at once and the server keeps the page 
 - The spend policy (`policy.yaml`) caps each payment and each UTC day, and can allow or deny hosts.
   It is a check in this client, not a limit the chain enforces. See the
   [security model](security.md).
-- The approval page is on `127.0.0.1`. Over SSH, forward the port in the link first:
+- The approval page is on `127.0.0.1`. Over SSH, forward the port in the approval link first:
   `ssh -L PORT:127.0.0.1:PORT user@host`.
 - With no browser on the machine, `--wallet local` signs with a key in a file instead, and the
   owner still approves each payment, on that wallet's own page. See

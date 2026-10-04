@@ -302,7 +302,7 @@ describe("an owner approval an agent started", () => {
     const port = new URL(url).port;
     expect(setup.result.next).toContain(`ssh -L ${port}:127.0.0.1:${port}`);
     // reply with the link and end the turn; wait --shown once the owner says they've approved
-    expect(setup.result.next).toContain("reply to the owner with message_for_owner, word for word (it has the link and the amount), and end your turn there");
+    expect(setup.result.next).toContain("reply to the owner with message_for_owner, word for word (it has the approval link and the amount), and end your turn there");
     expect(setup.result.next).toContain(`superstables budget wait --id ${id} --shown`);
     // the link once: one APPROVE line on stdout, none repeated on stderr
     expect(`${setup.stdout}\n${setup.stderr}`.split("\n").filter((l) => l.startsWith("APPROVE "))).toHaveLength(1);
@@ -322,7 +322,7 @@ describe("an owner approval an agent started", () => {
     expect(ended.code).toBe(3);
     expect(ended.result).toMatchObject({ command: "setup", state: "refused_precheck", final: true, id });
     expect(ended.result.reason).toMatch(/expired/);
-    expect(ended.result.next).toContain("run the same command again for a new link (setup reuses the agent key it created)");
+    expect(ended.result.next).toContain("run the same command again for a new one (setup reuses the agent key it created)");
   }, 90_000);
 
   it("with --json: stdout is the waiting_owner object alone, and the APPROVE line goes to stderr", async () => {
