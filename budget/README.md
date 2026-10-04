@@ -6,12 +6,12 @@ An owner gives an AI agent a spending budget once. The agent then buys from paid
 
 There are two ways to pay, and an agent can offer both:
 
-- **Buy once.** The owner approves one purchase on superstables.com, in their own wallet. No setup, no gas, no budget: `superstables budget buy-once`. See [Buy once](#buy-once).
-- **A budget.** The owner approves a spending cap once, and the agent buys within it with no approval per purchase. The rest of this file is about budgets.
+- **A budget.** The owner approves a spending cap once, and the agent buys within it with no approval per purchase. Follow the [local-first budget guide](../docs/budget.md); the rest of this file is the detailed budget reference.
+- **Single purchase.** The owner approves one purchase on superstables.com, in their own wallet. No setup or budget: `superstables budget buy-once`. See [Single purchase](#buy-once).
 
 Three ideas hold it together:
 
-- **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes, funding transfers and any owner steps in recovery, on a page on their own computer or, with hosted approvals, on superstables.com. The agent signs each purchase with its own key. No Superstables server is in the path of a purchase.
+- **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes and funding transfers, on a page on their own computer or, with hosted approvals, on superstables.com. The agent signs each purchase with its own key. The client sends each budget purchase directly to the seller; no site approval is needed per purchase. Any owner steps in EVM recovery always use the local approval page, including after hosted setup.
 - **The CLI checks each purchase.** Before it signs anything, `superstables budget buy` checks the price against `--max`, the token and, when `--pay-to` is supplied, the expected recipient. The agent must read the result and the exit code.
 - **Every purchase has an ID and a journal.** If a run dies half way, `superstables budget reconcile` reads the chain and says what happened. It never pays.
 
@@ -44,7 +44,13 @@ The owner approves in one of two places. Local approvals are the default and nee
 | Owner on record | The wallet that signs the setup message | The wallet that signs the owner-proof message on superstables.com (on `solana`, the Solana wallet the owner connects there); the command checks that signature before it records anyone |
 | What the agent shows the owner | The approval link and the terms | The approval link, the terms and a match code, which the owner picks on the page |
 
-In both modes the agent key stays on this computer, the owner's key stays in their wallet, and the command reads the chain itself before it reports success. Purchases never contact the site.
+In both modes the agent key stays on this computer, the owner's key stays in their wallet, and the command reads the chain itself before it reports success. Budget purchases need no site approval and go directly to the seller, which may itself be Superstables.
+
+Hosted budget approvals on superstables.com support Base Sepolia, Arc Testnet, Arbitrum Sepolia,
+Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet. Hosted approval keeps the CLI, agent key and journals on your own runtime; it lets the
+owner use a wallet on another device. The account uses Ethereum wallet sign-in, with a Solana
+wallet additionally needed to sign Solana transactions. Solana sign-in is not supported in 0.3.0.
+Linking an agent does not grant a budget.
 
 Hosted approvals, `buy-once` and `budget find` need superstables.com, or a compatible deployment the owner names with `--site` or `SUPERSTABLES_SITE`. An origin outside superstables.com and its subdomains is used only when the owner also sets `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own environment; an agent never sets it. Everything else works with no account: local approvals, budgets on every rail, `buy`, `reconcile` and `pay`. What a compatible site must do is in [CLI.md](CLI.md#hosted-approvals-what-a-compatible-site-must-do).
 
@@ -105,7 +111,7 @@ You need Node 20 or newer and a browser wallet: any EVM browser wallet (MetaMask
 
 Install. Pick one; all run the same commands on the same keys and state.
 
-- **With the client.** An npm install of the client (`npm install -g @superstables/client`, or `npm install github:superstables/superstables-client#<commit>`, which builds it on your computer) includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone: `superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+- **With the client from GitHub.** Follow [the git install](../docs/install.md#with-npm-from-git), pinned to the full 0.3.0 release commit: `npm install github:superstables/superstables-client#<commit>`. It builds the client on your computer and includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone. In that installation folder, run `npx --no superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 - **From a checkout of this repository.** At the repository root:
 
   ```sh
@@ -227,9 +233,11 @@ A revoked or expired Tempo key can never be granted again. For the next budget m
 
 An SPL token account has one delegate slot. A new grant would overwrite a live one, so `grant` refuses while a delegate with a remaining amount is set: revoke first. Each Solana purchase carries a memo `rb:<op>` so `reconcile` can find it on chain.
 
-## Buy once
+<a id="buy-once"></a>
 
-`superstables budget buy-once` asks superstables.com for one purchase of a service it lists for this, and the owner approves it there, signed in with their wallet. There is no setup, no budget, no agent key and no gas: the owner's wallet approves one payment of exactly the amount, to the recipient, the page shows. It runs on the network the service's listing names: Base Sepolia or Solana devnet (test USDC, from faucet.circle.com; the seller's facilitator pays the fee), or Tempo Moderato (test pathUSD; the owner pays the fee).
+## Single purchase
+
+`superstables budget buy-once` asks superstables.com for one purchase of a service it lists for this, and the owner approves it there, signed in with an Ethereum wallet. Solana purchases additionally need a Solana wallet to sign the payment transaction; Solana sign-in is not supported in 0.3.0. There is no setup, no budget or agent key: the owner's wallet approves one payment of exactly the amount, to the recipient, the page shows. It runs on the network the service's listing names: Base Sepolia, Arc Testnet or Solana devnet (test USDC, from faucet.circle.com; the seller's facilitator pays the fee), or Tempo Moderato (test pathUSD; the owner pays the fee).
 
 ```
 superstables budget find --once                                          # what can be bought this way, with inputs and prices
@@ -241,7 +249,7 @@ superstables budget wait --id <id> --shown                               # until
 
 A purchase the owner rejects, or does not approve within 10 minutes, pays nothing (exit 3). One buy-once purchase is open at a time. The full contract is in [CLI.md](CLI.md#buy-once).
 
-Buy once and a budget go together: an agent that has a budget can offer to buy one purchase once when it is over what is left, and an agent that bought once can mention that a budget would spare the owner each approval.
+An agent with a budget can offer a single purchase when the price exceeds what is left. An agent using Single purchase can mention that a budget would spare the owner each approval.
 
 ## Use it from an agent
 

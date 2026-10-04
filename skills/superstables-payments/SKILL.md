@@ -1,13 +1,13 @@
 ---
 name: superstables-payments
-description: Finds services that charge per request, prices them without paying, and pays them with the superstables CLI on testnets with test USDC, no real money. Either one purchase the owner approves in their wallet (pay, x402 on Base Sepolia, on this computer; or buy once on superstables.com, which needs an account there), or from an on-chain budget the owner grants once (superstables budget, approved on this computer with no account, or on superstables.com with setup --hosted; x402 and MPP sellers on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet). Use when asked to find a paid API or a service with per-request payment, quote what a call costs, pay for one, buy once, buy from an x402 or MPP seller under a price ceiling or a budget, check or reconcile a payment, or when the owner asks to set up, grant, fund, revoke or recover a testnet budget.
+description: Finds services that charge per request, prices them without paying, and pays them with the superstables CLI on testnets with test USDC, no real money. Either one purchase the owner approves in their wallet (pay, x402 on Base Sepolia, on this computer; or single purchase on superstables.com, which needs an account there), or from an on-chain budget the owner grants once (superstables budget, approved on this computer with no account, or on superstables.com with setup --hosted; x402 and MPP sellers on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet). Use when asked to find a paid API or a service with per-request payment, quote what a call costs, pay for one, make a single purchase, buy from an x402 or MPP seller under a price ceiling or a budget, check or reconcile a payment, or when the owner asks to set up, grant, fund, revoke or recover a testnet budget.
 ---
 
 # Superstables payments
 
 The `superstables` CLI finds services that charge per request, reads their price without paying, and pays them with test stablecoins. **Testnet only: test USDC, no real money.** There are two ways to pay:
 
-- **One purchase the owner approves.** `superstables budget buy-once`: the owner approves it on superstables.com, from any device, with no setup, for the services `superstables budget find --once` lists (Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet). It needs a superstables.com account (made by signing in with their wallet). For any other x402 seller on Base Sepolia, or when the owner has no account, `pay`: the owner approves in their wallet on a page on this computer.
+- **Single purchase.** `superstables budget buy-once`: the owner approves it on superstables.com, from any device, with no setup, for the services `superstables budget find --once` lists (Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet). It needs a superstables.com account (made by signing in with an Ethereum wallet). Solana purchases additionally need a Solana wallet to sign the payment transaction; Solana sign-in is not supported in 0.3.0. For any other x402 seller on Base Sepolia, or when the owner has no account, `pay`: the owner approves in their wallet on a page on this computer.
 - **A budget**: the owner grants an on-chain budget once; the agent then buys on its own until it is spent, expires (Tempo only) or is revoked. The chain enforces the limit. By default the owner approves each set-up step on a page on this computer, with no account. With `setup --hosted` they approve on superstables.com instead, from any device, the whole set-up with one approval link; that needs an account there.
 
 Local approvals, `pay` and budget purchases work without superstables.com. `buy-once`, `budget find` and `setup --hosted` need superstables.com, or a compatible site the owner chose (`--site`, or `SUPERSTABLES_SITE` set by the owner; an origin outside superstables.com also needs `SUPERSTABLES_ALLOW_SITE`, set by the owner).
@@ -19,7 +19,7 @@ Terms used below: the **owner** controls the wallet and approves; the **agent** 
 ## Running the CLI
 
 <!-- run: scripts/skill.mjs puts the standalone skill's own paragraph here -->
-`superstables` is the client's command, on the PATH once the client is installed (`npm install -g @superstables/client`) or linked from a checkout of the client repository (`npm ci`, `npm run build` and `npm link` at its root). Never run it as `npx superstables`: where the client is not found, npx downloads and runs whatever package the npm registry has under that name. It needs Node 20 or newer, on Linux or macOS (on Windows, WSL). Keys and state are in `$SUPERSTABLES_HOME` (default `~/.superstables`).
+`superstables` is the client's command, on the PATH once linked from a checkout of the client repository (`npm ci`, `npm run build` and `npm link` at its root). Never run it as `npx superstables`: where the client is not found, npx downloads and runs whatever package the npm registry has under that name. It needs Node 20 or newer, on Linux or macOS (on Windows, WSL). Keys and state are in `$SUPERSTABLES_HOME` (default `~/.superstables`).
 <!-- /run -->
 
 Every command has `--help` that lists its flags, whether it moves money, who runs it, what it prints and its exit codes. Read a command's `--help` before its first use instead of guessing flags. `superstables budget --help` also maps chain names to rails and lists the owner's steps per rail. Every `superstables budget` command accepts `--site <origin>`; pass one only when the owner gave you that site, and then pass it to each (safety rule 9).
@@ -28,7 +28,7 @@ Every command has `--help` that lists its flags, whether it moves money, who run
 
 If the owner has not chosen how to pay, ask once, before any purchase or budget command, in one short reply, and end your turn: "This uses test USDC, no real money. Would you like one purchase you approve, or a budget?" Keep that reply to the question and at most one line saying the skill is installed: no paths, checksums, flags or later steps. Do not ask for a network or a maximum price yet. `superstables budget find`, `superstables budget find --once` and `doctor` are fine first if they help you answer. If they already chose, or asked for something specific, do not ask again.
 
-- **One purchase you approve**: buy once, for a service `superstables budget find --once` lists. Read [references/once.md](references/once.md). For another seller, `pay` (step 5 below).
+- **Single purchase**: for a service `superstables budget find --once` lists. Read [references/once.md](references/once.md). For another seller, `pay` (step 5 below).
 - **A budget**: ask the network (Base Sepolia or Arc Testnet) and the amount together, in one reply, and say how they can approve: on this computer, with no account (the default), or from any device on superstables.com (needs an account). On this computer: `superstables budget setup --rail evm --chain C`, then `fund-agent` and `grant`, one approval link each; read [references/budget.md](references/budget.md#the-owners-steps-per-rail). On superstables.com: `superstables budget setup --rail evm --hosted --chain C --grant A --fund`, one approval link where the owner adds this agent to their account, sends it gas and approves the budget; read [references/budget.md](references/budget.md#a-hosted-budget-on-superstablescom). If `--hosted` fails, or the owner has no account and does not want one, use the page on this computer.
 
 ## Safety rules
@@ -59,7 +59,7 @@ Check every reply against this list before you send it. Each line points to the 
 ```
 Before you answer:
 - [ ] Price the seller (step 3): a quote for pay, or budget preflight for a budget. Compare it with the ceiling, and say the price and whether it fits. Always: also when there is no budget, and also when you will ask the user something.
-- [ ] No budget? Follow step 4: the user asked for the budget -> offer both options and do not start pay; one purchase, or the user did not say how -> buy once if `superstables budget find --once` lists the service (the owner approves on superstables.com from any device), else pay.
+- [ ] No budget? Follow step 4: the user asked for the budget -> offer both options and do not start pay; one purchase, or the user did not say how -> single purchase if `superstables budget find --once` lists the service (the owner approves on superstables.com from any device), else pay.
 - [ ] A pay is waiting? Your reply contains the approval link exactly as printed, the attempt id, the amount and the recipient. Leave that pay running, and say that you did (step 5).
 - [ ] Never run pay with a short --wait, or in a plain & or ( ... ) & (step 5).
 - [ ] pay said "A payment for this quote already exists"? Follow that attempt with superstables status ATTEMPT_ID; do not start another (step 5).
@@ -95,7 +95,7 @@ superstables find "btc price" --budget   # listings a budget rail can pay, inclu
 superstables find "btc price" --json     # {services, warnings}: endpoint, params, routes, mock, operator, commands
 superstables budget find                 # the testnet services superstables.com checked that a budget can pay, on every rail, with price, simulated and URL
 superstables budget find --chain devnet  # only that chain: any --chain key the budget commands take (moderato, devnet, base-sepolia, ...), or --rail R
-superstables budget find --once          # the services buy once can pay (Superstables' own), with the network of each
+superstables budget find --once          # the services single purchase can pay (Superstables' own), with the network of each
 ```
 
 With a budget set up through superstables.com, look in `superstables budget find` first: it lists sellers on the hosted chains that the index may not have (for example on Arc Testnet). Its URL goes straight to `budget preflight` and `budget buy`. Its `simulated` column (`simulated` in `--json`) says whether each listing is marked as returning prepared sample output, read the same way as below.
@@ -132,9 +132,9 @@ The price is the seller's ask, not your ceiling. Say the price and whether it fi
 With the status (step 2) and the price (step 3) in hand, take the first line that matches:
 
 1. A budget exists, `remaining` is at least the price, and it is not revoked or expired: `budget buy` (below).
-2. A budget exists but too little is left: it is spent. Say what you bought, what is left and the price, and end your turn (safety rule 11). You may offer one purchase they approve: buy once if `superstables budget find --once` lists the service, else `pay` if the listing has `routes.pay`.
-3. No budget set up, and the user asked for the budget: stop. Do not buy and do not start `pay`. Report the price against the ceiling, and offer both: the owner's steps (status's `next`; on superstables.com with `setup --hosted`), or one purchase they approve now (buy once if `superstables budget find --once` lists it, else `pay` if the listing has `routes.pay`).
-4. No budget, and the user asked for one purchase they approve, or to pay, or did not say how: buy once if `superstables budget find --once` lists the service ([references/once.md](references/once.md)); else `pay`, if the listing has `routes.pay` (x402 on Base Sepolia).
+2. A budget exists but too little is left: it is spent. Say what you bought, what is left and the price, and end your turn (safety rule 11). You may offer one purchase they approve: single purchase if `superstables budget find --once` lists the service, else `pay` if the listing has `routes.pay`.
+3. No budget set up, and the user asked for the budget: stop. Do not buy and do not start `pay`. Report the price against the ceiling, and offer both: the owner's steps (status's `next`; on superstables.com with `setup --hosted`), or one purchase they approve now (single purchase if `superstables budget find --once` lists it, else `pay` if the listing has `routes.pay`).
+4. No budget, and the user asked for one purchase they approve, or to pay, or did not say how: single purchase if `superstables budget find --once` lists the service ([references/once.md](references/once.md)); else `pay`, if the listing has `routes.pay` (x402 on Base Sepolia).
 5. No budget on that chain, nothing in `superstables budget find --once` and no `routes.pay`: report what exists and what the owner would need to set up.
 
 Do not start owner commands unless the owner asks.
@@ -275,7 +275,7 @@ The index format the client reads is in [references/discovery.md](references/dis
 
 Read only the one the task needs:
 
-- [references/once.md](references/once.md): buy once on superstables.com, step by step: `budget find --once`, `buy-once`, the result.
+- [references/once.md](references/once.md): single purchase on superstables.com, step by step: `budget find --once`, `buy-once`, the result.
 - [references/discovery.md](references/discovery.md): `find` and `quote`, listing fields, choosing a listing, how a listing maps to `pay` or a budget rail and chain, the self-hosted index format.
 - [references/pay.md](references/pay.md): how `pay` runs, keeping it alive from an agent, ports, its states (`abandoned`, `denied`, `expired` and the rest), where the response is, retries, `--json` fields.
 - [references/budget.md](references/budget.md): a hosted budget on superstables.com step by step, the rails and what each chain enforces, the owner's steps per rail, the approval flow in detail, buying (and when it is spent), reconcile, recover and gotchas.

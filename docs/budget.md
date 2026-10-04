@@ -1,13 +1,13 @@
 # Budget
 
 Use this when the agent should buy without asking each time. The owner grants a budget once, from
-their own wallet. The agent then buys on its own, one purchase at a time, until the budget is spent
-or the owner revokes it. The chain enforces the allowance; no Superstables server authorizes purchases. To approve each payment instead, see [Buy once](buy-once.md).
+their own wallet. The agent then buys on its own, purchase by purchase, until the budget is spent
+or the owner revokes it. The chain enforces the allowance; no Superstables server authorizes purchases. To approve each payment instead, see [Single purchase](buy-once.md).
 
 **Testnet only.** Mainnet chains are refused. This page uses the `evm` rail, where the budget is a
 USDC allowance, on Arc Testnet. Leave out `--chain arc-testnet` to use Base Sepolia, the default; buying there
 needs a seller that takes payment on Base Sepolia.
-The same rail also runs on Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia;
+The same rail also runs on Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia.
 The `tempo` rail runs on Tempo Moderato and the `solana` rail on Solana devnet. See [Budget rails and chains](../budget/README.md).
 
 ## What the chain enforces
@@ -29,16 +29,29 @@ expiry, a period and a seller list on chain; see the [security model](security.m
 
 - The client: [Install the client](install.md). Commands below use the installed `superstables`
   command.
-- Linux or macOS (on Windows, WSL), and a browser wallet for the owner, such as MetaMask, Rabby or
-  Coinbase Wallet, on the computer that runs the client.
+- Linux or macOS (on Windows, WSL). For this local EVM walkthrough, an owner browser wallet
+  such as MetaMask, Rabby or Coinbase Wallet that can reach the local approval page. On the same
+  computer, use a browser extension; over SSH, forward the port in the approval link. No website
+  account is needed. Hosted approvals use a wallet on the owner's device instead.
 - Test funds in the owner's wallet, from <https://faucet.circle.com>:
   - Arc Testnet: USDC only, since USDC also pays gas. About 0.4 USDC covers this page: 0.1 for the
     agent's gas, the 0.06 budget and fees; `doctor` wants at least 0.2 left after funding the agent.
   - Base Sepolia: at least the budget in USDC, plus a little Base Sepolia ETH for the owner's
-    transaction fees and the agent's gas (from any Base Sepolia ETH faucet). Buy once needs no
+    transaction fees and the agent's gas (from any Base Sepolia ETH faucet). Single purchase needs no
     ETH; a budget does.
 
 `doctor` says what is missing and which address to top up.
+
+## Choose where to approve
+
+Start with **local approvals**, the default used below: the client serves the approval page on
+`127.0.0.1`, and the owner signs in their browser wallet with no website account. For a runtime on
+a server, **hosted approvals** let the owner approve from another device without forwarding each
+approval port. Choose `setup --hosted` at the setup step and follow
+[Approve on superstables.com instead](#approve-on-superstablescom-instead).
+
+Both choices use the same installed CLI or command-capable agent skill. The budget key, purchases
+and journals stay on your computer or server. The payment MCP tools do not create or spend budgets.
 
 ## Who runs what
 
@@ -110,7 +123,8 @@ from the chain:
 RESULT {"ok":true,"command":"grant","rail":"evm","chain":"arc-testnet","state":"settled","final":true,"amount":"0.06","remaining":"0.06","tx":{"grant":"0x3500864caba62204475387fe2f578e7da08ca6e233ae8c18a8c4b77b11eb5763"},"expiry":null,"next":"none"}
 ```
 
-A live budget is never replaced silently: to change it, revoke it, then grant again.
+A live budget is never replaced silently. If the owner explicitly asks to change it, revoke it
+first, then grant the amount they requested.
 
 ## 5. Buy (agent)
 
@@ -181,17 +195,35 @@ RESULT {"ok":true,"command":"revoke","rail":"evm","chain":"arc-testnet","state":
 A buy after the revoke is refused, with nothing signed:
 
 ```
-RESULT {"ok":false,"command":"buy",...,"state":"refused_precheck","final":true,"paid":false,...,"next":"no budget to spend: ask the owner to run superstables budget grant --rail evm --chain arc-testnet --amount A. ...","reason":"REFUSED AT THE PULL: the allowance is 0 (revoked, spent or never set). No transferFrom was sent."}
+RESULT {"ok":false,"command":"buy",...,"state":"refused_precheck","final":true,"paid":false,...,"next":"no allowance is available: it may be spent, revoked or never granted. Nothing was signed. Report that in one reply (message_for_owner) and end your turn. Do not propose or start a grant, a revoke or gas unless the owner explicitly asks for one","reason":"REFUSED AT THE PULL: the allowance is 0 (revoked, spent or never set). No transferFrom was sent."}
 ```
+
+Report the refusal and stop. A fresh grant starts only when the owner explicitly asks for one.
+
+## Recovery and ending use
 
 `superstables budget recover --rail evm --chain arc-testnet` first brings the allowance to 0,
 then returns the USDC it can from the agent key to the owner. On Arc Testnet it leaves up to 2 USDC
-there as gas.
+there as gas. Recovery is EVM only, needs the agent key on this runtime, and any owner approvals
+use its local page even after hosted setup. Forward the page's port when connecting over SSH.
+Revoke does not return funds already transferred to the agent.
+
+For an unknown purchase, [reconcile the original operation](records.md#check-an-unresolved-outcome)
+before another payment. Keep its journal and key. To remove the client, follow
+[Uninstalling](install.md#uninstalling), which separates revocation, site account removal and local
+file deletion. [Security](security.md#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do) covers key loss and revocation limits.
 
 ## Approve on superstables.com instead
 
-On any rail, the owner can approve on superstables.com rather than on a page on this computer, from
-any device where they sign in with their wallet:
+Use hosted approval when the owner wants to approve from a device other than the machine running
+the agent. superstables.com supports Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy,
+SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
+The owner needs a compatible wallet on that device and an account created by signing in with an
+Ethereum wallet. Solana additionally requires a Solana wallet. Signing in and adding an agent do
+not grant a budget; funding and grant are separate wallet transactions.
+
+The [owner guide](https://www.superstables.com/docs/owner) covers the approval handoff, sign-in
+and account checkpoints. At step 1, choose hosted setup instead of local setup:
 
 ```bash
 superstables budget setup --rail evm --chain arc-testnet --hosted
@@ -199,20 +231,27 @@ superstables budget setup --rail tempo --hosted
 superstables budget setup --rail solana --hosted
 ```
 
-Setup then prints an approval link and a match code. The owner opens it, signs in with their wallet
+Setup then prints an approval link and a match code. The owner opens it, signs in with an Ethereum wallet
 the first time (a message, no fee), picks the same code and adds the agent to their superstables.com
 account. From then on, `fund-agent`, `grant` and `revoke` on that chain ask through the site, each
 with its own approval link and code, and the owner approves the transaction in their wallet there. `recover`
-still uses the page on this computer. The agent key stays here and the owner's key stays in their wallet. Purchases need no approval from
+still uses the page on this computer. The CLI, agent key and purchase journals stay on your own runtime; the owner's key stays in their wallet. Purchases need no approval from
 the site: the client pays the seller directly. On Solana the owner also connects a Solana wallet on
 the site's page; that address is the owner on record, and it signs each transaction the site builds.
+Solana sign-in is not supported in 0.3.0.
+
+The [site account](https://www.superstables.com/account) lets the owner inspect linked agents and
+revoke budgets. It shows hosted one-off requests, not a complete history of budget purchases;
+read [local budget records](records.md#budget-records) for those. After requesting a revoke, check
+`budget status` and wallet activity: the permission ends only when the transaction confirms.
 
 This is optional. Approvals on this computer remain the default and need no account. Hosted
 approvals need a superstables.com account, or a compatible deployment the owner names with `--site`
 or `SUPERSTABLES_SITE`. An origin outside superstables.com and its subdomains also needs the owner to
 set `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own environment; an agent never sets it.
 After picking the match code, the owner signs the owner-proof message in their wallet, and the command checks that
-signature before it records anyone as the owner. What such a site must do is in
+signature before it records anyone as the owner. Hosted approval does not host your agent runtime.
+Choosing a compatible site is an advanced API option; `--hosted` does not deploy a site. The contract is in
 [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).
 
 ## From an agent

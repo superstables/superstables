@@ -3,6 +3,26 @@
 The client records quotes, payment attempts, approval decisions and receipts on this computer. They
 are what you read to find out how a payment ended, including when its outcome is uncertain.
 
+## Check an unresolved outcome
+
+Keep the original identifiers and records. Read `reason`, `next`, payment status and wallet
+activity before deciding what to do; approval, payment and delivery are separate facts.
+
+| Flow | Read the original outcome | Follow-up |
+| --- | --- | --- |
+| Local `pay` or payment MCP | `superstables status <attempt-id>` (`payment_status` with MCP) | For `uncertain`, follow [the chain and authorization checks below](#why-failed-and-uncertain-are-different). Do not start another payment while unresolved |
+| Budget purchase, local or hosted owner approvals | `superstables budget reconcile --rail <rail> --chain <chain> --op <op>` | Use the original rail, chain and operation id. It needs the local journal and never pays. Do not replace the purchase with a new id |
+| Hosted single purchase | `superstables budget wait --id <id> --shown` | Re-read the same request later when `unknown` has `final: false`. Waiting never approves or retries payment |
+| Budget owner transaction | `superstables budget wait --id <id> --shown`, then `budget status` for that rail and chain | Check wallet activity and chain confirmation. An expired link does not cancel a wallet transaction |
+
+`--shown` means the agent wrote the approval link, terms and match code when present in a visible
+reply to the owner.
+Hosted approval leaves budget journals and the agent key on your runtime; the site account is not
+a complete budget purchase ledger. To stop spending, [revoke](budget.md#7-revoke-owner). To return
+stranded EVM USDC, use [recovery](budget.md#recovery-and-ending-use), which requires the agent key
+and uses local owner approvals even with hosted setup. Preserve these files until unresolved
+outcomes and key-held funds are checked, then follow [Uninstalling](install.md#uninstalling).
+
 ## The files
 
 ```

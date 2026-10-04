@@ -9,23 +9,36 @@ tokens on test networks: USDC, or pathUSD on Tempo Moderato. There is no mainnet
 
 ## Get started
 
-Paste this line into an agent that can run commands, such as Claude Code or Codex:
+Use a budget when the agent should make several purchases within an owner-approved cap. Start
+with [Install the client](docs/install.md) and a command-capable agent using the
+`superstables-payments` skill or CLI. These docs describe client **0.3.0**.
 
-```text
-Read and follow https://www.superstables.com/start.md to set up Superstables for me. Testnet only: test USDC, no real money.
+The first guide uses local approvals on Arc Testnet, with no superstables.com account. You need
+Node 20+, Linux or macOS (WSL on Windows), a browser wallet that can reach the client's local
+approval page, and test USDC for the budget and gas. After installing, start with:
+
+```bash
+superstables budget setup --rail evm --chain arc-testnet
+superstables budget fund-agent --rail evm --chain arc-testnet
+superstables budget doctor --rail evm --chain arc-testnet
+superstables budget grant --rail evm --chain arc-testnet --amount 0.06
 ```
 
-The page tells the agent to download the skill zip, check its SHA-256 checksum, install it and
-ask you what you would like to try. To install the client yourself, see [Install](#install).
+The agent can start these commands and show you the approval links; you review and sign in your
+wallet. Setup records the owner, funding transfers gas to the agent, and grant authorizes the
+budget. Finish each owner approval before starting the next command. Follow
+[Use a budget](docs/budget.md) to read a seller's price, buy within your ceiling, check what is
+left and revoke when done. The chain enforces the total allowance; `--max` is a check in this
+client, and a stolen EVM agent key can spend the remaining allowance to another address.
+
+If your agent runs on a server and you want to approve from another device, choose
+[hosted approvals inside the same guide](docs/budget.md#approve-on-superstablescom-instead).
+The client and its budget key still run on your machine. Owners using the site can follow the
+[owner guide](https://www.superstables.com/docs/owner) for approval and account checkpoints.
+For a single purchase, follow
+[Single purchase](docs/buy-once.md).
 
 ## What it does
-
-**Buy once.** `superstables budget buy-once` buys one service from the Superstables service
-catalogue. You approve that one purchase on superstables.com, in your own wallet, after picking
-the match code the agent shows you. Hosted buy once works on four networks: Base Sepolia (test
-USDC), Arc Testnet (test USDC), Tempo Moderato (test pathUSD) and Solana devnet (test USDC). It
-needs no `setup` command, budget or agent key. It requires a superstables.com account, which you
-create by signing in with an Ethereum wallet. `superstables budget find --once` lists the services.
 
 **Budgets.** With `superstables budget`, you grant an agent key a budget on chain once, from your
 own wallet. The agent then buys from x402 or MPP sellers without asking you again, until the budget
@@ -34,9 +47,17 @@ for each payment. The client sends the payment request directly to the seller, w
 Superstables or a third party. Budgets run on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon
 Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
 
-**Approve each payment on this computer.** Local `quote`/`pay`, the payment MCP server and the SDK
+**Single purchase.** `superstables budget buy-once` buys one service from the Superstables service
+catalogue. You approve that one purchase on superstables.com, in your own wallet, after picking
+the match code the agent shows you. Hosted single purchase works on four networks: Base Sepolia (test
+USDC), Arc Testnet (test USDC), Tempo Moderato (test pathUSD) and Solana devnet (test USDC). It
+needs no `setup` command, budget or agent key. It requires a superstables.com account, which you
+create by signing in with an Ethereum wallet. Solana purchases also need a Solana wallet to sign
+the payment transaction. Solana sign-in is not supported in 0.3.0. `superstables budget find --once` lists the services.
+
+**Single purchase on this computer.** Local `quote`/`pay`, the payment MCP server and the SDK
 payment core use Base Sepolia and a local approval page. Run `setup` for that flow. See
-[Approve each payment on this computer](#approve-each-payment-on-this-computer).
+[Single purchase on this computer](#approve-each-payment-on-this-computer).
 
 The tested services use x402 on EVM and Solana, and MPP on Tempo.
 
@@ -48,10 +69,13 @@ Owner actions happen in your own wallet, on one of two kinds of page:
   approve there with a browser extension wallet on the same computer, with no account. Every
   budget network uses these local approvals by default, and `recover` is always local and EVM
   only.
-- **On superstables.com.** Hosted buy once always uses the site. For a budget, `superstables budget
+- **On superstables.com.** Hosted single purchase always uses the site. For a budget, `superstables budget
   setup --hosted` moves the owner approvals for that chain to the site, where you approve from a
   device where you are signed in and have a compatible wallet. Hosted budget approvals support Base Sepolia, Arc Testnet, Arbitrum
   Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
+
+Hosted approvals require Ethereum wallet sign-in. Solana actions additionally need a Solana
+wallet to sign transactions; Solana sign-in is not supported in 0.3.0.
 
 To use hosted budget approvals, you add the agent to your account. The agent gives you an approval link
 and a match code. On the site you pick that code and choose **Sign with wallet**: your wallet signs
@@ -75,8 +99,8 @@ chains are refused, and no configuration turns them on.
 Node 20 or newer, on Linux or macOS. On Windows, use WSL: `superstables budget` refuses to run on
 native Windows. Each route below includes `superstables budget` and the MCP server.
 
-**The agent skill.** The [0.3.0 GitHub Release](https://github.com/superstables/superstables-client/releases/tag/v0.3.0)
-attaches `superstables-payments-skill-0.3.0.zip`: the skill, with the whole CLI bundled. Unzip
+**The agent skill.** When client 0.3.0 is released, use its skill zip from [GitHub Releases](https://github.com/superstables/superstables-client/releases)
+(`superstables-payments-skill-0.3.0.zip`), with the whole CLI bundled. Unzip
 it into `~/.claude/skills/` (Claude Code) or `~/.agents/skills/` (Codex), and run the CLI by its
 path:
 
@@ -86,8 +110,7 @@ node ~/.claude/skills/superstables-payments/scripts/superstables.mjs --help
 
 Check `scripts/VERSION.json` in the skill for the version and commit.
 
-**From git, pinned to a commit.** Replace `<commit>` with the full commit hash of a release (the
-release page names it):
+**From git, pinned to a commit.** When 0.3.0 is released, replace `<commit>` with its full release commit hash:
 
 ```bash
 npm install github:superstables/superstables-client#<commit>
@@ -97,7 +120,8 @@ npx --no superstables --version
 npm builds the client on your computer during the install, running this repository's build
 scripts there.
 
-**From a checkout.** `git clone`, then `npm ci`, `npm run build` and `npm link` put the
+**From a checkout.** Clone the repository, check out that 0.3.0 release commit, then run
+`npm ci`, `npm run build` and `npm link` to put the
 `superstables` command on your PATH. Details for every route are in
 [docs/install.md](docs/install.md).
 
@@ -115,13 +139,16 @@ once confirmed on chain; it does not reverse payments or return transferred fund
 
 ## Documentation
 
-Step by step: [docs/buy-once.md](docs/buy-once.md) for approving each payment and
-[docs/budget.md](docs/budget.md) for a budget. Every command's help is in
+Step by step: [Use a budget](docs/budget.md), then [Single purchase](docs/buy-once.md).
+[Install and connect an agent](docs/install.md) covers the skill, CLI and local payment MCP. Every command's help is in
 [docs/cli.md](docs/cli.md) and [docs/cli-budget.md](docs/cli-budget.md). Records and recovery
 after an interrupted payment: [docs/records.md](docs/records.md). What changed in each release:
-[CHANGELOG.md](CHANGELOG.md).
+[CHANGELOG.md](CHANGELOG.md). To stop using the client, [revoke and uninstall](docs/install.md#uninstalling);
+EVM funds held by an agent key have a separate [recovery step](docs/budget.md#recovery-and-ending-use).
 
-## Approve each payment on this computer
+<a id="approve-each-payment-on-this-computer"></a>
+
+## Single purchase on this computer
 
 `pay` uses [x402](https://x402.org) with the `exact` scheme and test USDC on Base Sepolia
 (`eip155:84532`, USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`). Unsupported payment
@@ -182,15 +209,15 @@ than `~/.superstables`, and `--wallet browser|local` chooses who signs (browser 
 
 ### Which way to pay
 
-| | `pay` | `budget` |
-| --- | --- | --- |
-| Who approves | The owner, in their own wallet, for every payment | The owner, once, when granting the budget |
-| What limits spending | The local spend policy and the owner's decision | The chain: an allowance, access key or delegate |
-| Protocol and chains | x402, USDC on Base Sepolia | `evm`: x402 on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia. `tempo`: MPP on Tempo Moderato. `solana`: x402 on Solana devnet |
-| Start with | `superstables setup` | `superstables budget setup --rail evm` |
+| Task | Approval and runtime | Networks | Start with |
+| --- | --- | --- | --- |
+| [Use a budget](docs/budget.md) | Owner grants once; client and agent key buy directly from sellers. Local approval by default; hosted approval optional | EVM/x402: Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia. Tempo/MPP: Tempo Moderato. Solana/x402: Solana devnet | `superstables budget setup --rail evm` |
+| [Single purchase on the site](docs/buy-once.md#hosted-buy-once-superstables-budget-buy-once) | Owner approves each purchase on superstables.com; the site coordinates that purchase. No budget setup or agent key | Base Sepolia, Arc Testnet, Tempo Moderato, Solana devnet | `superstables budget find --once` |
+| [Single purchase locally](docs/buy-once.md#approve-each-payment-on-this-computer-pay) | Owner approves each payment on a local page; CLI, payment MCP or SDK submits it | Base Sepolia only, test USDC, x402 `exact` | `superstables setup` |
 
-Use `pay` when the owner is there to approve. Use `budget` when the agent should buy on its own
-within a limit the owner set. `superstables setup` prepares `pay` only.
+All networks are testnets. Hosted budget approvals support all the budget networks above. EVM and Solana budgets use test USDC (bridged USDC on SKALE); Tempo uses test
+pathUSD. A seller must accept the selected network and protocol. See [rails, gas and faucets](budget/README.md#the-rails).
+`superstables setup` prepares local `pay` only; budgets use `budget setup`.
 
 ### Commands
 
@@ -278,6 +305,9 @@ The exit codes are the same numbers `superstables budget` uses:
 | `wallet_status` | Which signer is in use; address, network, balance, policy |
 | `list_receipts` | Payments made from this machine, each with `chain`: verified, unchecked or mismatch after a later check |
 
+These six tools cover local Base Sepolia payments. Budgets and hosted single purchase use the
+command-capable skill or CLI; they have no payment MCP tools.
+
 Of these tools, only `pay` can initiate a payment. It returns an `approval_url` and waits in
 `awaiting_approval` for your decision. The agent must show the complete approval link unchanged so you
 can open the correct payment request.
@@ -294,7 +324,10 @@ can open the correct payment request.
   budget/                only with superstables budget: public addresses, purchase journals, approval log
 ```
 
-`SUPERSTABLES_HOME` changes the base directory for this state.
+`SUPERSTABLES_HOME` changes the base directory for this state. Hosted approvals also keep the
+budget key and purchase journals here; the site account shows linked agents and hosted one-off
+requests, not a complete ledger of budget purchases. Pending hosted request records can contain
+access tokens; [Records](docs/records.md#budget-records) gives the full file inventory and recovery commands.
 
 ## What is enforced, and by what
 
@@ -446,15 +479,6 @@ result, chain status and wallet activity before requesting another approval. Eve
 `RESULT {json}` line (with `--json`, the object alone) and a fixed exit code, so an agent can act on it. EVM and Solana allowances have no automatic expiry or seller restriction. Revoke stops
 further use of the permission once it takes effect on chain; it does not reverse confirmed
 transfers. Setup, funding, wallet verification limits, the safety model and the agent skill are in [budget/README.md](budget/README.md).
-
-## Earlier release (0.2.0)
-
-0.2.0 was a demo of approving each payment from Claude Desktop, through a `.mcpb` bundle that 0.3.0 removes. These
-screenshots are from that release. The approval page is the one `pay` still serves on `127.0.0.1`.
-
-![0.2.0: the approval page next to MetaMask's signature request](docs/images/2-approve.png)
-
-![0.2.0: Claude Desktop reporting the price paid for and the transaction link](docs/images/3-result.png)
 
 ## Development
 
