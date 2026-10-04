@@ -26,14 +26,15 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HOME, approvalsDir, opsDir, publicFile } from "./paths.mjs";
+import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
 import { HOLDER_ENV, WORKER_ENV, adoptWorker, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { lockOp, railResult } from "./buy-guard.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
-import { UNSAFE_SECRET_FILE, readSecretFile } from "./secret-file.mjs";
+import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin } from "./site.mjs";
 import { customRpc, refusedRpcEnv } from "./rpc.mjs";
+import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
 import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, messageForOwner, showFirst, startOnce, waitOnce } from "./once.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -702,7 +703,7 @@ function parse(argv) {
     if (f.rail !== "tempo") badInput(ctx, "--agent is for tempo only (it picks the access key)");
     if (cmd === "setup" && (f["owner-key-file"] !== undefined)) badInput(ctx, "setup --agent adds a key for an owner already recorded: it takes no --owner-key-file");
     if (cmd === "setup" && f["new-owner"]) badInput(ctx, "setup --agent adds a key for the recorded owner; --new-owner replaces the owner: run them separately");
-    if (!/^[A-Za-z0-9]{1,32}$/.test(f.agent)) badInput(ctx, "--agent must be 1 to 32 letters or digits");
+    if (!new RegExp(`^${LABEL}$`).test(f.agent)) badInput(ctx, `--agent must be ${LABEL_WORDS}`);
   }
   if (f["fund-only"]) {
     if (f.rail !== "tempo") badInput(ctx, "--fund-only is for tempo only (it tops up the owner from the Moderato faucet)");
@@ -956,6 +957,23 @@ function recordedOwner(f) {
   } catch {
     return null;
   }
+}
+/**
+ * tempo and solana: why the two files that record the owner disagree (the public file, and the owner binding in the agent
+ * key file), or "" when they do not. The agent key file is read for that one public line only, through the bounded reader
+ * that never waits on a FIFO; a file it cannot read (missing, not a regular file, too large) is "no binding known": revoke
+ * is never blocked by it.
+ */
+function ownerFilesDisagree(f) {
+  if (f.rail !== "tempo" && f.rail !== "solana") return "";
+  const pub = recordedOwner(f);
+  let bound = null;
+  try {
+    bound = new RegExp(`^${OWNER_VAR[f.rail]}=(.*)$`, "m").exec(readRegularFile(agentKeyFile(f.rail), "the agent key file"))?.[1].trim() ?? null;
+  } catch {}
+  if (!pub || !bound) return "";
+  const same = f.rail === "solana" ? pub === bound : pub.toLowerCase() === bound.toLowerCase();
+  return same ? "" : `the owner files disagree: the public file records the owner ${pub}, and the agent key file is bound to ${bound}`;
 }
 const ownerLine = (owner) => owner ? `  owner (recorded): ${owner}. If this isn't your wallet, stop: do not approve anything for this budget.` : "  owner (recorded): none yet (superstables budget setup, run by the owner or with the owner watching)";
 /**
@@ -1450,6 +1468,12 @@ let revokeRead;
 // Runs before an owner command: one approval at a time on the chain, and, when detached, starts the worker and exits.
 async function ownerGate({ cmd, f, ctx }) {
   if (cmd === "revoke") {
+    // revoke acts for the public file's owner: while the agent key file names another, it reports on neither
+    const disagree = ownerFilesDisagree(f);
+    if (disagree) {
+      const site = recordedSite({ rail: f.rail, chain: f.chain });
+      return emit(3, { ...ctx, state: "refused_precheck", reason: `${disagree}. revoke would act for the first only, so it does not say whether a budget is live on either; nothing was sent`, next: `superstables budget setup --rail ${f.rail}${site ? ` --hosted --site ${site}` : ""} --new-owner checks both owners for a live budget and names the owner who must revoke it, and how; it records one owner again once neither has one` });
+    }
     revokeRead = await readBudget(f);
     if (revokeRead.ok && revokeRead.revoked) return;
   }

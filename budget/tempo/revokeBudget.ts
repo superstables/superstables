@@ -18,10 +18,11 @@
 
 import type { Address, Hex } from 'viem'
 import { addressCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, ownerAccount } from './lib/common.ts'
+import { AGENT_ENV_PATH, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, ownerAccount, parseEnvFile } from './lib/common.ts'
 import { chainHead, readKey, sleep } from './lib/chain.ts'
 import { closeGracePeriod, findOpenChannels, type OpenChannel } from './lib/channels.ts'
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
+import { readRegularFile } from '../secret-file.mjs'
 import { KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, readSent, revertedReceiptOf, revokeCalldata, revokeTerms, tokenBalance, useHostedAgent } from './owner.ts'
 import { mismatchPage, mismatchReason } from '../site.mjs'
 
@@ -70,6 +71,17 @@ async function main() {
   if (!owner || !agentAddress) {
     console.log('REFUSED: the public file names no owner or no agent. Nothing was sent.')
     process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason: 'the public file names no owner or no agent', next: 'superstables budget setup --rail tempo' }))
+  }
+  // The agent key file also records the owner. While it names another, this command (which acts for the public file's
+  // owner) says nothing about either: "never authorized" on one could hide the other's live key. Read for that one public
+  // line only, through the bounded reader that never waits on a FIFO; an agent key file it cannot read (missing, not a
+  // regular file, too large) never stops the revoke.
+  let bound: string | undefined
+  try { bound = parseEnvFile(readRegularFile(AGENT_ENV_PATH, 'the agent key file')).OWNER_ADDRESS } catch {}
+  if (bound && bound.toLowerCase() !== owner.toLowerCase()) {
+    const reason = `the owner files disagree: the public file records the owner ${owner}, and the agent key file is bound to ${bound}`
+    console.log(`REFUSED: ${reason}. Nothing was sent.`)
+    process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: 'superstables budget setup --rail tempo --new-owner checks both owners for a live budget and names the owner who must revoke it, and how' }))
   }
   console.log(`Revoking agent access key ${agentAddress} on owner ${owner}`)
 

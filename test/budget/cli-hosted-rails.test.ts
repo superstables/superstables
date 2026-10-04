@@ -2,7 +2,7 @@
 // dispatcher and rail scripts, against a fake superstables.com and fake Moderato and devnet RPCs on 127.0.0.1. The site
 // reports what the owner's wallet did; the fake chain shows it; the command reads the chain before it reports. No network,
 // no real key.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -107,6 +107,18 @@ describe("tempo, hosted", () => {
     expect(r.result.reason).toMatch(/a budget is live/);
     expect(r.result.next).toBe(`revoke it first (superstables budget revoke --rail tempo, approved by ${OWNER}), then superstables budget setup --rail tempo --hosted --site ${site.url} --new-owner`);
     expect(site.requests).toHaveLength(0);
+  }, 60_000);
+
+  it("setup --hosted with an unbound agent key file: an account other than the owner on record is refused, nothing changes", async () => {
+    write(file("keys", "budget", "tempo-agent.env"), `AGENT_PRIVATE_KEY=${TEMPO_KEY}\nAGENT_ADDRESS=${TEMPO_AGENT}\n`);
+    write(file("budget", "public", "tempo-moderato.env"), `OWNER_ADDRESS=${OWNER}\nAGENT_ADDRESS=${TEMPO_AGENT}\nAPPROVALS=hosted\nSITE=${site.url}\n`, 0o644);
+    const before = [readFileSync(file("keys", "budget", "tempo-agent.env"), "utf8"), publicOf("tempo")];
+    site.onPoll = (r) => { if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OTHER }); };
+    const r = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", owner: OWNER });
+    expect(r.result.next).toContain(`superstables budget setup --rail tempo --hosted --site ${site.url} --new-owner`);
+    expect([readFileSync(file("keys", "budget", "tempo-agent.env"), "utf8"), publicOf("tempo")]).toEqual(before);
   }, 60_000);
 
   it("setup --hosted links the agent and records the account, APPROVALS=hosted and SITE", async () => {
@@ -354,6 +366,18 @@ describe("solana, hosted", () => {
     expect(r.result.reason).toMatch(/a budget is live/);
     expect(r.result.next).toBe(`revoke first (superstables budget revoke --rail solana, approved by ${SOL_OWNER}), then superstables budget setup --rail solana --hosted --site ${site.url} --new-owner`);
     expect(site.requests).toHaveLength(0);
+  }, 60_000);
+
+  it("setup --hosted with an unbound agent key file: an account other than the owner on record is refused, nothing changes", async () => {
+    write(file("keys", "budget", "solana-agent.env"), `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);
+    write(file("budget", "public", "solana-devnet.env"), `SOLANA_OWNER_ADDRESS=${SOL_OWNER}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\nAPPROVALS=hosted\nSITE=${site.url}\n`, 0o644);
+    const before = [readFileSync(file("keys", "budget", "solana-agent.env"), "utf8"), publicOf("solana")];
+    site.onPoll = (r) => { if (r.polls >= 2) Object.assign(r, { state: "linked", owner: SOL_OTHER }); };
+    const r = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", owner: SOL_OWNER });
+    expect(r.result.next).toContain(`superstables budget setup --rail solana --hosted --site ${site.url} --new-owner`);
+    expect([readFileSync(file("keys", "budget", "solana-agent.env"), "utf8"), publicOf("solana")]).toEqual(before);
   }, 60_000);
 
   it("setup --hosted links the agent with its ed25519 proof; the owner is the Solana address the site names", async () => {
@@ -653,4 +677,74 @@ describe("an agent key file other users can read signs nothing", () => {
     expect(statSync(agentFile).mode & 0o777).toBe(0o644);
     expect(readFileSync(agentFile, "utf8")).not.toMatch(/OWNER_ADDRESS/);
   }, 60_000);
+});
+
+describe("hosted revoke when the agent key file cannot sign", () => {
+  const WALLET = {
+    solana: `ask the owner ${SOL_OWNER} to sign a transaction in their wallet on Solana devnet that removes the agent's spending permission from their associated USDC token account (mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU), using a tool that supports the SPL Token Revoke instruction`,
+    tempo: `ask the owner ${OWNER} to sign a transaction in their wallet on Tempo Moderato that revokes access key ${TEMPO_AGENT}, using a tool that can call AccountKeychain.revokeKey(${TEMPO_AGENT}) at ${KEYCHAIN}`,
+  };
+  for (const rail of ["solana", "tempo"] as const) {
+    it(`${rail}: missing, readable by others, a FIFO or not a key: ends at once with where to revoke, nothing requested`, async () => {
+      const keyFile = file("keys", "budget", `${rail}-agent.env`);
+      const setUp = () => {
+        if (rail === "tempo") {
+          hostedTempo();
+          tempo.keys.set(`${OWNER.toLowerCase()}:${TEMPO_AGENT.toLowerCase()}`, { expiry: BigInt(Math.floor(Date.now() / 1000) + 86400), limit: 1n, period: 0n, periodEnd: 0n, revoked: false, scoped: false });
+        } else {
+          hostedSolana();
+          solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: SOL_AGENT, delegated: 50_000n });
+        }
+        site.owner = rail === "tempo" ? OWNER : SOL_OWNER;
+      };
+      const broken: [string, () => void][] = [
+        ["missing", () => rmSync(keyFile)],
+        ["readable by others", () => chmodSync(keyFile, 0o644)],
+        ["a FIFO", () => { rmSync(keyFile); execFileSync("mkfifo", [keyFile]); }],
+        ["not a key", () => write(keyFile, rail === "tempo" ? `AGENT_PRIVATE_KEY=0xnotakey\nAGENT_ADDRESS=${TEMPO_AGENT}\n` : `SOLANA_AGENT_SECRET_BASE58=notakey0\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`)],
+        // 32 (Solana: 64) bytes of the right shape that are no key: 0, and all ff (above secp256k1's order)
+        ["a zero key", () => write(keyFile, rail === "tempo" ? `AGENT_PRIVATE_KEY=0x${"00".repeat(32)}\nAGENT_ADDRESS=${TEMPO_AGENT}\n` : `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(new Uint8Array(64))}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`)],
+        ["an all-ff key", () => write(keyFile, rail === "tempo" ? `AGENT_PRIVATE_KEY=0x${"ff".repeat(32)}\nAGENT_ADDRESS=${TEMPO_AGENT}\n` : `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(new Uint8Array(64).fill(255))}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`)],
+      ];
+      for (const [what, breakIt] of broken) {
+        setUp();
+        breakIt();
+        const started = Date.now();
+        const r = await budget(["revoke", "--rail", rail, "--wait", "--no-open"]);
+        expect(r.code, `${what}: ${r.stdout}${r.stderr}`).toBe(3);
+        expect(Date.now() - started, what).toBeLessThan(30_000);
+        expect(r.result.state, what).toBe("refused_precheck");
+        // the whole reason is in the rail's REFUSED line; the RESULT keeps at most 300 characters of it, and it names a file
+        expect(r.stdout + r.stderr, what).toMatch(/REFUSED: .*; a hosted revoke is signed by the agent key, so nothing was requested\./);
+        expect(r.result.reason.length, what).toBeGreaterThan(0);
+        expect(r.result.next, what).toContain(`revoke without the agent key: with Revoke on the owner's account page on ${new URL(site.url).host}, or ${WALLET[rail]}. Then restore `);
+        expect(site.requests, what).toHaveLength(0);
+        rmSync(keyFile, { force: true });
+      }
+    }, 180_000);
+  }
+});
+
+describe("tempo labels: one syntax in every command", () => {
+  it("a label with an underscore works for setup --agent, a hosted grant (signed by that key) and revoke; one too long is refused everywhere", async () => {
+    hostedTempo();
+    site.owner = OWNER;
+    site.onPoll = (r) => { if (r.polls >= 2 && r.kind === "link") Object.assign(r, { state: "linked", owner: OWNER }); };
+    const added = await budget(["setup", "--rail", "tempo", "--agent", "ops_team", "--wait", "--no-open"]);
+    expect(added.code, added.stderr).toBe(0);
+    const key = added.result.agent;
+    expect(publicOf("tempo")).toMatch(new RegExp(`^AGENTops_team_ADDRESS=${key}$`, "m"));
+    // the hosted grant for that key reaches the site, signed by it
+    site.onPoll = ownerSends("tempo");
+    const g = await budget(["grant", "--rail", "tempo", "--agent", "ops_team", "--amount", "0.05", "--wait", "--no-open"]);
+    expect(g.code, g.stderr).toBe(0);
+    expect(site.requests.at(-1)!.body).toMatchObject({ kind: "grant", agent: key });
+    const rv = await budget(["revoke", "--rail", "tempo", "--agent", "ops_team", "--wait", "--no-open"]);
+    expect(rv.code, rv.stderr).toBe(0);
+    expect(site.requests.at(-1)!.body).toMatchObject({ kind: "revoke", agent: key });
+    const long = await budget(["status", "--rail", "tempo", "--agent", "a".repeat(41)]);
+    expect(long.code).toBe(2);
+    expect(long.result.reason).toBe("--agent must be 1 to 40 letters, digits or underscores");
+    expect((await budget(["status", "--rail", "tempo", "--agent", "a".repeat(40)])).code).not.toBe(2);
+  }, 180_000);
 });

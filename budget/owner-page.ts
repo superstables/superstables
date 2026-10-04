@@ -127,7 +127,8 @@ export interface OwnerRail {
   /** The site that hosts this chain's owner approvals, or null for the page on this computer. */
   hostedSite?: () => string | null;
   /** The settings for a hosted request (read only when one is made: it opens the agent key). */
-  hosted?: () => Omit<HostedSettings, "auditPath" | "onRecord">;
+  /** `action`: the command asking (setup, grant, revoke, fund-agent), so a refusal can name the way out for it. */
+  hosted?: (action: string) => Omit<HostedSettings, "auditPath" | "onRecord">;
   /** The rail (and chain) flags for the commands this page names, e.g. "--rail tempo". Default "--rail evm". */
   railFlag?: string;
   /** The wallets a hosted page asks for, when they differ from walletWords (solana: an EVM wallet signs in). */
@@ -169,7 +170,7 @@ export function ownerPageFor(rail: OwnerRail) {
       console.error(`${action}: the owner's steps of recover use the approval page on this computer (127.0.0.1), not ${site.origin}. Hosted approvals cover setup, grant, revoke and fund-agent.`);
       return undefined;
     }
-    return { ...rail.hosted(), site: site.origin as string };
+    return { ...rail.hosted(action), site: site.origin as string };
   }
 
   /**

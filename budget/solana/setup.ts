@@ -118,23 +118,39 @@ if (pub.agent && pub.agent.toBase58() !== agent) {
 const newOwnerCmd = (site: string | null | undefined) => `superstables budget setup --rail solana${site ? ` --hosted --site ${site}` : ""} --new-owner`;
 
 // 2. the owner address
+// The owner is on record when either file names it: the public file (for this agent, or with no agent named), or the
+// owner binding in the agent key file. An unbound agent key file (an interrupted setup, a backup, an edit) does not make
+// the public file's owner replaceable, and the binding alone (an interrupted first setup) is an owner too. Only
+// --new-owner replaces it, with its live-budget check. Two files that name different owners are a conflict: refused, and
+// --new-owner checks both for a live budget.
 const bound = existing.SOLANA_OWNER_ADDRESS;
-const recorded: string | undefined = bound ?? (pub.owner && pub.agent?.toBase58() === agent ? pub.owner.toBase58() : undefined);
+const publicOwner = pub.owner && (!pub.agent || pub.agent.toBase58() === agent) ? pub.owner.toBase58() : undefined;
+const recorded: string | undefined = publicOwner ?? bound;
+const rawPub = parseEnvFile(PUBLIC_PATH) as Record<string, string>;
+const recordedSite = rawPub.APPROVALS === "hosted" && rawPub.SITE ? siteOrigin(rawPub.SITE).origin : undefined;
+if (bound && publicOwner && bound !== publicOwner && !newOwner) {
+  const reason = `the owner files disagree: ${PUBLIC_PATH} records the owner ${publicOwner}, and ${AGENT_KEY_PATH} is bound to ${bound}`;
+  console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`);
+  process.exit(result(3, { state: "refused_precheck", reason, owner: publicOwner, next: `${newOwnerCmd(recordedSite)} records one owner again (refused while a budget is live on either)` }));
+}
 if (newOwner && recorded) {
-  // never move the owner while the agent is still the delegate of the recorded owner's USDC account
-  const acc = await retryRead(() => getAccountOrNull(connection(), getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(recorded)))).then((a) => ({ ok: true as const, a }), (e) => ({ ok: false as const, e }));
-  const live = !acc.ok ? null : Boolean(acc.a?.delegate && acc.a.delegate.toBase58() === agent && acc.a.delegatedAmount > 0n);
-  if (live !== false) {
-    const reason = live === null ? `could not read the USDC account of the recorded owner ${recorded}; the owner is not replaced` : `a budget is live: the agent is the delegate of ${recorded}'s USDC account with ${formatUnits(acc.ok ? acc.a!.delegatedAmount : 0n)} USDC left`;
-    console.log(`REFUSED: ${reason}. Nothing was changed.`);
-    process.exit(result(3, { state: "refused_precheck", reason, owner: recorded, next: live === null ? `superstables budget doctor --rail solana, then ${newOwnerCmd(SITE)} again` : `revoke first (superstables budget revoke --rail solana, approved by ${recorded}), then ${newOwnerCmd(SITE)}` }));
+  // never move the owner while the agent is still the delegate of a recorded owner's USDC account
+  for (const was of [...new Set([publicOwner, bound].filter((o): o is string => Boolean(o)))]) {
+    const acc = await retryRead(() => getAccountOrNull(connection(), getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(was)))).then((a) => ({ ok: true as const, a }), (e) => ({ ok: false as const, e }));
+    const live = !acc.ok ? null : Boolean(acc.a?.delegate && acc.a.delegate.toBase58() === agent && acc.a.delegatedAmount > 0n);
+    if (live !== false) {
+      const reason = live === null ? `could not read the USDC account of the recorded owner ${was}; the owner is not replaced` : `a budget is live: the agent is the delegate of ${was}'s USDC account with ${formatUnits(acc.ok ? acc.a!.delegatedAmount : 0n)} USDC left`;
+      // superstables budget revoke acts for the public file's owner, and refuses while the files disagree: anyone else revokes
+      // in their own wallet
+      const viaRevoke = was === publicOwner && !(bound && bound !== publicOwner);
+      console.log(`REFUSED: ${reason}. Nothing was changed.`);
+      process.exit(result(3, { state: "refused_precheck", reason, owner: was, next: live === null ? `superstables budget doctor --rail solana, then ${newOwnerCmd(SITE)} again` : viaRevoke ? `revoke first (superstables budget revoke --rail solana, approved by ${was}), then ${newOwnerCmd(SITE)}` : `ask the owner ${was} to sign a transaction in their wallet on Solana devnet that removes the agent's spending permission from their associated USDC token account (mint ${USDC_MINT.toBase58()}), using a tool that supports the SPL Token Revoke instruction; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then ${newOwnerCmd(SITE)}` }));
+    }
   }
   console.log(`replacing the recorded owner ${recorded} (no budget is live): the new owner connects on the page`);
 }
 // The link recorded with the owner (setup --hosted), on this same site: an "already linked" answer is checked against it.
 // None with --new-owner, or when the site changes: then only a fresh link the owner signs records an owner.
-const rawPub = parseEnvFile(PUBLIC_PATH) as Record<string, string>;
-const recordedSite = rawPub.APPROVALS === "hosted" && rawPub.SITE ? siteOrigin(rawPub.SITE).origin : undefined;
 const prior: PriorLink | null = recorded && !newOwner && SITE && recordedSite === SITE && isSiteRequestId(rawPub.LINK_ID) && rawPub.LINK_CODE ? { owner: recorded, linkId: rawPub.LINK_ID, linkCode: rawPub.LINK_CODE } : null;
 if (HOSTED && recordedSite && recordedSite !== SITE) console.log(`this chain's approvals are hosted on ${recordedSite}; moving them to ${SITE} means adding the agent there, with a new owner proof`);
 let linked: { id: string; code: string } | undefined;
@@ -175,8 +191,8 @@ if (OWNER_KEY_FILE) {
   checkOwnerKeyFile(OWNER_KEY_FILE);
   owner = loadOwner(OWNER_KEY_FILE).keypair.publicKey.toBase58();
   console.log(`owner address from --owner-key-file: ${owner}`);
-} else if (pub.owner && pub.agent?.toBase58() === agent && !newOwner && !HOSTED) {
-  owner = pub.owner.toBase58();
+} else if (publicOwner && !newOwner && !HOSTED) {
+  owner = publicOwner;
   console.log(`${PUBLIC_PATH} already records owner ${owner} for this agent; not asking again. If this isn't your wallet, stop: ${newOwnerCmd(recordedSite)} replaces it`);
 } else if (HOSTED) {
   // the owner links this agent on the site with their Solana wallet; that address becomes the owner on record
@@ -240,11 +256,13 @@ if (OWNER_KEY_FILE) {
   finish = handle.finish;
   console.log(`the owner connected ${owner} and signed the sign-in message`);
 }
-if (owner === agent || (bound && bound !== owner && !newOwner)) {
-  const reason = owner === agent ? "the owner address is the agent's address" : `the agent key file is bound to another owner (${bound})`;
-  finish?.({ ok: false, message: owner === agent ? "That is the agent's own address. Connect your own wallet instead." : `This agent is already bound to another owner (${bound}). Nothing was changed.` });
+// every way an owner arrives (the key file, the page, the site): another owner than the one on record needs --new-owner
+if (owner === agent || (recorded && recorded !== owner && !newOwner)) {
+  const reason = owner === agent ? "the owner address is the agent's address" : `another owner (${recorded}) is recorded for this agent`;
+  finish?.({ ok: false, message: owner === agent ? "That is the agent's own address. Connect your own wallet instead." : `This computer records another owner for this agent (${recorded}). Nothing was changed.` });
   await closeOwnerPage();
-  process.exit(result(3, { state: "refused_precheck", reason, ...(owner === agent ? {} : { owner: bound }), next: owner === agent ? "connect the owner's own wallet" : `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }));
+  if (owner !== agent) console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this computer.`);
+  process.exit(result(3, { state: "refused_precheck", reason, ...(owner === agent ? {} : { owner: recorded }), next: owner === agent ? "connect the owner's own wallet" : `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }));
 }
 const replaced = recorded && recorded !== owner ? recorded : undefined;
 if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${owner}`);
@@ -263,7 +281,7 @@ if (bound !== owner) {
   const lines = text.split("\n").filter((l) => l !== "" && !l.startsWith("SOLANA_OWNER_ADDRESS="));
   replaceKeyFile(AGENT_KEY_PATH, `${[...lines, `SOLANA_OWNER_ADDRESS=${owner}`].join("\n")}\n`); // the only copy of the agent key: never truncated in place
 }
-const asked = !OWNER_KEY_FILE && !(pub.owner && pub.agent?.toBase58() === agent && !newOwner && !HOSTED);
+const asked = !OWNER_KEY_FILE && !(publicOwner && !newOwner && !HOSTED);
 if (HOSTED && !linked) throw new Error("an add-agent request without its id and code");
 // hosted: APPROVALS, SITE, and the link the owner signed (LINK_ID, LINK_CODE: a later "already linked" answer is checked
 // against them)

@@ -139,7 +139,13 @@ export const addressListCheck = (v) => {
 
 export const opIdCheck = (v) => (/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(v) ? undefined : 'operation id must be 1-64 characters: letters, digits, dot, dash, underscore')
 
-export const labelCheck = (v) => (/^[A-Za-z0-9_]{1,40}$/.test(v) ? undefined : 'label must be letters, digits, underscore')
+/**
+ * An agent key's label (--agent LABEL, the AGENT<label>_ lines): the one syntax the dispatcher, every tempo script and the
+ * hosted signer accept, so a label setup takes works in every command.
+ */
+export const LABEL = '[A-Za-z0-9_]{1,40}'
+export const LABEL_WORDS = '1 to 40 letters, digits or underscores'
+export const labelCheck = (v) => (new RegExp(`^${LABEL}$`).test(v) ? undefined : `label must be ${LABEL_WORDS}`)
 
 export const urlCheck = (v) => {
   try {
