@@ -119,6 +119,8 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
           `\`--wallet local\` to approve in a browser wallet; then ${payAgain(attempt, quote, requote)}`
         );
       }
+      // a record that names a transaction is never "nothing was paid" (an earlier version could keep one on a failure)
+      if (attempt.transaction) return `Do not pay again yet: this attempt names a transaction${/^0x[0-9a-fA-F]{64}$/.test(attempt.transaction) ? ` (${attempt.transaction})` : ""}. Check it, and \`superstables receipts\`, before taking a new quote.`;
       return `Nothing was paid. To try again, take a new quote: \`${requote}\`, then \`superstables pay <new-quote-id>\`.`;
   }
 }

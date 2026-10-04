@@ -27,11 +27,12 @@
 // site's raw text. The token goes to `onRecord` (the approval record, mode 600) and nowhere else: never a log line, never
 // the audit file.
 //
-// The site does not decide the owner alone. A link is recorded only with the owner's own signature over the link (the owner
-// link proof, ownerProofText): the site's origin, the owner, this agent, the rail and chain, the link id this client created
-// and the match code it showed. The client rebuilds that text from its own values and verifies the signature for the owner
-// address before anyone is recorded. An "already linked" answer is accepted only for the owner already recorded here, not
-// with --new-owner, and only with a proof over the link id and match code stored when that owner was recorded.
+// The site does not decide the owner alone. An added agent is recorded only with the owner's own signature over the
+// add-agent request (the owner proof, ownerProofText): the site's origin, the owner, this agent, the rail and chain, the
+// request id this client created and the match code it showed. The client rebuilds that text from its own values and
+// verifies the signature for the owner address before anyone is recorded. An "already linked" answer is accepted only for
+// the owner already recorded here, not with --new-owner, and only with a proof over the request id and match code stored
+// when that owner was recorded.
 //
 // Every approval checks the site's owner against the owner recorded at setup (`account`): a request the site ties to another
 // address is cancelled and refused before the link is shown, and at any later point.
@@ -66,21 +67,21 @@ export function agentProofText(origin: string, method: string, path: string, raw
   return `${AGENT_PROOF_TITLE}\norigin: ${origin}\n${method.toUpperCase()} ${path}\n${bodyHash(rawBody)}\n${timestamp}\n${nonce}`;
 }
 
-// ── owner link proof ───────────────────────────────────────────────────────────────────────────────────────────────────
+// ── owner proof ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The first line of the text the owner's wallet signs to link an agent. */
-export const OWNER_PROOF_TITLE = "Superstables: link an agent to my account";
+/** The first line of the text the owner's wallet signs to add an agent to their account. */
+export const OWNER_PROOF_TITLE = "Superstables: add an agent to my account";
 
-/** What the owner link proof is about: every value comes from this client, except the owner the site names. */
+/** What the owner proof is about: every value comes from this client, except the owner the site names. */
 export interface LinkFacts {
   site: string;
   owner: string;
   agent: string;
   rail: "evm" | "tempo" | "solana";
   chain: string;
-  /** The link request id this client created (bl_...). */
+  /** The add-agent request id this client created (bl_...). */
   linkId: string;
-  /** The match code this client received when it created the link. */
+  /** The match code this client received when it created the request. */
   code: string;
 }
 
@@ -91,7 +92,7 @@ export interface LinkFacts {
 export function ownerProofText(f: LinkFacts): string {
   const owner = f.rail === "solana" ? f.owner : getAddress(f.owner);
   const agent = f.rail === "solana" ? f.agent : getAddress(f.agent);
-  return [OWNER_PROOF_TITLE, `site: ${f.site}`, `owner: ${owner}`, `agent: ${agent}`, `rail: ${f.rail}`, `chain: ${f.chain}`, `link: ${f.linkId}`, `code: ${f.code}`].join("\n");
+  return [OWNER_PROOF_TITLE, `site: ${f.site}`, `owner: ${owner}`, `agent: ${agent}`, `rail: ${f.rail}`, `chain: ${f.chain}`, `request: ${f.linkId}`, `code: ${f.code}`].join("\n");
 }
 
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -129,7 +130,7 @@ export function ed25519Verifies(address: string, message: string, signature: str
 }
 
 /**
- * Why the site's `owner_proof` does not prove that `facts.owner` linked this agent, or "" when it does: the text must equal
+ * Why the site's `owner_proof` does not prove that `facts.owner` added this agent, or "" when it does: the text must equal
  * the one rebuilt here byte for byte, and the signature must verify for the owner (EIP-191 on evm and tempo, ed25519 on
  * solana).
  */
@@ -145,7 +146,7 @@ export async function ownerProofProblem(proof: unknown, facts: LinkFacts): Promi
   } catch {
     return "the owner is not an address of this rail";
   }
-  if (p.message !== want) return "the owner proof is for another link";
+  if (p.message !== want) return "the owner proof is for another add-agent request";
   if (scheme === "ed25519") return ed25519Verifies(facts.owner, want, p.signature) ? "" : `the owner proof is not signed by ${facts.owner}`;
   if (!/^0x(?:[0-9a-fA-F]{128}|[0-9a-fA-F]{130})$/.test(p.signature)) return "the owner proof's signature is not an EIP-191 signature";
   try {
@@ -405,18 +406,18 @@ export class HostedApprovals {
     const answer = await this.create(path, body, kind === "link" ? "bl_" : "ba_");
     if (answer.linked && then) {
       // the site must refuse a link with steps for an agent it already linked (409); a 200 here would skip every step
-      throw new HostedRefusal(alreadyLinkedWords(this.s.site, answer.owner, this.s.rail), alreadyLinkedNext(this.s.rail, this.s.chain));
+      throw new HostedRefusal(alreadyLinkedWords(this.s.site, answer.owner, this.s.rail), alreadyLinkedNext(this.s.rail, this.s.chain, this.s.site));
     }
     if (answer.linked) {
       // already linked on this chain: accepted only for the owner recorded here, with a proof over the link recorded here
       const prior = input.kind === "connect" ? input.prior : null;
-      const fresh = `ask the owner to remove this agent from their account on ${this.name} (account page), then run superstables budget setup ${railFlags(this.s.rail, this.s.chain)} --hosted again: a fresh link, which the owner signs`;
+      const fresh = `ask the owner to remove this agent from their account on ${this.name} (account page), then run superstables budget setup ${railFlags(this.s.rail, this.s.chain)} --hosted --site ${this.s.site} again: the owner adds the agent again and signs a new owner proof`;
       const refuse = (why: string): never => {
         this.audit({ id: answer.id, kind, title: input.terms.title, status: "refused", reason: why });
-        throw new HostedRefusal(`${this.name}: this agent is already linked to ${answer.owner}, but ${why}; nothing was recorded or sent. The owner removes it on their ${this.name} account page and links it again`, fresh);
+        throw new HostedRefusal(`${this.name}: this agent already belongs to the account ${answer.owner}, but ${why}; nothing was recorded or sent. The owner removes it on their ${this.name} account page and adds it again`, fresh);
       };
-      if (input.kind === "connect" && input.newOwner) refuse("a new owner is recorded only from a fresh link the owner signs, not from an existing one");
-      if (!prior) return refuse("this computer has no record of that link, so the site's word alone cannot make an owner");
+      if (input.kind === "connect" && input.newOwner) refuse("a new owner is recorded only when the owner adds the agent again and signs a new owner proof, not from an earlier one");
+      if (!prior) return refuse("this computer has no record of the add-agent request that added it, so the site's word alone cannot make an owner");
       if (!this.w.same(prior.owner, answer.owner)) refuse(`this computer records the owner ${prior.owner}`);
       const problem = await ownerProofProblem(answer.proof, this.facts(answer.owner, prior.linkId, prior.linkCode));
       if (problem) refuse(`its answer does not prove it: ${problem}`);
@@ -451,7 +452,7 @@ export class HostedApprovals {
         const why = first.ok ? `${this.name} did not say which account would approve this` : `${this.name} could not be read back (${siteFailure(first.status, null)})`;
         this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: first.ok ? "no owner: the site named no account" : "no owner: the request could not be read" });
         const a = afterCancel(c);
-        throw new HostedRefusal(`${why}, so the command cannot check it is the owner recorded on this computer (${expected}). ${a.words}`, a.sending ? CHECK_CHAIN : first.ok ? "try again later; if it repeats, check which account this agent is linked to on the account page" : "try again later", { sending: a.sending });
+        throw new HostedRefusal(`${why}, so the command cannot check it is the owner recorded on this computer (${expected}). ${a.words}`, a.sending ? CHECK_CHAIN : first.ok ? "try again later; if it repeats, check which account this agent belongs to on the account page" : "try again later", { sending: a.sending });
       }
       if (!this.w.same(owner, expected)) {
         const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
@@ -459,7 +460,7 @@ export class HostedApprovals {
         const a = afterCancel(c);
         throw new HostedRefusal(
           `${this.name} would ask ${this.w.owner(owner) ?? "an account that is not an address"} to approve this, but the owner recorded on this computer is ${expected}. ${a.words}`,
-          a.sending ? CHECK_CHAIN : `check which ${this.name} account this agent is linked to (the account page lists it). If the owner changed, run superstables budget setup ${railFlags(this.s.rail, this.s.chain)} --hosted --new-owner (refused while a budget is live)`,
+          a.sending ? CHECK_CHAIN : `check which ${this.name} account this agent belongs to (the account page lists it). If the owner changed, run superstables budget setup ${railFlags(this.s.rail, this.s.chain)} --hosted --site ${this.s.site} --new-owner (refused while a budget is live)`,
           { sending: a.sending },
         );
       }
@@ -557,7 +558,7 @@ export class HostedApprovals {
         if (attempt === 0) await sleep(1000);
       }
     }
-    if (!res) throw new HostedRefusal(`could not reach ${this.s.site} (${network}); nothing was sent. If an attempt did reach it, that request cannot be approved without its link and expires by itself in 10 minutes`, `check the network and ${this.s.site}, then run the same command again`);
+    if (!res) throw new HostedRefusal(`could not reach ${this.s.site} (${network}); nothing was sent. If an attempt did reach it, that request cannot be approved without its approval link and expires by itself in 10 minutes`, `check the network and ${this.s.site}, then run the same command again`);
     let json: any = null;
     try {
       json = await res.json();
@@ -567,7 +568,7 @@ export class HostedApprovals {
       try {
         res = await send();
       } catch (err) {
-        throw new HostedRefusal(`could not reach ${this.s.site} (${siteText((err as { cause?: { code?: string } }).cause?.code ?? (err as Error).message)}); nothing was sent. If an attempt did reach it, that request cannot be approved without its link and expires by itself in 10 minutes`, `check the network and ${this.s.site}, then run the same command again`);
+        throw new HostedRefusal(`could not reach ${this.s.site} (${siteText((err as { cause?: { code?: string } }).cause?.code ?? (err as Error).message)}); nothing was sent. If an attempt did reach it, that request cannot be approved without its approval link and expires by itself in 10 minutes`, `check the network and ${this.s.site}, then run the same command again`);
       }
       json = null;
       try {
@@ -583,21 +584,21 @@ export class HostedApprovals {
       if (held) return held;
       const what = code === "proof_reused" ? "with the same signed proof" : "with the same request key";
       throw new HostedRefusal(
-        `${this.s.site} already has request ${isSiteRequestId(otherId) ? otherId : "(no usable id)"}${typeof json?.state === "string" ? ` (${siteWord("state", json.state)})` : ""}, created ${what} by an earlier attempt whose answer never arrived here (${siteFailure(res.status, json)}). It cannot be approved without its link, which only that answer carried; it expires by itself in 10 minutes, and the owner can see it on their ${this.name} account page. Nothing was sent`,
+        `${this.s.site} already has request ${isSiteRequestId(otherId) ? otherId : "(no usable id)"}${typeof json?.state === "string" ? ` (${siteWord("state", json.state)})` : ""}, created ${what} by an earlier attempt whose answer never arrived here (${siteFailure(res.status, json)}). It cannot be approved without its approval link, which only that answer carried; it expires by itself in 10 minutes, and the owner can see it on their ${this.name} account page. Nothing was sent`,
         "run the same command again after that request expires (10 minutes)",
       );
     }
     if (res.status === 409 && code === "already_linked") {
       // a link with steps for an agent already linked on this chain: nothing was created; gas and a budget go one by one
       const owner = this.w.owner(json?.error?.owner) ?? this.w.owner(json?.owner);
-      throw new HostedRefusal(alreadyLinkedWords(this.s.site, owner, this.s.rail), alreadyLinkedNext(this.s.rail, this.s.chain));
+      throw new HostedRefusal(alreadyLinkedWords(this.s.site, owner, this.s.rail), alreadyLinkedNext(this.s.rail, this.s.chain, this.s.site));
     }
     if (!res.ok) throw new HostedRefusal(`${this.s.site} did not take the request (${siteFailure(res.status, json)}); nothing was sent`, res.status >= 500 ? "try again later" : "read reason; fix what it names before trying again");
     // a link that already exists for this agent on this chain: an already-final request, with no link to show
     if (res.status === 200 && prefix === "bl_" && json?.state === "linked" && json?.final === true && !json?.approval) {
       const owner = this.w.owner(json.owner);
       if (!isSiteRequestId(json.id) || !String(json.id).startsWith(prefix) || !owner) {
-        throw new HostedRefusal(`${this.s.site} says this agent is already linked, but its answer has no ${owner ? "request id" : "owner address"}; nothing was recorded or sent`, "try again later");
+        throw new HostedRefusal(`${this.s.site} says this agent has already been added to an account, but its answer has no ${owner ? "request id" : "owner address"}; nothing was recorded or sent`, "try again later");
       }
       return { linked: true as const, id: json.id as string, owner, proof: json.owner_proof as unknown };
     }
@@ -671,7 +672,7 @@ export class HostedApprovals {
       // past the expiry (and, once the wallet was asked, the time for its hash to come back) without a final answer: the
       // request may still be open on the site, so a transaction is never reported as "nothing sent"
       if (now > expiry + (walletAsked ? grace : 30_000)) {
-        return end("expired", walletAsked ? `the wallet was asked to send, but no transaction came back from ${this.name}` : `no final answer from ${this.s.site} by the time the link expired; the request may still be open there`, tx);
+        return end("expired", walletAsked ? `the wallet was asked to send, but no transaction came back from ${this.name}` : `no final answer from ${this.s.site} by the time the approval link expired; the request may still be open there`, tx);
       }
       const waitS = Math.max(0, Math.min(this.s.pollWaitS ?? 20, Math.ceil((expiry - now) / 1000)));
       readAt = Date.now();
@@ -710,11 +711,11 @@ export class HostedApprovals {
           continue;
         case "linked":
           if (tx) break;
-          if (!owner) return end("rejected", `${this.name} reported the link without an owner address`, false);
+          if (!owner) return end("rejected", `${this.name} reported the agent as added without an owner address`, false);
           {
             // the owner is recorded only with their own signature over this link
             const problem = await ownerProofProblem(v.owner_proof, this.facts(owner, p.id, p.matchCode));
-            if (problem) return end("rejected", `${this.name} reported the link to ${owner}, but ${problem}. Nothing was recorded`, false);
+            if (problem) return end("rejected", `${this.name} reported the agent as added to ${owner}, but ${problem}. Nothing was recorded`, false);
           }
           this.audit({ id: p.id, kind: p.kind, title: p.title, status: "connected", address: owner });
           return done({ status: "connected", address: owner });
@@ -783,7 +784,7 @@ export class HostedApprovals {
         // linked, and the site did not confirm the step closed: it can still hand it to the owner's wallet, so it is
         // never "nothing sent" here
         else if (owner || (refusedLink && !refusedLink.withdrawn)) Object.assign(s, { state: "unknown", reason: `the command stopped watching while ${this.s.site} could still ask the owner's wallet for this step, and withdrawing it did not succeed${why ? ` (${why})` : ""}; it may still be sent, so read the chain later` });
-        else Object.assign(s, { state: "skipped", reason: s.reason || why || "the agent was not linked, so this step was never asked" });
+        else Object.assign(s, { state: "skipped", reason: s.reason || why || "the agent was not added, so this step was never asked" });
       }
       const link: OwnerActionOutcome = owner
         ? { status: "connected", address: owner }
@@ -846,7 +847,7 @@ export class HostedApprovals {
           if (c?.walletAsked) for (const s of steps) if (!STEP_FINAL.has(s.state) && s.state !== "queued") s.walletAsked = true;
           refusedLink = { withdrawn: c?.cancelled === true || (Array.isArray(c?.view?.steps) && steps.every((s) => STEP_FINAL.has(s.state) || s.walletAsked)) };
           linkState = "rejected";
-          linkReason = `${this.name} reported the link to ${named}, but ${problem}. Nothing was recorded; its wallet steps were ${refusedLink.withdrawn ? "withdrawn" : "not confirmed withdrawn"}`;
+          linkReason = `${this.name} reported the agent as added to ${named}, but ${problem}. Nothing was recorded; its wallet steps were ${refusedLink.withdrawn ? "withdrawn" : "not confirmed withdrawn"}`;
           return finish(null);
         }
         owner = named;
@@ -862,7 +863,7 @@ export class HostedApprovals {
         this.audit({ id: p.id, kind: p.kind, title: p.title, status: siteWord("state", state), reason: reason || undefined, address: owner ?? undefined });
       }
       if (v.final === true) {
-        if (!owner && state === "linked") linkReason = `${this.name} reported the link without an owner address`;
+        if (!owner && state === "linked") linkReason = `${this.name} reported the agent as added without an owner address`;
         return finish(null);
       }
     }
@@ -886,16 +887,16 @@ function proofReason(json: any): string {
   return e && typeof e === "object" && e.code === "agent_proof" && typeof e.reason === "string" ? e.reason : "";
 }
 
-/** The words for an agent already linked on this chain, when a link with steps was asked for. */
+/** The words for an agent already added on this chain, when an add-agent request with steps was asked for. */
 function alreadyLinkedWords(site: string, owner: string | null, rail: HostedRail): string {
-  return `this agent is already linked on ${site}${owner ? ` to the account ${owner}` : ""}, so there is nothing to link and no request was created. ${rail === "tempo" ? "A budget is then asked for separately, with its own link" : "Gas and a budget are then asked for separately, each with its own link"}; nothing was sent`;
+  return `this agent already belongs to an account on ${site}${owner ? ` (${owner})` : ""}, so there is nothing to add and no request was created. ${rail === "tempo" ? "A budget is then asked for separately, with its own approval link" : "Gas and a budget are then asked for separately, each with its own approval link"}; nothing was sent`;
 }
-function alreadyLinkedNext(rail: HostedRail, chain: string): string {
+function alreadyLinkedNext(rail: HostedRail, chain: string, site: string): string {
   const r = railFlags(rail, chain);
   const steps = rail === "tempo"
-    ? `A budget is a separate owner step: superstables budget grant ${r} --amount A (one link)`
-    : `Gas and a budget are separate owner steps: superstables budget fund-agent ${r}, then superstables budget grant ${r} --amount A (each one link)`;
-  return `tell the owner this agent is already linked and end your turn. ${steps}. If this computer has no owner on record yet, superstables budget setup ${r} --hosted without ${rail === "tempo" ? "--grant" : "--grant and --fund"} records it, with no link`;
+    ? `A budget is a separate owner step: superstables budget grant ${r} --amount A (one approval link)`
+    : `Gas and a budget are separate owner steps: superstables budget fund-agent ${r}, then superstables budget grant ${r} --amount A (one approval link each)`;
+  return `tell the owner the site reports that this agent already belongs to an account and end your turn. ${steps}. If this computer has no owner on record yet, setup cannot take the site's word for it: the owner removes the agent on that account's page on the site, then superstables budget setup ${r} --hosted --site ${site} asks them to add it again and sign a new owner proof`;
 }
 
 /**

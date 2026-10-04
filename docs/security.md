@@ -70,8 +70,8 @@ rules as a convenience, not as a boundary.
 ## The approval link is the capability
 
 This section, and the three after it, describe the page `superstables pay` serves on `127.0.0.1`.
-`budget buy-once` and a budget set up with `--hosted` have no such page: their links are on the
-site, and the owner acts there signed in to their account with their wallet. See
+`budget buy-once` and a budget set up with `--hosted` have no such page: their approval links are
+on the site, and the owner acts there signed in to their account with their wallet. See
 [Hosted approvals and buy-once](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do).
 
 There is no password on the approval page. The authority is the id in the URL: 128 bits of
@@ -82,7 +82,7 @@ That id is deliberately narrow. Holding it lets someone see *one* payment and si
 
 - it names one stored request, and the routes under it (`/state`, `/account`, `/signature`,
   `/reject`) only ever act on that request;
-- signing needs a valid signature from the account selected on the page. The link does not
+- signing needs a valid signature from the account selected on the page. The approval link does not
   choose that account, but it cannot spend from an account without its signature;
 - a decision is final: a second POST to a request that is no longer pending gets 409;
 - the client binds `127.0.0.1`, so another machine cannot reach the page directly; port
@@ -91,7 +91,7 @@ That id is deliberately narrow. Holding it lets someone see *one* payment and si
   page under a DNS name that resolves to `127.0.0.1` cannot reach it;
 - `/account`, `/signature` and `/reject` accept only a JSON body sent from the page's own origin,
   so another website open in your browser cannot reject or prepare a payment. This stops web
-  pages, not local programs: any process on this machine that holds the link can set those
+  pages, not local programs: any process on this machine that holds the approval link can set those
   headers, which is why the signature check below decides what is signed.
 
 When a signature arrives, it is checked before it is used: `verifyTypedData` must recover the
@@ -110,7 +110,7 @@ It **can**:
 - pick which URL to call and therefore which seller's terms come back;
 - read this machine's records (`records/*.jsonl`): what was quoted, attempted, paid and asked
   for;
-- refuse to show you a link, or show you one for a payment you did not ask for.
+- refuse to show you an approval link, or show you one for a payment you did not ask for.
 
 It **cannot**:
 
@@ -182,7 +182,7 @@ The agent side keeps its own append-only records next to it — quotes, attempts
 
 `policy.yaml` is read and applied by this client: once advisory, at quote time, and once
 authoritative, at the gate, before an approval is created at all. A payment the policy refuses
-never becomes a link, so there is nothing to open and nobody is asked.
+never becomes an approval link, so there is nothing to open and nobody is asked.
 
 Nothing in the policy is enforced by the blockchain, and nothing in it is enforced by the wallet.
 A cap of 0.05 USDC per payment means this software will not ask you to sign more than that; it
@@ -294,11 +294,11 @@ undo an owner signature or a transaction already sent through hosted setup. `doc
 - **This CLI checks the rest**, before it signs: `--max`, the expected token, `--pay-to` and one
   purchase per `--op`. A stolen agent key skips all of these and can spend what is left of the
   budget, on `evm` and `solana` to any address. Keep budgets small.
-- **Setup is a trusted step.** Whoever holds the setup link, the agent included, can complete it
+- **Setup is a trusted step.** Whoever holds setup's approval link, the agent included, can complete it
   with a key of their own: the page's origin check stops other websites, not local programs. So the
   owner runs it, and checks the owner address that setup prints and every owner page shows. Under
-  `--hosted` there is no local page and no origin check: the owner links the agent on the site, and
-  the client records an owner only with that owner's signature over the link (see
+  `--hosted` there is no local page and no origin check: the owner adds the agent on the site, and
+  the client records an owner only with that owner's signature over the add-agent request (see
   [Hosted approvals and buy-once](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
 - **The checks depend on the rail.** The command builds the page's terms and the transaction
   from the same plan: the command's arguments and the chain's state, not the agent's description.
@@ -338,13 +338,13 @@ is not trusted to say who the owner is or what was paid.
   nonce it has already seen, so a proof made for one site fails on another and a captured one fails
   a second time. Those are the site's checks: the client cannot enforce them, and after a network
   error it sends the same proof once more on purpose.
-- **The owner signs the link.** The site cannot choose the recorded owner on its own. After picking
-  the match code, the owner's wallet signs the site, the owner, the agent, the rail and chain, the
-  link id and the code. The client rebuilds that text from its own values and verifies the
-  signature for that owner before it records anyone; without a valid proof it records nothing. An
-  "already linked" answer counts only for the owner already recorded, with that owner's proof over
-  the link stored when they were recorded, and never with `--new-owner`. Moving a hosted chain to
-  another site takes a fresh link the owner signs there.
+- **The owner signs an owner proof.** The site cannot choose the recorded owner on its own. After
+  picking the match code, the owner's wallet signs the site, the owner, the agent, the rail and
+  chain, the request ID and the code. The client rebuilds that text from its own values and
+  verifies the signature for that owner before it records anyone; without a valid proof it records
+  nothing. An `already_linked` answer counts only for the owner already recorded, with that owner's
+  proof over the add-agent request stored when they were recorded, and never with `--new-owner`.
+  Moving a hosted chain to another site means adding the agent there, with a new owner proof.
 - **The owner on record does not move under a live budget.** `--new-owner` is refused while a
   budget is live and, on `evm`, while the agent key holds the budget token, since `recover`
   returns that token to the owner on record.
@@ -358,7 +358,7 @@ is not trusted to say who the owner is or what was paid.
   token, to the listed recipient, mined no more than 60 seconds before the purchase was created (an
   allowance for clock differences); otherwise the result is unknown
   and the agent never buys again.
-- **Links are data.** An approval link is used only as `<site>/approve/budget/<id>#<token>` (or
+- **Approval links are data.** An approval link is used only as `<site>/approve/budget/<id>#<token>` (or
   `<site>/approve/<id>#<token>` for a purchase), rewritten by the URL parser. Text from the site
   loses control, zero-width and bidi characters before it is printed.
 - **What the site learns.** The rail, the chain, the agent's address and what the owner is asked
@@ -387,7 +387,7 @@ says "not supported", there is no command for it yet; do not move key files by h
 
 - **Budget agent key, `tempo`.** Supported. `superstables budget setup --rail tempo --agent LABEL`,
   with a LABEL not used before (a used one reuses the key it already names), adds a new access
-  key next to the old one; on a hosted chain it also links the new key there. The owner grants it
+  key next to the old one; on a hosted chain it also adds the new key there. The owner grants it
   with `superstables budget grant --rail tempo --agent LABEL --amount A`, then revokes the old key
   with `superstables budget revoke --rail tempo` (add `--agent OLD` if the old key had a label).
   A key revoked on an owner's account can never be granted again on that account. After this,

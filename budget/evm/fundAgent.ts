@@ -7,14 +7,11 @@ import "./cli-guard.mjs";
 // npx tsx budget/evm/fundAgent.ts [--chain <name>] [--amount <decimal>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 import { type Hex } from "viem";
 import { SYM, CFG, GAS, emit, arg, gasFmt, OWNER_KEY_FILE, ownerCtx, readCtx, nativeBalance, usdcBalance, usdc, readUntil, sendNative, usageError, assertRpcChain, tx } from "./lib.ts";
-import { fundInWallet, fundingTx, approvalSite, fundValue, DEFAULT_FUND_AMOUNT } from "./owner.ts";
+import { fundInWallet, fundValue, DEFAULT_FUND_AMOUNT } from "./owner.ts";
 
 const amt = arg("amount") ?? DEFAULT_FUND_AMOUNT;
 let value = 0n;
 try { value = fundValue(amt); } catch (e) { usageError((e as Error).message); }
-if (!OWNER_KEY_FILE && approvalSite() !== null) {
-  try { fundingTx("0x0000000000000000000000000000000000000001", value, true); } catch (e) { usageError((e as Error).message); }
-}
 const p = readCtx();
 await assertRpcChain();
 const ob = await nativeBalance(p.owner), ab = await nativeBalance(p.agent);

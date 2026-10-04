@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { encodeFunctionData, parseAbi } from "viem";
-import { evmOwner, signLinkProof, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
+import { evmOwner, evmOwnerKey, signLinkProof, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import type { TestServer } from "../helpers/servers.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -61,7 +61,7 @@ describe("setup --hosted: refusals before anything runs", () => {
     expect(fund.result.reason).toMatch(/tempo's agent needs no gas: setup --hosted on tempo takes --grant, not --fund/);
     const agent = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--agent", "2"]);
     expect(agent.code).toBe(2);
-    expect(agent.result.reason).toMatch(/setup --agent on a hosted chain links the new key there by itself: drop --hosted/);
+    expect(agent.result.reason).toMatch(/setup --agent on a hosted chain adds the new key there by itself: drop --hosted/);
     const sol = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--fund", "2"]);
     expect(sol.code).toBe(2);
     expect(sol.result.reason).toMatch(/--fund takes an amount of SOL above 0 and at most 1/);
@@ -124,7 +124,7 @@ describe("--site on every command", () => {
 });
 
 describe("setup --hosted", () => {
-  it("links the agent, records the account as the owner, and records APPROVALS=hosted and SITE", async () => {
+  it("adds the agent, records the account as the owner, and records APPROVALS=hosted and SITE", async () => {
     site.onPoll = (r) => {
       if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER });
     };
@@ -135,7 +135,7 @@ describe("setup --hosted", () => {
     expect(r.approve.url).toMatch(/\/approve\/budget\/bl_test0001#ssba_/);
     expect(r.stderr).toMatch(/match code: ABC-DEF/);
     expect(r.stderr).toMatch(/any device where the owner is signed in to/);
-    expect(r.stderr).toMatch(/Write this link, the match code ABC-DEF and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call/);
+    expect(r.stderr).toMatch(/Write this approval link, the match code ABC-DEF and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call/);
     const pub = publicFile();
     expect(pub).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
     expect(pub).toMatch(/^APPROVALS=hosted$/m);
@@ -150,13 +150,60 @@ describe("setup --hosted", () => {
     expect(r.stdout + r.stderr).not.toContain("ssbt_");
   }, 60_000);
 
-  it("records the link the owner signed (LINK_ID, LINK_CODE); a link without a valid owner proof records nothing", async () => {
+  it("asks the owner to check the account the agent was added to; replacing it is --hosted --new-owner, after the agent is removed there", async () => {
+    // someone else's account completed setup
+    site.onPoll = (r) => {
+      if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OTHER });
+    };
+    const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(0);
+    const host = new URL(site.url).host;
+    const again = `superstables budget setup --rail evm --chain base-sepolia --hosted --site ${site.url} --new-owner`;
+    expect(r.stderr).toContain(`AGENT ADDED to the ${host} account ${OTHER}`);
+    expect(r.stderr).toContain(`If it is not, someone else added this agent to their account: grant nothing. Once the agent is removed on that account's page on ${host}, run ${again} yourself.`);
+    expect(r.stderr).not.toContain("OWNER CONNECTED");
+    expect(r.result.next).toContain(`the owner on record is now ${OTHER}, the ${host} account this agent was added to: the owner checks that this is their own wallet's address. If it is not, stop: grant nothing. The agent stays on that account until it is removed on that account's page on ${host}; then run ${again} with the owner present`);
+    // never --new-owner without --hosted, which would move the chain to the page on this computer
+    expect(r.result.next).not.toMatch(/--chain base-sepolia --new-owner/);
+
+    // the command it names works once the agent is off that account (the site creates a new add-agent request)
+    site.onPoll = (x) => {
+      if (x.polls >= 2) Object.assign(x, { state: "linked", owner: OWNER });
+    };
+    const renew = await budget([...again.split(" ").slice(2), "--wait", "--no-open"]);
+    expect(renew.code, renew.stderr).toBe(0);
+    expect(renew.result).toMatchObject({ state: "ok", owner: OWNER, approvals: "hosted", site: site.url });
+    expect(publicFile()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
+    expect(publicFile()).toMatch(/^APPROVALS=hosted$/m);
+  }, 90_000);
+
+  it("the replacement command names the recorded site, not SUPERSTABLES_SITE, and run as printed stays on that site", async () => {
+    const env = { SUPERSTABLES_SITE: "https://staging.superstables.com" };
+    site.onPoll = (r) => {
+      if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OTHER });
+    };
+    const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"], env);
+    expect(r.code, r.stderr).toBe(0);
+    const again = `superstables budget setup --rail evm --chain base-sepolia --hosted --site ${site.url} --new-owner`;
+    expect(r.stderr).toContain(`run ${again} yourself.`);
+    expect(r.result.next).toContain(`then run ${again} with the owner present`);
+    expect(r.result.next).not.toContain("staging.superstables.com");
+    site.onPoll = (x) => {
+      if (x.polls >= 2) Object.assign(x, { state: "linked", owner: OWNER });
+    };
+    const renew = await budget([...again.split(" ").slice(2), "--wait", "--no-open"], env);
+    expect(renew.code, renew.stderr).toBe(0);
+    expect(publicFile()).toMatch(new RegExp(`^SITE=${site.url}$`, "m"));
+    expect(publicFile()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
+  }, 90_000);
+
+  it("records the add-agent request the owner signed (LINK_ID, LINK_CODE); one without a valid owner proof records nothing", async () => {
     site.onPoll = (r) => {
       if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER, owner_proof: null });
     };
     const bad = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"]);
     expect(bad.code, bad.stderr).toBe(3);
-    expect(bad.result.reason).toMatch(new RegExp(`reported the link to ${OWNER}, but the site sent no owner proof\\. Nothing was recorded`));
+    expect(bad.result.reason).toMatch(new RegExp(`reported the agent as added to ${OWNER}, but the site sent no owner proof\\. Nothing was recorded`));
     expect(publicFileOrNull()).toBeNull();
 
     site.onPoll = (r) => {
@@ -168,7 +215,7 @@ describe("setup --hosted", () => {
     expect(publicFile()).toMatch(/^LINK_CODE=ABC-DEF$/m);
   }, 60_000);
 
-  it("run again for an agent already linked: accepted only for the owner recorded here, with a proof over the link recorded here", async () => {
+  it("run again for an agent already added: accepted only for the owner recorded here, with a proof over the request recorded here", async () => {
     site.onPoll = (r) => {
       if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER });
     };
@@ -183,7 +230,7 @@ describe("setup --hosted", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.result).toMatchObject({ state: "ok", owner: OWNER, approvals: "hosted", site: site.url });
     expect(r.approve).toBeNull();
-    expect(r.stderr).toMatch(/already linked/);
+    expect(r.stderr).toMatch(/This agent already belongs to the account of the owner recorded on this computer/);
     expect(publicFile()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
     expect(publicFile()).toMatch(/^LINK_ID=bl_test0001$/m);
 
@@ -191,7 +238,7 @@ describe("setup --hosted", () => {
     site.reply = linked(OTHER, await signLinkProof({ ...facts, owner: OTHER }));
     const other = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"]);
     expect(other.code).toBe(3);
-    expect(other.result.reason).toMatch(new RegExp(`already linked to ${OTHER}, but this computer records the owner ${OWNER}`));
+    expect(other.result.reason).toMatch(new RegExp(`already belongs to the account ${OTHER}, but this computer records the owner ${OWNER}`));
     expect(publicFile()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
 
     // linked before owner proofs existed (owner_proof null), or a proof for another code: refused, with the way out
@@ -199,20 +246,20 @@ describe("setup --hosted", () => {
       site.reply = linked(OWNER, proof);
       const nope = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"]);
       expect(nope.code).toBe(3);
-      expect(nope.result.reason).toMatch(/does not prove it.*nothing was recorded or sent\. The owner removes it on their 127\.0\.0\.1:\d+ account page and links it again$/);
+      expect(nope.result.reason).toMatch(/does not prove it.*nothing was recorded or sent\. The owner removes it on their 127\.0\.0\.1:\d+ account page and adds it again$/);
     }
 
     // --new-owner never takes an existing link, even with a valid proof
     site.reply = linked(OWNER, await signLinkProof(facts));
     const renew = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--new-owner", "--wait", "--no-open"]);
     expect(renew.code, renew.stderr).toBe(3);
-    expect(renew.result.reason).toMatch(/a new owner is recorded only from a fresh link the owner signs/);
+    expect(renew.result.reason).toMatch(/a new owner is recorded only when the owner adds the agent again and signs a new owner proof/);
 
     // a computer with no owner on record: the site's "already linked" alone records nobody
     rmSync(join(home, "budget", "public"), { recursive: true, force: true });
     const fresh = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"]);
     expect(fresh.code).toBe(3);
-    expect(fresh.result.reason).toMatch(/this computer has no record of that link/);
+    expect(fresh.result.reason).toMatch(/this computer has no record of the add-agent request that added it/);
     expect(publicFileOrNull()).toBeNull();
   }, 90_000);
 
@@ -232,8 +279,44 @@ describe("setup --hosted", () => {
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.reason).toMatch(new RegExp(`the agent ${agent} holds 0\\.5 USDC from the recorded owner's budget`));
     expect(r.result.next).toMatch(/superstables budget recover --rail evm/);
+    // the retry stays hosted, on the recorded site: a bare setup --new-owner would move the chain to this computer
+    expect(r.result.next).toContain(`then superstables budget setup --rail evm --hosted --site ${site.url} --new-owner`);
     expect(site.requests).toHaveLength(1);
   }, 60_000);
+
+  it("on a hosted chain, every printed owner-replacement command names --hosted and the recorded site", async () => {
+    site.onPoll = (r) => {
+      if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER });
+    };
+    expect((await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"])).code).toBe(0);
+    const again = `superstables budget setup --rail evm --hosted --site ${site.url} --new-owner`;
+    await rpc.close();
+    // a live budget: allowance(owner, agent) is 0.5 USDC
+    rpc = await startFakeRpc(84532, (method, params) => {
+      if (method === "eth_call" && String(params[0]?.data).startsWith("0xdd62ed3e")) return `0x${(500000).toString(16).padStart(64, "0")}`;
+      return undefined;
+    });
+    const live = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--new-owner", "--wait", "--no-open"]);
+    expect(live.code, live.stderr).toBe(3);
+    expect(live.result.reason).toMatch(/a budget is live/);
+    expect(live.result.next).toBe(`revoke first (superstables budget revoke --rail evm, approved by ${OWNER}), then ${again}`);
+    expect(site.requests).toHaveLength(1);
+    // --new-owner without --hosted asks on this computer and moves the chain there: its retry stays bare, as asked
+    const local = await budget(["setup", "--rail", "evm", "--new-owner", "--wait", "--no-open"]);
+    expect(local.code, local.stderr).toBe(3);
+    expect(local.result.next).toBe(`revoke first (superstables budget revoke --rail evm, approved by ${OWNER}), then superstables budget setup --rail evm --new-owner`);
+    // an owner key file for another owner (tests and automation): refused, and the retry stays hosted on the recorded site
+    const keyFile = join(home, "other-owner.env");
+    writeFileSync(keyFile, `B4_OWNER_KEY=${evmOwnerKey("33")}\n`, { mode: 0o600 });
+    const mismatch = await budget(["setup", "--rail", "evm", "--owner-key-file", keyFile]);
+    expect(mismatch.code, mismatch.stderr).toBe(3);
+    expect(mismatch.result.reason).toBe(`another owner (${OWNER}) is recorded`);
+    expect(mismatch.result.next).toBe(`${again} replaces it (refused while a budget is live)`);
+    expect(publicFile()).toMatch(/^APPROVALS=hosted$/m);
+    // doctor names the same command for the owner on record
+    const doctor = await budget(["doctor", "--rail", "evm"]);
+    expect(doctor.stderr).toContain(`If this isn't your wallet, stop: do not approve grants for it. superstables budget setup --rail evm --chain base-sepolia --hosted --site ${site.url} --new-owner replaces it`);
+  }, 90_000);
 
   it("moving a hosted chain to another site takes a fresh link signed there; the old link does not count", async () => {
     site.onPoll = (r) => {
@@ -248,7 +331,7 @@ describe("setup --hosted", () => {
       other.reply = () => ({ status: 200, body: { id: "bl_test0001", state: "linked", final: true, owner: OWNER, owner_proof: proof, approval: null } });
       const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", other.url, "--wait", "--no-open"]);
       expect(r.code, r.stderr).toBe(3);
-      expect(r.result.reason).toMatch(/this computer has no record of that link/);
+      expect(r.result.reason).toMatch(/this computer has no record of the add-agent request that added it/);
       expect(publicFile()).toMatch(new RegExp(`^SITE=${site.url}$`, "m"));
       // a fresh link there, signed by the owner for that site: the chain moves
       other.reply = undefined;
@@ -278,7 +361,7 @@ describe("setup --hosted", () => {
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
-    expect(first.result.next).toMatch(/^reply to the owner with message_for_owner, word for word \(it has the link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id oa-\S+ --shown\. .*Testnet only: test USDC, no real money\.$/);
+    expect(first.result.next).toMatch(/^reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id oa-\S+ --shown\. .*Testnet only: test USDC, no real money\.$/);
     // the words for the owner are asserted on `next` (the RESULT), not on stderr: the worker writes the rail's stderr to
     // its log on its own schedule, so stderr may still lack them when the record with the link exists
     // the reply the agent sends word for word: the exact link (with the part after #), the code, the network, the testnet line
@@ -738,11 +821,11 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     await prepare();
     const first = await start();
     expect(first.result).toMatchObject({ command: "setup", state: "waiting_owner", final: false, action: "setup", matchCode: "ABC-DEF" });
-    expect(first.result.terms).toMatchObject({ title: "Link this agent, send it gas and approve a budget of 0.01 test USDC", amount: "0.01", unit: "USDC" });
-    expect(first.result.terms.summary).toMatch(/1\. Link this agent.*2\. Send 0\.0001 ETH.*3\. Allow the agent to withdraw up to 0\.01 USDC/);
+    expect(first.result.terms).toMatchObject({ title: "Add this agent, send it gas and approve a budget of 0.01 test USDC", amount: "0.01", unit: "USDC" });
+    expect(first.result.terms.summary).toMatch(/1\. Add this agent.*2\. Send 0\.0001 ETH.*3\. Allow the agent to withdraw up to 0\.01 USDC/);
     expect(first.result.terms.notEnforced.join(" ")).toMatch(/No expiry/);
     expect(first.result.message_for_owner).toContain(first.result.url);
-    expect(first.result.message_for_owner).toContain("Link this agent, send it gas and approve a budget of 0.01 test USDC");
+    expect(first.result.message_for_owner).toContain("Add this agent, send it gas and approve a budget of 0.01 test USDC");
     expect(first.result.message_for_owner).toContain("Match code: ABC-DEF");
     // one request: the link, then the gas, then the grant, built as fund-agent and grant build them
     expect(site.posts).toEqual([{ path: "/api/v1/budget/links", ok: true, why: undefined }]);
@@ -772,6 +855,50 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     expect(readFileSync(join(approvals(), `${first.result.id}.json`), "utf8")).not.toContain("ssbt_");
   }, 180_000);
 
+  it("Arc Testnet: the gas step is a plain transfer of native USDC (18 decimals), checked by the transaction and the agent's native balance", async () => {
+    const ARC_USDC = "0x3600000000000000000000000000000000000000";
+    // fund-agent's default on Arc: 0.1 USDC, native, 18 decimals
+    const ARC_FUND = 100_000_000_000_000_000n;
+    const arcApprove = encodeFunctionData({ abi: parseAbi(["function approve(address spender, uint256 value) returns (bool)"]), functionName: "approve", args: [AGENT, 10000n] });
+    mkdirSync(join(home, "keys", "budget"), { recursive: true });
+    writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=0x${"11".repeat(32)}\nB4_AGENT_ADDRESS=${AGENT}\n`, { mode: 0o600 });
+    const txs: Record<string, { to: string; input: string; value: bigint }> = {
+      [FUND_HASH]: { to: AGENT, input: "0x", value: ARC_FUND },
+      [GRANT_HASH]: { to: ARC_USDC, input: arcApprove, value: 0n },
+    };
+    let funded = false;
+    let granted = false;
+    const blockHash = `0x${"ef".repeat(32)}`;
+    await rpc.close();
+    rpc = await startFakeRpc(5042002, (method, params) => {
+      if (method === "eth_blockNumber") return funded || granted ? "0x20" : "0x10";
+      const t = txs[params[0]];
+      if (method === "eth_getTransactionByHash" && t) return { hash: params[0], blockHash, blockNumber: "0x20", from: OWNER, to: t.to, input: t.input, value: `0x${t.value.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x4cef52" };
+      if (method === "eth_getTransactionReceipt" && t) {
+        if (params[0] === FUND_HASH) funded = true;
+        if (params[0] === GRANT_HASH) granted = true;
+        return { transactionHash: params[0], blockHash, blockNumber: "0x20", from: OWNER, to: t.to, status: "0x1", logs: [], gasUsed: "0x10000", cumulativeGasUsed: "0x10000", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+      }
+      if (method === "eth_call" && String(params[0]?.data).startsWith("0xdd62ed3e")) return `0x${(granted ? 10000n : 0n).toString(16).padStart(64, "0")}`;
+      // the agent's native balance: 18 decimals, up by exactly the top-up once it is mined
+      if (method === "eth_getBalance" && String(params[0]).toLowerCase() === AGENT.toLowerCase()) return `0x${(10n ** 16n + (funded ? ARC_FUND : 0n)).toString(16)}`;
+      return undefined;
+    });
+    const first = await budget(["setup", "--rail", "evm", "--chain", "arc-testnet", "--hosted", "--site", site.url, "--grant", "0.01", "--fund"]);
+    expect(first.code, first.stderr).toBe(0);
+    // the step the site asks the owner's wallet for: to the agent, no data, 0.1 USDC in native units; never the ERC-20's transfer
+    expect(site.requests[0].body.then[0]).toEqual({ kind: "fund_agent", transaction: { to: AGENT, data: "0x", value: `0x${ARC_FUND.toString(16)}` } });
+    expect(JSON.stringify(site.requests[0].body.then)).not.toContain("0xa9059cbb");
+    expect(first.result.terms.summary).toMatch(/2\. Send 0\.1 USDC from your wallet to the agent/);
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: OWNER });
+    Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND_HASH, wallet_asked: true });
+    Object.assign(r.steps![1], { state: "confirmed", tx_hash: GRANT_HASH, wallet_asked: true });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ state: "ok", chain: "arc-testnet", tx: { fundAgent: FUND_HASH, grant: GRANT_HASH }, steps: [{ kind: "fund_agent", state: "settled", amount: "0.1" }, { kind: "grant", state: "settled" }] });
+  }, 180_000);
+
   it("a grant the owner rejects after the link: the link and the gas are recorded and reported, the budget is not", async () => {
     await prepare();
     const first = await start();
@@ -786,9 +913,9 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
       steps: [{ kind: "fund_agent", state: "settled", tx: FUND_HASH }, { kind: "grant", state: "refused_precheck", reasonCode: "owner_rejected" }],
     });
     // the site's code in the client's words; the site's own sentence is not repeated
-    expect(done.result.reason).toMatch(/^linked: yes; gas: 0\.0001 ETH sent; budget: nothing was sent: rejected: 127\.0\.0\.1:\d+ gives the reason owner_rejected$/);
+    expect(done.result.reason).toMatch(/^agent added: yes; gas: 0\.0001 ETH sent; budget: nothing was sent: rejected: 127\.0\.0\.1:\d+ gives the reason owner_rejected$/);
     expect(done.result.amount).toBeUndefined();
-    expect(done.result.next).toMatch(/the agent is linked and has gas\. Tell the owner .* only if the owner asks: superstables budget grant --rail evm --amount A$/);
+    expect(done.result.next).toMatch(/the agent has been added to the account and has gas\. Tell the owner .* only if the owner asks: superstables budget grant --rail evm --amount A$/);
     const pub = publicFile();
     expect(pub).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
     expect(pub).toMatch(/^APPROVALS=hosted$/m);
@@ -865,7 +992,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund"]);
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.state).toBe("refused_precheck");
-    expect(r.result.reason).toMatch(new RegExp(`this agent is already linked on .* to the account ${OWNER}.*nothing was sent`));
+    expect(r.result.reason).toMatch(new RegExp(`this agent already belongs to an account on .* \\(${OWNER}\\).*nothing was sent`));
     expect(r.result.next).toMatch(/superstables budget fund-agent --rail evm, then superstables budget grant --rail evm --amount A/);
     expect(r.approve).toBeNull();
   }, 60_000);

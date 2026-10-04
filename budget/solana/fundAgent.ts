@@ -23,7 +23,7 @@ superstables.com when the chain was set up with --hosted.
 
   --amount <sol>           SOL to send, at most 9 decimals
   --timeout <s>            how long the approval link stays open (default 600)
-  --no-open                do not open the link in the default browser
+  --no-open                do not open the approval link in the default browser
   --owner-key-file <path>  tests and automation only: sign with this owner key file (mode 600)
   -h, --help               show this help`;
 

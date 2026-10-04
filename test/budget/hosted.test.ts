@@ -111,12 +111,12 @@ describe("agent proof v2", () => {
   });
 });
 
-describe("owner link proof", () => {
+describe("owner proof", () => {
   const facts = { site: "https://www.superstables.com", owner: OWNER, agent: AGENT, rail: "evm" as const, chain: "base-sepolia", linkId: "bl_0123456789abcdef0123456789abcdef", code: "ABC-DEF" };
 
   it("is the exact eight-line text, with the owner checksummed", () => {
     expect(ownerProofText({ ...facts, owner: OWNER.toLowerCase() })).toBe(
-      `Superstables: link an agent to my account\nsite: https://www.superstables.com\nowner: ${OWNER}\nagent: ${AGENT}\nrail: evm\nchain: base-sepolia\nlink: bl_0123456789abcdef0123456789abcdef\ncode: ABC-DEF`,
+      `Superstables: add an agent to my account\nsite: https://www.superstables.com\nowner: ${OWNER}\nagent: ${AGENT}\nrail: evm\nchain: base-sepolia\nrequest: bl_0123456789abcdef0123456789abcdef\ncode: ABC-DEF`,
     );
     expect(ownerProofText(facts)).toBe(linkProofText(facts));
     const sol = { ...facts, owner: solanaOwner(8), agent: solanaOwner(7), rail: "solana" as const, chain: "devnet" };
@@ -133,12 +133,16 @@ describe("owner link proof", () => {
     expect(await ownerProofProblem(await signLinkProof(facts, { key: evmOwnerKey("33") }), facts)).toMatch(new RegExp(`signed by ${OTHER}, not ${OWNER}`));
     // a proof for another link id, another code, another agent, another site or another chain
     for (const over of [{ linkId: "bl_ffffffffffffffffffffffffffffffff" }, { code: "XYZ-UVW" }, { agent: OTHER }, { site: "https://staging.superstables.com" }, { chain: "arc-testnet" }]) {
-      expect(await ownerProofProblem(await signLinkProof({ ...facts, ...over }), facts), JSON.stringify(over)).toMatch(/for another link/);
+      expect(await ownerProofProblem(await signLinkProof({ ...facts, ...over }), facts), JSON.stringify(over)).toMatch(/for another add-agent request/);
     }
     // a signed message that is not the text: refused even though the signature is the owner's
-    expect(await ownerProofProblem(await signLinkProof(facts, { message: "hello" }), facts)).toMatch(/for another link/);
+    expect(await ownerProofProblem(await signLinkProof(facts, { message: "hello" }), facts)).toMatch(/for another add-agent request/);
     // the same text with a trailing newline is another text
-    expect(await ownerProofProblem(await signLinkProof(facts, { message: `${linkProofText(facts)}\n` }), facts)).toMatch(/for another link/);
+    expect(await ownerProofProblem(await signLinkProof(facts, { message: `${linkProofText(facts)}\n` }), facts)).toMatch(/for another add-agent request/);
+    // the earlier wording (title "link an agent", a link: line) is not accepted, even signed by the owner over the same values
+    const earlier = linkProofText(facts).replace("Superstables: add an", "Superstables: link an").replace("\nrequest: ", "\nlink: ");
+    expect(earlier).not.toBe(linkProofText(facts));
+    expect(await ownerProofProblem(await signLinkProof(facts, { message: earlier }), facts)).toMatch(/for another add-agent request/);
   });
 
   it("solana: ed25519 by the base58 owner", async () => {
@@ -268,15 +272,16 @@ describe("hosted approvals", () => {
       site.reply = answer(OWNER, await signLinkProof(facts()));
       const err = await connect().catch((e) => e);
       expect(err).toBeInstanceOf(HostedRefusal);
-      expect(err.message).toMatch(/already linked to .*but this computer has no record of that link.*nothing was recorded or sent\. The owner removes it on their .* account page and links it again/);
-      expect(err.next).toMatch(/remove this agent from their account.*fresh link/);
+      expect(err.message).toMatch(/already belongs to the account .*but this computer has no record of the add-agent request that added it.*nothing was recorded or sent\. The owner removes it on their .* account page and adds it again/);
+      expect(err.next).toMatch(/remove this agent from their account.*the owner adds the agent again and signs a new owner proof/);
+      expect(err.next).toContain(`superstables budget setup --rail evm --hosted --site ${site.url} again`);
     });
 
     it("refused with --new-owner, even with a valid proof", async () => {
       site.reply = answer(OWNER, await signLinkProof(facts()));
       const err = await connect({ prior: { owner: OWNER, linkId: LINK, linkCode: CODE }, newOwner: true }).catch((e) => e);
       expect(err).toBeInstanceOf(HostedRefusal);
-      expect(err.message).toMatch(/a new owner is recorded only from a fresh link the owner signs/);
+      expect(err.message).toMatch(/a new owner is recorded only when the owner adds the agent again and signs a new owner proof/);
     });
 
     it("refused for another owner than the one recorded, even with that owner's valid proof", async () => {
@@ -290,8 +295,8 @@ describe("hosted approvals", () => {
       const prior = { owner: OWNER, linkId: LINK, linkCode: CODE };
       for (const [proof, why] of [
         [undefined, /no owner proof/],
-        [await signLinkProof({ ...facts(), linkId: "bl_test0043" }), /for another link/],
-        [await signLinkProof({ ...facts(), code: "ABC-DEF" }), /for another link/],
+        [await signLinkProof({ ...facts(), linkId: "bl_test0043" }), /for another add-agent request/],
+        [await signLinkProof({ ...facts(), code: "ABC-DEF" }), /for another add-agent request/],
         [await signLinkProof(facts(), { key: evmOwnerKey("33") }), /signed by/],
       ] as const) {
         site.reply = answer(OWNER, proof);
@@ -310,7 +315,7 @@ describe("hosted approvals", () => {
   });
 
   it("409 is a refusal with the site's documented code, not its message", async () => {
-    site.reply = () => ({ status: 409, body: { error: "this agent is linked to another account", reason_code: "linked_elsewhere" } });
+    site.reply = () => ({ status: 409, body: { error: "this agent belongs to another account", reason_code: "linked_elsewhere" } });
     const err = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 }).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
     expect(err.message).toMatch(/HTTP 409 linked_elsewhere\); nothing was sent/);
@@ -372,7 +377,7 @@ describe("hosted approvals", () => {
     const err = await grant(client({ fetchImpl: lossy })).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
     expect(err.message).toMatch(/already has request ba_test0001 \(awaiting_owner\), created with the same signed proof by an earlier attempt/);
-    expect(err.message).toMatch(/cannot be approved without its link.*expires by itself in 10 minutes.*account page\. Nothing was sent/);
+    expect(err.message).toMatch(/cannot be approved without its approval link.*expires by itself in 10 minutes.*account page\. Nothing was sent/);
     expect(err.next).toMatch(/after that request expires/);
     // the retry re-sent the very same proof and key
     expect(sent).toHaveLength(2);
@@ -804,14 +809,14 @@ describe("hosted approvals", () => {
   });
 
   it("a link the site reports without a valid owner proof records no owner", async () => {
-    for (const proof of [null, { scheme: "eip191", message: "Superstables: link an agent to my account", signature: `0x${"11".repeat(65)}` }]) {
+    for (const proof of [null, { scheme: "eip191", message: "Superstables: add an agent to my account", signature: `0x${"11".repeat(65)}` }]) {
       site.onPoll = (r) => {
         if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER, owner_proof: proof });
       };
       const h = await client().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
       const o = await h.settled;
       expect(o).toMatchObject({ status: "rejected", sending: false });
-      expect(o.status === "rejected" && o.reason).toMatch(new RegExp(`reported the link to ${OWNER}, but the (site sent no owner proof|owner proof is for another link).*Nothing was recorded`));
+      expect(o.status === "rejected" && o.reason).toMatch(new RegExp(`reported the agent as added to ${OWNER}, but the (site sent no owner proof|owner proof is for another add-agent request).*Nothing was recorded`));
     }
     // signed by another wallet than the owner the site names
     site.onPoll = async (r) => {
@@ -829,7 +834,7 @@ describe("hosted approvals", () => {
     Object.assign(r, { state: "linked", owner: OWNER, owner_proof: await signLinkProof({ site: site.url, owner: OWNER, agent: AGENT, rail: "evm", chain: "base-sepolia", linkId: r.id, code: "XYZ-UVW" }) });
     const b = await h.bundle!;
     expect(b.link).toMatchObject({ status: "rejected", sending: false });
-    expect(b.link.status === "rejected" && b.link.reason).toMatch(/owner proof is for another link.*steps were withdrawn/);
+    expect(b.link.status === "rejected" && b.link.reason).toMatch(/owner proof is for another add-agent request.*steps were withdrawn/);
     expect(r.cancels).toBe(1);
     expect(b.steps).toMatchObject([{ kind: "grant", state: "cancelled" }]);
   });
@@ -927,7 +932,7 @@ describe("hosted approvals on tempo and solana", () => {
     const err = await intent(solana(), "grant", "1").catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
     expect(err.message).toMatch(new RegExp(`would ask ${SOL_OTHER} to approve this, but the owner recorded on this computer is ${SOL_OWNER}.*nothing was sent`));
-    expect(err.next).toMatch(/superstables budget setup --rail solana --hosted --new-owner/);
+    expect(err.next).toContain(`superstables budget setup --rail solana --hosted --site ${site.url} --new-owner`);
     expect(site.requests[0].state).toBe("cancelled");
     // the same letters in another case are another Solana address
     const swapped = SOL_OWNER.replace(/[a-z]/, (c) => c.toUpperCase());
@@ -984,8 +989,10 @@ describe("hosted approvals on tempo and solana", () => {
     site.linked = { [SOL_KEY.address]: SOL_OWNER };
     const err = await solana().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, then: [{ kind: "grant", solana: { amount_atomic: "1" } }] }).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
-    expect(err.message).toMatch(new RegExp(`already linked on .* to the account ${SOL_OWNER}`));
+    expect(err.message).toMatch(new RegExp(`already belongs to an account on .* \\(${SOL_OWNER}\\)`));
     expect(err.next).toMatch(/superstables budget fund-agent --rail solana, then superstables budget grant --rail solana --amount A/);
+    expect(err.next).toContain(`the site reports that this agent already belongs to an account`);
+    expect(err.next).toContain(`setup cannot take the site's word for it: the owner removes the agent on that account's page on the site, then superstables budget setup --rail solana --hosted --site ${site.url} asks them to add it again and sign a new owner proof`);
   });
 
   it("tempo: links and asks for the exact keychain transaction, signed EIP-191 as on evm", async () => {

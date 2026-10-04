@@ -190,7 +190,7 @@ describe("the approval page a browser wallet signs on", () => {
     await signer.start();
     const page = await fetch(`${signer.url}/approve/${"0".repeat(32)}`);
     expect(page.status).toBe(404);
-    expect(await page.text()).toContain("This link is unavailable");
+    expect(await page.text()).toContain("This approval link is unavailable");
     const state = await getJson(`${signer.url}/approve/${"0".repeat(32)}/state`);
     expect(state.status).toBe(404);
   });
@@ -912,7 +912,7 @@ describe("the owner approval page", () => {
     expect(status).toBe(421);
     const unknown = await fetch(`${server.url}/owner/${"0".repeat(32)}`);
     expect(unknown.status).toBe(404);
-    expect(await unknown.text()).toContain("This link is unavailable");
+    expect(await unknown.text()).toContain("This approval link is unavailable");
   });
 
   it("is plain ES2017 that a browser can run without a build step", async () => {
@@ -963,7 +963,7 @@ function fakePort(answer: "sent" | "refused" | "throw-after-send" = "sent") {
     async submit(signed, broadcasting) {
       calls.signed.push(signed);
       if (answer === "refused") return { status: "refused", reason: "Your wallet changed the transaction, so the command did not send it." };
-      if (!broadcasting()) return { status: "refused", reason: "The link expired while the wallet was signing." };
+      if (!broadcasting()) return { status: "refused", reason: "The approval link expired while the wallet was signing." };
       calls.broadcast += 1;
       if (answer === "throw-after-send") throw new Error("socket hang up");
       return { status: "sent", hash: "5".repeat(88) };
@@ -1052,7 +1052,7 @@ describe("the owner approval page with a Solana wallet", () => {
     expect(await handle.settled).toMatchObject({ status: "rejected", sending: false });
   });
 
-  it("sends nothing when the link expired while the wallet was signing", async () => {
+  it("sends nothing when the approval link expired while the wallet was signing", async () => {
     const { port, calls } = fakePort();
     const server = await ownerServer();
     const handle = server.request(solanaAction(port, { timeoutMs: 400 }));

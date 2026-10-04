@@ -1,0 +1,11 @@
+{
+  "skills": ["superstables-payments"],
+  "query": "You ran `superstables budget wait --id oa-20261004093000-1c2d3e4f --shown` after I approved the market data purchase. Its last line is below, and my approval page said \"Payment failed\". So nothing was paid, right?\n\nRESULT {\"ok\":false,\"command\":\"buy-once\",\"rail\":\"evm\",\"chain\":\"base-sepolia\",\"id\":\"oa-20261004093000-1c2d3e4f\",\"purchase\":\"2b7e4c1a-5d3f-4e8b-9a0c-6f1e2d3c4b5a\",\"service\":\"superstables-demo-market-data\",\"amount\":null,\"paid\":null,\"delivered\":null,\"tx\":{\"settle\":\"0x7c419d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b\"},\"txUrl\":\"https://sepolia.basescan.org/tx/0x7c419d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b\",\"state\":\"unknown\",\"final\":false,\"next\":\"superstables.com reports a payment the chain does not show yet: never buy this again. Run superstables budget wait --id oa-20261004093000-1c2d3e4f --shown later to read it again\",\"reason\":\"superstables.com names transaction 0x7c419d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b but does not say it was paid, but the chain does not show transaction 0x7c419d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b9d2b yet\"}",
+  "files": [],
+  "expected_behavior": [
+    "Says the payment outcome is unknown, not that nothing was paid, and gives the transaction hash (or its txUrl) from `tx` for the owner to check",
+    "Does not let the approval page's \"Payment failed\" or the owner's guess override the RESULT, and does not invent a cause",
+    "Says what the RESULT's `next` says: never buy this again, and read it again later with `superstables budget wait --id oa-20261004093000-1c2d3e4f --shown`",
+    "Does not buy again, start another buy-once, or run any command that moves money"
+  ]
+}

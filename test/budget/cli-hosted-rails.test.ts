@@ -90,6 +90,16 @@ const ownerSends = (rail: "tempo" | "solana", over: Partial<Parameters<FakeSolan
 };
 
 describe("tempo, hosted", () => {
+  it("setup --hosted --new-owner refused while a key is live: the retry names --hosted and the recorded site", async () => {
+    hostedTempo();
+    tempo.keys.set(`${OWNER.toLowerCase()}:${TEMPO_AGENT.toLowerCase()}`, { expiry: BigInt(Math.floor(Date.now() / 1000) + 86400), limit: 1n, period: 0n, periodEnd: 0n, revoked: false, scoped: false });
+    const r = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--new-owner", "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result.reason).toMatch(/a budget is live/);
+    expect(r.result.next).toBe(`revoke it first (superstables budget revoke --rail tempo, approved by ${OWNER}), then superstables budget setup --rail tempo --hosted --site ${site.url} --new-owner`);
+    expect(site.requests).toHaveLength(0);
+  }, 60_000);
+
   it("setup --hosted links the agent and records the account, APPROVALS=hosted and SITE", async () => {
     site.onPoll = (r) => { if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER }); };
     const r = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--wait", "--no-open"]);
@@ -110,7 +120,7 @@ describe("tempo, hosted", () => {
     const first = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--grant", "0.05"]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
-    expect(first.result.terms).toMatchObject({ title: "Link this agent and approve a budget of 0.05 pathUSD", amount: "0.05", unit: "pathUSD" });
+    expect(first.result.terms).toMatchObject({ title: "Add this agent and approve a budget of 0.05 pathUSD", amount: "0.05", unit: "pathUSD" });
     expect(first.result.message_for_owner).toContain("Match code: ABC-DEF");
     const r = site.requests[0];
     expect(r.body.then).toHaveLength(1);
@@ -206,6 +216,16 @@ describe("tempo, hosted", () => {
 });
 
 describe("solana, hosted", () => {
+  it("setup --hosted --new-owner refused while a budget is live: the retry names --hosted and the recorded site", async () => {
+    hostedSolana();
+    solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: SOL_AGENT, delegated: 1_000_000n });
+    const r = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--new-owner", "--wait", "--no-open"]);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.result.reason).toMatch(/a budget is live/);
+    expect(r.result.next).toBe(`revoke first (superstables budget revoke --rail solana, approved by ${SOL_OWNER}), then superstables budget setup --rail solana --hosted --site ${site.url} --new-owner`);
+    expect(site.requests).toHaveLength(0);
+  }, 60_000);
+
   it("setup --hosted links the agent with its ed25519 proof; the owner is the Solana address the site names", async () => {
     site.onPoll = (r) => { if (r.polls >= 2) Object.assign(r, { state: "linked", owner: SOL_OWNER }); };
     const r = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--wait", "--no-open"]);
@@ -225,7 +245,7 @@ describe("solana, hosted", () => {
     const first = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--grant", "0.05", "--fund"]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", action: "setup" });
-    expect(first.result.terms).toMatchObject({ title: "Link this agent, send it SOL for fees and approve a budget of 0.05 test USDC", amount: "0.05", unit: "USDC" });
+    expect(first.result.terms).toMatchObject({ title: "Add this agent, send it SOL for fees and approve a budget of 0.05 test USDC", amount: "0.05", unit: "USDC" });
     const r = site.requests[0];
     expect(r.body.then).toEqual([{ kind: "fund_agent", solana: { amount_atomic: "10000000" } }, { kind: "grant", solana: { amount_atomic: "50000" } }]);
     solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: null, delegated: 0n });
@@ -407,7 +427,7 @@ describe("solana, hosted", () => {
     site.linked = { [SOL_AGENT]: SOL_OWNER };
     const r = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--grant", "0.05"]);
     expect(r.code, r.stderr).toBe(3);
-    expect(r.result.reason).toMatch(new RegExp(`already linked on .* to the account ${SOL_OWNER}.*nothing was sent`));
+    expect(r.result.reason).toMatch(new RegExp(`already belongs to an account on .* \\(${SOL_OWNER}\\).*nothing was sent`));
     expect(r.result.next).toMatch(/superstables budget fund-agent --rail solana, then superstables budget grant --rail solana --amount A/);
   }, 60_000);
 });

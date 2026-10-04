@@ -50,6 +50,9 @@ if (HOSTED) {
   if (s.error) { console.error(`error: --site: ${s.error}`); process.exit(2); }
   SITE = s.origin as string;
 } else if (arg("site")) { console.error("error: --site goes with --hosted"); process.exit(2); }
+// The setup command that replaces the owner. On a hosted chain it names --hosted and the exact site: without them, setup
+// would ask on the page on this computer and move the chain's approvals there, or take SUPERSTABLES_SITE.
+const newOwnerCmd = (site: string | null | undefined) => `superstables budget setup --rail evm${chainFlag}${site ? ` --hosted --site ${site}` : ""} --new-owner`;
 useApprovalSite(SITE);
 const HOST = SITE ? new URL(SITE).host.replace(/^www\./, "") : "";
 
@@ -99,7 +102,7 @@ if (NEW_OWNER && recorded) {
   if (live === null || live > 0n) {
     const reason = live === null ? `could not read the allowance of the recorded owner ${recorded}; the owner is not replaced` : `a budget is live: the recorded owner ${recorded} still allows the agent ${usdc(live)} ${SYM}`;
     console.log(`REFUSED: ${reason}. Nothing was changed.`);
-    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: live === null ? `superstables budget doctor --rail evm${chainFlag}, then setup --new-owner again` : `revoke first (superstables budget revoke --rail evm${chainFlag}, approved by ${recorded}), then setup --new-owner` }));
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: live === null ? `superstables budget doctor --rail evm${chainFlag}, then ${newOwnerCmd(SITE)} again` : `revoke first (superstables budget revoke --rail evm${chainFlag}, approved by ${recorded}), then ${newOwnerCmd(SITE)}` }));
   }
   // nor while the agent key holds the budget token: recover returns it to the owner on record, which would then be the new one
   const reserve = GAS.isUsdc ? (CFG.gas.reserveMax ?? 0n) : 0n;
@@ -107,7 +110,7 @@ if (NEW_OWNER && recorded) {
   if (held === null || held > reserve) {
     const reason = held === null ? `could not read the ${SYM} the agent ${agentAddr} holds; the owner is not replaced` : `the agent ${agentAddr} holds ${usdc(held)} ${SYM} from the recorded owner's budget; recover returns it to the owner on record, so the owner is not replaced while it is there`;
     console.log(`REFUSED: ${reason}. Nothing was changed.`);
-    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: held === null ? `superstables budget doctor --rail evm${chainFlag}, then setup --new-owner again` : `return it first (superstables budget recover --rail evm${chainFlag}, approved by ${recorded}), then setup --new-owner` }));
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: held === null ? `superstables budget doctor --rail evm${chainFlag}, then ${newOwnerCmd(SITE)} again` : `return it first (superstables budget recover --rail evm${chainFlag}, approved by ${recorded}), then ${newOwnerCmd(SITE)}` }));
   }
   console.log(`replacing the recorded owner ${recorded} (no budget is live): the new owner connects on the page`);
 }
@@ -115,7 +118,7 @@ if (NEW_OWNER && recorded) {
 // None with --new-owner, or when the site changes: then only a fresh link the owner signs records an owner.
 const recordedSite = p.APPROVALS === "hosted" && p.SITE ? siteOrigin(p.SITE).origin : undefined;
 const prior: PriorLink | null = recorded && !NEW_OWNER && SITE && recordedSite === SITE && isSiteRequestId(p.LINK_ID) && typeof p.LINK_CODE === "string" && p.LINK_CODE ? { owner: recorded, linkId: p.LINK_ID, linkCode: p.LINK_CODE } : null;
-if (HOSTED && recordedSite && recordedSite !== SITE) console.log(`this chain's approvals are hosted on ${recordedSite}; moving them to ${SITE} takes a fresh link that the owner signs there`);
+if (HOSTED && recordedSite && recordedSite !== SITE) console.log(`this chain's approvals are hosted on ${recordedSite}; moving them to ${SITE} means adding the agent there, with a new owner proof`);
 let linked: { id: string; code: string } | undefined;
 // The steps after the link, built exactly as fund-agent and grant build them, and the block they must be mined after.
 let then: HostedStep[] | undefined;
@@ -148,7 +151,7 @@ if (BUNDLE) {
     process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: `superstables budget doctor --rail evm${chainFlag} checks the RPC; then run the same command again` }));
   }
   agentHad = await nativeBalance(agentAddr).catch(() => 0n);
-  console.log(`one link: the owner links this agent, then their wallet ${[FUND_AMT ? `sends it ${FUND_AMT} ${GAS.symbol} for gas` : "", CAP !== undefined ? `approves a budget of ${capWords(CAP)}` : ""].filter(Boolean).join(", then ")}. Transactions are checked from block ${startBlock + 1n} on.`);
+  console.log(`one approval link: the owner adds this agent, then their wallet ${[FUND_AMT ? `sends it ${FUND_AMT} ${GAS.symbol} for gas` : "", CAP !== undefined ? `approves a budget of ${capWords(CAP)}` : ""].filter(Boolean).join(", then ")}. Transactions are checked from block ${startBlock + 1n} on.`);
 }
 
 let ownerAddr: Address;
@@ -159,20 +162,20 @@ if (OWNER_KEY_FILE) {
   console.log(`owner address from --owner-key-file: ${ownerAddr}`);
   if (recorded && !same(recorded, ownerAddr) && !NEW_OWNER) {
     console.log(`REFUSED: ${PUBLIC_ENV} records owner ${recorded}, not ${ownerAddr}. Nothing was changed.`);
-    process.exit(emit("setup", 3, { state: "refused_precheck", reason: `another owner (${recorded}) is recorded`, owner: recorded, next: `superstables budget setup --rail evm${chainFlag} --new-owner replaces it (refused while a budget is live)` }));
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason: `another owner (${recorded}) is recorded`, owner: recorded, next: `${newOwnerCmd(recordedSite)} replaces it (refused while a budget is live)` }));
   }
 } else if (recorded && !NEW_OWNER && !HOSTED) {
   ownerAddr = recorded;
-  console.log(`${PUBLIC_ENV} already records owner ${ownerAddr} for this agent; not asking again. If this isn't your wallet, stop: superstables budget setup --rail evm${chainFlag} --new-owner replaces it`);
+  console.log(`${PUBLIC_ENV} already records owner ${ownerAddr} for this agent; not asking again. If this isn't your wallet, stop: ${newOwnerCmd(recordedSite)} replaces it`);
 } else if (HOSTED && then) {
   // one link: the owner links this agent, then the same page asks their wallet for the gas and the grant, in that order
   const what = [FUND_AMT ? "send it gas" : "", CAP !== undefined ? `approve a budget of ${usdc(CAP)} test ${SYM}` : ""].filter(Boolean);
   const r = await askConnect("setup", {
-    title: `Link this agent${what.length === 2 ? `, ${what[0]} and ${what[1]}` : ` and ${what[0]}`}`,
+    title: `Add this agent${what.length === 2 ? `, ${what[0]} and ${what[1]}` : ` and ${what[0]}`}`,
     amount: CAP !== undefined ? usdc(CAP) : FUND_AMT,
     unit: CAP !== undefined ? SYM : GAS.symbol,
     summary: [
-      `1. Link this agent to your ${HOST} account: your account's address is recorded as the budget owner on this computer.`,
+      `1. Add this agent to your ${HOST} account: your account's address is recorded as the budget owner on this computer.`,
       FUND_AMT ? `${2}. Send ${FUND_AMT} ${GAS.symbol} from your wallet to the agent for network fees.` : "",
       CAP !== undefined ? `${FUND_AMT ? 3 : 2}. Allow the agent to withdraw up to ${capWords(CAP)} from your wallet in total.` : "",
       "Your wallet asks you to approve each transaction in turn.",
@@ -186,7 +189,7 @@ if (OWNER_KEY_FILE) {
     enforced: CAP !== undefined ? grantEnforced(CAP) : [],
     notEnforced: CAP !== undefined ? GRANT_NOT_ENFORCED : [],
     notes: [
-      `You pick the match code your agent shows you before anything is linked or sent. The agent key stays on this computer; ${HOST} does not receive it.`,
+      `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on this computer; ${HOST} does not receive it.`,
       ...(FUND_AMT ? ["The agent controls the gas it receives and can send it elsewhere."] : []),
       ...(CAP !== undefined ? [`The grant gives permission; it does not transfer the budget now. Do not change the spending cap in your wallet. To end the budget at any time: ${REVOKE_HINT}`] : []),
       "You pay the network fee for each transaction, shown in your wallet.",
@@ -198,19 +201,19 @@ if (OWNER_KEY_FILE) {
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent: agentAddr, linked: false });
   if (outcome.status !== "connected") throw new Error(`unexpected approval outcome ${outcome.status}`);
   ownerAddr = outcome.address as Address;
-  console.log(`${HOST} linked this agent to the account ${ownerAddr}`);
+  console.log(`Agent added to the ${HOST} account ${ownerAddr}`);
   if (recorded && !same(recorded, ownerAddr) && !NEW_OWNER) {
     await closeOwnerPage(0);
     const sent = bundle?.steps.filter((s) => s.hash).map((s) => `${s.kind} ${s.hash}`) ?? [];
-    const reason = `${HOST} linked this agent to ${ownerAddr}, but this computer records the owner ${recorded}. Nothing was changed on this computer${sent.length ? `; that account's wallet reported ${sent.join(", ")}` : ""}`;
+    const reason = `${HOST} added this agent to the account ${ownerAddr}, but this computer records the owner ${recorded}. Nothing was changed on this computer${sent.length ? `; that account's wallet reported ${sent.join(", ")}` : ""}`;
     console.log(`REFUSED: ${reason}.`);
-    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `if ${ownerAddr} is the right owner: superstables budget setup --rail evm${chainFlag} --hosted --new-owner (refused while a budget is live). If not, remove this agent from that account on ${HOST}${sent.length ? ", and check that account's wallet activity" : ""}` }));
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `if ${ownerAddr} is the right owner: ${newOwnerCmd(SITE)} (refused while a budget is live). If not, remove this agent from that account on ${HOST}${sent.length ? ", and check that account's wallet activity" : ""}` }));
   }
 } else if (HOSTED) {
   // the owner links this agent to their account on the site; the account's address becomes the owner on record
   const r = await askConnect("setup", {
-    title: `Link this agent to your ${HOST} account`,
-    summary: `Sign in to ${HOST} with your wallet and link this agent to your account. Your account's address is recorded as the budget owner on this computer. This does not grant a budget or send a transaction.`,
+    title: `Add this agent to your ${HOST} account`,
+    summary: `Sign in to ${HOST} with your wallet and add this agent to your account. Your account's address is recorded as the budget owner on this computer. This does not grant a budget or send a transaction.`,
     rows: [
       { label: "Your agent", value: agentAddr, mono: true },
       { label: "Chain", value: `${CFG.label} (testnet)` },
@@ -219,7 +222,7 @@ if (OWNER_KEY_FILE) {
     enforced: [],
     notEnforced: [],
     notes: [
-      `Grants, revokes and gas for this agent are then approved on ${HOST}, in your wallet. You pick the match code your agent shows you before anything is linked or sent.`,
+      `Grants, revokes and gas for this agent are then approved on ${HOST}, in your wallet. You pick the match code your agent shows you before the agent is added or anything is sent.`,
       `The agent key stays on this computer; ${HOST} does not receive it. Your signing key stays in your wallet.`,
     ],
   }, "", NEW_OWNER ? recorded : undefined, undefined, { prior, newOwner: NEW_OWNER });
@@ -228,12 +231,12 @@ if (OWNER_KEY_FILE) {
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent: agentAddr });
   if (outcome.status !== "connected") throw new Error(`unexpected approval outcome ${outcome.status}`);
   ownerAddr = outcome.address as Address;
-  console.log(`${HOST} linked this agent to the account ${ownerAddr}`);
+  console.log(`Agent added to the ${HOST} account ${ownerAddr}`);
   if (recorded && !same(recorded, ownerAddr) && !NEW_OWNER) {
     await closeOwnerPage(0);
-    const reason = `${HOST} linked this agent to ${ownerAddr}, but this computer records the owner ${recorded}. Nothing was changed on this computer`;
+    const reason = `${HOST} added this agent to the account ${ownerAddr}, but this computer records the owner ${recorded}. Nothing was changed on this computer`;
     console.log(`REFUSED: ${reason}.`);
-    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `if ${ownerAddr} is the right owner: superstables budget setup --rail evm${chainFlag} --hosted --new-owner (refused while a budget is live). If not, remove this agent from that account on ${HOST}` }));
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `if ${ownerAddr} is the right owner: ${newOwnerCmd(SITE)} (refused while a budget is live). If not, remove this agent from that account on ${HOST}` }));
   }
 } else {
   const { handle, outcome } = await askConnect("setup", {
@@ -266,7 +269,7 @@ if (same(ownerAddr, agentAddr)) {
 // (LINK_ID, LINK_CODE: a later "already linked" answer is checked against them). Asked on this computer: none of them.
 const replaced = recorded && !same(recorded, ownerAddr) ? recorded : undefined;
 const asked = !OWNER_KEY_FILE && !(recorded && !NEW_OWNER && !HOSTED);
-if (HOSTED && !linked) throw new Error("a hosted link without its id and code");
+if (HOSTED && !linked) throw new Error("an add-agent request without its id and code");
 const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_EXPIRY", "B4_REVOKED_AT"] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : [])];
 writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, drop);
 if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${ownerAddr}`);
@@ -321,7 +324,7 @@ async function finishBundle(): Promise<never> {
       const why = s.state === "rejected"
         ? s.reasonCode === "cap_above_limit" ? `refused: the budget is above the limit set on the owner's ${HOST} account${s.reason ? ` (${s.reason})` : ""}` : `rejected${s.reason ? `: ${s.reason}` : " by the owner"}`
         : s.state === "skipped" ? "not asked, because an earlier step did not complete"
-        : s.state === "expired" ? "not approved before the link expired"
+        : s.state === "expired" ? "not approved before the approval link expired"
         : s.state === "cancelled" ? "withdrawn on superstables.com when this command stopped waiting, before the owner's wallet was asked"
         : `${s.state}${s.reason ? `: ${s.reason}` : ""}`;
       reports.push({ kind: s.kind, state: "refused_precheck", amount, reason: `nothing was sent: ${why}`, reasonCode: s.reasonCode ?? undefined });
@@ -337,22 +340,22 @@ async function finishBundle(): Promise<never> {
   const line = (r: Report) => `${name(r.kind)}: ${r.state === "settled" ? `${r.kind === "grant" ? `${r.amount} ${SYM} approved` : `${r.amount} ${GAS.symbol} sent`} (tx ${r.tx})` : r.tx ? `${r.state} (tx ${r.tx}): ${r.reason}` : `${r.state}: ${r.reason}`}`;
   // the RESULT's reason is one short line (the dispatcher keeps 300 characters): the hashes are in steps and tx
   const short = (r: Report) => `${name(r.kind)}: ${r.state === "settled" ? (r.kind === "grant" ? `${r.amount} ${SYM} approved` : `${r.amount} ${GAS.symbol} sent`) : r.state === "refused_precheck" ? (r.reason ?? "").slice(0, 120) : `${r.state}, ${(r.reason ?? "").slice(0, 110)}`}`;
-  const summary = ["linked: yes", ...reports.map(short)].join("; ");
+  const summary = ["agent added: yes", ...reports.map(short)].join("; ");
   for (const r of reports) console.log(`  ${line(r)}`);
   const txs = Object.fromEntries(reports.filter((r) => r.tx).map((r) => [r.kind === "grant" ? "grant" : "fundAgent", r.tx]));
   const base = { owner: ownerAddr, agent: agentAddr, linked: true, steps: reports, tx: txs, cap: grantDone ? usdc(CAP!) : undefined, allowance: grantDone?.allowance !== undefined ? usdc(grantDone.allowance) : undefined, sent: reports.find((r) => r.kind === "fund_agent" && r.state === "settled") ? FUND_AMT : undefined, publicFile: PUBLIC_ENV, agentKeyFile: AGENT_ENV };
   const first = reports.find((r) => r.state !== "settled");
   if (!first) {
-    console.log(`\nDone with one link: the agent is linked${FUND_AMT ? ", has gas" : ""}${CAP !== undefined ? ` and has a budget of ${usdc(CAP)} ${SYM}` : ""}.`);
+    console.log(`\nDone with one approval link: the agent was added to the account${FUND_AMT ? ", has gas" : ""}${CAP !== undefined ? ` and has a budget of ${usdc(CAP)} ${SYM}` : ""}.`);
     process.exit(emit("setup", 0, { state: "ok", ...base, next: CAP !== undefined ? `none: the agent can buy under the budget. superstables budget status --rail evm${chainFlag} shows what is left` : `superstables budget grant --rail evm${chainFlag} --amount A, only when the owner asks for a budget` }));
   }
   const missing = reports.filter((r) => r.state !== "settled");
   const later = missing.map((r) => (r.kind === "grant" ? `superstables budget grant --rail evm${chainFlag} --amount A` : `superstables budget fund-agent --rail evm${chainFlag}`)).join(" and ");
   const next = first.state === "unknown"
-    ? `superstables budget status --rail evm${chainFlag} and the owner's wallet activity: read whether ${first.kind === "grant" ? "the grant" : "the gas"} landed before running anything again. The agent is linked`
+    ? `superstables budget status --rail evm${chainFlag} and the owner's wallet activity: read whether ${first.kind === "grant" ? "the grant" : "the gas"} landed before running anything again. The agent has been added to the account`
     : first.state === "mismatch"
       ? first.kind === "grant" ? `the chain shows another approval than planned: the owner revokes it (superstables budget revoke --rail evm${chainFlag}); grant again only if the owner asks` : `check the owner's wallet activity, then superstables budget doctor --rail evm${chainFlag}`
-      : `the agent is linked${reports.some((r) => r.kind === "fund_agent" && r.state === "settled") ? " and has gas" : ""}. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: ${later}`;
+      : `the agent has been added to the account${reports.some((r) => r.kind === "fund_agent" && r.state === "settled") ? " and has gas" : ""}. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: ${later}`;
   const exit = first.state === "unknown" ? 5 : first.state === "failed" ? 1 : 3;
   process.exit(emit("setup", exit, { state: first.state, ...base, reason: summary, next }));
 }

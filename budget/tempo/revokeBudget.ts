@@ -32,7 +32,7 @@ const { values: args } = parseCli({
     key: { type: 'string', metavar: 'address', desc: 'Revoke this key address instead (e.g. a throwaway key)', check: addressCheck },
     'lookback-blocks': { type: 'string', metavar: 'n', desc: 'How far back to look for channels (default 300000, about 50 hours)', check: intCheck(1) },
     timeout: { type: 'string', metavar: 'seconds', desc: 'How long the approval link stays open (default 600)', check: intCheck(1) },
-    'no-open': { type: 'boolean', desc: 'Do not open the link in the default browser' },
+    'no-open': { type: 'boolean', desc: 'Do not open the approval link in the default browser' },
     'owner-key-file': { type: 'string', metavar: 'path', desc: 'Tests and automation only: sign with this owner key file (mode 600) instead of the wallet' },
   },
   examples: ['npx tsx budget/tempo/revokeBudget.ts --agent 2'],

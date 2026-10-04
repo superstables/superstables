@@ -29,7 +29,7 @@ superstables.com when the chain was set up with --hosted.
 
   --amount <usdc>          decimal USDC, at most 6 decimals (required)
   --timeout <s>            how long the approval link stays open (default 600)
-  --no-open                do not open the link in the default browser
+  --no-open                do not open the approval link in the default browser
   --owner-key-file <path>  tests and automation only: sign with this owner key file (mode 600)
   Not supported, refused with exit 2: --expiry, --expiry-seconds, --sellers, --period.
   The chain has no expiry or seller list for an SPL delegate. Revoke by your deadline.

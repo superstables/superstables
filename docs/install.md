@@ -12,7 +12,7 @@ budget once. Testnet only: test USDC, or pathUSD for Tempo budgets. No real mone
 - For the owner, a browser wallet on the computer that runs the client: MetaMask or another EVM
   browser wallet, or a Solana wallet for a Solana budget. The approval pages are served on
   `127.0.0.1`, so the wallet is a browser extension on that computer. Over SSH, the owner forwards
-  the page's port first (`ssh -L PORT:127.0.0.1:PORT user@host`, with the port from the link and your SSH destination).
+  the page's port first (`ssh -L PORT:127.0.0.1:PORT user@host`, with the port from the approval link and your SSH destination).
 
 The client runs on your computer and contacts sellers, the facilitators that settle x402 payments,
 testnet RPCs, the Superstables index and, when switched on, the hosted demo catalogue.
@@ -93,7 +93,7 @@ the bundled packages and their licences.
 
 For buy once, the owner runs `setup` once. It creates `~/.superstables`, writes a starting spend
 policy (`policy.yaml`, at most 0.05 USDC per payment and 1 USDC per day) and prints the command
-that connects an agent. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
+that sets up your agent app. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
 again keeps the existing policy.
 
 ```bash
@@ -127,10 +127,10 @@ see [Budget](budget.md).
 
 In browser mode there is no approval process to start. When a payment needs approval, the process that asked for it (the
 MCP server, or `superstables pay`) serves the approval page on `127.0.0.1:4412` and hands the agent
-a link of the form `http://127.0.0.1:4412/approve/<id>`. If another payment is already waiting on
-4412, the page takes a free port instead, and the link names it.
+an approval link of the form `http://127.0.0.1:4412/approve/<id>`. If another payment is already waiting on
+4412, the page takes a free port instead, and the approval link names that port.
 
-## Connect an agent
+## Set up your agent app
 
 An agent can use the client in two ways: through the skill and a shell, or through MCP.
 
@@ -334,8 +334,8 @@ have the owner approve it, then check that `superstables budget status --rail <r
 says `revoked: true`. For a named Tempo key, add `--agent <label>` to both.
 
 For each chain you set up with `setup --hosted`, also remove the agent on your account page on that
-site: that is what unlinks it from your account, and no command does it. Revoking on chain stops the
-spending but leaves the agent linked.
+site: that is what removes it from your account, and no command does it. Revoking on chain stops the
+spending but leaves the agent on your account.
 
 Then remove the MCP server (`claude mcp remove superstables`, or delete its entry from your MCP
 client's configuration), delete the skill folder if you installed it, and delete `~/.superstables`

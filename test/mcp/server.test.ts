@@ -419,7 +419,7 @@ describe("the Superstables MCP server in browser mode", () => {
 
     expect(started.state).toBe("awaiting_approval");
     expect(started.approval_url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/approve\/[0-9a-f]{32}$/);
-    expect(started.message).toContain("Open this link to review and sign in MetaMask:");
+    expect(started.message).toContain("Open this approval link to review and sign in MetaMask:");
     expect(started.message).toContain(started.approval_url as string);
     expect(started.message).toContain("Nothing is signed yet");
     expect(started.receipt).toBeUndefined();

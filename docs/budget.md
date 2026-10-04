@@ -43,10 +43,10 @@ expiry, a period and a seller list on chain; see the [security model](security.m
 ## Who runs what
 
 The **owner** runs `setup`, `fund-agent`, `grant`, `revoke` and `recover`. When the wallet is
-needed, the command prints a link to a page on `127.0.0.1` that shows the terms. Setup asks the
+needed, the command prints an approval link to a page on `127.0.0.1` that shows the terms. Setup asks the
 owner to sign a message; funding, granting and revoking ask the wallet to sign and submit a
 transaction. The **agent** runs `status`, `preflight`, `buy` and `reconcile`. It may start an owner
-command and show the owner the link, but never approves for the owner.
+command and show the owner the approval link, but never approves for the owner.
 
 The output below is from a run on Arc Testnet, with some fields shortened (`...`). Addresses,
 balances, transaction hashes and ids will differ: use the values from your own results.
@@ -199,10 +199,10 @@ superstables budget setup --rail tempo --hosted
 superstables budget setup --rail solana --hosted
 ```
 
-Setup then prints a link and a match code. The owner opens the link, signs in with their wallet the
-first time (a message, no fee), picks the same code and links the agent to their superstables.com
+Setup then prints an approval link and a match code. The owner opens it, signs in with their wallet
+the first time (a message, no fee), picks the same code and adds the agent to their superstables.com
 account. From then on, `fund-agent`, `grant` and `revoke` on that chain ask through the site, each
-with its own link and code, and the owner approves the transaction in their wallet there. `recover`
+with its own approval link and code, and the owner approves the transaction in their wallet there. `recover`
 still uses the page on this computer. The agent key stays here and the owner's key stays in their wallet. Purchases need no approval from
 the site: the client pays the seller directly. On Solana the owner also connects a Solana wallet on
 the site's page; that address is the owner on record, and it signs each transaction the site builds.
@@ -211,7 +211,7 @@ This is optional. Approvals on this computer remain the default and need no acco
 approvals need a superstables.com account, or a compatible deployment the owner names with `--site`
 or `SUPERSTABLES_SITE`. An origin outside superstables.com and its subdomains also needs the owner to
 set `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own environment; an agent never sets it.
-After picking the match code, the owner signs the link in their wallet, and the command checks that
+After picking the match code, the owner signs the owner-proof message in their wallet, and the command checks that
 signature before it records anyone as the owner. What such a site must do is in
 [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).
 
@@ -226,7 +226,7 @@ with nothing to revoke, returns its final result at once. `--wait` makes it bloc
 RESULT {"ok":true,"command":"grant",...,"state":"waiting_owner","final":false,"id":"oa-20261001231446-3c6ea55b","url":"http://127.0.0.1:33847/owner/013825489bc9de0494cd76603c7ff9e6","expires":"2026-10-01T23:15:10.110Z","terms":{...},"next":"show the owner the exact url and terms; ..."}
 ```
 
-`waiting_owner` is not an approval. The agent sends the `RESULT`'s `message_for_owner` (the link,
+`waiting_owner` is not an approval. The agent sends the `RESULT`'s `message_for_owner` (the approval link,
 the match code for a hosted approval, the amount and network) as its reply to the owner, and ends
 its turn there: some agent hosts show the owner
 nothing of a turn until it ends. When the owner says they have approved, it checks:
@@ -235,14 +235,14 @@ nothing of a turn until it ends. When the owner says they have approved, it chec
 superstables budget wait --id <id> --shown
 ```
 
-`--shown` says the link was written in a reply; without it, `wait` refuses.
+`--shown` says the approval link was written in a reply; without it, `wait` refuses.
 
 `<id>` is the `id` in the command's result. Each call waits up to 30 seconds (`--timeout`, at most
 300); once the approval is final, it prints the owner command's own result. If it still says
 `waiting_owner`, say so in one line and end the turn again.
 
-If the link expires before the wallet is asked to send, the command ends `refused_precheck` (exit 3)
-with nothing sent: run it again for a new link. If the wallet was already asked, the outcome can be
+If the approval link expires before the wallet is asked to send, the command ends `refused_precheck`
+(exit 3) with nothing sent: run it again for a new one. If the wallet was already asked, the outcome can be
 unknown (exit 5): check the wallet's activity and
 `superstables budget status --rail evm --chain arc-testnet` before trying again. Run one owner
 command at a time per rail and chain.
@@ -251,10 +251,10 @@ command at a time per rail and chain.
 
 | Exit | Meaning | What to do |
 | --- | --- | --- |
-| 0 | Done, or `waiting_owner` with `final: false` | On `waiting_owner`, write the link in a reply and end your turn; run `wait --id <id> --shown` when the owner says they have approved |
+| 0 | Done, or `waiting_owner` with `final: false` | On `waiting_owner`, write the approval link in a reply and end your turn; run `wait --id <id> --shown` when the owner says they have approved |
 | 1 | Failed, including a refusal by the chain | Read `reason` and `next`; do not retry blindly |
 | 2 | Bad input. Nothing was done | Fix the command; read its `--help` |
-| 3 | Refused: no budget, over `--max`, the owner rejected it, the link expired. A refused new purchase signs nothing; a repeated `--op` may be a purchase already paid or still unresolved, so check `paid` and `tx`. For an owner command, it can also mean a transaction that confirmed but differs from the plan | Read `reason`, `tx` and `next`; tell the owner. Do not raise `--max` |
+| 3 | Refused: no budget, over `--max`, the owner rejected it, the approval link expired. A refused new purchase signs nothing; a repeated `--op` may be a purchase already paid or still unresolved, so check `paid` and `tx`. For an owner command, it can also mean a transaction that confirmed but differs from the plan | Read `reason`, `tx` and `next`; tell the owner. Do not raise `--max` |
 | 4 | Paid, the seller did not deliver | Do not pay again; report the `tx` |
 | 5 | Outcome unknown | For a purchase, `superstables budget reconcile --rail evm --chain C --op ID`; never buy it again under a new id. For an owner command, `status` and the wallet's activity |
 

@@ -14,6 +14,7 @@ import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile } from "./secret-file.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
 import { DEFAULT_RPC, jsonRpc, rpcFromEnv } from "./rpc.mjs";
+import { siteOrigin } from "./site.mjs";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
 
@@ -145,6 +146,16 @@ function readEnv(path, what) {
 const keyShaped = (v) => /^0x[0-9a-fA-F]{64}$/.test(v) || /^[1-9A-HJ-NP-Za-km-z]{64,100}$/.test(v);
 const mode = (path) => (statSync(path).mode & 0o777).toString(8);
 
+/**
+ * The setup command that replaces the recorded owner. On a hosted chain (APPROVALS=hosted in the public file) it names
+ * --hosted and the recorded site: without them, setup would move the chain's approvals to the page on this computer.
+ */
+function newOwnerCmd(r, f, pub) {
+  const base = r.newOwner ?? `superstables budget setup --rail ${f.rail} --new-owner`;
+  const site = pub.APPROVALS === "hosted" && pub.SITE ? siteOrigin(pub.SITE) : null;
+  return site?.origin && !site.error ? base.replace(/ --new-owner$/, ` --hosted --site ${site.origin} --new-owner`) : base;
+}
+
 /** Runs every check for f.rail (and f.chain, f.agent), prints one line per check to stderr, returns the number that failed. */
 export async function runDoctor(f) {
   const r = RAILS[f.rail](f);
@@ -170,7 +181,7 @@ export async function runDoctor(f) {
   const agentAddress = pub[r.agentAddr] ?? agent[r.agentAddr] ?? owner[r.agentAddr];
   // Setup proves control of an address, not who the person is: show the owner on record so a person who is not it stops.
   process.stderr.write(ownerAddress
-    ? `\n  OWNER (recorded): ${ownerAddress}\n  If this isn't your wallet, stop: do not approve grants for it. ${r.newOwner ?? `superstables budget setup --rail ${f.rail} --new-owner`} replaces it (refused while a budget is live).\n\n`
+    ? `\n  OWNER (recorded): ${ownerAddress}\n  If this isn't your wallet, stop: do not approve grants for it. ${newOwnerCmd(r, f, pub)} replaces it (refused while a budget is live).\n\n`
     : `\n  OWNER (recorded): none yet. Setup records whoever connects: the owner runs it, or watches it run.\n\n`);
   if (existsSync(agentKeyFile(f.rail))) {
     const problems = r.ownerSecrets.filter((n) => agent[n]).map((n) => `defines ${n}`);

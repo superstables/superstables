@@ -75,14 +75,37 @@ export function readApproval(id) {
   }
 }
 
-/** Store a record (mode 600). A buy-once purchase has no worker: its record is made here (once.mjs). */
+/**
+ * Store a record (mode 600). A buy-once purchase has no worker: its record is made here (once.mjs). A final record stays
+ * final: a whole new record that is not final does not replace it. Through writeRecord, like every write.
+ */
 export function saveApproval(record) {
-  return withRecordLock(record.id, () => {
-    // a final record stays final: a whole new record that is not final does not replace it
-    const now = readApproval(record.id);
-    if (now?.final && !record.final) return now;
-    return writeApproval(record);
+  return writeRecord(record.id, (now) => (now?.final && !record.final ? null : structuredClone(record)));
+}
+
+/**
+ * Change a record under its lock, read, decided and written in one step: `fn` gets the record as stored now and returns
+ * the patch (null: no change). A final record changes only by another final result, as with every other write.
+ */
+export function updateApproval(id, fn) {
+  return update(id, fn);
+}
+
+/**
+ * Finish a record under its lock, deciding from the record as stored now: `decide` gets it (never a final one) and
+ * returns { code, result } to store, or null to store nothing. The same as recordFinal otherwise. Returns the record, and
+ * whether this call made it final.
+ */
+export function recordFinalWith(id, decide) {
+  let decided = null;
+  const record = update(id, (before) => {
+    if (before.final) return null;
+    decided = decide(before);
+    if (!decided) return null;
+    return { state: "final", endedAt: new Date().toISOString(), final: { code: decided.code, result: decided.result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
   });
+  if (record && decided) release(record.rail, record.chain, id);
+  return { record, stored: Boolean(record && decided) };
 }
 
 /**
@@ -196,29 +219,90 @@ function withRecordLock(id, fn) {
   }
 }
 
-/** Write a record whole (call it holding its lock). A final record never keeps an access token, whoever wrote it. */
-function writeApproval(record) {
+/**
+ * Write a record whole to the file of `id`, the record whose lock the caller holds: the destination is never taken from the
+ * record itself. A final record never keeps an access token, whoever wrote it.
+ */
+function writeApproval(id, record) {
   ensureDir();
   const out = record.final && record.hosted?.token ? { ...record, hosted: { ...record.hosted, token: undefined } } : record;
-  const tmp = `${recordFile(out.id)}.${process.pid}.tmp`;
+  const tmp = `${recordFile(id)}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(out, null, 2) + "\n", { mode: 0o600 });
-  renameSync(tmp, recordFile(out.id));
+  renameSync(tmp, recordFile(id));
   return JSON.parse(JSON.stringify(out));
+}
+
+/**
+ * The one way a record is written; saveApproval and update (with updateApproval, recordFinal and recordFinalWith on top of
+ * it) all go through here. Under the record's lock it loads the record as stored and takes a deep copy of its payment
+ * evidence (`seen`) as the baseline, before anything else runs. `compute` gets its own deep copy of the stored record (or
+ * null), so nothing it does can change that baseline, and returns the whole record to write, or null for no change. The
+ * result is refused, and the stored record returned unchanged, unless its `seen` keeps all of the baseline (seenGrows): a
+ * result with no `seen`, or `seen: undefined`, counts as removing it. Refusing, rather than quietly unioning the stored
+ * evidence back in, keeps this module free of how evidence merges (once.mjs owns that), and the caller's own record is
+ * never stored altered behind its back. The result must be the locked record (`id` unchanged), and it is written to that
+ * record's file only.
+ */
+function writeRecord(id, compute) {
+  return withRecordLock(id, () => {
+    const stored = readApproval(id);
+    const baseline = stored && stored.seen !== undefined ? structuredClone(stored.seen) : undefined;
+    const next = compute(stored ? structuredClone(stored) : null);
+    if (!next) return stored;
+    // a write stays on the record it locked: a result that names another record is refused
+    if (next.id !== id) return stored;
+    // payment evidence only grows, whoever writes and whatever record they pass
+    if (baseline !== undefined && !seenGrows(baseline, next.seen)) return stored;
+    recordTestHook.inLock?.(id);
+    return writeApproval(id, next);
+  });
 }
 
 /** Change a record under its lock: `patch`, or a function of the record that returns the patch (null: no change). */
 function update(id, patch) {
   if (!isApprovalId(id)) return null;
-  return withRecordLock(id, () => {
-    const record = readApproval(id);
+  return writeRecord(id, (record) => {
     if (!record) return null;
     const p = typeof patch === "function" ? patch(record) : patch;
-    if (!p) return record;
-    // a final record changes only by another final result (recordFinal): no write makes it not final again
-    if (record.final && !p.final) return record;
-    recordTestHook.inLock?.(id);
-    return writeApproval({ ...record, ...p });
+    if (!p) return null;
+    // a final record changes only by another final result (recordFinal), or by more payment evidence (`seen` alone, which
+    // only grows): no write makes it not final again
+    if (record.final && !p.final && Object.keys(p).some((k) => k !== "seen")) return null;
+    return { ...record, ...p };
   });
+}
+
+/**
+ * Whether `next` keeps everything `prev` holds of a purchase's payment evidence (`seen`, budget/once.mjs): every hash, every
+ * flag that was set, and every payer, which may only stay the same or become null (a conflict). EVM hashes and addresses are
+ * compared in any letter case (one key per transaction), so writing a record's keys in their canonical form passes.
+ */
+export function seenGrows(prev, next) {
+  if (!prev) return true;
+  if (!next || typeof next !== "object") return false;
+  const tx = (t) => (typeof t === "string" && /^0x[0-9a-fA-F]{64}$/.test(t) ? t.toLowerCase() : t);
+  const addr = (a) => (typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a) ? a.toLowerCase() : a);
+  const hashes = new Set((next.hashes ?? []).map(tx));
+  if (!(prev.hashes ?? []).every((h) => hashes.has(tx(h)))) return false;
+  for (const flag of ["named", "paid", "moved"]) if (prev[flag] && !next[flag]) return false;
+  // payers by canonical key; two spellings of one transaction with two payers are a conflict (null), as in once.mjs
+  const merged = (payers) => {
+    const out = {};
+    for (const [h, who] of Object.entries(payers ?? {})) {
+      const k = tx(h);
+      const w = who === null ? null : addr(who);
+      out[k] = out[k] === undefined ? w : out[k] === w ? w : null;
+    }
+    return out;
+  };
+  const before = merged(prev.payers);
+  const after = merged(next.payers);
+  for (const [k, who] of Object.entries(before)) {
+    if (!(k in after)) return false;
+    // a payer stays, or becomes null (a conflict); null never becomes an address again
+    if (after[k] !== null && after[k] !== who) return false;
+  }
+  return true;
 }
 
 /** The start identity to record with a pid (procs.mjs), or null when it cannot be read. */
@@ -625,17 +709,17 @@ export async function pageState(url) {
 /** What the page's status means for a caller who is waiting. On solana the wallet only signs and the command sends. */
 export function pageWords(page, rail) {
   switch (page?.status) {
-    case "pending": return "waiting for the owner to open the link and connect their wallet";
+    case "pending": return "waiting for the owner to open the approval link and connect their wallet";
     case "ready": return "the owner account is selected; waiting for wallet approval";
     case "sending": return rail === "solana" ? "the owner signed in the wallet; the command is sending it" : "a wallet transaction was requested; submission is not confirmed yet";
     case "sent": return "a transaction id is available; the command is checking it on chain";
     case "connected": return "the owner connected and signed; the command is finishing";
-    case "hosted:awaiting_owner": if (page.linked) return "the owner linked this agent; waiting for them to approve the next transaction in their wallet, on the same page";
-      return page.walletAsked ? "the owner's wallet was asked to send; no transaction is reported yet" : "waiting for the owner to open the link on superstables.com, signed in with their wallet, and pick the match code";
+    case "hosted:awaiting_owner": if (page.linked) return "the owner added this agent to their account; waiting for them to approve the next transaction in their wallet, on the same page";
+      return page.walletAsked ? "the owner's wallet was asked to send; no transaction is reported yet" : "waiting for the owner to open the approval link on superstables.com, signed in with their wallet, and pick the match code";
     case "hosted:sending": return "the owner's wallet was asked to send; no transaction is reported yet";
     case "hosted:unknown": return "superstables.com cannot tell whether the wallet sent it; the command is finishing and the chain must be checked";
-    case "hosted:linked": return "the owner linked this agent; the command is finishing";
-    case "hosted:queued": return "the owner linked this agent; the next wallet step has not been asked yet";
+    case "hosted:linked": return "the owner added this agent to their account; the command is finishing";
+    case "hosted:queued": return "the owner added this agent to their account; the next wallet step has not been asked yet";
     case "hosted:sent": case "hosted:confirmed": case "hosted:failed": return "a transaction hash was reported; the command is checking it on chain";
     case "hosted:unreachable": return "waiting for the owner (superstables.com did not answer just now)";
     case undefined: case null: return "waiting for the owner";
@@ -671,6 +755,8 @@ function lastPageStatus(url) {
  */
 function abandoned(record, hostedCancelled = false) {
   const page = lastPageStatus(record.url);
+  // the logged value stays as written (`connected`, `linked`); the reason says what it means for this approval
+  const last = page.status === "connected" ? (record.hosted ? "agent added" : "owner connected") : page.status === "linked" ? "agent added" : page.status;
   const base = { command: record.command, rail: record.rail, chain: record.chain };
   const status = `superstables budget status --rail ${record.rail}${record.chain ? ` --chain ${record.chain}` : ""}`;
   // a link moves no funds, unless wallet steps follow it on the same page (setup --hosted --grant/--fund)
@@ -679,9 +765,9 @@ function abandoned(record, hostedCancelled = false) {
     return { code: 5, result: { ok: false, ...base, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason: "the background approval stopped while its request may still be open on superstables.com; the owner may still approve it there" } };
   }
   if (page.sending) {
-    return { code: 5, result: { ok: false, ...base, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason: `the background approval stopped after the wallet was asked to send (last page state: ${page.status})` } };
+    return { code: 5, result: { ok: false, ...base, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason: `the background approval stopped after the wallet was asked to send (last page state: ${last})` } };
   }
-  return { code: 3, result: { ok: false, ...base, state: "refused_precheck", id: record.id, url: record.url, next: "no submission is recorded. Check wallet activity and budget status; retry only at the owner's request", reason: `the background approval stopped without a recorded submission (last page state: ${page.status ?? "none"})` } };
+  return { code: 3, result: { ok: false, ...base, state: "refused_precheck", id: record.id, url: record.url, next: "no submission is recorded. Check wallet activity and budget status; retry only at the owner's request", reason: `the background approval stopped without a recorded submission (last page state: ${last ?? "none"})` } };
 }
 
 /**

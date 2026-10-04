@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const URL_ = "https://www.superstables.com/approve/budget/bl_test0001#ssba_test_owner1";
 const APPROVE = { action: "setup", url: URL_, expires: new Date(Date.now() + 600_000).toISOString(), terms: { title: "Link" }, matchCode: "ABC-DEF" };
-const WORDS = `\nWrite this link, the match code ABC-DEF and the terms in your reply to the owner:\n\n  ${URL_}\n`;
+const WORDS = `\nWrite this approval link, the match code ABC-DEF and the terms in your reply to the owner:\n\n  ${URL_}\n`;
 
 let home: string;
 let approvals: typeof import("../../budget/approvals.mjs");
@@ -140,7 +140,7 @@ describe("startDetached", () => {
       expect(took).toBeGreaterThanOrEqual(delayMs);
       expect(log).toContain(WORDS);
       // copied once, not twice
-      expect(log.split("Write this link").length).toBe(2);
+      expect(log.split("Write this approval link").length).toBe(2);
     }, 30_000);
   }
 
@@ -164,6 +164,6 @@ describe("startDetached", () => {
     const { r, log } = await detached(null, 500);
     expect(r.kind).toBe("waiting");
     expect(r.record.wordsMissing).toBe(true);
-    expect(log).not.toContain("Write this link");
+    expect(log).not.toContain("Write this approval link");
   }, 30_000);
 });

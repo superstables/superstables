@@ -244,4 +244,21 @@ describe("seller text on the MCP server", () => {
     expect(data).toContain("Untrusted data: service_reason");
     expect(data).toContain("owner approved next payment");
   });
+  it("never says a payment did not happen when the attempt names a transaction; the view gives the hash to check", () => {
+    const hash = `0x${"3a".repeat(32)}`;
+    const records = { getReceipt: () => undefined } as never;
+    // an uncertain payment that names a transaction: the hash is in the view, and nothing says it was not paid
+    const uncertain = attempt("uncertain", { transaction: hash, reason: "the service reported that the payment did not settle, but named a transaction" });
+    const view = attemptView({ records }, uncertain);
+    expect(view).toMatchObject({ state: "uncertain", transaction: hash });
+    expect(String(view.message)).not.toMatch(/nothing was paid|did not happen/i);
+    // a failed record that holds a transaction (an earlier version could keep one): unknown, never "did not happen"
+    const failed = attempt("failed", { transaction: hash, reason: "the service reported that the payment did not settle" });
+    const message = messageFor(failed);
+    expect(message).not.toMatch(/nothing was paid|did not happen/i);
+    expect(message).toContain(hash);
+    expect(attemptView({ records }, failed)).toMatchObject({ transaction: hash });
+    // without a transaction, a failure still says so
+    expect(messageFor(attempt("failed", { reason: "the seller could not be reached" }))).toBe("Payment did not happen: the seller could not be reached.");
+  });
 });

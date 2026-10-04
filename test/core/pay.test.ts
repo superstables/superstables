@@ -9,12 +9,12 @@ import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { encodePaymentResponseHeader } from "@x402/core/http";
+import { decodePaymentResponseHeader, encodePaymentResponseHeader } from "@x402/core/http";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
 import { PaymentEngine, QuoteUsedError, recheckChain, shownAttempt, shownReceipt } from "../../src/core/pay.js";
 import { paymentReceipt, startFakeBaseSepolia } from "../helpers/fake-base-sepolia.js";
-import { messageFor } from "../../src/mcp/server.js";
+import { attemptView, messageFor } from "../../src/mcp/server.js";
 import { Records } from "../../src/core/records.js";
 import { quote } from "../../src/core/quote.js";
 import { WalletSigner } from "../../src/core/signer/wallet.js";
@@ -492,6 +492,51 @@ describe("PaymentEngine", () => {
     const later = await recheckChain(s.records, pending.id, chain.url);
     expect(later).toMatchObject({ state: "settled", chain: "verified" });
     expect(s.records.getReceipt(pending.receiptId ?? "")?.chain).toBe("verified");
+  });
+
+  it("a failed settlement that names a transaction is never 'nothing was paid': the chain decides", async () => {
+    const s = await stack();
+    const chain = await startFakeBaseSepolia();
+    open.push(chain);
+    const fromFacilitator = () => {
+      const a = s.facilitator.lastAuthorization!;
+      return paymentReceipt({ payer: a.from, to: a.to, value: a.value, nonce: a.nonce });
+    };
+    const engine = new PaymentEngine({
+      records: s.records,
+      policy: DEFAULT_POLICY,
+      signer: new WalletSigner({ url: s.wallet.url, agentToken: s.wallet.token, pollMs: 5, timeoutMs: 3_000 }),
+      rpcUrl: chain.url,
+      fetchImpl: async (input, init) => {
+        const headers = new Headers(init?.headers);
+        const res = await fetch(input, init);
+        if (!headers.has("payment-signature") && !headers.has("x-payment")) return res;
+        // The seller settled, then answered as if it had not: success false, with the transaction it settled.
+        const settled = decodePaymentResponseHeader(res.headers.get("payment-response")!);
+        return new Response("{}", {
+          status: 402,
+          headers: { "payment-response": encodePaymentResponseHeader({ ...settled, success: false, errorReason: "nothing was paid" } as Parameters<typeof encodePaymentResponseHeader>[0]) },
+        });
+      },
+    });
+
+    // The chain shows this payment: it was paid, whatever the service said.
+    chain.dynamic = () => fromFacilitator();
+    const q1 = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const paid = await engine.waitForAttempt(engine.startPayment(q1.id).id, 10_000);
+    expect(paid).toMatchObject({ state: "paid_service_failed", chain: "verified" });
+    expect(paid.transaction).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(messageFor(paid)).not.toMatch(/nothing was paid|did not happen/i);
+
+    // The chain does not show it: unknown, with the transaction, never failed.
+    chain.dynamic = undefined;
+    const q2 = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const unknown = await engine.waitForAttempt(engine.startPayment(q2.id).id, 10_000);
+    expect(unknown).toMatchObject({ state: "uncertain", chain: "unchecked" });
+    expect(unknown.transaction).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(unknown.reason).toMatch(/did not settle, but named transaction 0x[0-9a-f]{64}.*so whether it was paid is unknown/);
+    expect(messageFor(unknown)).not.toMatch(/nothing was paid|did not happen/i);
+    expect(attemptView({ records: s.records }, unknown)).toMatchObject({ state: "uncertain", transaction: unknown.transaction });
   });
 
   it("ends uncertain when the chain shows the transaction is not this payment, at pay time or on a later check", async () => {

@@ -40,8 +40,9 @@ export const EVM_CHAINS = {
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.circle.com, Base Sepolia", gasFaucet: "a Base Sepolia ETH faucet" },
   },
   // Circle's Arc Testnet. USDC is the native gas token: the native balance has 18 decimals, the ERC-20 at 0x3600... shows the
-  // same balance in 6-decimal units (native / 1e12, rounded down; checked by preflight). Gas: a pull used 55,514 (0x2a19bdf7);
-  // the other limits are FiatToken's (not measured here).
+  // same balance in 6-decimal units (native / 1e12, rounded down; checked by preflight). fund-agent sends gas as a plain native
+  // USDC transfer (value in 18 decimals, no data).
+  // Gas: a pull used 55,514 (0x2a19bdf7); the other limits are FiatToken's (not measured here).
   "arc-testnet": {
     label: "Arc Testnet", chainId: 5042002, viem: "arcTestnet",
     rpc: "https://rpc.testnet.arc.network", explorer: "https://explorer.testnet.arc.io",

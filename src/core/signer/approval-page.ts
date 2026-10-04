@@ -102,7 +102,7 @@ export const APPROVAL_PAGE_SCRIPT = `
     show("reject", false);
     document.body.setAttribute("data-state", status);
     if (status === "signed") say("Signed. You can go back to the agent.", "good");
-    else if (status === "expired") say("This request expired. Cancel any open wallet request, then ask the agent for a new link.", "bad");
+    else if (status === "expired") say("This request expired. Cancel any open wallet request, then ask the agent for a new approval link.", "bad");
     else say(why || "This payment was rejected. Cancel any open wallet request.", "bad");
   }
 
@@ -133,7 +133,7 @@ export const APPROVAL_PAGE_SCRIPT = `
         // The client serves this page from this computer; when it stops answering, the command that opened the page
         // has ended and nothing can be approved here any more. One miss can be a hiccup; three are not.
         unanswered += 1;
-        if (unanswered >= 3 && !busy) ended("gone", "The command that opened this page has stopped, so this payment can no longer be approved here. Cancel any open wallet request, and ask the agent for a new link if you still want to pay.");
+        if (unanswered >= 3 && !busy) ended("gone", "The command that opened this page has stopped, so this payment can no longer be approved here. Cancel any open wallet request, and ask the agent for a new approval link if you still want to pay.");
       });
   }
 
@@ -335,12 +335,12 @@ export function approvalPage(facts: ApprovalPageFacts, look: PageLook = pageLook
 export function approvalNotFoundPage(look: PageLook = pageLook()): string {
   return framePage({
     look,
-    title: "This link is unavailable",
+    title: "This approval link is unavailable",
     eyebrow: "Payment request",
     body: `
   <div class="note bad">
     The request may have ended or the client may have restarted. Cancel any open wallet request.
-    Check the command result and wallet activity before asking for a new link.
+    Check the command result and wallet activity before asking for a new one.
   </div>`,
   });
 }

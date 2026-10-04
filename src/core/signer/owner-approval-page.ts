@@ -181,7 +181,7 @@ export const OWNER_PAGE_SCRIPT = `
     }
     if (state.status === "confirmed") say(state.message || "Confirmed. You can return to the agent.", "good", state.hash ? txLink(state.hash) : null);
     else if (state.status === "failed") say(state.message || "Not confirmed. Check the command result and wallet activity before trying again.", "bad", state.hash ? txLink(state.hash) : null);
-    else if (state.status === "expired") say("This link expired. If your wallet still has a request open, cancel it. Check the command result and wallet activity before requesting a new link.", "bad");
+    else if (state.status === "expired") say("This approval link expired. If your wallet still has a request open, cancel it. Check the command result and wallet activity before requesting a new one.", "bad");
     else say(state.mine || "This request was rejected. Check the command result. Rejecting this page does not cancel a transaction already submitted in your wallet.", "bad");
   }
 
@@ -324,7 +324,7 @@ export const OWNER_PAGE_SCRIPT = `
       .catch(function (err) {
         if (err && err.code === 4001) {
           post("/reject", { by: "wallet" }).then(function (answer) {
-            rejected(answer, "Your wallet reported that you rejected this request. This link is closed. The command cannot prove from this page that nothing was submitted, so it reports the result as unknown until it checks the chain. Any existing budget stays in effect.");
+            rejected(answer, "Your wallet reported that you rejected this request. This approval link is closed. The command cannot prove from this page that nothing was submitted, so it reports the result as unknown until it checks the chain. Any existing budget stays in effect.");
           }, notAnswering);
           return;
         }
@@ -647,7 +647,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
     <span class="mono">${esc(facts.recordedOwner)}</span>
     ${facts.kind === "connect" ? "Replace it only if you are its owner and mean to move the budget to another wallet." : "This page acts only for that wallet. If this isn't your wallet, stop: reject and do not connect."}</div>`
     : facts.kind === "connect"
-      ? `<div class="note owner-box">Setup records the wallet you connect as the budget owner. Only the owner should do this, or someone with the owner watching. If an agent or someone else sent you this link and you are not the owner, stop and reject.</div>`
+      ? `<div class="note owner-box">Setup records the wallet you connect as the budget owner. Only the owner should do this, or someone with the owner watching. If an agent or someone else sent you this approval link and you are not the owner, stop and reject.</div>`
       : "";
   const body = `
   ${ownerBox}
@@ -663,7 +663,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
       ${rows}
       <dt>Network</dt><dd>${chainCell}</dd>
       <dt id="account-row" hidden>Connected wallet</dt><dd id="account" class="mono" hidden></dd>
-      <dt id="expiry-row">Link expires in</dt><dd id="expiry-val"><span id="expiry">${clock}</span></dd>
+      <dt id="expiry-row">Approval link expires in</dt><dd id="expiry-val"><span id="expiry">${clock}</span></dd>
     </dl>
     ${limits}
     ${networkHint}
@@ -694,13 +694,13 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
 export function ownerNotFoundPage(look: PageLook = pageLook()): string {
   return framePage({
     look,
-    title: "This link is unavailable",
+    title: "This approval link is unavailable",
     eyebrow: "Agent request",
     style: OWNER_STYLE,
     body: `
   <div class="note bad">
     The request may have ended or the command may have stopped.
-    Cancel any open wallet request. Check the command result and wallet activity before asking for a new link.
+    Cancel any open wallet request. Check the command result and wallet activity before asking for a new one.
   </div>`,
   });
 }
