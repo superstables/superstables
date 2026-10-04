@@ -99,7 +99,9 @@ let ownerRevokeTx: string | null = null;
 if (allowanceAfter > 0n) {
   console.log(`the allowance still reads ${usdc(allowanceAfter)} ${SYM}: the owner closes it (approve 0)`);
   if (ownerKey) ownerRevokeTx = (await send(ownerKey.wallet, USDC, encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [pub.agent, 0n] }), "recover: owner approve(agent, 0) for the rest")).hash;
-  else ownerRevokeTx = await revokeInWallet("recover", pub.owner, pub.agent, "Revoke before recovering funds");
+  else ownerRevokeTx = await revokeInWallet("recover", pub.owner, pub.agent, "Revoke before recovering funds", sr?.tx
+    ? { result: { selfRevokeTx: sr.tx }, done: `the agent's own revoke ${sr.tx} landed (${sr.state}) and lowered the allowance; only the rest needs the owner`, stepTx: "ownerRevokeTx" }
+    : { result: {}, stepTx: "ownerRevokeTx" });
   allowanceAfter = await readUntil(() => allowanceOf(pub.owner, pub.agent), (v) => v === 0n);
 }
 if (allowanceAfter !== 0n) {
@@ -111,13 +113,28 @@ writePublic({ B4_REVOKED_AT: String(Math.floor(Date.now() / 1000)) }, ["B4_CAP",
 // gas for the agent-side returns
 let topUp = 0n;
 let gasTx: Hex | null = null;
-const returnGas = returnOps.length ? await agentGas(pub.agent, returnOps) : null;
-if (returnGas && !returnGas.ok) {
-  topUp = topUpFor(returnGas);
-  console.log(`${gasWords(returnGas, "returning the funds")}; the owner sends ${gasFmt(topUp)} ${GAS.symbol}`);
-  if (ownerKey) gasTx = (await sendNative(ownerKey.wallet, pub.agent, topUp, "gas top-up owner -> agent")).hash;
-  else gasTx = await fundInWallet("recover", pub.owner, pub.agent, topUp, gasFmt(topUp), returnGas.have);
-  await readUntil(() => nativeBalance(pub.agent), (v) => v >= returnGas.have + topUp);
+// What the revoke step completed, said in the past tense: a later step can't vouch for the allowance now (a wallet may have
+// sent something else), only for what was read before it.
+const revokes = [sr?.tx && `the agent's own revoke ${sr.tx}`, ownerRevokeTx && `the owner's revoke ${ownerRevokeTx}`].filter(Boolean).join(" and ");
+const revoked = { selfRevokeTx: sr?.tx ?? null, ownerRevokeTx, allowanceAfterRevoke: usdc(allowanceAfter) };
+const revokedWords = `the allowance read 0${revokes ? ` after ${revokes}` : ""} before this step. No funds were returned yet`;
+try {
+  const returnGas = returnOps.length ? await agentGas(pub.agent, returnOps) : null;
+  if (returnGas && !returnGas.ok) {
+    topUp = topUpFor(returnGas);
+    console.log(`${gasWords(returnGas, "returning the funds")}; the owner sends ${gasFmt(topUp)} ${GAS.symbol}`);
+    if (ownerKey) gasTx = (await sendNative(ownerKey.wallet, pub.agent, topUp, "gas top-up owner -> agent")).hash;
+    else gasTx = await fundInWallet("recover", pub.owner, pub.agent, topUp, gasFmt(topUp), returnGas.have, { result: revoked, done: revokedWords, stepTx: "gasTx" });
+    await readUntil(() => nativeBalance(pub.agent), (v) => v >= returnGas.have + topUp);
+  }
+} catch (e) {
+  // an error here (an RPC read, the wallet page) must not lose the revoke that already landed. A gas transfer the chain shows
+  // reverted (sendNative names its hash) is a failure; anything else may or may not have sent the gas, so it is unknown.
+  const reverted = (e as { txHash?: Hex }).txHash;
+  const reason = `recover stopped at the gas step: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300);
+  console.log(`${reverted ? "FAILED" : "UNKNOWN"}: ${reason}`);
+  const doctor = `superstables budget doctor --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}`;
+  process.exit(emit("recover", reverted ? 1 : 5, { state: reverted ? "failed" : "unknown", op: opId ?? null, ...revoked, gasTx: reverted ?? gasTx, reason, next: `${revokedWords}. ${doctor}: read the agent's gas and the allowance, then run recover again` }));
 }
 
 // 2. CANCEL / RETURN journaled pulls
