@@ -59,7 +59,7 @@ The full model is in [docs/security.md](docs/security.md).
 - **Seller text is data.** Seller and listing text is labelled as data in CLI output, and results of Single purchase on superstables.com don't repeat arbitrary site text.
 - **Payments and the daily cap.** Requests that carry a payment refuse redirects. `pay` checks settlement on the payment's chain and reports `chain` as `verified`, `unchecked` or `mismatch`; a mismatch makes the attempt `uncertain`. These checks trust the configured RPC; on Solana, a custom RPC address is not checked to be devnet. The daily cap now counts pending, in-flight and uncertain payments, across processes.
 - **Keys and approval pages.** Key files that other users can read, or that aren't regular files, are refused. Key files are created private, and replacements are written atomically. The local wallet keeps the owner secret out of printed output and browser command lines. Local approval pages check Host and Origin.
-- **Release builds.** The skill is built from the exact release export. `npm pack` rebuilds from an empty output directory, and `npm publish` also checks for a clean checkout, release notes, a successful build and current CLI references. This release is not published to npm.
+- **Release builds.** The skill is built from the exact release export. `npm pack` rebuilds from an empty output directory, and `npm publish` also checks for a clean checkout, release notes, a successful build and current CLI references. This release is published to npm as `@superstables/client`.
 
 ### Breaking changes
 
