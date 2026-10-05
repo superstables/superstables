@@ -978,7 +978,7 @@ export async function recheckChain(records: Records, id: string, rpc?: string | 
   }
   if (attempt.state === "uncertain") return reconcile(records, attempt, rail, options);
   if (attempt.state !== "settled" && attempt.state !== "paid_service_failed") return attempt;
-  if (attempt.chain === "verified" || attempt.chain === "mismatch" || attempt.chain === "unpaid") return attempt;
+  if (attempt.chain === "verified" || attempt.chain === "unpaid") return attempt;
 
   const named = attributedCheck(
     records,
@@ -1032,7 +1032,7 @@ function verifiedPayment(records: Records, attempt: Attempt): boolean {
 /** A paid attempt's chain check, recorded on it and on its receipt; a mismatch makes it uncertain. */
 function recordChain(records: Records, attempt: Attempt, check: ChainCheck): Attempt {
   // Decided from a settled attempt whose chain was unchecked: only that attempt is changed by it.
-  if ((attempt.state !== "settled" && attempt.state !== "paid_service_failed") || attempt.chain === "mismatch" || attempt.chain === "unpaid") return attempt;
+  if ((attempt.state !== "settled" && attempt.state !== "paid_service_failed") || attempt.chain === "unpaid") return attempt;
   if (verifiedPayment(records, attempt)) return attempt;
   const receipt = attempt.receiptId ? records.getReceipt(attempt.receiptId) : undefined;
   if (receipt) {

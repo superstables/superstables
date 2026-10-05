@@ -100,7 +100,9 @@ export async function startFakeBaseSepolia(): Promise<FakeBaseSepolia> {
         const hash = String(params[0] ?? "").toLowerCase();
         const found = chain.receipts.has(hash) ? chain.receipts.get(hash) : (chain.dynamic?.(hash) ?? null);
         // A real node's receipt names its transaction; a test that wants another (or none) sets transactionHash itself.
-        return found && typeof found === "object" && !("transactionHash" in found) ? { transactionHash: hash, ...found } : found;
+        if (!found || typeof found !== "object") return found;
+        const blockNumber = "blockNumber" in found && typeof found.blockNumber === "string" ? found.blockNumber : undefined;
+        return { transactionHash: hash, ...(blockNumber ? { blockHash: hashOf(BigInt(blockNumber)) } : {}), ...found };
       }
       case "eth_getBlockByNumber": {
         if (params[0] === "finalized" && chain.finalizedLag === undefined) throw new Error("unknown block tag");

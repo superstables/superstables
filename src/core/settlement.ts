@@ -22,6 +22,7 @@
 import { decodeFunctionResult, encodeFunctionData, keccak256, toBytes } from "viem";
 import { BASE_SEPOLIA, evmNetworkFor, isAddress, type EvmNetwork } from "./chain.js";
 import { chainRpc, rpcCall, type RpcOptions } from "./rpc.js";
+import { finalInclusion } from "./finality.js";
 import type { FoundPayment } from "./rails/types.js";
 
 /** "unpaid": the chain shows this payment was never made and can no longer be (recorded by a later check). */
@@ -61,6 +62,7 @@ interface RpcLog {
   address?: string;
   topics?: string[];
   data?: string;
+  removed?: boolean;
 }
 
 /** Read the transaction's receipt and say whether it is this payment. Never throws. */
@@ -77,7 +79,7 @@ export async function checkSettlement(
   const rpc = options.rpcUrl ? { url: options.rpcUrl } : chainRpc(network);
   if ("error" in rpc) return { chain: "unchecked", reason: `the chain was not read: ${rpc.error}` };
 
-  let receipt: { status?: string; transactionHash?: string; logs?: RpcLog[] } | null;
+  let receipt: { status?: string; transactionHash?: string; blockNumber?: string; blockHash?: string; logs?: RpcLog[] } | null;
   try {
     receipt = await rpcCall(rpc.url, "eth_getTransactionReceipt", [input.transaction], options);
   } catch {
@@ -88,6 +90,9 @@ export async function checkSettlement(
   // The answer must be the receipt of the transaction asked for: an RPC that answers with another one's is not read.
   if (!isHash(receipt.transactionHash) || receipt.transactionHash.toLowerCase() !== input.transaction.toLowerCase()) {
     return { chain: "unchecked", reason: "the chain could not be read: the RPC answered with a receipt for another transaction" };
+  }
+  if (!(await finalInclusion(rpc.url, receipt, network.finality, options))) {
+    return { chain: "unchecked", reason: "the transaction has not reached final canonical inclusion" };
   }
   if (receipt.status !== "0x1") return { chain: "mismatch", reason: "the transaction failed on chain" };
 

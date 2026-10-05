@@ -4,6 +4,7 @@
 // along by changing its state, as the owner and the seller would. A payment it reports is also put on its fake chain
 // (`chainUrl`: one JSON-RPC server answering as Base Sepolia, Arc Testnet, Tempo Moderato and Solana devnet), where the CLI reads it
 // before it says paid; a test can make the site lie by reporting a payment the chain does not show. No network.
+import { keccak256, toBytes } from "viem";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readBody, startServer, type TestServer } from "./servers.js";
@@ -200,10 +201,11 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
       switch (method) {
         case "eth_getTransactionReceipt":
           if (!t || !t.evm) return null;
-          return { transactionHash: params[0], status: t.failed ? "0x0" : "0x1", blockNumber: `0x${t.block.toString(16)}`, logs: [{ address: t.asset, topics: [TRANSFER_TOPIC, word(t.payer), word(t.payTo)], data: `0x${t.amount.toString(16).padStart(64, "0")}` }] };
+          return { transactionHash: params[0], status: t.failed ? "0x0" : "0x1", blockNumber: `0x${t.block.toString(16)}`, blockHash: keccak256(toBytes(`purchase:${t.block}`)), logs: [{ address: t.asset, topics: [TRANSFER_TOPIC, word(t.payer), word(t.payTo)], data: `0x${t.amount.toString(16).padStart(64, "0")}` }] };
         case "eth_getBlockByNumber": {
-          const at = [...landed.values()].find((x) => x.evm && x.block === Number(params[0]))?.at ?? Math.floor(Date.now() / 1000);
-          return { number: params[0], timestamp: `0x${at.toString(16)}` };
+          const n = params[0] === "latest" || params[0] === "finalized" ? 1000 : Number(params[0]);
+          const at = [...landed.values()].find((x) => x.evm && x.block === n)?.at ?? Math.floor(Date.now() / 1000);
+          return { number: `0x${n.toString(16)}`, hash: keccak256(toBytes(`purchase:${n}`)), timestamp: `0x${at.toString(16)}` };
         }
         case "getTransaction":
           if (!t || t.evm) return null;
