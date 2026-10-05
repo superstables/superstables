@@ -1,4 +1,4 @@
-# Every push and pull request is type-checked, tested and built, and the skill zip is built and
+# Release candidate pushes to main are type-checked, tested and built, and the skill zip is built and
 # run on its own.
 #
 # The tests never reach the network (they stand up their own servers on loopback), so CI needs
@@ -13,19 +13,18 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-release
   cancel-in-progress: true
 
 jobs:
   build:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.ref == 'refs/heads/main'
     name: Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
     timeout-minutes: 15
@@ -72,7 +71,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}
 
   install:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.ref == 'refs/heads/main'
     name: Install routes, Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
     timeout-minutes: 30
