@@ -231,7 +231,7 @@ describe("the superstables CLI", () => {
             name: "approval page",
             ok: false,
             essential: true,
-            detail: expect.stringContaining(`port ${address.port} is taken (listen EADDRINUSE:`),
+            detail: expect.stringContaining(`port ${address.port} (SUPERSTABLES_APPROVE_PORT) is taken (listen EADDRINUSE:`),
           }),
         ]),
       });
