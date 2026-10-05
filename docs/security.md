@@ -241,8 +241,8 @@ the chain:
   the wallet was asked.
 
 `unchecked` means the chain could not say (no transaction named, not mined yet, the RPC did not
-answer): the payment rests on the seller's report, said as such, and `superstables status` and
-`payment_status` check again. `mismatch` means the transaction is something else: the attempt
+answer): the payment rests on the seller's report, said as such, and `superstables status` checks
+again. `mismatch` means the transaction is something else: the attempt
 becomes `uncertain`, neither confirmed nor refuted, and is never retried. On Tempo and Solana, the
 client does not use a transaction already recorded as another attempt's verified payment. On EVM
 chains, one transaction may settle several payments; each must match its own signed authorization
