@@ -5,9 +5,10 @@
 // Everything a quote records comes from the seller's own requirement; nothing is inferred
 // from the seller's self-declared resource URL, which the seller could write anything in.
 
-import { detect, termsFor, type Challenge, type RawAccept } from "./x402.js";
-import { describeNetwork } from "./chain.js";
-import { SellerTextError, untrustedText } from "./text.js";
+import { detectPayment, type SellerChallenge } from "./x402.js";
+import { judgeOffers } from "./rails/index.js";
+import type { Offer } from "./rails/types.js";
+import { SellerTextError } from "./text.js";
 import { evaluatePolicy, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
 import { Records } from "./records.js";
@@ -27,14 +28,14 @@ export interface QuoteDeps {
 
 /**
  * Ask a paid endpoint what it wants, judge it, and write the answer down.
- * Throws when the endpoint is not a paid x402 endpoint, or when nothing it offers can be
+ * Throws when the endpoint is not a paid endpoint (x402 or MPP), or when nothing it offers can be
  * paid by this client. A policy refusal is not a throw: it is recorded on the quote, so a
  * caller can show the owner what was asked for and why it was refused.
  */
 export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> {
   const { url, request, service } = resolveTarget(input);
 
-  const challenge: Challenge = await detect(url);
+  const challenge: SellerChallenge = await detectPayment(url);
   const chosen = firstSupported(challenge, url);
 
   const asset = chosen.terms.asset;
@@ -92,25 +93,18 @@ function resolveTarget(input: QuoteInput): { url: string; request?: ResolvedRequ
  * when none of them work, say what was offered and why each was refused, because "payment
  * failed" is useless and "it wants mainnet USDC" is actionable.
  */
-function firstSupported(challenge: Challenge, url: string) {
+function firstSupported(challenge: SellerChallenge, url: string): Offer {
   const refusals: string[] = [];
-  for (const accept of challenge.accepts) {
-    const judged = termsFor(accept, challenge.version);
-    if (judged.supported) return judged;
-    refusals.push(`${describeAccept(accept)}: ${judged.reason}`);
+  // The seller's own words in each description are quoted as one bounded line: this sentence reaches an agent as the
+  // client's refusal (rails/index.ts, describeAccept).
+  for (const { offered, judged } of judgeOffers(challenge)) {
+    if (judged.supported) return judged.offer;
+    refusals.push(`${offered}: ${judged.reason}`);
   }
   // A challenge can list any number of offers; the first few say enough.
   const shown = refusals.slice(0, 5).join("; ") + (refusals.length > 5 ? `; and ${refusals.length - 5} more` : "");
   // The host is the one this client called; the offers are the seller's words, kept apart as the detail.
   throw new SellerTextError(`${hostOf(url)} offers no payment this client can make`, shown);
-}
-
-function describeAccept(accept: RawAccept): string {
-  // The seller's own words, each quoted as one bounded line: this sentence reaches an agent as the client's refusal.
-  const scheme = untrustedText(accept.scheme ?? "exact", 40);
-  const network = untrustedText(describeNetwork(String(accept.network ?? "unknown network")), 60);
-  const asset = untrustedText(accept.extra?.name ?? accept.asset ?? "an unnamed asset", 60);
-  return `${scheme} ${asset} on ${network}`;
 }
 
 function hostOf(url: string): string {

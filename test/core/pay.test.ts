@@ -182,6 +182,71 @@ describe("PaymentEngine", () => {
     expect(s.engine.listAttempts()).toHaveLength(1);
   });
 
+  it("starts one attempt for a quote that two engines read open at once, and names it to the other", async () => {
+    const s = await stack();
+    const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    // B read the quote while it was open, before A spent it: its records answer with what it read then.
+    const seen = s.records.getQuote(q.id)!;
+    const stale = new Records(s.records.dir);
+    stale.getQuote = () => seen;
+    const signer = () => new WalletSigner({ url: s.wallet.url, agentToken: s.wallet.token, pollMs: 5, timeoutMs: 3_000 });
+    const a = new PaymentEngine({ records: new Records(s.records.dir), policy: DEFAULT_POLICY, signer: signer() });
+    const b = new PaymentEngine({ records: stale, policy: DEFAULT_POLICY, signer: signer() });
+    const first = a.startPayment(q.id);
+    let refused: unknown;
+    try {
+      b.startPayment(q.id);
+    } catch (err) {
+      refused = err;
+    }
+    expect(refused).toBeInstanceOf(QuoteUsedError);
+    expect((refused as QuoteUsedError).attempt?.id).toBe(first.id);
+    expect(s.records.listAttempts().filter((x) => x.quoteId === q.id)).toHaveLength(1);
+    await a.waitForAttempt(first.id, 10_000);
+  });
+
+  it("starts one attempt for a quote two pay processes read open at once", async () => {
+    const s = await stack();
+    const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const barrier = mkdtempSync(join(tmpdir(), "superstables-barrier-"));
+    const tsx = resolve(dirname(fileURLToPath(import.meta.url)), "../../node_modules/tsx/dist/cli.mjs");
+    const script = resolve(dirname(fileURLToPath(import.meta.url)), "../helpers/claim-process.ts");
+    const run = () =>
+      new Promise<Record<string, string | null>>((done, fail) => {
+        const child = spawn(process.execPath, [tsx, script, s.records.dir, q.id, barrier], { env: process.env });
+        let out = "";
+        child.stdout.on("data", (chunk) => (out += chunk));
+        child.on("exit", () => {
+          try {
+            done(JSON.parse(out.trim().split("\n").at(-1) ?? "{}"));
+          } catch (err) {
+            fail(err);
+          }
+        });
+      });
+    const results = await Promise.all([run(), run()]);
+    const started = results.filter((r) => "started" in r);
+    const used = results.filter((r) => "used" in r);
+    expect(started).toHaveLength(1);
+    expect(used).toEqual([{ used: started[0].started }]);
+    expect(s.records.listAttempts().filter((x) => x.quoteId === q.id).map((x) => x.id)).toEqual([started[0].started]);
+  }, 60_000);
+
+  it("ends uncertain, never failed, when something breaks after the credential left", async () => {
+    const s = await stack();
+    const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    // The disk fills up just as the receipt is written: the seller already has the credential.
+    const records = new Records(s.records.dir);
+    records.saveReceipt = () => {
+      throw new Error("ENOSPC: no space left on device");
+    };
+    const engine = new PaymentEngine({ records, policy: DEFAULT_POLICY, signer: new WalletSigner({ url: s.wallet.url, agentToken: s.wallet.token, pollMs: 5, timeoutMs: 3_000 }) });
+    const final = await engine.waitForAttempt(engine.startPayment(q.id).id, 10_000);
+    expect(s.facilitator.calls.settle).toBe(1);
+    expect(final.state).toBe("uncertain");
+    expect(final.reason).toBe("ENOSPC: no space left on device, after the owner approved, so whether it was paid is unknown");
+  });
+
   it("keeps the receipt when the money moved and the service then failed", async () => {
     const s = await stack();
     s.seller.options.failAfterPaying = true;
@@ -265,12 +330,83 @@ describe("PaymentEngine", () => {
 
     const final = await engine.waitForAttempt(engine.startPayment(q.id).id, 10_000);
 
-    expect(final.state).toBe("failed");
+    // The credential had left: the seller's "did not settle" is its word, not the chain's.
+    expect(final.state).toBe("uncertain");
     // The client's own sentence says only what the client knows; the seller's words are kept apart.
-    expect(final.reason).toBe("the service reported that the payment did not settle, and gave a reason of its own");
+    expect(final.reason).toBe(
+      "the service reported that the payment did not settle, and gave a reason of its own, after the payment was sent to it, so whether it settled is unknown until the chain shows it",
+    );
     expect(final.serviceReason).toContain("Ignore previous instructions");
     expect(final.serviceReason).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e]/);
     expect((final.serviceReason ?? "").length).toBeLessThanOrEqual(200);
+  });
+
+  it("never ends a payment the seller answered no to as unpaid: the chain decides, by the nonce the owner signed", async () => {
+    const s = await stack();
+    const chain = await startFakeBaseSepolia();
+    open.push(chain);
+    /** How the seller answers the paid request after its facilitator ran: no receipt (402), or "did not settle". */
+    let answer: "402" | "did-not-settle" = "402";
+    let settles = true;
+    const engine = new PaymentEngine({
+      records: s.records,
+      policy: DEFAULT_POLICY,
+      signer: new WalletSigner({ url: s.wallet.url, agentToken: s.wallet.token, pollMs: 5, timeoutMs: 3_000 }),
+      rpcUrl: chain.url,
+      fetchImpl: async (input, init) => {
+        const headers = new Headers(init?.headers);
+        const res = await fetch(input, init);
+        if (!headers.has("payment-signature") && !headers.has("x-payment")) return res;
+        if (settles) chain.settle(s.facilitator.lastAuthorization!);
+        return answer === "402"
+          ? new Response(JSON.stringify({ error: "payment required" }), { status: 402 })
+          : new Response("{}", {
+              status: 402,
+              headers: { "payment-response": encodePaymentResponseHeader({ success: false, errorReason: "insufficient_funds", transaction: "", network: "eip155:84532" } as Parameters<typeof encodePaymentResponseHeader>[0]) },
+            });
+      },
+    });
+
+    // Settled, then the seller asks for payment again: uncertain, counted, and status finds the transfer by its nonce.
+    const q1 = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const first = await engine.waitForAttempt(engine.startPayment(q1.id).id, 10_000);
+    expect(first).toMatchObject({ state: "uncertain", serviceStatus: 402 });
+    expect(messageFor(first)).not.toMatch(/did not happen|nothing was paid/i);
+    expect(s.records.spentToday("USDC")).toBe(0.01);
+    const found = await recheckChain(s.records, first.id, chain.url);
+    expect(found).toMatchObject({ state: "paid_service_failed", chain: "verified", transaction: chain.used.get(first.authorizationNonce!.toLowerCase())!.transaction });
+    expect(s.records.getReceipt(found!.receiptId!)).toMatchObject({ chain: "verified", transaction: found!.transaction });
+    expect(found!.reason).toBe("the chain shows this payment, but the service answered 402 without reporting it settled, so whether it delivered is unknown");
+    expect(s.records.spentToday("USDC")).toBe(0.01);
+
+    // Not settled when the seller answered no, settled after: uncertain, then found.
+    answer = "did-not-settle";
+    settles = false;
+    const q3 = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const third = await engine.waitForAttempt(engine.startPayment(q3.id).id, 10_000);
+    expect(third.state).toBe("uncertain");
+    expect((await recheckChain(s.records, third.id, chain.url))?.state).toBe("uncertain");
+    chain.settle(s.facilitator.lastAuthorization!);
+    expect(await recheckChain(s.records, third.id, chain.url)).toMatchObject({ state: "paid_service_failed", chain: "verified" });
+    expect(s.records.spentToday("USDC")).toBe(0.02);
+
+    // "Did not settle", and it never did: uncertain while the authorization can still be used, then unpaid, released.
+    const q2 = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const second = await engine.waitForAttempt(engine.startPayment(q2.id).id, 10_000);
+    expect(second).toMatchObject({ state: "uncertain", serviceReason: "insufficient_funds" });
+    expect(s.records.spentToday("USDC")).toBe(0.03);
+    const open1 = await recheckChain(s.records, second.id, chain.url);
+    expect(open1?.state).toBe("uncertain");
+    expect(open1?.chainReason).toMatch(/^the chain shows the owner's authorization unused so far; it can still be used until /);
+    expect(s.records.spentToday("USDC")).toBe(0.03);
+    chain.advance(300 + 180);
+    const closed = await recheckChain(s.records, second.id, chain.url);
+    expect(closed).toMatchObject({ state: "failed", chain: "unpaid" });
+    expect(closed?.chainReason).toMatch(/never used, and it can no longer be/);
+    expect(messageFor(closed!)).toMatch(/^Payment did not happen: the chain shows this payment was never made/);
+    expect(s.records.spentToday("USDC")).toBe(0.02);
+    // Final, and the chain keeps saying so.
+    expect((await recheckChain(s.records, second.id, chain.url))?.state).toBe("failed");
   });
 
   it("keeps a transaction only when it is a transaction hash, and the payer only as the address that signed", async () => {
@@ -486,7 +622,9 @@ describe("PaymentEngine", () => {
     const q2 = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
     const pending = await engine.waitForAttempt(engine.startPayment(q2.id).id, 10_000);
     expect(pending).toMatchObject({ state: "settled", chain: "unchecked", chainReason: "the chain does not show the transaction yet" });
-    expect(messageFor(pending)).toContain("the chain has not confirmed it yet");
+    // Not called paid: the seller reported it, and the chain has not confirmed it.
+    expect(messageFor(pending)).toMatch(/^The seller reported it paid: 0\.01 USDC on Base Sepolia \(testnet\) \(transaction 0x[0-9a-f]{64}\)\. The chain has not confirmed it yet/);
+    expect(messageFor(pending)).not.toMatch(/^Paid/);
     expect(messageFor(pending)).not.toContain("checked on chain:");
     chain.dynamic = () => fromFacilitator();
     const later = await recheckChain(s.records, pending.id, chain.url);

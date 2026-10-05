@@ -296,7 +296,7 @@ describe("tempo, hosted", () => {
     const r = await budget(["grant", "--rail", "tempo", "--amount", "0.05", "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.state).toBe("refused_precheck");
-    expect(r.result.reason).toMatch(new RegExp(`would ask ${OTHER} to approve this, but the owner recorded on this computer is ${OWNER}.*nothing was sent`));
+    expect(r.result.reason).toMatch(new RegExp(`would ask ${OTHER} to approve this, but the owner recorded on this machine is ${OWNER}.*nothing was sent`));
     expect(r.approve).toBeNull();
     expect(site.requests[0].state).toBe("cancelled");
   }, 60_000);
@@ -588,7 +588,7 @@ describe("solana, hosted", () => {
     site.owner = SOL_OTHER;
     const r = await budget(["grant", "--rail", "solana", "--amount", "0.05", "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(3);
-    expect(r.result.reason).toMatch(/owner recorded on this computer is .*nothing was sent/);
+    expect(r.result.reason).toMatch(/owner recorded on this machine is .*nothing was sent/);
     expect(r.approve).toBeNull();
   }, 60_000);
 

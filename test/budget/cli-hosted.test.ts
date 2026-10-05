@@ -238,7 +238,7 @@ describe("setup --hosted", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.result).toMatchObject({ state: "ok", owner: OWNER, approvals: "hosted", site: site.url });
     expect(r.approve).toBeNull();
-    expect(r.stderr).toMatch(/This agent already belongs to the account of the owner recorded on this computer/);
+    expect(r.stderr).toMatch(/This agent already belongs to the account of the owner recorded on this machine/);
     expect(publicFile()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
     expect(publicFile()).toMatch(/^LINK_ID=bl_test0001$/m);
 
@@ -246,7 +246,7 @@ describe("setup --hosted", () => {
     site.reply = linked(OTHER, await signLinkProof({ ...facts, owner: OTHER }));
     const other = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"]);
     expect(other.code).toBe(3);
-    expect(other.result.reason).toMatch(new RegExp(`already belongs to the account ${OTHER}, but this computer records the owner ${OWNER}`));
+    expect(other.result.reason).toMatch(new RegExp(`already belongs to the account ${OTHER}, but this machine records the owner ${OWNER}`));
     expect(publicFile()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
 
     // linked before owner proofs existed (owner_proof null), or a proof for another code: refused, with the way out
@@ -267,7 +267,7 @@ describe("setup --hosted", () => {
     rmSync(join(home, "budget", "public"), { recursive: true, force: true });
     const fresh = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"]);
     expect(fresh.code).toBe(3);
-    expect(fresh.result.reason).toMatch(/this computer has no record of the add-agent request that added it/);
+    expect(fresh.result.reason).toMatch(/this machine has no record of the add-agent request that added it/);
     expect(publicFileOrNull()).toBeNull();
   }, 90_000);
 
@@ -339,7 +339,7 @@ describe("setup --hosted", () => {
       other.reply = () => ({ status: 200, body: { id: "bl_test0001", state: "linked", final: true, owner: OWNER, owner_proof: proof, approval: null } });
       const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", other.url, "--wait", "--no-open"]);
       expect(r.code, r.stderr).toBe(3);
-      expect(r.result.reason).toMatch(/this computer has no record of the add-agent request that added it/);
+      expect(r.result.reason).toMatch(/this machine has no record of the add-agent request that added it/);
       expect(publicFile()).toMatch(new RegExp(`^SITE=${site.url}$`, "m"));
       // a fresh link there, signed by the owner for that site: the chain moves
       other.reply = undefined;
@@ -381,14 +381,14 @@ describe("setup --hosted", () => {
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
-    expect(first.result.next).toMatch(/^reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id oa-\S+ --shown\. .*Testnet only: test USDC, no real money\.$/);
+    expect(first.result.next).toMatch(/^reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id oa-\S+ --shown\. .*Testnet only\. Test tokens, no real money\.$/);
     // the words for the owner are asserted on `next` (the RESULT), not on stderr: the worker writes the rail's stderr to
     // its log on its own schedule, so stderr may still lack them when the record with the link exists
     // the reply the agent sends word for word: the exact link (with the part after #), the code, the network, the testnet line
     const msg = first.result.message_for_owner;
     expect(msg).toContain(first.result.url);
     expect(msg).toContain("Match code: ABC-DEF");
-    expect(msg).toMatch(/On Base Sepolia\. Testnet only: test USDC, no real money\./);
+    expect(msg).toMatch(/On Base Sepolia\. Testnet only\. Test tokens, no real money\./);
     expect(msg.endsWith("Tell me when you've approved.")).toBe(true);
     const id = first.result.id;
     const recordPath = join(approvals(), `${id}.json`);
@@ -476,7 +476,7 @@ describe("owner commands on a hosted chain", () => {
     const r = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.state).toBe("refused_precheck");
-    expect(r.result.reason).toMatch(new RegExp(`owner recorded on this computer is ${OWNER}.*nothing was sent`));
+    expect(r.result.reason).toMatch(new RegExp(`owner recorded on this machine is ${OWNER}.*nothing was sent`));
     expect(r.approve).toBeNull();
     expect(site.requests[0].body).toMatchObject({
       kind: "grant", rail: "evm", chain: "base-sepolia", agent: "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A",

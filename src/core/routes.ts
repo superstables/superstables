@@ -1,7 +1,9 @@
 // Which way this client could pay a listing. Two ways exist and they cover different ground:
 //
-//   superstables pay      x402, the exact scheme, USDC on Base Sepolia. The owner approves each
-//                         payment in their own wallet.
+//   superstables pay      the chains its rails pay on (src/core/rails/): x402 exact on the EVM
+//                         testnets below (and on Solana devnet when that rail is there), MPP
+//                         tempo.charge on Tempo Moderato. The owner approves each payment in their
+//                         own wallet.
 //   superstables budget   the owner grants an on-chain budget once, then the agent buys alone.
 //                         Rails and their testnets: evm (x402 on Base Sepolia, Arc Testnet,
 //                         Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum
@@ -13,10 +15,9 @@
 // explicit testnet names count. A listing that says "base", "ethereum" or "solana" is on a
 // mainnet, and nothing here claims a mainnet listing can be paid.
 
+import { networkFor, type NetworkInfo } from "./chain.js";
+import { SUPPORTED_NETWORKS } from "./rails/index.js";
 import type { BudgetRoute, PayRoutes } from "./types.js";
-
-/** The chain `superstables pay` pays on, and the names a listing may give it. */
-const PAY_CHAIN_NAMES = new Set(["base-sepolia", "eip155:84532"]);
 
 /** budget --rail evm: its --chain keys, each with the names a listing may use for it. */
 const EVM_BUDGET_CHAINS: Record<string, string[]> = {
@@ -35,9 +36,22 @@ const TEMPO_NAMES = new Set(["tempo-moderato", "moderato", "tempo:moderato", "ei
 /** budget --rail solana pays x402 sellers on Solana devnet. Plain "solana" is mainnet. */
 const SOLANA_DEVNET_NAMES = new Set(["solana-devnet", "solana:etwtrabzayq6imfeykouru166vu2xqa1"]);
 
-/** The chain name a listing uses for Base Sepolia, spelled the way the index spells it. */
+/** The names a listing may give a chain `pay` pays on: its budget key, its CAIP-2 id, its x402 v1 name, and Tempo's and Solana's other names. */
+function payNames(network: NetworkInfo): string[] {
+  if (network.rail === "tempo") return [...TEMPO_NAMES];
+  if (network.rail === "solana") return [...SOLANA_DEVNET_NAMES];
+  return EVM_BUDGET_CHAINS[network.key] ?? [network.key, network.caip2];
+}
+
+/** The chain `pay` pays on that a listing's chain name stands for, or undefined. */
+export function payNetworkFor(name: string): NetworkInfo | undefined {
+  const n = name.toLowerCase();
+  return SUPPORTED_NETWORKS.find((network) => payNames(network).includes(n));
+}
+
+/** The chain name a listing uses for a chain `pay` knows, spelled the way the index spells it (its budget key). */
 export function chainName(network: string): string {
-  return network === "eip155:84532" ? "base-sepolia" : network;
+  return networkFor(network)?.key ?? network;
 }
 
 /**
@@ -59,7 +73,9 @@ export function routesFor(rails: string[] | undefined, chains: string[]): PayRou
   }
   if (mpp && names.some((n) => TEMPO_NAMES.has(n))) budget.push({ rail: "tempo", chain: "moderato" });
 
-  return { pay: x402 && names.some((n) => PAY_CHAIN_NAMES.has(n)), budget };
+  // pay: a chain one of its rails pays on, in the protocol that rail speaks (MPP on Tempo, x402 elsewhere).
+  const pay = SUPPORTED_NETWORKS.some((network) => (network.rail === "tempo" ? mpp : x402) && names.some((n) => payNames(network).includes(n)));
+  return { pay, budget };
 }
 
 /** Mainnet names a listing may use, so a refusal can say which mainnet it is on. */
@@ -69,7 +85,6 @@ const MAINNET_NAMES = new Set([
 ]);
 
 const KNOWN_CHAIN_NAMES = new Set([
-  ...PAY_CHAIN_NAMES,
   ...Object.values(EVM_BUDGET_CHAINS).flat(),
   ...TEMPO_NAMES,
   ...SOLANA_DEVNET_NAMES,

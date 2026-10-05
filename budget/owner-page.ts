@@ -150,9 +150,9 @@ export function ownerPageFor(rail: OwnerRail) {
     if (site) {
       const host = siteName(site);
       const other = isOtherSite(site) ? ` The site is ${host}, not www.superstables.com: say so to the owner.` : "";
-      console.error(`\nWrite this approval link, the match code ${h.matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call: the page asks them to pick the code. It opens on any device where the owner is signed in to ${host} with their wallet (${rail.hostedWalletWords ?? rail.walletWords}):\n\n  ${h.url}\n\n  match code: ${h.matchCode}\n\nThe first approval link they open asks them to sign in with their wallet (a message, no fee). It expires in ${inMinutes(h.expiresAt)}. ${h.bundle ? `After they add the agent, the same page asks their wallet for each transaction in the terms, one after the other.` : `Setup adds this agent to their ${host} account: after the code, their wallet signs the owner-proof message (no fee), and no transaction is sent. Other actions ask their wallet for a transaction.`} Testnet only: test USDC, no real money.${other} End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
+      console.error(`\nWrite this approval link, the match code ${h.matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call: the page asks them to pick the code. It opens on any device where the owner is signed in to ${host} with their wallet (${rail.hostedWalletWords ?? rail.walletWords}):\n\n  ${h.url}\n\n  match code: ${h.matchCode}\n\nThe first approval link they open asks them to sign in with their wallet (a message, no fee). It expires in ${inMinutes(h.expiresAt)}. ${h.bundle ? `After they add the agent, the same page asks their wallet for each transaction in the terms, one after the other.` : `Setup adds this agent to their ${host} account: after the code, their wallet signs the owner-proof message (no fee), and no transaction is sent. Other actions ask their wallet for a transaction.`} Testnet only. Test tokens, no real money.${other} End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
     } else {
-      console.error(`\nWrite this approval link and its terms in your reply to the owner, a visible message, not only in your reasoning or a tool call. Only the owner should use the page, in the browser with their wallet (${rail.walletWords}):\n\n  ${h.url}\n\nIt works on this computer only (over SSH, the owner first forwards the port: ssh -L ${new URL(h.url).port}:127.0.0.1:${new URL(h.url).port} user@this-host) and expires in ${inMinutes(h.expiresAt)}; after that, run the command again for a new one. Setup asks for a message signature. Other actions ask for a transaction approval. Testnet only: test USDC, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
+      console.error(`\nWrite this approval link and its terms in your reply to the owner, a visible message, not only in your reasoning or a tool call. Only the owner should use the page, in the browser with their wallet (${rail.walletWords}):\n\n  ${h.url}\n\nIt works on this machine only (over SSH, the owner first forwards the port: ssh -L ${new URL(h.url).port}:127.0.0.1:${new URL(h.url).port} user@this-host) and expires in ${inMinutes(h.expiresAt)}; after that, run the command again for a new one. Setup asks for a message signature. Other actions ask for a transaction approval. Testnet only. Test tokens, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
     }
     if (!argv.includes("--no-open")) openBrowser(h.url);
   }
@@ -167,7 +167,7 @@ export function ownerPageFor(rail: OwnerRail) {
       process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: `the recorded site is not usable: ${site.error}`, next: `run superstables budget setup ${rail.railFlag ?? "--rail evm"} --hosted again, with --site if you use another site` }));
     }
     if (kind === "transaction" && !HOSTED_KIND[action]) {
-      console.error(`${action}: the owner's steps of recover use the approval page on this computer (127.0.0.1), not ${site.origin}. Hosted approvals cover setup, grant, revoke and fund-agent.`);
+      console.error(`${action}: the owner's steps of recover use the approval page on this machine (127.0.0.1), not ${site.origin}. Hosted approvals cover setup, grant, revoke and fund-agent.`);
       return undefined;
     }
     return { ...rail.hosted(action), site: site.origin as string };
@@ -201,7 +201,7 @@ export function ownerPageFor(rail: OwnerRail) {
       if (hosted) {
         const handle = await hostedFor(hosted).request({ kind: "connect", terms, timeoutMs: OWNER_TIMEOUT_MS, then, prior: linkOpts.prior ?? null, newOwner: linkOpts.newOwner === true }).catch((e) => refusedBySite(action, e));
         // already linked on this chain, with the owner's proof over the link recorded here: no link to show, nothing to wait for
-        if (handle.alreadyLinked) console.error(`\nThis agent already belongs to the account of the owner recorded on this computer, on ${hosted.site} (checked against that owner's signed proof); no approval link is needed.\n`);
+        if (handle.alreadyLinked) console.error(`\nThis agent already belongs to the account of the owner recorded on this machine, on ${hosted.site} (checked against that owner's signed proof); no approval link is needed.\n`);
         else announce(action, handle, terms, hosted.site);
         if (handle.bundle) {
           const bundle = await handle.bundle;

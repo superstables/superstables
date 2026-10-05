@@ -28,7 +28,7 @@ Listings that match the words come first, then index listings. A source that can
 | Flag | Effect |
 | --- | --- |
 | (none) | Only listings `pay` can call as listed |
-| `--budget` | Listings a `superstables budget` rail could pay, instead. Adds what `pay` cannot call: other testnets, MPP sellers, index listings without parameters. When every match is a Base Sepolia listing `pay` can call, both show the same |
+| `--budget` | Listings a `superstables budget` rail could pay, instead. Adds what `pay` cannot call as listed, such as index listings without parameters. When every match is a listing `pay` can call, both show the same |
 | `--all` | Every listing, including those this client cannot pay, with the reason |
 | `--demo` | Include Superstables' testnet services from the hosted catalogue: most are simulated, the market data service returns live prices |
 | `--limit N` | How many to ask for (default 20) |
@@ -109,7 +109,7 @@ superstables quote 'https://seller.example/path?k=v'
 - It checks the terms against the spend policy and prints each rule (`kill_switch`, `deny`, `allow`, `stablecoins`, `caps.per_call`, `caps.per_day`). Without a policy file the built-in defaults apply: at most 0.05 USDC per payment and 1 USDC per day.
 - The quote lasts 10 minutes and starts at most one payment. After that payment ends, however it ends, take a new quote.
 - `--json` prints the quote record: `id` (the quote id for `pay`; for example `superstables quote ... --json | jq -r .id`), `expiresAt`, `url`, `terms`, `requirement`, `policy` (`allowed`, `checks[]`), `next`.
-- Exit 0 quoted and allowed; 1 not a paid endpoint, unreachable, or no payment this client can make (for example a seller not on Base Sepolia); 2 bad input; 3 quoted, but the policy refuses it. The policy belongs to the owner: do not edit it to get past a refusal.
+- Exit 0 quoted and allowed; 1 not a paid endpoint, unreachable, or no payment this client can make (for example a seller on a mainnet); 2 bad input; 3 quoted, but the policy refuses it. The policy belongs to the owner: do not edit it to get past a refusal.
 
 ## Pricing for a budget
 

@@ -74,7 +74,7 @@ let agentAddr: Address;
 const agentFile = agentFileValues();
 if (agentFile.problem !== undefined) {
   // reusing it would hand the owner's budget to a key other users on this machine may already hold
-  console.log(`REFUSED: ${agentFile.problem}. Nothing was changed on this computer.`);
+  console.log(`REFUSED: ${agentFile.problem}. Nothing was changed on this machine.`);
   process.exit(emit("setup", 3, { state: "refused_precheck", reason: agentFile.problem, next: `make ${AGENT_ENV} a regular file only you can read (chmod 600), then run setup again` }));
 }
 if (existsSync(AGENT_ENV)) {
@@ -177,7 +177,7 @@ if (OWNER_KEY_FILE) {
     amount: CAP !== undefined ? usdc(CAP) : FUND_AMT,
     unit: CAP !== undefined ? SYM : GAS.symbol,
     summary: [
-      `1. Add this agent to your ${HOST} account: your account's address is recorded as the budget owner on this computer.`,
+      `1. Add this agent to your ${HOST} account: your account's address is recorded as the budget owner on the agent's machine.`,
       FUND_AMT ? `${2}. Send ${FUND_AMT} ${GAS.symbol} from your wallet to the agent for network fees.` : "",
       CAP !== undefined ? `${FUND_AMT ? 3 : 2}. Allow the agent to withdraw up to ${capWords(CAP)} from your wallet in total.` : "",
       "Your wallet asks you to approve each transaction in turn.",
@@ -191,7 +191,7 @@ if (OWNER_KEY_FILE) {
     enforced: CAP !== undefined ? grantEnforced(CAP) : [],
     notEnforced: CAP !== undefined ? GRANT_NOT_ENFORCED : [],
     notes: [
-      `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on this computer; ${HOST} does not receive it.`,
+      `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on the agent's machine; ${HOST} does not receive it.`,
       ...(FUND_AMT ? ["The agent controls the gas it receives and can send it elsewhere."] : []),
       ...(CAP !== undefined ? [`The grant gives permission; it does not transfer the budget now. Do not change the spending cap in your wallet. To end the budget at any time: ${REVOKE_HINT}`] : []),
       "You pay the network fee for each transaction, shown in your wallet.",
@@ -207,7 +207,7 @@ if (OWNER_KEY_FILE) {
   if (recorded && !same(recorded, ownerAddr) && !NEW_OWNER) {
     await closeOwnerPage(0);
     const sent = bundle?.steps.filter((s) => s.hash).map((s) => `${s.kind} ${s.hash}`) ?? [];
-    const reason = `${HOST} added this agent to the account ${ownerAddr}, but this computer records the owner ${recorded}. Nothing was changed on this computer${sent.length ? `; that account's wallet reported ${sent.join(", ")}` : ""}`;
+    const reason = `${HOST} added this agent to the account ${ownerAddr}, but this machine records the owner ${recorded}. Nothing was changed on this machine${sent.length ? `; that account's wallet reported ${sent.join(", ")}` : ""}`;
     console.log(`REFUSED: ${reason}.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `if ${ownerAddr} is the right owner: ${newOwnerCmd(SITE)} (refused while a budget is live). If not, remove this agent from that account on ${HOST}${sent.length ? ", and check that account's wallet activity" : ""}` }));
   }
@@ -215,17 +215,17 @@ if (OWNER_KEY_FILE) {
   // the owner links this agent to their account on the site; the account's address becomes the owner on record
   const r = await askConnect("setup", {
     title: `Add this agent to your ${HOST} account`,
-    summary: `Sign in to ${HOST} with your wallet and add this agent to your account. Your account's address is recorded as the budget owner on this computer. This does not grant a budget or send a transaction.`,
+    summary: `Sign in to ${HOST} with your wallet and add this agent to your account. Your account's address is recorded as the budget owner on the agent's machine. This does not grant a budget or send a transaction.`,
     rows: [
       { label: "Your agent", value: agentAddr, mono: true },
       { label: "Chain", value: `${CFG.label} (testnet)` },
-      { label: "Agent key", value: `on this computer only, in ${AGENT_ENV}` },
+      { label: "Agent key", value: `on the agent's machine only, in ${AGENT_ENV}` },
     ],
     enforced: [],
     notEnforced: [],
     notes: [
       `Grants, revokes and gas for this agent are then approved on ${HOST}, in your wallet. You pick the match code your agent shows you before the agent is added or anything is sent.`,
-      `The agent key stays on this computer; ${HOST} does not receive it. Your signing key stays in your wallet.`,
+      `The agent key stays on the agent's machine; ${HOST} does not receive it. Your signing key stays in your wallet.`,
     ],
   }, "", NEW_OWNER ? recorded : undefined, undefined, { prior, newOwner: NEW_OWNER });
   const outcome = r.outcome;
@@ -236,17 +236,17 @@ if (OWNER_KEY_FILE) {
   console.log(`Agent added to the ${HOST} account ${ownerAddr}`);
   if (recorded && !same(recorded, ownerAddr) && !NEW_OWNER) {
     await closeOwnerPage(0);
-    const reason = `${HOST} added this agent to the account ${ownerAddr}, but this computer records the owner ${recorded}. Nothing was changed on this computer`;
+    const reason = `${HOST} added this agent to the account ${ownerAddr}, but this machine records the owner ${recorded}. Nothing was changed on this machine`;
     console.log(`REFUSED: ${reason}.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `if ${ownerAddr} is the right owner: ${newOwnerCmd(SITE)} (refused while a budget is live). If not, remove this agent from that account on ${HOST}` }));
   }
 } else {
   const { handle, outcome } = await askConnect("setup", {
     title: "Connect your wallet",
-    summary: "Connect your wallet and sign a message to record its address as the budget owner on this computer. This does not grant a budget or send a transaction.",
+    summary: "Connect your wallet and sign a message to record its address as the budget owner on this machine. This does not grant a budget or send a transaction.",
     rows: [
       { label: "Your agent", value: agentAddr, mono: true },
-      { label: "Agent key", value: `on this computer only, in ${AGENT_ENV}` },
+      { label: "Agent key", value: `on this machine only, in ${AGENT_ENV}` },
     ],
     enforced: [],
     notEnforced: [],

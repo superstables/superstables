@@ -3,8 +3,8 @@
 //
 //   buy once superstables budget buy-once: a Superstables catalogue listing, which the owner approves
 //            on superstables.com from any device. Listed first: it needs no page on this computer.
-//   pay      superstables quote, then superstables pay <quote-id>. x402 on Base Sepolia; the
-//            owner approves each payment.
+//   pay      superstables quote, then superstables pay <quote-id>, on the chains pay pays on
+//            (src/core/rails/); the owner approves each payment.
 //   budget   superstables budget preflight (signs nothing; prints the price and payTo), then
 //            superstables budget buy, on every rail (evm, tempo, solana).
 //
@@ -36,7 +36,7 @@ export function listingCommands(service: ServiceListing): ListingCommands[] {
   // A command is the client's own words: it is built only from a listing whose id and parameter names are plain
   // identifiers and whose endpoint is a well-formed https URL (or http on this machine). Any other listing gets none.
   if (!isPlainListing(service)) return [];
-  // A catalogue listing on Base Sepolia that pay still cannot take is refused for a reason that
+  // A catalogue listing on a chain pay pays on that pay still cannot take is refused for a reason that
   // holds for a budget too (the endpoint is not https, the seller has no payout address).
   if (service.source === "demo-catalogue" && !service.actionable && service.routes?.pay) return [];
 

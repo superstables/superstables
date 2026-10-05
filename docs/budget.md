@@ -12,7 +12,7 @@ The `tempo` rail runs on Tempo Moderato and the `solana` rail on Solana devnet. 
 
 ## What the chain enforces
 
-On `evm`, the grant is a USDC `approve` from the owner's wallet to an agent key on this computer.
+On `evm`, the grant is a USDC `approve` from the owner's wallet to an agent key on this machine.
 The USDC stays in the owner's wallet; each purchase pulls exactly its price, then pays the seller.
 
 | | Enforced by |
@@ -31,7 +31,7 @@ expiry, a period and a seller list on chain; see the [security model](security.m
   command.
 - Linux or macOS (on Windows, WSL). For this local EVM walkthrough, an owner browser wallet
   such as MetaMask, Rabby or Coinbase Wallet that can reach the local approval page. On the same
-  computer, use a browser extension; over SSH, forward the port in the approval link. No website
+  machine, use a browser extension; over SSH, forward the port in the approval link. No website
   account is needed. Hosted approvals use a wallet on the owner's device instead.
 - Test funds in the owner's wallet, from <https://faucet.circle.com>:
   - Arc Testnet: USDC only, since USDC also pays gas. About 0.4 USDC covers this page: 0.1 for the
@@ -51,7 +51,7 @@ approval port. Choose `setup --hosted` at the setup step and follow
 [Approve on superstables.com instead](#approve-on-superstablescom-instead).
 
 Both choices use the same installed CLI or command-capable agent skill. The budget key, purchases
-and journals stay on your computer or server. The payment MCP tools do not create or spend budgets.
+and journals stay on your machine or server. The payment MCP tools do not create or spend budgets.
 
 ## Who runs what
 
@@ -70,7 +70,7 @@ balances, transaction hashes and ids will differ: use the values from your own r
 superstables budget setup --rail evm --chain arc-testnet
 ```
 
-This creates the agent key on this computer and opens a page where the owner connects their wallet
+This creates the agent key on this machine and opens a page where the owner connects their wallet
 and signs a short message. The message sends nothing and costs nothing. The command ends with the
 address it recorded as the owner:
 
@@ -235,7 +235,7 @@ Setup then prints an approval link and a match code. The owner opens it, signs i
 the first time (a message, no fee), picks the same code and adds the agent to their superstables.com
 account. From then on, `fund-agent`, `grant` and `revoke` on that chain ask through the site, each
 with its own approval link and code, and the owner approves the transaction in their wallet there. `recover`
-still uses the page on this computer. The CLI, agent key and purchase journals stay on your own runtime; the owner's key stays in their wallet. Purchases need no approval from
+still uses the page on this machine. The CLI, agent key and purchase journals stay on your own runtime; the owner's key stays in their wallet. Purchases need no approval from
 the site: the client pays the seller directly. On Solana the owner also connects a Solana wallet on
 the site's page; that address is the owner on record, and it signs each transaction the site builds.
 Solana sign-in is not supported in 0.3.0.
@@ -245,7 +245,7 @@ revoke budgets. It shows Single purchase requests made on superstables.com, not 
 read [local budget records](records.md#budget-records) for those. After requesting a revoke, check
 `budget status` and wallet activity: the permission ends only when the transaction confirms.
 
-This is optional. Approvals on this computer remain the default and need no account. Hosted
+This is optional. Approvals on this machine remain the default and need no account. Hosted
 approvals need a superstables.com account, or a compatible deployment the owner names with `--site`
 or `SUPERSTABLES_SITE`. An origin outside superstables.com and its subdomains also needs the owner to
 set `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own environment; an agent never sets it.

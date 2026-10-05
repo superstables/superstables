@@ -1,6 +1,6 @@
 # Quotes, attempts and receipts
 
-The client records quotes, payment attempts, approval decisions and receipts on this computer. They
+The client records quotes, payment attempts, approval decisions and receipts on this machine. They
 are what you read to find out how a payment ended, including when its outcome is uncertain.
 
 ## Check an unresolved outcome
@@ -106,60 +106,97 @@ awaiting_approval ──┼── the owner says no ─────────�
 | State | Final | What it means |
 | --- | --- | --- |
 | `awaiting_approval` | no | The attempt is checking the quote or waiting for the owner. In browser mode, `approvalUrl` appears once the page is ready. **No payment credential has been sent** |
-| `approved` | no | The owner signed with their wallet. The payment credential has not been sent to the seller yet |
-| `submitting` | no | The request is being replayed with the payment credential attached |
-| `denied` | yes | The owner rejected it — on the approval page, or in MetaMask's own popup. No payment credential was sent. The seller was only asked for its terms |
+| `approved` | no | The owner signed with their wallet. The payment credential has not been sent to the seller yet. On Tempo Moderato: the owner's wallet was asked to send the payment |
+| `submitting` | no | The request is being replayed with the payment credential attached. On Tempo Moderato: the client is checking on chain the transaction the wallet reported, before it calls the seller |
+| `denied` | yes | The owner rejected it — on the approval page, or in MetaMask's own popup — before anything was signed or sent. No payment credential was sent. The seller was only asked for its terms |
 | `expired` | yes | Nobody decided within the approval window: five minutes in browser mode, 120 seconds with the local wallet, by default. Cancel any open wallet prompt before asking again |
 | `abandoned` | yes | Nobody decided: whoever was waiting for the owner stopped first (`pay --wait` ran out, `pay` was interrupted, or the process serving the approval page stopped). Not a rejection. Nothing was submitted |
-| `failed` | yes | The client stopped before sending a payment, or the seller reported that it was not paid. The
-client does not check the chain for this. See `reason`; `refusal` says which check refused when one did (`policy`, `invalid`, `unavailable`, `approval_page`) |
+| `failed` | yes | Nothing was paid: the client stopped before sending a payment, or a later chain check shows the payment was never made and can no longer be (`chain: "unpaid"`). See `reason`; `refusal` says which check refused when one did: `policy`, `invalid`, `unavailable` (the local wallet did not answer), `approval_page`, `cap_check` (the daily cap could not be checked), or `chain` (on Tempo, the chain could not be read before the wallet was asked; nothing was sent) |
 | `settled` | yes | The seller reported that settlement succeeded, and the service answered 2xx. A receipt exists. `chain` says whether the client confirmed it on chain |
 | `paid_service_failed` | yes | The seller reported that settlement succeeded, and the service answered a non-2xx status or its answer did not arrive in full. A receipt exists. `chain` as for `settled` |
-| `uncertain` | yes | The credential may have been sent, and the outcome is unknown, including when the chain shows the seller's transaction is not this payment (`chain: "mismatch"`). **Never retried automatically** |
+| `uncertain` | yes | The credential may have been sent, or the wallet may have sent the payment, and the outcome is unknown: including when the seller said it was not paid, and when the chain shows the seller's transaction is not this payment (`chain: "mismatch"`). **Never retried automatically** |
 
-`chain` on a paid attempt and its receipt: `verified` when the client read the transaction on Base
-Sepolia and it used the nonce the owner signed and transferred exactly the signed amount to the
-checked recipient; `unchecked` (with `chainReason`) when the chain could not say yet. `superstables
-status` reads the chain again for an unchecked attempt.
+`chain` on a paid attempt and its receipt: `verified` when the client read the transaction on the
+payment's chain and it is this payment (see [security.md](security.md) for what that means on each
+chain); `unchecked` (with `chainReason`) when the chain could not say yet. `superstables status`
+reads the chain again for an unchecked attempt: first the transaction the seller named, then the
+payment itself, as for an `uncertain` one (below).
 
 A later chain check can change `settled` or `paid_service_failed` to `uncertain` and mark its
-receipt `mismatch`. The history retains the earlier state. This never starts another payment.
+receipt `mismatch`, correct the receipt to the transaction that is this payment, or, when the chain
+shows the payment was never made and can no longer be, make the attempt `failed` and mark its
+receipt `unpaid`. The history retains the earlier state. This never starts another payment.
 
 ### Why `failed` and `uncertain` are different
 
-The client records `failed` when: the owner's policy refused before anyone
-was asked, the seller's terms changed between the quote and the payment, the approval page
-could not be served (or the local wallet could not be reached), the service asked for payment
-again, or the facilitator reported that the transfer did not settle. A failure before submission means this attempt sent no payment credential. After submission, the
-client relies on the seller's answer: if that is in doubt, check the chain before paying again.
+The client records `failed` when nothing was paid: the owner's policy refused before anyone was
+asked, the seller's terms changed between the quote and the payment, the approval page could not
+be served (or the local wallet could not be reached), or anything else stopped the payment before
+the credential left this machine or the wallet was asked to send. A later chain check also records
+`failed`, with `chain: "unpaid"`, when it shows that the payment was never made and can no longer
+be.
 
-`uncertain` means the outcome is unknown after the owner signed. It comes from an interruption after
-approval, or from one of these:
+`uncertain` means the outcome is unknown after the owner signed, or after the wallet was asked to
+send. It comes from an interruption after approval (a `pay` that was stopped or crashed, which
+`superstables status` picks up), or from one of these:
 
 - the service could not be reached after the credential was sent (a timeout, a dropped
   connection);
-- the service answered without a readable `PAYMENT-RESPONSE` or `X-PAYMENT-RESPONSE` header (other
-  than an HTTP 402, which is recorded as `failed`), so whether the transfer settled is not known here.
+- the service answered without a readable `PAYMENT-RESPONSE` or `X-PAYMENT-RESPONSE` header, or
+  asked for payment again (HTTP 402), or reported that the payment did not settle: the seller's
+  facilitator may have settled it before the answer, or may settle it later, so the seller's word
+  does not end it as unpaid;
+- on Tempo Moderato, where the owner's wallet sends the payment itself: the wallet was asked to
+  send and the page reported no transaction (the page closed, the window ended, `pay` stopped), or
+  reported that the owner rejected it in the wallet (a report the client cannot check), or the
+  chain did not show the transaction it reported within 30 seconds, or showed another transfer. The
+  service was not called.
 
 The client does not retry these, ever. Retrying a payment that may already have settled is how
 money gets spent twice, and a retry cannot tell you which case you were in.
 
-**What to do with an `uncertain` attempt.** Look, do not retry:
+**What to do with an `uncertain` attempt.** Look, do not retry, and do not quote the same request
+again:
 
-1. `superstables status <attempt-id>` — the `reason` says which of the two cases happened, and
-   the history says how far it got.
-2. Check the payer address on the block explorer for a transfer of that amount to that
-   recipient around that time. Base Sepolia:
+1. `superstables status <attempt-id>` — the `reason` says which case happened, and the history
+   says how far it got. It also searches the chain for the payment, by what ties it to this attempt
+   alone, never by a transaction the seller named:
+   - on the EVM chains, the authorization the owner signed: the token says whether its nonce was
+     used, and its `AuthorizationUsed` log names the transaction;
+   - on Tempo Moderato, the transfer with this payment's memo, in a block after the one the chain
+     was at when the wallet was asked;
+   - on Solana devnet, a transaction carrying the owner's signature among the owner's token
+     account's transactions since the payment was built, and, once its blockhash has expired, in
+     each of the blocks it could have landed in. The search is limited; when it cannot tell, it
+     says so. One status reads those blocks for up to 45 seconds and records on the attempt the
+     slot up to which they hold no payment (`searchedToSlot`); the next status reads on from
+     there. The public devnet RPC limits how fast blocks can be read, so through it this takes
+     several statuses.
+
+   Found, the attempt becomes `paid_service_failed` (or `settled`, when the service had already
+   answered and delivered) with a receipt. When final chain evidence shows the payment can no
+   longer happen, the attempt becomes `failed` with `chain: "unpaid"`: nothing was paid, and only
+   then quote again. On the EVM chains that is a final block (the RPC's `finalized` block; on SKALE
+   Base Sepolia, the latest) dated at or past the authorization's `validBefore` with the
+   authorization unused, or its cancellation in a block at or below the final block that is still
+   the chain's block at that height (the same block hash); without a final block, it stays
+   `uncertain`. On Solana devnet it is a blockhash expired by the finalized block height, with every
+   block it could have landed in read whole and none holding this payment (a transaction carrying
+   the owner's signature that failed on chain is not this payment). Otherwise it stays
+   `uncertain`, with the chain's answer. A Tempo transfer has no expiry, so on Tempo only finding
+   it resolves the attempt, and until then it counts against the daily cap. If the wallet's
+   activity shows it never sent the transfer, and no request is still waiting there, whether to
+   pay again is the owner's decision; raising `caps.per_day` in the policy is how to stop the
+   attempt from blocking other payments.
+2. Check the payer address on the payment chain's block explorer for a transfer of that amount to
+   that recipient around that time, for example on Base Sepolia
    `https://sepolia.basescan.org/address/<the account that paid>` — in browser mode that is the
-   MetaMask account you connected, which `~/.superstables/browser-wallet.json` also names.
+   wallet account you connected, which `~/.superstables/browser-wallet.json` also names.
 3. Check the approval record for this attempt in `~/.superstables/records/approvals.jsonl`. A
    `signed` line means the client verified a signature. A missing line does not prove that nothing
    was signed. With the local wallet, `~/.superstables/wallet/audit.jsonl` is the record.
 4. If the transfer is on chain, do not pay again; the service owes you an answer, so take it up
-   with the service. Otherwise, quote again only after you have checked on chain that the authorization is unused and
-   the chain's time is past its signed `validBefore`, which in browser mode is `maxTimeoutSeconds`
-   (300 seconds by default) after the typed data was prepared for signing. If you cannot establish
-   both, treat the payment as unresolved.
+   with the service.
 
 ## Approvals
 
@@ -170,22 +207,36 @@ verified terms, the reported context and the account that connected — and neve
 | Approval status | Meaning |
 | --- | --- |
 | `pending` | The approval link exists and is waiting for the owner. Nothing is signed |
-| `signed` | The owner signed with their browser wallet, and the signature was verified to be theirs |
-| `denied` | Rejected on the page, or rejected in MetaMask |
+| `signed` | The owner signed with their browser wallet, and the signature was verified to be theirs (on Tempo: the wallet sent the payment and the page reported its transaction) |
+| `denied` | Rejected on the page, or rejected in MetaMask, before anything was signed or sent |
 | `expired` | The approval window ended before the client accepted a signature or a rejection; cancel any open wallet prompt |
 | `abandoned` | The process serving the page stopped before anyone decided |
+| `refused` | Tempo: the client stopped before the wallet was asked to send, for example because the daily cap now refuses it. Nothing was sent |
+| `unknown` | Tempo: the wallet was asked to send, and no transaction came back before the window ended or the process stopped, or the page reported that the owner rejected it in the wallet. It may have been sent |
 
-A payment the policy refuses never appears here at all: nobody was asked. The same is true of a
-requirement this client cannot pay — an unsupported network, the wrong asset — which is refused
-before an approval is created.
+A payment refused by the policy before an approval is created does not appear in this log. On
+Tempo, a later policy refusal before the wallet is asked to send is recorded as `refused`.
+Unsupported requirements (an unsupported chain, the wrong asset) are rejected before an approval is
+created.
 
 ## Receipts
 
-A receipt is written when the seller's settlement response reports success, for `settled` and for
-`paid_service_failed`. Its id is the attempt's id. Its `chain` says whether the client confirmed the
-transfer on chain (`verified`), has not confirmed it (`unchecked`), or found a mismatch on a later
-check (`mismatch`); the transaction link is how you check it
-yourself.
+A receipt is written when the seller's settlement response reports success, or when the chain
+shows the payment (on Tempo, before the seller is called; or when `superstables status` finds an
+`uncertain` payment), for `settled` and for `paid_service_failed`. Its id is the attempt's id, so a
+payment has one receipt: a later check corrects it rather than adding another. On Tempo and Solana,
+a transaction recorded as one attempt's verified payment is never taken as another's; on EVM chains
+one transaction may settle several payments, and each must match its own signed authorization nonce
+and exact transfer. A check never turns a receipt the chain verified back into anything else, and
+neither does a seller's answer that arrives after `superstables status` decided the payment: on a
+verified payment it adds what the service did; on a payment the chain showed was never made, it is
+kept as a receipt marked `unpaid`, which counts nowhere. A seller's answer is written under the
+same lock as status. When a run cannot take that lock, the answer waits in `pending-answers/` for
+the next `superstables status` to record it, and a run still in progress ends `uncertain`. Its
+`chain` says whether the client confirmed the transfer on chain
+(`verified`), has not confirmed it (`unchecked`: the seller's report), found a mismatch on a later
+check (`mismatch`), or found on a later check that the payment was never made and can no longer be
+(`unpaid`); the transaction link is how you check it yourself.
 
 It records the terms that were paid, the payer (the account that signed — your MetaMask
 account, in the default mode), the transaction and its explorer URL, selected fields of the settlement response (success, payer, transaction, network, error
@@ -210,15 +261,22 @@ pretending to a hash it does not have.
 ## What the daily cap counts
 
 `caps.per_day` is checked against the records in this directory, per asset and UTC day. A payment
-counts on the day it ended, and on every day while it is still open (signed and in flight until its
-authorization expires, or waiting for the owner within its approval window). So a receipt counts on its own day, an
-`uncertain` attempt on the day it became uncertain, an `approved` or `submitting` one on every day
-until it ends or its signed authorization expires (`authorizationValidBefore`; after that, on the
-day it was signed; an older record without it counts every day until it ends), and one waiting for the owner until its reservation (`reservedAt`, `reservedUntil`)
-ends: the signer's approval window and one minute of grace. A reservation that lapses before the
+counts on the day it ended, and on every day while it can still move money (signed or sent and not
+resolved, or waiting for the owner within its approval window). So a receipt counts on its own day
+(not at all once a later check marked it `unpaid`). A receipt the chain has not confirmed
+(`unchecked`, the seller's report) or has contradicted (`mismatch`) leaves its payment unresolved,
+unless its attempt is `verified`: it also counts on later days, once a day, on the terms below for
+its attempt. An `uncertain`, `approved` or `submitting` attempt counts on every day while it can still move money: on the EVM chains until its signed
+authorization expires (`authorizationValidBefore`, and two minutes for a chain clock behind this
+machine's; after that, on the day it became uncertain, or was signed); on Tempo Moderato, where a
+transfer has no expiry, and on Solana devnet, where only the chain can say a transaction's blockhash
+has expired, until `superstables status` resolves it, paid or (Solana) unpaid. An older EVM record
+without `authorizationValidBefore` counts every day while `approved` or `submitting`, and on the day
+it became uncertain. One waiting for the owner counts until its reservation (`reservedAt`,
+`reservedUntil`) ends: the signer's approval window and one minute of grace. A reservation that lapses before the
 owner is asked, or before a signature is sent, is checked against the cap again and renewed, or the
 payment stops there. Before the owner is asked, `pay` checks the cap and reserves the amount under a lock every
-`pay` process on this computer shares, so two payments started at once cannot both pass. A payment
+`pay` process on this machine shares, so two payments started at once cannot both pass. A payment
 that ends unsigned releases its reservation. Each payment counts once. It is checked
 once when a quote is taken, and again at the gate, before anyone is asked to approve. (With the
 local wallet there is a second count, from the wallet's own audit log of what it signed today.)

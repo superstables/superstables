@@ -37,7 +37,7 @@ const source = join(root, "skills", NAME);
 const outRoot = join(root, "build", "skill");
 const out = join(outRoot, NAME);
 
-const RUN_IN_ZIP = `\`superstables\` is \`node scripts/superstables.mjs\` in this skill's folder (the folder this SKILL.md is in). Run it with that folder's absolute path, for example \`node ~/.claude/skills/${NAME}/scripts/superstables.mjs find weather\` or \`node ~/.claude/skills/${NAME}/scripts/superstables.mjs budget doctor --rail evm\`. It needs Node 20+ and nothing else: \`scripts/\` holds the whole tool, bundled. \`node scripts/superstables.mjs --version\` names the build. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this computer.`;
+const RUN_IN_ZIP = `\`superstables\` is \`node scripts/superstables.mjs\` in this skill's folder (the folder this SKILL.md is in). Run it with that folder's absolute path, for example \`node ~/.claude/skills/${NAME}/scripts/superstables.mjs find weather\` or \`node ~/.claude/skills/${NAME}/scripts/superstables.mjs budget doctor --rail evm\`. It needs Node 20+ and nothing else: \`scripts/\` holds the whole tool, bundled. \`node scripts/superstables.mjs --version\` names the build. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine.`;
 
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const version = process.argv.includes("--dev") ? devVersion(pkg.version, revisionOf(root)) : pkg.version;

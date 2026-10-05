@@ -275,7 +275,7 @@ describe("the Superstables MCP server", () => {
     expect(settled.receipt?.service_outcome).toBe("ok");
     expect(settled.service_response?.asset).toBe("BTC");
     // No chain is reachable in this test, so the settlement stays the seller's report, said as such.
-    expect(settled.message).toContain("the service reported it settled, and the chain has not confirmed it yet");
+    expect(settled.message).toMatch(/^The seller reported it paid: 0\.01 USDC on Base Sepolia \(testnet\) \(transaction 0x[0-9a-f]{64}\)\. The chain has not confirmed it yet/);
     expect((settled as { chain?: string }).chain).toBe("unchecked");
     expect(facilitator.calls.settle).toBe(1);
     // The seller's answer is marked as somebody else's in the structure itself, not only in the instructions.
@@ -304,7 +304,7 @@ describe("the Superstables MCP server", () => {
     const denied = await waitForFinal(started.attempt_id);
     expect(denied.state).toBe("denied");
     expect(denied.message).toBe(
-      "The owner rejected this payment in their wallet. Nothing was signed or submitted, and the service was not called.",
+      "The owner rejected this payment. Nothing was signed or submitted, and the service was not called.",
     );
     expect(denied.receipt).toBeUndefined();
     // The denial must have cost nothing: the facilitator never heard about this payment.

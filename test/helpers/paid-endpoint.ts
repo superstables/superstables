@@ -8,7 +8,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { decodePaymentSignatureHeader, encodePaymentResponseHeader } from "@x402/core/http";
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import type { PaymentPayload, PaymentRequirements, SettleResponse } from "@x402/core/types";
-import { BASE_SEPOLIA, isSameAddress, toAtomic, toCaip2 } from "../../src/core/chain.js";
+import { BASE_SEPOLIA, isSameAddress, toAtomic, toCaip2, type EvmNetwork } from "../../src/core/chain.js";
 
 export type PaidEndpointBehaviour =
   /** Settles and answers 200 with the receipt header. */
@@ -26,6 +26,8 @@ export interface PaidEndpointOptions {
   facilitatorUrl: string;
   /** Which x402 wire version to speak. Default 2. */
   version?: 1 | 2;
+  /** Which EVM chain it is paid on, in that chain's USDC. Default Base Sepolia. */
+  network?: EvmNetwork;
   behaviour?: PaidEndpointBehaviour;
 }
 
@@ -52,7 +54,8 @@ export async function startPaidEndpoint(opts: PaidEndpointOptions): Promise<Paid
   const behaviour = opts.behaviour ?? "ok";
   const facilitator = new HTTPFacilitatorClient({ url: opts.facilitatorUrl, timeoutMs: 10_000 });
   const hits = { total: 0, challenges: 0, paid: 0 };
-  const usdc = BASE_SEPOLIA.usdc;
+  const network = opts.network ?? BASE_SEPOLIA;
+  const usdc = network.usdc;
 
   // The price the seller is asking right now. Only "change-price-after-first-402" moves it.
   const priceNow = (): number =>
@@ -60,7 +63,7 @@ export async function startPaidEndpoint(opts: PaidEndpointOptions): Promise<Paid
 
   const requirementV2 = (): PaymentRequirements => ({
     scheme: "exact",
-    network: BASE_SEPOLIA.caip2 as PaymentRequirements["network"],
+    network: network.caip2 as PaymentRequirements["network"],
     asset: usdc.address,
     amount: toAtomic(priceNow(), usdc.decimals),
     payTo: opts.payTo,
@@ -70,7 +73,7 @@ export async function startPaidEndpoint(opts: PaidEndpointOptions): Promise<Paid
 
   const requirementV1 = (resource: string): Record<string, unknown> => ({
     scheme: "exact",
-    network: BASE_SEPOLIA.v1Name,
+    network: network.v1Name,
     maxAmountRequired: toAtomic(priceNow(), usdc.decimals),
     resource,
     description: RESOURCE_DESCRIPTION,

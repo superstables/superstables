@@ -6,7 +6,9 @@
 //
 // They are mapped from the attempt's recorded state, never from what the caller hoped for.
 
+import { networkFor, shortLabel } from "../core/chain.js";
 import { policyPath } from "../core/home.js";
+import { railFor } from "../core/rails/index.js";
 import type { Attempt, Quote } from "../core/types.js";
 import { FINAL_ATTEMPT_STATES } from "../core/types.js";
 
@@ -81,14 +83,25 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
     case "submitting":
       return `Run \`superstables status ${attempt.id}\` to see where it got to.`;
     case "settled":
-      return "Nothing to do: the service's answer is above, and `superstables receipts` lists the payment.";
+      return attempt.chain === "verified"
+        ? "Nothing to do: the service's answer is above, and `superstables receipts` lists the payment."
+        : `Nothing to do: the service's answer is above. The seller reported the payment and the chain has not confirmed it yet; \`superstables status ${attempt.id}\` checks again.`;
     case "paid_service_failed":
       return `Do not pay again. \`superstables status ${attempt.id}\` shows the service's answer; report it to the seller.`;
-    case "uncertain":
+    case "uncertain": {
+      // The payment's own chain: its explorer (on the right cluster), and the command that searches that chain for it.
+      const network = networkFor(attempt.terms?.network ?? "");
+      const search = railFor(network)?.findPayment ? `Run \`superstables status ${attempt.id}\`: it searches the chain for this payment. ` : "";
+      const explorer = !network ? "the chain's explorer" : network.explorerQuery ? `${network.explorer}/${network.explorerQuery}` : network.explorer;
+      // A Tempo transfer has no expiry: the chain never says it can no longer happen, so the owner decides.
+      const tempo = railFor(network)?.flow === "push"
+        ? " On Tempo a transfer has no expiry, so only finding it resolves this one: if the owner's wallet shows no transfer and no request waiting, paying again is the owner's decision, and this attempt keeps counting against the daily cap."
+        : "";
       return (
-        "Do not pay again yet. Check `superstables receipts` and the payer's account on " +
-        "https://sepolia.basescan.org; only quote again once you know this payment did not settle."
+        `Do not pay again yet. ${search}Check \`superstables receipts\` and the payer's account on ${explorer}; ` +
+        `only quote again once \`superstables status\` says this payment was not made.${tempo}`
       );
+    }
     case "denied":
       return `The owner said no. Do not retry unless the owner asks; then \`${requote}\` and \`superstables pay <new-quote-id>\`.`;
     case "expired":
@@ -114,10 +127,30 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
         );
       }
       if (attempt.refusal === "unavailable") {
+        // The local wallet, and only it. Each command names its wallet with the flag: the flag wins over
+        // SUPERSTABLES_WALLET, and a flag on `wallet serve` does not carry over to the next command.
+        const serve = "The local wallet did not answer. The owner starts it with `superstables --wallet local wallet serve`";
+        return quote?.status === "open"
+          ? `${serve}, then pays the same quote again with \`superstables --wallet local pay ${attempt.quoteId}\`. ` +
+              `To approve in a browser wallet instead, run \`superstables --wallet browser pay ${attempt.quoteId}\`.`
+          : `${serve}. Take a new quote with \`${requote}\`, then run \`superstables --wallet local pay <new-quote-id>\`. ` +
+              "To approve in a browser wallet instead, run `superstables --wallet browser pay <new-quote-id>` after taking the new quote.";
+      }
+      if (attempt.refusal === "cap_check") {
+        return `The daily cap could not be checked, so the owner was not asked and nothing was signed. If another \`pay\` is running, let it finish; then ${payAgain(attempt, quote, requote)}`;
+      }
+      if (attempt.refusal === "chain") {
+        // A chain read before the owner's wallet was asked to send failed: the RPC is what to look at, and the owner was
+        // already asked on this quote, so a new one is needed.
+        const network = networkFor(attempt.terms?.network ?? "");
+        const rpc = network ? ` (${network.rpcEnv ? `\`${network.rpcEnv}\` when it is set, otherwise ` : ""}${network.defaultRpc})` : "";
         return (
-          "The local wallet did not answer: the owner starts it with `superstables wallet serve`, or drop " +
-          `\`--wallet local\` to approve in a browser wallet; then ${payAgain(attempt, quote, requote)}`
+          `Nothing was sent: the ${network ? shortLabel(network) : "chain's"} RPC could not be read before the owner's wallet was asked. ` +
+          `Check that RPC${rpc}, then take a new quote: \`${requote}\`, then \`superstables --wallet browser pay <new-quote-id>\`.`
         );
+      }
+      if (attempt.chain === "unpaid") {
+        return `Nothing was paid: the chain shows it, and this attempt can no longer settle. To try again, take a new quote: \`${requote}\`, then \`superstables pay <new-quote-id>\`.`;
       }
       // a record that names a transaction is never "nothing was paid" (an earlier version could keep one on a failure)
       if (attempt.transaction) return `Do not pay again yet: this attempt names a transaction${/^0x[0-9a-fA-F]{64}$/.test(attempt.transaction) ? ` (${attempt.transaction})` : ""}. Check it, and \`superstables receipts\`, before taking a new quote.`;

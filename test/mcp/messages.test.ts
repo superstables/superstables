@@ -40,6 +40,29 @@ describe("messageFor", () => {
     }
   });
 
+  it("says what a Tempo payment in flight is waiting for: the wallet asked, then the transfer checked on chain", () => {
+    const tempo = { ...attempt("approved").terms, asset: "pathUSD", assetAddress: "0x20C0000000000000000000000000000000000000", network: "eip155:42431", networkLabel: "Tempo Moderato (testnet)", scheme: "charge" };
+    const asked = messageFor(attempt("approved", { terms: tempo, paymentMemo: `0x${"ab".repeat(32)}` }));
+    expect(asked).toBe("The owner's wallet has been asked to send 0.01 pathUSD on Tempo Moderato (testnet); whether it has sent it is not known yet. Call payment_status with this attempt_id.");
+    expect(asked).not.toMatch(/owner approved|settl/);
+    const checking = messageFor(attempt("submitting", { terms: tempo, transaction: `0x${"cd".repeat(32)}` }));
+    expect(checking).toBe(`The owner's wallet sent 0.01 pathUSD (transaction 0x${"cd".repeat(32)}). The client is checking that transfer on chain before it calls the service. Call payment_status with this attempt_id.`);
+    expect(checking).not.toMatch(/facilitator/);
+    // x402: the owner signed, and the seller's facilitator settles.
+    expect(messageFor(attempt("submitting"))).toContain("the facilitator is settling it");
+  });
+
+  it("calls a payment paid only when the chain verified it, and unpaid only when the chain says so", () => {
+    const hash = `0x${"ab".repeat(32)}`;
+    expect(messageFor(attempt("settled", { transaction: hash, chain: "verified", serviceStatus: 200 }))).toMatch(/^Paid 0\.01 USDC on Base Sepolia \(testnet\)/);
+    const reported = messageFor(attempt("settled", { transaction: hash, chain: "unchecked", chainReason: "the chain does not show the transaction yet", serviceStatus: 200 }));
+    expect(reported).toMatch(/^The seller reported it paid: 0\.01 USDC on Base Sepolia \(testnet\) \(transaction 0x[0-9a-f]{64}\)\. The chain has not confirmed it yet \(the chain does not show the transaction yet\); payment_status checks again\./);
+    expect(messageFor(attempt("paid_service_failed", { chain: "unchecked", serviceStatus: 500 }))).toMatch(/^The seller reported it paid/);
+    const unpaid = messageFor(attempt("failed", { transaction: hash, chain: "unpaid", reason: "the chain shows this payment was never made, and it can no longer be", chainReason: "it expired" }));
+    expect(unpaid).toBe("Payment did not happen: the chain shows this payment was never made, and it can no longer be (it expired). Nothing was paid, and nothing can be for this attempt.");
+    expect(messageFor(attempt("uncertain", { reason: "x" }))).toBe("The payment may or may not have settled: x. It was not retried. payment_status looks for it on chain; do not pay again for this request until it says this payment was not made.");
+  });
+
   it("reports an abandoned attempt as nobody deciding, with nothing paid", () => {
     const said = messageFor(attempt("abandoned"), undefined, "cli");
     expect(said).toContain("Nobody decided");
@@ -223,7 +246,10 @@ describe("seller text on the MCP server", () => {
       expect(instructions).not.toContain("Any other state means no money moved");
       expect(instructions).toContain('"uncertain" means it is unknown whether money moved');
       expect(instructions).not.toContain("Every other state means no money moved");
-      expect(instructions).toContain("Do not report success in other states. While submitting, the outcome is pending.");
+      expect(instructions).toContain("Do not report success in other states. While approved or submitting, the outcome is pending.");
+      // A failed attempt is never the seller's word against a payment that left: only the chain calls it unpaid.
+      expect(instructions).not.toContain("A failed attempt can reflect the seller's report");
+      expect(instructions).toContain('with chain "unpaid", the chain shows it was never made and can no longer be');
     } finally {
       await client.close();
     }

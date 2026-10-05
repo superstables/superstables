@@ -4,8 +4,7 @@ Superstables connects service discovery, pricing and payment for AI agents. Appr
 in your wallet, or grant a budget the agent can spend within.
 
 This repository is the client: the `superstables` command with its `superstables budget` tool, an
-MCP server, a TypeScript SDK and the `superstables-payments` agent skill. Agent payments use test
-tokens on test networks: USDC, or pathUSD on Tempo Moderato. There is no mainnet mode.
+MCP server, a TypeScript SDK and the `superstables-payments` agent skill.
 
 ## Get started
 
@@ -58,8 +57,8 @@ create by signing in with an Ethereum wallet. Solana purchases also need a Solan
 the payment transaction. Solana sign-in is not supported in 0.3.0. `superstables budget find --once` lists the services.
 
 **Single purchase on your machine.** Local `quote`/`pay`, the payment MCP server and the SDK
-payment core use Base Sepolia and a local approval page. Run `setup` for that flow. See
-[Single purchase on your machine](#approve-each-payment-on-this-computer).
+payment core use a local approval page, on the same eight chains as budgets. Run `setup` for that
+flow. See [Single purchase on your machine](#approve-each-payment-on-this-computer).
 
 The tested services use x402 on EVM and Solana, and MPP on Tempo.
 
@@ -119,7 +118,7 @@ npm install github:superstables/superstables-client#<commit>
 npx --no superstables --version
 ```
 
-npm builds the client on your computer during the install, running this repository's build
+npm builds the client on your machine during the install, running this repository's build
 scripts there.
 
 **From a checkout.** Clone the repository, check out that 0.3.0 release commit, then run
@@ -152,19 +151,22 @@ EVM funds held by an agent key have a separate [recovery step](docs/budget.md#re
 
 ## Single purchase on your machine
 
-`pay` uses [x402](https://x402.org) with the `exact` scheme and test USDC on Base Sepolia
-(`eip155:84532`, USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`). Unsupported payment
-schemes, networks and assets are rejected before approval.
+`pay` uses [x402](https://x402.org) with the `exact` scheme and test USDC on Base Sepolia, Arc
+Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia and Solana devnet,
+and [MPP](https://mpp.dev) `tempo.charge` with test pathUSD on Tempo Moderato. The client pins each
+chain's token, and on the EVM chains its signing domain. Unsupported payment schemes, chains and
+assets are rejected before approval, and so is every mainnet.
 
 1. **Find.** The agent lists paid services and identifies which ones this client can call.
 2. **Quote.** The client reads the service's HTTP 402 challenge and records its payment terms.
    No payment is made and nothing is signed.
-3. **Approve.** You open the local approval page and review the amount, asset, network and
+3. **Approve.** You open the local approval page and review the amount, asset, chain and
    recipient. These details come from the seller's payment requirement. Check the same
    transfer in your wallet before signing.
-4. **Pay.** The client sends the signed authorization to the seller, whose facilitator settles it
-   and pays the gas. The client returns the service's response, records a receipt and reads the
-   transaction on Base Sepolia.
+4. **Pay.** The client sends what you signed to the seller, whose facilitator settles it and pays
+   the fee. The client returns the service's response, records a receipt and reads the
+   transaction on that chain. On Tempo Moderato your wallet sends the payment itself and pays its
+   network fee; the client reads that transaction on chain before it calls the seller.
 5. **Reject.** Reject a request on the approval page or in your wallet before signing. No
    signature is produced, no payment is submitted, and the paid service request is not sent.
    The agent reports the rejection.
@@ -181,8 +183,12 @@ claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- superstables mcp
 steps with your local paths. In the default browser-wallet mode, it does not create a signing key.
 Another MCP client: point its configuration at `superstables mcp`;
 [docs/install.md](docs/install.md#any-other-mcp-client) has example entries. Fund your wallet
-address with test USDC on Base Sepolia from <https://faucet.circle.com>. You do not need ETH for
-this flow because the facilitator covers the gas.
+address with test USDC on the chain you pay on: on SKALE Base Sepolia, Base Sepolia test USDC
+bridged over the SKALE bridge; on the other USDC chains, test USDC from
+<https://faucet.circle.com>, with the payment's chain selected. You need no gas for x402 because
+the facilitator covers it. On Tempo Moderato you pay in test pathUSD
+(<https://docs.tempo.xyz/quickstart/faucet>) and your wallet pays the network fee. On Solana
+devnet you approve with a Solana wallet such as Phantom.
 
 Then ask the agent, in your own words:
 
@@ -211,11 +217,11 @@ than `~/.superstables`, and `--wallet browser|local` chooses who signs (browser 
 
 ### Which way to pay
 
-| Task | Approval and runtime | Networks | Start with |
+| Task | Approval and runtime | Chains | Start with |
 | --- | --- | --- | --- |
 | [Use a budget](docs/budget.md) | Owner grants once; client and agent key buy directly from sellers. Local approval by default; hosted approval optional | EVM/x402: Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia. Tempo/MPP: Tempo Moderato. Solana/x402: Solana devnet | `superstables budget setup --rail evm` |
 | [Single purchase on superstables.com](docs/buy-once.md#hosted-buy-once-superstables-budget-buy-once) | Owner approves each purchase on superstables.com; the site coordinates that purchase. No budget setup or agent key | Base Sepolia, Arc Testnet, Tempo Moderato, Solana devnet | `superstables budget find --once` |
-| [Single purchase on your machine](docs/buy-once.md#approve-each-payment-on-this-computer-pay) | Owner approves each payment on a local page; CLI, payment MCP or SDK submits it | Base Sepolia only, test USDC, x402 `exact` | `superstables setup` |
+| [Single purchase on your machine](docs/buy-once.md#approve-each-payment-on-this-computer-pay) | Owner approves each payment on a local page. For x402, the client passes the signed payment to the seller; on Tempo, the owner's wallet sends the transfer | The same as budgets. x402 `exact` with test USDC on the EVM chains and Solana devnet; MPP `tempo.charge` with test pathUSD on Tempo Moderato | `superstables setup` |
 
 All networks are testnets. Hosted budget approvals support all the budget networks above. EVM and Solana budgets use test USDC (bridged USDC on SKALE); Tempo uses test
 pathUSD. A seller must accept the selected network and protocol. See [rails, gas and faucets](budget/README.md#the-rails).
@@ -253,7 +259,8 @@ once.
 `https://www.superstables.com/api/v1/services`. The index records each service's payment
 protocols (`rails`, for example `["x402"]`) and `chains` (for example
 `["base-sepolia", "solana"]`), and `find` keeps both. It marks a listing payable by `pay` when it
-accepts x402 on Base Sepolia, and names the budget rail and chain that could pay it. Only testnet
+accepts x402 on one of the EVM testnets or Solana devnet, or MPP on Tempo Moderato, and names the
+budget rail and chain that could pay it. Only testnet
 chain names count: in the index, `base` and `solana` are mainnets, and nothing on a mainnet is
 marked payable. Under the table, `find` prints the commands for each way to pay each listing, pay
 first: `quote` then `pay`; on a budget, `budget preflight` then `budget buy`. `--json` has them as `commands`, and `next` is the first one. Index
@@ -288,7 +295,7 @@ The exit codes are the same numbers `superstables budget` uses:
 | Code | Meaning |
 | --- | --- |
 | 0 | Done. For `pay`, the payment settled and the service answered; `chain` says whether the client confirmed it on chain |
-| 1 | Failed. Includes an approval that expired or was abandoned, and a service or wallet that could not be reached. After a payment was sent, `failed` can rest on the seller's report that it did not settle: read `reason` before saying nothing was paid |
+| 1 | Failed. Includes an approval that expired or was abandoned, and a service or wallet that could not be reached. For `pay`, `failed` means nothing was paid: the payment never left your machine, or the chain shows it was never made (`chain: "unpaid"`). A seller's report that a sent payment did not settle is `uncertain` (5), not `failed` |
 | 2 | Bad input: an unknown command or flag, a missing or wrong parameter, an unknown id, or a used or expired quote. Nothing was done |
 | 3 | Refused: the owner rejected the payment, or a spend policy refused it (for `quote`, the policy would refuse it). For a budget owner command, an owner-transaction mismatch can be detected after the transaction has landed: check the reported reason, transaction identifier and chain status before claiming nothing was sent |
 | 4 | Paid, not delivered: the payment settled but the service answered with an error, or its answer did not arrive in full. Do not pay again |
@@ -357,9 +364,10 @@ local policy and what a compromised agent or client process could do.
 
 ## Limitations
 
-- Testnet only: agent payments use test tokens on test networks, USDC or pathUSD on Tempo
-  Moderato. `pay` supports Base Sepolia, test USDC and the x402 `exact` scheme. There is no
-  mainnet mode.
+- `pay` supports the x402 `exact` scheme with test USDC and MPP `tempo.charge` with test pathUSD,
+  on the eight chains above.
+- With `--wallet local`, `pay` signs on the EVM chains only. Tempo and Solana payments are approved
+  in a browser wallet on the approval page.
 - MetaMask displays the amount in USDC's smallest unit: `10000` represents 0.01 USDC. The
   approval page shows the conversion. Check the amount and recipient in MetaMask before signing.
 - In browser mode, an approval link opens one payment request and expires after five minutes.
@@ -372,13 +380,19 @@ local policy and what a compromised agent or client process could do.
   user can read. This mode is intended for machines without a browser.
 - Public-index listings without the required request parameters can be displayed but cannot be
   called by this release. The client identifies these listings.
-- An interrupted payment can end in `uncertain` and is never retried automatically. See
-  [docs/records.md](docs/records.md) for the checks to make before trying again.
+- An interrupted payment can end in `uncertain` and is never retried automatically. So does a
+  payment the seller says it did not receive after the client sent it. `superstables status`
+  searches the chain for it, and only it decides: paid, or `failed` with `chain: "unpaid"` once the
+  payment can no longer happen. On Tempo Moderato a transfer has no expiry, so only finding it
+  resolves the attempt. See [docs/records.md](docs/records.md) for the checks to make before trying
+  again.
 - A receipt records payment and service outcomes separately. A settled payment does not
-  guarantee a successful service response. For `pay`, the client reads the seller's transaction
-  on Base Sepolia: `chain: "verified"` when it is this payment (the signed nonce used, the exact
-  amount to the checked recipient), `"unchecked"` when the chain could not say yet
-  (`superstables status` checks again). A transaction that is not this payment makes the attempt
+  guarantee a successful service response. For `pay`, the client reads the transaction on the
+  payment's chain: `chain: "verified"` when it is this payment (on EVM, the signed nonce used and
+  the exact amount to the checked recipient; on Solana, the owner's signature and the exact
+  transfer; on Tempo, the exact pathUSD transfer with this payment's memo), `"unchecked"` when the
+  chain could not say yet, which the client reports as the seller's word (`superstables status`
+  checks again). A transaction that is not this payment makes the attempt
   `uncertain`. If the facilitator has not returned a transaction
   hash, the receipt records its pending reference instead.
 - Hosted approvals (`superstables budget setup --hosted`), `superstables budget buy-once` and
@@ -459,7 +473,7 @@ and its `next` names the owner's commands.
 
 Every [install](#install) includes it: the skill bundles it, and a git install or a checkout (after `npm ci` and
 `npm run build`) builds it as a self-contained copy. It runs on Linux and macOS; on Windows, run it in WSL. Owner actions use a local page on `127.0.0.1` and a
-compatible browser extension wallet on the same computer: an EVM wallet such as MetaMask, Rabby or Coinbase Wallet on
+compatible browser extension wallet on the same machine: an EVM wallet such as MetaMask, Rabby or Coinbase Wallet on
 `evm`; an EVM wallet that can add a custom network on `tempo`; and a Solana Wallet Standard wallet such as Phantom,
 Solflare or Backpack on `solana`, with no account. `setup --hosted` moves them to
 superstables.com instead, after you add the agent to your account (see

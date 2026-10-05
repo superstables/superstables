@@ -398,7 +398,7 @@ export class HostedApprovals {
       body = { rail: this.s.rail, chain: this.s.chain, agent, ...(this.s.label ? { label: this.s.label.slice(0, 40) } : {}), ...(then ? { then } : {}) };
     } else {
       const k = HOSTED_KIND[input.action];
-      if (!k) throw new HostedRefusal(`"${input.action}" has no hosted approval`, "use the approval page on this computer");
+      if (!k) throw new HostedRefusal(`"${input.action}" has no hosted approval`, "use the approval page on this machine");
       path = `${BUDGET_API}/approvals`;
       kind = k;
       body = { kind: k, rail: this.s.rail, chain: this.s.chain, agent, ...(input.kind === "solana-intent" ? { solana: input.solana } : { transaction: input.transaction }) };
@@ -417,8 +417,8 @@ export class HostedApprovals {
         throw new HostedRefusal(`${this.name}: this agent already belongs to the account ${answer.owner}, but ${why}; nothing was recorded or sent. The owner removes it on their ${this.name} account page and adds it again`, fresh);
       };
       if (input.kind === "connect" && input.newOwner) refuse("a new owner is recorded only when the owner adds the agent again and signs a new owner proof, not from an earlier one");
-      if (!prior) return refuse("this computer has no record of the add-agent request that added it, so the site's word alone cannot make an owner");
-      if (!this.w.same(prior.owner, answer.owner)) refuse(`this computer records the owner ${prior.owner}`);
+      if (!prior) return refuse("this machine has no record of the add-agent request that added it, so the site's word alone cannot make an owner");
+      if (!this.w.same(prior.owner, answer.owner)) refuse(`this machine records the owner ${prior.owner}`);
       const problem = await ownerProofProblem(answer.proof, this.facts(answer.owner, prior.linkId, prior.linkCode));
       if (problem) refuse(`its answer does not prove it: ${problem}`);
       this.audit({ id: answer.id, kind, title: input.terms.title, status: "linked", address: answer.owner });
@@ -452,14 +452,14 @@ export class HostedApprovals {
         const why = first.ok ? `${this.name} did not say which account would approve this` : `${this.name} could not be read back (${siteFailure(first.status, null)})`;
         this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: first.ok ? "no owner: the site named no account" : "no owner: the request could not be read" });
         const a = afterCancel(c);
-        throw new HostedRefusal(`${why}, so the command cannot check it is the owner recorded on this computer (${expected}). ${a.words}`, a.sending ? CHECK_CHAIN : first.ok ? "try again later; if it repeats, check which account this agent belongs to on the account page" : "try again later", { sending: a.sending });
+        throw new HostedRefusal(`${why}, so the command cannot check it is the owner recorded on this machine (${expected}). ${a.words}`, a.sending ? CHECK_CHAIN : first.ok ? "try again later; if it repeats, check which account this agent belongs to on the account page" : "try again later", { sending: a.sending });
       }
       if (!this.w.same(owner, expected)) {
         const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
         this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: `owner mismatch: the site acts for ${this.w.owner(owner) ?? "an account that is not an address"}` });
         const a = afterCancel(c);
         throw new HostedRefusal(
-          `${this.name} would ask ${this.w.owner(owner) ?? "an account that is not an address"} to approve this, but the owner recorded on this computer is ${expected}. ${a.words}`,
+          `${this.name} would ask ${this.w.owner(owner) ?? "an account that is not an address"} to approve this, but the owner recorded on this machine is ${expected}. ${a.words}`,
           a.sending ? CHECK_CHAIN : `check which ${this.name} account this agent belongs to (the account page lists it). If the owner changed, run superstables budget setup ${railFlags(this.s.rail, this.s.chain)} --hosted --site ${this.s.site} --new-owner (refused while a budget is live)`,
           { sending: a.sending },
         );
@@ -703,7 +703,7 @@ export class HostedApprovals {
         const c = FINAL_STATES.has(state) ? null : await cancelSiteRequest({ site: this.s.site, id: p.id, token: p.token, fetchImpl: this.s.fetchImpl });
         if (c?.walletAsked) walletAsked = true;
         const who = owner ? `acts for ${owner}` : "no longer names the account this approval is for";
-        return end("rejected", `${this.name} ${who}, not the owner recorded on this computer (${p.expected}); the request was ${c?.cancelled ? "cancelled" : "not used"}`, walletAsked);
+        return end("rejected", `${this.name} ${who}, not the owner recorded on this machine (${p.expected}); the request was ${c?.cancelled ? "cancelled" : "not used"}`, walletAsked);
       }
       switch (state) {
         case "awaiting_owner":
@@ -897,7 +897,7 @@ function alreadyLinkedNext(rail: HostedRail, chain: string, site: string): strin
   const steps = rail === "tempo"
     ? `A budget is a separate owner step: superstables budget grant ${r} --amount A (one approval link)`
     : `Gas and a budget are separate owner steps: superstables budget fund-agent ${r}, then superstables budget grant ${r} --amount A (one approval link each)`;
-  return `tell the owner the site reports that this agent already belongs to an account and end your turn. ${steps}. If this computer has no owner on record yet, setup cannot take the site's word for it: the owner removes the agent on that account's page on the site, then superstables budget setup ${r} --hosted --site ${site} asks them to add it again and sign a new owner proof`;
+  return `tell the owner the site reports that this agent already belongs to an account and end your turn. ${steps}. If this machine has no owner on record yet, setup cannot take the site's word for it: the owner removes the agent on that account's page on the site, then superstables budget setup ${r} --hosted --site ${site} asks them to add it again and sign a new owner proof`;
 }
 
 /**

@@ -91,7 +91,7 @@ describe("owner approval help", () => {
   it("keeps recovery local when other owner commands offer hosted approval", async () => {
     const recover = await run([BUDGET, "recover", "--help"]);
     expect(recover.code).toBe(0);
-    expect(recover.stdout).toContain("Recovery always uses this computer's local approval page");
+    expect(recover.stdout).toContain("Recovery always uses this machine's local approval page");
     expect(recover.stdout).toContain("127.0.0.1");
     expect(recover.stdout).not.toContain("the approval link is on superstables.com");
     expect(recover.stdout).not.toContain("matchCode");

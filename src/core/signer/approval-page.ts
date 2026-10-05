@@ -1,5 +1,5 @@
 // The page the owner opens to approve one payment with a browser wallet (MetaMask and
-// anything else that speaks window.ethereum). One self-contained HTML string per request,
+// anything else that speaks window.ethereum; a Solana wallet on Solana). One self-contained HTML string per request,
 // served by the approval server on 127.0.0.1, with no build step and no external asset: a
 // page that authorises a payment should be readable in full, in one file, by anyone who
 // wants to check what it does before they sign.
@@ -15,16 +15,23 @@
 //     it never sees a private key, and the signature goes straight back to loopback.
 //
 // The script is plain ES2017 with no bundler, so it is exported separately and parsed by a
-// test: a syntax error here would only show up in front of a person about to pay.
+// test: a syntax error here would only show up in front of a person about to pay. What the
+// wallet is asked to do depends on the rail (./steps/): the main script below does the EVM
+// steps (connect, switch chain, sign typed data); a rail whose wallet does something else
+// brings a script of its own, which runs first and hands the main script its own `approve`.
 
 import type { PaymentContext } from "../types.js";
 import { esc, framePage, pageLook, type PageLook } from "./look.js";
+import { eip3009Step } from "./steps/eip3009.js";
+import type { WalletStep } from "./steps/types.js";
 
 export { esc };
 
 /** Everything the page shows and needs, all of it derived by the server. */
 export interface ApprovalPageFacts {
   id: string;
+  /** Which wallet step this page runs (the SignRequest kind). */
+  step?: string;
   amountDecimal: number;
   asset: string;
   /** Atomic units, so the page can explain what the wallet's popup will show. */
@@ -39,6 +46,10 @@ export interface ApprovalPageFacts {
   chainName: string;
   rpcUrl: string;
   explorer: string;
+  /** What wallet_addEthereumChain is offered as the chain's own currency. */
+  nativeCurrency?: { name: string; symbol: string; decimals: number };
+  /** Solana: the Wallet Standard chain. */
+  walletChain?: string;
   reported?: PaymentContext;
 }
 
@@ -59,8 +70,12 @@ export const APPROVAL_PAGE_SCRIPT = `
   var facts = JSON.parse(document.getElementById("approval-facts").textContent);
   var base = "/approve/" + encodeURIComponent(facts.id);
   var provider = window.ethereum;
+  // A rail's own wallet step, when its page brings one (it ran first); the EVM steps below otherwise.
+  var step = window.superstablesStep || null;
   var account = null;
   var typedData = null;
+  var prepared = null;
+  var locked = false;
   var busy = false;
   var done = false;
   var unanswered = 0;
@@ -101,7 +116,7 @@ export const APPROVAL_PAGE_SCRIPT = `
     show("approve", false);
     show("reject", false);
     document.body.setAttribute("data-state", status);
-    if (status === "signed") say("Signed. You can go back to the agent.", "good");
+    if (status === "signed") say(step && step.doneMessage ? step.doneMessage : "Signed. You can go back to the agent.", "good");
     else if (status === "expired") say("This request expired. Cancel any open wallet request, then ask the agent for a new approval link.", "bad");
     else say(why || "This payment was rejected. Cancel any open wallet request.", "bad");
   }
@@ -137,12 +152,21 @@ export const APPROVAL_PAGE_SCRIPT = `
       });
   }
 
+  function switchChain() {
+    return provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: facts.chainIdHex }] });
+  }
+
+  // The wallet is asked which chain it is on, and anything but the payment's chain stops here: a wallet that stayed
+  // where it was, or added the chain without switching to it, never signs or sends for this page.
+  function verifyChain() {
+    return provider.request({ method: "eth_chainId" }).then(function (id) {
+      if (Number(id) !== Number(facts.chainIdHex)) throw new Error("your wallet is on another chain; switch it to " + facts.chainName + " and try again");
+    });
+  }
+
   function ensureChain() {
-    return provider.request({
-      method: "wallet_switchEthereumChain",
-      params: [{ chainId: facts.chainIdHex }]
-    }).catch(function (err) {
-      // 4902: the wallet has never heard of this chain. Offer to add it, then switch.
+    return switchChain().catch(function (err) {
+      // 4902: the wallet has never heard of this chain. Offer to add it, then switch to it.
       if (err && (err.code === 4902 || (err.data && err.data.originalError && err.data.originalError.code === 4902))) {
         return provider.request({
           method: "wallet_addEthereumChain",
@@ -150,16 +174,18 @@ export const APPROVAL_PAGE_SCRIPT = `
             chainId: facts.chainIdHex,
             chainName: facts.chainName,
             rpcUrls: [facts.rpcUrl],
-            nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+            nativeCurrency: facts.nativeCurrency || { name: "Ether", symbol: "ETH", decimals: 18 },
             blockExplorerUrls: [facts.explorer]
           }]
-        });
+        }).then(switchChain);
       }
       throw err;
-    });
+    }).then(verifyChain);
   }
 
   function connect() {
+    if (step && step.connect) return step.connect(api);
+    if (locked) return;
     setBusy(true);
     say("Check your wallet: it is asking which account to use.");
     provider.request({ method: "eth_requestAccounts" })
@@ -171,7 +197,8 @@ export const APPROVAL_PAGE_SCRIPT = `
       .then(function () { return post("/account", { address: account }); })
       .then(function (answer) {
         if (!answer.ok) throw new Error(answer.data.error || "the approval server would not prepare this payment");
-        typedData = answer.data.typedData;
+        prepared = answer.data;
+        typedData = answer.data.typedData || null;
         el("account").textContent = account;
         show("account-label", true);
         show("account", true);
@@ -188,14 +215,20 @@ export const APPROVAL_PAGE_SCRIPT = `
   }
 
   function approve() {
+    if (step && step.approve) return step.approve(api);
     if (!typedData || !account) return;
     var signed = false;
+    var asking = false;
     setBusy(true);
-    say("Check your wallet: it is asking you to sign this payment.");
-    provider.request({
-      method: "eth_signTypedData_v4",
-      params: [account, JSON.stringify(typedData)]
-    })
+    ensureChain()
+      .then(function () {
+        asking = true;
+        say("Check your wallet: it is asking you to sign this payment.");
+        return provider.request({
+          method: "eth_signTypedData_v4",
+          params: [account, JSON.stringify(typedData)]
+        });
+      })
       .then(function (signature) { signed = true; return post("/signature", { address: account, signature: signature }); })
       .then(function (answer) {
         if (!answer.ok) {
@@ -208,16 +241,24 @@ export const APPROVAL_PAGE_SCRIPT = `
       .catch(function (err) {
         setBusy(false);
         if (signed) say("Your wallet signed, but the client did not confirm it received the signature: " + reason(err) + ". Check the command result before trying again.", "bad");
+        // Declining to switch chains is not declining the payment: nothing was asked yet, and the owner can try again.
+        else if (!asking) say("This page could not confirm that your wallet is on " + facts.chainName + ", so it did not ask it to sign: " + reason(err), "bad");
         else if (err && err.code === 4001) rejectedInWallet();
         else say("The wallet could not sign this: " + reason(err), "bad");
       });
   }
 
-  // A rejection in the wallet is the owner's answer: end the payment, so the agent hears it now, not at expiry.
+  // A rejection in the wallet is the owner's answer: end the payment, so the agent hears it now, not at expiry. Once a
+  // wallet was asked to send the payment itself, the client cannot take this page's word that nothing was sent, and
+  // says so (status "unknown").
   function rejectedInWallet() {
     setBusy(true);
     post("/reject", { by: "wallet" })
       .then(function (answer) {
+        if (answer.ok && answer.data.status === "unknown") {
+          ended("unknown", "You rejected this payment in your wallet. Your wallet had already been asked to send it, so the client records it as unconfirmed until the chain shows the payment. Check the command result.");
+          return;
+        }
         if (answer.ok) { ended("denied", "You rejected this payment in your wallet. Nothing was signed."); return; }
         if (answer.data.status) { ended(answer.data.status, answer.data.reason); return; }
         setBusy(false);
@@ -239,6 +280,27 @@ export const APPROVAL_PAGE_SCRIPT = `
       .catch(function () { setBusy(false); say("The client is not answering. Check that the agent is still running.", "bad"); });
   }
 
+  // What a rail's own step works with: the same helpers, and the state this script keeps.
+  var api = {
+    facts: facts,
+    el: el,
+    show: show,
+    say: say,
+    reason: reason,
+    setBusy: setBusy,
+    ended: ended,
+    post: post,
+    rejectedInWallet: rejectedInWallet,
+    ensureChain: ensureChain,
+    verifyChain: verifyChain,
+    provider: function () { return provider; },
+    account: function () { return account; },
+    prepared: function () { return prepared; },
+    isDone: function () { return done; },
+    // the wallet was asked to send: nothing is prepared again, and switching accounts changes nothing
+    lock: function () { locked = true; }
+  };
+
   document.addEventListener("click", function (event) {
     var button = event.target && event.target.closest ? event.target.closest("button[data-act]") : null;
     if (!button || button.disabled || busy) return;
@@ -248,21 +310,32 @@ export const APPROVAL_PAGE_SCRIPT = `
     else if (act === "reject") reject();
   });
 
-  if (!provider) {
+  if (step && step.init) step.init(api);
+  else if (!provider) {
     show("no-wallet", true);
     show("connect", false);
   }
 
-  if (provider && provider.on) {
+  if (provider && provider.on && !(step && step.init)) {
     // Switching accounts mid-flow must re-prepare the payment for the new one.
     provider.on("accountsChanged", function (accounts) {
-      if (done || !accounts || accounts.length === 0) return;
+      if (done || locked || !accounts || accounts.length === 0) return;
       account = accounts[0];
       typedData = null;
+      prepared = null;
       show("approve", false);
       show("connect", true);
       el("account").textContent = account;
       say("You switched accounts. Connect again so this payment is prepared for " + account + ".");
+    });
+    // A wallet that moves to another chain before it is asked must be brought back first: nothing prepared stays usable.
+    provider.on("chainChanged", function (chainId) {
+      if (done || locked || Number(chainId) === Number(facts.chainIdHex)) return;
+      typedData = null;
+      prepared = null;
+      show("approve", false);
+      show("connect", true);
+      say("Your wallet switched to another chain. Connect again to switch it back to " + facts.chainName + ".");
     });
   }
 
@@ -288,7 +361,7 @@ function networkCell(facts: ApprovalPageFacts): string {
 }
 
 /** The whole page for one pending approval, facts and all, ready to serve. */
-export function approvalPage(facts: ApprovalPageFacts, look: PageLook = pageLook()): string {
+export function approvalPage(facts: ApprovalPageFacts, step: WalletStep = eip3009Step, look: PageLook = pageLook()): string {
   const seconds = Math.max(0, Math.round((facts.expiresAt - Date.now()) / 1000));
   const body = `
   <div id="no-wallet" class="note bad" hidden>
@@ -314,18 +387,17 @@ export function approvalPage(facts: ApprovalPageFacts, look: PageLook = pageLook
       <button id="reject" data-act="reject">Reject</button>
     </div>
     <p class="fineprint">
-      Your wallet shows this amount in the token's smallest unit: ${esc(facts.amountAtomic)} is
-      ${esc(facts.amountDecimal)} ${esc(facts.asset)}. Signing authorises this one transfer and nothing else.
+      ${esc(step.words.fineprint(facts))}
     </p>
   </div>
 
 <script id="approval-facts" type="application/json">${inlineJson(facts)}</script>
-<script>${APPROVAL_PAGE_SCRIPT}</script>`;
+${step.script ? `<script>${step.script}</script>\n` : ""}<script>${APPROVAL_PAGE_SCRIPT}</script>`;
   return framePage({
     look,
     title: "Approve a payment",
     eyebrow: "Payment request",
-    lede: "Check the amount and the recipient, then sign with your browser wallet, or reject. Your wallet keeps its key.",
+    lede: step.words.lede,
     testnet: /testnet/i.test(facts.networkLabel || facts.network),
     body,
   });

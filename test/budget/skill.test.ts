@@ -34,7 +34,9 @@ describe("skills/superstables-payments/SKILL.md", () => {
 
   it("states testnet at the top and asks the owner which way to pay before it points to a file", () => {
     const top = skill.split("\n").slice(0, 12).join("\n");
-    expect(top).toMatch(/Testnet only: test USDC, no real money\./);
+    expect(top).toMatch(/Testnet only: test tokens, no real money\./);
+    // The description names both tokens, and Budgets before Single purchase.
+    expect(top).toMatch(/using test USDC or test pathUSD\. Testnet only\. Budgets let the owner grant[^\n]*Single purchase lets the owner approve one purchase/);
     const ask = skill.indexOf("## First, ask the owner what they would like to try");
     expect(ask).toBeGreaterThan(0);
     expect(skill).toContain('"This uses test USDC, no real money. Would you like one purchase you approve, or a budget?"');
@@ -52,7 +54,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
     expect(skill).toMatch(/superstables budget preflight --rail R --chain C --url U` \(R: the rail of that network\)/);
     expect(skill).not.toMatch(/preflight --chain C`/);
     // local approval stays the default; an owner sent by superstables.com's setup page is offered the site first
-    expect(skill).toMatch(/on this computer, with no account \(the default\)/);
+    expect(skill).toMatch(/on this machine, with no account \(the default\)/);
     expect(skill).toMatch(/setup page \(`start\.md`\) brought you here in this conversation[^\n]*offer superstables\.com first/);
     expect(skill).toMatch(/Tell me when you.ve approved/);
     expect(skill).toMatch(/wait --id ID --shown/);
@@ -60,7 +62,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
 
   it("writes the link before waiting, offers Single purchase only for listed services, and treats a no as final", () => {
     expect(skill).toMatch(/Reply with `message_for_owner` and end your turn/);
-    expect(skill).toMatch(/Testnet only: test USDC, no real money\./);
+    expect(skill).toMatch(/Testnet only: test tokens, no real money\./);
     expect(skill).toMatch(/so is a spent budget/);
     expect(skill).toMatch(/`wait` refuses without `--shown`/);
     expect(skill).toMatch(/A no is final/);
@@ -82,7 +84,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
     const files = new Set([...skill.matchAll(/\]\(((?:references\/)[A-Za-z]+\.md)(?:#[^)]*)?\)/g)].map((m) => m[1]));
     for (const f of ["references/once.md", "references/budget.md", "references/pay.md", "references/discovery.md"]) expect(files).toContain(f);
     for (const f of files) expect(existsSync(resolve(SKILL, f)), f).toBe(true);
-    for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/Testnet only: test USDC, no real money/);
+    for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/Testnet only\. Test tokens, no real money\./);
   });
 });
 
@@ -110,7 +112,11 @@ describe("skills/superstables-payments/references/pay.md: seller text", () => {
     expect(skill).toContain("nothing paid when there is no transaction");
     expect(ref("references/once.md")).toMatch(/\| 1 \| `failed` \| Nothing was paid \(`paid: false`, no `tx`\)/);
     expect(ref("references/once.md")).toMatch(/\| 3 \| `refused_precheck` \| Nothing was paid \(`paid: false`, no `tx`\)/);
-    expect(ref("references/pay.md")).toContain("| `failed` | yes | no, when it names no transaction |");
+    expect(ref("references/pay.md")).toContain("| `failed` | yes | no, when it names no transaction or `chain` is `unpaid` |");
+    // An uncertain payment is never quoted again until status resolves it.
+    expect(ref("references/pay.md")).toContain("- After `uncertain`: do not pay again, and do not quote the same request again.");
+    expect(skill).toContain('after `uncertain`, do not quote the same request again either until `superstables status` ends it `failed` with `chain: "unpaid"` (on Tempo, which never ends that way, only if the owner decides to pay again)');
+    expect(ref("references/pay.md")).toContain("paying again for the same request is the owner's decision, not yours");
   });
 
   it("documents service_reason as the seller's untrusted words, apart from the client's reason", () => {

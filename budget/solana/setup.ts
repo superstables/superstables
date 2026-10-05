@@ -90,7 +90,7 @@ const agentFileTextOrRefuse = (): string => {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
     if ((err as NodeJS.ErrnoException).code !== UNSAFE_SECRET_FILE) throw err;
     const reason = (err as Error).message;
-    console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`);
+    console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`);
     process.exit(result(3, { state: "refused_precheck", reason, next: `make ${AGENT_KEY_PATH} a regular file only you can read (chmod 600), then run setup again` }));
   }
 };
@@ -130,7 +130,7 @@ const rawPub = parseEnvFile(PUBLIC_PATH) as Record<string, string>;
 const recordedSite = rawPub.APPROVALS === "hosted" && rawPub.SITE ? siteOrigin(rawPub.SITE).origin : undefined;
 if (bound && publicOwner && bound !== publicOwner && !newOwner) {
   const reason = `the owner files disagree: ${PUBLIC_PATH} records the owner ${publicOwner}, and ${AGENT_KEY_PATH} is bound to ${bound}`;
-  console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`);
+  console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`);
   process.exit(result(3, { state: "refused_precheck", reason, owner: publicOwner, next: `${newOwnerCmd(recordedSite)} records one owner again (refused while a budget is live on either)` }));
 }
 if (newOwner && recorded) {
@@ -202,12 +202,12 @@ if (OWNER_KEY_FILE) {
     ...(CAP !== undefined ? { amount: formatUnits(CAP), unit: "USDC" } : LAMPORTS !== undefined ? { amount: sol(LAMPORTS), unit: "SOL" } : {}),
     summary: what.length
       ? [
-          `1. Add this agent to your ${HOST} account with your Solana wallet: its address is recorded as the budget owner on this computer.`,
+          `1. Add this agent to your ${HOST} account with your Solana wallet: its address is recorded as the budget owner on the agent's machine.`,
           LAMPORTS !== undefined ? `2. Send ${sol(LAMPORTS)} SOL from your wallet to the agent for fees.` : "",
           CAP !== undefined ? `${LAMPORTS !== undefined ? 3 : 2}. Allow the agent to transfer up to ${formatUnits(CAP)} USDC from your USDC account in total.` : "",
           "Your wallet asks you to sign each transaction in turn.",
         ].filter(Boolean).join(" ")
-      : `Sign in to ${HOST}, connect your Solana wallet and add this agent to your account. Your Solana address is recorded as the budget owner on this computer. This does not grant a budget or send a transaction.`,
+      : `Sign in to ${HOST}, connect your Solana wallet and add this agent to your account. Your Solana address is recorded as the budget owner on the agent's machine. This does not grant a budget or send a transaction.`,
     rows: [
       { label: "Your agent", value: agent, mono: true },
       { label: "Chain", value: "Solana devnet (testnet)" },
@@ -217,7 +217,7 @@ if (OWNER_KEY_FILE) {
     enforced: CAP !== undefined ? [`Transfers or burns under this delegation total at most ${formatUnits(CAP)} USDC.`] : [],
     notEnforced: CAP !== undefined ? ["No expiry. The budget stays until it is spent or you revoke it.", "No seller list. Whoever holds the agent key can transfer to any address, up to the cap."] : [],
     notes: [
-      `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on this computer; ${HOST} does not receive it.`,
+      `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on the agent's machine; ${HOST} does not receive it.`,
       ...(what.length ? ["You pay the network fee for each transaction, shown in your wallet. To end the budget at any time: superstables budget revoke --rail solana."] : [`Grants, revokes and SOL for this agent are then approved on ${HOST}, in your Solana wallet.`]),
     ],
   }, "", newOwner ? recorded : undefined, then, { prior, newOwner });
@@ -231,17 +231,17 @@ if (OWNER_KEY_FILE) {
   if (recorded && recorded !== owner && !newOwner) {
     await closeOwnerPage(0);
     const sent = bundle?.steps.filter((s) => s.hash).map((s) => `${s.kind} ${s.hash}`) ?? [];
-    const reason = `${HOST} added this agent to the account ${owner}, but this computer records the owner ${recorded}. Nothing was changed on this computer${sent.length ? `; that wallet reported ${sent.join(", ")}` : ""}`;
+    const reason = `${HOST} added this agent to the account ${owner}, but this machine records the owner ${recorded}. Nothing was changed on this machine${sent.length ? `; that wallet reported ${sent.join(", ")}` : ""}`;
     console.log(`REFUSED: ${reason}.`);
     process.exit(result(3, { state: "refused_precheck", reason, owner: recorded, next: `if ${owner} is the right owner: ${newOwnerCmd(SITE)} (refused while a budget is live). If not, remove this agent from that account on ${HOST}${sent.length ? ", and check that wallet's activity" : ""}` }));
   }
 } else {
   const { handle, outcome } = await askConnect("setup", {
     title: "Connect your wallet",
-    summary: "Connect your wallet and sign a message to record its address as the budget owner on this computer. This does not grant a budget or send a transaction.",
+    summary: "Connect your wallet and sign a message to record its address as the budget owner on this machine. This does not grant a budget or send a transaction.",
     rows: [
       { label: "Your agent", value: agent, mono: true },
-      { label: "Agent key", value: `on this computer only, in ${AGENT_KEY_PATH}` },
+      { label: "Agent key", value: `on this machine only, in ${AGENT_KEY_PATH}` },
     ],
     enforced: [],
     notEnforced: [],
@@ -259,9 +259,9 @@ if (OWNER_KEY_FILE) {
 // every way an owner arrives (the key file, the page, the site): another owner than the one on record needs --new-owner
 if (owner === agent || (recorded && recorded !== owner && !newOwner)) {
   const reason = owner === agent ? "the owner address is the agent's address" : `another owner (${recorded}) is recorded for this agent`;
-  finish?.({ ok: false, message: owner === agent ? "That is the agent's own address. Connect your own wallet instead." : `This computer records another owner for this agent (${recorded}). Nothing was changed.` });
+  finish?.({ ok: false, message: owner === agent ? "That is the agent's own address. Connect your own wallet instead." : `This machine records another owner for this agent (${recorded}). Nothing was changed.` });
   await closeOwnerPage();
-  if (owner !== agent) console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this computer.`);
+  if (owner !== agent) console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this machine.`);
   process.exit(result(3, { state: "refused_precheck", reason, ...(owner === agent ? {} : { owner: recorded }), next: owner === agent ? "connect the owner's own wallet" : `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }));
 }
 const replaced = recorded && recorded !== owner ? recorded : undefined;
@@ -275,7 +275,7 @@ if (bound !== owner) {
   const text = agentFileTextOrRefuse();
   if (!text.includes("SOLANA_AGENT_SECRET_BASE58=")) {
     const reason = `${AGENT_KEY_PATH} changed while setup waited: it no longer holds the agent key`;
-    console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`);
+    console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`);
     process.exit(result(3, { state: "refused_precheck", reason, next: `restore ${AGENT_KEY_PATH}, then run setup again` }));
   }
   const lines = text.split("\n").filter((l) => l !== "" && !l.startsWith("SOLANA_OWNER_ADDRESS="));

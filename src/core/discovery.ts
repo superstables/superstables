@@ -18,8 +18,9 @@
 // than an error.
 
 import { z } from "zod";
-import { describeNetwork, toCaip2 } from "./chain.js";
-import { chainName, isKnownChainName, isKnownRail, routesFor } from "./routes.js";
+import { describeNetwork, networkFor, toCaip2 } from "./chain.js";
+import { SUPPORTED_NETWORKS } from "./rails/index.js";
+import { chainName, isKnownChainName, isKnownRail, payNetworkFor, routesFor } from "./routes.js";
 import { SellerTextError, untrustedText } from "./text.js";
 import type { ResolvedRequest, ServiceListing, ServiceParam } from "./types.js";
 
@@ -460,8 +461,8 @@ const HostedListingSchema = z.object({
   method: z.literal("GET"),
   params: z.array(HostedParamSchema),
   payment: z.object({
-    rail: z.literal("x402"),
-    scheme: z.literal("exact"),
+    rail: z.enum(["x402", "mpp"]),
+    scheme: z.enum(["exact", "charge"]),
     network: z.string().min(1),
     networkLabel: z.string().optional(),
     asset: z.string().min(1),
@@ -537,7 +538,13 @@ function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing
     (endpoint.protocol === "http:" && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(endpoint.hostname));
   const network = toCaip2(row.payment.network);
   const networkLabel = row.payment.networkLabel ?? describeNetwork(row.payment.network);
-  const supported = network === "eip155:84532" && row.payment.asset.toUpperCase() === "USDC";
+  // A chain `pay` pays on, in that chain's token, over the protocol its rail speaks (MPP on Tempo, x402 elsewhere).
+  const chain = SUPPORTED_NETWORKS.find((n) => n.caip2 === network);
+  const supported =
+    chain !== undefined &&
+    row.payment.asset.toUpperCase() === chain.token.symbol.toUpperCase() &&
+    row.payment.rail === (chain.rail === "tempo" ? "mpp" : "x402") &&
+    row.payment.scheme === (chain.rail === "tempo" ? "charge" : "exact");
   const configured = row.payment.configured !== false;
   const notActionableReason = !secure
     ? "the endpoint is not https, so a payment credential would travel in the clear"
@@ -564,8 +571,8 @@ function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing
       ...(p.enum && p.enum.length > 0 ? { enum: p.enum } : {}),
     })),
     payment: {
-      rail: "x402",
-      scheme: "exact",
+      rail: row.payment.rail,
+      scheme: row.payment.scheme,
       network,
       networkLabel,
       asset: row.payment.asset,
@@ -574,14 +581,14 @@ function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing
     ...(row.operator ? { operator: row.operator } : {}),
     source: "demo-catalogue",
     // What the network says, not what the row claims.
-    testnet: network === "eip155:84532" || /sepolia|testnet|devnet/i.test(networkLabel),
+    testnet: networkFor(network)?.testnet === true || /sepolia|testnet|devnet/i.test(networkLabel),
     actionable: notActionableReason === undefined,
     ...(notActionableReason ? { notActionableReason } : {}),
     ...(row.mock !== undefined ? { mock: row.mock } : {}),
     ...(row.example_prompts && row.example_prompts.length > 0 ? { examplePrompts: row.example_prompts } : {}),
-    rails: ["x402"],
+    rails: [row.payment.rail],
     chains: [chainName(network)],
-    routes: routesFor(["x402"], [chainName(network)]),
+    routes: routesFor([row.payment.rail], [chainName(network)]),
   };
 }
 
@@ -623,7 +630,9 @@ function fromIndexRow(row: IndexRow): ServiceListing {
   const routes = routesFor(rails, chains);
   // The network shown is the one `pay` could use when the listing offers it, not merely the
   // first one listed: ["base", "base-sepolia"] is a Base Sepolia listing as far as `pay` goes.
-  const chain = chains.find((c) => toCaip2(c) === "eip155:84532") ?? chains[0] ?? "";
+  const chain = chains.find((c) => payNetworkFor(c)) ?? chains[0] ?? "";
+  const payNetwork = payNetworkFor(chain);
+  const onTempo = payNetwork?.rail === "tempo";
   const testnet = chains.some((c) => /sepolia|testnet|devnet|amoy|moderato/i.test(c));
   // A payment credential travels to this endpoint too, so it gets the same test the hosted
   // catalogue rows get: only https, or plain http on this machine. An index row names its own
@@ -642,10 +651,10 @@ function fromIndexRow(row: IndexRow): ServiceListing {
     // The index does not record request parameters yet; an empty list says exactly that.
     params: [],
     payment: {
-      rail: "x402",
-      scheme: "exact",
-      network: toCaip2(chain),
-      networkLabel: describeNetwork(chain),
+      rail: onTempo ? "mpp" : "x402",
+      scheme: onTempo ? "charge" : "exact",
+      network: payNetwork?.caip2 ?? toCaip2(chain),
+      networkLabel: payNetwork?.label ?? describeNetwork(chain),
       asset: row.assets?.[0] ?? "USDC",
       price:
         typeof row.price?.usd === "number"
@@ -670,7 +679,7 @@ function fromIndexRow(row: IndexRow): ServiceListing {
         : !testnet
           ? `mainnet only (${describeOffer(rails, chains)}); this client pays on testnets only`
           : routes.budget.length > 0
-            ? `\`superstables pay\` pays x402 on Base Sepolia only; a \`superstables budget\` rail could pay ${describeOffer(rails, chains)}`
+            ? `\`superstables pay\` does not pay ${describeOffer(rails, chains)}; a \`superstables budget\` rail could`
             : `this client does not pay ${describeOffer(rails, chains)}`,
     rails,
     chains,

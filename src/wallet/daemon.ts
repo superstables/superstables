@@ -23,11 +23,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { join } from "node:path";
 import type { PaymentRequirements } from "@x402/core/types";
 import type { PrivateKeyAccount } from "viem/accounts";
-import { DEFAULT_NETWORK, fromAtomic, usdcBalance } from "../core/chain.js";
+import { DEFAULT_NETWORK, evmNetworkFor, fromAtomic, usdcBalance } from "../core/chain.js";
 import { DEFAULT_WALLET_PORT, ensureDir, policyPath, walletDir } from "../core/home.js";
 import { evaluatePolicy, formatMoney, loadPolicy, type Policy } from "../core/policy.js";
 import { LocalKeySigner } from "../core/signer/local.js";
-import type { SignRequest, SignResult } from "../core/signer/types.js";
+import { LOCAL_WALLET_EVM_ONLY, type Eip3009SignRequest, type Eip3009SignResult } from "../core/signer/types.js";
 import type {
   PaymentContext,
   VerifiedTerms,
@@ -36,6 +36,7 @@ import type {
   WalletStatus,
 } from "../core/types.js";
 import { termsFor, type RawAccept } from "../core/x402.js";
+import { untrustedText } from "../core/text.js";
 import { loadAccount, readOrCreateSecret, writeAllSync } from "./keystore.js";
 import { walletPage } from "./page.js";
 
@@ -102,7 +103,7 @@ interface WalletRequestRecord {
   /** The seller's requirement verbatim: what an approval signs, byte for byte. */
   requirement?: PaymentRequirements;
   x402Version: 1 | 2;
-  result?: SignResult;
+  result?: Eip3009SignResult;
 }
 
 type Caller = "agent" | "owner";
@@ -214,7 +215,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
         // A truncated or hand-edited line is skipped rather than failing the payment path.
       }
     }
-    // One asset, one network in this release: USDC's six decimals apply to every line above.
+    // This wallet signs USDC only, which has six decimals on every chain it signs on.
     return fromAtomic(total.toString(), DEFAULT_NETWORK.usdc.decimals);
   }
 
@@ -252,8 +253,10 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
   function createRequest(sign: unknown): WalletRequestRecord {
     const id = randomUUID();
     const now = Date.now();
-    const request = (sign ?? {}) as Partial<SignRequest>;
-    const version: 1 | 2 = request.x402Version === 1 ? 1 : 2;
+    const request = (sign ?? {}) as Partial<Eip3009SignRequest> & { kind?: string };
+    // Only the two wire versions there are; anything else is refused below, never read as version 2.
+    const named: unknown = request.x402Version;
+    const version: 1 | 2 = named === 1 ? 1 : 2;
     const reported = sanitizeContext(request.context);
     // A rejected request still gets a record and an audit line: "nothing was signed" is a fact
     // the owner may want to see later, and the agent needs an id to talk about.
@@ -281,7 +284,14 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     requests.set(id, record);
 
     if (request.kind !== undefined && request.kind !== "eip3009") {
-      record.reason = `this wallet signs eip3009 authorizations, not "${String(request.kind)}"`;
+      record.reason = request.kind === "tempo-transfer" || request.kind === "solana-transaction"
+        ? LOCAL_WALLET_EVM_ONLY
+        : `this wallet signs eip3009 authorizations, not "${String(request.kind)}"`;
+      audit(record);
+      return record;
+    }
+    if (named !== 1 && named !== 2) {
+      record.reason = `x402 version ${untrustedText(String(named), 20)} is not supported (only 1 and 2)`;
       audit(record);
       return record;
     }
@@ -295,6 +305,12 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     const judged = termsFor(request.requirements as RawAccept, version);
     if (!judged.supported) {
       record.reason = judged.reason;
+      audit(record);
+      return record;
+    }
+    // One EVM key: an x402 payment on any other rail is approved in a browser wallet instead.
+    if (!evmNetworkFor(judged.terms.network)) {
+      record.reason = LOCAL_WALLET_EVM_ONLY;
       audit(record);
       return record;
     }
@@ -592,7 +608,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     if (launcherReady) console.log(`  open signed in: ${launcherPath} (only you can read it; deleted once the page is open)`);
     if (launcherProblem) console.log(`  open signed in: no launcher (${launcherProblem}); open the page and paste the secret`);
     console.log(`  owner secret:   ${ownerSecretFile} (paste it into the page; never share it)`);
-    console.log(`  over SSH:       ssh -L ${port}:127.0.0.1:${port} <you>@<this machine>, open ${url}/ on your computer, paste the secret`);
+    console.log(`  over SSH:       ssh -L ${port}:127.0.0.1:${port} <you>@<this machine>, open ${url}/ on your machine, paste the secret`);
     console.log(`  policy:         ${policySummary(policy)}`);
     console.log(`  agent token:    ${agentTokenFile}`);
   }

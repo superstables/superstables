@@ -9,15 +9,15 @@ describe("message_for_owner", () => {
       "Review and approve in your wallet: Approve a budget",
       "https://www.superstables.com/approve/budget/ba_1#ssba_test_x",
       "Match code: QRS-TUV (pick it on the page)",
-      "0.2 test USDC on Arc Testnet. Testnet only: test USDC, no real money.",
+      "0.2 test USDC on Arc Testnet. Testnet only. Test tokens, no real money.",
       "Tell me when you've approved.",
     ].join("\n"));
   });
 
-  it("names a gas token as it is, and says where to open a page on this computer", () => {
+  it("names a gas token as it is, and says where to open a page on this machine", () => {
     const m = messageForOwner({ url: "http://127.0.0.1:4413/approve/x", chain: "base-sepolia", terms: { title: "Send gas to the agent", amount: "0.002", unit: "ETH" } });
     expect(m).toContain("0.002 ETH (testnet) on Base Sepolia.");
-    expect(m).toContain("Open it in the browser that has your wallet, on this computer.");
+    expect(m).toContain("Open it in the browser that has your wallet, on this machine.");
     expect(m).not.toContain("Match code");
   });
 

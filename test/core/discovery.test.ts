@@ -289,11 +289,15 @@ describe("findServices", () => {
     expect(dual?.chains).toEqual(["base", "base-sepolia", "solana"]);
     expect(dual?.routes).toEqual({ pay: true, budget: [{ rail: "evm", chain: "base-sepolia" }] });
     expect(dual?.payment.network).toBe("eip155:84532");
-    expect(by("arb")?.routes).toEqual({ pay: false, budget: [{ rail: "evm", chain: "arbitrum-sepolia" }] });
-    expect(by("arb")?.notActionableReason).toContain("superstables budget");
+    // pay pays on every testnet the evm budget rail does.
+    expect(by("arb")?.routes).toEqual({ pay: true, budget: [{ rail: "evm", chain: "arbitrum-sepolia" }] });
+    expect(by("arb")?.payment).toMatchObject({ rail: "x402", network: "eip155:421614", networkLabel: "Arbitrum Sepolia (testnet)" });
+    expect(by("arb")?.notActionableReason).toBe("the index does not yet record the request parameters this service needs");
     expect(by("sol-main")?.routes).toEqual({ pay: false, budget: [] });
-    expect(by("sol-dev")?.routes).toEqual({ pay: false, budget: [{ rail: "solana", chain: "devnet" }] });
-    expect(by("tempo")?.routes).toEqual({ pay: false, budget: [{ rail: "tempo", chain: "moderato" }] });
+    expect(by("sol-dev")?.routes).toEqual({ pay: true, budget: [{ rail: "solana", chain: "devnet" }] });
+    // pay pays MPP on Tempo Moderato too.
+    expect(by("tempo")?.routes).toEqual({ pay: true, budget: [{ rail: "tempo", chain: "moderato" }] });
+    expect(by("tempo")?.payment).toMatchObject({ rail: "mpp", scheme: "charge", network: "eip155:42431" });
   });
 
   it("asks the index with the query, live and limit it documents", async () => {

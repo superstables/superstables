@@ -51,7 +51,7 @@ export const ONCE_NETWORKS = {
 /** The rail and chain flags buy-once accepts: each names one of ONCE_NETWORKS. */
 export const ONCE_CHAINS = Object.fromEntries(Object.values(ONCE_NETWORKS).map((n) => [n.chain, n.rail]));
 const networkOfChain = (chain) => Object.values(ONCE_NETWORKS).find((n) => n.chain === chain);
-export const TESTNET_LINE = "Testnet only: test USDC, no real money.";
+export const TESTNET_LINE = "Testnet only. Test tokens, no real money.";
 const SERVICES_API = "/api/v1/purchase/services";
 const PURCHASES_API = "/api/v1/purchases";
 /** How long a wait reads on once a purchase's outcome is unknown (the owner's step is over) before it answers unknown. */
@@ -493,7 +493,7 @@ export function messageForOwner(r) {
     r.url,
     r.matchCode ? `Match code: ${r.matchCode} (pick it on the page)` : null,
     `${hasAmount ? `${t.amount} ${unit} on ${network}.` : `On ${network}.`} ${TESTNET_LINE}`,
-    local ? "Open it in the browser that has your wallet, on this computer." : null,
+    local ? "Open it in the browser that has your wallet, on this machine." : null,
     "Tell me when you've approved.",
   ].filter(Boolean).join("\n");
 }
@@ -832,7 +832,7 @@ export async function startOnce(args) {
   // started together cannot both create a purchase
   const id = newApprovalId();
   const lock = claim("once", "purchase", id);
-  if (!lock.ok) return { ok: false, code: 3, state: "refused_precheck", reason: "another buy-once is being started on this computer right now: one at a time", next: "wait for it to return its approval link, then write it to the owner; do not start another" };
+  if (!lock.ok) return { ok: false, code: 3, state: "refused_precheck", reason: "another buy-once is being started on this machine right now: one at a time", next: "wait for it to return its approval link, then write it to the owner; do not start another" };
   try {
     return await startOnceLocked(id, args);
   } finally {
