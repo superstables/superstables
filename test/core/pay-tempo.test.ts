@@ -18,7 +18,7 @@ import { Records } from "../../src/core/records.js";
 import { BrowserWalletSigner } from "../../src/core/signer/browser.js";
 import { SignRefused, type Signer, type TempoSignRequest } from "../../src/core/signer/types.js";
 
-import { attemptView, messageFor } from "../../src/mcp/server.js";
+import { attemptView, messageFor } from "../../src/cli/views.js";
 import { nextFor } from "../../src/cli/outcome.js";
 import { PATH_USD, startFakeMppSeller, startFakeTempoPay, type FakeMppSeller, type FakeTempoPay } from "../helpers/fake-tempo-pay.js";
 
@@ -134,7 +134,7 @@ describe("pay on Tempo Moderato", () => {
     expect(receipt.transactionUrl).toBe(`https://explore.testnet.tempo.xyz/tx/${hash.toLowerCase()}`);
     expect(shownReceipt(receipt).transactionUrl).toBe(receipt.transactionUrl);
     expect(shownAttempt(done).payer).toBe(owner);
-    expect(attemptView({ records: s.records }, done, "cli")).toMatchObject({ state: "settled" });
+    expect(attemptView({ records: s.records }, done)).toMatchObject({ state: "settled" });
     // The daily cap counts pathUSD as dollars, with USDC.
     expect(s.records.spentToday("USDC")).toBe(0.01);
     expect(s.records.spentToday("pathUSD")).toBe(0.01);
@@ -246,7 +246,7 @@ describe("pay on Tempo Moderato", () => {
     expect(s.seller.credentials).toHaveLength(0);
     // It counts toward the cap on the day it became uncertain: it may have been paid.
     expect(s.records.spentToday("pathUSD")).toBe(0.01);
-    expect(messageFor(done, undefined, "cli")).toBeTruthy();
+    expect(messageFor(done)).toBeTruthy();
 
     // Nothing on chain: it stays uncertain, with the chain's answer.
     const unseen = await recheckChain(s.records, attempt.id, s.chain.url);

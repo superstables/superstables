@@ -1,6 +1,6 @@
 // Which build is this? The one question a machine that has been reinstalled a few times cannot
-// answer by looking, and the reason it matters: an MCP client still running an older copy of the
-// server looks exactly like one running the new copy, until something asks.
+// answer by looking, and the reason it matters: an older copy still installed somewhere looks
+// exactly like the new one, until something asks.
 //
 // The answer is the version in package.json, read from the file at run time rather than baked in
 // at compile time, so a checkout, an npm install and a git install each report the package they

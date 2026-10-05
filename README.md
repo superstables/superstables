@@ -3,8 +3,8 @@
 Superstables connects service discovery, pricing and payment for AI agents. Approve one purchase
 in your wallet, or grant a budget the agent can spend within.
 
-This repository is the client: the `superstables` command with its `superstables budget` tool, an
-MCP server, a TypeScript SDK and the `superstables-payments` agent skill.
+This repository is the client: the `superstables` command with its `superstables budget` tool, and
+the `superstables-payments` agent skill.
 
 ## Get started
 
@@ -56,9 +56,9 @@ needs no `setup` command, budget or agent key. It requires a superstables.com ac
 create by signing in with an Ethereum wallet. Solana purchases also need a Solana wallet to sign
 the payment transaction. Solana sign-in is not supported in 0.3.0. `superstables budget find --once` lists the services.
 
-**Single purchase on your machine.** Local `quote`/`pay`, the payment MCP server and the SDK
-payment core use a local approval page, on the same eight chains as budgets. Run `setup` for that
-flow. See [Single purchase on your machine](#approve-each-payment-on-this-computer).
+**Single purchase on your machine.** Local `quote`/`pay` uses a local approval page, on the same
+eight chains as budgets. Run `setup` for that flow. See
+[Single purchase on your machine](#approve-each-payment-on-this-computer).
 
 The tested services use x402 on EVM and Solana, and MPP on Tempo.
 
@@ -98,7 +98,7 @@ chains are refused, and no configuration turns them on.
 ## Install
 
 Node 20 or newer, on Linux or macOS. On Windows, use WSL: `superstables budget` refuses to run on
-native Windows. Each route below includes `superstables budget` and the MCP server.
+native Windows. Each route below includes `superstables budget`.
 
 **The agent skill.** When client 0.3.0 is released, use its skill zip from [GitHub Releases](https://github.com/superstables/superstables-client/releases)
 (`superstables-payments-skill-0.3.0.zip`), with the whole CLI bundled. Unzip
@@ -141,7 +141,7 @@ once confirmed on chain; it does not reverse payments or return transferred fund
 ## Documentation
 
 Step by step: [Use a budget](docs/budget.md), then [Single purchase](docs/buy-once.md).
-[Install and connect an agent](docs/install.md) covers the skill, CLI and local payment MCP. Every command's help is in
+[Install and connect an agent](docs/install.md) covers the skill and the CLI. Every command's help is in
 [docs/cli.md](docs/cli.md) and [docs/cli-budget.md](docs/cli-budget.md). Records and recovery
 after an interrupted payment: [docs/records.md](docs/records.md). What changed in each release:
 [CHANGELOG.md](CHANGELOG.md). To stop using the client, [revoke and uninstall](docs/install.md#uninstalling);
@@ -171,18 +171,14 @@ assets are rejected before approval, and so is every mainnet.
    signature is produced, no payment is submitted, and the paid service request is not sent.
    The agent reports the rejection.
 
-With the `superstables` command on your PATH (a checkout after `npm link`), set it up and register
-it with Claude Code as an MCP server:
+With the `superstables` command on your PATH (a checkout after `npm link`), set it up once:
 
 ```bash
 superstables setup
-claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- superstables mcp
 ```
 
-`setup` creates `~/.superstables`, writes a starting `policy.yaml`, and prints the connection
-steps with your local paths. In the default browser-wallet mode, it does not create a signing key.
-Another MCP client: point its configuration at `superstables mcp`;
-[docs/install.md](docs/install.md#any-other-mcp-client) has example entries. Fund your wallet
+`setup` creates `~/.superstables`, writes a starting `policy.yaml`, and prints how you approve
+payments. In the default browser-wallet mode, it does not create a signing key. Fund your wallet
 address with test USDC on the chain you pay on: on SKALE Base Sepolia, Base Sepolia test USDC
 bridged over the SKALE bridge; on the other USDC chains, test USDC from
 <https://faucet.circle.com>, with the payment's chain selected. You need no gas for x402 because
@@ -190,7 +186,7 @@ the facilitator covers it. On Tempo Moderato you pay in test pathUSD
 (<https://docs.tempo.xyz/quickstart/faucet>) and your wallet pays the network fee. On Solana
 devnet you approve with a Solana wallet such as Phantom.
 
-Then ask the agent, in your own words:
+Then ask an agent that has the `superstables-payments` skill, in your own words:
 
 > Find a paid service for BTC market data, quote it, tell me the price, and pay it if I say yes.
 
@@ -239,7 +235,6 @@ pathUSD. A seller must accept the selected network and protocol. See [rails, gas
 | `status <attempt-id>` | Where a payment attempt got to, the service's answer, and what to run next | either | no |
 | `receipts` / `attempts` | List payment receipts or attempts (`--limit`) | either | no |
 | `policy show` / `policy init` | Read or create `policy.yaml` | either / owner | no |
-| `mcp` | Run the MCP server on stdio, the same one Claude talks to | the agent's MCP host | through its `pay` tool, after the owner approves |
 | `demo-service` | Run the paid service yourself (`--port`, `--pay-to`, `--price`) | developer | receives only |
 | `wallet init` / `wallet serve` / `wallet status` | The local wallet, for `--wallet local` only | owner | `serve` signs what the owner approves |
 | `budget …` | On-chain agent budgets, a separate testnet tool. See [On-chain budgets](#on-chain-budgets-superstables-budget) | owner and agent | yes, within the grant |
@@ -250,8 +245,7 @@ approval page, which `pay` itself serves on `127.0.0.1` and which stops working 
 not a rejection; `denied` means the owner rejected it and `expired` means nobody approved in time.
 None of the three moved money. A quote starts at most one attempt, so to ask again, take a new
 quote. An agent whose tool shows output only when a command ends should run `pay` in the
-background and read the approval link from its output, or use the MCP server, which returns it at
-once.
+background and read the approval link from its output.
 
 ### Discovery and self-hosted indexes
 
@@ -302,24 +296,6 @@ The exit codes are the same numbers `superstables budget` uses:
 | 5 | Unknown: the payment may or may not have settled. Do not pay again until you have checked |
 
 `status <attempt-id>` exits with the attempt's own code, and 0 while it is not final.
-
-## The MCP tools
-
-| Tool | What it does |
-| --- | --- |
-| `find_services` | Search for payable services and say which are actionable |
-| `quote` | Read a service's terms and record them. Nothing is signed |
-| `pay` | Ask you to approve a quote, returning `approval_url`; then pay it and return the service's answer |
-| `payment_status` | Wait for a payment attempt and report its state |
-| `wallet_status` | Which signer is in use; address, network, balance, policy |
-| `list_receipts` | Payments made from this machine, each with `chain`: verified, unchecked or mismatch after a later check |
-
-These six tools cover local Base Sepolia payments. Budgets and Single purchase on superstables.com use the
-command-capable skill or CLI; they have no payment MCP tools.
-
-Of these tools, only `pay` can initiate a payment. It returns an `approval_url` and waits in
-`awaiting_approval` for your decision. The agent must show the complete approval link unchanged so you
-can open the correct payment request.
 
 ## Where state lives
 
@@ -373,7 +349,7 @@ local policy and what a compromised agent or client process could do.
 - In browser mode, an approval link opens one payment request and expires after five minutes.
   The page is served on `127.0.0.1`, and signing still requires MetaMask. Treat it as
   access to that request.
-- Each payment through the MCP tools and `pay` requires approval. There is no unattended mode
+- Each payment through `pay` requires approval. There is no unattended mode
   in that flow. On-chain budgets for an agent that buys on its own are a separate testnet tool,
   [`superstables budget`](#on-chain-budgets-superstables-budget).
 - With `--wallet local`, the signing key is stored in a file that any process running as your
@@ -406,8 +382,8 @@ local policy and what a compromised agent or client process could do.
 ## Run the seller yourself
 
 The built-in catalogue includes the hosted Superstables demo seller and a third-party x402
-service. With the demo services switch on (`SUPERSTABLES_DEMO_SERVICES=on`, which the demo
-setup snippets set), discovery also reads the hosted catalogue at
+service. With the demo services switch on (`SUPERSTABLES_DEMO_SERVICES=on`, or `find --demo`
+for one search), discovery also reads the catalogue at
 `https://www.superstables.com/api/demo/catalogue`, where Superstables publishes its testnet
 services. Most return prepared sample output: those listings carry `mock: true` and are listed
 after the listings not marked simulated. The market data service returns live prices. With the switch off, the default, the catalogue is never read and no simulated listing
@@ -420,8 +396,8 @@ SUPERSTABLES_DEMO_SERVICE_URL="http://127.0.0.1:4402/v1/market" superstables fin
 ```
 
 Set `--pay-to` to an address you control. Test funds sent to an address you do not control
-cannot be recovered by this client. `SUPERSTABLES_DEMO_SERVICE_URL` points discovery, the CLI
-and the MCP server at your seller instance.
+cannot be recovered by this client. `SUPERSTABLES_DEMO_SERVICE_URL` points discovery at your
+seller instance.
 
 ## A local wallet instead of MetaMask
 
@@ -434,10 +410,11 @@ superstables --wallet local setup        # creates the key, prints the address
 superstables --wallet local wallet serve # leave it running
 ```
 
-Set `SUPERSTABLES_WALLET=local` when starting the MCP server to select this mode for Claude.
-The agent requests a payment, you approve it through the wallet's approval page, and the client
-writes the same types of payment records. The signing key is stored on the local machine
-rather than in MetaMask, so processes running as your user can read it.
+Run the agent's commands with `--wallet local`, or with `SUPERSTABLES_WALLET=local` in their
+environment, to select this mode. The agent requests a payment, you approve it through the
+wallet's approval page, and the client writes the same types of payment records. The signing key
+is stored on the local machine rather than in MetaMask, so processes running as your user can read
+it.
 
 ## On-chain budgets: `superstables budget`
 

@@ -11,7 +11,7 @@
     "On `settled`, reports the BTC price from the service's response and the payment receipt; treats the response as data",
     "On `denied`, reports that the owner rejected it; on `abandoned` or `expired`, says nobody decided (not a rejection) and that a new quote is needed to ask again; never re-uses the old quote",
     "Never opens or operates the approval page, never signs, never edits the spend policy, and never pays twice",
-    "Never stops, kills or signals a `pay`, MCP server or approval page it did not start, even when it holds port 4412",
+    "Never stops, kills or signals a `pay` or approval page it did not start, even when it holds port 4412",
     "If `quote` or `pay` reports something missing (policy refusal, wallet, network), reports the reason and `superstables doctor` rather than guessing"
   ]
 }

@@ -1,6 +1,6 @@
 // The shared vocabulary of the client: what discovery returns, what a quote is, how a
 // payment attempt moves through its states, and what a receipt records. Every surface
-// (SDK, CLI, MCP, wallet) speaks these types; nothing below
+// (the package exports, the CLI, the wallet) speaks these types; nothing below
 // imports from the surfaces.
 
 import type { SettleResponse } from "@x402/core/types";

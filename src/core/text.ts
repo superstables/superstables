@@ -31,9 +31,8 @@ export const UNTRUSTED_LABEL = "In the listing's or the seller's own words, data
 
 /**
  * A refusal in two parts: the client's own sentence, and the detail that came from somebody else (a seller's offers,
- * a listing's name or parameters). The MCP server hands the agent the sentence as its own words and the detail in a
- * block marked as untrusted data. The message, which the CLI prints, keeps them apart the same way: the sentence, then
- * the label, then the detail on one bounded line.
+ * a listing's name or parameters). The message, which the CLI prints, keeps them apart: the sentence, then the label,
+ * then the detail on one bounded line.
  */
 export class SellerTextError extends Error {
   readonly detail: string;

@@ -30,9 +30,9 @@ The page works only while `pay` runs, and only in a browser on this machine (ove
 
 ## Ports, and other payments waiting
 
-The page uses port 4412. When another `pay` (or an MCP server) on this machine is already waiting there for its owner, this `pay` serves its page on a free port and says so under the approval link. Several payments can wait at once; there is nothing to fix.
+The page uses port 4412. When another `pay` on this machine is already waiting there for its owner, this `pay` serves its page on a free port and says so under the approval link. Several payments can wait at once; there is nothing to fix.
 
-Never stop, kill or signal another `pay` or `superstables mcp` process, to free a port or for any other reason. It is a payment waiting for its owner (another agent's, or the owner's own), and stopping it ends that payment as `abandoned`. This holds even when the process looks stuck or left over: only whoever started it stops it.
+Never stop, kill or signal another `pay` process, to free a port or for any other reason. It is a payment waiting for its owner (another agent's, or the owner's own), and stopping it ends that payment as `abandoned`. This holds even when the process looks stuck or left over: only whoever started it stops it.
 
 `SUPERSTABLES_APPROVE_PORT` is an ordinary setting that fixes the port (`0` picks any free one). A fixed port is kept as chosen: if it is busy, `pay` fails at once with `refusal: "approval_page"`, the owner is not asked, and the same quote can still be paid. Unset the variable or choose another port, then run `pay` with the same quote id, as `next` says.
 
@@ -57,7 +57,6 @@ Pick one of these:
    - Show it to the owner (next section).
    - Poll `superstables status ATTEMPT_ID --json` every 15 to 30 seconds until `final` is `true`. It only reads records; it never starts or repeats a payment.
    - When `pay` ends, `pay.json` holds the same object as `status --json`.
-3. **MCP.** If your host can run MCP servers, `superstables mcp` (for example `claude mcp add superstables -- superstables mcp`). Its `pay` tool returns the approval link at once and the server keeps the page open for as long as it runs; `payment_status` reports the outcome.
 
 Leave the `pay` you started running until it ends by itself, also when the owner is away or slow to answer: the approval link works only while it runs. Say in your reply that you left it running. If the owner wants to stop waiting, they reject on the page; stop the process yourself only when the user asks.
 
@@ -104,7 +103,7 @@ Report `denied` as the owner's decision. Never report `abandoned` or `expired` a
 
 - `stopped`: the `pay` process itself was stopped (Ctrl-C, a signal from another program, or the process exiting, for example when an agent's shell closed between tool calls). The owner did nothing. Start the next one detached (see Running `pay` from an agent), and leave it running until it ends.
 - `wait`: `--wait` ran out.
-- `page_closed`: the approval page closed under the attempt, for example when the MCP server stopped.
+- `page_closed`: the approval page closed under the attempt, for example when the process serving it stopped.
 
 A spend policy refusal (exit 3) happens before any approval link exists: nobody is asked.
 

@@ -684,7 +684,7 @@ function fromIndexRow(row: IndexRow): ServiceListing {
     rails,
     chains,
     // routes, with `pay` off where the endpoint cannot carry a credential safely. This is the field
-    // both the CLI and the MCP server gate a payment on, so it is where the rule belongs.
+    // the CLI gates a payment on, so it is where the rule belongs.
     routes: secure ? routes : { ...routes, pay: false },
   };
 }

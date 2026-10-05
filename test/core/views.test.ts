@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { isTxHash, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../../src/core/pay.js";
 import { Records } from "../../src/core/records.js";
 import type { Attempt, PaymentTerms, Receipt } from "../../src/core/types.js";
-import { attemptView } from "../../src/mcp/server.js";
+import { attemptView } from "../../src/cli/views.js";
 
 const SIGNATURE = "5".repeat(87) + "z";
 const SOL_PAYER = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
@@ -95,12 +95,12 @@ describe("transactions and payers as they are shown", () => {
     expect(shown.network).toBe("eip155:42431");
   });
 
-  it("reads a Solana receipt from the records and shows it in the MCP view, counted toward the cap with USDC", () => {
+  it("reads a Solana receipt from the records and shows it in the attempt view, counted toward the cap with USDC", () => {
     const records = new Records(mkdtempSync(join(tmpdir(), "superstables-views-")));
     records.saveReceipt(receipt(solanaTerms, SIGNATURE, SOL_PAYER));
     const a = records.saveAttempt(attempt(solanaTerms, SIGNATURE, SOL_PAYER));
     expect(records.getReceipt("r1")?.transaction).toBe(SIGNATURE);
-    const view = attemptView({ records }, a, "mcp") as Record<string, any>;
+    const view = attemptView({ records }, a) as Record<string, any>;
     expect(JSON.stringify(view)).toContain(`https://explorer.solana.com/tx/${SIGNATURE}?cluster=devnet`);
     expect(JSON.stringify(view)).toContain(SOL_PAYER);
     expect(records.spentToday("USDC")).toBe(0.01);

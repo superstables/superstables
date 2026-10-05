@@ -18,7 +18,7 @@ import { Records } from "../../src/core/records.js";
 import { BrowserWalletSigner } from "../../src/core/signer/browser.js";
 import { SellerTextError } from "../../src/core/text.js";
 import type { Attempt } from "../../src/core/types.js";
-import { attemptView, messageFor } from "../../src/mcp/server.js";
+import { attemptView, messageFor } from "../../src/cli/views.js";
 import { withFileLock } from "../../src/core/lock.js";
 import type { SignResult, Signer } from "../../src/core/signer/types.js";
 import { MINT, randomAddress, signAsOwner, solanaKey, startFakeDevnet, startSolanaSeller, type FakeSolanaDevnet, type SolanaSeller, type SolanaSellerBehaviour } from "../helpers/fake-solana-pay.js";
@@ -141,15 +141,6 @@ describe("a Single purchase on Solana devnet", () => {
 
     // one quote, one payment
     expect(() => s.engine.startPayment(taken.id)).toThrow(QuoteUsedError);
-  });
-
-  it("tells the agent to sign in a Solana wallet while it waits", () => {
-    const attempt = {
-      id: "a", quoteId: "q", state: "awaiting_approval", approvalUrl: "http://127.0.0.1:1/approve/x", history: [],
-      terms: { amountDecimal: 0.01, amountAtomic: "10000", asset: "USDC", assetAddress: MINT, network: SOLANA_DEVNET.caip2, networkLabel: SOLANA_DEVNET.label, recipient: randomAddress(), scheme: "exact" },
-    } as unknown as Attempt;
-    expect(messageFor(attempt)).toContain("Open this approval link to review and sign in a Solana wallet such as Phantom: http://127.0.0.1:1/approve/x.");
-    expect(messageFor({ ...attempt, terms: { ...attempt.terms, network: "eip155:84532" } })).toContain("sign in MetaMask");
   });
 
   it("reads only x402 versions 1 and 2 off the wire, and never takes another for version 2", async () => {
@@ -758,7 +749,6 @@ describe("a Single purchase on Solana devnet", () => {
     const final = await pay(s);
     expect(final).toMatchObject({ state: "settled", chain: "unchecked" });
     expect(messageFor(final)).toMatch(/^The seller reported it paid: 0\.01 USDC on Solana devnet \(testnet\) \(no transaction hash was given\)\. The chain has not confirmed it yet/);
-    expect(messageFor(final, undefined, "cli")).not.toMatch(/^Paid/);
     // Looked for by the owner's signature, not by the transaction the seller did not name.
     const searched = await recheckChain(s.records, final.id, chain.url);
     expect(searched).toMatchObject({ state: "settled", chain: "unchecked" });

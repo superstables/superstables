@@ -11,7 +11,7 @@ without an approval each time, see [Budget](budget.md).
 
 There are two ways:
 
-- **Single purchase on your machine** (`pay`, the MCP tools): the owner approves on a page on this
+- **Single purchase on your machine** (`pay`): the owner approves on a page on this
   machine, with no account, on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE
   Base Sepolia, Ethereum Sepolia, Tempo Moderato or Solana devnet. See
   [Single purchase on your machine](#approve-each-payment-on-this-computer-pay).
@@ -41,8 +41,7 @@ signing in with an Ethereum wallet, or a compatible deployment the owner names w
 `SUPERSTABLES_SITE`; an origin outside superstables.com and its subdomains also needs the owner to set
 `SUPERSTABLES_ALLOW_SITE` to it (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
 The installed CLI runs on your own machine, but the site coordinates this single purchase after
-the owner approves. This differs from a budget, whose client pays sellers directly. The six local
-payment MCP tools do not initiate Single purchase on superstables.com. Solana purchases additionally need a Solana
+the owner approves. This differs from a budget, whose client pays sellers directly. Solana purchases additionally need a Solana
 wallet on the owner's device to sign the payment transaction. Solana sign-in is not supported
 in 0.3.0. Signing in does not approve a purchase. The
 [owner guide](https://www.superstables.com/docs/owner) covers the link/code handoff, sign-in
@@ -279,9 +278,6 @@ the background. When the owner says they have approved or rejected it, run
 still `false`, say so in one line and end your turn again. `pay.json` holds the same result once
 `pay` ends. Do not use a short `--wait`:
 it ends the attempt as `abandoned` before the owner can act.
-
-With MCP, the `pay` tool returns the approval link at once and the server keeps the page open;
-`payment_status` reports the outcome. The `superstables-payments` skill covers both ways.
 
 ### Limits
 

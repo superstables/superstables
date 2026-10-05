@@ -71,7 +71,7 @@ describe("the superstables CLI", () => {
   it("prints its own help", async () => {
     const result = await run(["--help"]);
     expect(result.code).toBe(0);
-    for (const command of ["setup", "wallet", "mcp", "find", "quote", "pay", "doctor", "policy"]) {
+    for (const command of ["setup", "wallet", "find", "quote", "pay", "doctor", "policy"]) {
       expect(result.stdout).toContain(command);
     }
     // The one sentence a reader must not miss.
@@ -246,7 +246,6 @@ const COMMANDS = [
   ["wallet", "serve"],
   ["wallet", "status"],
   ["wallet", "address"],
-  ["mcp"],
   ["find"],
   ["quote"],
   ["pay"],
@@ -312,6 +311,15 @@ describe("the help", () => {
     expect(stdout).toContain("take a new quote");
     expect(stdout).toContain("abandoned");
     expect(stdout).not.toMatch(/\.mcpb|Claude Desktop/);
+  }, 90_000);
+
+  it("has no MCP server: no `mcp` command, and no MCP in the help or the setup", async () => {
+    const mcp = await run(["mcp"]);
+    expect(mcp.code).toBe(2);
+    expect(mcp.stderr).toContain("unknown command 'mcp'");
+    for (const args of [["--help"], ["pay", "--help"], ["setup", "--help"], ["setup"], ["--wallet", "local", "setup"]]) {
+      expect((await run(args)).stdout, args.join(" ")).not.toMatch(/mcp/i);
+    }
   }, 90_000);
 });
 

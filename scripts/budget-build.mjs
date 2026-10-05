@@ -293,7 +293,7 @@ function gitDirty() {
  * checks that the result is self-contained. `version` replaces package.json's (a --dev stamp). esbuild also writes it
  * into src/core/version.ts, which has no package.json to read in a bundle.
  */
-export async function buildStandalone({ outdir, entryPoints, name, title, builtBy, rebuild, version: stamped, versionFiles = ["VERSION.json"], plugins = [] }) {
+export async function buildStandalone({ outdir, entryPoints, name, title, builtBy, rebuild, version: stamped, versionFiles = ["VERSION.json"] }) {
   const { build } = await import("esbuild");
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const rev = revisionOf(root);
@@ -317,7 +317,6 @@ export async function buildStandalone({ outdir, entryPoints, name, title, builtB
     banner: { js: 'import { createRequire as __budgetRequire } from "node:module"; const require = __budgetRequire(import.meta.url);' },
     define: { SUPERSTABLES_BUILD_VERSION: JSON.stringify(version.version) },
     external: OPTIONAL,
-    plugins,
     // licence comments stay in the code too, at the end of each file; the full texts are in THIRD_PARTY_NOTICES.txt
     legalComments: "eof",
     metafile: true,

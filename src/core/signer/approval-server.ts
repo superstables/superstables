@@ -121,7 +121,7 @@ const WALLET_SAID_NO =
   "that report cannot be checked against the wallet, so whether it was sent is unknown until the chain shows it";
 
 /**
- * The port somebody chose is taken. Most likely another `superstables pay` (or MCP server) is
+ * The port somebody chose is taken. Most likely another `superstables pay` is
  * serving its own approval page there and waiting for its owner, so the message says to leave
  * it alone: stopping that process would end someone else's payment.
  */
@@ -129,7 +129,7 @@ export class ApprovalPortBusy extends Error {
   constructor(readonly port: number) {
     super(
       `port ${port} on 127.0.0.1 is already in use, so the approval page could not start. Another ` +
-        "`superstables pay` or MCP server is probably serving its own approval page there and waiting " +
+        "`superstables pay` is probably serving its own approval page there and waiting " +
         "for its owner: do not stop it. Unset SUPERSTABLES_APPROVE_PORT to let pay pick a free port, " +
         "or set it to a different one",
     );

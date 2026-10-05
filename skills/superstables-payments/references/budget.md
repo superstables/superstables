@@ -165,7 +165,6 @@ A payment signed before the revoke and submitted after it is refused on all thre
 - **Wallet cap edits.** If the owner changes the spending cap in the wallet during `grant`, the command refuses (exit 3), but the changed allowance may be live on chain: the owner revokes it.
 - **Sequential only.** The chain limits the total; it does not make parallel purchases safe. One `buy` at a time per agent key.
 - **Something looks wrong** (missing key, empty balance, RPC errors): run `superstables budget doctor --rail R --chain C` first and report its FAIL lines.
-- **The MCP server has no budget tools.** Budgets need a shell.
 - **`buy` does not use `find` or `quote` records.** Give it the full seller URL.
 
 ## Where state lives

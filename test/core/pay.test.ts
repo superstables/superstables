@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
 import { PaymentEngine, QuoteUsedError, recheckChain, shownAttempt, shownReceipt } from "../../src/core/pay.js";
 import { paymentReceipt, startFakeBaseSepolia } from "../helpers/fake-base-sepolia.js";
-import { attemptView, messageFor } from "../../src/mcp/server.js";
+import { attemptView, messageFor } from "../../src/cli/views.js";
 import { Records } from "../../src/core/records.js";
 import { quote } from "../../src/core/quote.js";
 import { WalletSigner } from "../../src/core/signer/wallet.js";
