@@ -29,7 +29,7 @@ import { quote } from "../../src/core/quote.js";
 import { Records } from "../../src/core/records.js";
 import { APPROVAL_PAGE_SCRIPT } from "../../src/core/signer/approval-page.js";
 import { BrowserWalletSigner } from "../../src/core/signer/browser.js";
-import { SignRefused, type SignRequest } from "../../src/core/signer/types.js";
+import { SignRefused, type Eip3009SignRequest, type SignRequest } from "../../src/core/signer/types.js";
 import { OWNER_PAGE_SCRIPT } from "../../src/core/signer/owner-approval-page.js";
 import { OwnerApprovalServer, signInMessage, type OwnerActionInput, type SolanaTransactionPort } from "../../src/core/signer/owner-approval-server.js";
 import { ownerApprovalPage } from "../../src/core/signer/owner-approval-page.js";
@@ -83,7 +83,7 @@ function newSigner(
   return signer;
 }
 
-function signRequest(context?: SignRequest["context"]): SignRequest {
+function signRequest(context?: SignRequest["context"]): Eip3009SignRequest {
   return { kind: "eip3009", requirements: usdcRequirement(PRICE, SELLER), x402Version: 2, context };
 }
 

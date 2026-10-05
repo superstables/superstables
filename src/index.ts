@@ -31,9 +31,17 @@ export { FINAL_ATTEMPT_STATES } from "./core/types.js";
 
 // ── Chain and protocol ─────────────────────────────────────────────────────────────────
 export {
+  ARBITRUM_SEPOLIA,
+  ARC_TESTNET,
   BASE_SEPOLIA,
   DEFAULT_NETWORK,
-  SUPPORTED_NETWORKS,
+  ETHEREUM_SEPOLIA,
+  EVM_NETWORKS,
+  KNOWN_NETWORKS,
+  POLYGON_AMOY,
+  SKALE_BASE_SEPOLIA,
+  SOLANA_DEVNET,
+  TEMPO_MODERATO,
   addressUrl,
   describeNetwork,
   fromAtomic,
@@ -46,7 +54,8 @@ export {
   usdcBalance,
   usdcRequirement,
 } from "./core/chain.js";
-export type { NetworkInfo } from "./core/chain.js";
+export type { EvmNetwork, NetworkInfo, Rail, SolanaNetwork, TempoNetwork } from "./core/chain.js";
+export { SUPPORTED_NETWORKS } from "./core/rails/index.js";
 
 export { NotPaidEndpointError, detect, parseChallenge, sameTerms, termsFor } from "./core/x402.js";
 export type { Challenge, RawAccept, Supported, Unsupported } from "./core/x402.js";

@@ -101,7 +101,7 @@ describe("status with no budget set up here", () => {
     const r = await budget(["status", "--rail", "evm"]);
     expect(r.code).toBe(1);
     expect(r.stderr.split("\n")[0]).toContain("no budget has been set up here for evm on base-sepolia");
-    expect(r.result.reason).toBe("no budget has been set up here for evm on base-sepolia: no agent key on this computer; no owner has connected a wallet");
+    expect(r.result.reason).toBe("no budget has been set up here for evm on base-sepolia: no agent key on this machine; no owner has connected a wallet");
     expect(r.result.next).toContain("superstables budget setup --rail evm, superstables budget fund-agent --rail evm, superstables budget doctor --rail evm, superstables budget grant --rail evm --amount A");
     expect(`${r.stderr}${r.stdout}`.replaceAll(home, "<home>")).not.toMatch(/B4/);
   });

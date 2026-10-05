@@ -28,12 +28,30 @@ export interface Policy {
   approval: "ask-every-payment";
 }
 
+/**
+ * The US dollar stablecoins `pay` pays in: USDC (the EVM chains and Solana) and pathUSD (Tempo Moderato). The caps count
+ * them together, one for one, as dollars; any other asset is refused unless the owner lists it, and is then counted
+ * on its own.
+ */
+export const USD_STABLECOINS: readonly string[] = ["USDC", "pathUSD"];
+
+/** The asset's own spelling when it is one this client knows (USDC, pathUSD), else its name in capitals. */
+export function assetName(asset: string): string {
+  return USD_STABLECOINS.find((known) => known.toUpperCase() === asset.toUpperCase()) ?? asset.toUpperCase();
+}
+
+/** What the daily cap adds an asset's payments up as: "USD" for the dollar stablecoins, the asset itself otherwise. */
+export function capUnit(asset: string): string {
+  const name = assetName(asset);
+  return USD_STABLECOINS.includes(name) ? "USD" : name;
+}
+
 export const DEFAULT_POLICY: Policy = {
   perCall: { amount: 0.05, asset: "USDC" },
   perDay: { amount: 1, asset: "USDC" },
   allow: [],
   deny: [],
-  stablecoins: ["USDC"],
+  stablecoins: [...USD_STABLECOINS],
   killSwitch: false,
   approval: "ask-every-payment",
 };
@@ -46,7 +64,7 @@ caps:
   per_day: 1 USDC       # the most all payments may add up to in one UTC day
 allow: []               # hostname patterns; empty = any host
 deny: []                # e.g. ["*.example.net"]
-stablecoins: [USDC]     # the only asset this release pays in
+stablecoins: [USDC, pathUSD]  # allowed assets; the caps count USDC and pathUSD together, one for one
 approval: ask-every-payment   # the wallet asks the owner before every payment
 # kill_switch: true     # refuse everything
 `;
@@ -74,7 +92,7 @@ export function parsePolicy(yamlText: string): Policy {
     perDay: money(raw.caps?.per_day),
     allow: Array.isArray(raw.allow) ? raw.allow.map(String) : [],
     deny: Array.isArray(raw.deny) ? raw.deny.map(String) : [],
-    stablecoins: Array.isArray(raw.stablecoins) ? raw.stablecoins.map((s: unknown) => String(s).toUpperCase()) : ["USDC"],
+    stablecoins: Array.isArray(raw.stablecoins) ? raw.stablecoins.map((s: unknown) => assetName(String(s))) : [...USD_STABLECOINS],
     killSwitch: raw.kill_switch === true,
     approval: "ask-every-payment",
   };
@@ -119,7 +137,7 @@ export function evaluatePolicy(policy: Policy, a: Attempt): Verdict {
       return { allowed: false, reason: `host ${a.domain} is not on the allow list` };
     }
   }
-  if (!policy.stablecoins.includes(a.asset.toUpperCase())) {
+  if (!listed(policy, a.asset)) {
     return { allowed: false, reason: `${a.asset} is not in the policy's stablecoin list [${policy.stablecoins.join(", ")}]` };
   }
   if (policy.perCall && a.amountDecimal > policy.perCall.amount) {
@@ -156,7 +174,7 @@ export function policyChecks(policy: Policy, a: Attempt): PolicyCheck[] {
       detail: policy.allow.length === 0 ? "empty: any host" : `host ${a.domain} ${allowed ? "is" : "is not"} on ${policy.allow.join(", ")}`,
     });
   }
-  const coin = policy.stablecoins.includes(a.asset.toUpperCase());
+  const coin = listed(policy, a.asset);
   checks.push({ rule: "stablecoins", ok: coin, detail: `${a.asset} ${coin ? "is" : "is not"} in [${policy.stablecoins.join(", ")}]` });
   checks.push(
     policy.perCall
@@ -180,6 +198,11 @@ export function policyChecks(policy: Policy, a: Attempt): PolicyCheck[] {
     });
   }
   return checks;
+}
+
+/** Is this asset on the policy's stablecoin list? Letter case does not matter. */
+function listed(policy: Policy, asset: string): boolean {
+  return policy.stablecoins.some((coin) => coin.toUpperCase() === asset.toUpperCase());
 }
 
 export const round6 =(n: number): number => Math.round(n * 1e6) / 1e6;

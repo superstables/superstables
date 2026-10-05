@@ -12,7 +12,8 @@ without an approval each time, see [Budget](budget.md).
 There are two ways:
 
 - **Single purchase on your machine** (`pay`, the MCP tools): the owner approves on a page on this
-  machine, on Base Sepolia, with no account. See
+  machine, with no account, on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE
+  Base Sepolia, Ethereum Sepolia, Tempo Moderato or Solana devnet. See
   [Single purchase on your machine](#approve-each-payment-on-this-computer-pay).
 - **Single purchase on superstables.com** (`superstables budget buy-once`): the owner approves on superstables.com,
   on Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet. Choose this when the owner's
@@ -84,19 +85,43 @@ Single purchase requests made on superstables.com appear in the [site account](h
 
 ## Single purchase on your machine (`pay`)
 
-`pay` uses x402 with the `exact` scheme and test USDC on Base Sepolia (`eip155:84532`, token
-`0x036CbD53842c5426634e7929541eC2318f3dCF7e`, 6 decimals). If the seller offers no payment option
-the client supports, it is refused before the owner is asked. Local `pay` needs no account and no
-site.
+`pay` pays in one of two ways, depending on the chain the seller asks for:
+
+| Chains | Protocol and token | What the owner's wallet does |
+| --- | --- | --- |
+| Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia | x402 `exact`, test USDC | Signs one EIP-3009 authorization over that chain's USDC. The seller's facilitator submits it and pays the gas |
+| Tempo Moderato | MPP `tempo.charge`, test pathUSD | Sends one pathUSD transfer, with a memo tied to the seller's request, and pays its network fee |
+| Solana devnet | x402 `exact`, test USDC | Signs one token transfer whose fee the seller's facilitator pays; the facilitator sends it |
+
+The client pins each chain's token, and on the EVM chains the token's signing domain. If the seller
+offers no payment option the client supports, or asks for a mainnet, it is refused before the
+owner is asked. Local `pay` needs no account and no site.
+
+On Tempo Moderato the money moves when the wallet sends the transfer, before the seller is called.
+The page switches the wallet to Tempo Moderato and checks that it is there, and the client records
+that the wallet was asked before it asks. It then reads the owner's transaction on chain, and only
+then calls the seller. Once the wallet has been asked to send, an attempt that ends without a
+transaction report is `uncertain`, never unpaid. That includes a rejection the page reports from
+the wallet, which the client cannot check. `superstables status <attempt-id>` searches the chain
+for the payment's memo, in blocks after the wallet was asked. A transfer has no expiry, so the
+attempt counts against the daily cap until that search finds it, and nothing else releases it. If
+your wallet shows it never sent the transfer, whether to pay again is your decision; you can raise
+`caps.per_day` in your policy if the attempt blocks other payments. The wallet is asked at most once
+per approval.
 
 ### What you need
 
 - The client, installed and set up: [Install the client](install.md). Commands below use the
   installed `superstables` command.
-- A browser wallet for the owner, such as MetaMask, on the computer that runs the client.
-- Test USDC on Base Sepolia in that wallet, at least the price: free at
-  <https://faucet.circle.com> (pick Base Sepolia). No ETH is needed: the facilitator that settles
-  the payment pays the gas.
+- A browser wallet for the owner on the machine that runs the client: MetaMask (or another EVM
+  wallet) for the EVM chains and Tempo Moderato, a Solana wallet such as Phantom for Solana devnet.
+  `--wallet local` signs on the EVM chains only.
+- Test tokens in that wallet on the seller's chain, at least the price. Test USDC: on SKALE Base
+  Sepolia, Base Sepolia test USDC bridged over the SKALE bridge; on the other USDC chains, free at
+  <https://faucet.circle.com> (select the payment's chain). No gas is needed, because the
+  facilitator that settles the payment pays it. On Tempo Moderato, test pathUSD from
+  <https://docs.tempo.xyz/quickstart/faucet>, a little more than the price, because the wallet pays
+  the network fee.
 
 ### 1. Find a service (agent)
 
@@ -141,7 +166,7 @@ superstables quote --service superstables-demo-market-data --param asset=BTC
     ok       kill_switch  off
     ok       deny         empty
     ok       allow        empty: any host
-    ok       stablecoins  USDC is in [USDC]
+    ok       stablecoins  USDC is in [USDC, pathUSD]
     ok       caps.per_call 0.01 USDC, at most 0.05 USDC
     ok       caps.per_day 0 USDC paid today (UTC) + this 0.01 = 0.01, at most 1 USDC
 
@@ -174,7 +199,7 @@ Then it waits until the owner decides, for up to 5 minutes. The page works only 
 
 ### 4. Approve or reject (owner)
 
-Open the approval link in the browser that has your wallet, on the same computer. The page shows the
+Open the approval link in the browser that has your wallet, on the same machine. The page shows the
 amount, the recipient and the network, worked out from the seller's payment terms, not from what
 the agent says. What the agent says the payment is for is shown apart, under "Reported by the agent
 (not verified)".
@@ -225,13 +250,13 @@ superstables receipts --limit 5
 
 | State | What happened | Exit | What next |
 | --- | --- | --- | --- |
-| `settled` | Paid, and the service answered | 0 | Use the answer |
+| `settled` | Paid, and the service answered. `chain` says whether the chain confirmed it, or it is the seller's report so far | 0 | Use the answer |
 | `denied` | The owner rejected it; the client submitted no payment | 3 | Ask again only if the owner wants to |
 | `expired` | Nobody decided within 5 minutes. Nothing was paid | 1 | A new quote, then `pay` |
 | `abandoned` | `pay` stopped before anyone decided (it was stopped, or `--wait` ran out). Not a rejection. Nothing was paid | 1 | A new quote, then `pay`, with no short `--wait` |
-| `failed` | The policy refused it, the terms changed, or the seller reported that the payment did not settle. `reason` says which; a seller's report is not a check on chain | 1 or 3 | Read `reason` and `next` |
+| `failed` | Nothing was paid: the policy refused it, the terms changed, or the payment stopped before it left your machine; or, with `chain: "unpaid"`, a later chain check showed it was never made and can no longer be | 1 or 3 | Read `reason` and `next` |
 | `paid_service_failed` | Paid, but the service answered with an error | 4 | Do not pay again. Report the receipt |
-| `uncertain` | The payment may or may not have settled | 5 | Do not pay again. Follow [Quotes, attempts and receipts](records.md#why-failed-and-uncertain-are-different) |
+| `uncertain` | The payment may or may not have settled, including after the seller said it did not | 5 | Do not pay again, and do not quote the same request again. `superstables status <attempt-id>` searches the chain for it; see [Quotes, attempts and receipts](records.md#why-failed-and-uncertain-are-different) |
 
 `pay` on a used quote is refused (exit 2) and names the attempt it started; follow it with
 `superstables status <attempt-id>`. If the approval page could not start or the local wallet was

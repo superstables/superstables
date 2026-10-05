@@ -1,10 +1,17 @@
-// x402 challenge detection and parsing, protocol v1 and v2 shapes. Detection is free:
-// a paid endpoint answers HTTP 402 with its requirements, and reading them costs nothing.
+// Payment challenge detection and parsing. Detection is free: a paid endpoint answers HTTP 402 with what it wants, and
+// reading that costs nothing. Two protocols are read: x402 (its v1 and v2 shapes, in the PAYMENT-REQUIRED header or the
+// body) and MPP (`WWW-Authenticate: Payment` challenges, src/core/mpp.ts). Which offers this client can pay is the rails'
+// call (src/core/rails/); termsFor below is the x402 entry to it.
 
 import type { PaymentRequirements } from "@x402/core/types";
-import { describeNetwork, fromAtomic, isSameAddress, networkFor, toCaip2 } from "./chain.js";
+import { sameAddressOn, toCaip2 } from "./chain.js";
+import { DETECT_TIMEOUT_MS, DeadlineError, MAX_CHALLENGE_BYTES, readCapped } from "./http.js";
+import { parseMppChallenges, type MppChallenge } from "./mpp.js";
+import { judgeAccept } from "./rails/index.js";
 import { untrustedText } from "./text.js";
 import type { PaymentTerms } from "./types.js";
+
+export { DeadlineError, MAX_CHALLENGE_BYTES, readBody, readCapped, type ReadEnd } from "./http.js";
 
 export interface RawAccept {
   scheme?: string;
@@ -22,8 +29,9 @@ export interface RawAccept {
 interface RawChallenge {
   x402Version?: number;
   error?: string;
-  resource?: string | { url?: string; description?: string };
+  resource?: string | { url?: string; description?: string; mimeType?: string };
   accepts?: RawAccept[];
+  extensions?: Record<string, unknown>;
 }
 
 export interface Challenge {
@@ -33,6 +41,35 @@ export interface Challenge {
   description: string;
   /** The raw requirement objects, in the order offered. */
   accepts: RawAccept[];
+  /** v2: the challenge's resource object and extensions as received, for a credential that carries them back. */
+  resourceInfo?: { url?: string; description?: string; mimeType?: string };
+  extensions?: Record<string, unknown>;
+}
+
+/** Everything a 402 asked for: an x402 challenge, MPP challenges, or both. */
+export interface SellerChallenge {
+  x402?: Challenge;
+  /** Why an x402 challenge in the 402 was not read (a wire version this client does not read). */
+  x402Refusal?: string;
+  /** MPP challenges, in the order the seller gave them. */
+  mpp: MppChallenge[];
+  /** The seller's own description of the resource, from the x402 challenge or the first MPP challenge that has one. */
+  description: string;
+}
+
+/**
+ * An x402 challenge in a wire version this client does not read. Only versions 1 and 2 are read: a seller that names
+ * another, or none, is refused before any of its offers is judged, never read as a version it did not name.
+ */
+export class UnsupportedX402Version extends Error {
+  constructor(named: unknown) {
+    super(
+      named === undefined
+        ? "the x402 challenge names no version, and this client reads versions 1 and 2 only"
+        : `the x402 challenge is version ${untrustedText(JSON.stringify(named) ?? String(named), 20)}, and this client reads versions 1 and 2 only`,
+    );
+    this.name = "UnsupportedX402Version";
+  }
 }
 
 export function parseChallenge(input: { paymentRequiredHeader?: string | null; body?: string }): Challenge {
@@ -56,20 +93,53 @@ export function parseChallenge(input: { paymentRequiredHeader?: string | null; b
   if (!raw || !Array.isArray(raw.accepts) || raw.accepts.length === 0) {
     throw new Error("No x402 challenge found in the 402 response (header or body)");
   }
+  // The wire version decides how an offer is read and signed (v1 is EVM only: the EVM rail is the one that takes it).
+  if (raw.x402Version !== 1 && raw.x402Version !== 2) throw new UnsupportedX402Version(raw.x402Version);
+  const version: 1 | 2 = raw.x402Version;
   const resource = typeof raw.resource === "string" ? raw.resource : (raw.resource?.url ?? "");
   const description = typeof raw.resource === "object" && raw.resource ? (raw.resource.description ?? "") : "";
-  return { version: raw.x402Version === 1 ? 1 : 2, resource, description, accepts: raw.accepts };
+  const resourceInfo = typeof raw.resource === "object" && raw.resource ? raw.resource : undefined;
+  const extensions = raw.extensions && typeof raw.extensions === "object" && !Array.isArray(raw.extensions) ? raw.extensions : undefined;
+  return {
+    version,
+    resource,
+    description,
+    accepts: raw.accepts,
+    ...(resourceInfo ? { resourceInfo } : {}),
+    ...(extensions ? { extensions } : {}),
+  };
+}
+
+/**
+ * Read a 402 for every challenge this client understands: x402 (header or body) and MPP (WWW-Authenticate). Throws
+ * when there is neither.
+ */
+export function readSellerChallenge(input: { paymentRequiredHeader?: string | null; wwwAuthenticate?: string | null; body?: string }): SellerChallenge {
+  let x402: Challenge | undefined;
+  let x402Refusal: string | undefined;
+  try {
+    x402 = parseChallenge(input);
+  } catch (err) {
+    x402 = undefined;
+    if (err instanceof UnsupportedX402Version) x402Refusal = err.message;
+  }
+  const mpp = parseMppChallenges(input.wwwAuthenticate);
+  if (!x402 && mpp.length === 0) {
+    throw new Error(x402Refusal ? `The 402 response offers no payment this client reads: ${x402Refusal}` : "No payment challenge (x402 or MPP) found in the 402 response");
+  }
+  const description = x402?.description || mpp.find((c) => c.description)?.description || "";
+  return { ...(x402 ? { x402 } : {}), ...(x402Refusal ? { x402Refusal } : {}), mpp, description };
 }
 
 export class NotPaidEndpointError extends Error {
   constructor(readonly url: string, readonly status: number, readonly bodyPreview: string) {
-    super(`Expected HTTP 402 from ${url}, got ${status}: not a paid x402 endpoint, or the request is wrong`);
+    super(`Expected HTTP 402 from ${url}, got ${status}: not a paid endpoint (x402 or MPP), or the request is wrong`);
     this.name = "NotPaidEndpointError";
   }
 }
 
 /**
- * Fetch the endpoint and read its challenge. Throws NotPaidEndpointError on anything but 402.
+ * Fetch the endpoint and read its x402 challenge. Throws NotPaidEndpointError on anything but 402.
  *
  * This is the free leg: no credential is on it, but the endpoint is somebody else's, so it is read
  * under one deadline for the whole exchange, never redirected, and never read past the cap. A 402
@@ -77,6 +147,20 @@ export class NotPaidEndpointError extends Error {
  * the same way (budget/response.mjs): the point is that one side of the product must not be the weak one.
  */
 export async function detect(url: string, init: RequestInit = {}, options: { timeoutMs?: number } = {}): Promise<Challenge> {
+  const answer = await fetch402(url, init, options);
+  return parseChallenge({ paymentRequiredHeader: answer.paymentRequiredHeader, body: answer.body });
+}
+
+/** As detect(), for every challenge this client understands: x402 and MPP. */
+export async function detectPayment(url: string, init: RequestInit = {}, options: { timeoutMs?: number } = {}): Promise<SellerChallenge> {
+  return readSellerChallenge(await fetch402(url, init, options));
+}
+
+async function fetch402(
+  url: string,
+  init: RequestInit,
+  options: { timeoutMs?: number },
+): Promise<{ paymentRequiredHeader: string | null; wwwAuthenticate: string | null; body: string }> {
   const timeoutMs = options.timeoutMs ?? DETECT_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   const controller = new AbortController();
@@ -86,8 +170,11 @@ export async function detect(url: string, init: RequestInit = {}, options: { tim
     const res = await fetch(url, { ...init, redirect: "error", signal });
     const body = await readCapped(res, MAX_CHALLENGE_BYTES, deadline - Date.now(), url);
     if (res.status !== 402) throw new NotPaidEndpointError(url, res.status, body.slice(0, 300));
-    const header = res.headers.get("payment-required") ?? res.headers.get("x-payment-required");
-    return parseChallenge({ paymentRequiredHeader: header, body });
+    return {
+      paymentRequiredHeader: res.headers.get("payment-required") ?? res.headers.get("x-payment-required"),
+      wwwAuthenticate: res.headers.get("www-authenticate"),
+      body,
+    };
   } catch (err) {
     // An abort from our own deadline reads as what it is, not as an AbortError.
     if (controller.signal.aborted && controller.signal.reason instanceof DeadlineError) throw controller.signal.reason;
@@ -97,151 +184,28 @@ export async function detect(url: string, init: RequestInit = {}, options: { tim
   }
 }
 
-/** How long the free challenge exchange may take, start to finish, and how much of the answer is read. */
-const DETECT_TIMEOUT_MS = 15_000;
-export const MAX_CHALLENGE_BYTES = 1_000_000;
-
-/** A service that did not finish answering in time. Its socket has been released. */
-export class DeadlineError extends Error {
-  constructor(url: string, ms: number) {
-    super(`${hostLabel(url)} did not finish answering within ${Math.round(ms / 100) / 10} s`);
-    this.name = "DeadlineError";
-  }
-}
-
-function hostLabel(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return "the service";
-  }
-}
-
-/** How a capped read ended: the body's end was seen, the cap or drain limit was reached, the deadline passed, or the read failed. */
-export type ReadEnd = "eof" | "cap" | "deadline" | "error";
-
-/**
- * Read a response body as text, keeping no more than `max` bytes and reading no later than `ms` from now, and say how
- * the read ended. With `drainTo`, reading goes on past `max` without keeping anything, up to `drainTo` bytes in all, so
- * that an answer longer than what is kept can still be seen to end ("eof"). The reader is always cancelled afterwards,
- * which releases the socket. Never throws.
- */
-export async function readBody(
-  res: Response,
-  max: number,
-  ms: number,
-  drainTo = max,
-): Promise<{ text: string; end: ReadEnd }> {
-  const body = res.body;
-  if (!body) return { text: "", end: "eof" };
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let kept = 0;
-  let seen = 0;
-  let end: ReadEnd = "eof";
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<"deadline">((resolve) => {
-    timer = setTimeout(() => resolve("deadline"), Math.max(0, ms));
-  });
-  try {
-    for (;;) {
-      const next = await Promise.race([reader.read(), late]);
-      if (next === "deadline") {
-        end = "deadline";
-        break;
-      }
-      if (next.done) break;
-      const value = next.value;
-      if (!value) continue;
-      seen += value.length;
-      if (kept < max) {
-        chunks.push(value);
-        kept += value.length;
-      }
-      if (seen >= drainTo) {
-        end = "cap";
-        break;
-      }
-    }
-  } catch {
-    end = "error";
-  } finally {
-    clearTimeout(timer);
-    reader.cancel().catch(() => undefined);
-  }
-  return { text: Buffer.concat(chunks).subarray(0, max).toString("utf8"), end };
-}
-
-/**
- * Read a response body as text, no further than `max` bytes and no later than `ms` from now. Past the cap the transfer
- * stops; past the deadline the read is cancelled and this throws DeadlineError. A service that sends a byte at a time
- * forever is the case the deadline is for: a timeout on the request alone does not end a body that keeps arriving.
- */
-export async function readCapped(res: Response, max: number, ms = DETECT_TIMEOUT_MS, url = res.url): Promise<string> {
-  const { text, end } = await readBody(res, max, ms);
-  if (end === "deadline") throw new DeadlineError(url, ms);
-  if (end === "error") throw new Error(`the answer from ${hostLabel(url)} broke off`);
-  return text;
-}
-
 export type Unsupported = { supported: false; reason: string };
 export type Supported = { supported: true; terms: PaymentTerms; requirement: PaymentRequirements };
 
 /**
- * Judge one offered requirement against what this client can pay: exact scheme, a supported
- * network, that network's USDC. Returns the terms the owner will be shown, derived only from
- * the requirement itself.
+ * Judge one offered x402 requirement against what this client can pay: exact scheme, a chain `pay` pays on, that
+ * chain's token and signing facts (the rail's own checks, src/core/rails/). Returns the terms the owner will be shown,
+ * derived only from the requirement itself.
  */
 export function termsFor(accept: RawAccept, version: 1 | 2): Supported | Unsupported {
-  // Every string the seller offers here can end up in a refusal an agent reads, so it is quoted as one bounded line.
-  const scheme = accept.scheme ?? "exact";
-  if (scheme !== "exact") return { supported: false, reason: `scheme "${untrustedText(scheme, 40)}" is not supported (only exact)` };
-  const network = networkFor(accept.network ?? "");
-  if (!network) return { supported: false, reason: `network ${untrustedText(describeNetwork(String(accept.network ?? "unknown")), 60)} is not supported (only ${describeNetwork("eip155:84532")})` };
-  if (!accept.asset || !isSameAddress(accept.asset, network.usdc.address)) {
-    return { supported: false, reason: `asset ${untrustedText(accept.extra?.name ?? accept.asset ?? "unknown", 60)} is not USDC on ${network.label}` };
-  }
-  // The signing domain is USDC's own. An offer that names another one is either wrong or asks the owner's wallet to show
-  // a name the seller chose as the signing application; either way the signature would not verify on chain.
-  const domain = network.usdc.eip712;
-  if ((accept.extra?.name !== undefined && accept.extra.name !== domain.name) || (accept.extra?.version !== undefined && accept.extra.version !== domain.version)) {
-    return { supported: false, reason: `the offer's signing domain is not USDC's on ${network.label} (expected name "${domain.name}", version "${domain.version}"), so the signature would not verify` };
-  }
-  const atomic = accept.amount ?? accept.maxAmountRequired;
-  if (!atomic || !/^\d+$/.test(String(atomic))) return { supported: false, reason: "the offered amount is missing or malformed" };
-  if (!accept.payTo || !/^0x[0-9a-fA-F]{40}$/.test(accept.payTo)) return { supported: false, reason: "the recipient (payTo) is missing or malformed" };
-  const amountAtomic = String(atomic);
-  const terms: PaymentTerms = {
-    amountDecimal: fromAtomic(amountAtomic, network.usdc.decimals),
-    amountAtomic,
-    asset: "USDC",
-    assetAddress: network.usdc.address,
-    network: network.caip2,
-    networkLabel: network.label,
-    recipient: accept.payTo,
-    scheme,
-    x402Version: version,
-  };
-  const requirement: PaymentRequirements = {
-    scheme,
-    network: (accept.network ?? network.caip2) as PaymentRequirements["network"],
-    asset: accept.asset,
-    amount: amountAtomic,
-    payTo: accept.payTo,
-    maxTimeoutSeconds: accept.maxTimeoutSeconds ?? 300,
-    extra: (accept.extra ?? {}) as Record<string, unknown>,
-  };
-  // v1 requirements keep their wire shape (maxAmountRequired, vernacular network) for the signer.
-  if (version === 1) Object.assign(requirement, { maxAmountRequired: amountAtomic });
-  return { supported: true, terms, requirement };
+  const judged = judgeAccept(accept, version);
+  if (!judged.supported) return judged;
+  return { supported: true, terms: judged.offer.terms, requirement: judged.offer.requirement as PaymentRequirements };
 }
 
 /** Two requirements name the same payment when amount, asset, recipient and network agree. */
 export function sameTerms(a: PaymentTerms, b: PaymentTerms): boolean {
+  const network = toCaip2(a.network);
   return (
     a.amountAtomic === b.amountAtomic &&
-    isSameAddress(a.assetAddress, b.assetAddress) &&
-    isSameAddress(a.recipient, b.recipient) &&
-    toCaip2(a.network) === toCaip2(b.network)
+    network === toCaip2(b.network) &&
+    sameAddressOn(network, a.assetAddress, b.assetAddress) &&
+    sameAddressOn(network, a.recipient, b.recipient) &&
+    (a.scheme ?? "exact") === (b.scheme ?? "exact")
   );
 }

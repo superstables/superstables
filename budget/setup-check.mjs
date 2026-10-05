@@ -52,7 +52,7 @@ export function setupGaps({ rail, chain, agent }) {
   const problem = k.problem ?? p.problem;
   if (problem) return { missing: [], problem, agentKey: keyPath, publicFile: pubPath };
   const missing = [];
-  if (!existsSync(keyPath)) missing.push("no agent key on this computer");
+  if (!existsSync(keyPath)) missing.push("no agent key on this machine");
   else if (!keys[v.key]) missing.push(v.label ? `no agent key for --agent ${v.label}` : "the agent key file holds no key");
   const owner = pub[v.owner] ?? (v.ownerInAgentFile ? keys[v.owner] : undefined);
   if (!owner) missing.push("no owner has connected a wallet");

@@ -81,7 +81,7 @@ const RAILS = {
   solana: { chains: ["devnet"], chain: "devnet", addr: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/, unit: "USDC" },
 };
 /** find covers every network: the testnet line names the tokens without naming one. */
-const TESTNET_TOKENS_LINE = "Testnet only: test tokens, no real money.";
+const TESTNET_TOKENS_LINE = "Testnet only. Test tokens, no real money.";
 /** Every chain key the budget commands take, and its rail. */
 const RAIL_OF_CHAIN = Object.fromEntries(Object.entries(RAILS).flatMap(([rail, r]) => r.chains.map((c) => [c, rail])));
 /** The chain keys in words, each with its rail: the list find names when it refuses a chain. */
@@ -112,7 +112,7 @@ const MAX_HELP = `--max M is the most this one purchase may cost, in the budget 
   Only what is actually paid comes off the budget. Required, with no default.`;
 const FLOW_HELP = `The owner's steps, in order, once per rail and chain:
   evm     setup, fund-agent, doctor, grant.
-          setup: the owner connects their wallet and signs a free message; this computer gets an agent key.
+          setup: the owner connects their wallet and signs a free message; this machine gets an agent key.
           fund-agent: the owner sends the agent key a little of the chain's gas token (ETH on Base Sepolia, Arbitrum
           Sepolia and Ethereum Sepolia, USDC on Arc Testnet, POL on Polygon Amoy, CREDIT on SKALE Base Sepolia) so it can
           pay for its own transactions. On Arc, that gas transfer is USDC, separate from the budget allowance.
@@ -133,13 +133,13 @@ const OWNER_COMMANDS_LIST = ["setup", "fund-agent", "grant", "revoke", "recover"
 const OWNER_FLAGS = { timeout: "v", "no-open": "b", "owner-key-file": "v", wait: "b", detach: "b", replace: "b" };
 const OWNER_HELP = `How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on
 stdout and in words on stderr. The owner opens it in the browser that has their wallet, and approves or rejects there.
-The page is on this computer only: over SSH, the owner forwards its port first,
+The page is on this machine only: over SSH, the owner forwards its port first,
 ssh -L PORT:127.0.0.1:PORT user@this-host (PORT is the number in the approval link), then opens it on their own
-computer. An agent may start this command and hand the owner the approval link; only the owner approves, and an agent
+machine. An agent may start this command and hand the owner the approval link; only the owner approves, and an agent
 never does it for them.
 On a chain set up with --hosted, the approval link is on superstables.com instead: it opens on any device where the
 owner is signed in with their wallet, and the APPROVE line carries a matchCode the owner picks there (recover stays on
-this computer).
+this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. Write the approval link (and the
 match code) and the terms in your reply to the owner, a visible message, and end your turn there. When they say they've
@@ -156,8 +156,8 @@ Unattended tests only: --owner-key-file PATH --yes signs with that key file inst
 const RECOVER_OWNER_HELP = OWNER_HELP.replace(
   `On a chain set up with --hosted, the approval link is on superstables.com instead: it opens on any device where the
 owner is signed in with their wallet, and the APPROVE line carries a matchCode the owner picks there (recover stays on
-this computer).`,
-  "Recovery always uses this computer's local approval page, including on a chain set up with --hosted.",
+this machine).`,
+  "Recovery always uses this machine's local approval page, including on a chain set up with --hosted.",
 ).replace(" (and the\nmatch code)", "");
 const OWNER_PRINTS = "the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final\n  false, id, url, matchCode (hosted), expires and next; or, when it waited, the final RESULT: state settled (or ok), tx, next.";
 const COMMANDS = {
@@ -165,22 +165,22 @@ const COMMANDS = {
     flags: { agent: "v", "new-owner": "b", hosted: "b", grant: "v", fund: "o", "fund-only": "b", ...OWNER_FLAGS }, required: [],
     help: helpText({
       usage: "superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--hosted [--site URL] [--grant A] [--fund [AMOUNT]]]\n  [--fund-only] [--timeout S] [--no-open] [--detach|--wait]",
-      about: `The owner's first step on a rail and chain. Creates the agent key on this computer if there is none (it never
+      about: `The owner's first step on a rail and chain. Creates the agent key on this machine if there is none (it never
 overwrites one: running setup again reuses it), then asks the owner to connect their own wallet and sign a free sign-in
 message (no transaction). Records both addresses in the public file and prints the next steps. No owner key is created
 or stored: the owner's key stays in their wallet.
 A trusted step: whoever connects becomes the owner on record. The owner runs it, or watches it run.
 --new-owner replaces a recorded owner with the wallet that connects; refused while a budget is live (revoke first).
---hosted: the owner approves on superstables.com instead of a page on this computer. Setup then adds this agent to the
+--hosted: the owner approves on superstables.com instead of a page on this machine. Setup then adds this agent to the
 owner's superstables.com account (the owner signs in there with their wallet, picks the match code and signs the
 owner-proof message), checks the owner's signature over that message, records that address as the owner, and records
 APPROVALS=hosted, SITE, LINK_ID and LINK_CODE in the public file: grant, revoke and fund-agent on this chain use it from
-then on (recover stays on this computer). solana: the owner also connects a Solana wallet there, and that address is the
+then on (recover stays on this machine). solana: the owner also connects a Solana wallet there, and that address is the
 owner. Needs a superstables.com account. --site URL picks another site (default ${DEFAULT_SITE}, or SUPERSTABLES_SITE):
 a superstables.com subdomain, or another origin only when the owner set SUPERSTABLES_ALLOW_SITE to it. Without --hosted:
 the page on 127.0.0.1, no account. An agent already added to an account is taken only for the owner recorded here, with
 that owner's signed proof; otherwise the owner removes the agent on the site's account page and adds it again.
-setup --new-owner without --hosted moves a hosted chain back to the page on this computer.
+setup --new-owner without --hosted moves a hosted chain back to the page on this machine.
 --grant A and --fund [AMOUNT] (with --hosted): one approval link for the whole set-up. After the owner adds this agent,
 the same page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain; not on
 tempo) and then the grant of A (tempo: for 24 hours), in that order. The command reads each transaction from the chain
@@ -211,7 +211,7 @@ ${FLOW_HELP}`,
 after setup and before grant. It transfers funds for network fees; it does not grant a budget.
   evm     the chain's gas token (ETH on Base Sepolia, Arbitrum Sepolia and Ethereum Sepolia, USDC on Arc Testnet, POL on
           Polygon Amoy, CREDIT on SKALE Base Sepolia). --amount in that token; the default is enough for a few purchases.
-          On Arc it is native USDC (a plain transfer, 18 decimals), on this computer and on superstables.com alike.
+          On Arc it is native USDC (a plain transfer, 18 decimals), on this machine and on superstables.com alike.
   solana  SOL for transaction fees. --amount in SOL, default 0.01.
   tempo   has none: the agent needs no gas, fees come from the owner.
 superstables budget doctor says whether the agent has enough.
@@ -284,7 +284,7 @@ ${OWNER_HELP}`,
     help: helpText({
       usage: "superstables budget status --rail evm|tempo|solana [--chain C] [--agent LABEL]",
       about: `Whether a budget is set up here, and if so what is left of it: remaining, expiry, revoked, and the funds at risk
-(the most the agent key could still move). Reads the chain. When no budget has been set up on this computer, it says so
+(the most the agent key could still move). Reads the chain. When no budget has been set up on this machine, it says so
 first, names the home it checked (SUPERSTABLES_HOME, default ~/.superstables; home in the RESULT) and the owner's next
 command. If the budget is elsewhere, ask the user for the path: do not point SUPERSTABLES_HOME at another home yourself.
 remaining 0 means there is nothing to spend: the owner grants one.`,
@@ -299,7 +299,7 @@ remaining 0 means there is nothing to spend: the owner grants one.`,
     flags: { url: "v", max: "v", "pay-to": "v", op: "v", method: "v", body: "v", agent: "v" }, required: ["url", "max"],
     help: helpText({
       usage: "superstables budget buy --rail evm|tempo|solana --url U --max M [--chain C] [--pay-to ADDR] [--op ID]\n  [--method GET|POST|PUT|PATCH|DELETE] [--body JSON] [--agent LABEL]",
-      about: `One purchase from the seller at U, paid from the budget the owner granted, signed by the agent key on this computer.
+      about: `One purchase from the seller at U, paid from the budget the owner granted, signed by the agent key on this machine.
 Nobody approves it: the chain enforces the budget. It asks the seller for its price, checks it, then pays and fetches.
 ${MAX_HELP}
 --pay-to ADDR refuses unless the seller's payee is exactly ADDR (preflight prints it). --op ID names this purchase
@@ -328,7 +328,7 @@ ${FLOW_HELP}`,
     help: helpText({
       usage: "superstables budget reconcile --rail evm|tempo|solana --op ID [--chain C]",
       about: `Reads the chain for one purchase, by its --op, and reports what happened to it. Run it after a buy exits 5 (unknown),
-or before reusing an --op. Needs the purchase's journal on this computer.`,
+or before reusing an --op. Needs the purchase's journal on this machine.`,
       money: "no. It never signs or sends.",
       who: "anyone, usually the agent.",
       example: "superstables budget reconcile --rail evm --op btc-001",
@@ -346,7 +346,7 @@ tempo and solana have nothing to recover: the agent never holds the budget.
 
 ${RECOVER_OWNER_HELP}`,
       money: "yes: stranded USDC back to the owner, and possibly gas from the owner to the agent, which the owner approves.",
-      who: "the owner, with the agent key on this computer. An agent may start it and hand the owner the approval link.",
+      who: "the owner, with the agent key on this machine. An agent may start it and hand the owner the approval link.",
       example: "superstables budget recover --rail evm",
       prints: OWNER_PRINTS.replace("matchCode (hosted), ", "").replace("tx, next", "amount (returned), tx, next"),
       exits: EXITS_OWNER,
@@ -454,7 +454,7 @@ ${OWNER_HELP}`,
 };
 const TOP_HELP = `superstables budget: on-chain budgets for an agent. The owner grants a budget once, from their own wallet; the
 agent then buys on its own, purchase by purchase, until the budget is spent or revoked. The chain enforces the limit.
-Testnets only: no real money moves.
+Testnet only. No real money moves.
 
 Start here, the owner (once per rail and chain; each step prints an approval link; the owner approves in their own
 wallet):
@@ -505,7 +505,7 @@ Commands (each takes --help):
 
 Owner approvals: an owner command starts a page on 127.0.0.1 and prints its approval link once, as a line
   APPROVE {"action","url","expires","terms"}
-The owner opens it in the browser that has their wallet. The page is on this computer only: over SSH, forward its port
+The owner opens it in the browser that has their wallet. The page is on this machine only: over SSH, forward its port
 first (ssh -L PORT:127.0.0.1:PORT user@this-host, PORT from the approval link). On a chain set up with --hosted (and for
 buy-once), the approval link is on superstables.com instead: it opens on any device where the owner is signed in with
 an Ethereum wallet. Solana actions additionally use a Solana wallet to sign transactions; Solana sign-in is not
@@ -553,7 +553,7 @@ Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
                                              and LINK_CODE)
   budget/ops/<rail>-<chain>/<op>.json        one journal per purchase, and <op>.response, the seller's answer when saved
   budget/approvals/                          owner approvals started in the background, and buy-once purchases
-Testnet only: --mainnet, or a mainnet chain, is refused.`;
+--mainnet, or a mainnet chain, is refused.`;
 
 // ---- output -----------------------------------------------------------------------------------------
 // control characters (C0, DEL, C1) and the Unicode line and paragraph separators become spaces: one line, always
@@ -1397,10 +1397,10 @@ async function setup({ f, ctx }) {
     return emit(0, { ...ctx, state: "ok", owner: rr.owner, next: rr.next ?? "superstables budget doctor --rail tempo" });
   }
   if (f.hosted) {
-    log(`\nsetup on ${f.rail} (${f.chain}), hosted on ${f.site}: the agent key stays on this computer; the owner adds this agent to their account there, signed in with their wallet. No owner key is created.`);
+    log(`\nsetup on ${f.rail} (${f.chain}), hosted on ${f.site}: the agent key stays on this machine; the owner adds this agent to their account there, signed in with their wallet. No owner key is created.`);
     log("  setup is a trusted step: the account that adds this agent becomes the owner on record. An agent may start it and hand the owner the approval link and match code; only the owner signs in and picks the code.");
   } else {
-    log(`\nsetup on ${f.rail} (${f.chain}): the agent key stays on this computer; the owner connects their own wallet. No owner key is created.`);
+    log(`\nsetup on ${f.rail} (${f.chain}): the agent key stays on this machine; the owner connects their own wallet. No owner key is created.`);
     log("  setup is a trusted step: whoever connects becomes the owner on record. An agent may start it and hand the owner the approval link; only the owner connects their wallet.");
   }
   if (f.grant !== undefined || f.fund !== undefined) log(`  one approval link: after the owner adds the agent, the same page asks the owner's wallet for ${[f.fund !== undefined ? "gas for the agent" : "", f.grant !== undefined ? `a budget of ${f.grant} ${unitOf(f)}` : ""].filter(Boolean).join(", then ")}. Each transaction is read from the chain before it is reported.`);
@@ -1444,7 +1444,7 @@ const backstopS = (cmd, f) => Number(f.timeout ?? 600) * (cmd === "setup" && (f.
 const waitNext = (id, r = {}) => {
   if (r.matchCode) return showFirst(id, true);
   const port = /^http:\/\/127\.0\.0\.1:(\d+)\//.exec(r.url ?? "")?.[1] ?? "PORT";
-  return `${showFirst(id, false)} Only the owner uses the page, in the browser with their wallet. It is on this computer only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. waiting_owner does not mean approved. If the approval link expires first, the command ends refused and nothing is sent: run it again for a new one. Do not start another owner command`;
+  return `${showFirst(id, false)} Only the owner uses the page, in the browser with their wallet. It is on this machine only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. waiting_owner does not mean approved. If the approval link expires first, the command ends refused and nothing is sent: run it again for a new one. Do not start another owner command`;
 };
 /** The next step of a wait that is still waiting: poll again. A new link (recover can ask twice) is written first. */
 const stillWaiting = (id) => `the owner has not finished. Say so in one line and end your turn; run superstables budget wait --id ${id} --shown again when they say they've approved. If the url is not the one you showed, write the new approval link and code first. The owner has not finished approving; do not approve for the owner.`;
@@ -1539,7 +1539,7 @@ async function wait({ f }) {
   if (f.site !== undefined && madeOn && madeOn !== f.site) return badInput({ command: "wait" }, `--site ${f.site} is not the site this approval was made on (${madeOn}): use --site ${madeOn}, or leave --site out`);
   if (f.abandon) {
     // the owner gives up a buy-once purchase the site does not end: the record stays, marked, and the payment stays unknown
-    if (once?.command !== "buy-once") return badInput({ command: "wait" }, `--abandon is for a buy-once purchase; ${f.id} is ${once ? `a ${once.command}` : "not one on this computer"}`);
+    if (once?.command !== "buy-once") return badInput({ command: "wait" }, `--abandon is for a buy-once purchase; ${f.id} is ${once ? `a ${once.command}` : "not one on this machine"}`);
     // a purchase that already ended is answered as every wait answers it: its stored answer, checked against the evidence
     // (abandonOnce reads it through settleOnce, which never repeats a stored answer the evidence no longer supports)
     const s = await abandonOnce(once);

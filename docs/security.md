@@ -22,7 +22,7 @@ that site can and cannot do is in
 ## Where the key is
 
 In the default `pay` flow, the owner's signing key stays in their browser wallet. The client
-does not generate, read or store it. That does not mean the computer holds no keys: the browser
+does not generate, read or store it. That does not mean the machine holds no keys: the browser
 wallet keeps its own, and the local wallet mode and budgets store separate keys.
 
 Before the owner signs, the client builds an authorization and serves a page that shows its terms.
@@ -197,37 +197,103 @@ those records and the count starts again.
 
 ## Testnet only
 
-`pay` supports one network (`eip155:84532`, Base Sepolia), one asset (test USDC at
-`0x036CbD53842c5426634e7929541eC2318f3dCF7e`), one scheme (x402 `exact`). A requirement naming
-anything else is refused before anyone is asked. There is no configuration that turns on
-mainnet.
+`pay` supports eight testnets, each with one token pinned in the client: x402 `exact` with test
+USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum
+Sepolia and Solana devnet, and MPP `tempo.charge` with test pathUSD on Tempo Moderato. On the EVM
+chains the token's EIP-712 signing domain is pinned too, so a seller cannot make the wallet show a
+signing name of its choosing. A requirement naming anything else, every mainnet included, is
+refused before anyone is asked. There is no configuration that turns on mainnet.
+
+On Tempo the owner's wallet sends the payment itself, so the order is different. MPP sellers that
+split a price between recipients, set a memo of their own, accept only payments they submit
+themselves, want the credential in a header of their choosing, or whose request expires in less
+than a minute or more than an hour are refused before anyone is asked, and so is a challenge an
+earlier payment already used: its memo would be the same. Before the page asks the wallet to send,
+it switches the wallet to Tempo Moderato and checks the chain it is on, and the client records that
+money may move, under the daily cap check, with the chain's latest block. The page checks the
+wallet's chain again right before it asks, the call it sends names Tempo Moderato's chain id, and
+it asks the wallet once per approval. The client then reads the owner's transaction and calls the
+seller only when the chain shows exactly this transfer with this payment's memo, mined after the
+wallet was asked. A wallet that was asked and did not answer, or whose rejection the page reports,
+leaves the attempt `uncertain`: a page's report is not proof that nothing was sent, since anything
+holding the approval link can post it. `superstables status` then searches the chain for the memo,
+in blocks after the one recorded, and never takes a transfer already recorded as another payment.
 
 Payments are settled by public facilitators, which submit the transfer and pay the gas. A
 facilitator sees the signed authorization, so it learns who paid whom and how much; it cannot
 alter the amount or the recipient, because those are inside what was signed. The client's facilitator helper tries the next facilitator when one cannot be
 reached, and stops when one refuses. Other sellers choose their own facilitators.
 
-With `pay`, the seller reports the settlement and names a transaction. The client then reads
-that transaction's receipt from Base Sepolia (`SUPERSTABLES_RPC_URL`, https or this computer only)
-and records `chain`:
+With `pay` over x402, the seller reports the settlement and names a transaction. The client checks
+that transaction on the payment's chain and records `chain`. What `verified` requires depends on
+the chain:
 
-- `verified`: the transaction succeeded, and the USDC contract logged both the use of the nonce
-  the owner signed and a transfer of exactly the signed amount from the payer to the checked
-  recipient.
-- `unchecked`: the chain could not say (no hash, not mined yet, the RPC did not answer). The
-  payment rests on the seller's report; `superstables status` and `payment_status` check again.
-- `mismatch`: the transaction is something else. The attempt becomes `uncertain`: it is not
-  confirmed and not refuted, and it is never retried.
+- On the EVM chains: a successful receipt in which the chain's USDC contract logged both the use of
+  the nonce the owner signed (`AuthorizationUsed`) and a transfer of exactly the signed amount from
+  the payer to the checked recipient.
+- On Solana devnet: a successful transaction that carries the owner's signature over the
+  transaction the client built, and whose one token instruction moves exactly the signed amount of
+  devnet USDC from the owner's token account to the recipient's.
+- On Tempo Moderato (MPP, above): a successful transaction from the owner in which pathUSD logged
+  `TransferWithMemo` of exactly this amount to this recipient with this payment's memo, mined after
+  the wallet was asked.
 
-`verified` means the RPC the client read returned a receipt with those logs. The client does not
-run a node: a dishonest or compromised RPC can answer with a receipt that never happened. HTTPS
-authenticates the connection to that RPC, not the chain behind it. Use an RPC you trust
-(`SUPERSTABLES_RPC_URL`) when that matters. The budget rails read the chain too.
+`unchecked` means the chain could not say (no transaction named, not mined yet, the RPC did not
+answer): the payment rests on the seller's report, said as such, and `superstables status` and
+`payment_status` check again. `mismatch` means the transaction is something else: the attempt
+becomes `uncertain`, neither confirmed nor refuted, and is never retried. On Tempo and Solana, the
+client does not use a transaction already recorded as another attempt's verified payment. On EVM
+chains, one transaction may settle several payments; each must match its own signed authorization
+nonce and exact transfer.
+
+Once the credential has left this machine, a seller's "not paid" (an HTTP 402, a failed
+settlement) leaves the attempt `uncertain`, not `failed`: the facilitator may have settled it
+anyway, before or after the answer. `superstables status` then looks for the payment by what ties
+it to this attempt alone: on the EVM chains the token's record of the nonce (`authorizationState`
+and its `AuthorizationUsed` log), on Solana devnet a transaction carrying the owner's signature.
+When the chain shows the payment can no longer happen, the attempt becomes `failed` with
+`chain: "unpaid"`. That takes final evidence, and anything less decides nothing:
+
+- On the EVM chains: a final block dated at or past the authorization's `validBefore`, at which the
+  token shows the authorization unused; or the authorization's cancellation (`AuthorizationCanceled`)
+  in the chain's final history. For a cancellation, the client reads the final block first, then the
+  cancellation's log; the log must be in a block at or below the final block, and that height's
+  block, read again, must have the log's block hash. A used nonce alone does not show a
+  cancellation: after a reorganisation, the payment may have used it instead. A final block is the
+  one the RPC returns for the `finalized` tag; on SKALE Base Sepolia, whose blocks are final once
+  they are in the chain and whose RPC does not answer that tag, it is the latest block. If the RPC
+  does not return a final block, the attempt stays `uncertain`.
+- On Solana devnet: on an RPC whose genesis hash is devnet's, the finalized block height is past the
+  blockhash's last valid height, and every one of the 151 finalized blocks the transaction could have
+  landed in was read whole, at consecutive heights, with no transaction in them that is this payment:
+  each one that carries the owner's signature is read, and one that failed on chain is not this
+  payment. A block or a transaction that cannot be read, or a missing block, decides nothing. One
+  status reads these blocks for up to 45 seconds and records on the attempt the slot up to which they
+  hold no payment (`searchedToSlot`); the next status reads on from the block after it. Finalized
+  blocks do not change, so what an earlier status read still holds. The list of the owner's token
+  account's transactions is used to find a payment, never to show one is missing: an RPC writes that
+  list after the blocks, so it can lag them.
+- On Tempo Moderato: never. A transfer the wallet was asked to send has no expiry, so only finding it
+  resolves the attempt.
+
+The same search decides a payment the seller reported without a transaction the chain confirms.
+
+These checks trust the RPC's answer. The client does not run a node: a dishonest or compromised RPC
+can answer with a receipt that never happened, or hide one that did. HTTPS authenticates the
+connection to that RPC, not the chain behind it. Base Sepolia uses `SUPERSTABLES_RPC_URL` when it is
+set, Tempo Moderato `SUPERSTABLES_TEMPO_RPC` and Solana devnet `SUPERSTABLES_SOLANA_RPC` (each
+HTTPS, or HTTP on this machine, without credentials); otherwise the client uses the chain's
+configured public RPC. Use an RPC you trust when that matters. The budget rails read the chain too.
 
 The per-day cap (`caps.per_day`): a payment counts on the day it ended, and on every day while it
-is still open (signed and in flight until its authorization expires, or waiting for the owner
-within its approval window). `pay`
-reserves the amount under a lock shared by the processes on this computer before the owner is
+can still move money: waiting for the owner within its approval window, or signed or sent and not
+resolved (an EVM authorization until its `validBefore` and two minutes; a Tempo transfer, which has
+no expiry, or a Solana transaction until `superstables status` resolves it on chain). That includes
+a payment with a receipt the chain has not confirmed (the seller's report) or has contradicted: it
+counts on the receipt's day and, once a day, on later days on the same terms. USDC and pathUSD count together, one for one, as dollars; the
+default `stablecoins` list is `[USDC, pathUSD]`, and a policy that lists USDC only refuses pathUSD.
+`pay`
+reserves the amount under a lock shared by the processes on this machine before the owner is
 asked.
 
 Text from sellers and listings reaches the agent as data. The MCP server names those fields in
@@ -238,7 +304,7 @@ characters.
 **Where the signed payment goes.** `pay` sends the signed authorization only to the URL it quoted:
 it refuses a redirect, and the attempt then ends `uncertain`, because the client cannot tell whether
 the seller acted on it. A listing from the index or the catalogue is payable only when its endpoint
-is `https`, or `http` on this computer. Reading a seller's 402 challenge has a deadline and a size
+is `https`, or `http` on this machine. Reading a seller's 402 challenge has a deadline and a size
 limit and follows no redirect.
 
 ## The local wallet mode
@@ -353,7 +419,7 @@ Per rail, with what each revoke does not cover:
 is not trusted to say who the owner is or what was paid.
 
 - **Which site.** `--site`, `SUPERSTABLES_SITE` and a recorded `SITE` accept superstables.com, its
-  subdomains and this computer only. Another origin is used only when the owner sets
+  subdomains and this machine only. Another origin is used only when the owner sets
   `SUPERSTABLES_ALLOW_SITE` to that exact `https` origin in their own environment. An agent never
   sets it, so an agent told to "use this other site" cannot send the owner's approvals there. When
   the site is not `www.superstables.com`, the logs and `message_for_owner` name its host.
@@ -413,14 +479,14 @@ is not trusted to say who the owner is or what was paid.
   reports a transaction, an unfinished request ends as `unknown` (exit 5), never as "nothing was
   sent". Read the chain before trying again.
 - **`recover` stays local.** On a hosted chain, `grant`, `revoke` and `fund-agent` go through the
-  site; the owner's part of `recover` still uses the page on this computer.
+  site; the owner's part of `recover` still uses the page on this machine.
 - **A hosted revoke needs the agent key.** The agent key signs every request to the site. On
   `solana` and `tempo`, if a hosted `revoke` needs approval but the agent key file is missing,
   readable by others, not a regular file or holds no usable key, it refuses (exit 3, nothing
   requested) and names the other ways to revoke: Revoke on the owner's account page on the site,
   or a revoke transaction the owner signs in their own wallet.
 - **RPC replacements.** `B4_RPC`, `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC` must be
-  `https`, or `http` on this computer; every check above reads the chain through them. A
+  `https`, or `http` on this machine; every check above reads the chain through them. A
   replacement in use is named in the `RESULT` (`rpc`).
 
 What a compatible site must serve, with both proofs spelled out:
@@ -433,7 +499,7 @@ For 0.3.0, use the agent skill zip built from that released commit, once it is a
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with
-a full commit hash builds the client on your computer and runs the repository's build scripts
+a full commit hash builds the client on your machine and runs the repository's build scripts
 there; without a hash, npm installs whatever the default branch holds.
 
 ## Replacing a key

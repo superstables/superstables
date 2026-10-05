@@ -64,6 +64,17 @@ function sameProcess(pid: number, start: string | null | undefined): boolean {
   return now === start;
 }
 
+/** This process, as a record names it: its pid and its start identity (null where the system gives none). */
+export function thisProcess(): { pid: number; start: string | null } {
+  return { pid: process.pid, start: processStart(process.pid) ?? null };
+}
+
+/** Is the process a record names still running? The same judgment the lock makes of its holder. */
+export function processRunning(runner: { pid?: unknown; start?: unknown } | undefined): boolean {
+  if (!runner || typeof runner.pid !== "number") return false;
+  return sameProcess(runner.pid, typeof runner.start === "string" ? runner.start : null);
+}
+
 /** What a lock or mutex file says about its holder, or null when it cannot be read as one. */
 function readHolder(path: string): { text: string | null; holder: { pid?: number; pidStart?: string | null } | null } {
   let text: string | null = null;

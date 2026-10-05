@@ -252,10 +252,10 @@ export function esc(value: unknown): string {
 /** The whole document around a page's body: bar, heading, body, footer. */
 export function framePage(parts: FrameParts): string {
   const site = parts.look === "superstables";
-  const brand = site ? `<span class="logo">${MARK}Superstables</span>` : `<span class="logo local">${COMPUTER}Approval on this computer</span>`;
+  const brand = site ? `<span class="logo">${MARK}Superstables</span>` : `<span class="logo local">${COMPUTER}Approval on this machine</span>`;
   const foot = site
-    ? "Served on this computer by the Superstables client, for the command that opened it."
-    : "Served on this computer by the command that opened it.";
+    ? "Served on this machine by the Superstables client, for the command that opened it."
+    : "Served on this machine by the command that opened it.";
   return `<!doctype html>
 <html lang="en">
 <head>

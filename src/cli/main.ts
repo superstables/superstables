@@ -59,8 +59,13 @@ import {
   usedQuoteMessage,
 } from "./outcome.js";
 
-const NO_GAS_LINE = "no ETH is needed, facilitators pay the gas.";
-const FAUCET_LINE = `Fund it with test USDC on Base Sepolia at https://faucet.circle.com; ${NO_GAS_LINE}`;
+/**
+ * Where test USDC comes from: Circle's faucet on every chain `pay` pays USDC on but SKALE Base Sepolia, whose USDC is
+ * Base Sepolia's, bridged over the SKALE bridge. `others` names the rest: "EVM chains" for the local wallet.
+ */
+const usdcSources = (others: string) =>
+  `on SKALE Base Sepolia, Base Sepolia test USDC bridged over the SKALE bridge; on the other ${others}, https://faucet.circle.com (select the payment's chain). No gas is needed: facilitators pay it.`;
+const FAUCET_LINE = `Fund it with test USDC on the EVM chain you pay on: ${usdcSources("EVM chains")}`;
 
 /** How long the browser approval page gives the owner (BrowserWalletSigner's default). */
 const BROWSER_WINDOW_S = 300;
@@ -83,7 +88,7 @@ program
   .version(clientVersion(), "-V, --version", "print the version of this client and exit")
   .description(
     "Find services that charge per request, quote them, and pay them with test USDC from a wallet " +
-      "the owner controls. Testnets only: no real money moves.",
+      "the owner controls. Testnet only. No real money moves.",
   )
   .option("--home <dir>", "where this client keeps its state (default: SUPERSTABLES_HOME or ~/.superstables)")
   .addOption(
@@ -134,10 +139,12 @@ explain(
         console.log("There is nothing else to start. When an agent asks to pay, it prints an approval link:");
         console.log("  1. Install MetaMask in your browser: https://metamask.io/download");
         console.log("  2. Open the approval link the agent gives you and press Connect wallet.");
-        console.log("  3. Add or switch to the Base Sepolia network when MetaMask asks.");
+        console.log("  3. Add or switch to the payment's chain when MetaMask asks.");
         console.log("  4. Check the amount and the recipient on the page, then approve in MetaMask.");
+        console.log("For a payment on Solana devnet, use a Solana wallet such as Phantom instead.");
         console.log("");
-        console.log(`Fund that MetaMask account with test USDC on Base Sepolia at https://faucet.circle.com; ${NO_GAS_LINE}`);
+        console.log(`Fund that account with test USDC on the chain you pay on: ${usdcSources("USDC chains")}`);
+        console.log("On Tempo Moderato it pays in test pathUSD, and the wallet pays the network fee itself.");
         console.log("");
         console.log("To use the local wallet process instead, run any command with `--wallet local`.");
       } else {
@@ -402,7 +409,7 @@ explain(
   {
     notes: [
       "Reads a built-in catalogue and the public index (SUPERSTABLES_INDEX_URL; `off` skips it). " +
-        "Columns: pay is whether `superstables pay` can call the listing as listed (x402 on Base Sepolia, " +
+        "Columns: pay is whether `superstables pay` can call the listing as listed (on a chain it pays on, " +
         "with the request parameters known); budget names the `superstables budget` rail and chain that " +
         "could pay it; simulated is yes when the listing marks the output as prepared sample output, no when " +
         "it marks it as not sample output (Superstables' market data service, which returns live prices; no " +
@@ -458,7 +465,7 @@ explain(
           throw badInput(
             "This service cannot be paid by `superstables pay`." +
               (budget ? ` With a budget: ${budget.run.map((c) => `\`${c}\``).join(", then ")}.` : "") +
-              ` ${UNTRUSTED_LABEL} ${untrustedText(`${service.name}: ${service.notActionableReason ?? "it is not on Base Sepolia"}`, 500)}`,
+              ` ${UNTRUSTED_LABEL} ${untrustedText(`${service.name}: ${service.notActionableReason ?? "the payment is not supported by this client"}`, 500)}`,
           );
         }
         const params = parseParams(options.param);
@@ -661,6 +668,13 @@ explain(
         `the port the approval link names: ssh -L ${DEFAULT_APPROVE_PORT}:127.0.0.1:${DEFAULT_APPROVE_PORT}). With --wallet local the ` +
         "request goes to the wallet process, whose page outlives this command; approving there after " +
         "pay has stopped pays nothing, because nothing is left to submit it.",
+      "Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base " +
+        "Sepolia, Ethereum Sepolia and Solana devnet; MPP with test pathUSD on Tempo Moderato. The wallet signs on " +
+        "the EVM chains and Solana, and pay submits what it signed. On Tempo the owner's wallet sends the payment " +
+        "itself: pay records that before the wallet is asked, reads the owner's transaction on chain, and only then " +
+        "calls the seller. Once the wallet has been asked to send, an attempt that ends without a transaction report " +
+        "is uncertain, a rejection the page reports from the wallet included, and `superstables status` searches the " +
+        "chain for it. --wallet local signs on the EVM chains only.",
       `How long it waits: with no --wait, until the attempt ends: the browser page gives the owner ` +
         `${BROWSER_WINDOW_S / 60} minutes; with --wallet local, pay gives the wallet ${LOCAL_WINDOW_S} s ` +
         "(the wallet's own window is 120 s by default). After the owner approves, settlement takes up " +
@@ -681,14 +695,17 @@ explain(
         "`superstables status <attempt-id>` shows it again later.",
       "Retrying: a quote starts at most one attempt. After denied, expired, abandoned or failed, take a " +
         "new quote and pay that, unless the Next line (next, with --json) says the same quote can still be paid (the " +
-        "owner was never asked). After uncertain or paid_service_failed, do not pay again.",
+        "owner was never asked). After paid_service_failed, do not pay again. After uncertain, do not pay again or " +
+        "quote the same request again: `superstables status` looks for the payment on chain, and only when it ends " +
+        "the attempt failed with chain unpaid was nothing paid.",
       "States: awaiting_approval, approved, submitting (not final); settled, paid_service_failed " +
         "(paid; chain says verified, when the client read the transaction on chain and it is this payment, or " +
         "unchecked, when it rests on the seller's report until `superstables status` checks again); denied (the owner rejected it), expired (nobody approved in the window), " +
         "abandoned (the wait ended before anyone decided; abandoned_by says whether this process was " +
-        "stopped, --wait ran out or the page closed), failed (nothing was paid); uncertain (the " +
-        "payment may or may not have settled, including when the chain shows the seller's transaction is not this " +
-        "payment: chain mismatch).",
+        "stopped, --wait ran out or the page closed), failed (nothing was paid: the payment never left this machine, " +
+        "or chain unpaid, when the chain shows it was never made and can no longer be); uncertain (the payment may " +
+        "or may not have settled, including after the seller said it did not, and when the chain shows the seller's " +
+        "transaction is not this payment: chain mismatch).",
     ],
     money:
       "yes, once, and only after the owner approves it in their own wallet. Calling pay only asks; " +
@@ -700,7 +717,7 @@ explain(
       "service's response and the next command. With --json, one object: attempt_id, quote_id, state, " +
       "final, message, next, reason, refusal, receipt (or transaction, for a payment without one), service_response, history.",
     exits:
-      "0 paid and delivered, 1 failed, expired or abandoned; nothing was paid only when no transaction is reported, 2 bad input (unknown, used " +
+      "0 paid and delivered, 1 failed, expired or abandoned; nothing was paid when no transaction is reported, or chain is unpaid, 2 bad input (unknown, used " +
       "or expired quote), 3 refused (the owner rejected it, or a spend policy refused it), 4 paid but the " +
       "service failed, 5 unknown",
   },
@@ -746,8 +763,8 @@ explain(
     }),
   {
     money:
-      "no. It reads this machine's records, and the chain again for a paid attempt whose chain is unchecked; it " +
-      "never starts or repeats a payment.",
+      "no. It reads this machine's records, and the chain again for an uncertain attempt, one a stopped process left " +
+      "approved or submitting, and a paid one whose chain is unchecked; it never starts or repeats a payment.",
     who: "the agent or the owner.",
     examples: ["superstables status <attempt-id>", "superstables status <attempt-id> --json"],
     prints:
@@ -792,10 +809,12 @@ explain(
     }),
   {
     notes: [
-      "One receipt for each payment the seller reported settled. The chain column says verified when the client read " +
-        "the transaction on chain and it is this payment, unchecked when it has not yet (`superstables status` checks " +
-        "again). A later check can mark the receipt mismatch and the attempt uncertain. Do not pay again. A receipt " +
-        "records the payment and the service's answer separately.",
+      "One receipt for each payment the seller reported settled, or the chain showed. The chain column says verified " +
+        "when the client read the transaction on chain and it is this payment, unchecked when it has not yet " +
+        "(`superstables status` checks again). A later check can mark the receipt mismatch and the attempt uncertain, " +
+        "or unpaid when the chain shows the payment was never made and can no longer be (the attempt is then failed, " +
+        "and the receipt no longer counts against the daily cap). Do not pay again. A receipt records the payment and " +
+        "the service's answer separately.",
     ],
     money: "no.",
     who: "the agent or the owner.",
@@ -1076,10 +1095,11 @@ function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt
   if (receipt) {
     console.log("");
     console.log(field("receipt", receipt.id));
-    console.log(field("paid", money(receipt.terms.amountDecimal, receipt.terms.asset)));
+    // Paid only when the chain says so; otherwise the amount the seller reported paid.
+    console.log(field(receipt.chain === "verified" ? "paid" : "amount", money(receipt.terms.amountDecimal, receipt.terms.asset)));
     console.log(field("transaction", shownTransaction(receipt.transaction, receipt.terms.network).url ?? "no transaction hash was given"));
-    console.log(field("payer", shownPayer(receipt.payer) ?? "unknown"));
-    console.log(field("chain", receipt.chain === "verified" ? "verified: the transaction is this payment" : `${receipt.chain === "mismatch" ? "mismatch" : "unchecked"}: ${receipt.chainReason ?? "it was not read"}`));
+    console.log(field("payer", shownPayer(receipt.payer, receipt.terms.network) ?? "unknown"));
+    console.log(field("chain", receiptChain(receipt)));
     console.log(field("recipient", receipt.terms.recipient));
     console.log(field("service", `HTTP ${receipt.serviceStatus ?? "unknown"} (${receipt.serviceOutcome})`));
   }
@@ -1097,6 +1117,20 @@ function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt
   }
   console.log("");
   console.log(`Next: ${nextFor(attempt, getQuote(attempt.quoteId, records))}`);
+}
+
+/** What the chain says about a receipt, in words: only "verified" confirms the payment. */
+function receiptChain(receipt: Receipt): string {
+  switch (receipt.chain) {
+    case "verified":
+      return "verified: the transaction is this payment";
+    case "mismatch":
+      return `mismatch: ${receipt.chainReason ?? "the transaction is not this payment"}`;
+    case "unpaid":
+      return `unpaid: the seller reported it paid, but ${receipt.chainReason ?? "the chain shows it was never made"}`;
+    default:
+      return `unchecked: the seller reported it paid, and the chain has not confirmed it yet (${receipt.chainReason ?? "it was not read"})`;
+  }
 }
 
 /** A signer that binds a port has to give it back before the command exits. */

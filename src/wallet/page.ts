@@ -237,7 +237,7 @@ export function walletPage(look: PageLook = pageLook()): string {
     look,
     title: "Payment approvals",
     eyebrow: "Local wallet",
-    lede: "The wallet process uses a key file on this computer. Approve or reject each payment request.",
+    lede: "The wallet process uses a key file on this machine. Approve or reject each payment request.",
     wide: true,
     style: WALLET_STYLE,
     body: `

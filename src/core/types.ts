@@ -3,7 +3,8 @@
 // (SDK, CLI, MCP, wallet) speaks these types; nothing below
 // imports from the surfaces.
 
-import type { PaymentRequirements, SettleResponse } from "@x402/core/types";
+import type { SettleResponse } from "@x402/core/types";
+import type { RailRequirement } from "./rails/types.js";
 import type { ChainState } from "./settlement.js";
 
 // ── Discovery ────────────────────────────────────────────────────────────────────────────
@@ -19,8 +20,8 @@ export interface ServiceParam {
 }
 
 export interface ServicePayment {
-  rail: "x402";
-  scheme: "exact";
+  rail: "x402" | "mpp";
+  scheme: "exact" | "charge";
   /** CAIP-2, e.g. eip155:84532. */
   network: string;
   networkLabel: string;
@@ -75,7 +76,7 @@ export interface BudgetRoute {
  * (that is `actionable`).
  */
 export interface PayRoutes {
-  /** `superstables pay`: x402 on Base Sepolia, the owner approves each payment. */
+  /** `superstables pay`: on a chain `pay` supports (x402 on the EVM testnets and Solana devnet, MPP on Tempo Moderato); the owner approves each payment. */
   pay: boolean;
   /** `superstables budget` rails with a chain this listing accepts. Testnets only. */
   budget: BudgetRoute[];
@@ -100,8 +101,10 @@ export interface PaymentTerms {
   network: string;
   networkLabel: string;
   recipient: string;
+  /** "exact" for x402, "charge" for MPP. */
   scheme: string;
-  x402Version: 1 | 2;
+  /** The x402 wire version. Absent for MPP, which has none. */
+  x402Version?: 1 | 2;
 }
 
 /** One rule of the spend policy, as it applied to one payment. */
@@ -127,8 +130,8 @@ export interface Quote {
   description?: string;
   request?: ResolvedRequest;
   terms: PaymentTerms;
-  /** The seller's requirement verbatim: exactly what the wallet will be asked to sign. */
-  requirement: PaymentRequirements;
+  /** The seller's requirement verbatim (an x402 accept, or an MPP challenge): what the wallet will be asked to act on. */
+  requirement: RailRequirement;
   /** The local (software) policy's verdict. The wallet applies the owner's policy again. */
   policy: { allowed: boolean; reason?: string; checks?: PolicyCheck[] };
   /** Who decides: always the owner's wallet in this release. */
@@ -181,13 +184,15 @@ export interface Attempt {
   /** Why it stopped: the wallet's reason, the seller's error, or the network failure. */
   reason?: string;
   /**
-   * Why nothing was signed, when a check refused before the owner decided: "policy" for a
+   * Why nothing was signed or sent, when a check refused before the owner decided: "policy" for a
    * spend policy (this client's or the wallet's), "invalid" for a request the signer would not
-   * take, "unavailable" for a wallet that did not answer, "approval_page" for an approval page
-   * that could not start. After the last two the owner was never asked, so the quote can still
-   * be paid.
+   * take, "unavailable" for a local wallet that did not answer, "approval_page" for an approval page
+   * that could not start, "cap_check" for a daily cap that could not be checked, "chain" for a chain
+   * read the payment needed before the owner's wallet was asked to send (Tempo). After
+   * "unavailable", "approval_page" and "cap_check" the owner was never asked, so the quote can still
+   * be paid; after "chain" the owner was asked, and nothing was sent.
    */
-  refusal?: "policy" | "invalid" | "unavailable" | "approval_page";
+  refusal?: "policy" | "invalid" | "unavailable" | "approval_page" | "cap_check" | "chain";
   /**
    * For an `abandoned` attempt, what ended the wait: "stopped" when the process running it was
    * stopped (Ctrl-C, a signal from another program, or the process exiting), "wait" when its
@@ -217,9 +222,32 @@ export interface Attempt {
   authorizationValidBefore?: string;
   /** The EIP-3009 nonce the owner signed: what ties a transaction on chain to this payment. */
   authorizationNonce?: string;
+  /** Tempo: the memo the owner's transfer carries, bound to the seller's challenge: what finds it on chain. */
+  paymentMemo?: string;
+  /** Solana: the owner's signature over the transaction that was built (base58): what finds it on chain. */
+  ownerSignature?: string;
+  /** Solana: the last block height the transaction's blockhash is good for. After it, it can no longer land. */
+  lastValidBlockHeight?: number;
+  /** Tempo: the chain's head block when the owner's wallet was asked to send. The owner's transfer is in a later block. */
+  searchFromBlock?: string;
+  /** Solana: the slot devnet had reached when the transaction was built. It can only land in a later slot. */
+  searchFromSlot?: number;
   /**
-   * What the chain says about a settlement the seller reported: "verified" (the transaction is this payment),
-   * "mismatch" (it is not; the attempt is then uncertain), or "unchecked" (the chain could not say yet).
+   * Solana: how far `superstables status` has read the blocks the transaction could have landed in, once its blockhash
+   * expired: every block up to this slot was read whole, and none holds this payment. The next status reads on from the
+   * block after it.
+   */
+  searchedToSlot?: number;
+  /**
+   * The process running this attempt (its pid, and that process's start identity where the system gives one): while it
+   * runs, it carries the attempt on; once it is gone, an attempt it left approved or submitting is for
+   * `superstables status` to reconcile from the chain.
+   */
+  runner?: { pid: number; start: string | null };
+  /**
+   * What the chain says about the payment: "verified" (the transaction is this payment), "mismatch" (the transaction the
+   * seller named is not; the attempt is then uncertain), "unchecked" (the chain could not say yet), or "unpaid" (a later
+   * check found the payment was never made and can no longer be; the attempt is then failed).
    */
   chain?: ChainState;
   /** Why, for mismatch and unchecked. */
@@ -286,7 +314,7 @@ export interface WalletRequestView {
   verified: VerifiedTerms;
   reported?: PaymentContext;
   reason?: string;
-  /** Present only once signed; returned to the agent-token caller that created the request. */
+  /** Present only once signed; returned to the agent-token caller that created the request. The local wallet signs EIP-3009 only. */
   result?: { kind: "eip3009"; payload: { signature: string; authorization: Record<string, unknown> }; signer: string };
 }
 

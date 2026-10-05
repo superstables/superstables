@@ -53,19 +53,21 @@ describe("the commands find prints for a listing", () => {
     ]);
   });
 
-  it("gives a budget-only evm listing preflight then buy, on its own chain, and no quote", () => {
+  it("gives an evm listing on another testnet the quote first, then preflight and buy on its own chain", () => {
     const commands = listingCommands(indexListing("arc.example", ["x402"], ["arc-testnet"]));
-    expect(commands).toHaveLength(1);
-    expect(commands[0]).toMatchObject({ way: "budget", rail: "evm", chain: "arc-testnet" });
-    expect(commands[0].run[0]).toBe("superstables budget preflight --rail evm --chain arc-testnet --url 'https://arc.example/api?<parameters>'");
-    expect(commands[0].run[1]).toContain("superstables budget buy --rail evm --chain arc-testnet");
-    expect(commands[0].run[1]).toContain("--max <ceiling> --pay-to <payTo> --op <new id>");
-    expect(commands.flatMap((c) => c.run).join("\n")).not.toContain("quote");
+    expect(commands.map((c) => c.way)).toEqual(["pay", "budget"]);
+    expect(commands[0].run).toEqual(["superstables quote 'https://arc.example/api?<parameters>'", "superstables pay <quote-id>"]);
+    expect(commands[1]).toMatchObject({ way: "budget", rail: "evm", chain: "arc-testnet" });
+    expect(commands[1].run[0]).toBe("superstables budget preflight --rail evm --chain arc-testnet --url 'https://arc.example/api?<parameters>'");
+    expect(commands[1].run[1]).toContain("superstables budget buy --rail evm --chain arc-testnet");
+    expect(commands[1].run[1]).toContain("--max <ceiling> --pay-to <payTo> --op <new id>");
   });
 
   it("gives tempo and solana listings preflight then buy, like evm", () => {
     const tempo = listingCommands(indexListing("tempo.example", ["mpp"], ["tempo-moderato"]));
     expect(tempo).toEqual([
+      // pay quotes and pays MPP on Tempo Moderato too
+      expect.objectContaining({ way: "pay", run: ["superstables quote 'https://tempo.example/api?<parameters>'", "superstables pay <quote-id>"] }),
       expect.objectContaining({
         way: "budget",
         rail: "tempo",
@@ -76,19 +78,21 @@ describe("the commands find prints for a listing", () => {
         ],
       }),
     ]);
-    expect(tempo[0].note).toContain("--method and --body");
+    expect(tempo[1].note).toContain("--method and --body");
     const price = { amountDecimal: 0.005, asset: "USDC", display: "0.005 USDC" };
     const solana = listingCommands(
       indexListing("devnet.example", ["x402"], ["solana-devnet"], {
         payment: { rail: "x402", scheme: "exact", network: "solana-devnet", networkLabel: "", asset: "USDC", price },
       }),
     );
-    expect(solana).toHaveLength(1);
-    expect(solana[0]).toMatchObject({ rail: "solana", chain: "devnet" });
-    expect(solana[0].run).toHaveLength(2);
-    expect(solana[0].run[0]).toMatch(/^superstables budget preflight --rail solana --chain devnet /);
-    expect(solana[0].run[1]).toMatch(/^superstables budget buy --rail solana --chain devnet .* --pay-to <payTo> /);
-    expect(solana[0].note).toContain("listed at 0.005 USDC");
+    // pay quotes and pays x402 on Solana devnet too, then the budget way
+    expect(solana).toHaveLength(2);
+    expect(solana[0]).toMatchObject({ way: "pay", run: ["superstables quote 'https://devnet.example/api?<parameters>'", "superstables pay <quote-id>"] });
+    expect(solana[1]).toMatchObject({ rail: "solana", chain: "devnet" });
+    expect(solana[1].run).toHaveLength(2);
+    expect(solana[1].run[0]).toMatch(/^superstables budget preflight --rail solana --chain devnet /);
+    expect(solana[1].run[1]).toMatch(/^superstables budget buy --rail solana --chain devnet .* --pay-to <payTo> /);
+    expect(solana[1].note).toContain("listed at 0.005 USDC");
   });
 
   it("lists every way for a listing on several testnets, pay first", () => {
@@ -105,7 +109,7 @@ describe("the commands find prints for a listing", () => {
   it("routes every name the index may give Ethereum Sepolia to its evm chain key", () => {
     for (const name of ["ethereum-sepolia", "sepolia", "eip155:11155111"]) {
       const commands = listingCommands(indexListing("sepolia.example", ["x402"], [name]));
-      expect(commands.map((c) => `${c.way} ${c.rail ?? ""} ${c.chain ?? ""}`.trim())).toEqual(["budget evm ethereum-sepolia"]);
+      expect(commands.map((c) => `${c.way} ${c.rail ?? ""} ${c.chain ?? ""}`.trim())).toEqual(["pay", "budget evm ethereum-sepolia"]);
     }
   });
 
@@ -117,7 +121,7 @@ describe("the commands find prints for a listing", () => {
     }
     // A mainnet next to a testnet: only the testnet is offered.
     const mixed = listingCommands(indexListing("mixed.example", ["x402"], ["base", "arbitrum-sepolia"]));
-    expect(mixed.map((c) => c.chain)).toEqual(["arbitrum-sepolia"]);
+    expect(mixed.map((c) => `${c.way} ${c.chain ?? ""}`.trim())).toEqual(["pay", "budget arbitrum-sepolia"]);
   });
 
   it("offers nothing for a catalogue listing refused for a reason a budget shares", () => {
@@ -132,9 +136,12 @@ describe("the commands find prints for a listing", () => {
 
   it("prints each way under a heading, its commands one per line", () => {
     const lines = formatListingCommands(indexListing("arc.example", ["x402"], ["arc-testnet"]));
-    expect(lines[0]).toMatch(/^with a budget, evm on arc-testnet \(preflight signs nothing/);
-    expect(lines[1]).toMatch(/^ {2}superstables budget preflight /);
-    expect(lines[2]).toMatch(/^ {2}superstables budget buy /);
+    expect(lines[0]).toMatch(/^with pay \(the index does not list the request parameters/);
+    expect(lines[1]).toBe("  superstables quote 'https://arc.example/api?<parameters>'");
+    expect(lines[2]).toBe("  superstables pay <quote-id>");
+    expect(lines[3]).toMatch(/^with a budget, evm on arc-testnet \(preflight signs nothing/);
+    expect(lines[4]).toMatch(/^ {2}superstables budget preflight /);
+    expect(lines[5]).toMatch(/^ {2}superstables budget buy /);
   });
 
   it("quotes a placeholder for a required parameter with no example, so the shell does not read it as a redirect", () => {

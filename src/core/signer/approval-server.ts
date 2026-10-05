@@ -1,7 +1,8 @@
 // The approval server: a node:http server on 127.0.0.1 that the agent's own process runs, so
 // the owner has nothing to start. It serves one page per pending payment, hands the browser
-// wallet the exact typed data to sign, checks the signature that comes back, and gives the
-// payment core a SignResult — or a refusal.
+// wallet exactly what to do (typed data to sign, a call to send, a transaction to sign: the
+// rail's wallet step, ./steps/), checks what comes back, and gives the payment core a
+// SignResult — or a refusal.
 //
 // Four properties shape every line below.
 //
@@ -14,7 +15,10 @@
 //     a page opened under one id can only ever sign that one payment.
 //  3. A signature is checked before it is believed: the recovered signer must be the account
 //     the typed data was built for. A signature from any other key is rejected and the request
-//     stays pending, so the person can simply try again with the right account.
+//     stays pending, so the person can simply try again with the right account. A wallet that
+//     sends the payment itself (Tempo) is asked once per approval, after the payment core has
+//     recorded that money may move; from then on an approval that ends without the transaction
+//     ends "unknown", never as unpaid, a rejection the page reports included.
 //  4. Nothing waits for ever. Requests expire on their own, an expiry is a refusal with a
 //     reason, and every state change is appended to an audit log that never holds a signature.
 //
@@ -25,53 +29,47 @@
 import { randomBytes } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { PaymentRequirements } from "@x402/core/types";
-import { authorizationTypes } from "@x402/evm";
-import { getAddress, toHex, verifyTypedData } from "viem";
-import { DEFAULT_NETWORK, isAddress, networkFor } from "../chain.js";
+import { networkFor } from "../chain.js";
 import { DEFAULT_APPROVE_PORT, approvalsPath, ensureDir, recordsDir } from "../home.js";
+import type { RailRequirement } from "../rails/types.js";
 import type { PaymentContext, VerifiedTerms } from "../types.js";
 import { approvalNotFoundPage, approvalPage, type ApprovalPageFacts } from "./approval-page.js";
-import type { SignResult } from "./types.js";
+import { stepFor } from "./steps/index.js";
+import type { StepRecord, WalletStep } from "./steps/types.js";
+import { SignRefused, type RefusalCode, type SignKind, type SignResult, type WalletSendIntent } from "./types.js";
+
+export type { ApprovalTypedData } from "./steps/eip3009.js";
 
 /** An approval is small; anything larger than this is not one. */
 const MAX_BODY_BYTES = 64 * 1024;
 /** How often expiry is swept. The page also polls, so a second's granularity is plenty. */
 const SWEEP_MS = 1_000;
 
-export type ApprovalStatus = "pending" | "signed" | "denied" | "expired" | "abandoned";
-
-/** The EIP-712 payload, in the JSON-safe shape a browser wallet's signTypedData_v4 expects. */
-export interface ApprovalTypedData {
-  domain: { name: string; version: string; chainId: number; verifyingContract: string };
-  types: Record<string, { name: string; type: string }[]>;
-  primaryType: "TransferWithAuthorization";
-  message: {
-    from: string;
-    to: string;
-    value: string;
-    validAfter: string;
-    validBefore: string;
-    nonce: string;
-  };
-}
+export type ApprovalStatus = "pending" | "signed" | "denied" | "expired" | "abandoned" | "refused" | "unknown";
 
 export interface ApprovalRequestInput {
-  /** Derived from the requirement by the caller, with termsFor(). Never agent-supplied. */
+  /** What the owner's wallet is asked to do: the rail's wallet step. Defaults to eip3009. */
+  kind?: SignKind;
+  /** Derived from the requirement by the caller, with the rail's own judging. Never agent-supplied. */
   verified: VerifiedTerms;
   /** What the agent says this is for. Shown as unverified; used for nothing else. */
   reported?: PaymentContext;
-  /** The seller's requirement verbatim: what the typed data is built from. */
-  requirement: PaymentRequirements;
+  /** The seller's requirement as it was judged: what the wallet's request is built from. */
+  requirement: RailRequirement;
   x402Version: 1 | 2;
   /** How long the person has to decide. */
   timeoutMs: number;
+  /** When the approval must end at the latest, if sooner than timeoutMs (a seller's challenge that expires sooner). */
+  notAfter?: number;
+  /** Push rails: awaited before the wallet is asked to send (the payment core records that money may move). */
+  beforeWalletSends?: (intent: WalletSendIntent) => Promise<void>;
 }
 
-/** How an approval ended. `signed` carries the credential; everything else carries a reason. */
+/** How an approval ended. `signed` carries the result; everything else carries a reason. */
 export type ApprovalOutcome =
   | { status: "signed"; result: SignResult }
-  | { status: "denied" | "expired" | "abandoned"; reason: string };
+  | { status: "denied" | "expired" | "abandoned" | "unknown"; reason: string }
+  | { status: "refused"; code: RefusalCode; reason: string };
 
 export interface ApprovalHandle {
   id: string;
@@ -81,15 +79,16 @@ export interface ApprovalHandle {
   settled: Promise<ApprovalOutcome>;
 }
 
-interface ApprovalRecord extends ApprovalRequestInput {
-  id: string;
+interface ApprovalRecord extends StepRecord {
   status: ApprovalStatus;
   createdAt: number;
-  expiresAt: number;
+  timeoutMs: number;
   reason?: string;
-  /** The account the typed data was built for, once the page has reported one. */
-  account?: string;
-  typedData?: ApprovalTypedData;
+  reported?: PaymentContext;
+  step: WalletStep;
+  beforeWalletSends?: (intent: WalletSendIntent) => Promise<void>;
+  /** A POST is being answered: a second one is refused (409) rather than racing it. */
+  busy?: boolean;
   finish: (outcome: ApprovalOutcome) => void;
 }
 
@@ -109,56 +108,17 @@ export interface ApprovalServerOptions {
   /** Where the audit log lives. Defaults to the records directory under SUPERSTABLES_HOME. */
   recordsDirPath?: string;
   /** Remember the connected account here, so `status` can name a payer later. */
-  onAccount?: (address: string) => void;
+  onAccount?: (address: string, network: string) => void;
 }
 
-const EIP712_DOMAIN_TYPE = [
-  { name: "name", type: "string" },
-  { name: "version", type: "string" },
-  { name: "chainId", type: "uint256" },
-  { name: "verifyingContract", type: "address" },
-];
+/** What an approval whose wallet was asked to send ends with, when nothing came back. */
+const MAY_HAVE_SENT =
+  "your wallet was asked to send this payment and the page did not report a transaction, so whether it was sent is unknown";
 
-/**
- * Builds exactly the authorization the x402 exact scheme signs, for the account the page
- * reported. The values match what the SDK's own client produces field for field, because the
- * facilitator that settles this credential checks all of them: a v1 requirement backdates
- * validAfter by ten minutes and carries its amount as maxAmountRequired, a v2 one does not.
- */
-function buildTypedData(record: ApprovalRecord, payer: string): ApprovalTypedData {
-  const requirement = record.requirement as PaymentRequirements & { maxAmountRequired?: string };
-  const network = networkFor(String(requirement.network ?? "")) ?? DEFAULT_NETWORK;
-  const now = Math.floor(Date.now() / 1000);
-  const timeout = Number(requirement.maxTimeoutSeconds ?? 300);
-  return {
-    domain: {
-      // USDC's own domain, never the seller's `extra`: the wallet shows the domain name as the signing application,
-      // and quoting refuses an offer whose `extra` names another one (x402.ts, termsFor).
-      name: network.usdc.eip712.name,
-      version: network.usdc.eip712.version,
-      chainId: network.chainId,
-      verifyingContract: getAddress(String(requirement.asset)),
-    },
-    // Copied rather than referenced: this object is serialised to the page as JSON, and the
-    // SDK's own table is frozen and read-only.
-    types: {
-      EIP712Domain: EIP712_DOMAIN_TYPE,
-      TransferWithAuthorization: authorizationTypes.TransferWithAuthorization.map((field) => ({
-        name: field.name,
-        type: field.type,
-      })),
-    },
-    primaryType: "TransferWithAuthorization",
-    message: {
-      from: getAddress(payer),
-      to: getAddress(String(requirement.payTo)),
-      value: String(requirement.amount ?? requirement.maxAmountRequired ?? "0"),
-      validAfter: record.x402Version === 1 ? String(now - 600) : "0",
-      validBefore: String(now + timeout),
-      nonce: toHex(randomBytes(32)),
-    },
-  };
-}
+/** What an approval whose wallet was asked to send ends with, when the page reports that the wallet rejected it. */
+const WALLET_SAID_NO =
+  "the approval page reported that the owner rejected this payment in their wallet after the wallet was asked to send it; " +
+  "that report cannot be checked against the wallet, so whether it was sent is unknown until the chain shows it";
 
 /**
  * The port somebody chose is taken. Most likely another `superstables pay` (or MCP server) is
@@ -266,6 +226,11 @@ export class ApprovalServer {
 
   /** Register one payment for approval and hand back the link and the promise to wait on. */
   request(input: ApprovalRequestInput): ApprovalHandle {
+    const kind = input.kind ?? "eip3009";
+    const step = stepFor(kind);
+    const network = networkFor(input.verified.network);
+    // The caller judged the request; a kind with no step here, or a chain this client does not know, is a bug upstream.
+    if (!step || !network) throw new SignRefused("invalid", `the approval page cannot ask a wallet for a ${kind} payment on ${input.verified.networkLabel || "an unknown chain"}`);
     const id = randomBytes(16).toString("hex");
     const now = Date.now();
     let finish!: (outcome: ApprovalOutcome) => void;
@@ -278,13 +243,23 @@ export class ApprovalServer {
       };
     });
     const record: ApprovalRecord = {
-      ...input,
       id,
+      kind,
+      network,
+      step,
+      verified: input.verified,
+      reported: input.reported,
+      requirement: input.requirement,
+      x402Version: input.x402Version,
+      timeoutMs: input.timeoutMs,
+      beforeWalletSends: input.beforeWalletSends,
       status: "pending",
       createdAt: now,
-      expiresAt: now + input.timeoutMs,
+      expiresAt: Math.min(now + input.timeoutMs, input.notAfter ?? Number.POSITIVE_INFINITY),
       finish,
     };
+    const deadline = step.deadline?.(record);
+    if (deadline !== undefined) record.expiresAt = Math.min(record.expiresAt, deadline);
     this.records.set(id, record);
     this.audit(record);
     return { id, url: `${this.url}/approve/${id}`, settled };
@@ -297,10 +272,11 @@ export class ApprovalServer {
     // away with this process. Recording it as a rejection would put words in the owner's mouth.
     for (const record of this.records.values()) {
       if (record.status !== "pending") continue;
-      record.status = "abandoned";
-      record.reason = "the process serving the approval page stopped before anyone approved or rejected this payment";
-      this.audit(record);
-      record.finish({ status: "abandoned", reason: record.reason });
+      if (record.step.mayHaveSent?.(record)) {
+        this.end(record, "unknown", `the process serving the approval page stopped, and ${MAY_HAVE_SENT}`);
+        continue;
+      }
+      this.end(record, "abandoned", "the process serving the approval page stopped before anyone approved or rejected this payment");
     }
     const server = this.server;
     this.server = undefined;
@@ -315,12 +291,21 @@ export class ApprovalServer {
   private sweep(): void {
     const now = Date.now();
     for (const record of this.records.values()) {
-      if (record.status !== "pending" || record.expiresAt > now) continue;
-      record.status = "expired";
-      record.reason = `nobody approved this payment within ${Math.round(record.timeoutMs / 1000)} s`;
-      this.audit(record);
-      record.finish({ status: "expired", reason: record.reason });
+      if (record.status !== "pending" || record.expiresAt > now || record.busy) continue;
+      if (record.step.mayHaveSent?.(record)) {
+        this.end(record, "unknown", `the approval window ended, and ${MAY_HAVE_SENT}`);
+        continue;
+      }
+      this.end(record, "expired", `nobody approved this payment within ${Math.round((record.expiresAt - record.createdAt) / 1000)} s`);
     }
+  }
+
+  /** End a pending approval: record it, audit it, and answer whoever waits on it. */
+  private end(record: ApprovalRecord, status: Exclude<ApprovalStatus, "pending" | "signed" | "refused">, reason: string): void {
+    record.status = status;
+    record.reason = reason;
+    this.audit(record);
+    record.finish({ status, reason });
   }
 
   /** One line per state change. Never a signature, never a key: this file is for reading. */
@@ -344,9 +329,9 @@ export class ApprovalServer {
   }
 
   private facts(record: ApprovalRecord): ApprovalPageFacts {
-    const network = networkFor(record.verified.network) ?? DEFAULT_NETWORK;
     return {
       id: record.id,
+      step: record.kind,
       amountDecimal: record.verified.amountDecimal,
       asset: record.verified.asset,
       amountAtomic: record.verified.amountAtomic,
@@ -355,10 +340,7 @@ export class ApprovalServer {
       networkLabel: record.verified.networkLabel,
       assetAddress: record.verified.assetAddress,
       expiresAt: record.expiresAt,
-      chainIdHex: `0x${network.chainId.toString(16)}`,
-      chainName: network.label.replace(/\s*\(testnet\)\s*/i, "").trim(),
-      rpcUrl: network.rpc,
-      explorer: network.explorer,
+      ...record.step.pageFacts(record),
       reported: record.reported,
     };
   }
@@ -406,7 +388,7 @@ export class ApprovalServer {
     const method = req.method ?? "GET";
     this.sweep();
 
-    const match = /^\/approve\/([^/]+)(\/state|\/account|\/signature|\/reject)?$/.exec(path);
+    const match = /^\/approve\/([^/]+)(\/[a-z]+)?$/.exec(path);
     if (!match) {
       this.sendJson(res, 404, { error: "no such route" });
       return;
@@ -423,9 +405,13 @@ export class ApprovalServer {
       this.sendJson(res, 404, { error: "there is no payment waiting under this approval link" });
       return;
     }
+    if (leaf && leaf !== "/state" && leaf !== "/reject" && !record.step.routes.includes(leaf)) {
+      this.sendJson(res, 404, { error: "no such route" });
+      return;
+    }
 
     if (!leaf && method === "GET") {
-      this.sendHtml(res, 200, approvalPage(this.facts(record)));
+      this.sendHtml(res, 200, approvalPage(this.facts(record), record.step));
       return;
     }
     if (leaf === "/state" && method === "GET") {
@@ -440,7 +426,7 @@ export class ApprovalServer {
       });
       return;
     }
-    if (method !== "POST") {
+    if (method !== "POST" || !leaf) {
       this.sendJson(res, 405, { error: "that route takes a POST" });
       return;
     }
@@ -460,100 +446,114 @@ export class ApprovalServer {
 
     let body: Record<string, unknown>;
     try {
-      body = JSON.parse((await this.readBody(req)) || "{}") as Record<string, unknown>;
+      const parsed = JSON.parse((await this.readBody(req)) || "{}") as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+      body = parsed as Record<string, unknown>;
     } catch {
       this.sendJson(res, 400, { error: "the request body is not JSON" });
       return;
     }
 
+    if (record.status !== "pending") {
+      this.sendJson(res, 409, { error: `this payment is already ${record.status}`, status: record.status, reason: record.reason });
+      return;
+    }
+    // One state change at a time per approval: a wallet step may wait on the payment core (Tempo), and a second POST
+    // meanwhile must see its result, not race it.
+    if (record.busy) {
+      this.sendJson(res, 409, { error: "the approval page is already handling a request for this payment; wait for it" });
+      return;
+    }
+    record.busy = true;
+    try {
+      await this.post(record, leaf, body, res);
+    } finally {
+      record.busy = false;
+    }
+  }
+
+  private async post(record: ApprovalRecord, leaf: string, body: Record<string, unknown>, res: ServerResponse): Promise<void> {
     if (leaf === "/reject") {
-      if (record.status !== "pending") {
-        this.sendJson(res, 409, { error: `this payment is already ${record.status}`, status: record.status });
+      const byWallet = body.by === "wallet";
+      // A wallet that was asked to send may still send while this page says "rejected". The page's button is not an
+      // answer from the wallet at all.
+      if (record.walletAsked && !byWallet) {
+        this.sendJson(res, 409, { error: "your wallet was asked to send this payment: reject it in your wallet, or check its activity" });
+        return;
+      }
+      // The page says the wallet rejected the send. That is a line in a request body, which anything holding this link
+      // can post, and nothing here can check it against the wallet: it ends the approval, as unknown, never as unpaid.
+      // The chain decides whether the transfer happened.
+      if (record.walletAsked) {
+        this.end(record, "unknown", WALLET_SAID_NO);
+        this.sendJson(res, 200, { status: record.status, reason: record.reason });
         return;
       }
       record.status = "denied";
       // The page posts { by: "wallet" } when the wallet answered the signature request with a rejection: nothing was
       // signed, and a signature that came later could not be used, because only a pending payment takes one.
-      record.reason = body.by === "wallet" ? "rejected by the owner in their wallet" : "rejected by the owner on the approval page";
+      record.reason = byWallet ? "rejected by the owner in their wallet" : "rejected by the owner on the approval page";
       this.audit(record);
       record.finish({ status: "denied", reason: record.reason });
       this.sendJson(res, 200, { status: record.status, reason: record.reason });
       return;
     }
 
-    if (record.status !== "pending") {
-      this.sendJson(res, 409, { error: `this payment is already ${record.status}`, status: record.status });
-      return;
-    }
-
     if (leaf === "/account") {
-      const address = typeof body.address === "string" ? body.address : "";
-      if (!isAddress(address)) {
+      const address = record.step.account(body.address);
+      if (!address) {
         this.sendJson(res, 400, { error: "that is not an account address" });
         return;
       }
-      // A person may switch accounts before signing, so this rebuilds rather than refusing.
-      record.account = getAddress(address);
-      record.typedData = buildTypedData(record, record.account);
-      record.verified = { ...record.verified, payer: record.account };
-      this.sendJson(res, 200, {
-        typedData: record.typedData,
-        summary: `${record.verified.amountDecimal} ${record.verified.asset} to ${record.verified.recipient} on ${record.verified.networkLabel}`,
-      });
+      if (record.walletAsked) {
+        this.sendJson(res, 409, { error: "your wallet was already asked to send this payment; it is not prepared again" });
+        return;
+      }
+      const answer = await record.step.prepare(record, address);
+      if (answer.http === 200) {
+        // A person may switch accounts before signing, so this rebuilds rather than refusing.
+        record.account = address;
+        record.verified = { ...record.verified, payer: address };
+      }
+      this.sendJson(res, answer.http, answer.body);
       return;
     }
 
-    if (leaf === "/signature") {
-      const address = typeof body.address === "string" ? body.address : "";
-      const signature = typeof body.signature === "string" ? body.signature : "";
-      if (!record.typedData || !record.account) {
-        this.sendJson(res, 409, { error: "connect an account first: there is nothing prepared to sign" });
-        return;
+    let answer;
+    try {
+      answer = await record.step.answer(record, leaf, body, {
+        beforeWalletSends: async (intent) => {
+          if (!record.beforeWalletSends) throw new SignRefused("invalid", "nobody is recording this payment, so the wallet is not asked to send it");
+          await record.beforeWalletSends(intent);
+        },
+      });
+    } catch (err) {
+      // The payment core said no before the wallet was asked (a spend policy, nobody waiting any more): nothing was sent.
+      const code: RefusalCode = err instanceof SignRefused ? err.code : "invalid";
+      const reason = err instanceof Error ? err.message : String(err);
+      if (record.status === "pending") {
+        record.status = "refused";
+        record.reason = reason;
+        this.audit(record);
+        record.finish({ status: "refused", code, reason });
       }
-      if (!isAddress(address) || getAddress(address) !== record.account) {
-        this.sendJson(res, 400, {
-          error: `this payment was prepared for ${record.account}; connect that account again, or reconnect to prepare a new one`,
-        });
-        return;
-      }
-      if (!/^0x[0-9a-fA-F]+$/.test(signature)) {
-        this.sendJson(res, 400, { error: "that is not a signature" });
-        return;
-      }
-      let valid = false;
-      try {
-        // viem's typed-data types are built from literal type tables; ours is the JSON shape
-        // the page signs, so the argument is checked here by construction rather than by TS.
-        valid = await verifyTypedData({
-          address: record.account as `0x${string}`,
-          signature: signature as `0x${string}`,
-          ...record.typedData,
-        } as unknown as Parameters<typeof verifyTypedData>[0]);
-      } catch {
-        valid = false;
-      }
-      if (!valid) {
-        // The request stays pending on purpose: a wrong account is a mistake, not a decision.
-        this.sendJson(res, 400, {
-          error: `that signature was not made by ${record.account}; nothing was accepted, and you can sign again`,
-        });
-        return;
-      }
-      const result: SignResult = {
-        kind: "eip3009",
-        payload: { signature, authorization: { ...record.typedData.message } },
-        signer: record.account,
-      };
+      this.sendJson(res, 409, { error: reason, status: record.status, reason: record.reason });
+      return;
+    }
+    // The approval may have ended while the step waited (the process serving it closed): then nothing the step
+    // prepared is handed out, and the page hears how it ended instead.
+    if (record.status !== "pending") {
+      this.sendJson(res, 409, { error: `this payment is already ${record.status}`, status: record.status, reason: record.reason });
+      return;
+    }
+    if (answer.signed) {
       record.status = "signed";
       record.reason = undefined;
       this.audit(record);
-      this.options.onAccount?.(record.account);
-      record.finish({ status: "signed", result });
-      this.sendJson(res, 200, { status: "signed" });
-      return;
+      if (record.account) this.options.onAccount?.(record.account, record.verified.network);
+      record.finish({ status: "signed", result: answer.signed });
     }
-
-    this.sendJson(res, 404, { error: "no such route" });
+    this.sendJson(res, answer.http, answer.body);
   }
 }
 
