@@ -17,12 +17,12 @@
 // There is no worker process: the site does the work once the
 // owner signs, so this command returns as soon as the link exists (state waiting_owner, an approval id) and
 // `superstables budget wait --id` reads the purchase from the site. The site's word that it paid is not enough: before a
-// purchase is reported paid, its transaction is read from the chain (settlement.mjs: a transfer of exactly the amount, to
-// the listed recipient, in the listed token, after the purchase was created); a payment the chain does not show is unknown. Its record, in the approvals folder (mode 600), is the
+// purchase is reported paid, its transaction is read from the chain against the purchase nonce, memo or signed message
+// and the exact listed transfer (settlement.mjs); a payment without this proof is unknown. Its record, in the approvals folder (mode 600), is the
 // only place the access token lives, until the purchase is final; nothing here prints or logs it. Plain JavaScript with
 // Node built-ins only, like site.mjs, so the dispatcher and the standalone build share it.
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approvalsDir, onceDir } from "./paths.mjs";
 import { claim, isApprovalId, newApprovalId, readApproval, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
@@ -162,6 +162,7 @@ function evidenceOf(view, net) {
   const payers = {};
   for (const [t, who] of hashes) if (isAddress(who, net)) payers[t] = payers[t] === undefined || payers[t] === canonAddr(who) ? canonAddr(who) : null;
   return {
+    nonce: typeof p.authorization?.nonce === "string" && /^0x[0-9a-fA-F]{64}$/.test(p.authorization.nonce) ? p.authorization.nonce.toLowerCase() : undefined,
     hashes: [...new Set(hashes.map(([t]) => t))],
     payers,
     named: pairs.length > 0,
@@ -192,6 +193,7 @@ function unionSeen(seen, ev) {
   for (const [h, who] of Object.entries(s.payers ?? {})) put(h, who);
   for (const [h, who] of Object.entries(ev.payers ?? {})) put(h, who);
   return {
+    nonce: s.nonce === undefined ? ev.nonce : ev.nonce === undefined || s.nonce === ev.nonce ? s.nonce : null,
     hashes: [...new Set([...(s.hashes ?? []), ...(ev.hashes ?? [])].map(canonTx))],
     payers,
     named: Boolean(s.named || ev.named),
@@ -247,7 +249,10 @@ function verdictHolds(seen, result) {
   return true;
 }
 
-/** Tests only: called after an answer is decided and before it is stored (to force another command in between). */
+/**
+ * Tests only: called after an answer is decided and before it is stored (to force another command in between).
+ * @type {{ beforeFinal: null | ((id: string) => void) }}
+ */
 export const onceTestHook = { beforeFinal: null };
 
 /**
@@ -258,10 +263,17 @@ export const onceTestHook = { beforeFinal: null };
  */
 function checkedFinal(record) {
   const { code, result } = record.final;
-  if (verdictHolds(record.seen, result)) return { code, result };
+  if (cachedVerdictHolds(record)) return { code, result };
   const fixed = overruled(record, result);
-  updateApproval(record.id, (now) => (now.final && !verdictHolds(now.seen, now.final.result) ? { final: { code: 5, result: fixed } } : null));
+  updateApproval(record.id, (now) => (now.final && !cachedVerdictHolds(now) ? { final: { code: 5, result: fixed } } : null));
   return { code: 5, result: fixed };
+}
+
+function cachedVerdictHolds(record) {
+  const { result, attribution } = record.final;
+  if (!verdictHolds(record.seen, result)) return false;
+  if (result?.paid !== true) return true;
+  return typeof record.seen?.nonce === "string" && attribution?.nonce === record.seen.nonce && !attributedElsewhere(record, result.tx?.settle);
 }
 
 /** A verdict the evidence overrules: unknown, with the transaction it names, never "nothing was paid", never "paid". */
@@ -273,7 +285,9 @@ function overruled(record, result) {
     tx: h ? { settle: h } : {}, ...(h && net ? { txUrl: net.tx(h) } : {}),
     next: `never buy this again. Ask the owner to check their wallet activity and the receipts on their ${siteName(record.hosted?.site ?? "")} account`,
     reason: result?.paid === true
-      ? `transaction ${h} was read on chain as paid by ${result.payer}, but another answer for this purchase named a different payer for it, so whether it was this owner's payment is unknown`
+      ? !verdictHolds(record.seen, result)
+        ? `transaction ${h} was read on chain as paid by ${result.payer}, but another answer for this purchase named a different payer for it, so whether it was this owner's payment is unknown`
+        : `transaction ${h} has no verified attribution to this purchase's payment identity, so whether it was paid is unknown`
       : "the site's last answer said not paid, but another answer for this purchase named a transaction, a payment or money that may have moved, so whether it was paid is unknown",
   };
 }
@@ -500,6 +514,39 @@ export function messageForOwner(r) {
 
 // ---- records ---------------------------------------------------------------------------------------------------------
 
+const purchaseKey = (record) => JSON.stringify([record.hosted?.site, record.hosted?.requestId]);
+const attributionFile = (record, tx) => join(onceDir(), `attributed-${record.rail}-${record.chain}-${canonTx(tx)}.json`);
+
+function attributedElsewhere(record, tx) {
+  if (!tx) return true;
+  try {
+    if (readFileSync(attributionFile(record, tx), "utf8") !== purchaseKey(record)) return true;
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  for (const file of readdirSync(approvalsDir())) {
+    if (!file.endsWith(".json")) continue;
+    const other = readApproval(file.slice(0, -5));
+    if (other?.command === "buy-once" && other.rail === record.rail && other.chain === record.chain && other.final?.result?.paid === true && canonTx(other.final.result.tx?.settle) === canonTx(tx) && purchaseKey(other) !== purchaseKey(record)) return true;
+  }
+  return false;
+}
+
+// Publish one complete, permanent claim before saving paid. A crash retains the claim for this purchase's retry.
+function claimAttribution(record, tx) {
+  if (attributedElsewhere(record, tx)) return false;
+  mkdirSync(onceDir(), { recursive: true, mode: 0o700 });
+  const file = attributionFile(record, tx);
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  writeFileSync(tmp, purchaseKey(record), { mode: 0o600, flag: "wx" });
+  try {
+    try { linkSync(tmp, file); } catch (e) { if (e.code !== "EEXIST") throw e; }
+    return readFileSync(file, "utf8") === purchaseKey(record);
+  } finally {
+    unlinkSync(tmp);
+  }
+}
+
 /**
  * The records of buy-once purchases that have no final result yet. Age alone never ends one: a payment the owner signed can
  * still settle after the link expired, so a record stays open until a read of the site ends it, or the owner gives it up
@@ -673,8 +720,9 @@ async function chainCheck(record, net, hash, payer, deadline) {
   const h = record.hosted ?? {};
   if (!hash) return { state: "unread", reason: "the site names no transaction for it" };
   if (!isDecimal(h.amount) || !isAddress(h.payTo, net)) return { state: "mismatch", reason: "this purchase's record has no amount or recipient to check the payment against" };
+  if (attributedElsewhere(record, hash)) return { state: "mismatch", reason: `transaction ${hash} is already attributed to another hosted purchase` };
   const notBefore = Math.floor(Date.parse(record.createdAt) / 1000);
-  return readSettlement({ rail: net.rail, chain: net.chain, tx: hash, payer, payTo: h.payTo, asset: net.asset, amount: micro(h.amount), notBefore: Number.isFinite(notBefore) ? notBefore : 0, deadline });
+  return readSettlement({ rail: net.rail, chain: net.chain, tx: hash, payer, payTo: h.payTo, asset: net.asset, amount: micro(h.amount), notBefore: Number.isFinite(notBefore) ? notBefore : 0, nonce: record.seen?.nonce, deadline });
 }
 
 /** What a caller waiting for the owner is told while the purchase is not final. */
@@ -773,7 +821,20 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
   // answer the evidence no longer supports (another command added some meanwhile) is not stored. It is unknown for now,
   // and the next read decides again with that evidence; the access token is still there for it.
   onceTestHook.beforeFinal?.(record.id);
-  const done = recordFinalWith(record.id, (now) => (verdictHolds(unionSeen(now.seen, record.seen ?? {}), result) ? { code, result } : null));
+  let done;
+  if (result.paid === true) {
+    let stored = false;
+    const committed = updateApproval(record.id, (now) => {
+      const seen = unionSeen(now.seen, record.seen ?? {});
+      if (now.final || !verdictHolds(seen, result) || !seen.nonce || seen.nonce !== record.seen?.nonce || !claimAttribution(now, result.tx.settle)) return null;
+      stored = true;
+      return { state: "final", endedAt: new Date().toISOString(), final: { code, result, attribution: { nonce: seen.nonce } }, hosted: { ...now.hosted, token: undefined } };
+    });
+    if (stored) release(record.rail, record.chain, record.id);
+    done = { record: committed, stored };
+  } else {
+    done = recordFinalWith(record.id, (now) => (verdictHolds(unionSeen(now.seen, record.seen ?? {}), result) ? { code, result } : null));
+  }
   const now = done.record ?? readApproval(record.id) ?? record;
   if (done.stored) return { final: true, code, result, record: now };
   // another command finished it first: its answer, checked the same way

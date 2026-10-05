@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ARC_MARKET, ARC_SELLER, MARKET, PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite, type Paid } from "../helpers/fake-purchase-site.js";
+import { ARC_MARKET, ARC_SELLER, MARKET, PAYER, SOLANA_PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite, type Paid } from "../helpers/fake-purchase-site.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
@@ -249,7 +249,7 @@ describe("buy-once on Tempo Moderato and Solana devnet", () => {
     expect(first.approve.terms.notEnforced[0]).toMatch(/connect a Solana wallet/);
     expect(first.result.message_for_owner).toMatch(/0\.01 test USDC on Solana devnet\./);
     const sig = "5".repeat(87);
-    const payer = "8Kag3gJfDbVyqC1n7jUXwDzWWGWa5o1oHqfEPAUhHxD7";
+    const payer = SOLANA_PAYER;
     site.settle(site.purchases[0], "ok", { transaction: sig, payer });
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30"]);
     expect(done.code, done.stderr).toBe(0);
@@ -875,7 +875,7 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
     const rb = await budget(["wait", "--shown", "--id", b.result.id, "--timeout", "10"]);
     expect(rb.code, rb.stderr).toBe(5);
     expect(rb.result).toMatchObject({ state: "unknown", paid: null, amount: null, tx: { settle: other } });
-    expect(rb.result.reason).toMatch(/names transaction 0xefef.* but does not say it was paid, but the chain does not show transaction/);
+    expect(rb.result.reason).toMatch(/names transaction 0xefef.* but does not say it was paid, but this purchase has no payment identity and payer to verify/);
     expect(rb.stdout + rb.stderr).not.toMatch(/nothing was paid/i);
   }, 90_000);
 
