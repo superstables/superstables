@@ -134,7 +134,7 @@ export class PaymentEngine {
       runner: thisProcess(),
       history: [{ at, state: "awaiting_approval" }],
     };
-    // Claim the quote before any await, and across processes: another `pay` or MCP server sharing these records may have
+    // Claim the quote before any await, and across processes: another `pay` sharing these records may have
     // read the same open quote. One claim file per quote, created only if none exists, decides which attempt it starts;
     // the other is told about that attempt instead.
     const holder = this.records.claimQuote(quote.id, attempt.id);
@@ -309,7 +309,7 @@ export class PaymentEngine {
       }
     }
 
-    // Reserve the amount against the daily cap before anyone is asked. Two `pay` processes (or MCP servers) asking at
+    // Reserve the amount against the daily cap before anyone is asked. Two `pay` processes asking at
     // once would each pass a cap check that does not see the other, so the check and the reservation happen together
     // under a lock shared by every process on this computer, held only for that moment. The reservation counts until
     // the owner signs (then the signed states count it) or the attempt ends unsigned (then it is released).

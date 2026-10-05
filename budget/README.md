@@ -307,7 +307,7 @@ Development runs have exercised these flows with wallet harnesses and chain read
 - Local approvals run on the machine that runs the command, on `127.0.0.1`. Use the owner's wallet browser on that machine, or forward the port over SSH (`ssh -L PORT:127.0.0.1:PORT`). To approve from another device, use hosted approvals (needs a superstables.com account).
 - Hosted approvals for `recover`'s owner steps.
 - `superstables budget find` lists the services superstables.com says a budget can pay, and whether each listing is marked as returning prepared sample output (`simulated`); `--chain C` or `--rail R` lists one chain or rail, such as `--chain moderato` or `--chain devnet`. `superstables budget find --once` lists the ones `buy-once` can buy. `buy-once` covers the services the site lists for it, on Base Sepolia, Arc Testnet, Tempo Moderato and Solana devnet; any other seller needs a budget. Any other seller works too: supply its URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
-- Budget commands need a shell. The MCP server has no budget tools.
+- Budget commands need a shell.
 - Native Windows: refused, because owner approvals rely on POSIX process groups and the key files on file modes. Use WSL.
 - Mainnet: refused everywhere.
 - `evm` buys are GET only and need an EIP-3009 USDC option (no Circle Gateway batched option). `tempo` and `solana` buys can POST.

@@ -11,7 +11,6 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | [`superstables wallet serve`](#superstables-wallet-serve) | run the wallet: it asks the owner to approve every payment, in a browser page |
 | [`superstables wallet status`](#superstables-wallet-status) | ask the running local wallet what it is doing |
 | [`superstables wallet address`](#superstables-wallet-address) | the address that pays, from this machine's wallet key |
-| [`superstables mcp`](#superstables-mcp) | run the MCP server on stdio, for Claude Code or another MCP host |
 | [`superstables find`](#superstables-find) | search for services that charge per request, and say how each could be paid |
 | [`superstables quote`](#superstables-quote) | ask a paid endpoint what one call costs, and check it against the spend policy; nothing is paid or signed |
 | [`superstables pay`](#superstables-pay) | ask the owner to approve a quote in their wallet, and pay it if they do |
@@ -49,8 +48,6 @@ Commands:
                                  policy file, then say what to do next
   wallet                         the local wallet process, for --wallet local
                                  only
-  mcp                            run the MCP server on stdio, for Claude Code or
-                                 another MCP host
   find [options] [query]         search for services that charge per request,
                                  and say how each could be paid
   quote [options] [url]          ask a paid endpoint what one call costs, and
@@ -118,7 +115,7 @@ Start here, budget: superstables budget setup --rail evm
 
 Who runs what:
   owner   setup, wallet init, wallet serve, policy init, and every approval
-  agent   find, quote, pay, status, receipts, attempts, doctor; `mcp` is started by the agent's host
+  agent   find, quote, pay, status, receipts, attempts, doctor
   Either may run the read-only commands.
 
 Where state lives:
@@ -147,7 +144,6 @@ Environment:
   SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine)
   SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, 4412 or a free one when busy
   SUPERSTABLES_WALLET_URL        where the local wallet listens (default http://127.0.0.1:4411)
-  SUPERSTABLES_MCP_WAIT_MS       how long the MCP pay and payment_status tools wait (default 20000)
   SUPERSTABLES_DOCTOR_OFFLINE    1: doctor skips the network checks
   SUPERSTABLES_DEMO_PAY_TO       where demo-service's earnings go
 
@@ -188,8 +184,7 @@ Run by: the owner, once per machine.
 Example:
   $ superstables setup
   $ superstables --wallet local setup
-Prints: the paths it wrote, how the owner approves payments, and the command that connects an MCP
-  host to this build.
+Prints: the paths it wrote, how the owner approves payments, and what to run next.
 Exit codes: 0 ready, 1 the home directory could not be written (the full table: superstables --help)
 ```
 
@@ -306,28 +301,6 @@ Example:
 Prints: one address.
 Exit codes: 0 printed, 1 no key yet (run `superstables wallet init`) (the full table: superstables
   --help)
-```
-
-## superstables mcp
-
-```text
-Usage: superstables mcp [options]
-
-run the MCP server on stdio, for Claude Code or another MCP host
-
-Options:
-  -h, --help  display help for command
-
-Tools: find_services, quote, pay, payment_status, wallet_status, list_receipts. Its pay tool asks
-the owner exactly as `superstables pay` does, and returns the approval link at once; the approval
-page lives as long as this server does. stdout carries the protocol; logs go to stderr.
-
-Moves money: only through its pay tool, and only after the owner approves in their wallet.
-Run by: the agent's MCP host (Claude Code, for example), not a person at a terminal.
-Example:
-  $ claude mcp add superstables -- superstables mcp
-Prints: MCP messages on stdout until the host disconnects.
-Exit codes: 0 the host disconnected, 1 could not start (the full table: superstables --help)
 ```
 
 ## superstables find
@@ -463,8 +436,7 @@ busy fails at once, the owner is not asked and the quote can still be paid.
 
 For agents: the approval link is printed as soon as it exists, but pay keeps running until the owner
 decides. If your tool shows output only when a command ends, run pay in the background with its
-output going to a file and show the owner the approval link from that file, or use the MCP server
-(`superstables mcp`), whose pay tool returns it at once.
+output going to a file and show the owner the approval link from that file.
 
 Where the answer is: the service's response is printed after the receipt (up to 4,000 characters are
 kept); with --json it is service_response. `superstables status <attempt-id>` shows it again later.

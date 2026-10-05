@@ -1,5 +1,5 @@
 // Offline guard for tests: fetch reaches this computer only. Loaded by test/setup-offline.ts in the test workers and,
-// through NODE_OPTIONS, in every node process a test starts (the CLI, the MCP server, the budget scripts). A request
+// through NODE_OPTIONS, in every node process a test starts (the CLI, the budget scripts). A request
 // to any other host fails at once with a message naming it, so a test that would have used the network fails visibly
 // instead of depending on it; the few third-party hosts the client's own code calls in ordinary tests get a local
 // stand-in answer instead (STAND_INS). Live tests (SUPERSTABLES_LIVE=1) never load it.

@@ -51,7 +51,7 @@ approval port. Choose `setup --hosted` at the setup step and follow
 [Approve on superstables.com instead](#approve-on-superstablescom-instead).
 
 Both choices use the same installed CLI or command-capable agent skill. The budget key, purchases
-and journals stay on your machine or server. The payment MCP tools do not create or spend budgets.
+and journals stay on your machine or server.
 
 ## Who runs what
 

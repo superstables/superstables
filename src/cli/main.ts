@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The `superstables` command. One binary for the three people in this story: the owner who
 // sets the machine up and approves payments, the developer who wants to see a payment happen
-// from a terminal, and the agent that runs `superstables mcp` and talks JSON-RPC over stdio.
+// from a terminal, and the agent that runs the same commands and reads what they print.
 //
 // Every command prints facts, one per line, and refuses in one sentence that names the next
 // command to run. No command ever signs anything: `pay` asks the owner's wallet and reports
@@ -10,7 +10,7 @@
 
 import { spawn } from "node:child_process";
 import { constants as osConstants } from "node:os";
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command, CommanderError, InvalidArgumentError, Option } from "commander";
@@ -38,8 +38,6 @@ import { walletStatus } from "../core/signer/wallet.js";
 import type { Attempt, Quote, Receipt, ServiceListing, WalletStatus } from "../core/types.js";
 import { clientVersion } from "../core/version.js";
 import { startDemoService } from "../demo-service/server.js";
-import { runStdioServer, signerFor, walletModeFromEnvironment, type WalletMode } from "../mcp/main.js";
-import { attemptView, messageFor } from "../mcp/server.js";
 import { policySummary, startWallet } from "../wallet/daemon.js";
 import { initKey, keyExists, keyPath, loadAccount, readSecretFile } from "../wallet/keystore.js";
 import { SellerTextError, UNTRUSTED_LABEL, untrustedText } from "../core/text.js";
@@ -55,9 +53,10 @@ import {
   isFinalAttempt,
   nextFor,
   requoteCommand,
-  shellWord,
   usedQuoteMessage,
 } from "./outcome.js";
+import { signerFor, walletModeFromEnvironment, type WalletMode } from "./signer.js";
+import { attemptView, messageFor } from "./views.js";
 
 /**
  * Where test USDC comes from: Circle's faucet on every chain `pay` pays USDC on but SKALE Base Sepolia, whose USDC is
@@ -160,12 +159,6 @@ explain(
         console.log("  superstables wallet serve");
       }
       console.log("");
-      console.log("Set up your agent app over MCP (Claude Code shown; other MCP hosts take the same command):");
-      console.log(`  claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- ${mcpCommand()}`);
-      console.log("  The switch adds Superstables' testnet services from the hosted catalogue. Most return");
-      console.log("  prepared sample output and are marked simulated; the market data service returns live prices.");
-      console.log("  Leave it out to list no simulated services.");
-      console.log("");
       console.log("Next: `superstables doctor` checks the machine; `superstables find` lists what can be bought.");
       console.log("On-chain budgets are set up separately: `superstables budget setup --rail evm`.");
     }),
@@ -178,7 +171,7 @@ explain(
     money: "no.",
     who: "the owner, once per machine.",
     examples: ["superstables setup", "superstables --wallet local setup"],
-    prints: "the paths it wrote, how the owner approves payments, and the command that connects an MCP host to this build.",
+    prints: "the paths it wrote, how the owner approves payments, and what to run next.",
     exits: "0 ready, 1 the home directory could not be written",
   },
 );
@@ -306,29 +299,6 @@ explain(
     examples: ["superstables wallet address"],
     prints: "one address.",
     exits: "0 printed, 1 no key yet (run `superstables wallet init`)",
-  },
-);
-
-// ── mcp ──────────────────────────────────────────────────────────────────────────────────
-
-explain(
-  program
-    .command("mcp")
-    .description("run the MCP server on stdio, for Claude Code or another MCP host")
-    .action(async () => {
-      await runStdioServer();
-    }),
-  {
-    notes: [
-      "Tools: find_services, quote, pay, payment_status, wallet_status, list_receipts. Its pay tool asks " +
-        "the owner exactly as `superstables pay` does, and returns the approval link at once; the " +
-        "approval page lives as long as this server does. stdout carries the protocol; logs go to stderr.",
-    ],
-    money: "only through its pay tool, and only after the owner approves in their wallet.",
-    who: "the agent's MCP host (Claude Code, for example), not a person at a terminal.",
-    examples: ["claude mcp add superstables -- superstables mcp"],
-    prints: "MCP messages on stdout until the host disconnects.",
-    exits: "0 the host disconnected, 1 could not start",
   },
 );
 
@@ -688,8 +658,7 @@ explain(
         "a fixed port that is busy fails at once, the owner is not asked and the quote can still be paid.",
       "For agents: the approval link is printed as soon as it exists, but pay keeps running until the owner " +
         "decides. If your tool shows output only when a command ends, run pay in the background with its " +
-        "output going to a file and show the owner the approval link from that file, or use the MCP server " +
-        "(`superstables mcp`), whose pay tool returns it at once.",
+        "output going to a file and show the owner the approval link from that file.",
       "Where the answer is: the service's response is printed after the receipt (up to " +
         `${SERVICE_BODY_LIMIT.toLocaleString("en")} characters are kept); with --json it is service_response. ` +
         "`superstables status <attempt-id>` shows it again later.",
@@ -755,7 +724,7 @@ explain(
       if (!isFinalAttempt(attempt)) {
         console.log("");
         console.log(
-          "This record moves only while the `superstables pay` command (or MCP server) that started it is " +
+          "This record moves only while the `superstables pay` command that started it is " +
             "running. If that process has stopped, it will not change: nothing was signed if it is " +
             "awaiting_approval, and whether it settled is unknown if it is approved or submitting.",
         );
@@ -1064,9 +1033,9 @@ function context(): {
   return { records, policy: parsed, engine: new PaymentEngine({ records, policy: parsed, signer }), signer };
 }
 
-/** What `pay --json` and `status --json` print: the MCP view of the attempt, in CLI words. */
+/** What `pay --json` and `status --json` print: the attempt's view, with what the CLI adds to it. */
 function attemptJson(records: Records, attempt: Attempt): Record<string, unknown> {
-  const view = attemptView({ records }, attempt, "cli");
+  const view = attemptView({ records }, attempt);
   // A link to an attempt that has ended opens nothing useful; only a live one is worth showing.
   const { history, approval_url, ...rest } = view;
   if (!isFinalAttempt(attempt) && approval_url) rest.approval_url = approval_url;
@@ -1091,7 +1060,7 @@ function attemptJson(records: Records, attempt: Attempt): Record<string, unknown
 function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt): void {
   const receipt = known ?? (attempt.receiptId ? records.getReceipt(attempt.receiptId) : undefined);
   console.log("");
-  console.log(messageFor(attempt, receipt, "cli"));
+  console.log(messageFor(attempt, receipt));
   if (receipt) {
     console.log("");
     console.log(field("receipt", receipt.id));
@@ -1137,23 +1106,6 @@ function receiptChain(receipt: Receipt): string {
 async function closeSigner(signer: Signer): Promise<void> {
   const closable = signer as Signer & { close?: () => Promise<void> };
   if (typeof closable.close === "function") await closable.close().catch(() => undefined);
-}
-
-/**
- * The command that starts this same build's MCP server: the Node that is running now, its own
- * flags (a TypeScript loader, when run from source) and the entry point that was started, plus
- * `mcp`. Absolute, so it works from any directory and however the CLI was installed: from a
- * checkout, a package or a single bundled file.
- */
-function mcpCommand(): string {
-  const started = process.argv[1];
-  let entry = started;
-  try {
-    if (started) entry = realpathSync(started);
-  } catch {
-    // A path that cannot be resolved is still the one that was started.
-  }
-  return [process.execPath, ...process.execArgv, entry ?? "superstables", "mcp"].map(shellWord).join(" ");
 }
 
 function payable(service: ServiceListing): string {

@@ -33,10 +33,9 @@ import {
 import { loadPolicy } from "../core/policy.js";
 import { clientVersion } from "../core/version.js";
 import { walletStatus } from "../core/signer/wallet.js";
-import type { WalletMode } from "../mcp/main.js";
-import { walletModeFromEnvironment } from "../mcp/main.js";
 import { policySummary } from "../wallet/daemon.js";
 import { keyExists, keyPath } from "../wallet/keystore.js";
+import { walletModeFromEnvironment, type WalletMode } from "./signer.js";
 
 /** Long enough for a loaded public facilitator, short enough that ten checks stay bearable. */
 const CHECK_TIMEOUT_MS = 5_000;

@@ -10,7 +10,7 @@ activity before deciding what to do; approval, payment and delivery are separate
 
 | Flow | Read the original outcome | Follow-up |
 | --- | --- | --- |
-| Local `pay` or payment MCP | `superstables status <attempt-id>` (`payment_status` with MCP) | For `uncertain`, follow [the chain and authorization checks below](#why-failed-and-uncertain-are-different). Do not start another payment while unresolved |
+| Local `pay` | `superstables status <attempt-id>` | For `uncertain`, follow [the chain and authorization checks below](#why-failed-and-uncertain-are-different). Do not start another payment while unresolved |
 | Budget purchase, local or hosted owner approvals | `superstables budget reconcile --rail <rail> --chain <chain> --op <op>` | Use the original rail, chain and operation id. It needs the local journal and never pays. Do not replace the purchase with a new id |
 | Single purchase on superstables.com | `superstables budget wait --id <id> --shown` | Re-read the same request later when `unknown` has `final: false`. Waiting never approves or retries payment |
 | Budget owner transaction | `superstables budget wait --id <id> --shown`, then `budget status` for that rail and chain | Check wallet activity and chain confirmation. An expired link does not cancel a wallet transaction |

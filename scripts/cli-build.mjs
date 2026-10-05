@@ -12,12 +12,9 @@
 //   VERSION.json               the version, commit and build time; budget/VERSION.json is a copy for `budget --version`
 //   THIRD_PARTY_NOTICES.txt    every bundled package with its version, licence and full licence text
 //
-// The MCP server has no entry of its own here: the skill runs the CLI, and `superstables mcp` still starts the server
-// from cli/main.mjs, which contains it.
-//
 // node scripts/cli-build.mjs [--outdir <dir>] [--version <version>]   default build/cli/
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { budgetEntryPoints, buildStandalone, checkSelfContained } from "./budget-build.mjs";
@@ -35,21 +32,6 @@ if (major < 20) {
 await import("./cli/main.mjs");
 `;
 
-// src/mcp/main.ts starts the server when the file it is in is the one node was started with. In a bundle that file is
-// cli/main.mjs (or a shared chunk), so running cli/main.mjs directly would start a server under the CLI. The check is
-// switched off here; `superstables mcp` is the way to start it.
-const mcpNotStartedDirectly = {
-  name: "mcp-not-started-directly",
-  setup(build) {
-    build.onLoad({ filter: /[\\/]src[\\/]mcp[\\/]main\.ts$/ }, (args) => {
-      const text = readFileSync(args.path, "utf8");
-      const guard = "if (startedDirectly()) {";
-      if (text.split(guard).length !== 2) throw new Error(`src/mcp/main.ts must contain \`${guard}\` exactly once (scripts/cli-build.mjs switches it off in the bundle)`);
-      return { contents: text.replace(guard, "if (false) {"), loader: "ts" };
-    });
-  },
-};
-
 export async function buildCli(outdir = join(root, "build", "cli"), version) {
   const entryPoints = { "cli/main": join(root, "src", "cli", "main.ts"), ...budgetEntryPoints("budget/") };
   const built = await buildStandalone({
@@ -61,7 +43,6 @@ export async function buildCli(outdir = join(root, "build", "cli"), version) {
     builtBy: "scripts/cli-build.mjs",
     rebuild: "npm run skill",
     versionFiles: ["VERSION.json", "budget/VERSION.json"],
-    plugins: [mcpNotStartedDirectly],
   });
   writeFileSync(join(outdir, "superstables.mjs"), ENTRY);
   checkSelfContained(outdir);

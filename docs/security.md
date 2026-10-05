@@ -5,7 +5,7 @@ and what it does not.
 
 These payment flows have different boundaries:
 
-| | Single purchase on your machine (`pay`, the MCP tools) | Single purchase on superstables.com (`superstables budget buy-once`) | Budget (`superstables budget`) |
+| | Single purchase on your machine (`pay`) | Single purchase on superstables.com (`superstables budget buy-once`) | Budget (`superstables budget`) |
 | --- | --- | --- | --- |
 | Who approves | The owner, in their own wallet, for every payment | The owner, in their own wallet on the site, for one purchase | The owner, in their own wallet, once, for the whole budget |
 | Keys the client holds | None with a browser wallet; `--wallet local` stores a signing key | None | The agent key, which signs purchases. The owner's key stays in their wallet |
@@ -122,10 +122,10 @@ It **cannot**:
 
 
 
-## What a compromised MCP process could do
+## What a compromised client process could do
 
-The MCP process serves the approval page. A hostile build of this software, or code injected into
-it, **could**:
+The `superstables pay` process serves the approval page. A hostile build of this software, or code
+injected into it, **could**:
 
 - show you a page that describes the payment dishonestly — a smaller amount, a different
   recipient, a service you recognise;
@@ -219,10 +219,12 @@ leaves the attempt `uncertain`: a page's report is not proof that nothing was se
 holding the approval link can post it. `superstables status` then searches the chain for the memo,
 in blocks after the one recorded, and never takes a transfer already recorded as another payment.
 
-Payments are settled by public facilitators, which submit the transfer and pay the gas. A
-facilitator sees the signed authorization, so it learns who paid whom and how much; it cannot
+For x402 payments, public facilitators submit the transfer and pay the gas. A facilitator sees
+the signed authorization or transaction, so it learns who paid whom and how much; it cannot
 alter the amount or the recipient, because those are inside what was signed. The client's facilitator helper tries the next facilitator when one cannot be
 reached, and stops when one refuses. Other sellers choose their own facilitators.
+
+On Tempo Moderato, the owner's wallet sends the pathUSD transfer and pays its network fee.
 
 With `pay` over x402, the seller reports the settlement and names a transaction. The client checks
 that transaction on the payment's chain and records `chain`. What `verified` requires depends on
@@ -296,10 +298,8 @@ default `stablecoins` list is `[USDC, pathUSD]`, and a policy that lists USDC on
 reserves the amount under a lock shared by the processes on this machine before the owner is
 asked.
 
-Text from sellers and listings reaches the agent as data. The MCP server names those fields in
-`untrusted_data` in each result, and the text form of the result carries them in separate blocks
-marked "Untrusted data". The CLI prints them on one line, without control or invisible
-characters.
+Text from sellers and listings reaches the agent as data. The CLI prints it on one line, without
+control or invisible characters.
 
 **Where the signed payment goes.** `pay` sends the signed authorization only to the URL it quoted:
 it refuses a redirect, and the attempt then ends `uncertain`, because the client cannot tell whether

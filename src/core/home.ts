@@ -13,8 +13,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 /**
- * SUPERSTABLES_HOME as an MCP client may hand it over: possibly blank, possibly with a `~`,
- * `$HOME` or `${HOME}` nobody expanded (a JSON config file is not a shell, and not every client
+ * SUPERSTABLES_HOME as an agent's host may hand it over: possibly blank, possibly with a `~`,
+ * `$HOME` or `${HOME}` nobody expanded (a JSON config file is not a shell, and not every host
  * substitutes variables in it). Blank means "the default"; those placeholders mean the user's
  * home directory.
  */
