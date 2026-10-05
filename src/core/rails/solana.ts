@@ -356,7 +356,7 @@ export async function devnetBlockHeight(options: ChainReadOptions = {}): Promise
   return height;
 }
 
-/** A confirmed transaction as getTransaction answers it (json encoding). */
+/** A finalized transaction as getTransaction answers it (json encoding). */
 interface RpcTransaction {
   meta?: { err?: unknown; loadedAddresses?: { writable?: unknown; readonly?: unknown } } | null;
   transaction?: {
@@ -369,7 +369,7 @@ interface RpcTransaction {
 }
 
 function readTransaction(url: string, signature: string, options: RpcOptions, version = 0): Promise<RpcTransaction | null> {
-  return rpcCall<RpcTransaction | null>(url, "getTransaction", [signature, { commitment: "confirmed", maxSupportedTransactionVersion: version, encoding: "json" }], options);
+  return rpcCall<RpcTransaction | null>(url, "getTransaction", [signature, { commitment: "finalized", maxSupportedTransactionVersion: version, encoding: "json" }], options);
 }
 
 /** What a search read of the blocks a payment could have landed in. */
@@ -456,7 +456,7 @@ function matchable(facts: PaymentFacts): boolean {
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
 
 /**
- * Whether a confirmed transaction is this payment: it is the transaction asked for, it carries the owner's signature, it
+ * Whether a finalized transaction is this payment: it is the transaction asked for, it carries the owner's signature, it
  * succeeded, and its one token instruction is a TransferChecked of the amount of devnet USDC from the owner's token
  * account to the recipient's, by the owner.
  */
