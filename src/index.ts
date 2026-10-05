@@ -8,6 +8,7 @@
 
 // ── The vocabulary ─────────────────────────────────────────────────────────────────────
 export type {
+  AbandonCause,
   Attempt,
   AttemptState,
   AttemptTransition,
@@ -30,9 +31,17 @@ export { FINAL_ATTEMPT_STATES } from "./core/types.js";
 
 // ── Chain and protocol ─────────────────────────────────────────────────────────────────
 export {
+  ARBITRUM_SEPOLIA,
+  ARC_TESTNET,
   BASE_SEPOLIA,
   DEFAULT_NETWORK,
-  SUPPORTED_NETWORKS,
+  ETHEREUM_SEPOLIA,
+  EVM_NETWORKS,
+  KNOWN_NETWORKS,
+  POLYGON_AMOY,
+  SKALE_BASE_SEPOLIA,
+  SOLANA_DEVNET,
+  TEMPO_MODERATO,
   addressUrl,
   describeNetwork,
   fromAtomic,
@@ -45,7 +54,8 @@ export {
   usdcBalance,
   usdcRequirement,
 } from "./core/chain.js";
-export type { NetworkInfo } from "./core/chain.js";
+export type { EvmNetwork, NetworkInfo, Rail, SolanaNetwork, TempoNetwork } from "./core/chain.js";
+export { SUPPORTED_NETWORKS } from "./core/rails/index.js";
 
 export { NotPaidEndpointError, detect, parseChallenge, sameTerms, termsFor } from "./core/x402.js";
 export type { Challenge, RawAccept, Supported, Unsupported } from "./core/x402.js";
@@ -68,7 +78,7 @@ export type { Attempt as PolicyAttempt, Money, Policy, Verdict } from "./core/po
 // ── Records, discovery, facilitators ───────────────────────────────────────────────────
 export { Records } from "./core/records.js";
 
-export { DEMO_SERVICE_ID, HOSTED_DEMO_SERVICE_URL, HOSTED_CATALOGUE_URL, INDEX_URL, demoService, externalCoinPriceService, catalogue, allListings, fetchHostedCatalogue, hostedCatalogueUrl, clearHostedCatalogueCache, demoServicesEnabled, EXTERNAL_COIN_PRICE_ID, findServices, getService, resolveRequest } from "./core/discovery.js";
+export { DEMO_SERVICE_ID, HOSTED_DEMO_SERVICE_URL, HOSTED_CATALOGUE_URL, INDEX_URL, DEFAULT_INDEX_URL, indexUrl, demoService, externalCoinPriceService, catalogue, allListings, fetchHostedCatalogue, hostedCatalogueUrl, clearHostedCatalogueCache, demoServicesEnabled, EXTERNAL_COIN_PRICE_ID, findServices, getService, resolveRequest } from "./core/discovery.js";
 export type { DiscoveryResult, FindServicesOptions } from "./core/discovery.js";
 
 export { FACILITATORS, FACILITATOR_TIMEOUT_MS, facilitatorClient, firstThatWorks, settleWith, verifyWith } from "./core/facilitator.js";
@@ -88,7 +98,7 @@ export { WalletSigner, isWalletUp, walletStatus } from "./core/signer/wallet.js"
 export type { WalletSignerOptions } from "./core/signer/wallet.js";
 export { BrowserWalletSigner } from "./core/signer/browser.js";
 export type { BrowserWalletSignerOptions } from "./core/signer/browser.js";
-export { ApprovalServer } from "./core/signer/approval-server.js";
+export { ApprovalPortBusy, ApprovalServer } from "./core/signer/approval-server.js";
 export type {
   ApprovalHandle,
   ApprovalOutcome,
@@ -105,6 +115,7 @@ export {
   DEFAULT_WALLET_PORT,
   agentTokenPath,
   approvalsPath,
+  approvePortFromEnvironment,
   browserWalletPath,
   ensureDir,
   homeDir,

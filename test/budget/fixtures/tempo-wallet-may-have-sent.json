@@ -1,0 +1,70 @@
+{
+  "id": "2e1bba94-5e91-43fd-8208-03ce713b2784",
+  "state": "uncertain",
+  "final": false,
+  "livemode": false,
+  "created_at": "2026-10-04T06:02:20.778Z",
+  "updated_at": "2026-10-04T06:12:24.127Z",
+  "service": {
+    "id": "superstables-demo-market-data-tempo",
+    "name": "Superstables demo market data on Tempo",
+    "simulated": false,
+    "testnet": true
+  },
+  "request": {
+    "method": "GET",
+    "url": "https://staging.superstables.com/api/demo/market/tempo?asset=ETH",
+    "params": {
+      "asset": "ETH"
+    }
+  },
+  "terms": {
+    "amount": {
+      "decimal": "0.001",
+      "atomic": "1000"
+    },
+    "asset": {
+      "symbol": "pathUSD",
+      "address": "0x20C0000000000000000000000000000000000000",
+      "decimals": 6
+    },
+    "network": "eip155:42431",
+    "network_label": "Tempo Moderato (testnet)",
+    "recipient": "0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E",
+    "protocol": "mpp",
+    "method": "tempo",
+    "intent": "charge",
+    "challenge_window_seconds": 899
+  },
+  "approval": {
+    "match_code": "PCW-ZVF",
+    "expires_at": "2026-10-04T06:12:20.776Z"
+  },
+  "payment": {
+    "status": "unknown",
+    "basis": "a transfer was prepared for the owner's wallet, but the chain does not show the payment yet. If the wallet sent it, it could still arrive",
+    "payer": "0xD47F6FeeC6c93CC13821A05A4D5C13c522Fa16AE",
+    "authorization": {
+      "valid_before": "2026-10-04T06:17:21.000Z",
+      "nonce": "0xef1ed71201c26e5d6e58ac7464640f00000000000000000000a3c411002409c2"
+    }
+  },
+  "delivery": {
+    "status": "unknown",
+    "simulated": false
+  },
+  "receipt": null,
+  "reason": "a transfer was prepared for the owner's wallet, but the chain does not show the payment yet. If the wallet sent it, it could still arrive",
+  "reason_code": "wallet_may_have_sent",
+  "message": "The payment may or may not have settled: a transfer was prepared for the owner's wallet, but the chain does not show the payment yet. If the wallet sent it, it could still arrive. It was not retried.",
+  "next": "Do not buy again. GET https://staging.superstables.com/api/v1/purchases/2e1bba94-5e91-43fd-8208-03ce713b2784 again in a minute: the server reconciles it from the chain, and its answer can become final once the authorization window has closed and the chain can be read.",
+  "next_action": {
+    "type": "wait_for_chain",
+    "poll_url": "https://staging.superstables.com/api/v1/purchases/2e1bba94-5e91-43fd-8208-03ce713b2784",
+    "retry_at": "2026-10-04T09:17:21.000Z"
+  },
+  "notice": "Testnet preview: test pathUSD on Tempo Moderato, no real money.",
+  "links": {
+    "self": "https://staging.superstables.com/api/v1/purchases/2e1bba94-5e91-43fd-8208-03ce713b2784"
+  }
+}

@@ -18,7 +18,10 @@
 // than an error.
 
 import { z } from "zod";
-import { describeNetwork, toCaip2 } from "./chain.js";
+import { describeNetwork, networkFor, toCaip2 } from "./chain.js";
+import { SUPPORTED_NETWORKS } from "./rails/index.js";
+import { chainName, isKnownChainName, isKnownRail, payNetworkFor, routesFor } from "./routes.js";
+import { SellerTextError, untrustedText } from "./text.js";
 import type { ResolvedRequest, ServiceListing, ServiceParam } from "./types.js";
 
 export const DEMO_SERVICE_ID = "superstables-demo-market-data";
@@ -31,8 +34,24 @@ export const EXTERNAL_COIN_PRICE_ID = "x402-coin-api.vercel.app";
  */
 export const HOSTED_DEMO_SERVICE_URL = "https://www.superstables.com/api/demo/market";
 
-/** Where the public index lives. Overridable so a self-hosted index can be pointed at. */
-export const INDEX_URL = process.env.SUPERSTABLES_INDEX_URL ?? "https://www.superstables.com/api/v1/services";
+/** The public index Superstables runs: every x402 service it has found, with rails, chains and price. */
+export const DEFAULT_INDEX_URL = "https://www.superstables.com/api/v1/services";
+
+/** Where the public index lives, as this process started. Kept for SDK users; the code reads indexUrl(). */
+export const INDEX_URL = process.env.SUPERSTABLES_INDEX_URL ?? DEFAULT_INDEX_URL;
+
+/**
+ * The index to read, or undefined when it is switched off. SUPERSTABLES_INDEX_URL points at
+ * another index that answers the same API (a self-hosted one, say); the empty string or "off"
+ * switches the index off, and discovery then lists the built-in catalogue only.
+ */
+export function indexUrl(): string | undefined {
+  const raw = process.env.SUPERSTABLES_INDEX_URL;
+  if (raw === undefined) return DEFAULT_INDEX_URL;
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed.toLowerCase() === "off") return undefined;
+  return trimmed;
+}
 
 /** Where the hosted catalogue lives: every paid demo endpoint the website operates, with parameters. */
 export const HOSTED_CATALOGUE_URL = "https://www.superstables.com/api/demo/catalogue";
@@ -51,10 +70,11 @@ export function hostedCatalogueUrl(): string | undefined {
 }
 
 /**
- * Are the simulated demo services switched on? SUPERSTABLES_DEMO_SERVICES=on (or 1, true, yes)
- * includes the hosted catalogue's prepared services in discovery. Off, the default, never reads
+ * Is the hosted catalogue switched on? SUPERSTABLES_DEMO_SERVICES=on (or 1, true, yes) includes
+ * Superstables' testnet services from the hosted catalogue in discovery: most return prepared
+ * sample output (mock: true); the market data service returns live prices. Off, the default, never reads
  * the catalogue, so a client that was not set up for the demo never sees a simulated listing.
- * The Claude Desktop bundle and the demo page's configuration snippets switch it on.
+ * The demo page's configuration snippets switch it on.
  */
 export function demoServicesEnabled(): boolean {
   const raw = (process.env.SUPERSTABLES_DEMO_SERVICES ?? "").trim().toLowerCase();
@@ -82,7 +102,7 @@ export interface FindServicesOptions {
   includeIndex?: boolean;
   /** Check that the demo service is actually answering. Costs one HTTP request. */
   probe?: boolean;
-  /** Include the simulated demo services from the hosted catalogue. Default: the SUPERSTABLES_DEMO_SERVICES switch. */
+  /** Include Superstables' testnet services from the hosted catalogue (most simulated). Default: the SUPERSTABLES_DEMO_SERVICES switch. */
   demoServices?: boolean;
 }
 
@@ -91,6 +111,13 @@ export interface DiscoveryResult {
   services: ServiceListing[];
   warnings: string[];
 }
+
+/** Rails, chains and routes of a listing paid with x402 on Base Sepolia, like every built-in one. */
+const BASE_SEPOLIA_X402: Pick<ServiceListing, "rails" | "chains" | "routes"> = {
+  rails: ["x402"],
+  chains: ["base-sepolia"],
+  routes: routesFor(["x402"], ["base-sepolia"]),
+};
 
 /** The one service this release can discover, quote and pay without any further setup. */
 export function demoService(): ServiceListing {
@@ -125,7 +152,10 @@ export function demoService(): ServiceListing {
     operator: "Superstables (demo service on the testnet)",
     source: "demo-catalogue",
     testnet: true,
+    // Live spot prices, not prepared output: the payment is the demo, the data is real.
+    mock: false,
     actionable: true,
+    ...BASE_SEPOLIA_X402,
   };
 }
 
@@ -165,6 +195,7 @@ export function externalCoinPriceService(): ServiceListing {
     source: "demo-catalogue",
     testnet: true,
     actionable: true,
+    ...BASE_SEPOLIA_X402,
   };
 }
 
@@ -185,7 +216,7 @@ export async function allListings(
   const { includeHosted = true, demoServices = demoServicesEnabled() } = options;
   const builtIn = catalogue();
   const url = hostedCatalogueUrl();
-  // The hosted catalogue holds the simulated demo services: it is read only for the demo.
+  // The hosted catalogue holds Superstables' testnet services, most of them simulated: it is read only for the demo.
   if (!includeHosted || !demoServices || !url) return { listings: builtIn, warnings: [] };
 
   const warnings: string[] = [];
@@ -218,7 +249,7 @@ export async function findServices(options: FindServicesOptions = {}): Promise<D
   // caller that asked for no network gets none. They are read side by side.
   const [{ listings, warnings }, index] = await Promise.all([
     allListings({ includeHosted: includeIndex, demoServices }),
-    includeIndex
+    includeIndex && indexUrl()
       ? fetchIndex(query, limit).then((rows) => ({ rows, error: undefined })).catch((err: unknown) => ({ rows: [] as ServiceListing[], error: message(err) }))
       : Promise.resolve({ rows: [] as ServiceListing[], error: undefined }),
   ]);
@@ -262,7 +293,7 @@ export async function getService(
   const { listings } = await allListings({ includeHosted: includeIndex, demoServices });
   const listed = listings.find((s) => s.id === id);
   if (listed) return probe ? await probeDemo(listed) : listed;
-  if (!includeIndex) return undefined;
+  if (!includeIndex || !indexUrl()) return undefined;
   try {
     const found = await fetchIndex(id, DEFAULT_LIMIT);
     return found.find((s) => s.id === id);
@@ -295,7 +326,8 @@ export function resolveRequest(service: ServiceListing, params: Record<string, s
   }
 
   if (problems.length > 0) {
-    throw new Error(`Cannot call ${service.name}: ${problems.join("; ")}.`);
+    // Parameter names and allowed values are the listing's, so they are the detail, not the client's sentence.
+    throw new SellerTextError("The parameters given do not match what this service's listing asks for", `${service.name}: ${problems.join("; ")}`);
   }
 
   const url = new URL(service.endpoint);
@@ -429,8 +461,8 @@ const HostedListingSchema = z.object({
   method: z.literal("GET"),
   params: z.array(HostedParamSchema),
   payment: z.object({
-    rail: z.literal("x402"),
-    scheme: z.literal("exact"),
+    rail: z.enum(["x402", "mpp"]),
+    scheme: z.enum(["exact", "charge"]),
     network: z.string().min(1),
     networkLabel: z.string().optional(),
     asset: z.string().min(1),
@@ -506,19 +538,28 @@ function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing
     (endpoint.protocol === "http:" && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(endpoint.hostname));
   const network = toCaip2(row.payment.network);
   const networkLabel = row.payment.networkLabel ?? describeNetwork(row.payment.network);
-  const supported = network === "eip155:84532" && row.payment.asset.toUpperCase() === "USDC";
+  // A chain `pay` pays on, in that chain's token, over the protocol its rail speaks (MPP on Tempo, x402 elsewhere).
+  const chain = SUPPORTED_NETWORKS.find((n) => n.caip2 === network);
+  const supported =
+    chain !== undefined &&
+    row.payment.asset.toUpperCase() === chain.token.symbol.toUpperCase() &&
+    row.payment.rail === (chain.rail === "tempo" ? "mpp" : "x402") &&
+    row.payment.scheme === (chain.rail === "tempo" ? "charge" : "exact");
   const configured = row.payment.configured !== false;
   const notActionableReason = !secure
     ? "the endpoint is not https, so a payment credential would travel in the clear"
     : !supported
-      ? `${networkLabel} in ${row.payment.asset} is not supported in this release`
+      ? // The catalogue's own label is not repeated: the client names the network and asset only when it knows them.
+        `${isKnownChainName(row.payment.network) ? describeNetwork(row.payment.network) : "this network"} in ${/^[A-Za-z0-9]{1,12}$/.test(row.payment.asset) ? row.payment.asset : "this asset"} is not supported in this release`
       : !configured
         ? "the seller has no payout address configured, so it cannot be paid right now"
         : undefined;
   return {
     id: row.id,
-    name: row.name,
-    description: row.description,
+    // The same rule as an index row's text: the catalogue's address can be pointed elsewhere, and what it says
+    // about a service reaches an agent that then chooses what to pay.
+    name: untrustedText(row.name, 200),
+    description: untrustedText(row.description, 500),
     endpoint: row.endpoint,
     method: "GET",
     params: row.params.map((p) => ({
@@ -530,8 +571,8 @@ function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing
       ...(p.enum && p.enum.length > 0 ? { enum: p.enum } : {}),
     })),
     payment: {
-      rail: "x402",
-      scheme: "exact",
+      rail: row.payment.rail,
+      scheme: row.payment.scheme,
       network,
       networkLabel,
       asset: row.payment.asset,
@@ -540,11 +581,14 @@ function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing
     ...(row.operator ? { operator: row.operator } : {}),
     source: "demo-catalogue",
     // What the network says, not what the row claims.
-    testnet: network === "eip155:84532" || /sepolia|testnet|devnet/i.test(networkLabel),
+    testnet: networkFor(network)?.testnet === true || /sepolia|testnet|devnet/i.test(networkLabel),
     actionable: notActionableReason === undefined,
     ...(notActionableReason ? { notActionableReason } : {}),
     ...(row.mock !== undefined ? { mock: row.mock } : {}),
     ...(row.example_prompts && row.example_prompts.length > 0 ? { examplePrompts: row.example_prompts } : {}),
+    rails: [row.payment.rail],
+    chains: [chainName(network)],
+    routes: routesFor([row.payment.rail], [chainName(network)]),
   };
 }
 
@@ -565,7 +609,7 @@ interface IndexRow {
 }
 
 async function fetchIndex(query: string, limit: number): Promise<ServiceListing[]> {
-  const url = new URL(INDEX_URL);
+  const url = new URL(indexUrl() ?? DEFAULT_INDEX_URL);
   url.searchParams.set("q", query);
   url.searchParams.set("live", "true");
   url.searchParams.set("limit", String(limit));
@@ -580,23 +624,37 @@ async function fetchIndex(query: string, limit: number): Promise<ServiceListing[
 }
 
 function fromIndexRow(row: IndexRow): ServiceListing {
-  const chains = row.chains ?? [];
-  const chain = chains[0] ?? "";
-  const payable = chains.some((c) => toCaip2(c) === "eip155:84532");
-  const testnet = chains.some((c) => /sepolia|testnet|devnet/i.test(c));
+  // The row's own words for its chains and rails end up in the listing and in the reason it cannot be paid.
+  const chains = (row.chains ?? []).map((c) => untrustedText(c, 60)).filter(Boolean);
+  const rails = (row.rails ?? []).map((r) => untrustedText(r, 60)).filter(Boolean);
+  const routes = routesFor(rails, chains);
+  // The network shown is the one `pay` could use when the listing offers it, not merely the
+  // first one listed: ["base", "base-sepolia"] is a Base Sepolia listing as far as `pay` goes.
+  const chain = chains.find((c) => payNetworkFor(c)) ?? chains[0] ?? "";
+  const payNetwork = payNetworkFor(chain);
+  const onTempo = payNetwork?.rail === "tempo";
+  const testnet = chains.some((c) => /sepolia|testnet|devnet|amoy|moderato/i.test(c));
+  // A payment credential travels to this endpoint too, so it gets the same test the hosted
+  // catalogue rows get: only https, or plain http on this machine. An index row names its own
+  // endpoint, and `chains` is the row's own claim about where it pays, so neither is a check.
+  let endpoint: URL | undefined;
+  try { endpoint = new URL(String(row.endpoint)); } catch {}
+  const secure = endpoint !== undefined && (endpoint.protocol === "https:" || (endpoint.protocol === "http:" && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(endpoint.hostname)));
   return {
-    id: String(row.id),
-    name: row.name ?? String(row.id),
-    description: row.description ?? "",
+    // Index text is whoever registered the service. It reaches an agent that then chooses what to pay and
+    // what to tell the owner, so it is flattened to one bounded line here rather than at each place it is shown.
+    id: untrustedText(row.id, 200),
+    name: untrustedText(row.name ?? row.id, 200),
+    description: untrustedText(row.description, 500),
     endpoint: String(row.endpoint),
     method: "GET",
     // The index does not record request parameters yet; an empty list says exactly that.
     params: [],
     payment: {
-      rail: "x402",
-      scheme: "exact",
-      network: toCaip2(chain),
-      networkLabel: describeNetwork(chain),
+      rail: onTempo ? "mpp" : "x402",
+      scheme: onTempo ? "charge" : "exact",
+      network: payNetwork?.caip2 ?? toCaip2(chain),
+      networkLabel: payNetwork?.label ?? describeNetwork(chain),
       asset: row.assets?.[0] ?? "USDC",
       price:
         typeof row.price?.usd === "number"
@@ -612,10 +670,37 @@ function fromIndexRow(row: IndexRow): ServiceListing {
     lastSeenLive: row.last_seen_live,
     testnet,
     actionable: false,
-    notActionableReason: payable
-      ? "the index does not yet record the request parameters this service needs"
-      : "mainnet network not supported in this release",
+    notActionableReason: !secure
+      ? endpoint === undefined
+        ? "the index records no usable endpoint for this service"
+        : "the endpoint is not https, so a payment credential would travel in the clear"
+      : routes.pay
+        ? "the index does not yet record the request parameters this service needs"
+        : !testnet
+          ? `mainnet only (${describeOffer(rails, chains)}); this client pays on testnets only`
+          : routes.budget.length > 0
+            ? `\`superstables pay\` does not pay ${describeOffer(rails, chains)}; a \`superstables budget\` rail could`
+            : `this client does not pay ${describeOffer(rails, chains)}`,
+    rails,
+    chains,
+    // routes, with `pay` off where the endpoint cannot carry a credential safely. This is the field
+    // the CLI gates a payment on, so it is where the rule belongs.
+    routes: secure ? routes : { ...routes, pay: false },
   };
+}
+
+/**
+ * What a listing offers, in the client's own words: only the rail and chain names the client knows are repeated, and
+ * the rest are counted, never quoted, because this text goes into the client's sentence about the listing.
+ */
+function describeOffer(rails: string[], chains: string[]): string {
+  const name = (known: string[], others: number, one: string, none: string) =>
+    known.length === 0 && others === 0
+      ? none
+      : [...known, ...(others > 0 ? [`${others} other ${one}${others === 1 ? "" : "s"}`] : [])].join(", ");
+  const knownRails = rails.filter(isKnownRail);
+  const knownChains = chains.filter(isKnownChainName);
+  return `${name(knownRails, rails.length - knownRails.length, "protocol", "an unnamed protocol")} on ${name(knownChains, chains.length - knownChains.length, "chain", "no named chain")}`;
 }
 
 function message(err: unknown): string {

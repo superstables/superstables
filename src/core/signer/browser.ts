@@ -5,19 +5,21 @@
 //
 // Like every signer here, this one holds no key and can approve nothing. What it adds is the
 // two checks that happen before a person is ever asked: the requirement must be one this
-// client can pay at all (termsFor), and the owner's own spend policy must allow it. Only then
-// does an approval exist, and only then is there a link to open.
+// client can pay at all (the rail's own judging, src/core/rails/), and the owner's own spend
+// policy must allow it. Only then does an approval exist, and only then is there a link to
+// open. What the wallet is then asked to do is the rail's: sign an EIP-3009 authorization
+// (EVM), send a pathUSD transfer (Tempo), or sign a token transfer (Solana).
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_NETWORK, networkFor, usdcBalance } from "../chain.js";
-import { DEFAULT_APPROVE_PORT, browserWalletPath, ensureDir, homeDir, policyPath, recordsDir } from "../home.js";
+import { DEFAULT_NETWORK, networkFor, usdcBalance, type Rail } from "../chain.js";
+import { browserWalletPath, ensureDir, homeDir, policyPath, recordsDir } from "../home.js";
 import { evaluatePolicy, formatMoney, loadPolicy, type Policy } from "../policy.js";
 import { Records } from "../records.js";
+import { judgeSignRequest } from "../rails/index.js";
 import type { VerifiedTerms, WalletStatus } from "../types.js";
-import { termsFor, type RawAccept } from "../x402.js";
 import { ApprovalServer } from "./approval-server.js";
-import { SignRefused, type SignHooks, type SignRequest, type SignResult, type Signer } from "./types.js";
+import { SignRefused, type Eip3009SignRequest, type Eip3009SignResult, type SignHooks, type SignRequest, type SignResult, type Signer } from "./types.js";
 
 /** How long an approval page waits for the person before the request expires. */
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -27,8 +29,14 @@ const BALANCE_TIMEOUT_MS = 5_000;
 const APPROVAL_MODE = "ask-every-payment" as const;
 
 export interface BrowserWalletSignerOptions {
-  /** 0 picks a free port (tests). Defaults to DEFAULT_APPROVE_PORT. */
+  /**
+   * A port somebody chose (SUPERSTABLES_APPROVE_PORT), kept as chosen even when it is busy; 0
+   * picks a free port (tests). Leave it out for DEFAULT_APPROVE_PORT, or a free port when
+   * another payment is already waiting on that one.
+   */
   port?: number;
+  /** The port to try first when none was chosen. Defaults to DEFAULT_APPROVE_PORT. */
+  preferredPort?: number;
   /** How long the person has to open the link and sign. */
   timeoutMs?: number;
   /** The owner's policy. Defaults to the policy file, or the built-in defaults. */
@@ -42,10 +50,19 @@ export interface BrowserWalletSignerOptions {
 interface RememberedAccount {
   address: string;
   connectedAt: string;
+  /** The Solana account, when one has paid here: a Solana wallet is a different account from the EVM one above. */
+  solana?: { address: string; connectedAt: string };
 }
+
+/** Which remembered account pays on a rail: the EVM one on EVM chains and Tempo, the Solana one on Solana. */
+const accountKind = (rail: Rail): "evm" | "solana" => (rail === "solana" ? "solana" : "evm");
 
 export class BrowserWalletSigner implements Signer {
   readonly kind = "browser" as const;
+
+  get approvalWindowMs(): number {
+    return this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  }
 
   private readonly options: BrowserWalletSignerOptions;
   private readonly server: ApprovalServer;
@@ -59,9 +76,10 @@ export class BrowserWalletSigner implements Signer {
     const dir = options.home ? join(options.home, "records") : recordsDir();
     this.records = new Records(dir);
     this.server = new ApprovalServer({
-      port: options.port ?? DEFAULT_APPROVE_PORT,
+      port: options.port,
+      preferredPort: options.preferredPort,
       recordsDirPath: dir,
-      onAccount: (address) => this.remember(address),
+      onAccount: (address, network) => this.remember(address, network),
     });
     this.remembered = this.readRemembered();
   }
@@ -69,6 +87,11 @@ export class BrowserWalletSigner implements Signer {
   /** Where the approval pages live. Empty until the server has been started. */
   get url(): string {
     return this.server.port === 0 ? "" : this.server.url;
+  }
+
+  /** The default port, when it was busy and the page took a free one instead. */
+  get movedFrom(): number | undefined {
+    return this.server.movedFrom;
   }
 
   /** Bind the approval server. Called for you on the first sign(); safe to call twice. */
@@ -86,18 +109,25 @@ export class BrowserWalletSigner implements Signer {
    * payer on a quote.
    */
   async address(network: string): Promise<string> {
-    if (network && !networkFor(network)) throw new Error(`no identity on ${network}`);
-    const remembered = this.remembered ?? this.readRemembered();
-    if (!remembered) {
+    const known = network ? networkFor(network) : DEFAULT_NETWORK;
+    if (!known) throw new Error(`no identity on ${network}`);
+    const address = this.rememberedOn(known.rail);
+    if (!address) {
       throw new Error("no browser wallet connected yet: the account is chosen when you open the approval link");
     }
-    return remembered.address;
+    return address;
+  }
+
+  /** The account a browser wallet last paid with on this rail. */
+  private rememberedOn(rail: Rail): string | undefined {
+    const remembered = this.remembered ?? this.readRemembered();
+    return accountKind(rail) === "solana" ? remembered?.solana?.address : remembered?.address;
   }
 
   /** What this signer says about itself. It never throws: there is nothing here to be down. */
   async status(): Promise<WalletStatus> {
     const policy = this.policy();
-    const address = (this.remembered ?? this.readRemembered())?.address;
+    const address = this.rememberedOn("evm") || undefined;
     return {
       mode: "browser",
       address,
@@ -123,27 +153,26 @@ export class BrowserWalletSigner implements Signer {
    * every other ending is a SignRefused carrying the reason, because "they said no" and "the
    * policy would not allow it" are answers an agent should repeat, not errors to guess at.
    */
+  sign(req: Eip3009SignRequest, hooks?: SignHooks): Promise<Eip3009SignResult>;
+  sign(req: SignRequest, hooks?: SignHooks): Promise<SignResult>;
   async sign(req: SignRequest, hooks?: SignHooks): Promise<SignResult> {
-    if (req.kind !== "eip3009") {
-      throw new SignRefused("invalid", `this signer signs eip3009 authorizations, not "${String(req.kind)}"`);
-    }
-    if (!req.requirements || typeof req.requirements !== "object") {
-      throw new SignRefused("invalid", "the request carried no payment requirement to check");
-    }
-    const version: 1 | 2 = req.x402Version === 1 ? 1 : 2;
-
-    // The single source of truth for what the page shows and for what gets signed.
-    const judged = termsFor(req.requirements as RawAccept, version);
+    // The single source of truth for what the page shows and for what the wallet is asked: the rail's own judging of
+    // the seller's requirement, never the caller's account of it.
+    const judged = judgeSignRequest(req);
     if (!judged.supported) throw new SignRefused("invalid", judged.reason);
+    const { terms, requirement } = judged.offer;
+    const network = networkFor(terms.network);
+    if (!network) throw new SignRefused("invalid", `${terms.networkLabel} is not a chain this client knows`);
 
     const policy = this.policy();
     const verdict = evaluatePolicy(policy, {
       domain: policyDomain(req.context?.target),
-      amountDecimal: judged.terms.amountDecimal,
-      asset: judged.terms.asset,
+      amountDecimal: terms.amountDecimal,
+      asset: terms.asset,
       // What this machine has already paid today, from its own receipts: the per-day cap is
       // checked again here, at the gate, and not only when the quote was taken.
-      spentTodayDecimal: this.records.spentToday(judged.terms.asset),
+      // The attempt being signed has already reserved its amount (pay.ts): it is left out, so it does not count twice.
+      spentTodayDecimal: this.records.spentToday(terms.asset, new Date(), { exclude: req.context?.attemptId }),
     });
     // A payment the owner's policy refuses never becomes an approval: nobody is asked, and
     // there is no link to open.
@@ -151,23 +180,34 @@ export class BrowserWalletSigner implements Signer {
       throw new SignRefused("policy", verdict.reason ?? "the owner's spend policy refuses this payment");
     }
 
-    await this.start();
-    const verified: VerifiedTerms = {
-      ...judged.terms,
-      payer: (this.remembered ?? this.readRemembered())?.address ?? "",
-    };
+    try {
+      await this.start();
+    } catch (err) {
+      // Nobody has been asked and there is no link: a refusal the caller can act on, not a
+      // crash, and one that leaves the quote usable.
+      throw new SignRefused("approval_page", err instanceof Error ? err.message : String(err));
+    }
+    // Last word before the page exists: the page's start may have taken long enough for the caller's cap reservation
+    // to lapse (pay.ts renews it, or refuses).
+    await hooks?.beforeAsk?.();
+    const verified: VerifiedTerms = { ...terms, payer: this.rememberedOn(network.rail) ?? "" };
     const approval = this.server.request({
+      kind: req.kind,
       verified,
       reported: req.context,
-      requirement: judged.requirement,
-      x402Version: version,
+      requirement,
+      x402Version: req.kind === "eip3009" && req.x402Version === 1 ? 1 : 2,
       timeoutMs: this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      ...(hooks?.beforeWalletSends ? { beforeWalletSends: hooks.beforeWalletSends } : {}),
     });
     hooks?.onPending?.(approval.id, approval.url);
 
     const outcome = await approval.settled;
     if (outcome.status === "signed") return outcome.result;
+    if (outcome.status === "refused") throw new SignRefused(outcome.code, outcome.reason, approval.id);
+    if (outcome.status === "unknown") throw new SignRefused("unknown", outcome.reason, approval.id);
     if (outcome.status === "expired") throw new SignRefused("expired", outcome.reason, approval.id);
+    if (outcome.status === "abandoned") throw new SignRefused("abandoned", outcome.reason, approval.id);
     throw new SignRefused("denied", outcome.reason, approval.id);
   }
 
@@ -204,8 +244,14 @@ export class BrowserWalletSigner implements Signer {
   }
 
   /** The account is a name, not a secret — but it is still nobody else's business. */
-  private remember(address: string): void {
-    const record: RememberedAccount = { address, connectedAt: new Date().toISOString() };
+  private remember(address: string, network: string): void {
+    const rail = networkFor(network)?.rail ?? "evm";
+    const now = new Date().toISOString();
+    const previous = this.remembered ?? this.readRemembered();
+    const record: RememberedAccount =
+      accountKind(rail) === "solana"
+        ? { address: previous?.address ?? "", connectedAt: previous?.connectedAt ?? now, solana: { address, connectedAt: now } }
+        : { address, connectedAt: now, ...(previous?.solana ? { solana: previous.solana } : {}) };
     this.remembered = record;
     try {
       ensureDir(this.home);

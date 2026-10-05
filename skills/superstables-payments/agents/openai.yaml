@@ -1,0 +1,5 @@
+interface:
+  display_name: "Superstables payments"
+  short_description: "Find paid services, price them without paying, and pay them on testnets with the superstables CLI: one purchase the owner approves (on superstables.com or this machine), or from an on-chain budget the owner grants once"
+policy:
+  allow_implicit_invocation: true

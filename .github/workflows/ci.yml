@@ -1,9 +1,13 @@
-# Release candidate pushes to main are type-checked, tested, built and packed. The bundle is built in
-# CI and not only at release time, because a manifest that no longer matches the code is a
-# failure people only notice when they try to install it.
+# Release candidate pushes to main are type-checked, tested and built, and the skill zip is built and
+# run on its own.
+# It runs only in the private repo; the public copy of this file never starts a job.
 #
 # The tests never reach the network (they stand up their own servers on loopback), so CI needs
 # no keys, no funded wallet and no facilitator.
+#
+# The install job installs the client the five ways people do (the packed tarball, a global
+# install, a checkout, a checkout without dev packages, a git URL) and runs it, with scripts/install-check.mjs. Its
+# `budget doctor` reads a public testnet RPC; everything else stays local.
 
 name: CI
 
@@ -16,12 +20,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-release
+  # a dispatch on another ref skips its jobs, so it must not cancel the release candidate's run
+  group: ${{ github.ref == 'refs/heads/main' && 'ci-release' || format('ci-{0}', github.run_id) }}
   cancel-in-progress: true
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
+    if: github.event.repository.private && github.ref == 'refs/heads/main'
     name: Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
     timeout-minutes: 15
@@ -44,19 +49,51 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      # The runner's service may use 2 CPUs and 4 GB, but vitest sizes its pool by the machine's cores.
+      # Two workers and longer timeouts keep the tests that start the CLI as a process from timing out.
+      # The tests write their temporary homes and checkouts to TMPDIR. On the runner /tmp is a small
+      # tmpfs shared with everything else on the machine; the job's own temp folder is on disk.
       - name: Test
-        run: npm test
+        run: npm test -- --maxWorkers=2 --minWorkers=1 --testTimeout=60000 --hookTimeout=60000
+        env:
+          TMPDIR: ${{ runner.temp }}
 
       - name: Build
         run: npm run build
 
-      - name: Bundle
-        run: npm run bundle
+      # docs/cli.md and docs/cli-budget.md are the commands' --help; this fails when they drift.
+      - name: CLI reference matches the help
+        run: npm run docs:cli -- --check
 
-      - name: Upload the bundle
-        uses: actions/upload-artifact@v4
+      # The skill zip, unpacked outside the checkout and run with node alone. `find` reads the
+      # hosted catalogue, the one step here that needs the network.
+      - name: Skill zip
+        run: npm run skill && npm run skill:check
+        env:
+          TMPDIR: ${{ runner.temp }}
+
+  install:
+    if: github.event.repository.private && github.ref == 'refs/heads/main'
+    name: Install routes, Node ${{ matrix.node }}
+    runs-on: [self-hosted, Linux, X64, superstables-ci]
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          name: superstables-mcpb-node${{ matrix.node }}
-          path: build/*.mcpb
-          if-no-files-found: error
-          retention-days: 3
+          persist-credentials: false
+          # the git route clones this checkout, and the build stamps the commit count
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install five ways and run
+        run: node scripts/install-check.mjs
+        env:
+          TMPDIR: ${{ runner.temp }}

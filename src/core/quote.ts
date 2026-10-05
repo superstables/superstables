@@ -5,9 +5,11 @@
 // Everything a quote records comes from the seller's own requirement; nothing is inferred
 // from the seller's self-declared resource URL, which the seller could write anything in.
 
-import { detect, termsFor, type Challenge, type RawAccept } from "./x402.js";
-import { describeNetwork } from "./chain.js";
-import { evaluatePolicy, type Policy } from "./policy.js";
+import { detectPayment, type SellerChallenge } from "./x402.js";
+import { judgeOffers } from "./rails/index.js";
+import type { Offer } from "./rails/types.js";
+import { SellerTextError } from "./text.js";
+import { evaluatePolicy, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
 import { Records } from "./records.js";
 import type { Quote, ResolvedRequest, ServiceListing } from "./types.js";
@@ -26,24 +28,25 @@ export interface QuoteDeps {
 
 /**
  * Ask a paid endpoint what it wants, judge it, and write the answer down.
- * Throws when the endpoint is not a paid x402 endpoint, or when nothing it offers can be
+ * Throws when the endpoint is not a paid endpoint (x402 or MPP), or when nothing it offers can be
  * paid by this client. A policy refusal is not a throw: it is recorded on the quote, so a
  * caller can show the owner what was asked for and why it was refused.
  */
 export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> {
   const { url, request, service } = resolveTarget(input);
 
-  const challenge: Challenge = await detect(url);
+  const challenge: SellerChallenge = await detectPayment(url);
   const chosen = firstSupported(challenge, url);
 
   const asset = chosen.terms.asset;
-  const verdict = evaluatePolicy(deps.policy, {
+  const payment = {
     // The host we chose to call, never the one the seller claims in its challenge.
     domain: hostOf(url),
     amountDecimal: chosen.terms.amountDecimal,
     asset,
     spentTodayDecimal: deps.records.spentToday(asset),
-  });
+  };
+  const verdict = evaluatePolicy(deps.policy, payment);
 
   const now = Date.now();
   const record: Quote = {
@@ -58,7 +61,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
     request,
     terms: chosen.terms,
     requirement: chosen.requirement,
-    policy: { allowed: verdict.allowed, reason: verdict.reason },
+    policy: { allowed: verdict.allowed, reason: verdict.reason, checks: policyChecks(deps.policy, payment) },
     approval: "wallet",
   };
   return deps.records.saveQuote(record);
@@ -90,23 +93,18 @@ function resolveTarget(input: QuoteInput): { url: string; request?: ResolvedRequ
  * when none of them work, say what was offered and why each was refused, because "payment
  * failed" is useless and "it wants mainnet USDC" is actionable.
  */
-function firstSupported(challenge: Challenge, url: string) {
+function firstSupported(challenge: SellerChallenge, url: string): Offer {
   const refusals: string[] = [];
-  for (const accept of challenge.accepts) {
-    const judged = termsFor(accept, challenge.version);
-    if (judged.supported) return judged;
-    refusals.push(`${describeAccept(accept)}: ${judged.reason}`);
+  // The seller's own words in each description are quoted as one bounded line: this sentence reaches an agent as the
+  // client's refusal (rails/index.ts, describeAccept).
+  for (const { offered, judged } of judgeOffers(challenge)) {
+    if (judged.supported) return judged.offer;
+    refusals.push(`${offered}: ${judged.reason}`);
   }
-  throw new Error(
-    `${hostOf(url)} offers no payment this client can make — ${refusals.join("; ")}`,
-  );
-}
-
-function describeAccept(accept: RawAccept): string {
-  const scheme = accept.scheme ?? "exact";
-  const network = describeNetwork(accept.network ?? "unknown network");
-  const asset = accept.extra?.name ?? accept.asset ?? "an unnamed asset";
-  return `${scheme} ${asset} on ${network}`;
+  // A challenge can list any number of offers; the first few say enough.
+  const shown = refusals.slice(0, 5).join("; ") + (refusals.length > 5 ? `; and ${refusals.length - 5} more` : "");
+  // The host is the one this client called; the offers are the seller's words, kept apart as the detail.
+  throw new SellerTextError(`${hostOf(url)} offers no payment this client can make`, shown);
 }
 
 function hostOf(url: string): string {

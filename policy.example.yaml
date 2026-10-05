@@ -6,6 +6,6 @@ caps:
   per_day: 1 USDC       # the most all payments may add up to in one UTC day
 allow: []               # hostname patterns; empty = any host
 deny: []                # e.g. ["*.example.net"]
-stablecoins: [USDC]     # the only asset this release pays in
+stablecoins: [USDC, pathUSD]  # allowed assets; the caps count USDC and pathUSD together, one for one
 approval: ask-every-payment   # the wallet asks the owner before every payment
 # kill_switch: true     # refuse everything

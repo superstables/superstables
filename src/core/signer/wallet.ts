@@ -5,9 +5,9 @@
 
 import { readFileSync } from "node:fs";
 import { agentTokenPath, walletUrl } from "../home.js";
-import { networkFor, toCaip2 } from "../chain.js";
+import { evmNetworkFor, networkFor } from "../chain.js";
 import type { WalletRequestView, WalletStatus } from "../types.js";
-import { SignRefused, type SignHooks, type SignRequest, type SignResult, type Signer } from "./types.js";
+import { LOCAL_WALLET_EVM_ONLY, SignRefused, type Eip3009SignResult, type SignHooks, type SignRequest, type Signer } from "./types.js";
 
 export interface WalletSignerOptions {
   /** Where the wallet is listening. Loopback only in this release. */
@@ -94,6 +94,10 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
 export class WalletSigner implements Signer {
   readonly kind = "wallet" as const;
 
+  get approvalWindowMs(): number {
+    return this.timeoutMs;
+  }
+
   private readonly wire: WalletWire;
   private readonly pollMs: number;
   private readonly timeoutMs: number;
@@ -112,10 +116,15 @@ export class WalletSigner implements Signer {
     return walletRequest<WalletStatus>(this.wire, "GET", "/status");
   }
 
-  /** The address that would pay on this network, as the wallet reports it. */
+  /**
+   * The address that would pay on this network, as the wallet reports it. The wallet holds one EVM key, and an
+   * EIP-3009 signature is the same on every EVM chain, so it pays on each of them; on Tempo and Solana it does not pay.
+   */
   async address(network: string): Promise<string> {
+    const known = networkFor(network);
+    if (known && !evmNetworkFor(network)) throw new Error(LOCAL_WALLET_EVM_ONLY);
     const answer = await walletRequest<{ address: string; network: string }>(this.wire, "GET", "/address");
-    if (networkFor(network) && toCaip2(answer.network) !== toCaip2(network)) {
+    if (known && !evmNetworkFor(answer.network)) {
       throw new Error(`the wallet has no identity on ${network} (it is set up for ${answer.network})`);
     }
     return answer.address;
@@ -126,7 +135,11 @@ export class WalletSigner implements Signer {
    * signed; every other ending throws SignRefused with the reason the owner (or the wallet's
    * own policy) gave.
    */
-  async sign(req: SignRequest, hooks?: SignHooks): Promise<SignResult> {
+  async sign(req: SignRequest, hooks?: SignHooks): Promise<Eip3009SignResult> {
+    // The local wallet signs EIP-3009 only: a payment the owner's wallet must send (Tempo) or a Solana key must sign is
+    // refused here, before anyone is asked.
+    if (req.kind !== "eip3009") throw new SignRefused("invalid", LOCAL_WALLET_EVM_ONLY);
+    await hooks?.beforeAsk?.();
     const deadline = Date.now() + this.timeoutMs;
     let view = await walletRequest<WalletRequestView>(this.wire, "POST", "/requests", { sign: req });
 

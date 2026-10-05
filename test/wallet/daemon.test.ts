@@ -6,15 +6,17 @@
 // requirement and not from the agent's description of it, an agent token cannot approve, and a
 // refusal leaves nothing signed.
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { request } from "node:http";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { afterEach, describe, expect, it } from "vitest";
-import { BASE_SEPOLIA, usdcRequirement } from "../../src/core/chain.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ARBITRUM_SEPOLIA, BASE_SEPOLIA, usdcRequirement } from "../../src/core/chain.js";
 import type { Policy } from "../../src/core/policy.js";
 import type { WalletRequestView, WalletStatus } from "../../src/core/types.js";
-import { startWallet, type StartWalletOptions, type WalletHandle } from "../../src/wallet/daemon.js";
+import { defaultLauncherDir, startWallet, writeOwnerLauncher, type StartWalletOptions, type WalletHandle } from "../../src/wallet/daemon.js";
 
 const PAYEE = "0x2222222222222222222222222222222222222222";
 
@@ -48,6 +50,8 @@ async function startTestWallet(overrides: Partial<StartWalletOptions> = {}): Pro
     openBrowser: false,
     // The status route must never reach an RPC in a unit test.
     balance: false,
+    // never the real ~/Superstables-wallet-open
+    launcherDir: join(dir, "Superstables-wallet-open"),
     ...overrides,
   });
   const entry = { wallet, dir, privateKey };
@@ -98,6 +102,198 @@ const auditLines = (dir: string): Record<string, any>[] =>
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** The pid of a process that has exited. */
+function deadPid(): number {
+  const pid = spawnSync(process.execPath, ["-e", ""]).pid;
+  expect(pid).toBeGreaterThan(0);
+  return pid!;
+}
+
+describe("the owner secret leaves the wallet only through a file only the owner can read", () => {
+  /** Starts a wallet that prints and opens as `wallet serve` does, with everything it prints and opens captured. */
+  async function startLoudWallet(overrides: Partial<StartWalletOptions> = {}) {
+    const printed: string[] = [];
+    const capture = (...args: unknown[]) => void printed.push(args.map(String).join(" "));
+    const spies = [
+      vi.spyOn(console, "log").mockImplementation(capture),
+      vi.spyOn(console, "error").mockImplementation(capture),
+      vi.spyOn(console, "warn").mockImplementation(capture),
+    ];
+    const opened: string[] = [];
+    try {
+      const entry = await startTestWallet({ quiet: false, openBrowser: true, opener: (target) => void opened.push(target), ...overrides });
+      return { ...entry, launcherDir: join(entry.dir, "Superstables-wallet-open"), printed, opened };
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  }
+
+  it("is in ~/Superstables-wallet-open by default: not hidden, so a browser installed as a Snap can open it", () => {
+    expect(defaultLauncherDir()).toBe(join(homedir(), "Superstables-wallet-open"));
+  });
+
+  it("prints no secret and hands the opener only the path of a 0600 launcher in a 0700 folder", async () => {
+    const { wallet, dir, launcherDir, printed, opened } = await startLoudWallet();
+    expect(printed.join("\n")).not.toContain(wallet.ownerSecret);
+    expect(printed.join("\n")).toContain(`${wallet.url}/ (it asks for the owner secret)`);
+    expect(printed.join("\n")).toContain(join(dir, "owner-secret"));
+    expect(opened).toEqual([wallet.launcherPath]);
+    expect(opened.join(" ")).not.toContain(wallet.ownerSecret);
+    const launcher = wallet.launcherPath!;
+    expect(launcher.startsWith(launcherDir + "/")).toBe(true);
+    expect(statSync(launcher).mode & 0o777).toBe(0o600);
+    expect(statSync(launcherDir).mode & 0o777).toBe(0o700);
+    // the launcher sends the browser to the page with the secret in the fragment, which is never sent to the server
+    expect(readFileSync(launcher, "utf8")).toContain(`location.replace("${wallet.url}/#${wallet.ownerSecret}")`);
+  });
+
+  it("deletes the launcher, and its folder, once the page signs in with the owner secret, not before", async () => {
+    const { wallet, launcherDir } = await startLoudWallet();
+    const launcher = wallet.launcherPath!;
+    const target = /location\.replace\("([^"]+)"\)/.exec(readFileSync(launcher, "utf8"))![1];
+    const secret = new URL(target).hash.slice(1);
+    // the page itself carries no secret, and an agent's request does not count as the owner signing in
+    expect((await fetch(new URL(target).origin + "/")).status).toBe(200);
+    expect((await call(wallet, "/status", wallet.agentToken)).status).toBe(200);
+    expect(existsSync(launcher)).toBe(true);
+    // what the page does with the fragment: the owner's list, with the secret as a bearer token
+    expect((await call(wallet, "/owner/requests", secret)).status).toBe(200);
+    expect(existsSync(launcher)).toBe(false);
+    expect(wallet.launcherPath).toBeUndefined();
+    // nothing lingers in the home folder
+    expect(existsSync(launcherDir)).toBe(false);
+  });
+
+  it("deletes the launcher when the wallet stops, and clears launchers an earlier run left behind", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "superstables-wallet-test-"));
+    const launcherDir = join(dir, "Superstables-wallet-open");
+    mkdirSync(launcherDir, { mode: 0o700 });
+    chmodSync(launcherDir, 0o700);
+    // a launcher whose wallet process is gone
+    const stale = join(launcherDir, `owner-${deadPid()}-00112233445566778899aabbccddeeff.html`);
+    writeFileSync(stale, "old", { mode: 0o600 });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const wallet = await startWallet({
+      port: 0, dir, launcherDir, account: privateKeyToAccount(generatePrivateKey()), policy: TEST_POLICY, quiet: false, openBrowser: false, balance: false,
+    });
+    spy.mockRestore();
+    expect(existsSync(stale)).toBe(false);
+    const launcher = wallet.launcherPath!;
+    expect(existsSync(launcher)).toBe(true);
+    await wallet.close();
+    expect(existsSync(launcher)).toBe(false);
+    expect(existsSync(launcherDir)).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("leaves the launcher of another wallet that is still running", async () => {
+    const shared = join(mkdtempSync(join(tmpdir(), "superstables-launcher-test-")), "Superstables-wallet-open");
+    try {
+      const first = await startLoudWallet({ launcherDir: shared });
+      // a launcher of a live process that is not this one: the parent of this test runner
+      const other = join(shared, `owner-${process.ppid}-ffeeddccbbaa99887766554433221100.html`);
+      writeFileSync(other, "theirs", { mode: 0o600 });
+      const second = await startLoudWallet({ launcherDir: shared });
+      expect(existsSync(first.wallet.launcherPath!)).toBe(true);
+      expect(existsSync(second.wallet.launcherPath!)).toBe(true);
+      expect(existsSync(other)).toBe(true);
+      await second.wallet.close();
+      expect(existsSync(first.wallet.launcherPath!)).toBe(true);
+      rmSync(other);
+    } finally {
+      rmSync(dirname(shared), { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a half-written launcher it could not delete, and deletes it at close", async () => {
+    const eio = () => {
+      throw Object.assign(new Error("EIO: i/o error, fsync"), { code: "EIO" });
+    };
+    const eacces = () => {
+      throw Object.assign(new Error("EACCES: permission denied, unlink"), { code: "EACCES" });
+    };
+    const { wallet, launcherDir, printed, opened } = await startLoudWallet({
+      launcherIo: { fsyncSync: eio as unknown as typeof import("node:fs").fsyncSync, unlinkSync: eacces as unknown as typeof import("node:fs").unlinkSync },
+    });
+    const leftover = wallet.launcherPath!;
+    expect(leftover.startsWith(launcherDir + "/")).toBe(true);
+    expect(existsSync(leftover)).toBe(true);
+    // not offered as a launcher: the page opens bare and asks for the secret
+    expect(opened).toEqual([`${wallet.url}/`]);
+    expect(printed.join("\n")).toMatch(/no launcher \(EIO/);
+    expect(printed.join("\n")).not.toContain(leftover);
+    await wallet.close();
+    expect(existsSync(leftover)).toBe(false);
+    expect(existsSync(launcherDir)).toBe(false);
+  });
+
+  it("keeps the launcher's path when deleting it fails, says so, and deletes it at close", async () => {
+    const { wallet, launcherDir, printed } = await startLoudWallet();
+    const launcher = wallet.launcherPath!;
+    chmodSync(launcherDir, 0o500); // EACCES on unlink
+    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void printed.push(a.map(String).join(" ")));
+    try {
+      expect((await call(wallet, "/owner/requests", wallet.ownerSecret)).status).toBe(200);
+    } finally {
+      spy.mockRestore();
+      chmodSync(launcherDir, 0o700);
+    }
+    expect(existsSync(launcher)).toBe(true);
+    expect(wallet.launcherPath).toBe(launcher);
+    expect(printed.join("\n")).toMatch(/could not delete the page launcher .*EACCES/);
+    await wallet.close();
+    expect(existsSync(launcher)).toBe(false);
+  });
+
+  it("refuses a launcher folder that is a symlink, has another mode, or is a file, and falls back to the bare page", async () => {
+    const base = mkdtempSync(join(tmpdir(), "superstables-launcher-test-"));
+    try {
+      const real = join(base, "real");
+      mkdirSync(real, { mode: 0o700 });
+      chmodSync(real, 0o700);
+      const link = join(base, "link");
+      symlinkSync(real, link);
+      const loose = join(base, "loose");
+      mkdirSync(loose, { mode: 0o755 });
+      chmodSync(loose, 0o755);
+      const file = join(base, "file");
+      writeFileSync(file, "");
+      for (const [launcherDir, why] of [[link, /is a symlink/], [loose, /has mode 755, not 700/], [file, /is not a folder/]] as const) {
+        const { wallet, printed, opened } = await startLoudWallet({ launcherDir });
+        expect(wallet.launcherPath).toBeUndefined();
+        expect(printed.join("\n")).toMatch(why);
+        expect(printed.join("\n")).toContain("open the page and paste the secret");
+        // the browser still gets the page, without the secret
+        expect(opened).toEqual([`${wallet.url}/`]);
+      }
+      expect(readdirSync(real)).toEqual([]);
+      expect(statSync(loose).mode & 0o777).toBe(0o755);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a launcher that could not be written in full", () => {
+    const base = mkdtempSync(join(tmpdir(), "superstables-launcher-test-"));
+    try {
+      const launcherDir = join(base, "Superstables-wallet-open");
+      const failing = (() => {
+        throw Object.assign(new Error("EIO: i/o error, fsync"), { code: "EIO" });
+      }) as unknown as typeof import("node:fs").fsyncSync;
+      expect(() => writeOwnerLauncher(launcherDir, "http://127.0.0.1:1/#secret", { fsyncSync: failing })).toThrow(/EIO/);
+      expect(existsSync(launcherDir)).toBe(false);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("writes no launcher when it prints nothing and opens nothing", async () => {
+    const { wallet, dir } = await startTestWallet();
+    expect(wallet.launcherPath).toBeUndefined();
+    expect(existsSync(join(dir, "Superstables-wallet-open"))).toBe(false);
+  });
+});
+
 describe("wallet credentials", () => {
   it("answers 401 without a token, and with the wrong one", async () => {
     const { wallet } = await startTestWallet();
@@ -122,7 +318,30 @@ describe("wallet credentials", () => {
     const res = await fetch(wallet.url + "/");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
-    expect(await res.text()).toContain("Superstables wallet");
+    expect(await res.text()).toContain("Payment approvals");
+  });
+
+  it("answers only to the host it is bound to, and is not framed", async () => {
+    const { wallet } = await startTestWallet();
+    // A page under a DNS name resolving to 127.0.0.1 must not reach this one: under --wallet local this
+    // page is the whole surface, with no wallet prompt to contradict what it shows. `fetch` will not let a
+    // caller set Host, which is half the point, so this goes out as a raw request.
+    const raw = (host: string, path: string) =>
+      new Promise<number>((resolve) => {
+        const req = request({ host: "127.0.0.1", port: wallet.port, path, method: "GET", headers: { host } }, (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        req.on("error", () => resolve(0));
+        req.end();
+      });
+    expect(await raw("evil.example", "/")).toBe(421);
+    expect(await raw("localhost.example", "/status")).toBe(421);
+    expect(await raw(`127.0.0.1:${wallet.port}`, "/")).toBe(200);
+    expect(await raw(`localhost:${wallet.port}`, "/")).toBe(200);
+    const own = await fetch(wallet.url + "/");
+    expect(own.headers.get("x-frame-options")).toBe("DENY");
+    expect(own.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
   });
 });
 
@@ -245,7 +464,7 @@ describe("requests the wallet rejects before the owner sees them", () => {
         amount: "10000",
         payTo: PAYEE,
       },
-      reason: /network .* is not supported/i,
+      reason: /chain .* is not supported/i,
     },
     {
       name: "another asset",
@@ -313,6 +532,31 @@ describe("requests the wallet rejects before the owner sees them", () => {
     const rejected = (await res.json()) as WalletRequestView;
     expect(rejected.status).toBe("rejected");
     expect(rejected.reason).toContain("eip3009");
+  });
+
+  it("sends a Tempo or Solana payment to the approval page in a browser wallet, and signs nothing", async () => {
+    const { wallet } = await startTestWallet();
+    for (const sign of [
+      { kind: "tempo-transfer", challenge: { id: "c", realm: "r", method: "tempo", intent: "charge", request: {} } },
+      { kind: "solana-transaction", requirements: { ...usdcRequirement(0.01, PAYEE), network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1" }, x402Version: 2 },
+    ]) {
+      const res = await call(wallet, "/requests", wallet.agentToken, "POST", { sign });
+      const rejected = (await res.json()) as WalletRequestView;
+      expect(rejected.status, sign.kind).toBe("rejected");
+      expect(rejected.reason, sign.kind).toBe("the local wallet signs x402 payments on EVM chains only; to pay on Tempo Moderato or Solana devnet, take a new quote and pay it in a browser wallet on your machine: `superstables --wallet browser pay <new-quote-id>`");
+    }
+  });
+});
+
+describe("the EVM chains the local wallet signs on", () => {
+  it("takes a payment on Arbitrum Sepolia in its own USDC, and refuses one on Arbitrum One", async () => {
+    const { wallet } = await startTestWallet();
+    const pending = await ask(wallet, usdcRequirement(0.01, PAYEE, ARBITRUM_SEPOLIA) as unknown as Record<string, unknown>, { target: "https://service.example/thing" });
+    expect(pending.status).toBe("pending");
+    expect(pending.verified).toMatchObject({ network: "eip155:421614", networkLabel: "Arbitrum Sepolia (testnet)", assetAddress: ARBITRUM_SEPOLIA.usdc.address });
+    const mainnet = await ask(wallet, { ...usdcRequirement(0.01, PAYEE, ARBITRUM_SEPOLIA), network: "eip155:42161" } as unknown as Record<string, unknown>);
+    expect(mainnet.status).toBe("rejected");
+    expect(mainnet.reason).toContain("it is a mainnet");
   });
 });
 
