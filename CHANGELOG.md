@@ -7,7 +7,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.0]
+## [0.3.0] - Agent budgets and single purchases
 
 Give an agent a budget. You approve a spending limit once, in your own wallet, and the agent then buys compatible services within it without asking you each time. You can revoke the budget by signing a transaction in your wallet. Budgets work on eight chains, and you can approve them on your machine or on superstables.com. Single purchase, where you approve one purchase in your wallet, now works on superstables.com as well as on your machine. This release also adds a standalone agent skill.
 
@@ -47,19 +47,11 @@ Testnet support only. Mainnet chains are refused.
 - Paying a quote that already has an attempt returns that attempt's state and how to follow it.
 - **Single purchase on superstables.com (`buy-once`):** when a purchase no longer needs action from the owner but its payment outcome is not known, `wait` and a blocking `buy-once` report `unknown` (exit 5), never “waiting for the owner”. A new `buy-once` is refused (exit 3) while that purchase is still open. If the site never ends it, the owner can run `superstables budget wait --id ID --abandon` to mark its local record abandoned so another purchase can start. This doesn't cancel it on the site, and its payment stays unknown.
 
-### Removed
-
-- **The MCP server:** `superstables mcp` and its six tools (`find_services`, `quote`, `pay`, `payment_status`, `wallet_status` and `list_receipts`), with the `SUPERSTABLES_MCP_WAIT_MS` setting. Agents use the `superstables-payments` skill or the CLI instead: `quote`, `pay` and `status` make the same single purchase on your machine. If an agent app is set up to start `superstables mcp`, remove that entry; in Claude Code, run `claude mcp remove superstables`.
-- **The Claude Desktop `.mcpb` bundle** and `npm run bundle`. Existing bundles receive no update.
-- **The TypeScript SDK** is no longer offered as a way to use the client.
-
-MCP and SDK support may return in a later release.
-
 ### Security
 
 The full model is in [docs/security.md](docs/security.md).
 
-- **Requests to superstables.com.** Requests that set up hosted budget approvals are signed and include the site's origin and a one-time value, so a compatible site can refuse a request meant for another site or sent twice. The site for hosted approvals can only be superstables.com, its subdomains or this machine, unless the owner allows another with `SUPERSTABLES_ALLOW_SITE`. Incomplete or mismatched answers from the site are refused, and access tokens are kept out of output.
+- **Requests to superstables.com.** Requests that set up budget approvals on superstables.com are signed and include the site's origin and a one-time value, so a compatible site can refuse a request meant for another site or sent twice. The approval site can only be superstables.com, its subdomains or this machine, unless the owner allows another with `SUPERSTABLES_ALLOW_SITE`. Incomplete or mismatched answers from the site are refused, and access tokens are kept out of output.
 - **Single purchase on superstables.com checks.** The client checks that the amount the site asks you to sign matches the amount it displays and stays within `--max`; still check the request in your wallet. Only one single purchase on superstables.com can be open at a time among processes sharing the same client state. A purchase is reported paid only after the chain shows the expected transfer, amount and recipient; a cancellation that isn't confirmed stays `unknown`.
 - **Outcomes stay honest.** Once the site reports that the owner's wallet was asked, an unfinished outcome is `unknown`, not failed. On Solana, transactions approved on the site are checked against the plan after they are sent; this detects a difference but cannot undo it. A step the site reports as failed, or a reverted owner transaction, is never reported as settled.
 - **Wallet-sponsored owner transactions.** On EVM chains, an owner step sent through a wallet that pays the fee for the owner, such as MetaMask's sponsored transactions, counts only on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy and Ethereum Sepolia. The transaction must go through MetaMask's delegation contract, whose code the client pins. The receipt must contain that contract's record of the redemption, and the chain must show the step's effect. Chain evidence that can't be read is `unknown`; a readable receipt without the required evidence is refused. On SKALE Base Sepolia, only transactions the owner sends directly count.
@@ -74,7 +66,6 @@ The full model is in [docs/security.md](docs/security.md).
 - **Exit codes:** 0 done (or, for `wait`, `buy-once` and owner commands, still waiting with `final: false`), 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 5 unknown. Usage errors now exit 2, and `quote` exits 3 when policy refuses. `pay` and final `status` results use the outcome's code; non-final `status` results exit 0.
 - **`status --json`** returns the same outcome object as `pay --json`, not the stored attempt record. Use `attempts --json` for stored records.
 - **`find --json`** adds payment routes, commands and next steps, and `mock` is always present as `true`, `false` or `null`. Text table columns have changed.
-- **The MCP server is removed** (see Removed): an agent app set up to start `superstables mcp` can no longer connect.
 - **Agents and scripts that read `pay` or `status`** must handle `abandoned` separately from `denied`.
 - **Approval links may use a different port.** Over SSH, forward the port shown in the link, with the same local and remote port number.
 - **`wallet init --import-key` is removed.** Use `--import-key-file` with a private, regular file.
