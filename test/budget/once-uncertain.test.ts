@@ -199,7 +199,7 @@ describe("buy once: an outcome that is not established is unknown, on every rail
     process.env.B4_RPC = rpc;
     let reads = 0;
     // the first read is uncertain (the read-on starts); the next is final and says paid, with a transaction to check
-    answer = () => (++reads === 1 ? ROWS[0].view(id, EVM_HASH, PAYER) : { id, state: "settled", final: true, payment: { status: "paid", transaction: EVM_HASH, payer: PAYER }, delivery: { status: "delivered", http_status: 200, result: { ok: true } } });
+    answer = () => (++reads === 1 ? ROWS[0].view(id, EVM_HASH, PAYER) : { id, state: "settled", final: true, payment: { status: "paid", transaction: EVM_HASH, payer: PAYER, authorization: { nonce: `0x${"9a".repeat(32)}` } }, delivery: { status: "delivered", http_status: 200, result: { ok: true } } });
     try {
       const grace = 2_000;
       const t = Date.now();

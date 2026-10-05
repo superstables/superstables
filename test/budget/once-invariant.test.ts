@@ -384,7 +384,7 @@ describe("buy-once: once payment evidence appears, no outcome says nothing was p
     const other = `0x${"77".repeat(20)}`;
     // the chain shows the payment from PAYER, and the site says paid by PAYER
     site.pay(site.purchases.at(-1)!, { transaction: hash, payer: PAYER });
-    const settled = { id, state: "settled", final: true, payment: { status: "paid", transaction: hash, payer: PAYER }, delivery: { status: "delivered", http_status: 200, result: { ok: true } } };
+    const settled = { id, state: "settled", final: true, payment: { status: "paid", transaction: hash, payer: PAYER, authorization: { nonce: site.purchases.at(-1)?.nonce } }, delivery: { status: "delivered", http_status: 200, result: { ok: true } } };
     queue.read.push(async () => ({ status: 200, body: settled }));
     // after this command verified it and before it stores "paid", another command records another payer for that hash
     once.onceTestHook.beforeFinal = (rid: string) => {
@@ -403,8 +403,8 @@ describe("buy-once: once payment evidence appears, no outcome says nothing was p
   it("a stored paid verdict is re-checked too: another payer named for its transaction later makes it unknown", async () => {
     const record = await fresh();
     const hash = `0x${"4b".repeat(32)}`;
-    once.accumulate(record, { payment: { transaction: hash, payer: PAYER } });
-    approvals.recordFinal(record.id, 0, { ok: true, command: "buy-once", state: "settled", paid: true, delivered: true, amount: "0.01", tx: { settle: hash }, payer: PAYER, next: "none" });
+    site.settle(site.purchases.at(-1)!, { ok: true }, { transaction: hash, payer: PAYER });
+    expect((await once.settleOnce(record, { waitS: 0, fetchImpl })).result.paid).toBe(true);
     // the stored verdict holds while the transaction has that one payer
     expect((await once.settleOnce(record, { waitS: 0, fetchImpl })).result.paid).toBe(true);
     // another answer names a different payer for the same transaction
@@ -418,7 +418,7 @@ describe("buy-once: once payment evidence appears, no outcome says nothing was p
   const LOWER = `0x${"ab".repeat(32)}`;
   const UPPER = `0x${"AB".repeat(32)}`;
   const OTHER = `0x${"77".repeat(20)}`;
-  const settledWith = (id: string, transaction: string, payer: string) => ({ id, state: "settled", final: true, payment: { status: "paid", transaction, payer }, delivery: { status: "delivered", http_status: 200, result: { ok: true } } });
+  const settledWith = (id: string, transaction: string, payer: string) => ({ id, state: "settled", final: true, payment: { status: "paid", transaction, payer, authorization: { nonce: site.purchases.at(-1)?.nonce } }, delivery: { status: "delivered", http_status: 200, result: { ok: true } } });
 
   it("one key per EVM transaction: another payer named for the same hash in other letters, read late, makes it unknown", async () => {
     const record = await fresh();
