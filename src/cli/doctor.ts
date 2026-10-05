@@ -177,7 +177,8 @@ function browserWalletCheck(): Check {
  * already being taken, so the check is to bind it and let it go again.
  */
 async function approvalPageCheck(): Promise<Check> {
-  const port = Number(process.env.SUPERSTABLES_APPROVE_PORT) || DEFAULT_APPROVE_PORT;
+  const configuredPort = Number(process.env.SUPERSTABLES_APPROVE_PORT);
+  const port = Number.isInteger(configuredPort) && configuredPort >= 0 ? configuredPort : DEFAULT_APPROVE_PORT;
   const server = createServer();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -187,10 +188,12 @@ async function approvalPageCheck(): Promise<Check> {
         resolve();
       });
     });
+    const address = server.address();
+    const boundPort = typeof address === "object" && address ? address.port : port;
     return {
       name: "approval page",
       ok: true,
-      detail: `http://127.0.0.1:${port} is free; the agent serves the page itself`,
+      detail: `http://127.0.0.1:${boundPort} is free; the agent serves the page itself`,
       essential: true,
     };
   } catch (err) {
