@@ -1186,8 +1186,8 @@ async function status({ f, ctx }) {
     log(`  Checked the home ${HOME} (${process.env.SUPERSTABLES_HOME?.trim() ? "SUPERSTABLES_HOME" : "SUPERSTABLES_HOME is not set: the default ~/.superstables"}), chain ${f.chain}.`);
     log(`  Looked for: ${gaps.agentKey} and ${gaps.publicFile}.`);
     log(`  ${elsewhere}.`);
-    log(`  The owner sets one up, in this order: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain)}.`);
-    return emit(1, { ...ctx, state: "failed", remaining: null, home: HOME, next: `no budget yet in ${HOME}: the owner runs ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain)}. An agent may start each one and hand the owner the approval link. ${elsewhere}`, reason });
+    log(`  The owner sets one up, in this order: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain, gaps.owner)}.`);
+    return emit(1, { ...ctx, state: "failed", remaining: null, home: HOME, next: `no budget yet in ${HOME}: the owner runs ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain, gaps.owner)}. An agent may start each one and hand the owner the approval link. ${elsewhere}`, reason });
   }
   const owner = recordedOwner(f);
   log(ownerLine(owner));
@@ -1231,7 +1231,7 @@ async function buy({ f, ctx }) {
     const reason = `${noBudgetWords(f, gaps)}. Nothing was signed or paid`;
     log(`superstables budget: refused: ${reason}.`);
     log(`  Looked for: ${gaps.agentKey} and ${gaps.publicFile}.`);
-    return emit(3, { ...ctx, op: f.op, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: `ask the owner to set up a budget: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain)} (an agent may start each one and hand the owner the approval link). Then check with superstables budget status --rail ${f.rail}${chainFlag(f)}`, reason });
+    return emit(3, { ...ctx, op: f.op, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: `ask the owner to set up a budget: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain, gaps.owner)} (an agent may start each one and hand the owner the approval link). Then check with superstables budget status --rail ${f.rail}${chainFlag(f)}`, reason });
   }
   f.op ??= newOp();
   ctx.op = f.op;
