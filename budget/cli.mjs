@@ -1078,8 +1078,8 @@ function normalize(cmd, f, rail, code) {
   const base = { command: cmd, rail: f.rail, chain: f.chain, op: f.op };
   if (!rail) {
     if (code === 2) return { code: 2, fields: { ...base, state: "failed", next: `fix the command; see superstables budget ${cmd} --help`, reason: "the rail script rejected the input" } };
-    const state = cmd === "buy" ? "unknown" : "failed";
-    return { code: exitFor(cmd, state, null), fields: { ...base, state, paid: cmd === "buy" ? null : false, delivered: null, amount: null, remaining: null, tx: {}, next: nextFor(state, null, f, cmd), reason: `the rail script exited ${code} without a RESULT line` } };
+    const state = ["buy", "reconcile"].includes(cmd) ? "unknown" : "failed";
+    return { code: exitFor(cmd, state, null), fields: { ...base, state, paid: state === "unknown" ? null : false, delivered: null, amount: null, remaining: null, tx: {}, next: nextFor(state, null, f, cmd), reason: `the rail script exited ${code} without a RESULT line` } };
   }
   let state = STATES.includes(rail.state) ? rail.state : "unknown";
   if (rail.state === "submitted" || (rail.state === "sent" && ["buy", "reconcile"].includes(cmd))) state = "unknown";
@@ -1278,8 +1278,12 @@ async function buy({ f, ctx }) {
 }
 
 async function reconcile({ f, ctx }) {
+  const lock = lockOp(opsDir(f.rail, f.chain), f.op);
+  if (!lock.ok) return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`, reason: "op_in_progress" });
   if (!readJournal(f)) return badInput(ctx, `no journal for op ${f.op} under ${opsDir(f.rail, f.chain)}`);
-  const r = await run(railCommand("reconcile", f)); // read-only: none of the three rail scripts signs or sends
+  const running = run(railCommand("reconcile", f)); // none of the rail scripts signs or sends
+  lock.holdAlso(currentChild?.pid);
+  const r = await running;
   const n = normalize("reconcile", f, r.signal || interrupted ? null : railResult(r.stdout, { last: true }), r.code);
   emit(n.code, n.fields);
 }

@@ -17,6 +17,7 @@
 // Exit codes: 0 settled or already final without loss, 1 failed / not_found, 2 bad usage, 5 unknown.
 
 import type { Address } from 'viem'
+import { requireRecordLock } from '../op-lock.mjs'
 import { hashCheck, intCheck, opIdCheck, parseCli } from './lib/args.mjs'
 import { explorerTx, fromBaseUnits, oneLine } from './lib/common.ts'
 import { readKey } from './lib/chain.ts'
@@ -37,16 +38,18 @@ const { values: args } = parseCli({
 const opId = args.op as string
 
 async function main() {
+  requireRecordLock(OPS_DIR, opId)
   const op = readOp(opId)
   if (!op) {
     console.error(`No journal for operation ${opId} under ${OPS_DIR}`)
     process.exit(2)
   }
   const done = (state: OpState, f: { tx?: string; debit?: bigint | null; reason?: string; next?: string; exit: number }): never => {
+    const alreadySettled = op.state === 'settled'
     op.state = state
     if (f.tx) op.tx = f.tx
     if (f.reason) op.reason = f.reason
-    writeOp(op, `reconcile: ${f.reason ?? state}`)
+    if (!alreadySettled) writeOp(op, `reconcile: ${f.reason ?? state}`)
     return readKey(op.intent.owner as Address, op.intent.agent as Address).then(
       (k) => k.remaining,
       () => null,
@@ -67,6 +70,8 @@ async function main() {
 
   // the reason, recipient and receipt tx may be the seller's text: one line (oneLine)
   console.log(oneLine(`op ${opId} (${op.kind}): journal says ${op.state}${op.reason ? ` (${op.reason})` : ''}; ${op.intent.amountDecimal} pathUSD to ${op.intent.recipient}${op.tx ? `; tx ${op.tx}` : ''}`, 2000))
+
+  if (op.state === 'settled') return done('settled', { tx: op.tx, next: op.delivered === false ? 'paid but not delivered; never pay again, contact the seller with the tx hash' : 'none', exit: 0 })
 
   if (op.state === 'refused_precheck' || op.state === 'refused_chain' || (op.state === 'quoted' && op.reason === 'quote_only')) {
     console.log('Nothing was signed for this operation. Nothing to reconcile.')
