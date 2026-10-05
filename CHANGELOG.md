@@ -16,6 +16,18 @@ Testnet only: test tokens, no real money.
 ### Added
 
 - Budgets on eight chains, with budget approvals on superstables.com or on your machine. Limits differ by chain. See [Budgets](https://superstables.com/docs/client/budget).
+
+  | Chain | Approve on your machine | Approve on superstables.com |
+  | --- | --- | --- |
+  | Base Sepolia | Yes | Yes |
+  | Arc Testnet | Yes | Yes |
+  | Arbitrum Sepolia | Yes | Yes |
+  | Polygon Amoy | Yes | Yes |
+  | SKALE Base Sepolia | Yes | Yes |
+  | Ethereum Sepolia | Yes | Yes |
+  | Tempo Moderato | Yes | Yes |
+  | Solana devnet | Yes | Yes |
+
 - Single purchase on superstables.com, with wallet approval for each purchase and no budget or agent key required. Available on Base Sepolia, Arc Testnet, Solana devnet and Tempo Moderato. See [Single purchase](https://superstables.com/docs/client/buy-once).
 - A standalone agent skill that includes the CLI. See [Installation](https://superstables.com/docs/client).
 
