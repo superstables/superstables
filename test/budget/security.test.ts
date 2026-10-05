@@ -238,6 +238,38 @@ describe("one buy per operation at a time", () => {
     if (taken.ok) taken.release();
   });
 
+  it("reconcile shares the dispatcher's buy lock and keeps its outcome unknown while busy", async () => {
+    const dir = opsDir();
+    const op = 'reconcile-busy';
+    mkdirSync(dir, { recursive: true });
+    const record = JSON.stringify({ op, path: 'approve', state: 'submitted', signed: true });
+    writeFileSync(join(dir, `${op}.json`), record);
+    const lock = guard.lockOp(dir, op);
+    expect(lock.ok).toBe(true);
+    try {
+      const r = await budget(['reconcile', '--rail', 'evm', '--op', op]);
+      expect(r.code).toBe(5);
+      expect(r.result).toMatchObject({ state: 'unknown', paid: null, reason: 'op_in_progress' });
+      expect(readFileSync(join(dir, `${op}.json`), 'utf8')).toBe(record);
+    } finally { if (lock.ok) lock.release(); }
+  });
+
+  it("release retains the operation lock until its recorded rail process exits", async () => {
+    const dir = join(home, 'locks');
+    const rail = sleeper();
+    const lock = guard.lockOp(dir, 'live-rail-release');
+    if (!lock.ok) throw new Error('lock was unexpectedly busy');
+    lock.holdAlso(rail.pid);
+    lock.release();
+    expect(existsSync(guard.opLockFile(dir, 'live-rail-release'))).toBe(true);
+    expect(guard.lockOp(dir, 'live-rail-release').ok).toBe(false);
+    const exited = new Promise<void>(resolve => rail.once('exit', () => resolve()));
+    rail.kill('SIGKILL');
+    await exited;
+    lock.release();
+    expect(existsSync(guard.opLockFile(dir, 'live-rail-release'))).toBe(false);
+  });
+
   it.runIf(PROCESS_START)("treats a lock whose pid now names another process as stale", () => {
     const dir = join(home, "locks");
     // this test's own pid, recorded with another start: the number was reused
