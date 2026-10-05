@@ -37,9 +37,9 @@ function readEnv(path, what, secret) {
 
 /**
  * What setup has not done yet for this rail and chain (tempo: and agent label), in plain words; [] when both the agent key
- * and the owner are recorded. `agentKey` and `publicFile` are the paths it looked at. `problem`, when set, is a file that
+ * and the owner are recorded. `owner` is whether an owner is recorded. `agentKey` and `publicFile` are the paths it looked at. `problem`, when set, is a file that
  * must not be used (an agent key file other users can read, or either file not a regular file): the caller refuses.
- * @returns {{ missing: string[], problem?: string, agentKey: string, publicFile: string }}
+ * @returns {{ missing: string[], owner: boolean, problem?: string, agentKey: string, publicFile: string }}
  */
 export function setupGaps({ rail, chain, agent }) {
   const v = VARS[rail](agent ?? "");
@@ -50,19 +50,24 @@ export function setupGaps({ rail, chain, agent }) {
   const keys = k.env;
   const pub = p.env;
   const problem = k.problem ?? p.problem;
-  if (problem) return { missing: [], problem, agentKey: keyPath, publicFile: pubPath };
+  if (problem) return { missing: [], owner: false, problem, agentKey: keyPath, publicFile: pubPath };
   const missing = [];
   if (!existsSync(keyPath)) missing.push("no agent key on this machine");
   else if (!keys[v.key]) missing.push(v.label ? `no agent key for --agent ${v.label}` : "the agent key file holds no key");
   const owner = pub[v.owner] ?? (v.ownerInAgentFile ? keys[v.owner] : undefined);
   if (!owner) missing.push("no owner has connected a wallet");
-  return { missing, agentKey: keyPath, publicFile: pubPath };
+  return { missing, owner: Boolean(owner), agentKey: keyPath, publicFile: pubPath };
 }
 
-/** The owner's commands, in order, that make a budget on this rail and chain: for a `next` field or a log line. */
-export function ownerSteps(rail, chain, defaultChain) {
+/**
+ * The owner's commands, in order, that make a budget on this rail and chain: for a `next` field or a log line. With no owner
+ * on record yet, also the one command that does the whole set-up with one approval link on superstables.com.
+ */
+export function ownerSteps(rail, chain, defaultChain, owner) {
   const c = chain && chain !== defaultChain ? ` --chain ${chain}` : "";
   const r = `--rail ${rail}${c}`;
   const fund = rail === "tempo" ? "" : `superstables budget fund-agent ${r}, superstables budget doctor ${r}, `;
-  return `superstables budget setup ${r}, ${fund}superstables budget grant ${r} --amount A`;
+  const local = `superstables budget setup ${r}, ${fund}superstables budget grant ${r} --amount A`;
+  if (owner) return local;
+  return `${local}; or, with one approval link on superstables.com (the owner needs an account there): superstables budget setup ${r} --hosted --grant A${rail === "tempo" ? "" : " --fund"}`;
 }
