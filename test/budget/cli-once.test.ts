@@ -875,7 +875,7 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
     const rb = await budget(["wait", "--shown", "--id", b.result.id, "--timeout", "10"]);
     expect(rb.code, rb.stderr).toBe(5);
     expect(rb.result).toMatchObject({ state: "unknown", paid: null, amount: null, tx: { settle: other } });
-    expect(rb.result.reason).toMatch(/names transaction 0xefef.* but does not say it was paid, but this purchase has no payment identity and payer to verify/);
+    expect(rb.result.reason).toMatch(/names transaction 0xefef.* but does not say it was paid, but this purchase has no payment identity or payer to verify/);
     expect(rb.stdout + rb.stderr).not.toMatch(/nothing was paid/i);
   }, 90_000);
 

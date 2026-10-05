@@ -22,7 +22,7 @@
 // only place the access token lives, until the purchase is final; nothing here prints or logs it. Plain JavaScript with
 // Node built-ins only, like site.mjs, so the dispatcher and the standalone build share it.
 import { randomUUID } from "node:crypto";
-import { linkSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approvalsDir, onceDir } from "./paths.mjs";
 import { claim, isApprovalId, newApprovalId, readApproval, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
@@ -263,6 +263,15 @@ export const onceTestHook = { beforeFinal: null };
  */
 function checkedFinal(record) {
   const { code, result } = record.final;
+  // Older paid records cannot regain their discarded access token. Preserve the recorded proof under I21 and mark
+  // its limit, rather than applying a new attribution requirement retroactively.
+  if (result?.paid === true && record.attributionVersion === undefined && !record.final.attribution) {
+    const attribution = "not verified (recorded by an older version)";
+    const kept = { ...result, attribution };
+    updateApproval(record.id, (now) => now.final?.result?.paid === true && now.attributionVersion === undefined && !now.final.attribution
+      ? { final: { ...now.final, result: { ...now.final.result, attribution } } } : null);
+    return { code, result: kept };
+  }
   if (cachedVerdictHolds(record)) return { code, result };
   const fixed = overruled(record, result);
   updateApproval(record.id, (now) => (now.final && !cachedVerdictHolds(now) ? { final: { code: 5, result: fixed } } : null));
@@ -273,7 +282,7 @@ function cachedVerdictHolds(record) {
   const { result, attribution } = record.final;
   if (!verdictHolds(record.seen, result)) return false;
   if (result?.paid !== true) return true;
-  return typeof record.seen?.nonce === "string" && attribution?.nonce === record.seen.nonce && !attributedElsewhere(record, result.tx?.settle);
+  return typeof record.seen?.nonce === "string" && attribution?.nonce === record.seen.nonce && attributionStatus(record, result.tx?.settle) !== "elsewhere";
 }
 
 /** A verdict the evidence overrules: unknown, with the transaction it names, never "nothing was paid", never "paid". */
@@ -517,33 +526,80 @@ export function messageForOwner(r) {
 const purchaseKey = (record) => JSON.stringify([record.hosted?.site, record.hosted?.requestId]);
 const attributionFile = (record, tx) => join(onceDir(), `attributed-${record.rail}-${record.chain}-${canonTx(tx)}.json`);
 
-function attributedElsewhere(record, tx) {
-  if (!tx) return true;
+// Only remove a temporary that a dead process left or that already shares the published claim's inode. Old UUID-only
+// names have no process identity, so only the inode check can establish that removing them is safe.
+function cleanClaimTemps(file) {
+  let names;
+  try { names = readdirSync(onceDir()); } catch (e) { if (e.code === "ENOENT") return; throw e; }
+  const prefix = file.slice(onceDir().length + 1) + ".";
+  let published;
+  try { published = lstatSync(file); } catch (e) { if (e.code !== "ENOENT") return; }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const match = /^(?:(\d+)\.)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp$/.exec(name.slice(prefix.length));
+    if (!match) continue;
+    const tmp = join(onceDir(), name);
+    try {
+      const stat = lstatSync(tmp);
+      if (!stat.isFile()) continue;
+      const linked = published?.isFile() && stat.dev === published.dev && stat.ino === published.ino;
+      let dead = false;
+      if (match[1]) {
+        const pid = Number(match[1]);
+        if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 2147483647) continue;
+        try { process.kill(pid, 0); } catch (e) { dead = e.code === "ESRCH"; }
+      }
+      if (linked || dead) unlinkSync(tmp);
+    } catch (e) { if (e.code !== "ENOENT") throw e; }
+  }
+}
+
+function attributionStatus(record, tx) {
+  if (!tx) return "elsewhere";
+  const file = attributionFile(record, tx);
   try {
-    if (readFileSync(attributionFile(record, tx), "utf8") !== purchaseKey(record)) return true;
+    cleanClaimTemps(file);
+    const key = JSON.parse(readFileSync(file, "utf8"));
+    if (!Array.isArray(key) || key.length !== 2 || key.some((value) => typeof value !== "string" || !value)) return "unread";
+    if (JSON.stringify(key) !== purchaseKey(record)) return "elsewhere";
   } catch (e) {
-    if (e.code !== "ENOENT") throw e;
+    if (e.code !== "ENOENT") return "unread";
   }
   for (const file of readdirSync(approvalsDir())) {
     if (!file.endsWith(".json")) continue;
     const other = readApproval(file.slice(0, -5));
-    if (other?.command === "buy-once" && other.rail === record.rail && other.chain === record.chain && other.final?.result?.paid === true && canonTx(other.final.result.tx?.settle) === canonTx(tx) && purchaseKey(other) !== purchaseKey(record)) return true;
+    if (other?.command === "buy-once" && other.rail === record.rail && other.chain === record.chain && other.final?.result?.paid === true && canonTx(other.final.result.tx?.settle) === canonTx(tx) && purchaseKey(other) !== purchaseKey(record)) return "elsewhere";
   }
-  return false;
+  return "available";
 }
 
-// Publish one complete, permanent claim before saving paid. A crash retains the claim for this purchase's retry.
+// Publish one complete, durable claim before saving paid. Sync the contents and temporary directory entry before the
+// atomic link, then sync the published link before the paid commit. A crash retains the claim for this purchase's retry.
 function claimAttribution(record, tx) {
-  if (attributedElsewhere(record, tx)) return false;
+  if (attributionStatus(record, tx) !== "available") return false;
   mkdirSync(onceDir(), { recursive: true, mode: 0o700 });
   const file = attributionFile(record, tx);
-  const tmp = `${file}.${randomUUID()}.tmp`;
-  writeFileSync(tmp, purchaseKey(record), { mode: 0o600, flag: "wx" });
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  const directory = openSync(onceDir(), "r");
   try {
+    const fd = openSync(tmp, "wx", 0o600);
+    try {
+      writeFileSync(fd, purchaseKey(record));
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    fsyncSync(directory);
     try { linkSync(tmp, file); } catch (e) { if (e.code !== "EEXIST") throw e; }
-    return readFileSync(file, "utf8") === purchaseKey(record);
+    fsyncSync(directory);
+    return attributionStatus(record, tx) === "available";
   } finally {
-    unlinkSync(tmp);
+    try {
+      try { unlinkSync(tmp); } catch (e) { if (e.code !== "ENOENT") throw e; }
+      fsyncSync(directory);
+    } finally {
+      closeSync(directory);
+    }
   }
 }
 
@@ -657,14 +713,12 @@ async function finalOf(record, view, { deadline } = {}) {
   if (paid === true || (paid === null && candidates.length)) {
     let unresolved = false;
     let first = null;
-    let payerless = null;
     for (const h of candidates) {
       const who = seen.payers?.[h] ?? null;
       // the chain check fits in the command's deadline: one that runs out is unread, so the answer is unknown and not final
       const c = await chainCheck(record, net, h, who, deadline);
       if (c.state === "settled" && who) { hash = h; payer = who; paid = true; break; }
-      if (c.state === "settled") payerless ??= h;
-      else if (c.state !== "mismatch") unresolved = true;
+      if (c.state !== "mismatch") unresolved = true;
       first ??= c.reason;
     }
     if (!candidates.length) {
@@ -674,7 +728,7 @@ async function finalOf(record, view, { deadline } = {}) {
     }
     if (paid !== true || !payer) {
       paid = null;
-      chainWords = payerless && !unresolved ? `the chain shows transaction ${payerless} paying this purchase, but the site named no single payer for it` : first;
+      chainWords = first;
       keep = !unresolved;
     }
   }
@@ -704,7 +758,7 @@ async function finalOf(record, view, { deadline } = {}) {
     // "nothing paid"
     const next = keep
       ? `the chain does not show the payment ${site} reports: never buy this again. Ask the owner to check their wallet activity and the receipts on their ${site} account`
-      : `${site} reports a payment the chain does not show yet: never buy this again. Run superstables budget wait --id ${record.id} --shown later to read it again`;
+      : `${site} reports a payment that cannot be verified yet: never buy this again. Run superstables budget wait --id ${record.id} --shown later to read it again`;
     const said = sitePaid ? `${site} says paid` : hash ? `${site} ${now.hashes.includes(hash) ? "names" : "named"} transaction ${hash} but does not say it was paid` : `${site} said paid earlier`;
     // not stored (keep false): a later wait reads it again, so it is not final
     return { keep, code: 5, result: { ok: false, ...base, state: "unknown", ...(keep ? {} : { final: false }), next, reason: `${said}, but ${chainWords}` } };
@@ -720,7 +774,9 @@ async function chainCheck(record, net, hash, payer, deadline) {
   const h = record.hosted ?? {};
   if (!hash) return { state: "unread", reason: "the site names no transaction for it" };
   if (!isDecimal(h.amount) || !isAddress(h.payTo, net)) return { state: "mismatch", reason: "this purchase's record has no amount or recipient to check the payment against" };
-  if (attributedElsewhere(record, hash)) return { state: "mismatch", reason: `transaction ${hash} is already attributed to another hosted purchase` };
+  const attribution = attributionStatus(record, hash);
+  if (attribution === "unread") return { state: "unread", reason: `transaction ${hash} cannot be attributed because its attribution claim could not be read` };
+  if (attribution === "elsewhere") return { state: "mismatch", reason: `transaction ${hash} is already attributed to another hosted purchase` };
   const notBefore = Math.floor(Date.parse(record.createdAt) / 1000);
   return readSettlement({ rail: net.rail, chain: net.chain, tx: hash, payer, payTo: h.payTo, asset: net.asset, amount: micro(h.amount), notBefore: Number.isFinite(notBefore) ? notBefore : 0, nonce: record.seen?.nonce, deadline });
 }
@@ -969,7 +1025,7 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
       next: `never buy this again. Ask the owner to check their wallet activity and the receipts on their ${siteName(site)} account; superstables budget wait --id ${recordId} prints this again`,
       reason: `${why}, but its answers name a transaction, a payment or money that may have moved, so whether it was paid is unknown`,
     };
-    saveApproval({ id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "unknown", createdAt: new Date().toISOString(), action: "buy-once", url: null, expires: null, matchCode: null, terms: null, service: { id: service.id, name: service.name }, max, pid: null, seen });
+    saveApproval({ id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "unknown", attributionVersion: 1, createdAt: new Date().toISOString(), action: "buy-once", url: null, expires: null, matchCode: null, terms: null, service: { id: service.id, name: service.name }, max, pid: null, seen });
     recordFinal(recordId, 5, result);
     return { ok: false, code: 5, state: "unknown", record: readApproval(recordId), final: true, result, reason: result.reason, next: result.next };
   };
@@ -1000,7 +1056,7 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
     const why = c?.cancelled ? "the site cancelled it, but its creation answer already named a transaction or a payment" : c ? `the site did not cancel it (${c.reason})` : "the site could not be reached to cancel it";
     const expiresAt = Date.parse(approval.expires_at);
     const record = saveApproval({
-      id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "cancel_unconfirmed", createdAt: new Date().toISOString(),
+      id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "cancel_unconfirmed", attributionVersion: 1, createdAt: new Date().toISOString(),
       action: "buy-once", url: null, expires: Number.isFinite(expiresAt) ? new Date(expiresAt).toISOString() : null, matchCode: null, terms: null,
       service: { id: service.id, name: service.name }, max, pid: null, cancelUnconfirmed: scrub(siteText(`${reason}; ${why}`, 600)),
       ...(mayBeUnpaid(seen) ? {} : { seen }),
@@ -1035,7 +1091,7 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
   const expires = new Date(approval.expires_at).toISOString();
   // The access token lives only in this record (mode 600) until the purchase is final (recordFinal removes it).
   const record = saveApproval({
-    id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "waiting_owner", createdAt: new Date().toISOString(),
+    id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "waiting_owner", attributionVersion: 1, createdAt: new Date().toISOString(),
     action: "buy-once", url: link.href, expires, matchCode: approval.match_code, terms, service: { id: service.id, name: service.name }, max, pid: null,
     ...(mayBeUnpaid(born) ? {} : { seen: born }),
     // the amount, recipient and token checked against the listing and --max: a payment is read from the chain against them

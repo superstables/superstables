@@ -42,27 +42,28 @@ function shortvec(bytes, at) {
 }
 
 function solanaIdentity(raw, tx, payer, nonce) {
-  if (!Array.isArray(raw) || raw[1] !== "base64" || typeof raw[0] !== "string") return false;
+  if (!Array.isArray(raw) || raw[1] !== "base64" || typeof raw[0] !== "string") return "has a signed transaction that could not be decoded";
   const bytes = Buffer.from(raw[0], "base64");
   const count = shortvec(bytes, 0);
   const start = count.at + count.value * 64;
-  if (!count.value || start >= bytes.length || !bytes.subarray(count.at, count.at + 64).equals(base58Bytes(tx))) return false;
+  if (!count.value || start >= bytes.length) return "has an incomplete signed transaction";
+  if (!bytes.subarray(count.at, count.at + 64).equals(base58Bytes(tx))) return "has a first signature that does not match the claimed transaction ID";
   const message = bytes.subarray(start);
   // The hosted API commits to the base64 string, matching prepareSolana's authNonce.
-  if (!sameHex(`0x${createHash("sha256").update(message.toString("base64")).digest("hex")}`, nonce)) return false;
+  if (!sameHex(`0x${createHash("sha256").update(message.toString("base64")).digest("hex")}`, nonce)) return "has a signed message that does not match this purchase's payment identity";
   const header = message[0] & 128 ? 1 : 0;
-  if (header && message[0] !== 128) return false;
+  if (header && message[0] !== 128) return "has a signed message with an unsupported version";
   const required = message[header];
   const keys = shortvec(message, header + 3);
-  if (required !== count.value || required > keys.value || keys.at + keys.value * 32 > message.length) return false;
+  if (required !== count.value || required > keys.value || keys.at + keys.value * 32 > message.length) return "does not carry this payer's signature over this purchase's message";
   const owner = base58Bytes(payer);
-  if (owner.length !== 32) return false;
+  if (owner.length !== 32) return "does not carry this payer's signature over this purchase's message";
   for (let i = 0; i < required; i++) {
     if (!message.subarray(keys.at + i * 32, keys.at + (i + 1) * 32).equals(owner)) continue;
     const key = createPublicKey({ key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), owner]), format: "der", type: "spki" });
-    return verify(null, message, key, bytes.subarray(count.at + i * 64, count.at + (i + 1) * 64));
+    return verify(null, message, key, bytes.subarray(count.at + i * 64, count.at + (i + 1) * 64)) ? null : "does not carry this payer's signature over this purchase's message";
   }
-  return false;
+  return "does not carry this payer's signature over this purchase's message";
 }
 
 /** The RPC this computer reads `rail` and `chain` through. */
@@ -80,7 +81,7 @@ const topicAddress = (t) => (typeof t === "string" && t.length === 66 ? `0x${t.s
  * transaction and it is not that payment, or { state: "unread", reason } when the chain cannot say (not found, RPC down).
  */
 export async function readSettlement({ rail, chain, tx, payer, payTo, asset, amount, notBefore, nonce, rpcUrl, deadline }) {
-  if (!isNonce(nonce) || !payer) return { state: "unread", reason: "this purchase has no payment identity and payer to verify" };
+  if (!isNonce(nonce) || !payer) return { state: "unread", reason: "this purchase has no payment identity or payer to verify" };
   const url = rpcUrl ?? settlementRpc(rail, chain);
   // `deadline` (an absolute time, ms): every RPC call gets what is left of it at most, and none starts after it
   const rpc = (method, params) => {
@@ -107,13 +108,15 @@ async function evmSettlement({ rpc, rail, tx, payer, payTo, asset, amount, notBe
   if (receipt.status !== "0x1") return { state: "mismatch", reason: `transaction ${tx} failed on chain` };
   const logs = Array.isArray(receipt.logs) ? receipt.logs : [];
   const tokenLogs = logs.filter((l) => !l.removed && sameHex(l.address, asset));
-  const paid = tokenLogs.find((l) =>
+  const paid = tokenLogs.filter((l) =>
     Array.isArray(l.topics) && sameHex(l.topics[0], rail === "tempo" ? TRANSFER_WITH_MEMO_TOPIC : TRANSFER_TOPIC) &&
-    (rail !== "tempo" || sameHex(l.topics[3], nonce)) &&
     topicAddress(l.topics[2]) === payTo.toLowerCase() &&
     (!payer || topicAddress(l.topics[1]) === payer.toLowerCase()) &&
     (() => { try { return BigInt(l.data) === amount; } catch { return false; } })());
-  if (!paid) return { state: "mismatch", reason: `transaction ${tx} has no transfer of exactly ${amount} base units of ${asset} ${payer ? `from ${payer} ` : ""}to ${payTo}` };
+  if (!paid.length) return { state: "mismatch", reason: `transaction ${tx} has no transfer of exactly ${amount} base units of ${asset} ${payer ? `from ${payer} ` : ""}to ${payTo}` };
+  if (rail === "tempo" && !paid.some((l) => sameHex(l.topics[3], nonce))) {
+    return { state: "mismatch", reason: `transaction ${tx} does not carry this purchase's memo` };
+  }
   if (rail !== "tempo" && !tokenLogs.some((l) => sameHex(l.topics?.[0], AUTHORIZATION_USED_TOPIC) && topicAddress(l.topics?.[1]) === payer.toLowerCase() && sameHex(l.topics?.[2], nonce))) {
     return { state: "mismatch", reason: `transaction ${tx} did not use this purchase's authorization nonce` };
   }
@@ -137,7 +140,8 @@ async function solanaSettlement({ rpc, tx, payer, payTo, asset, amount, notBefor
   if (payer && delta(payer) !== -amount) return { state: "mismatch", reason: `transaction ${tx} did not take ${amount} base units of ${asset} from ${payer}` };
   const signed = await rpc("getTransaction", [tx, { encoding: "base64", commitment: "confirmed", maxSupportedTransactionVersion: 0 }]);
   if (!signed) return { state: "unread", reason: `the signed message of transaction ${tx} could not be read` };
-  if (!solanaIdentity(signed.transaction, tx, payer, nonce)) return { state: "mismatch", reason: `transaction ${tx} does not carry this payer's signature over this purchase's message` };
+  const identityReason = solanaIdentity(signed.transaction, tx, payer, nonce);
+  if (identityReason) return { state: "mismatch", reason: `transaction ${tx} ${identityReason}` };
   if (typeof t.blockTime !== "number") return { state: "unread", reason: `the time of transaction ${tx} could not be read` };
   if (t.blockTime < notBefore - SKEW_S) return { state: "mismatch", reason: `transaction ${tx} landed before this purchase was created` };
   return { state: "settled" };

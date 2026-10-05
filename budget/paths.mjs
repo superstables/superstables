@@ -1,4 +1,4 @@
-// Where superstables budget keeps keys and state. Every rail and the CLI import this file; no other file names a path.
+// Where superstables budget keeps keys and state. Every rail and the CLI import this file; record file names are composed under these directories.
 // The home is the client's: SUPERSTABLES_HOME (a leading ~, $HOME or ${HOME} is expanded; blank means the default),
 // else ~/.superstables. Same rule as src/core/home.ts.
 //
@@ -9,6 +9,8 @@
 //   $SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/<id>.json   one journal per purchase.
 //   $SUPERSTABLES_HOME/budget/owner-approvals.jsonl          one line per owner page state change (no signatures).
 //   $SUPERSTABLES_HOME/budget/approvals/<id>.json and .log  one detached owner approval: its record and its process log.
+//   $SUPERSTABLES_HOME/budget/once/attributed-<rail>-<chain>-<tx>.json   durable [site, purchase id] claim, mode 600; no token.
+//   $SUPERSTABLES_HOME/budget/once/attributed-<rail>-<chain>-<tx>.json.<pid>.<uuid>.tmp   unpublished claim; cleaned safely on read.
 //   $SUPERSTABLES_HOME/budget/once/<id>.response            what a buy-once purchase returned (seller data, mode 600).
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
