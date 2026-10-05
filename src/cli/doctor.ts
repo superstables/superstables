@@ -189,10 +189,12 @@ async function approvalPageCheck(): Promise<Check> {
         resolve();
       });
     });
+    const address = server.address();
+    const boundPort = typeof address === "object" && address ? address.port : port;
     return {
       name: "approval page",
       ok: true,
-      detail: `http://127.0.0.1:${port} is free; the agent serves the page itself`,
+      detail: `http://127.0.0.1:${boundPort} is free; the agent serves the page itself`,
       essential: true,
     };
   } catch (err) {

@@ -44,6 +44,7 @@ function run(args: string[], env: Record<string, string> = {}): Promise<Run> {
         ...process.env,
         SUPERSTABLES_HOME: home,
         SUPERSTABLES_DOCTOR_OFFLINE: "1",
+        SUPERSTABLES_APPROVE_PORT: "0",
         // Nothing listens here, so "is the wallet running?" has one deterministic answer.
         SUPERSTABLES_WALLET_URL: "http://127.0.0.1:1",
         ...env,
@@ -191,7 +192,7 @@ describe("the superstables CLI", () => {
     expect(setUp.stdout).not.toContain("superstables wallet serve");
 
     const result = await run(["doctor", "--json"]);
-    expect(result.code).toBe(0);
+    expect(result.code, result.stdout + result.stderr).toBe(0);
     const report = JSON.parse(result.stdout) as {
       ok: boolean;
       mode: string;
@@ -207,6 +208,36 @@ describe("the superstables CLI", () => {
     expect(by("wallet key")).toBeUndefined();
     expect(by("browser wallet")?.detail).toContain("MetaMask connects when the first approval link opens");
     expect(by("approval page")?.ok).toBe(true);
+    expect(by("approval page")?.detail).toMatch(/^http:\/\/127\.0\.0\.1:[1-9]\d* is free;/);
+  });
+
+  it("reports an explicitly occupied approval port as unhealthy", async () => {
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("expected a TCP address");
+      const result = await run(["--wallet", "browser", "doctor", "--json"], {
+        SUPERSTABLES_APPROVE_PORT: String(address.port),
+      });
+      expect(result.code, result.stdout + result.stderr).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        checks: expect.arrayContaining([
+          expect.objectContaining({
+            name: "approval page",
+            ok: false,
+            essential: true,
+            detail: expect.stringContaining(`port ${address.port} (SUPERSTABLES_APPROVE_PORT) is taken (listen EADDRINUSE:`),
+          }),
+        ]),
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("refuses a quote that names both a URL and a service, as bad input", async () => {
