@@ -312,7 +312,7 @@ explain(
     .option("--limit <n>", "how many services to ask for", toInteger, 20)
     .option("--budget", "show the listings a `superstables budget` rail could pay, instead of the ones pay can")
     .option("--all", "show every listing, including those this client cannot pay, and why")
-    .option("--demo", "also list Superstables' testnet services from the hosted catalogue: most return prepared sample output and are marked simulated; the market data service returns live prices (SUPERSTABLES_DEMO_SERVICES=on does the same)")
+    .option("--demo", "also list Superstables' testnet services from the catalogue on superstables.com: most return prepared sample output and are marked simulated; the market data service returns live prices (SUPERSTABLES_DEMO_SERVICES=on does the same)")
     .option("--json", "print {services, warnings} as JSON")
     .action(
       async (

@@ -106,6 +106,28 @@ describe("status with no budget set up here", () => {
     expect(`${r.stderr}${r.stdout}`.replaceAll(home, "<home>")).not.toMatch(/B4/);
   });
 
+  const hosted = {
+    evm: "superstables budget setup --rail evm --chain arc-testnet --hosted --grant A --fund",
+    tempo: "superstables budget setup --rail tempo --hosted --grant A",
+    solana: "superstables budget setup --rail solana --hosted --grant A --fund",
+  } as const;
+  for (const rail of ["evm", "tempo", "solana"] as const) {
+    it(`offers the one-link set-up on superstables.com on ${rail} when no owner is on record`, async () => {
+      const r = await budget(["status", "--rail", rail, ...(rail === "evm" ? ["--chain", "arc-testnet"] : [])]);
+      expect(r.result.next).toContain(`; or, with one approval link on superstables.com (the owner needs an account there): ${hosted[rail]}.`);
+      expect(r.stderr).toContain(hosted[rail]);
+    });
+  }
+
+  it("names only the steps on this machine once an owner is on record", async () => {
+    mkdirSync(join(home, "budget", "public"), { recursive: true });
+    writeFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=0x${"22".repeat(20)}\n`);
+    const r = await budget(["status", "--rail", "evm"]);
+    expect(r.result.reason).toBe("no budget has been set up here for evm on base-sepolia: no agent key on this machine");
+    expect(r.result.next).toContain("superstables budget setup --rail evm, superstables budget fund-agent --rail evm");
+    expect(r.result.next).not.toContain("--hosted");
+  });
+
   it("names the home it checked, and says to ask the user for the path when the budget is elsewhere", async () => {
     const r = await budget(["status", "--rail", "evm"]);
     expect(r.result.home).toBe(home);

@@ -574,14 +574,14 @@ describe("find against a local index", () => {
     const section = (id: string) => stdout.split(`\n  ${id}\n`)[1]?.split(/\n(?: {2})?\S/)[0] ?? "";
 
     const sats = section("sats.example");
-    expect(sats.indexOf("with pay")).toBeGreaterThanOrEqual(0);
-    expect(sats.indexOf("with pay")).toBeLessThan(sats.indexOf("with a budget, evm on base-sepolia"));
+    expect(sats.indexOf("Single purchase on your machine")).toBeGreaterThanOrEqual(0);
+    expect(sats.indexOf("Single purchase on your machine")).toBeLessThan(sats.indexOf("with a budget, evm on base-sepolia"));
     expect(sats).toContain("superstables quote 'https://sats.example/api?<parameters>'");
     expect(sats).toContain("superstables budget preflight --rail evm --chain base-sepolia --url 'https://sats.example/api?<parameters>'");
 
     // pay pays on Arc Testnet too: its quote comes first
     const arc = section("arc.example");
-    expect(arc.indexOf("with pay")).toBeLessThan(arc.indexOf("with a budget, evm on arc-testnet"));
+    expect(arc.indexOf("Single purchase on your machine")).toBeLessThan(arc.indexOf("with a budget, evm on arc-testnet"));
     expect(arc).toContain("superstables quote 'https://arc.example/weather?<parameters>'");
     expect(arc).toContain("superstables budget preflight --rail evm --chain arc-testnet");
     expect(arc).toContain("--max <ceiling> --pay-to <payTo> --op <new id>");
