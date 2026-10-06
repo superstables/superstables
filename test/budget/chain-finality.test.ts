@@ -383,8 +383,7 @@ describe("round 2: Solana complete history and resumable fallback", () => {
     conn.getSignatureStatuses.mockResolvedValue({ context: { slot: 361 }, value: [{ confirmationStatus: "finalized", err: { InstructionError: [1, "Custom"] }, slot: 111 }] });
     const rec = { ...solRec, inclusionObserved: true, ...(later === "missing" ? { agentSig: undefined } : {}) };
     const result = await assessOp(conn, rec);
-    expect(result).toMatchObject({ verdict: "pending" });
-    expect(result.reason).toMatch(/outcome unknown.*do not pay again/i);
+    expect(result).toMatchObject({ verdict: "pending", reason: expect.stringMatching(/outcome unknown.*do not pay again/i) });
   });
   it("accepts the full devnet genesis hash and rejects a CAIP-2 prefix", async () => {
     const conn = solRpc("finalized");
