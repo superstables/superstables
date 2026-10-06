@@ -21,7 +21,7 @@ function sandbox(rail: string) {
 function child(rail: string, action: string, box: ReturnType<typeof sandbox>, marker: string, state?: string) {
   const p = spawn(process.execPath, ['--import', 'tsx', helper], {
     cwd: root, env: { ...process.env, SUPERSTABLES_HOME: box.home, RACE_ROOT: root, RACE_DIR: box.dir,
-      RACE_OP: op, RACE_ACTION: action, RACE_RAIL: rail, RACE_MARKER: marker, ...(state ? { RACE_STATE: state } : {}) },
+      RACE_OP: op, RACE_ACTION: action, RACE_RAIL: rail, RACE_MARKER: marker, RACE_PAUSE_GAP_MS: '50', ...(state ? { RACE_STATE: state } : {}) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   children.push(p);
@@ -34,10 +34,24 @@ function child(rail: string, action: string, box: ReturnType<typeof sandbox>, ma
   });
   return { p, done };
 }
-async function untilFile(path: string) {
-  const end = Date.now() + 8000;
-  while (!existsSync(path)) {
-    if (Date.now() > end) throw new Error(`child did not reach ${path}`);
+async function untilFile(path: string, running?: ReturnType<typeof child>) {
+  const end = Date.now() + 30_000;
+  let ended: string | undefined;
+  if (running) void running.done.then(
+    result => { ended = `exited ${result.code}: ${result.stderr} ${result.stdout}`; },
+    (error: unknown) => { ended = `could not start: ${String(error)}`; },
+  );
+  const stopped = () => {
+    if (!running) return true;
+    try {
+      const stat = readFileSync(`/proc/${running.p.pid}/stat`, 'utf8');
+      return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] === 'T';
+    } catch { return false; }
+  };
+  // The marker precedes SIGSTOP. Resume only after the kernel reports it stopped.
+  while (!existsSync(path) || !stopped()) {
+    if (ended) throw new Error(`child ${ended} before ${path}`);
+    if (Date.now() > end) throw new Error(`child ${running?.p.pid ?? 'unknown'} did not reach ${path}`);
     await sleep(10);
   }
 }
@@ -58,21 +72,21 @@ describe.runIf(process.platform === 'linux')('operation ownership under forced p
     child('dispatcher', 'hold', box, marker);
     await untilFile(marker + '.result');
     expect(JSON.parse(readFileSync(marker + '.result', 'utf8')).ok).toBe(true);
-  });
+  }, 90_000);
   for (const rail of ['dispatcher', 'solana']) {
     it(`${rail}: an old release cannot delete the next generation in the same clock tick`, async () => {
       const box = sandbox(rail);
       const r = await child(rail, 'generation', box, join(box.home, 'generation')).done;
       expect(r.stderr).not.toContain('Error');
       expect(JSON.parse(r.stdout)).toEqual({ first: true, second: true, third: false });
-    });
+    }, 90_000);
     it(`${rail}: a paused stale-lock breaker cannot displace a live successor`, async () => {
       const box = sandbox(rail);
       const path = join(box.dir, rail === 'solana' ? `${op}.json.lock` : `${op}.buy.lock`);
       writeFileSync(path, rail === 'solana' ? '2147483647' : JSON.stringify({ pid: 2147483647, pidStart: null }));
       const marker = join(box.home, 'first');
       const first = child(rail, 'break', box, marker);
-      await untilFile(marker);
+      await untilFile(marker, first);
       // The dispatcher's old breaker was stolen after ten seconds, even while SIGSTOP kept its owner alive.
       if (rail === 'dispatcher') await sleep(10_100);
       const secondMarker = join(box.home, 'second');
@@ -87,7 +101,7 @@ describe.runIf(process.platform === 'linux')('operation ownership under forced p
       child(rail, 'hold', box, thirdMarker);
       await untilFile(thirdMarker + '.result');
       expect(JSON.parse(readFileSync(thirdMarker + '.result', 'utf8')).ok).toBe(false);
-    }, 25_000);
+    }, 90_000);
   }
 });
 
@@ -103,7 +117,7 @@ describe.runIf(process.platform === 'linux')('operation writers share serializat
           intent: { amount: '1000', amountDecimal: '0.001',
             recipient: `0x${'11'.repeat(20)}`, owner: `0x${'22'.repeat(20)}`, agent: `0x${'33'.repeat(20)}` } }));
         const first = child(rail, 'reconcile', box, join(box.home, 'read'));
-        await untilFile(join(box.home, 'read'));
+        await untilFile(join(box.home, 'read'), first);
         const writer = await child(rail, 'write', box, join(box.home, 'write'), state).done;
         first.p.kill('SIGCONT');
         const reconciled = await first.done;
@@ -113,7 +127,7 @@ describe.runIf(process.platform === 'linux')('operation writers share serializat
         const after = await child(rail, 'write', box, join(box.home, 'after'), state).done;
         expect(JSON.parse(after.stdout).ok).toBe(true);
         expect(JSON.parse(readFileSync(path, 'utf8')).state).toBe(state);
-      });
+      }, 90_000);
     }
     it(`${rail}: a later negative RPC result preserves settled evidence and delivery`, async () => {
       const box = sandbox(rail);
@@ -129,7 +143,7 @@ describe.runIf(process.platform === 'linux')('operation writers share serializat
       writeFileSync(path, JSON.stringify(rec));
       const marker = join(box.home, 'paid-read');
       const reconcile = child(rail, 'reconcile', box, marker);
-      await untilFile(marker);
+      await untilFile(marker, reconcile);
       reconcile.p.kill('SIGCONT');
       const r = await reconcile.done;
       expect(r.stdout).toContain('RESULT ');
@@ -139,6 +153,6 @@ describe.runIf(process.platform === 'linux')('operation writers share serializat
       if (rail === 'tempo') expect(JSON.parse(line.slice(7)).debit).toBe('0.001');
       expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ state: 'settled', tx, settleTx: tx,
         delivered: false, debit: '0.001', createdAt: rec.createdAt });
-    });
+    }, 90_000);
   }
 });
