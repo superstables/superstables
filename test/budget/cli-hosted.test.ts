@@ -106,13 +106,13 @@ describe("--site on every command", () => {
     expect(t.result.reason ?? "").not.toMatch(/--site|unknown flag/);
   }, 60_000);
 
-  it("is refused clearly where the chain's approvals are hosted on another site, and accepted on the same one", async () => {
+  it("is refused clearly where the chain's approvals happen on another site, and accepted on the same one", async () => {
     mkdirSync(join(home, "budget", "public"), { recursive: true });
     writeFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A\nAPPROVALS=hosted\nSITE=${site.url}\n`);
     for (const args of COMMANDS) {
       const other = await run(args, "https://staging.superstables.com");
       expect(other.code, args.join(" ")).toBe(2);
-      expect(other.result.reason, args.join(" ")).toMatch(new RegExp(`--site https://staging.superstables.com is not the site this chain's approvals are hosted on \\(${site.url.replace(/[.]/g, "\\.")}\\): use --site ${site.url.replace(/[.]/g, "\\.")}, or leave --site out`));
+      expect(other.result.reason, args.join(" ")).toMatch(new RegExp(`--site https://staging.superstables.com is not the site this chain's approvals happen on \\(${site.url.replace(/[.]/g, "\\.")}\\): use --site ${site.url.replace(/[.]/g, "\\.")}, or leave --site out`));
       accepted(await run(args, site.url), args);
     }
   }, 120_000);

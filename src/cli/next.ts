@@ -118,7 +118,7 @@ export function formatListingCommands(service: ServiceListing, commands = listin
   }
   const lines: string[] = [];
   for (const way of commands) {
-    const heading = way.way === "buy-once" ? "buy once" : way.way === "pay" ? "with pay" : `with a budget, ${way.rail} on ${way.chain}`;
+    const heading = way.way === "buy-once" ? "Single purchase on superstables.com" : way.way === "pay" ? "Single purchase on your machine" : `with a budget, ${way.rail} on ${way.chain}`;
     lines.push(`${heading}${way.note ? ` (${way.note})` : ""}:`);
     for (const command of way.run) lines.push(`  ${command}`);
   }

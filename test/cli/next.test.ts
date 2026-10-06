@@ -136,7 +136,7 @@ describe("the commands find prints for a listing", () => {
 
   it("prints each way under a heading, its commands one per line", () => {
     const lines = formatListingCommands(indexListing("arc.example", ["x402"], ["arc-testnet"]));
-    expect(lines[0]).toMatch(/^with pay \(the index does not list the request parameters/);
+    expect(lines[0]).toMatch(/^Single purchase on your machine \(the index does not list the request parameters/);
     expect(lines[1]).toBe("  superstables quote 'https://arc.example/api?<parameters>'");
     expect(lines[2]).toBe("  superstables pay <quote-id>");
     expect(lines[3]).toMatch(/^with a budget, evm on arc-testnet \(preflight signs nothing/);
