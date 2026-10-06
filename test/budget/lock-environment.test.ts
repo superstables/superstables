@@ -10,6 +10,7 @@ const procs = await import(join(root, 'budget/procs.mjs'));
 const { createIdentitySource } = await import(join(root, 'budget/lock-identity.mjs'));
 const { lockFile } = await import(join(root, 'budget/op-lock.mjs'));
 const psReadable = typeof procs.processStart(process.pid, 'darwin') === 'string';
+if (!psReadable && process.env.BUDGET_TEST_SANDBOX !== '1') throw new Error('ps start identity is unavailable outside the sandbox simulation; install procps or check ps permissions');
 const helper = join(import.meta.dirname, '../helpers/budget-identity-worker.mjs');
 const preload = join(root, 'test/helpers/budget-macos-identity.mjs');
 const homes: string[] = [];
@@ -106,7 +107,7 @@ it('rechecks the lock after the override warning so a normally released holder a
 });
 for (const [holderTZ, contenderTZ] of [['UTC', 'America/Los_Angeles'], ['Asia/Tokyo', 'UTC'], ['America/Los_Angeles', 'Asia/Tokyo']]) {
   it(`protects the real-ps macOS holder in ${holderTZ} from takeover and unlock in ${contenderTZ}`, async (context) => {
-    if (!psReadable) context.skip('mixed-time-zone identity requires ps; blocked-identity safety still runs in lock-sandbox.test.ts');
+    if (!psReadable && process.env.BUDGET_TEST_SANDBOX === '1') context.skip('mixed-time-zone identity requires ps; blocked-identity safety still runs in lock-sandbox.test.ts');
     const b = box();
     const holder = spawn(process.execPath, ['--import', preload, helper, root, b.path, 'hold'], { env: { ...process.env, TZ: holderTZ }, stdio: ['ignore', 'pipe', 'pipe'] });
     try {
@@ -172,7 +173,7 @@ it.each(['record', 'inode'])('preserves a replacement %s published during the fi
 });
 
 it('approval and group readers prefer numeric UTC seconds over the legacy start field', async (context) => {
-  if (!psReadable) context.skip('numeric UTC start identity requires ps; blocked-identity readers still run in lock-sandbox.test.ts');
+  if (!psReadable && process.env.BUDGET_TEST_SANDBOX === '1') context.skip('numeric UTC start identity requires ps; blocked-identity readers still run in lock-sandbox.test.ts');
   const r = spawn(process.execPath, ['--import', preload, '--input-type=module', '-e', `
     import { processStartFields, sameProcess, groupAlive } from ${JSON.stringify(join(root, 'budget/procs.mjs'))};
     import { alive, groupAlive as approvalGroup, processesAlive } from ${JSON.stringify(join(root, 'budget/approvals.mjs'))};

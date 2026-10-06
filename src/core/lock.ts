@@ -14,74 +14,26 @@ import { linkSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 
-let bootId: string | undefined;
-function linuxBootId(): string {
-  if (bootId === undefined) {
-    try {
-      bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-    } catch {
-      bootId = "";
-    }
-  }
-  return bootId;
+import { createIdentitySource, preferredProcessStart, sameProcess } from "./process-identity.mjs";
+export { processStart } from "./process-identity.mjs";
+const identity = createIdentitySource();
+
+export function thisProcess(): { pid: number; start: string | null } & Omit<import("./process-identity.mjs").ProcessRecord, "pid" | "pidStart"> {
+  const { pidStart, ...record } = identity.record();
+  return { ...record, start: preferredProcessStart(pidStart, record.pidStartUtc) };
 }
 
-/**
- * The start identity of process `pid`: a string, null when no such process exists, or undefined when this system gives
- * no way to tell (then only the pid is checked). Linux only: /proc/<pid>/stat's start time with the boot id.
- */
-export function processStart(pid: number): string | null | undefined {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  if (process.platform !== "linux") return undefined;
-  let stat: string;
-  try {
-    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  } catch (err) {
-    const code = err instanceof Error && 'code' in err ? err.code : undefined;
-    return code === "ENOENT" || code === "ESRCH" ? null : undefined;
-  }
-  // the command name (field 2) is in parentheses and may hold spaces or ')': fields are counted after the last ')'
-  const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]; // field 22, starttime
-  const boot = linuxBootId();
-  return boot && /^\d+$/.test(start ?? "") ? `linux:${boot}:${start}` : undefined;
-}
-
-function pidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return !(err instanceof Error && 'code' in err && err.code === "ESRCH");
-  }
-}
-
-/** Does `pid` still name the process recorded with start identity `start`? Without one, the pid alone decides. */
-function sameProcess(pid: number, start: string | null | undefined): boolean {
-  if (!pid) return false;
-  if (!start) return pidAlive(pid);
-  const now = processStart(pid);
-  if (now === undefined || now === null) return pidAlive(pid);
-  return now === start;
-}
-
-/** This process, as a record names it: its pid and its start identity (null where the system gives none). */
-export function thisProcess(): { pid: number; start: string | null } {
-  return { pid: process.pid, start: processStart(process.pid) ?? null };
-}
-
-/** Is the process a record names still running? The same judgment the lock makes of its holder. */
-export function processRunning(runner: { pid?: unknown; start?: unknown } | undefined): boolean {
+export function processRunning(runner: { pid?: unknown; start?: unknown; namespace?: string | null; bootId?: string | null; platform?: string; hostname?: string; writtenAt?: number } | undefined): boolean {
   if (!runner || typeof runner.pid !== "number") return false;
-  return sameProcess(runner.pid, typeof runner.start === "string" ? runner.start : null);
+  return sameProcess(runner.pid, typeof runner.start === "string" ? runner.start : null, undefined, runner);
 }
 
 /** What a lock or mutex file says about its holder, or null when it cannot be read as one. */
-function readHolder(path: string): { text: string | null; holder: { pid?: number; pidStart?: string | null } | null } {
+function readHolder(path: string): { text: string | null; holder: import("./process-identity.mjs").ProcessRecord | null } {
   let text: string | null = null;
   try {
     text = readFileSync(path, "utf8");
-    const holder = JSON.parse(text) as { pid?: number; pidStart?: string | null } | null;
+    const holder = JSON.parse(text) as import("./process-identity.mjs").ProcessRecord | null;
     return { text, holder: holder && typeof holder === "object" ? holder : null };
   } catch {
     return { text, holder: null };
@@ -89,7 +41,7 @@ function readHolder(path: string): { text: string | null; holder: { pid?: number
 }
 
 const ownerText = () =>
-  JSON.stringify({ pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: randomBytes(8).toString("hex") });
+  JSON.stringify({ ...identity.record(), owner: randomBytes(8).toString("hex") });
 
 /** A short pause after every attempt that did not get the file, so a waiter never spins and timers keep running. */
 const RETRY_MS = 10;
@@ -112,7 +64,7 @@ async function acquire(path: string, me: string, deadline: number, breakDead?: (
         if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       }
       const { text, holder } = readHolder(path);
-      if (text !== null && holder && !sameProcess(Number(holder.pid), holder.pidStart)) {
+      if (text !== null && holder && !sameProcess(Number(holder.pid), holder.pidStart, holder.pidStartUtc, holder)) {
         if (breakDead) await breakDead(text);
         else removeIfSame(path, text);
       } else if (Date.now() >= deadline) {

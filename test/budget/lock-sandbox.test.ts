@@ -145,3 +145,48 @@ it('an owner can recover a reused PID outside the sandbox after identity becomes
   const outside = cli(b, 'unlock', 'EPERM', false);
   expect(outside.status, outside.stderr).toBe(0); expect(outside.result.reason).toBe('locks_cleared'); expect(existsSync(b.path)).toBe(false);
 });
+
+for (const mac of [false, true]) {
+  const preloads = [...(mac ? ['--import', join(root, 'test/helpers/budget-macos-identity.mjs')] : []), '--import', helper];
+  it(`${mac ? 'macOS' : 'Linux'}: normal release after a rail child exits works with identity blocked`, () => {
+    const b = box();
+    const r = spawnSync(process.execPath, [...preloads, '--input-type=module', '-e', `
+      const { spawn } = await import('node:child_process');
+      const { lockFile } = await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});
+      const lock = lockFile(${JSON.stringify(b.path)});
+      const child = spawn('sleep', ['0.1']); lock.holdAlso(child);
+      await new Promise(resolve => child.once('exit', resolve)); lock.release();
+    `], { env: { ...process.env }, encoding: 'utf8', timeout: 10000 });
+    expect(r.status, r.stderr).toBe(0); expect(existsSync(b.path)).toBe(false);
+    const next = lockFile(b.path); expect(next.ok).toBe(true); if (next.ok) next.release();
+  });
+  for (const legacy of [false, true]) {
+    it(`${mac ? 'macOS' : 'Linux'}: proves reuse after a ${legacy ? '0.3.0' : 'blocked-identity'} write from the record timestamp`, async () => {
+      const b = box();
+      const writer = spawnSync(process.execPath, [...preloads, '--input-type=module', '-e', `
+        const { lockFile } = await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});
+        const lock = lockFile(${JSON.stringify(b.path)}); if (!lock.ok) throw new Error('not acquired');
+        process.kill(process.pid, 'SIGKILL');
+      `], { encoding: 'utf8', timeout: 10000 });
+      expect(writer.signal).toBe('SIGKILL');
+      const record = JSON.parse(readFileSync(b.path, 'utf8'));
+      expect(record.hostname).toBeTypeOf('string'); expect(record.writtenAt).toBeTypeOf('number');
+      // ps and Linux btime have one-second resolution. Keep the proof strictly after the recorded write.
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const unrelated = spawn('sleep', ['30']);
+      try {
+        record.pid = unrelated.pid;
+        if (legacy) for (const field of ['platform', 'hostname', 'bootId', 'namespace', 'writtenAt', 'hostPid']) delete record[field];
+        writeFileSync(b.path, JSON.stringify(record));
+        const args = ['--import', terminal, join(root, 'budget/cli.mjs'), 'unlock', '--rail', 'solana', '--op', 'sandbox-op', '--confirm'];
+        const env = { ...process.env, SUPERSTABLES_HOME: b.home };
+        const inside = spawnSync(process.execPath, [...preloads, ...args], { env, encoding: 'utf8', input: 'sandbox-op\n' });
+        expect(inside.status, inside.stderr).toBe(5);
+        const outsideEnv = { ...env, NODE_OPTIONS: (process.env.NODE_OPTIONS ?? '').replace(/--import(?:=|\s+)\S*budget-blocked-identity\.mjs/g, '').replace(/--import(?:=|\s+)\S*budget-macos-identity\.mjs/g, '') };
+        const outside = spawnSync(process.execPath, [...(mac ? ['--import', join(root, 'test/helpers/budget-macos-identity.mjs')] : []), ...args], { env: outsideEnv, encoding: 'utf8', input: 'sandbox-op\n' });
+        expect(outside.status, outside.stderr + outside.stdout).toBe(0); expect(existsSync(b.path)).toBe(false);
+        expect(() => process.kill(unrelated.pid ?? 0, 0)).not.toThrow();
+      } finally { const done = new Promise(resolve => unrelated.once('exit', resolve)); unrelated.kill('SIGKILL'); await done; }
+    });
+  }
+}

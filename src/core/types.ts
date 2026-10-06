@@ -245,7 +245,7 @@ export interface Attempt {
    * runs, it carries the attempt on; once it is gone, an attempt it left approved or submitting is for
    * `superstables status` to reconcile from the chain.
    */
-  runner?: { pid: number; start: string | null };
+  runner?: ReturnType<typeof import("./lock.js").thisProcess>;
   /**
    * What the chain says about the payment: "verified" (the transaction is this payment), "mismatch" (the transaction the
    * seller named is not; the attempt is then uncertain), "unchecked" (the chain could not say yet), or "unpaid" (a later
