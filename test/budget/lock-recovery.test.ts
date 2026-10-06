@@ -247,14 +247,14 @@ it('names a stray directory and gives inspection guidance for ordinary and confi
   }
 });
 it('recovers a verifiably reused PID without waiting for timestamps', () => {
-  const b = box(); writeFileSync(b.path, JSON.stringify({ ...live, pidStart: 'linux:wrong-start' }));
+  const b = box(); writeFileSync(b.path, JSON.stringify({ ...live, pidStart: 'linux:wrong-start', ...(typeof live.pidStartUtc === 'number' ? { pidStartUtc: live.pidStartUtc + 1 } : {}) }));
   const lock = locks.lockFile(b.path); expect(lock.ok).toBe(true); if (lock.ok) lock.release();
 });
 
-it('does not infer death from a hidden proc entry while the PID probe shows life', () => {
+it('does not infer death from a missing process start while the PID probe shows life', () => {
   const b = box();
   const r = spawnSync(process.execPath, [join(import.meta.dirname, '../helpers/budget-lock-probe.mjs')], {
-    env: { ...process.env, PROBE_ROOT: root, PROBE_PATH: b.path, PROBE_ACTION: 'hidden-proc' }, encoding: 'utf8',
+    env: { ...process.env, PROBE_ROOT: root, PROBE_PATH: b.path, PROBE_ACTION: 'hidden-start' }, encoding: 'utf8',
   });
   expect(r.status, r.stderr).toBe(0); expect(JSON.parse(r.stdout)).toEqual({ protected: true });
 });

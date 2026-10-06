@@ -210,7 +210,7 @@ describe("one buy per operation at a time", () => {
     const running = sleeper();
     mkdirSync(opsDir(), { recursive: true });
     // the first buy's lock, as it holds it: its own pid with that process's start
-    writeFileSync(join(opsDir(), "same-op.buy.lock"), JSON.stringify({ ...hostIdentity, pid: running.pid, pidStart: procs.processStart(running.pid!) ?? null, createdAt: Date.now() }));
+    writeFileSync(join(opsDir(), "same-op.buy.lock"), JSON.stringify({ ...hostIdentity, pid: running.pid, ...identitySource.starts(running.pid!), createdAt: Date.now() }));
     // no seller listens here: a buy that got past the lock would fail on the network, not be refused
     const r = await budget(["buy", "--rail", "evm", "--url", "http://127.0.0.1:9/paid", "--max", "0.01", "--op", "same-op"]);
     expect(r.code).toBe(3);
@@ -233,12 +233,15 @@ describe("one buy per operation at a time", () => {
 
     // the command was killed, but the rail script it started still runs: still held
     const rail = sleeper();
-    writeFileSync(guard.opLockFile(dir, "op-2"), JSON.stringify({ ...hostIdentity, pid: deadPid(), pidStart: "test:dead", railPid: rail.pid, railPidStart: identitySource.start(rail.pid!), createdAt: Date.now() }));
+    const dispatcherPid = deadPid();
+    const railStarts = identitySource.starts(rail.pid!);
+    writeFileSync(guard.opLockFile(dir, "op-2"), JSON.stringify({ ...hostIdentity, pid: dispatcherPid, ...identitySource.starts(dispatcherPid), railPid: rail.pid, railPidStart: railStarts.pidStart, railPidStartUtc: railStarts.pidStartUtc, createdAt: Date.now() }));
     expect(guard.lockOp(dir, "op-2", { identitySource }).ok).toBe(false);
     rail.kill("SIGKILL");
 
     // its process is gone: stale, taken over
-    writeFileSync(guard.opLockFile(dir, "op-3"), JSON.stringify({ ...hostIdentity, pid: deadPid(), pidStart: "test:dead", createdAt: Date.now() }));
+    const gone = deadPid();
+    writeFileSync(guard.opLockFile(dir, "op-3"), JSON.stringify({ ...hostIdentity, pid: gone, ...identitySource.starts(gone), createdAt: Date.now() }));
     const taken = guard.lockOp(dir, "op-3", { identitySource });
     expect(taken.ok).toBe(true);
     if (taken.ok) taken.release();
@@ -279,7 +282,7 @@ describe("one buy per operation at a time", () => {
   it("treats a lock whose pid now names another process as stale", () => {
     const dir = join(home, "locks");
     // this test's own pid, recorded with another start: the number was reused
-    writeFileSync(guard.opLockFile(dir, "op-4"), JSON.stringify({ ...hostIdentity, pid: process.pid, pidStart: "linux:another-start:1", createdAt: Date.now() }));
+    writeFileSync(guard.opLockFile(dir, "op-4"), JSON.stringify({ ...hostIdentity, pid: process.pid, pidStart: "linux:another-start:1", ...(typeof hostIdentity.pidStartUtc === "number" ? { pidStartUtc: hostIdentity.pidStartUtc + 1 } : {}), createdAt: Date.now() }));
     const taken = guard.lockOp(dir, "op-4", { identitySource });
     expect(taken.ok).toBe(true);
     if (taken.ok) taken.release();

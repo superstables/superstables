@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, fstatSync, fsyncSync, futimesSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createIdentitySource } from './lock-identity.mjs';
-import { compareProcessStarts } from './procs.mjs';
+import { compareProcessStarts, preferredProcessStart } from './procs.mjs';
 import { dirname, join } from 'node:path';
 
 export const HEARTBEAT_MS = 15_000;
@@ -25,7 +25,7 @@ function liveness(owner, options = {}) {
   } else if (owner.hostname !== local.hostname) return { state: 'unverifiable', why: 'another host' };
   if (local.platform === 'linux' && (!local.namespace || owner.namespace !== local.namespace)) return { state: 'unverifiable', why: 'another or unknown container' };
   let unknown = false;
-  for (const [pid, start] of [[owner.pid, owner.pidStart], [owner.railPid, owner.railPidStart]]) {
+  for (const [pid, start] of [[owner.pid, preferredProcessStart(owner.pidStart, owner.pidStartUtc)], [owner.railPid, preferredProcessStart(owner.railPidStart, owner.railPidStartUtc)]]) {
     if (pid === undefined) continue;
     if (!Number.isSafeInteger(pid) || pid <= 0) { unknown = true; continue; }
     const current = source(options).start(pid);
@@ -40,12 +40,13 @@ function liveness(owner, options = {}) {
   }
   return unknown ? { state: 'unverifiable', why: 'unreadable process identity' } : { state: 'dead' };
 }
+const fileVersion = stat => `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.size}`;
 function holder(path, options = {}) {
   let stat;
   try { stat = lstatSync(path); } catch (err) { if (err.code === 'ENOENT') return null; throw err; }
   let text = null;
   try { text = readFileSync(path, 'utf8'); } catch (err) { if (err.code === 'ENOENT') return null; }
-  const version = `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.size}`;
+  const version = fileVersion(stat);
   try {
     const value = JSON.parse(text);
     const owner = typeof value === 'number' ? { pid: value } : value;
@@ -133,6 +134,10 @@ function breakStale(path, stale, options) {
       // The warning can block on terminal output while the old holder releases and a new one publishes.
       const afterWarning = holder(path, options);
       if (!afterWarning || afterWarning.version !== current.version || afterWarning.text !== current.text) { changed = true; return; }
+      // Process inspection may spawn ps. Recheck the file after that work, immediately before unlink.
+      try {
+        if ((afterWarning.text !== null && readFileSync(path, 'utf8') !== afterWarning.text) || fileVersion(lstatSync(path)) !== afterWarning.version) { changed = true; return; }
+      } catch (err) { if (err.code !== 'ENOENT') throw err; changed = true; return; }
       unlinkSync(path);
       syncDir(dirname(path));
     }
@@ -190,7 +195,7 @@ export function lockFile(path, options = {}) {
       timer.unref();
       let closed = false;
       const release = () => {
-        if (railOwner && liveness({ ...identity(options), pid: railOwner.pid, pidStart: railOwner.pidStart }, options).state !== 'dead') return;
+        if (railOwner && liveness({ ...identity(options), pid: railOwner.pid, pidStart: railOwner.pidStart, pidStartUtc: railOwner.pidStartUtc }, options).state !== 'dead') return;
         if (closed) return;
         // A live holder cannot be taken over automatically. Release its inode
         // without the breaker, which may belong to an unverifiable namespace.
@@ -208,10 +213,10 @@ export function lockFile(path, options = {}) {
       };
       const holdAlso = (pid) => {
         if (!pid || holder(path, options)?.text !== text) return;
-        const child = { pid, pidStart: source(options).start(pid) ?? null };
+        const child = { pid, ...(source(options).starts?.(pid) ?? { pidStart: source(options).start(pid) ?? null }) };
         // Retain the lock even if publication fails after the child was spawned.
         railOwner = child;
-        const next = JSON.stringify({ ...owner, railPid: child.pid, railPidStart: child.pidStart });
+        const next = JSON.stringify({ ...owner, railPid: child.pid, railPidStart: child.pidStart, ...(child.pidStartUtc !== undefined ? { railPidStartUtc: child.pidStartUtc } : {}) });
         const update = `${path}.${randomUUID()}.tmp`;
         try {
           durableRecord(update, next);

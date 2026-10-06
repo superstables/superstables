@@ -1757,7 +1757,8 @@ if (WORKER_ID) {
   const f = parsed.f;
   setTimeout(async () => {
     const pgid = currentChild?.pid;
-    if (pgid && !(await stopGroup(pgid, { start: readApproval(WORKER_ID)?.railPgidStart }))) {
+    const worker = readApproval(WORKER_ID);
+    if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc }))) {
       // no result while its page may still run: the chain stays held, and wait keeps trying to stop the group
       log(`superstables budget: the approval ran past its deadline and process group ${pgid} would not stop; no result is recorded`);
       process.exit(5);
