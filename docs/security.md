@@ -287,7 +287,19 @@ set, Tempo Moderato `SUPERSTABLES_TEMPO_RPC` and Solana devnet `SUPERSTABLES_SOL
 HTTPS, or HTTP on this machine, without credentials); otherwise the client uses the chain's
 configured public RPC. Use an RPC you trust when that matters. The budget rails read the chain too.
 
-The per-day cap (`caps.per_day`): a payment counts on the day it ended, and on every day while it
+On chains that require finalized evidence, a custom RPC without the `finalized` block tag can
+show a matching paid transaction but cannot make its verification permanent. The payment is
+reported paid and its delivered response is saved; `status` or budget `reconcile` keeps checking
+it. Use an RPC that serves finalized history to finish verification. Read errors preserve the
+last observed payment state. Removed inclusion leaves the outcome unknown, with "Do not pay again".
+
+Ethereum Sepolia's public RPC may prune logs after about 10,000 blocks, roughly 33 hours. Budget
+recovery searches recent logs first and resumes a block scan for older replacements. Unavailable
+history preserves the unknown outcome. Use an RPC with the required history to finish recovery.
+
+Matching included payments count once on their paid day, including legacy `verified` records and custom RPCs that cannot read finality. A pruned receipt or block does not prove removal. Positively removed inclusions stay uncertain and hold the amount across days.
+
+The per-day cap (`caps.per_day`): an unresolved payment counts on the day it ended, and on every day while it
 can still move money: waiting for the owner within its approval window, or signed or sent and not
 resolved (an EVM authorization until its `validBefore` and two minutes; a Tempo transfer, which has
 no expiry, or a Solana transaction until `superstables status` resolves it on chain). That includes

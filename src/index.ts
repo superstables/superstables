@@ -12,6 +12,7 @@ export type {
   Attempt,
   AttemptState,
   AttemptTransition,
+  ChainMismatch,
   PaymentContext,
   PaymentTerms,
   Quote,

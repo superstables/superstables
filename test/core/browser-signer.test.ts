@@ -1786,7 +1786,7 @@ describe("settlement binding and failed reads on the chain", () => {
     const txs = new Map<string, unknown>([["old-seller-tx", { slot: 10, transaction: { signatures: ["old-seller-tx", "someone-elses-sig"] }, meta: { err: null } }]]);
     const conn = {
       getGenesisHash: async () => "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
-      getEpochInfo: async () => ({ absoluteSlot: 100, blockHeight: 100 }),
+      getEpochInfo: async () => ({ blockHeight: 100, absoluteSlot: 100 }),
       getSignatureStatuses: async (sigs: string[]) => ({ value: sigs.map((sig) => statuses.get(sig) ?? null) }),
       getTransaction: async (sig: string) => txs.get(sig) ?? null,
       getSignaturesForAddress: async () => [],
@@ -1798,9 +1798,9 @@ describe("settlement binding and failed reads on the chain", () => {
     // the facilitator's transaction that carries our signature is
     statuses.set("new-settle", { confirmationStatus: "confirmed", err: null, slot: 11 });
     txs.set("new-settle", { slot: 11, transaction: { signatures: ["new-settle", "our-agent-sig"] }, meta: { err: null } });
-    expect(await assessOp(conn, { ...rec, sellerTx: "new-settle" })).toMatchObject({ verdict: "pending" });
+    expect(await assessOp(conn, { ...rec, sellerTx: "new-settle" })).toMatchObject({ verdict: "settled", tx: "new-settle", final: false });
     statuses.set("new-settle", { confirmationStatus: "finalized", err: null, slot: 11 });
-    expect(await assessOp(conn, { ...rec, sellerTx: "new-settle" })).toMatchObject({ verdict: "settled", tx: "new-settle" });
+    expect(await assessOp(conn, { ...rec, sellerTx: "new-settle" })).toMatchObject({ verdict: "settled", tx: "new-settle", final: true });
     // a failed read is not "not found": it throws, and the caller keeps the purchase unknown
     await expect(assessOp({ ...conn, getSignatureStatuses: async () => { throw new Error("fetch failed"); } }, rec)).rejects.toThrow("fetch failed");
   });

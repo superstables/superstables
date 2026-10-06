@@ -62,6 +62,8 @@ export interface PaymentFacts {
   lastValidBlockHeight?: number;
   /** EVM x402: the signed validBefore (ISO): from the chain's time past it, an unused authorization can never be used. */
   validBefore?: string;
+  /** Previously observed EVM payment block. A final unused nonce past it proves inclusion is gone. */
+  paymentBlock?: string;
   /**
    * When the payment could first have happened: a search looks no earlier. x402: when the attempt began, before anything
    * was signed. Tempo: when the owner's wallet was asked to send.
@@ -85,8 +87,8 @@ export interface PaymentFacts {
  * the payment could have landed in says how far it got (`searchedToSlot`), for the next search to read on from.
  */
 export type FoundPayment =
-  | { found: true; transaction: string; final?: false }
-  | { found: false; reason: string; unreadable?: boolean; never?: boolean; searchedToSlot?: number };
+  | { found: true; transaction: string; final?: false; paymentBlock?: string }
+  | { found: false; reason: string; unreadable?: boolean; never?: boolean; inclusionGone?: true; authorizationUsed?: true; searchedToSlot?: number };
 
 /** What a signed result records on the attempt before anything leaves this machine. */
 export type SignedFacts = Pick<Attempt, "authorizationNonce" | "authorizationValidBefore" | "paymentMemo" | "ownerSignature" | "lastValidBlockHeight" | "searchFromSlot">;

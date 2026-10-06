@@ -1,5 +1,6 @@
 // Chain reads for the Tempo scripts. Reads retry with backoff; nothing here sends a transaction, so
 // a retry can never pay twice.
+import { finalityFor } from "../../../src/core/finality-policy.js";
 import { keccak256, toBytes, type Address, type Hex } from 'viem'
 import { Abis, Addresses } from 'viem/tempo'
 import { RPC_URL, TOKEN_ADDRESS, fromBaseUnits, makeClient } from './common.ts'
@@ -57,7 +58,7 @@ export async function getReceipt(hash: string): Promise<ChainReceipt | null> {
   const quantity = (v: unknown): v is string => typeof v === 'string' && /^0x[0-9a-fA-F]+$/.test(v)
   const blockHash = (v: unknown): v is string => typeof v === 'string' && /^0x[0-9a-fA-F]{64}$/.test(v)
   if (!blockHash(r.transactionHash) || r.transactionHash.toLowerCase() !== hash.toLowerCase() || !quantity(r.blockNumber) || !blockHash(r.blockHash) || !Array.isArray(r.logs) || r.logs.some((l: { removed?: boolean }) => l?.removed) || !['0x0', '0x1'].includes(r.status)) throw new Error('transaction inclusion unreadable')
-  const head = await rpcRead('eth_getBlockByNumber', ['latest', false])
+  const head = await rpcRead('eth_getBlockByNumber', [finalityFor('tempo', 'moderato') === 'instant' ? 'latest' : 'finalized', false])
   if (!quantity(head?.number) || BigInt(r.blockNumber) > BigInt(head.number)) throw new Error('transaction is not in a committed block')
   const block = await rpcRead('eth_getBlockByNumber', [r.blockNumber, false])
   if (!quantity(block?.number) || BigInt(block.number) !== BigInt(r.blockNumber) || !blockHash(block?.hash) || block.hash.toLowerCase() !== r.blockHash.toLowerCase()) throw new Error('transaction canonical inclusion unreadable')
@@ -94,7 +95,7 @@ export async function getTxSigner(hash: string): Promise<{ from?: Address; keyId
 }
 
 export async function chainHead(): Promise<{ number: bigint; timestamp: number }> {
-  const b = await rpcRead('eth_getBlockByNumber', ['latest', false])
+  const b = await rpcRead('eth_getBlockByNumber', [finalityFor('tempo', 'moderato') === 'instant' ? 'latest' : 'finalized', false])
   return { number: BigInt(b.number), timestamp: parseInt(b.timestamp, 16) }
 }
 

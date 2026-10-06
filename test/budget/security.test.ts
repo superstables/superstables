@@ -342,6 +342,7 @@ describe("a Solana payment the chain refuses today", () => {
     getGenesisHash: async () => "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
     getEpochInfo: async () => ({ blockHeight: height, absoluteSlot: height }),
     getFirstAvailableBlock: async () => 0,
+    getBlockHeight: async () => height,
     getSignatureStatuses: async (sigs: string[]) => ({ context: { slot: height }, value: sigs.map(() => null) }),
     getSignaturesForAddress: async () => [],
     getTransaction: async () => null,

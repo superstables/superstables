@@ -58,7 +58,7 @@ export const PUBLIC_PATH = publicFile("solana", "devnet");
 export const OPS_DIR = opsDir("solana", "devnet");
 
 export function connection() {
-  return new Connection(RPC_URL, "confirmed");
+  return new Connection(RPC_URL, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }) });
 }
 
 // Exact decimal parse. Throws on anything that is not a plain non-negative

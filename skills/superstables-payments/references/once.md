@@ -1,5 +1,7 @@
 # Single purchase on superstables.com
 
+`budget` keeps the 0.3.0 command-completion meaning of `final`. It is `false` while an owner approval is open or a buy-once `unknown` can still be read by `wait`, and `true` otherwise. `chain_final` describes the current matching payment separately: `true` after chain finality, `false` while included but not final, and `null` when no current matching inclusion is established, including an unknown after removal. A provisional paid purchase is `settled`, with `final: true`, `chain_final: false`, and exit 0 when delivered or exit 4 when not delivered. Check finality later with `reconcile` or `wait`; never pay again for that purchase. Owner-command transactions are not seller payments and have `chain_final: null`. Older stored results without finality evidence also have `chain_final: null`.
+
 <a id="buy-once"></a>
 
 Read this when the owner chose to approve one purchase. The owner approves this one payment on superstables.com, in their own wallet. There is no setup, no budget or agent key: nothing is spent until they approve, and they approve each purchase separately. Testnet only. Test tokens, no real money. It pays on the network the service's listing names: Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet.
@@ -43,3 +45,5 @@ The final `RESULT` has `state`, `paid`, `delivered`, `amount`, `service`, `purch
 ## After the purchase
 
 Once, and only after a purchase went through, you may tell the owner that a budget lets you buy within a cap they approve once, without asking for each payment, and that you can set one up if they want it. Do not repeat it, and do not start it yourself. If they say yes, read [budget.md](budget.md#a-hosted-budget-on-superstablescom).
+
+A buy-once whose earlier inclusion was removed can stay `unknown`, `final: false` indefinitely, even after finality passes its old block. The read token remains available, as in 0.3.0's existing site-paid but chain-unverified unknown case. Stop automatic polling in that case and report it to the owner. `superstables budget wait --id <id> --abandon` ends local waiting without proving the purchase unpaid or permitting payment again.

@@ -74,7 +74,7 @@ const { values: args } = parseCli({
     agent: { type: 'string', metavar: 'label', desc: 'Named agent key (AGENT<label>_* in tempo-agent.env); omit for the primary agent', check: labelCheck },
     quote: { type: 'boolean', desc: 'Fetch the challenge and run the checks, sign nothing (RESULT state quoted)' },
   },
-  examples: ['npx tsx budget/tempo/buy.ts --url https://mpp.dev/api/ping/paid --max 0.2', 'npx tsx budget/tempo/reconcile.ts --op <id>'],
+  examples: ['npx tsx budget/tempo/buy.ts --url https://mpp.dev/api/ping/paid --max 0.2', 'superstables budget reconcile --rail tempo --op <id>'],
 })
 
 const url = args.url as string
@@ -101,6 +101,7 @@ let saved: Record<string, unknown> | null = null
 function finish(state: OpState, f: { tx?: string | null; debit?: bigint | null; remaining?: bigint | null; delivered?: boolean | null; next?: string; reason?: string }): never {
   if (op) {
     op.state = state
+    if (state === 'settled') op.chain_final = true
     if (f.tx) op.tx = f.tx
     if (f.delivered !== undefined && f.delivered !== null) op.delivered = f.delivered
     if (f.reason) op.reason = f.reason
@@ -111,6 +112,7 @@ function finish(state: OpState, f: { tx?: string | null; debit?: bigint | null; 
   printResult({
     op: opId,
     state,
+    chain_final: state === 'settled' ? true : null,
     tx: f.tx ?? null,
     debit: f.debit === undefined || f.debit === null ? null : fromBaseUnits(f.debit),
     remaining: f.remaining === undefined || f.remaining === null ? null : fromBaseUnits(f.remaining),
@@ -128,7 +130,7 @@ async function main() {
   const existing = readOp(opId)
   if (existing && BLOCKING.includes(existing.state)) {
     console.log(`Operation ${opId} is already ${existing.state}${existing.tx ? ` (tx ${oneLine(existing.tx, 100)})` : ''}. Not paying again.`)
-    console.log(`Run: npx tsx budget/tempo/reconcile.ts --op ${opId}`)
+    console.log(`Run: superstables budget reconcile --rail tempo --op ${opId}`)
     printResult({
       op: opId,
       state: existing.state,
@@ -136,7 +138,7 @@ async function main() {
       debit: null,
       remaining: null,
       delivered: existing.delivered ?? null,
-      next: `npx tsx budget/tempo/reconcile.ts --op ${opId}`,
+      next: `superstables budget reconcile --rail tempo --op ${opId}`,
       reason: `op_already_${existing.state}`,
     })
     process.exit(3)
@@ -294,7 +296,7 @@ async function main() {
     }
     if (mode === 'push') {
       console.log(`\nUNKNOWN: push-mode broadcast raised an error: ${desc}`)
-      finish('unknown', { reason: desc, next: `npx tsx budget/tempo/reconcile.ts --op ${opId}` })
+      finish('unknown', { reason: desc, next: `superstables budget reconcile --rail tempo --op ${opId}` })
     }
     console.log(`\nFAILED before signing: ${desc}`)
     finish('failed', { reason: `signing_failed: ${desc}`, remaining: remainingBefore, next: 'nothing was sent; safe to retry with a new op id' })
@@ -357,14 +359,14 @@ async function main() {
       finish('failed', { tx: r.transactionHash, debit: 0n, remaining: remainingAfter, delivered, reason: j.note, next: 'read the tx on the explorer; safe to retry with a new op id' })
     }
     console.log(`UNKNOWN: ${j.note}`)
-    finish('unknown', { tx: r.transactionHash, remaining: remainingAfter, delivered, reason: j.note, next: `npx tsx budget/tempo/reconcile.ts --op ${opId}` })
+    finish('unknown', { tx: r.transactionHash, remaining: remainingAfter, delivered, reason: j.note, next: `superstables budget reconcile --rail tempo --op ${opId}` })
   }
   if (outcome.kind === 'expired') {
     console.log('NOT FOUND: the signed payment expired without landing on chain. No funds moved.')
     finish('not_found', { debit: 0n, remaining: remainingAfter, delivered, reason: 'signed payment expired unsent; no transfer with this purchase memo on chain', next: 'no funds moved; safe to retry with a new op id' })
   }
   console.log('UNKNOWN: the chain does not show the payment yet and it may still land.')
-  finish('unknown', { remaining: remainingAfter, delivered, reason: sendError ?? 'not visible on chain yet', next: `npx tsx budget/tempo/reconcile.ts --op ${opId}` })
+  finish('unknown', { remaining: remainingAfter, delivered, reason: sendError ?? 'not visible on chain yet', next: `superstables budget reconcile --rail tempo --op ${opId}` })
 }
 
 function baseOp(
@@ -406,7 +408,7 @@ main().catch((err) => {
   const msg = oneLine((err as Error)?.message ?? err)
   console.error('buy failed:', msg)
   if (op && (op.state === 'submitted')) {
-    finish('unknown', { reason: msg, next: `npx tsx budget/tempo/reconcile.ts --op ${opId}` })
+    finish('unknown', { reason: msg, next: `superstables budget reconcile --rail tempo --op ${opId}` })
   }
   if (op) finish('failed', { reason: `error before signing: ${msg}`, next: 'nothing was signed; safe to retry with a new op id' })
   process.exit(1)
