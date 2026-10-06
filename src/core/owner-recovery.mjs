@@ -74,8 +74,9 @@ export function recoverAttempt(home, id, options) {
   const latest = () => {
     let found;
     for (const line of readFileSync(ledger, 'utf8').split('\n').filter(Boolean)) {
-      const row = JSON.parse(line);
-      if (row.id === id) found = row;
+      let row;
+      try { row = JSON.parse(line); } catch { continue; }
+      if (row?.id === id) found = row;
     }
     return found;
   };
@@ -89,7 +90,8 @@ export function recoverAttempt(home, id, options) {
     if (!permitted(inspect(), options) || JSON.stringify(latest()) !== JSON.stringify(attempt)) return false;
     // Append a new row. All payment, reservation, receipt and history evidence stays intact.
     const { runner, ...recovered } = attempt;
-    appendFileSync(ledger, JSON.stringify(recovered) + '\n', { mode: 0o600 });
+    const prefix = readFileSync(ledger, 'utf8').endsWith('\n') ? '' : '\n';
+    appendFileSync(ledger, prefix + JSON.stringify(recovered) + '\n', { mode: 0o600 });
     return true;
   }, options);
 }
