@@ -240,7 +240,7 @@ with its own approval link and code, and the owner approves the transaction in t
 still uses the page on this machine. The CLI, agent key and purchase journals stay on your own runtime; the owner's key stays in their wallet. Purchases need no approval from
 the site: the client pays the seller directly. On Solana the owner also connects a Solana wallet on
 the site's page; that address is the owner on record, and it signs each transaction the site builds.
-Solana sign-in is not supported in 0.3.0.
+Solana sign-in is not supported in 0.3.1.
 
 The [site account](https://www.superstables.com/account) lets the owner inspect linked agents and
 revoke budgets. It shows Single purchase requests made on superstables.com, not a complete history of budget purchases;
