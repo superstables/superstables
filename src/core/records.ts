@@ -175,7 +175,7 @@ export class Records {
   paymentsOfOthers(network: string, exclude: string): string[] {
     const out: string[] = [];
     for (const receipt of this.byId<Receipt>("receipts.jsonl").values()) {
-      if (receipt.attemptId === exclude || receipt.id === exclude || receipt.chain !== "verified" || !receipt.transaction) continue;
+      if (receipt.attemptId === exclude || receipt.id === exclude || (receipt.chain !== "verified" && !receipt.paymentIncluded) || !receipt.transaction) continue;
       if (networkFor(receipt.terms?.network ?? "")?.caip2 !== networkFor(network)?.caip2) continue;
       out.push(receipt.transaction);
     }
@@ -186,7 +186,7 @@ export class Records {
   paymentOwner(network: string, transaction: string, exclude: string): string | undefined {
     const wanted = txKey(network, transaction);
     for (const receipt of this.byId<Receipt>("receipts.jsonl").values()) {
-      if (receipt.attemptId === exclude || receipt.id === exclude || receipt.chain !== "verified" || !receipt.transaction) continue;
+      if (receipt.attemptId === exclude || receipt.id === exclude || (receipt.chain !== "verified" && !receipt.paymentIncluded) || !receipt.transaction) continue;
       if (networkFor(receipt.terms?.network ?? "")?.caip2 !== networkFor(network)?.caip2) continue;
       if (txKey(network, receipt.transaction) === wanted) return receipt.attemptId;
     }
