@@ -1,3 +1,4 @@
+import { finalityFor } from "../finality-policy.js";
 import { finalInclusion } from "../finality.js";
 // The MPP tempo.charge rail on Tempo Moderato, push mode: the owner's own wallet sends one pathUSD transferWithMemo,
 // with the memo bound to the seller's challenge, and the seller is then shown the transaction's hash. Pinned in code:
@@ -182,8 +183,8 @@ async function checkTempoPayment(facts: PaymentFacts, options: ChainReadOptions)
     return { chain: "unchecked", reason: "the chain could not be read: the RPC answered with a receipt for another transaction" };
   }
   // Tempo Moderato uses committed BFT blocks with instant finality, but still requires canonical inclusion.
-  if (!(await finalInclusion(rpc.url, receipt, "instant", options))) {
-    return { chain: "unchecked", reason: "the transaction has not reached final canonical inclusion" };
+  if (!(await finalInclusion(rpc.url, receipt, finalityFor("tempo", "moderato"), options))) {
+    return { chain: "unchecked", reason: "the transaction has not reached a final block on chain" };
   }
   if (receipt.status !== "0x1") return { chain: "mismatch", reason: "the transaction failed on chain" };
   // Mined before the wallet was asked to send: an older transfer, whatever it shows, is not this payment.

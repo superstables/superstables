@@ -80,6 +80,8 @@ export interface FakePurchaseSite extends TestServer {
   pay(p: FakePurchase, paid?: Paid): void;
   /** The fake chain's JSON-RPC URL: B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC point at it. */
   chainUrl: string;
+  /** Defaults below all payments to exercise delivery before finality. */
+  finalizedBlock?: number;
 }
 
 /** A payment as the site reports it, and what the chain shows for it: false for nothing, or other values. */
@@ -203,7 +205,7 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
           if (!t || !t.evm) return null;
           return { transactionHash: params[0], status: t.failed ? "0x0" : "0x1", blockNumber: `0x${t.block.toString(16)}`, blockHash: keccak256(toBytes(`purchase:${t.block}`)), logs: [{ address: t.asset, topics: [TRANSFER_TOPIC, word(t.payer), word(t.payTo)], data: `0x${t.amount.toString(16).padStart(64, "0")}` }] };
         case "eth_getBlockByNumber": {
-          const n = params[0] === "latest" || params[0] === "finalized" ? 1000 : Number(params[0]);
+          const n = params[0] === "finalized" ? site.finalizedBlock ?? 10 : params[0] === "latest" ? 1000 : Number(params[0]);
           const at = [...landed.values()].find((x) => x.evm && x.block === n)?.at ?? Math.floor(Date.now() / 1000);
           return { number: `0x${n.toString(16)}`, hash: keccak256(toBytes(`purchase:${n}`)), timestamp: `0x${at.toString(16)}` };
         }

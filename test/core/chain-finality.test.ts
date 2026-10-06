@@ -33,7 +33,8 @@ it.each(["unchecked", "mismatch"] as const)("status rechecks provisional payment
   const first = await recheckChain(records, "a", chain.url);
   chain.receipts.delete(transaction); chain.used.delete(NONCE);
   const second = await recheckChain(records, "a", chain.url);
-  expect(first?.chain).toBe(initialChain); expect(second?.chain).toBe(initialChain);
+  expect(first?.chain).toBe("unchecked"); expect(second?.chain).toBe("unchecked");
+  expect(second?.state).toBe("uncertain");
   const replacement = chain.settle({ from: PAYER, to: TO, value: "10000", nonce: NONCE });
   chain.advance(10);
   expect(await recheckChain(records, "a", chain.url)).toMatchObject({ chain: "verified", transaction: replacement });
