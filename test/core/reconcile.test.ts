@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import bs58 from "bs58";
+import { keccak256, toBytes } from "viem";
 import { afterEach, describe, expect, it } from "vitest";
 import { BASE_SEPOLIA, POLYGON_AMOY, SOLANA_DEVNET } from "../../src/core/chain.js";
 import { recheckChain } from "../../src/core/pay.js";
@@ -64,6 +65,7 @@ describe("status on EVM chains", () => {
     const validBefore = new Date((chain.head.timestamp + 300) * 1000).toISOString();
     const cancelled = chain.settle({ from: PAYER, to: RECIPIENT, value: "10000", nonce: NONCE });
     chain.used.get(NONCE)!.cancelled = true;
+    chain.receipts.set(cancelled, { status: "0x1", blockNumber: `0x${chain.used.get(NONCE)!.block.toString(16)}`, logs: [{ address: BASE_SEPOLIA.usdc.address, topics: [keccak256(toBytes("AuthorizationCanceled(address,bytes32)")), `0x${PAYER.slice(2).padStart(64, "0")}`, NONCE], data: "0x" }] });
     chain.finalizedLag = 2;
     evmAttempt(r, validBefore);
     const first = await recheckChain(r, "a", chain.url);

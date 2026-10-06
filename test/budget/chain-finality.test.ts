@@ -10,6 +10,7 @@ import { encodeEventTopics, parseAbi, createWalletClient, http, type Hex } from 
 import { privateKeyToAccount } from "viem/accounts";
 import { readSettlement as hostedSettlement } from "../../budget/settlement.mjs";
 import { sendJson, readBody, startServer } from "../helpers/servers.js";
+import { SOLANA_MARKET, SOLANA_PAYER, startFakePurchaseSite } from "../helpers/fake-purchase-site.js";
 import { assessOp, refusalIsFinal } from "../../budget/solana/ops.mjs";
 
 const OWNER = "0x1111111111111111111111111111111111111111";
@@ -213,7 +214,7 @@ describe("hosted client finality", () => {
       expect((await hostedSettlement({ ...input, rail: "tempo", chain: "moderato" })).state).toBe("settled");
     } finally { await server.close(); }
   });
-  it("reads hosted Solana payment at finalized commitment", async () => {
+  it("reads hosted Solana payment before and after finalized commitment", async () => {
     const owner = solanaKey();
     const recipient = randomAddress();
     const sponsor = solanaKey();
@@ -244,6 +245,39 @@ describe("hosted client finality", () => {
       finalized = true;
       expect((await hostedSettlement(input)).state).toBe("settled");
     } finally { await server.close(); }
+  });
+  it("reads the hosted Solana payment identity at the same commitment as its execution", async () => {
+    const site = await startFakePurchaseSite();
+    site.services.push(SOLANA_MARKET);
+    site.finalizedSlot = 10;
+    const reads: unknown[] = [];
+    const proxy = await startServer(async (req, res) => {
+      const raw = await readBody(req);
+      const call = JSON.parse(raw);
+      reads.push(call.params[1]);
+      const response = await fetch(site.chainUrl, { method: "POST", headers: { "content-type": "application/json" }, body: raw });
+      sendJson(res, 200, await response.json());
+    });
+    try {
+      await fetch(`${site.url}/api/v1/purchases`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ service_id: SOLANA_MARKET.id }) });
+      const p = site.purchases[0];
+      const tx = "5".repeat(87);
+      site.settle(p, "ok", { transaction: tx, payer: SOLANA_PAYER });
+      const input = { rail: "solana", chain: "devnet", tx, payer: SOLANA_PAYER, payTo: SOLANA_MARKET.payTo, asset: SOLANA_MARKET.asset, amount: 10000n, notBefore: 0, nonce: p.nonce, rpcUrl: proxy.url, deadline: undefined };
+      expect((await hostedSettlement(input)).state).toBe("included");
+      site.finalizedSlot = 1000;
+      expect((await hostedSettlement(input)).state).toBe("settled");
+      expect((await hostedSettlement({ ...input, nonce: NONCE })).state).toBe("mismatch");
+      expect(reads).toEqual([
+        expect.objectContaining({ encoding: "json", commitment: "finalized" }),
+        expect.objectContaining({ encoding: "json", commitment: "confirmed" }),
+        expect.objectContaining({ encoding: "base64", commitment: "confirmed" }),
+        expect.objectContaining({ encoding: "json", commitment: "finalized" }),
+        expect.objectContaining({ encoding: "base64", commitment: "finalized" }),
+        expect.objectContaining({ encoding: "json", commitment: "finalized" }),
+        expect.objectContaining({ encoding: "base64", commitment: "finalized" }),
+      ]);
+    } finally { await proxy.close(); await site.close(); }
   });
 });
 
