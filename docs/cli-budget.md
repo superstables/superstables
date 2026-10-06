@@ -121,7 +121,7 @@ Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount i
 while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read.
 next is the command to run next, or none.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
-approval link, the match code (hosted), the amount and chain, the testnet line. The agent sends it and ends its turn.
+approval link, the match code (on superstables.com), the amount and chain, the testnet line. The agent sends it and ends its turn.
 budget_spent: true when buy was refused because the budget cannot cover the purchase (spent, revoked, never granted).
 --json (every command): stdout is only that object, as JSON without the RESULT prefix, like the rest of superstables;
 the APPROVE line goes to stderr with the logs. The fields and exit codes are the same.
