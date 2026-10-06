@@ -71,7 +71,7 @@ async function acquire(path: string, me: string, deadline: number, breakDead?: (
         throw new Error(
           holder
             ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}${inspectProcess(holder).possiblyAlive ? "; the holder may still be running; stop and ask the owner to check the payment lock in their own terminal, outside the agent's sandbox. Agents must not clear payment locks" : ""}`
-            : `the lock ${path} cannot be read; if no payment is being made, remove it`,
+            : `the lock ${path} cannot be read; stop and ask the owner to check the payment lock in their own terminal, outside the agent's sandbox. Agents must not clear payment locks`,
         );
       }
       if (Date.now() >= deadline) throw new Error(`the lock ${path} could not be taken in time`);
