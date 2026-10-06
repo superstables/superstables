@@ -124,6 +124,7 @@ export function messageFor(attempt: Attempt, receipt?: Receipt): string {
       if (hash) return `Whether the payment settled is unknown: ${attempt.reason ?? "no reason was recorded"}, but it names ${transaction}. It was not retried. Check the transaction before trying again.`;
       return `Payment did not happen: ${attempt.reason ?? "no reason was recorded"}.`;
     case "uncertain":
+      if (attempt.paymentIncluded) return "The earlier payment inclusion was removed; outcome unknown. Do not pay again.";
       return (
         `The payment may or may not have settled: ${attempt.reason ?? "no reason was recorded"}. ` +
         `It was not retried. \`superstables status ${attempt.id}\` looks for it on chain; ` +

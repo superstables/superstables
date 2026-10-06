@@ -268,7 +268,15 @@ export class PaymentEngine {
   private async run(attempt: Attempt, quote: Quote): Promise<void> {
     const started = Date.now();
 
-    // Resolve older seller reports that still hold today's cap. Included payments count on their paid day.
+    if (!quote.policy.allowed) {
+      this.settleState(attempt, "failed", {
+        refusal: "policy",
+        reason: `the local spend policy refuses this payment: ${quote.policy.reason ?? "no reason given"}`,
+      });
+      return;
+    }
+
+    // Resolve older unchecked seller reports. Included payments count on their paid day.
     const day = new Date(this.now()).toISOString().slice(0, 10);
     for (const prior of this.records.listAttempts()) {
       if ((prior.state === "settled" || prior.state === "paid_service_failed") && prior.chain !== "verified" && !prior.paymentIncluded && prior.chain !== "unpaid" && !prior.createdAt.startsWith(day)) await this.recheckChain(prior.id);
@@ -1181,7 +1189,7 @@ function recordSearch(records: Records, attempt: Attempt, reason: string, search
     records.saveReceipt({ ...rest, chain: "unchecked", chainFinal: null, chainReason });
   }
   const further = searchedToSlot !== undefined && searchedToSlot > (attempt.searchedToSlot ?? -1);
-  const updated: Attempt = { ...attempt, ...(inclusionRemoved ? { state: "uncertain", paymentIncluded: true } : {}), chain: mismatch ? "mismatch" : "unchecked", chainFinal: null, chainReason, ...(further ? { searchedToSlot } : {}), updatedAt: at };
+  const updated: Attempt = { ...attempt, ...(inclusionRemoved ? { state: "uncertain", paymentIncluded: true, reason } : {}), chain: mismatch ? "mismatch" : "unchecked", chainFinal: null, chainReason, ...(further ? { searchedToSlot } : {}), updatedAt: at };
   records.saveAttempt(updated);
   return updated;
 }
