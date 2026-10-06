@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { closeSync, fstatSync, fsyncSync, futimesSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createIdentitySource } from './lock-identity.mjs';
 import { inspectProcess } from '../src/core/process-identity.mjs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 export const HEARTBEAT_MS = 15_000;
 const systemIdentity = createIdentitySource();
@@ -18,8 +18,8 @@ function durableRecord(path, text) {
 }
 function liveness(owner, options = {}) {
   const results = [inspectProcess(owner, source(options))];
-  if (owner.railPid !== undefined) results.push(inspectProcess({ ...owner, pid: owner.railPid, pidStart: owner.railPidStart, pidStartUtc: owner.railPidStartUtc, hostPid: owner.railHostPid, writtenAt: owner.railWrittenAt, createdAt: undefined }, source(options)));
-  return results.find(result => result.state === 'alive') ?? results.find(result => result.state === 'unverifiable') ?? { state: 'dead' };
+  if (owner.railPid !== undefined) results.push(inspectProcess({ ...owner, pid: owner.railPid, pidStart: owner.railPidStart, pidStartUtc: owner.railPidStartUtc, namespace: 'railNamespace' in owner ? owner.railNamespace : owner.namespace, hostPid: owner.railHostPid, writtenAt: owner.railWrittenAt, bootElapsedMs: owner.railBootElapsedMs, createdAt: undefined }, source(options)));
+  return results.find(result => result.state === 'alive' && !result.possiblyAlive) ?? results.find(result => result.state === 'alive') ?? results.find(result => result.state === 'unverifiable') ?? { state: 'dead' };
 }
 
 const fileVersion = stat => `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.size}`;
@@ -38,19 +38,21 @@ function holder(path, options = {}) {
   } catch {}
   return { text, version, pid: null, owner: null, state: 'unverifiable', why: 'unreadable or unrecognised lock record', directory: stat.isDirectory() };
 }
-/** @returns {{ ok: false, holder: number | null, path: string, details: string }} */
-function busy(path, current = holder(path), agent = true) {
+export const operationBusy = op => `Operation ${op} is locked. Its process may still be running. Stop and ask the owner to check it in their own terminal, outside the agent's sandbox. Agents must not clear operation locks.`;
+/** @returns {{ ok: false, holder: number | null, path: string, details: string, possiblyAlive: boolean }} */
+function busy(path, current = holder(path), agent = true, operationPath = path) {
   const owner = current?.owner;
+  const possiblyAlive = Boolean(current?.possiblyAlive || (current?.state === 'unverifiable' && !current.directory));
   const created = Number.isFinite(owner?.createdAt) ? new Date(owner.createdAt) : null;
   const time = created && !Number.isNaN(created.getTime()) ? created.toISOString() : 'an unknown time';
-  const details = current?.possiblyAlive
-    ? `possibly live holder process ${current.pid} since ${time}: ${current.why}; the holder may still be running; the owner must ${current.guidance ?? 'stop that process or run unlock outside the sandbox where process identity can be read'}`
+  const details = possiblyAlive && agent
+    ? operationBusy(basename(operationPath).replace(/\.(?:buy|json)\.lock(?:\..*)?$|\.lock(?:\..*)?$/, ''))
     : current?.state === 'alive'
     ? `held by process ${current.pid} since ${time}; wait for its RESULT or ask the owner to check it`
     : current?.directory
       ? 'unrecognised directory in the lock or takeover mutex; the owner must inspect and remove this directory after stopping all work on this op'
-      : `unverifiable holder${current?.pid ? ` process ${current.pid} since ${time}` : ''}: ${current?.why ?? 'lock changed during inspection'}; timestamps cannot prove it has exited${agent ? '; stop and ask the owner; see the owner-only unlock --help section of the installed CLI' : ''}`;
-  return { ok: false, holder: current?.pid ?? null, path, details: `${details} (${path})` };
+      : `unverifiable holder${current?.pid ? ` process ${current.pid} since ${time}` : ''}: ${current?.why ?? 'lock changed during inspection'}; timestamps cannot prove it has exited${agent ? "; stop and ask the owner to check it in their own terminal, outside the agent's sandbox" : ""}`;
+  return { ok: false, holder: current?.pid ?? null, path, possiblyAlive, details: possiblyAlive && agent ? details : `${details} (${path})` };
 }
 function removeBreaker(path, generation) {
   try { unlinkSync(join(path, generation)); }
@@ -69,7 +71,7 @@ function clearDeadBreaker(path, options = {}) {
     const records = readdirSync(path);
     if (records.length === 0) { rmdirSync(path); return; }
     const owners = records.map(name => ({ name, record: holder(join(path, name), options) }));
-    if (owners.some(({ record }) => record?.state === 'alive' || record?.directory || (record?.state === 'unverifiable' && !options.confirmUnverifiable))) return;
+    if (owners.some(({ record }) => (record?.state === 'alive' && !(record.possiblyAlive && options.confirmPossiblyAlive)) || record?.directory || (record?.state === 'unverifiable' && !options.confirmUnverifiable))) return;
     // Only remove the entries observed here. rmdir refuses a newly published generation.
     for (const { name, record } of owners) {
       const entry = join(path, name);
@@ -81,9 +83,10 @@ function clearDeadBreaker(path, options = {}) {
   }
 }
 function removable(path, record, options) {
-  if (!record || record.directory || record.state === 'alive') return false;
+  if (!record || record.directory) return false;
+  if (record.state === 'alive' && !(record.possiblyAlive && options.confirmPossiblyAlive)) return false;
   if (record.state === 'dead') return true;
-  if (!options.confirmUnverifiable) return false;
+  if (record.state === 'unverifiable' && !options.confirmUnverifiable) return false;
   options.onOverride?.(busy(path, record, false).details);
   return true;
 }
@@ -118,7 +121,7 @@ function breakStale(path, stale, options) {
       // The warning can block on terminal output while the old holder releases and a new one publishes.
       const afterWarning = holder(path, options);
       if (!afterWarning || afterWarning.version !== current.version || afterWarning.text !== current.text) { changed = true; return; }
-      if (afterWarning.state === 'alive') { changed = true; return; }
+      if (afterWarning.state === 'alive' && !(afterWarning.possiblyAlive && options.confirmPossiblyAlive)) { changed = true; return; }
       // Process inspection may spawn ps. Recheck the file after that work, immediately before unlink.
       try {
         if ((afterWarning.text !== null && readFileSync(path, 'utf8') !== afterWarning.text) || fileVersion(lstatSync(path)) !== afterWarning.version) { changed = true; return; }
@@ -139,7 +142,7 @@ export function abandonedBreaker(path, options = {}) {
       for (const name of readdirSync(mutex)) {
         const entry = join(mutex, name);
         const owner = holder(entry, options);
-        if (owner) return busy(entry, owner);
+        if (owner) return busy(entry, owner, true, path);
       }
     } catch (err) { if (err.code !== 'ENOENT') throw err; }
   }
@@ -163,7 +166,7 @@ export function lockFile(path, options = {}) {
         if (err.code !== 'EEXIST') throw err;
         const current = holder(path, options);
         if (!current) continue;
-        if (current.state === 'alive' || current.directory || (current.state === 'unverifiable' && !options.confirmUnverifiable)) return busy(path, current);
+        if ((current.state === 'alive' && !(current.possiblyAlive && options.confirmPossiblyAlive)) || current.directory || (current.state === 'unverifiable' && !options.confirmUnverifiable)) return busy(path, current);
         if (breakStale(path, current, options)) return busy(path, holder(path, options));
         continue;
       }
@@ -210,7 +213,7 @@ export function lockFile(path, options = {}) {
           if (processOrPid.exitCode !== null || processOrPid.signalCode !== null) exited();
           else processOrPid.once('exit', exited);
         }
-        const next = JSON.stringify({ ...owner, railPid: child.pid, railPidStart: child.pidStart, railWrittenAt: child.writtenAt, railHostPid: child.hostPid ?? null, ...(child.pidStartUtc !== undefined ? { railPidStartUtc: child.pidStartUtc } : {}) });
+        const next = JSON.stringify({ ...owner, railPid: child.pid, railPidStart: child.pidStart, railWrittenAt: child.writtenAt, railBootElapsedMs: child.bootElapsedMs, railNamespace: child.namespace, railHostPid: child.hostPid ?? null, ...(child.pidStartUtc !== undefined ? { railPidStartUtc: child.pidStartUtc } : {}) });
         const update = `${path}.${randomUUID()}.tmp`;
         try {
           durableRecord(update, next);
@@ -243,7 +246,8 @@ export function lockRecord(dir, op, options = {}) {
   return lockFile(join(dir, `${op}.json.lock`), options);
 }
 export function lockNext(lock, op, rail, chain) {
-  return `${lock.details}. Another process (buy or reconcile) may be working on this op; wait for its RESULT, then superstables budget reconcile --rail ${rail} --chain ${chain} --op ${op}. Stop and ask the owner to check and stop all work on this op across processes, containers and hosts. Only the owner handles lock recovery; see the owner-only unlock --help section of the installed CLI and the payment skill rule 5. A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments. Never pay again for this op while its outcome is unknown`;
+  if (lock.possiblyAlive) return operationBusy(op);
+  return `${lock.details}. Another process (buy or reconcile) may be working on this op; wait for its RESULT, then superstables budget reconcile --rail ${rail} --chain ${chain} --op ${op}. Stop and ask the owner to check it in their own terminal, outside the agent's sandbox. Agents must not clear operation locks. Never pay again for this op while its outcome is unknown`;
 }
 export function requireRecordLock(dir, op) {
   const lock = lockRecord(dir, op);

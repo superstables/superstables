@@ -3,7 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, readlinkSync, readdirSync } from "node:fs";
 
-import { hostname } from 'node:os';
+import { hostname, uptime } from 'node:os';
 
 let bootId;
 function linuxBootId(readFile = readFileSync) {
@@ -35,7 +35,7 @@ export function compareProcessStarts(recorded, current) {
 
 /**
  * The start identity of process `pid`: a string, or null when no such process exists, or undefined when this system gives
- * no way to tell (then only the pid can be checked).
+ * no way to tell. A PID probe still requires verified location.
  */
 export function processStart(pid, platform = process.platform, run = execFileSync, utc = true, readFile = readFileSync) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
@@ -97,8 +97,19 @@ export function createIdentitySource({ platform = process.platform, host = hostn
       try { procPid = Number(readFile('/proc/self/status', 'utf8').match(/^NSpid:\s+(\d+)/m)?.[1]) || pid; } catch {}
     }
     return processStart(procPid, platform, run, true, readFile);
-  }, probe = pid => process.kill(pid, 0) } = {}) {
-  let bootId = null, namespace = null;
+  }, probe = pid => process.kill(pid, 0), bootElapsed = () => uptime() * 1000 } = {}) {
+  let bootId = null, namespace = null, hostId = null;
+  if (platform === 'linux') {
+    for (const path of ['/etc/machine-id', '/var/lib/dbus/machine-id']) {
+      try { const id = readFile(path, 'utf8').trim(); if (/^[0-9a-f]{32}$/i.test(id)) { hostId = id.toLowerCase(); break; } } catch {}
+    }
+  } else if (platform === 'darwin') {
+    try {
+      const out = run('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+      const id = out.match(/"IOPlatformUUID"\s*=\s*"([0-9a-f-]+)"/i)?.[1];
+      if (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id ?? '')) hostId = id.toLowerCase();
+    } catch {}
+  }
   if (platform === 'linux') {
     try { bootId = readFile('/proc/sys/kernel/random/boot_id', 'utf8').trim() || null; } catch {}
     try { namespace = readlink('/proc/self/ns/pid'); } catch {}
@@ -114,17 +125,17 @@ export function createIdentitySource({ platform = process.platform, host = hostn
   };
   // Linux reserves 0xEFFFFFFC for the initial PID namespace (include/uapi/linux/nsfs.h).
   // NSpid alone cannot identify nesting after a sandbox remounts /proc.
-  const nested = () => platform === 'linux' && (pids('self').length > 1 || (namespace !== null && namespace !== 'pid:[4026531836]'));
+  const nested = () => platform === 'linux' && (!namespace || pids('self').length !== 1 || namespace !== 'pid:[4026531836]');
   const fields = pid => {
     const target = pid === process.pid ? 'self' : pid;
-    if (platform === 'linux' && target !== 'self' && pids('self').length > 1) return { platform, hostname: host, bootId, namespace, hostPid: null, pidStart: null, writtenAt: Date.now() };
+    if (platform === 'linux' && target !== 'self' && pids('self').length > 1) return { platform, hostname: host, hostId, bootId, namespace: null, hostPid: null, pidStart: null, writtenAt: Date.now(), bootElapsedMs: bootElapsed() };
     let ns = namespace;
-    if (platform === 'linux') { try { ns = readlink(`/proc/${target}/ns/pid`); } catch {} }
+    if (platform === 'linux') { try { ns = readlink(`/proc/${target}/ns/pid`); } catch { ns = null; } }
     const ids = platform === 'linux' ? pids(target) : [];
-    return { platform, hostname: host, bootId, namespace: ns, hostPid: ns === 'pid:[4026531836]' || ids.length > 1 ? ids[0] ?? null : null, ...starts(pid), writtenAt: Date.now() };
+    return { platform, hostname: host, hostId, bootId, namespace: ns, hostPid: ns === 'pid:[4026531836]' || ids.length > 1 ? ids[0] ?? null : null, ...starts(pid), writtenAt: Date.now(), bootElapsedMs: bootElapsed() };
   };
   let ownFields;
-  return { record: () => ({ pid: process.pid, ...(ownFields ??= fields(process.pid)), writtenAt: Date.now() }), starts, fields, start, probe, nested, readFile, readlink, readdir, pids, run };
+  return { record: () => ({ pid: process.pid, ...(ownFields ??= fields(process.pid)), writtenAt: Date.now(), bootElapsedMs: bootElapsed() }), starts, fields, start, probe, nested, readFile, readlink, readdir, pids, run, bootElapsed };
 }
 
 /**
@@ -135,6 +146,8 @@ export function createIdentitySource({ platform = process.platform, host = hostn
  * @property {string|null} [namespace]
  * @property {string|null} [bootId]
  * @property {string} [hostname]
+ * @property {string|null} [hostId]
+ * @property {number} [bootElapsedMs]
  * @property {string} [platform]
  * @property {number|string} [createdAt]
  * @property {number} [writtenAt]
@@ -149,15 +162,13 @@ function zombie(pid, source) {
   try { return ['Z', 'X'].includes(statFields(source.readFile(`/proc/${pid}/stat`, 'utf8'))[0]); } catch { return false; }
 }
 
-/** Map an inner PID (or group) only from the initial namespace. Undefined means inspection was incomplete. */
+/** Map an inner PID (or group) only from a readable initial namespace. */
 export function visiblePid(owner, source = systemIdentity, group = false) {
   const local = source.record();
-  if (local.platform !== 'linux') return owner.pid;
-  if (source.pids?.('self').length > 1) return undefined;
+  if (local.platform === 'darwin') return owner.pid;
+  if (local.platform !== 'linux' || !local.namespace || source.pids?.('self').length !== 1) return undefined;
   if (owner.namespace && owner.namespace === local.namespace) return owner.pid;
-  if (source.nested?.()) return undefined;
-  if (!local.namespace) return owner.pid;
-  if (local.namespace !== 'pid:[4026531836]') return undefined;
+  if (source.nested?.() || !owner.namespace || local.namespace !== 'pid:[4026531836]') return undefined;
   let entries;
   try { entries = source.readdir('/proc'); } catch { return undefined; }
   let incomplete = false;
@@ -165,104 +176,92 @@ export function visiblePid(owner, source = systemIdentity, group = false) {
     if (!/^\d+$/.test(entry)) continue;
     try {
       const status = source.readFile(`/proc/${entry}/status`, 'utf8');
-      const ids = status.match(/^NSpid:\s+(.+)$/m)?.[1].trim().split(/\s+/).map(Number);
-      // On a host-mounted proc, one NSpid entry excludes a foreign namespace even if its ns link is denied.
-      if (ids?.length === 1) continue;
-      if (owner.namespace && source.readlink(`/proc/${entry}/ns/pid`) !== owner.namespace) continue;
-      const numbers = group ? status.match(/^NSpgid:\s+(.+)$/m)?.[1].trim().split(/\s+/).map(Number) : ids;
+      const numbers = status.match(group ? /^NSpgid:\s+(.+)$/m : /^NSpid:\s+(.+)$/m)?.[1].trim().split(/\s+/).map(Number);
       if (!numbers?.length) { incomplete = true; continue; }
-      if (numbers.at(-1) === owner.pid) {
-        if (zombie(Number(entry), source)) continue;
-        const candidate = group ? Number(statFields(source.readFile(`/proc/${entry}/stat`, 'utf8'))[2]) : Number(entry);
-        if (!owner.namespace) {
-          const recorded = preferredProcessStart(owner.pidStart, owner.pidStartUtc);
-          const current = source.start(candidate);
-          if (typeof recorded === 'string' && typeof current === 'string' && compareProcessStarts(recorded, current) === false) continue;
-          if (!recorded && startAfterWrite(candidate, current, owner, source)) continue;
-        }
-        return candidate;
-      }
+      // A single namespace PID on the initial proc mount is already proven to be on the host.
+      if (numbers.length === 1 || numbers.at(-1) !== owner.pid) continue;
+      // Read namespace links only for matching inner PIDs. Unreadable unrelated links cannot block recovery.
+      if (source.readlink(`/proc/${entry}/ns/pid`) !== owner.namespace) continue;
+      if (zombie(Number(entry), source)) continue;
+      return group ? Number(statFields(source.readFile(`/proc/${entry}/stat`, 'utf8'))[2]) : Number(entry);
     } catch (err) { if (!absent(err)) incomplete = true; }
   }
-  return incomplete ? undefined : owner.namespace ? null : owner.pid;
+  return incomplete ? undefined : null;
 }
 
-let clockTicks;
-function startAfterWrite(pid, current, owner, source) {
+function sameHost(owner, local) {
+  return typeof owner.hostId === 'string' && owner.hostId.length > 0 && owner.hostId === local.hostId;
+}
+function sameBoot(owner, local) {
+  return uuid(owner.bootId) && uuid(local.bootId) && owner.bootId.toLowerCase() === local.bootId.toLowerCase();
+}
+function startAfterWrite(current, owner, source) {
+  const local = source.record();
+  if (!sameHost(owner, local) || !sameBoot(owner, local)) return false;
   const written = owner.writtenAt ?? (typeof owner.createdAt === 'string' ? Date.parse(owner.createdAt) : owner.createdAt);
-  if (!Number.isFinite(written)) return false;
-  if (owner.hostname && owner.hostname !== source.record().hostname) return false;
-  if (typeof current === 'string' && /^darwin:utc:\d+$/.test(current)) return Number(current.slice(11)) * 1000 > written;
+  if (!Number.isFinite(written) || written > Date.now() || !Number.isFinite(owner.bootElapsedMs)) return false;
+  // A recorded boot-relative time also detects wall-clock steps since publication.
+  if (Number.isFinite(owner.bootElapsedMs)) {
+    const elapsed = source.bootElapsed?.();
+    if (!Number.isFinite(elapsed) || elapsed < owner.bootElapsedMs || Math.abs((Date.now() - written) - (elapsed - owner.bootElapsedMs)) > 1000) return false;
+  }
+  if (typeof current === 'string' && /^darwin:utc:\d+$/.test(current)) return Number(current.slice(11)) * 1000 >= written + 60_000;
   if (typeof current !== 'string' || !/^linux:[^:]+:\d+$/.test(current)) return false;
   try {
     const bootSeconds = Number(source.readFile('/proc/stat', 'utf8').match(/^btime (\d+)$/m)?.[1]);
-    const ticks = clockTicks ??= Number(source.run('getconf', ['CLK_TCK'], { encoding: 'utf8', timeout: 5000 }));
+    const ticks = Number(source.run('getconf', ['CLK_TCK'], { encoding: 'utf8', timeout: 5000 }));
     if (!(ticks > 0) || !Number.isFinite(bootSeconds)) return false;
-    return (bootSeconds + Number(current.split(':').at(-1)) / ticks) * 1000 > written;
+    const started = Number(current.split(':').at(-1)) / ticks * 1000;
+    if (Number.isFinite(owner.bootElapsedMs) && started < owner.bootElapsedMs + 60_000) return false;
+    return bootSeconds * 1000 + started >= written + 60_000;
   } catch { return false; }
 }
 
-/** @param {ProcessRecord} owner */
-export function inspectProcess(owner, source = systemIdentity) {
+/**
+ * @typedef {object} ProcessInspection
+ * @property {'alive'|'dead'} state
+ * @property {boolean} [possiblyAlive]
+ * @property {number} [pid]
+ * @property {string} [why]
+ */
+
+/**
+ * A holder is dead only with positive proof; a failed local probe never establishes its location.
+ * @returns {ProcessInspection}
+ */
+export function inspectProcess(owner, source = systemIdentity, group = false) {
   const local = source.record();
-  if (owner.platform && owner.platform !== local.platform) return { state: 'unverifiable', why: 'another OS' };
-  if (uuid(local.bootId) && uuid(owner.bootId) && owner.bootId.toLowerCase() !== local.bootId.toLowerCase()) {
-    return { state: 'unverifiable', why: owner.hostname && owner.hostname !== local.hostname ? 'another host' : 'another boot' };
-  }
-  // Positive local evidence already suffices to refuse a legacy holder. Scan only when absence or reuse is possible.
-  if (local.platform === 'linux' && !owner.namespace && !source.nested?.()) {
-    const recorded = preferredProcessStart(owner.pidStart, owner.pidStartUtc);
-    const current = source.start(owner.pid);
-    if (typeof recorded === 'string' && typeof current === 'string' && compareProcessStarts(recorded, current) === true) {
-      const live = { state: 'alive', possiblyAlive: true, pid: owner.pid, why: owner.platform ? 'unreadable PID namespace identity' : '0.3.0 record without host identity', guidance: 'stop the recorded process; a readable start mismatch or a process started after the record was written permits recovery' };
-      try { source.probe(owner.pid); return live; }
-      catch (err) { if (err.code === 'EPERM') return live; }
-    }
-  }
-  const pid = visiblePid(owner, source);
-  if (pid === undefined) return source.nested?.() || local.namespace !== 'pid:[4026531836]'
-    ? { state: 'alive', possiblyAlive: true, pid: owner.pid, why: owner.namespace === local.namespace ? 'process identity is unverifiable from this PID namespace proc view' : 'holder in another PID namespace that is unverifiable from here', guidance: 'run unlock on the host (the initial PID namespace), outside the sandbox' }
-    : { state: 'alive', possiblyAlive: true, pid: owner.pid, why: 'unreadable PID namespace inspection', guidance: 'run unlock on the host with permission to inspect the holder namespace' };
+  /** @type {(why: string) => ProcessInspection} */
+  const possible = why => ({ state: 'alive', possiblyAlive: true, pid: owner.pid, why });
+  if (owner.platform && owner.platform !== local.platform) return possible('another OS');
+  if (!sameHost(owner, local)) return possible(owner.hostId && local.hostId ? 'another host' : 'unreadable host identity');
+  if (!uuid(owner.bootId) || !uuid(local.bootId)) return possible('unreadable boot identity');
+  if (!sameBoot(owner, local)) return { state: 'dead' };
+  if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) return possible('unrecognised process identity');
+  const pid = visiblePid(owner, source, group);
+  if (pid === undefined) return possible(!local.namespace && local.platform === 'linux'
+    ? 'unreadable PID namespace identity'
+    : source.nested?.() ? 'holder in another PID namespace that is unverifiable from here' : 'unreadable PID namespace inspection');
   if (pid === null) return { state: 'dead' };
-  if (!Number.isSafeInteger(pid) || pid <= 0) return { state: 'unverifiable', why: 'unrecognised process identity' };
-  if (local.platform === 'linux' && zombie(pid, source)) return { state: 'dead' };
   const start = preferredProcessStart(owner.pidStart, owner.pidStartUtc);
   const current = source.start(pid);
-  const comparable = typeof current === 'string' && typeof start === 'string' ? compareProcessStarts(start, current) : undefined;
-  if (comparable === false || (comparable === undefined && startAfterWrite(pid, current, owner, source))) return { state: 'dead' };
-  let why;
-  if (!owner.platform) why = '0.3.0 record without host identity';
-  else if (!uuid(local.bootId) || !uuid(owner.bootId)) why = 'unreadable boot identity';
-  const locationWhy = why;
-  if (comparable === undefined) why ??= 'unreadable process identity';
-  const possible = () => ({ state: 'alive', ...(why ? { possiblyAlive: true, pid: owner.pid, why, guidance: why.startsWith('0.3.0') ? 'stop the recorded process; a readable start mismatch or a process started after the record was written permits recovery' : 'stop that process or run unlock outside the sandbox where process identity can be read' } : {}) });
-  try { source.probe(pid); return possible(); }
+  const comparable = typeof start === 'string' && typeof current === 'string' ? compareProcessStarts(start, current) : undefined;
+  if (comparable === false || (comparable === undefined && startAfterWrite(current, owner, source))) return { state: 'dead' };
+  if (!group && local.platform === 'linux' && zombie(pid, source)) return { state: 'dead' };
+  try { source.probe(group ? -pid : pid); }
   catch (err) {
-    if (err.code === 'EPERM') return possible();
-    if (err.code !== 'ESRCH') return { ...possible(), possiblyAlive: true, why: 'unreadable process identity or PID probe' };
+    if (err.code === 'ESRCH') return { state: 'dead' };
+    if (err.code !== 'EPERM') return possible('unreadable process identity or PID probe');
   }
-  return locationWhy || (typeof start === 'string' && typeof current === 'string' && comparable === undefined) ? { state: 'unverifiable', why } : { state: 'dead' };
+  return comparable === true ? { state: 'alive' } : possible('unreadable process identity');
 }
 
-/** Readers without location fields must not trust a local ESRCH from a nested namespace. */
 export function sameProcess(pid, start, startUtc, location = {}) {
   if (!pid) return false;
-  const record = { ...location, pid, pidStart: start, pidStartUtc: startUtc };
-  const checked = inspectProcess(record);
-  if (checked.state === 'alive') return true;
-  if (checked.state === 'dead') return false;
-  return !(visiblePid(record) === pid && !pidAlive(pid));
+  return inspectProcess({ ...location, pid, pidStart: start, pidStartUtc: startUtc }).state !== 'dead';
 }
 
 export function groupAlive(pgid, start, startUtc, location = {}) {
   if (!pgid) return false;
-  const owner = { ...location, pid: pgid, pidStart: start, pidStartUtc: startUtc };
-  const visible = visiblePid(owner, systemIdentity, true);
-  if (visible === undefined) return true;
-  if (visible === null) return false;
-  const current = processStart(visible);
-  const recorded = preferredProcessStart(start, startUtc);
-  if (typeof current === 'string' && ((typeof recorded === 'string' && compareProcessStarts(recorded, current) === false) || (!recorded && startAfterWrite(visible, current, owner, systemIdentity)))) return false;
-  try { process.kill(-visible, 0); return true; }
-  catch (err) { return err.code !== 'ESRCH'; }
+  return inspectProcess({ ...location, pid: pgid, pidStart: start, pidStartUtc: startUtc }, systemIdentity, true).state !== 'dead';
 }

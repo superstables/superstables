@@ -100,7 +100,7 @@ if (process.argv[2] === 'worker') {
       try {
         const stat = fs.readFileSync(`/proc/${state.hostPid}/stat`, 'utf8');
         if (['Z', 'X'].includes(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0])) break;
-      } catch (err) { if (err.code === 'ENOENT') break; throw err; }
+      } catch (err) { if (['ENOENT', 'ESRCH'].includes(err.code)) break; throw err; }
       if (Date.now() > deadline) throw new Error('namespace holder did not finish exiting');
       await sleep(3);
     }
@@ -202,7 +202,7 @@ if (process.argv[2] === 'worker') {
       for (let step = 1; step <= calls; step++) for (const phase of ['before', 'after']) for (const crash of [false, true]) await run('release', step, phase, crash);
       // Fire the real heartbeat callback through a shortened test interval.
       for (let step = 1; step <= 2; step++) for (const phase of ['before', 'after']) for (const crash of [false, true]) await run('heartbeat', step, phase, crash);
-      console.log(JSON.stringify({ result: 'pass', cases, fired, doubleHolders: 0, lostSuccessors: 0, automaticForeignTakeovers: 0 }));
+      console.log(JSON.stringify({ result: 'pass', cases, fired, doubleHolders: 0, lostSuccessors: 0, unsafeForeignTakeovers: 0 }));
     }
   } finally { stop(); for (const home of homes) fs.rmSync(home, { recursive: true, force: true }); }
 }

@@ -16,7 +16,7 @@ const hostIdentity = createIdentitySource().record();
 const dead = { ...hostIdentity, pid: 2147483646, pidStart: 'missing-start' };
 const live = hostIdentity;
 const locationReadable = Boolean(hostIdentity.bootId && (process.platform !== 'linux' || hostIdentity.namespace));
-const foreign = process.platform === 'linux' ? { namespace: 'pid:[foreign]' } : { hostname: 'other-host', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7b' };
+const foreign = process.platform === 'linux' ? { namespace: 'pid:[foreign]' } : { hostId: 'another-stable-host', hostname: 'other-host', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7b' };
 function box() {
   const home = mkdtempSync(join(tmpdir(), 'budget-lock-recovery-'));
   dirs.push(home);
@@ -31,7 +31,7 @@ function aged(path: string, text = '') {
 function cli(home: string, args: string[]) {
   const terminal = args[0] === 'unlock' && args.includes('--confirm') ? ['--import', join(import.meta.dirname, '../helpers/budget-owner-terminal.mjs')] : [];
   const op = args[args.indexOf('--op') + 1];
-  const r = spawnSync(process.execPath, [...terminal, join(root, 'budget/cli.mjs'), ...args], { env: { ...process.env, SUPERSTABLES_HOME: home }, encoding: 'utf8', input: `${op}\n` });
+  const r = spawnSync(process.execPath, [...terminal, join(root, 'budget/cli.mjs'), ...args], { env: { ...process.env, SUPERSTABLES_HOME: home }, encoding: 'utf8', input: `${op}${args.includes('--unverified') ? ' unverified' : ''}\n` });
   const line = r.stdout.trim().split('\n').reverse().find(l => l.startsWith('RESULT '));
   return { ...r, result: line ? JSON.parse(line.slice(7)) : null };
 }
@@ -57,17 +57,18 @@ describe('recovering abandoned operation locks', () => {
       if (state === 'unreadable') {
         if (!lock.ok) expect(lock.details).toContain('owner must inspect and remove this directory');
       } else {
-        expect(cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm']).status).toBe(0);
+        expect(cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm', '--unverified']).status).toBe(0);
         expect(existsSync(b.path)).toBe(false);
       }
     });
   }
-  it('never breaks a fresh damaged record or a record from another boot', () => {
+  it('retains fresh damaged records and automatically recovers a proven earlier boot', () => {
     const b = box();
     for (const text of ['', JSON.stringify({ ...dead, bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7b', heartbeatAt: Date.now() })]) {
       writeFileSync(b.path, text);
       const lock = locks.lockFile(b.path);
-      expect(lock.ok).toBe(false);
+      expect(lock.ok).toBe(text !== '');
+      if (lock.ok) lock.release();
     }
   });
   it('protects a live same-namespace holder even with an expired heartbeat', () => {
@@ -88,18 +89,19 @@ describe('recovering abandoned operation locks', () => {
     expect(cli(b.home, [...args, '--confirm']).result).toMatchObject({ reason: 'op_in_progress' });
     expect(readFileSync(b.path, 'utf8')).toBe(JSON.stringify(live));
   });
-  it('busy reconcile reports the op, foreign holder, lock path and owner recovery guidance', () => {
+  it('busy reconcile uses the approved agent guidance for a possibly-alive holder', () => {
     const b = box();
-    writeFileSync(b.path.replace('.json.lock', '.buy.lock'), JSON.stringify({ ...dead, hostname: 'other-host', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7b', heartbeatAt: Date.now(), createdAt: Date.now() }));
+    writeFileSync(b.path.replace('.json.lock', '.buy.lock'), JSON.stringify({ ...dead, hostId: 'another-stable-host', hostname: 'other-host', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7b', heartbeatAt: Date.now(), createdAt: Date.now() }));
     const r = cli(b.home, ['reconcile', '--rail', 'solana', '--op', 'paid-op']);
     expect(r.status).toBe(5);
     expect(r.result).toMatchObject({ op: 'paid-op', state: 'unknown', reason: 'op_in_progress' });
-    expect(r.result.next).toContain(locationReadable ? 'another host' : 'unreadable boot identity');
+    expect(r.result.next).toContain('Operation paid-op is locked.');
     expect(r.result.next).not.toContain('superstables budget unlock');
     expect(r.result.next).not.toContain('--confirm');
     expect(r.result.next).toContain('Stop and ask the owner');
-    expect(r.result.next).toContain('the owner-only unlock --help section of the installed CLI');
-    expect(r.result.next).toContain('.buy.lock');
+    expect(r.result.next).toContain("outside the agent's sandbox");
+    expect(r.result.next).not.toContain('unlock');
+    expect(r.result.next).not.toContain('--unverified');
   });
   for (const rail of ['solana', 'evm', 'tempo']) {
     it(`${rail} direct reconcile emits op_in_progress without a stack trace`, () => {
@@ -108,7 +110,7 @@ describe('recovering abandoned operation locks', () => {
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, 'paid-op.json.lock'), JSON.stringify(live));
       const r = spawnSync(process.execPath, ['--import', 'tsx', join(root, `budget/${rail}/reconcile.${rail === 'solana' ? 'mjs' : 'ts'}`), '--op', 'paid-op'], { cwd: root, env: { ...process.env, SUPERSTABLES_HOME: b.home }, encoding: 'utf8' });
-      expect(r.status).toBe(5);
+      expect(r.status, r.stderr + r.stdout).toBe(5);
       const line = r.stdout.trim().split('\n').reverse().find(l => l.startsWith('RESULT '));
       expect(line && JSON.parse(line.slice(7))).toMatchObject({ op: 'paid-op', state: 'unknown', reason: 'op_in_progress' });
       expect(r.stderr).not.toContain('at ');
@@ -184,7 +186,7 @@ it('requires confirmed owner recovery for an unreadable lock file', () => {
   chmodSync(b.path, 0);
   const lock = locks.lockFile(b.path);
   expect(lock.ok).toBe(false);
-  expect(cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm']).status).toBe(0);
+  expect(cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm', '--unverified']).status).toBe(0);
 });
 for (const entry of ['legacy file', 'empty owner', 'stray entry']) {
   it(`unlock clears an abandoned ${entry} breaker even without a main lock`, () => {
@@ -192,7 +194,7 @@ for (const entry of ['legacy file', 'empty owner', 'stray entry']) {
     const mutex = b.path + '.break';
     if (entry === 'legacy file') aged(mutex);
     else { mkdirSync(mutex); aged(join(mutex, entry === 'empty owner' ? '0a1b2c3d-0000-4000-8000-000000000000.owner' : '.DS_Store')); utimesSync(mutex, old / 1000, old / 1000); }
-    expect(cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm']).result).toMatchObject({ state: 'ok', reason: 'locks_cleared' });
+    expect(cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm', '--unverified']).result).toMatchObject({ state: 'ok', reason: 'locks_cleared' });
     expect(existsSync(mutex)).toBe(false);
   });
 }
@@ -214,7 +216,7 @@ it('reconcile names the live breaker owner that prevents dead-lock recovery', ()
     expect(r.result.next).toContain('unreadable boot identity');
     const confirmed = cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm']);
     expect(confirmed.status).toBe(5); expect(confirmed.result.next).toContain(ownerPath);
-    expect(confirmed.result.next).toContain('holder may still be running');
+    expect(confirmed.result.next).toContain('Its process may still be running');
     expect(readFileSync(ownerPath, 'utf8')).toBe(JSON.stringify(live));
   }
 });
@@ -228,7 +230,7 @@ it('does not clear an old regular-file breaker with a verifiable live owner', ()
 });
 
 for (const [why, patch] of [
-  ['another host', { hostname: 'other-host', bootId: 'other-boot' }],
+  ['another host', { hostId: 'another-stable-host', hostname: 'other-host', bootId: 'other-boot' }],
   ['another boot', { bootId: 'other-boot' }],
   ['another OS', { platform: process.platform === 'darwin' ? 'linux' : 'darwin', namespace: null }],
   ['missing identity', { platform: undefined, bootId: undefined }],
@@ -239,10 +241,11 @@ for (const [why, patch] of [
     const text = JSON.stringify({ ...dead, ...patch, heartbeatAt: future, createdAt: future });
     writeFileSync(b.path, text); utimesSync(b.path, future / 1000, future / 1000);
     const lock = locks.lockFile(b.path); expect(lock.ok).toBe(false);
-    if (!lock.ok) { expect(lock.details).toContain('unverifiable'); expect(lock.details).toContain('timestamps cannot prove'); expect(lock.details).not.toContain('wait five'); }
+    if (!lock.ok) { expect(lock.details).toContain('is locked'); expect(lock.details).toContain('Its process may still be running'); expect(lock.details).not.toContain('wait five'); }
     expect(readFileSync(b.path, 'utf8')).toBe(text);
-    const r = cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm']);
-    expect(r.status, r.stderr).toBe(0); expect(r.stderr).toContain('overriding unverifiable lock');
+    expect(cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm']).status).toBe(5);
+    const r = cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm', '--unverified']);
+    expect(r.status, r.stderr).toBe(0); expect(r.stderr).toContain('without proof that its process has stopped');
   });
 }
 it('refuses confirmed unlock of an op with no journal or locks', () => {

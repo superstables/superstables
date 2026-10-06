@@ -17,11 +17,11 @@ function box() {
   return { home, dir, path };
 }
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
-function cli(b: ReturnType<typeof box>, action: string, error = 'EPERM', blocked = true) {
+function cli(b: ReturnType<typeof box>, action: string, error = 'EPERM', blocked = true, unverified = false) {
   const r = spawnSync(process.execPath, [
     ...(blocked ? ['--import', helper] : []), '--import', terminal,
-    join(root, 'budget/cli.mjs'), action, '--rail', 'solana', '--op', 'sandbox-op', ...(action === 'unlock' ? ['--confirm'] : []),
-  ], { env: { ...process.env, SUPERSTABLES_HOME: b.home, BUDGET_TEST_IDENTITY_ERROR: error }, encoding: 'utf8', input: 'sandbox-op\n' });
+    join(root, 'budget/cli.mjs'), action, '--rail', 'solana', '--op', 'sandbox-op', ...(action === 'unlock' ? ['--confirm', ...(unverified ? ['--unverified'] : [])] : []),
+  ], { env: { ...process.env, SUPERSTABLES_HOME: b.home, BUDGET_TEST_IDENTITY_ERROR: error }, encoding: 'utf8', input: `${unverified ? 'sandbox-op unverified' : 'sandbox-op'}\n` });
   const line = r.stdout.split('\n').find(l => l.startsWith('RESULT '));
   return { ...r, result: line ? JSON.parse(line.slice(7)) : null };
 }
@@ -35,8 +35,8 @@ for (const error of ['EPERM', 'ENOENT']) {
       const r = cli(b, action, error);
       expect(r.status, r.stderr).toBe(5);
       expect(r.result).toMatchObject({ op: 'sandbox-op', state: 'unknown', reason: 'op_in_progress' });
-      expect(r.result.next).toContain('holder may still be running');
-      expect(r.result.next).toContain('outside the sandbox');
+      expect(r.result.next).toContain('Its process may still be running');
+      expect(r.result.next).toContain("outside the agent's sandbox");
       expect(r.stderr).not.toContain('overriding unverifiable lock');
       expect(readFileSync(b.path, 'utf8')).toBe(text);
       expect(readFileSync(join(b.dir, 'sandbox-op.json'), 'utf8')).toBe(journal);
@@ -46,7 +46,8 @@ for (const error of ['EPERM', 'ENOENT']) {
     const b = box();
     writeFileSync(b.path, JSON.stringify({ ...createIdentitySource().record(), pid: 2147483646, pidStart: 'old' }));
     const journal = '{"state":"unknown"}'; writeFileSync(join(b.dir, 'sandbox-op.json'), journal);
-    const r = cli(b, 'unlock', error);
+    expect(cli(b, 'unlock', error).status).toBe(5);
+    const r = cli(b, 'unlock', error, true, true);
     expect(r.status, r.stderr).toBe(0); expect(r.result.reason).toBe('locks_cleared');
     expect(existsSync(b.path)).toBe(false); expect(readFileSync(join(b.dir, 'sandbox-op.json'), 'utf8')).toBe(journal);
   });
@@ -65,7 +66,7 @@ for (const platform of ['linux', 'darwin'] satisfies NodeJS.Platform[]) {
         expect(lockFile(b.path, { identitySource }).ok).toBe(false);
         const recovered = lockFile(b.path, { identitySource, confirmUnverifiable: true });
         try {
-          expect(recovered.ok).toBe(probeCode === 'ESRCH');
+          expect(recovered.ok).toBe(false);
           if (!recovered.ok) expect(readFileSync(b.path, 'utf8')).toBe(text);
         } finally { if (recovered.ok) recovered.release(); }
       });
@@ -117,7 +118,7 @@ for (const code of ['EPERM', 'ENOENT']) {
     child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
     const status = await new Promise<number | null>((resolve, reject) => { child.once('close', resolve); child.once('error', reject); });
     expect(status, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({ live: [true, true, true, true, true], dead: [false, false, false, false], wrote: false, busy: true, owner: 'original' });
+    expect(JSON.parse(stdout)).toEqual({ live: [true, true, true, true, true], dead: [true, true, true, true], wrote: false, busy: true, owner: 'original' });
   });
 }
 
@@ -141,7 +142,7 @@ it('an owner can recover a reused PID outside the sandbox after identity becomes
   if (!record.bootId || !record.pidStart || (process.platform === 'linux' && !record.namespace)) context.skip('outside-sandbox recovery requires a host with readable identity; injected identity controls still run');
   const b = box();
   writeFileSync(b.path, JSON.stringify({ ...record, pidStart: 'linux:old-process', ...(typeof record.pidStartUtc === 'number' ? { pidStartUtc: record.pidStartUtc + 1 } : {}) }));
-  const blocked = cli(b, 'unlock'); expect(blocked.status).toBe(5); expect(blocked.result.next).toContain('outside the sandbox');
+  const blocked = cli(b, 'unlock'); expect(blocked.status).toBe(5); expect(blocked.result.next).toContain("outside the agent's sandbox");
   const outside = cli(b, 'unlock', 'EPERM', false);
   expect(outside.status, outside.stderr).toBe(0); expect(outside.result.reason).toBe('locks_cleared'); expect(existsSync(b.path)).toBe(false);
 });
@@ -161,7 +162,7 @@ for (const mac of [false, true]) {
     const next = lockFile(b.path); expect(next.ok).toBe(true); if (next.ok) next.release();
   });
   for (const legacy of [false, true]) {
-    it(`${mac ? 'macOS' : 'Linux'}: proves reuse after a ${legacy ? '0.3.0' : 'blocked-identity'} write from the record timestamp`, async () => {
+    it(`${mac ? 'macOS' : 'Linux'}: requires explicit owner recovery after a ${legacy ? '0.3.0' : 'blocked-identity'} write without proven host and boot`, async () => {
       const b = box();
       const writer = spawnSync(process.execPath, [...preloads, '--input-type=module', '-e', `
         const { lockFile } = await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});
@@ -184,7 +185,10 @@ for (const mac of [false, true]) {
         expect(inside.status, inside.stderr).toBe(5);
         const outsideEnv = { ...env, NODE_OPTIONS: (process.env.NODE_OPTIONS ?? '').replace(/--import(?:=|\s+)\S*budget-blocked-identity\.mjs/g, '').replace(/--import(?:=|\s+)\S*budget-macos-identity\.mjs/g, '') };
         const outside = spawnSync(process.execPath, [...(mac ? ['--import', join(root, 'test/helpers/budget-macos-identity.mjs')] : []), ...args], { env: outsideEnv, encoding: 'utf8', input: 'sandbox-op\n' });
-        expect(outside.status, outside.stderr + outside.stdout).toBe(0); expect(existsSync(b.path)).toBe(false);
+        expect(outside.status, outside.stderr + outside.stdout).toBe(5);
+        expect(existsSync(b.path)).toBe(true);
+        const owner = spawnSync(process.execPath, [...(mac ? ['--import', join(root, 'test/helpers/budget-macos-identity.mjs')] : []), ...args, '--unverified'], { env: outsideEnv, encoding: 'utf8', input: 'sandbox-op unverified\n' });
+        expect(owner.status, owner.stderr + owner.stdout).toBe(0); expect(existsSync(b.path)).toBe(false);
         expect(() => process.kill(unrelated.pid ?? 0, 0)).not.toThrow();
       } finally { const done = new Promise(resolve => unrelated.once('exit', resolve)); unrelated.kill('SIGKILL'); await done; }
     });

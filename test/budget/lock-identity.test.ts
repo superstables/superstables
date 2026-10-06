@@ -16,6 +16,7 @@ function box() {
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 function mac({ dead = false, readable = true, bootReadable = true } = {}) {
   const run = vi.fn((command: string, args: string[]) => {
+    if (command === 'ioreg') return '"IOPlatformUUID" = "11111111-2222-3333-4444-555555555555"';
     if (command === 'sysctl') {
       expect(args).toEqual(['-n', 'kern.bootsessionuuid']);
       if (!bootReadable) throw new Error('sysctl unavailable');
@@ -93,10 +94,10 @@ it('keeps other platforms unverifiable without readable process start identity',
   record(b.path, identitySource, { pid: 2147483646 });
   expect(lockFile(b.path, { identitySource }).ok).toBe(false);
 });
-it('recovers matching other-platform records only with readable start identity', () => {
+it('retains other-platform records without verified host and namespace even with a start mismatch', () => {
   const b = box(); const identitySource = createIdentitySource({ platform: 'freebsd', host: 'test-host', start: () => 'new-start' });
   record(b.path, identitySource, { pidStart: 'old-start' });
-  const lock = lockFile(b.path, { identitySource }); expect(lock.ok).toBe(true); if (lock.ok) lock.release();
+  const lock = lockFile(b.path, { identitySource }); expect(lock.ok).toBe(false);
 });
 it('normally releases despite an orphaned foreign takeover mutex', () => {
   const b = box(); const lock = lockFile(b.path); expect(lock.ok).toBe(true);
@@ -105,10 +106,10 @@ it('normally releases despite an orphaned foreign takeover mutex', () => {
   expect(existsSync(b.path)).toBe(false); expect(existsSync(b.path + '.break')).toBe(true);
   const successor = lockFile(b.path); expect(successor.ok).toBe(true); if (successor.ok) successor.release();
 });
-it('agent busy guidance stops at the owner recovery docs', () => {
+it('agent busy guidance asks the owner to check outside the sandbox', () => {
   const b = box(); writeFileSync(b.path, '{'); const lock = lockFile(b.path); expect(lock.ok).toBe(false);
   const next = lockNext(lock, 'mac-op', 'solana', 'devnet');
-  expect(next).toContain('Stop and ask the owner'); expect(next).toContain('the owner-only unlock --help section of the installed CLI');
+  expect(next).toContain('Stop and ask the owner'); expect(next).toContain("outside the agent's sandbox");
   expect(next).not.toContain('superstables budget unlock'); expect(next).not.toContain('--confirm');
 });
 function unlock(b: ReturnType<typeof box>, terminal: boolean, answer = 'mac-op') {

@@ -14,7 +14,7 @@ import { linkSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 
-import { createIdentitySource, preferredProcessStart, sameProcess } from "./process-identity.mjs";
+import { createIdentitySource, inspectProcess, preferredProcessStart, sameProcess } from "./process-identity.mjs";
 export { processStart } from "./process-identity.mjs";
 const identity = createIdentitySource();
 
@@ -23,7 +23,7 @@ export function thisProcess(): { pid: number; start: string | null } & Omit<impo
   return { ...record, start: preferredProcessStart(pidStart, record.pidStartUtc) };
 }
 
-export function processRunning(runner: { pid?: unknown; start?: unknown; namespace?: string | null; bootId?: string | null; platform?: string; hostname?: string; writtenAt?: number } | undefined): boolean {
+export function processRunning(runner: { pid?: unknown; start?: unknown; namespace?: string | null; bootId?: string | null; hostId?: string | null; platform?: string; hostname?: string; writtenAt?: number } | undefined): boolean {
   if (!runner || typeof runner.pid !== "number") return false;
   return sameProcess(runner.pid, typeof runner.start === "string" ? runner.start : null, undefined, runner);
 }
@@ -70,7 +70,7 @@ async function acquire(path: string, me: string, deadline: number, breakDead?: (
       } else if (Date.now() >= deadline) {
         throw new Error(
           holder
-            ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}`
+            ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}${inspectProcess(holder).possiblyAlive ? "; the holder may still be running; stop all work and retry on the host, outside the sandbox, where process identity and the PID namespace can be read" : ""}`
             : `the lock ${path} cannot be read; if no payment is being made, remove it`,
         );
       }
