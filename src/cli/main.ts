@@ -1093,7 +1093,7 @@ function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt
 function receiptChain(receipt: Receipt): string {
   switch (receipt.chain) {
     case "verified":
-      return "verified: the transaction is this payment";
+      return receipt.chainFinal === false ? "verified: paid; the payment landed, but is not final on chain yet" : "verified: the transaction is this payment";
     case "mismatch":
       return `mismatch: ${receipt.chainReason ?? "the transaction is not this payment"}`;
     case "unpaid":

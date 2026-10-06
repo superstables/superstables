@@ -161,7 +161,10 @@ export const solanaRail: X402Rail = {
       found = await readTransaction(rpc.url, facts.transaction, options);
       if (!found) {
         const confirmed = await rpcCall<RpcTransaction | null>(rpc.url, "getTransaction", [facts.transaction, { commitment: "confirmed", maxSupportedTransactionVersion: 0, encoding: "json" }], options);
-        if (confirmed && judgeTransaction(confirmed, facts.transaction, facts).chain === "verified") return { chain: "unchecked", included: true, reason: "the payment landed, but is not final on chain yet" };
+        if (confirmed) {
+          const check = judgeTransaction(confirmed, facts.transaction, facts, false);
+          return check.chain === "verified" ? { chain: "unchecked", included: true, reason: "the payment landed, but is not final on chain yet" } : check;
+        }
       }
     } catch {
       // The RPC's own error text is not repeated: it is somebody else's words.
@@ -465,14 +468,14 @@ const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filt
  * succeeded, and its one token instruction is a TransferChecked of the amount of devnet USDC from the owner's token
  * account to the recipient's, by the owner.
  */
-function judgeTransaction(found: RpcTransaction, signature: string, facts: PaymentFacts): ChainCheck {
+function judgeTransaction(found: RpcTransaction, signature: string, facts: PaymentFacts, final = true): ChainCheck {
   const signatures = found.transaction?.signatures;
   if (!Array.isArray(signatures) || signatures[0] !== signature) {
     return { chain: "unchecked", reason: "the chain could not be read: the RPC answered with another transaction" };
   }
   if (!signatures.includes(facts.ownerSignature)) return { chain: "mismatch", reason: "the transaction does not carry the owner's signature over this payment" };
   if (!found.meta) return { chain: "unchecked", reason: "the chain could not be read: the RPC did not say whether the transaction succeeded" };
-  if (found.meta.err !== null && found.meta.err !== undefined) return { chain: "mismatch", reason: "the transaction failed on chain" };
+  if (found.meta.err !== null && found.meta.err !== undefined) return { chain: "mismatch", mismatchKind: final ? "final_execution" : "provisional_execution", reason: "the transaction failed on chain" };
 
   const message = found.transaction?.message;
   const keys = [

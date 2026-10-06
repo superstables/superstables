@@ -83,7 +83,7 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
     case "submitting":
       return `Run \`superstables status ${attempt.id}\` to see where it got to.`;
     case "settled":
-      return attempt.chain === "verified"
+      return attempt.chainFinal !== false && attempt.chain === "verified"
         ? "Nothing to do: the service's answer is above, and `superstables receipts` lists the payment."
         : attempt.paymentIncluded
         ? `The payment landed and the service's answer is above. It is not final on chain yet; \`superstables status ${attempt.id}\` checks again.`

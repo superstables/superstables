@@ -24,7 +24,7 @@ const VALID_BEFORE_MARGIN_MS = 120_000;
  * reads the chain and records what it found. Undefined for an EVM record without a validBefore (an older record).
  */
 function mayStillMove(attempt: Attempt, now: Date): boolean | undefined {
-  if (attempt.paymentIncluded && attempt.chain !== "verified" && attempt.chain !== "unpaid") return true;
+  if ((attempt.paymentIncluded || attempt.chain === "verified") && attempt.chainFinal !== true && attempt.chain !== "unpaid") return true;
   const rail = networkFor(attempt.terms?.network ?? "")?.rail;
   if (rail === "tempo" || rail === "solana") return true;
   const validBefore = attempt.authorizationValidBefore ? Date.parse(attempt.authorizationValidBefore) : NaN;
@@ -105,8 +105,9 @@ export class Records {
   // ── Attempts ─────────────────────────────────────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): Attempt {
-    this.append("attempts.jsonl", attempt);
-    return attempt;
+    const normalized = { ...attempt, chainFinal: attempt.chainFinal ?? null };
+    this.append("attempts.jsonl", normalized);
+    return normalized;
   }
 
   getAttempt(id: string): Attempt | undefined {
@@ -232,8 +233,9 @@ export class Records {
   // ── Receipts ─────────────────────────────────────────────────────────────────────────
 
   saveReceipt(receipt: Receipt): Receipt {
-    this.append("receipts.jsonl", receipt);
-    return receipt;
+    const normalized = { ...receipt, chainFinal: receipt.chainFinal ?? null };
+    this.append("receipts.jsonl", normalized);
+    return normalized;
   }
 
   getReceipt(id: string): Receipt | undefined {
@@ -251,9 +253,9 @@ export class Records {
    * sent and not resolved, or waiting for the owner within its approval window).
    *
    *   receipt                       on its own day, unless a later chain check found it unpaid (the seller's report was
-   *                                 wrong, and the authorization can no longer be used). One the chain has not confirmed
-   *                                 (unchecked) or contradicted (mismatch) also on later days while its payment can still
-   *                                 move money, as below, unless its attempt is verified: one payment, counted once a day
+   *                                 wrong, and the authorization can no longer be used). Without explicit finality it
+   *                                 also counts on later days while its payment can still move money, as below. Matching
+   *                                 provisional evidence keeps that hold even after local authorization expiry.
    *   uncertain, no receipt         on the day it became uncertain, and on every day while it can still move money: an
    *                                 EVM authorization until its validBefore; a Tempo send or a Solana transaction until
    *                                 `superstables status` reads the chain and records it paid, or (Solana) unpaid
@@ -289,9 +291,9 @@ export class Records {
       if (receipt) {
         // One payment: counted through its receipt on the receipt's day. A receipt the chain has not confirmed (the
         // seller's word) or has contradicted leaves the payment unresolved: it keeps counting on later days, once, while it
-        // can still move money, as an unresolved attempt without a receipt would. An attempt the chain verified is resolved,
+        // can still move money, as an unresolved attempt without a receipt would. An attempt with final chain evidence is resolved,
         // whatever an older receipt line says.
-        if (receipt.at?.startsWith(day) || attempt.chain === "verified" || (receipt.chain !== "unchecked" && receipt.chain !== "mismatch")) continue;
+        if (receipt.at?.startsWith(day) || attempt.chainFinal === true || receipt.chainFinal === true || receipt.chain === "unpaid") continue;
         if (attempt.state !== "failed" && mayStillMove(attempt, now) === true) total += attempt.terms.amountDecimal;
         continue;
       }
@@ -336,7 +338,12 @@ export class Records {
       } catch {
         continue; // a torn line: skip it, keep reading
       }
-      if (row && typeof row.id === "string") rows.set(row.id, row);
+      if (row && typeof row.id === "string") {
+        if (file === "attempts.jsonl" || file === "receipts.jsonl") {
+          row = { chainFinal: null, ...row };
+        }
+        rows.set(row.id, row);
+      }
     }
     return rows;
   }
