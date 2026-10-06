@@ -200,3 +200,9 @@ it('approval recovery protects a verified live rail child behind an unverifiable
   const result = unlock(b.home, ['--rail', 'solana', '--approvals']);
   expect(result.status).toBe(5); expect(readFileSync(active, 'utf8')).toBe(before);
 });
+
+it('hidepid does not weaken a readable verified live holder in the same PID namespace', () => {
+  const base = source({ hidepid: '2' });
+  const src = { ...base, probe: () => true };
+  expect(inspectProcess({ ...src.record(), pid: 77 }, src)).toEqual({ state: 'alive' });
+});

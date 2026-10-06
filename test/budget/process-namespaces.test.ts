@@ -13,7 +13,7 @@ afterEach(() => { for (const h of homes.splice(0)) rmSync(h, { recursive: true, 
 function source(namespace: string, entries: string[] = []) {
   return createIdentitySource({ platform: 'linux', host: 'host',
     readlink: (path: string) => path.includes('/self/') || path.includes(`/${process.pid}/`) ? namespace : foreign,
-    readFile: (path: string) => path === '/etc/machine-id' ? machine : path.endsWith('boot_id') ? boot : path.includes('/self/') || path.includes(`/${process.pid}/`) ? `NSpid:\t${process.pid}\n` : 'NSpid:\t7000\t2\nNSpgid:\t7000\t2\n',
+    readFile: (path: string) => path === '/proc/self/mountinfo' ? '1 0 0:1 / /proc rw - proc proc rw\n' : path === '/etc/machine-id' ? machine : path.endsWith('boot_id') ? boot : path.includes('/self/') || path.includes(`/${process.pid}/`) ? `NSpid:\t${process.pid}\n` : 'NSpid:\t7000\t2\nNSpgid:\t7000\t2\n',
     readdir: () => entries, start: () => `linux:${boot}:100`,
     probe: () => { throw Object.assign(new Error('absent in this namespace'), { code: 'ESRCH' }); },
   });

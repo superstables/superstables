@@ -212,8 +212,8 @@ export function visiblePid(owner, source = systemIdentity, group = false) {
   const local = source.record();
   if (local.platform === 'darwin') return owner.pid;
   if (local.platform !== 'linux' || !local.namespace || source.pids?.('self').length !== 1) return undefined;
-  if (!completeProcView(source)) return undefined;
   if (owner.namespace && owner.namespace === local.namespace) return owner.pid;
+  if (!completeProcView(source)) return undefined;
   if (source.nested?.() || !owner.namespace || local.namespace !== 'pid:[4026531836]') return undefined;
   let entries;
   try { entries = source.readdir('/proc'); } catch { return undefined; }
