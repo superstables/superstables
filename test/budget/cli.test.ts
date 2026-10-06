@@ -55,6 +55,8 @@ const result = (stdout: string) => {
 function checkoutWithoutDevPackages(): string {
   const repo = join(work, "repo");
   cpSync(resolve(ROOT, "budget"), join(repo, "budget"), { recursive: true });
+  mkdirSync(join(repo, "src", "core"), { recursive: true });
+  cpSync(resolve(ROOT, "src/core/finality-policy.js"), join(repo, "src/core/finality-policy.js"));
   writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "checkout", version: "9.9.9" }));
   return repo;
 }

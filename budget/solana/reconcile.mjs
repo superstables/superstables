@@ -91,10 +91,10 @@ if (a.verdict === "no_tx") {
   emit(result("failed", { tx: a.tx, delivered: false, reason: JSON.stringify(a.err), next: "nothing moved; buy again with a new --op" }), EXIT.OK);
 } else if (a.verdict === "not_found") {
   updateOp(opId, { state: "not_found" }, `reconcile: no transaction and the blockhash expired (height ${a.blockHeight} > ${a.lastValidBlockHeight})`);
-  console.log(`Not found: block height ${a.blockHeight} is past ${a.lastValidBlockHeight} (+ margin), so the signed transaction can no longer land. Nothing was paid.`);
+  console.log(`Not found: finalized block height ${a.blockHeight} is past ${a.lastValidBlockHeight}, and final history proves no transaction landed. Nothing was paid.`);
   emit(result("not_found", { reason: "blockhash expired", delivered: false, next: `nothing was paid; safe to buy again (this --op may be reused)` }), EXIT.OK);
 } else {
   updateOp(opId, { state: "unknown" }, `reconcile: pending, ${a.blocksLeft ?? "?"} blocks until the blockhash is provably dead`);
-  console.log(`Still pending: no transaction found yet and the blockhash may be valid for about ${a.blocksLeft ?? "?"} more blocks (about ${Math.ceil((a.blocksLeft ?? 0) * 0.4)} s). Do not pay again.`);
-  emit(result("unknown", { next: `wait about ${Math.ceil((a.blocksLeft ?? 0) * 0.4) + 5} s, then: node budget/solana/reconcile.mjs --op ${opId}` }), EXIT.UNCERTAIN);
+  console.log("Still unresolved: no final settlement or final absence proof. Do not pay again.");
+  emit(result("unknown", { next: `run node budget/solana/reconcile.mjs --op ${opId} again later. Do not pay again.` }), EXIT.UNCERTAIN);
 }
