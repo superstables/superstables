@@ -15,7 +15,7 @@ Testnet only.
 
 Stop every 0.3.0 client process before upgrading, including agents, servers and approval processes.
 
-For a lock left by a stopped process, the owner can run `superstables budget unlock --confirm` in a terminal.
+On Linux, run commands sharing a client home either inside the same sandbox or outside it. Mixing the two can exceed the daily cap or misreport an approval as "abandoned"; do not pay again on that status alone. To clear a lock, the owner must first stop every process working on that operation, then run `superstables budget unlock --confirm` in their own terminal, outside any agent's sandbox.
 
 - For scripts: the additive `chain_final` CLI and `chainFinal` SDK fields report chain finality. `final` and `verified` keep their 0.3.0 meanings. An included payment with provisional or legacy evidence can become uncertain again after a reorg; treat uncertain as "don't pay again". Established final proof stays final.
 
