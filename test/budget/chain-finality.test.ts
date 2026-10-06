@@ -185,7 +185,7 @@ describe("hosted client finality", () => {
     const server = await startServer(async (req, res) => {
       const call = JSON.parse(await readBody(req));
       const result = call.method === "eth_getTransactionReceipt"
-        ? { transactionHash: HASH, blockNumber: "0x64", blockHash: BLOCK_HASH, status: "0x1", logs: [used(), transfer(), { address: TOKEN, topics: encodeEventTopics({ abi, eventName: "TransferWithMemo", args: { from: AGENT, to: TO, memo: NONCE } }), data: transfer().data }] }
+        ? { transactionHash: HASH, blockNumber: "0x64", blockHash: BLOCK_HASH, status: "0x1", logs: [{ address: TOKEN, topics: used().topics, data: "0x" }, transfer(), { address: TOKEN, topics: encodeEventTopics({ abi, eventName: "TransferWithMemo", args: { from: AGENT, to: TO, memo: NONCE } }), data: transfer().data }] }
         : call.params[0] === "finalized"
           ? { number: final }
           : { number: call.params[0] === "latest" ? "0x6e" : "0x64", hash: canonical, timestamp: "0x7d0" };

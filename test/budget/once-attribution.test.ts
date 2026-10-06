@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PAYER, SOLANA_PAYER, TX, TEMPO_MARKET, SOLANA_MARKET, startFakePurchaseSite, type FakePurchaseSite, type Paid } from "../helpers/fake-purchase-site.js";
 
 process.env.SUPERSTABLES_HOME = mkdtempSync(join(tmpdir(), "ss-attribution-"));
-const { settleOnce, onceTestHook } = await import("../../budget/once.mjs");
+const { settleOnce, waitOnce, onceTestHook } = await import("../../budget/once.mjs");
 const approvals = await import("../../budget/approvals.mjs");
 const home = process.env.SUPERSTABLES_HOME;
 let site: FakePurchaseSite;
@@ -108,6 +108,21 @@ describe("hosted purchase payment identity", () => {
       unknown(await settleOnce(target.record));
     });
   }
+  it("wait keeps a site-open paid report open until its payment identity becomes readable", async () => {
+    const rail = rails[0];
+    site.finalizedBlock = 10;
+    const { p, record } = await purchase(rail);
+    site.settle(p, "ok", { transaction: rail.tx, payer: rail.payer });
+    p.final = false;
+    const nonce = p.nonce;
+    site.onPoll = (purchase) => { purchase.nonce = purchase.polls === 1 ? undefined : nonce; };
+    expect(await waitOnce(record, 3000, { unknownGraceMs: 3000 })).toMatchObject({ code: 0, result: { paid: true, delivered: true, final: false } });
+    expect(p.polls).toBeGreaterThanOrEqual(2);
+    expect(approvals.readApproval(record.id).final).toBeUndefined();
+    expect(approvals.readApproval(record.id).hosted.token).toBe(p.token);
+    expect(existsSync(claimFile(rail))).toBe(true);
+  });
+
   for (const [name, chain] of [
     ["signed by someone else", { signer: "other" }],
     ["with an invalid payer signature", { badSignature: true }],

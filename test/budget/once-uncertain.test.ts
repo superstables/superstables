@@ -94,7 +94,7 @@ const ROWS: Row[] = [
     name: "settled, chain not confirmed",
     final: false,
     withHash: true,
-    reason: /^the seller reports it paid; the chain has not confirmed the payment yet \(transaction /,
+    reason: /says paid, but this purchase has no payment identity or payer to verify$/,
     view: (id, hash, payer) => ({ id, state: "settled", final: false, payment: { status: "paid", transaction: hash, payer }, delivery: { status: "delivered", http_status: 200 }, next_action: { type: "wait_for_chain" } }),
   },
   {
