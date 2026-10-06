@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,22 +27,34 @@ import { MINT, randomAddress, signAsOwner, solanaKey, startFakeDevnet } from "..
 const PAYER = "0x1111111111111111111111111111111111111111";
 const TO = "0x2222222222222222222222222222222222222222";
 const NONCE: Hex = `0x${"44".repeat(32)}`;
+const run = promisify(execFile);
+async function cliStatus(home: string, rpc: string) {
+  const args = ["--import", "tsx", new URL("../../src/cli/main.ts", import.meta.url).pathname, "status", "a", "--json"];
+  const env = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_RPC_URL: rpc };
+  const stdout = await run(process.execPath, args, { env }).then(r => r.stdout, (e: { stdout?: string }) => { if (!e.stdout) throw e; return e.stdout; });
+  return JSON.parse(stdout);
+}
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()?.(); });
 it.each(["unchecked", "mismatch"] as const)("status rechecks provisional payment after a reorg removes its receipt, initially %s", async (initialChain) => {
   const chain = await startFakeBaseSepolia(); cleanup.push(() => chain.close());
   const dir = mkdtempSync(join(tmpdir(), "pay-finality-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
-  const records = new Records(dir);
+  const records = new Records(join(dir, "records"));
   const transaction = chain.settle({ from: PAYER, to: TO, value: "10000", nonce: NONCE });
   chain.finalizedLag = 2;
   const at = new Date().toISOString();
   const a: Attempt = { id: "a", quoteId: "q", createdAt: at, updatedAt: at, state: "settled", chain: initialChain, transaction, url: "https://seller.example", payer: PAYER, authorizationNonce: NONCE, authorizationValidBefore: new Date((chain.head.timestamp + 300) * 1000).toISOString(), terms: { network: BASE_SEPOLIA.caip2, networkLabel: BASE_SEPOLIA.label, asset: "USDC", assetAddress: BASE_SEPOLIA.usdc.address, amountAtomic: "10000", amountDecimal: 0.01, recipient: TO, scheme: "exact" }, history: [] };
   records.saveAttempt(a);
   const first = await recheckChain(records, "a", chain.url);
+  expect(await cliStatus(dir, chain.url)).toMatchObject({ state: "settled", final: false, exit_code: 0 });
   chain.receipts.delete(transaction); chain.used.delete(NONCE);
   const second = await recheckChain(records, "a", chain.url);
   expect(first?.chain).toBe("unchecked"); expect(second?.chain).toBe("unchecked");
   expect(second?.state).toBe("uncertain");
+  expect(second?.chainReason).toMatch(/do not pay again/i);
+  const removed = await cliStatus(dir, chain.url);
+  expect(removed).toMatchObject({ state: "uncertain", final: false, exit_code: 5 });
+  expect(removed.next).toMatch(/do not pay again/i);
   const replacement = chain.settle({ from: PAYER, to: TO, value: "10000", nonce: NONCE });
   chain.advance(10);
   expect(await recheckChain(records, "a", chain.url)).toMatchObject({ chain: "verified", transaction: replacement });

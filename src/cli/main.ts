@@ -51,6 +51,7 @@ import {
   badInput,
   exitCodeFor,
   isFinalAttempt,
+  isFinalResult,
   nextFor,
   requoteCommand,
   usedQuoteMessage,
@@ -715,7 +716,7 @@ explain(
       const receipt = attempt.receiptId ? records.getReceipt(attempt.receiptId) : undefined;
       console.log(field("attempt", attempt.id));
       console.log(field("quote", attempt.quoteId));
-      console.log(field("state", `${attempt.state}${isFinalAttempt(attempt) ? "" : " (not final)"}`));
+      console.log(field("state", `${attempt.state}${isFinalResult(attempt) ? "" : " (not final)"}`));
       console.log(field("url", attempt.url));
       console.log(field("price", money(attempt.terms.amountDecimal, attempt.terms.asset)));
       if (receipt) console.log(field("transaction", shownTransaction(receipt.transaction, receipt.terms.network).url ?? "no transaction hash was given"));
@@ -1041,7 +1042,7 @@ function attemptJson(records: Records, attempt: Attempt): Record<string, unknown
   if (!isFinalAttempt(attempt) && approval_url) rest.approval_url = approval_url;
   return {
     ...rest,
-    final: isFinalAttempt(attempt),
+    final: isFinalResult(attempt),
     exit_code: exitCodeFor(attempt),
     next: nextFor(attempt, getQuote(attempt.quoteId, records)),
     url: attempt.url,
