@@ -2,12 +2,13 @@
 // dispatcher's lines, and a reused pid from standing in for a process this tool started. Nothing
 // here touches a chain: the sellers are local servers, and the chain is a stand-in where one is read.
 
+import { stopHolder } from '../helpers/budget-holder-cleanup.mjs';
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const REPO = join(import.meta.dirname, "..", "..");
 const CLI = join(REPO, "budget", "cli.mjs");
@@ -37,16 +38,10 @@ beforeAll(async () => {
   guard = await import("../../budget/buy-guard.mjs");
 });
 
-afterAll(() => {
-  for (const c of children) {
-    try {
-      c.kill("SIGKILL");
-    } catch {
-      // already gone
-    }
-  }
-  rmSync(home, { recursive: true, force: true });
+afterEach(async () => {
+  for (const child of children.splice(0)) await stopHolder(child);
 });
+afterAll(() => { rmSync(home, { recursive: true, force: true }); });
 
 /** A process that only sleeps, standing in for an unrelated process that got a recorded pid. */
 function sleeper(detached = false): ChildProcess {

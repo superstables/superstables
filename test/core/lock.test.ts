@@ -1,5 +1,6 @@
 // The cap lock (src/core/lock.ts) across processes. A lock is taken over only from a holder that is gone, never for its
 // age; it is broken only if it is still the same lock; and it is released only by its owner.
+import { stopHolder } from '../helpers/budget-holder-cleanup.mjs';
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,7 +32,7 @@ describe("withFileLock", () => {
       await expect(withFileLock(path, () => "mine", 300)).rejects.toThrow(/held by process/);
       expect(JSON.parse(readFileSync(path, "utf8")).owner).toBe("paused");
     } finally {
-      child.kill("SIGKILL");
+      await stopHolder(child);
     }
   });
 
@@ -91,7 +92,7 @@ describe("withFileLock", () => {
       expect(readFileSync(path, "utf8")).toBe(fresh); // not removed
       expect(existsSync(`${path}.break`)).toBe(false); // and the breaker released its own mutex
     } finally {
-      breaker.kill("SIGKILL");
+      await stopHolder(breaker);
     }
   }, 30_000);
 
