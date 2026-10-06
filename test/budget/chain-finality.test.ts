@@ -127,7 +127,7 @@ function solRpc(status: "confirmed" | "finalized" | null = null) {
 }
 describe("budget Solana finality and absence", () => {
   it("distinguishes a confirmed own transaction from a finalized one", async () => {
-    expect((await assessOp(solRpc("confirmed"), solRec)).verdict).toBe("settled");
+    expect(await assessOp(solRpc("confirmed"), solRec)).toMatchObject({ verdict: "settled", final: false });
     expect(await assessOp(solRpc("finalized"), solRec)).toMatchObject({ verdict: "settled", tx: solRec.agentSig });
   });
   it("keeps an index that omits a landed sponsored transaction unresolved", async () => {
@@ -343,7 +343,12 @@ describe("round 2: Solana complete history and resumable fallback", () => {
   });
   it("uses old own-fee-payer signature history when block zero is pruned", async () => {
     const conn = { ...solRpc(), getFirstAvailableBlock: vi.fn(async () => 116113408), getBlockTime: vi.fn(async () => 1600000000) };
-    expect((await assessOp(conn, { ...solRec, searchFromSlot: undefined, submittedAt: "2026-10-01T00:00:00Z" })).verdict).toBe("not_found");
+    conn.getEpochInfo.mockResolvedValue({ absoluteSlot: 116113608, blockHeight: 351 });
+    conn.getSignatureStatuses.mockResolvedValue({ context: { slot: 116113608 }, value: [null] });
+    const rec = { ...solRec, searchFromSlot: undefined, submittedAt: "2026-10-01T00:00:00Z" };
+    expect((await assessOp(conn, rec)).verdict).toBe("not_found");
+    conn.getBlockTime.mockResolvedValue(1900000000);
+    expect((await assessOp(conn, rec)).verdict).toBe("pending");
   });
   it("proves sponsored absence with finalized paginated history spanning the whole landing window", async () => {
     const conn = { ...solRpc(), getSignaturesForAddress: vi.fn(async (_address, options, commitment) => {

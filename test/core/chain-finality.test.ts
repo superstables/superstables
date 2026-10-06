@@ -157,4 +157,10 @@ it("reports a matching included payment as paid even when the seller says settle
   expect(a).toMatchObject({ state: "paid_service_failed", chain: "unchecked", paymentIncluded: true });
   expect(records.getReceipt(a.receiptId!)?.paymentIncluded).toBe(true);
   expect(records.spentToday("USDC")).toBe(0.01);
+  chain.receipts.delete(a.transaction!);
+  chain.used.delete(a.authorizationNonce!);
+  expect(await recheckChain(records, a.id, chain.url)).toMatchObject({ state: "uncertain", paymentIncluded: true });
+  expect(records.getReceipt(a.receiptId!)?.paymentIncluded).toBeUndefined();
+  expect(records.getReceipt(a.receiptId!)?.chainReason).toContain("Do not pay again");
+  expect(records.spentToday("USDC")).toBe(0.01);
 });

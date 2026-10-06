@@ -1065,7 +1065,7 @@ function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt
     console.log("");
     console.log(field("receipt", receipt.id));
     // Paid only when the chain says so; otherwise the amount the seller reported paid.
-    console.log(field(receipt.chain === "verified" ? "paid" : "amount", money(receipt.terms.amountDecimal, receipt.terms.asset)));
+    console.log(field(receipt.chain === "verified" || receipt.paymentIncluded ? "paid" : "amount", money(receipt.terms.amountDecimal, receipt.terms.asset)));
     console.log(field("transaction", shownTransaction(receipt.transaction, receipt.terms.network).url ?? "no transaction hash was given"));
     console.log(field("payer", shownPayer(receipt.payer, receipt.terms.network) ?? "unknown"));
     console.log(field("chain", receiptChain(receipt)));
@@ -1088,7 +1088,7 @@ function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt
   console.log(`Next: ${nextFor(attempt, getQuote(attempt.quoteId, records))}`);
 }
 
-/** What the chain says about a receipt, in words: only "verified" confirms the payment. */
+/** What the chain says about a receipt; matching inclusion is paid while finality is pending. */
 function receiptChain(receipt: Receipt): string {
   switch (receipt.chain) {
     case "verified":
