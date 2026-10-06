@@ -102,7 +102,7 @@ The owner opens it in the browser that has their wallet. The page is on this mac
 first (ssh -L PORT:127.0.0.1:PORT user@this-host, PORT from the approval link). On a chain set up with --hosted (and for
 buy-once), the approval link is on superstables.com instead: it opens on any device where the owner is signed in with
 an Ethereum wallet. Solana actions additionally use a Solana wallet to sign transactions; Solana sign-in is not
-supported in 0.3.0. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
+supported in 0.3.1. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
 command returns at once with state waiting_owner and final false. Write the approval link, the match code and the terms
 in your reply to the owner and end your turn; when they say they've approved, run
 superstables budget wait --id ID --shown. The approval link expires after --timeout seconds (default 600): if the wallet
@@ -678,7 +678,7 @@ The command asks the site for the purchase and prints the owner's approval link 
 same as the owner commands. Write the approval link, the code and the terms in your reply to the owner, a visible
 message, not only in your reasoning or a tool call, and end your turn there. The first approval link the owner opens
 asks them to sign in with an Ethereum wallet (a message, no fee). For Solana devnet, they also
-connect a Solana wallet to sign the payment transaction; Solana sign-in is not supported in 0.3.0.
+connect a Solana wallet to sign the payment transaction; Solana sign-in is not supported in 0.3.1.
 Not in a terminal (an agent), or with --detach: returns at
 once with state waiting_owner and an approval id; when the owner says they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: blocks until the purchase ends. One buy-once
