@@ -74,6 +74,8 @@ describe("status on EVM chains", () => {
     chain.used.delete(NONCE);
     chain.receipts.delete(cancelled);
     const landed = chain.settle({ from: PAYER, to: RECIPIENT, value: "10000", nonce: NONCE });
+    expect(await recheckChain(r, "a", chain.url)).toMatchObject({ state: "uncertain" });
+    chain.advance(10);
     expect(await recheckChain(r, "a", chain.url)).toMatchObject({ state: "paid_service_failed", chain: "verified", transaction: landed });
     expect(r.spentToday("USDC")).toBe(0.01);
   });

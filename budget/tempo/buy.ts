@@ -34,6 +34,7 @@
 //   npx tsx budget/tempo/buy.ts --url <seller> --max 0.2 --agent 2 --op my-op-1
 
 import { createHash } from 'node:crypto'
+import { requireRecordLock } from '../op-lock.mjs'
 import { Mppx, tempo } from 'mppx/client'
 import { Credential, Receipt } from 'mppx'
 import { keccak256, type Address, type Hex } from 'viem'
@@ -121,6 +122,7 @@ function finish(state: OpState, f: { tx?: string | null; debit?: bigint | null; 
 }
 
 async function main() {
+  requireRecordLock(OPS_DIR, opId)
   // 1. An operation that is pending or settled is never started again under the same id.
   const existing = readOp(opId)
   if (existing && BLOCKING.includes(existing.state)) {
