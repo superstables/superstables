@@ -287,6 +287,12 @@ set, Tempo Moderato `SUPERSTABLES_TEMPO_RPC` and Solana devnet `SUPERSTABLES_SOL
 HTTPS, or HTTP on this machine, without credentials); otherwise the client uses the chain's
 configured public RPC. Use an RPC you trust when that matters. The budget rails read the chain too.
 
+On chains that require finalized evidence, a custom RPC without the `finalized` block tag can
+show a matching paid transaction but cannot make its verification permanent. The payment is
+reported paid and its delivered response is saved; `status` or budget `reconcile` keeps checking
+it. Use an RPC that serves finalized history to finish verification. Read errors or missing
+inclusion remain unknown, with “Do not pay again”.
+
 The per-day cap (`caps.per_day`): a payment counts on the day it ended, and on every day while it
 can still move money: waiting for the owner within its approval window, or signed or sent and not
 resolved (an EVM authorization until its `validBefore` and two minutes; a Tempo transfer, which has
