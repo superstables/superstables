@@ -220,7 +220,7 @@ describe("hosted client finality", () => {
       const p = site.purchases[0];
       const tx = "5".repeat(87);
       site.settle(p, "ok", { transaction: tx, payer: SOLANA_PAYER });
-      const input = { rail: "solana", chain: "devnet", tx, payer: SOLANA_PAYER, payTo: SOLANA_MARKET.payTo, asset: SOLANA_MARKET.asset, amount: 10000n, notBefore: 0, nonce: p.nonce, rpcUrl: proxy.url };
+      const input = { rail: "solana", chain: "devnet", tx, payer: SOLANA_PAYER, payTo: SOLANA_MARKET.payTo, asset: SOLANA_MARKET.asset, amount: 10000n, notBefore: 0, nonce: p.nonce, rpcUrl: proxy.url, deadline: undefined };
       expect((await hostedSettlement(input)).state).toBe("included");
       site.finalizedSlot = 1000;
       expect((await hostedSettlement(input)).state).toBe("settled");
