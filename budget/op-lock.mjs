@@ -1,19 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, fsyncSync, futimesSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
-import { processStart } from './procs.mjs';
-import { hostname } from 'node:os';
+import { closeSync, fstatSync, fsyncSync, futimesSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createIdentitySource } from './lock-identity.mjs';
 import { dirname, join } from 'node:path';
 
 export const HEARTBEAT_MS = 15_000;
-function namespace() {
-  try { return readlinkSync('/proc/self/ns/pid'); } catch { return null; }
-}
-const pidNamespace = namespace();
-const host = hostname();
-const bootId = (() => {
-  try { return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(); } catch { return null; }
-})();
-const identity = () => ({ pid: process.pid, pidStart: processStart(process.pid) ?? null, namespace: pidNamespace, platform: process.platform, hostname: host, bootId });
+const systemIdentity = createIdentitySource();
+const source = options => options.identitySource ?? systemIdentity;
+const identity = options => source(options).record();
 function syncDir(path) {
   const fd = openSync(path, 'r');
   try { fsyncSync(fd); } finally { closeSync(fd); }
@@ -22,18 +15,20 @@ function durableRecord(path, text) {
   const fd = openSync(path, 'wx', 0o600);
   try { writeFileSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
 }
-function liveness(owner) {
-  if (owner.platform !== process.platform) return { state: 'unverifiable', why: owner.platform ? 'another OS' : 'missing host identity' };
-  if (owner.hostname !== host) return { state: 'unverifiable', why: 'another host' };
-  if (!bootId || owner.bootId !== bootId) return { state: 'unverifiable', why: 'another or unknown boot' };
-  if (!pidNamespace || owner.namespace !== pidNamespace) return { state: 'unverifiable', why: 'another or unknown container' };
+function liveness(owner, options = {}) {
+  const local = identity(options);
+  if (owner.platform !== local.platform) return { state: 'unverifiable', why: owner.platform ? 'another OS' : 'missing host identity' };
+  if (owner.hostname !== local.hostname) return { state: 'unverifiable', why: 'another host' };
+  if (['linux', 'darwin'].includes(local.platform) && (!local.bootId || owner.bootId !== local.bootId)) return { state: 'unverifiable', why: 'another or unknown boot' };
+  if (local.platform === 'linux' && (!local.namespace || owner.namespace !== local.namespace)) return { state: 'unverifiable', why: 'another or unknown container' };
   let unknown = false;
   for (const [pid, start] of [[owner.pid, owner.pidStart], [owner.railPid, owner.railPidStart]]) {
     if (pid === undefined) continue;
     if (!Number.isSafeInteger(pid) || pid <= 0) { unknown = true; continue; }
-    const current = processStart(pid);
+    const current = source(options).start(pid);
+    if (!['linux', 'darwin'].includes(local.platform) && (current === undefined || typeof start !== 'string')) { unknown = true; continue; }
     if (typeof current === 'string' && typeof start === 'string' && current !== start) continue;
-    try { process.kill(pid, 0); return { state: 'alive' }; }
+    try { source(options).probe(pid); return { state: 'alive' }; }
     catch (err) {
       if (err.code === 'EPERM') return { state: 'alive' };
       if (err.code !== 'ESRCH') unknown = true;
@@ -41,7 +36,7 @@ function liveness(owner) {
   }
   return unknown ? { state: 'unverifiable', why: 'unreadable process identity' } : { state: 'dead' };
 }
-function holder(path) {
+function holder(path, options = {}) {
   let stat;
   try { stat = lstatSync(path); } catch (err) { if (err.code === 'ENOENT') return null; throw err; }
   let text = null;
@@ -51,7 +46,7 @@ function holder(path) {
     const value = JSON.parse(text);
     const owner = typeof value === 'number' ? { pid: value } : value;
     if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) {
-      return { text, version, pid: owner.pid, owner, ...liveness(owner), directory: stat.isDirectory() };
+      return { text, version, pid: owner.pid, owner, ...liveness(owner, options), directory: stat.isDirectory() };
     }
   } catch {}
   return { text, version, pid: null, owner: null, state: 'unverifiable', why: 'unreadable or unrecognised lock record', directory: stat.isDirectory() };
@@ -65,7 +60,7 @@ function busy(path, current = holder(path)) {
     ? `held by process ${current.pid} since ${time}; wait for its RESULT or ask the owner to check it`
     : current?.directory
       ? 'unrecognised directory in the lock or takeover mutex; the owner must inspect and remove this directory after stopping all work on this op'
-      : `unverifiable holder${current?.pid ? ` process ${current.pid} since ${time}` : ''}: ${current?.why ?? 'lock changed during inspection'}; timestamps cannot prove it has exited; only the owner may override it with unlock --confirm`;
+      : `unverifiable holder${current?.pid ? ` process ${current.pid} since ${time}` : ''}: ${current?.why ?? 'lock changed during inspection'}; timestamps cannot prove it has exited; stop and ask the owner; see budget/CLI.md#operation-lock-recovery`;
   return { ok: false, holder: current?.pid ?? null, path, details: `${details} (${path})` };
 }
 function removeBreaker(path, generation) {
@@ -78,18 +73,18 @@ function clearDeadBreaker(path, options = {}) {
   try {
     const stat = lstatSync(path);
     if (!stat.isDirectory()) {
-      const record = holder(path);
+      const record = holder(path, options);
       if (removable(path, record, options)) unlinkSync(path);
       return;
     }
     const records = readdirSync(path);
     if (records.length === 0) { rmdirSync(path); return; }
-    const owners = records.map(name => ({ name, record: holder(join(path, name)) }));
+    const owners = records.map(name => ({ name, record: holder(join(path, name), options) }));
     if (owners.some(({ record }) => record?.state === 'alive' || record?.directory || (record?.state === 'unverifiable' && !options.confirmUnverifiable))) return;
     // Only remove the entries observed here. rmdir refuses a newly published generation.
     for (const { name, record } of owners) {
       const entry = join(path, name);
-      const current = holder(entry);
+      const current = holder(entry, options);
       if (current && current.version === record?.version && current.text === record?.text && removable(entry, current, options)) removeBreaker(path, name);
     }
   } catch (err) {
@@ -110,7 +105,7 @@ function withBreaker(path, action, options = {}) {
   mkdirSync(tmp, { mode: 0o700 });
   let published = false;
   try {
-    durableRecord(join(tmp, generation), JSON.stringify(identity()));
+    durableRecord(join(tmp, generation), JSON.stringify(identity(options)));
     syncDir(tmp);
     try { renameSync(tmp, mutex); published = true; syncDir(dirname(path)); }
     catch (err) {
@@ -128,7 +123,7 @@ function withBreaker(path, action, options = {}) {
 
 function breakStale(path, stale, options) {
   withBreaker(path, () => {
-    const current = holder(path);
+    const current = holder(path, options);
     if (current && current.version === stale.version && current.text === stale.text && removable(path, current, options)) {
       unlinkSync(path);
       syncDir(dirname(path));
@@ -139,12 +134,12 @@ function breakStale(path, stale, options) {
 export function abandonedBreaker(path, options = {}) {
   clearDeadBreaker(`${path}.break`, options);
   const mutex = `${path}.break`;
-  const record = holder(mutex);
+  const record = holder(mutex, options);
   if (record?.directory) {
     try {
       for (const name of readdirSync(mutex)) {
         const entry = join(mutex, name);
-        const owner = holder(entry);
+        const owner = holder(entry, options);
         if (owner) return busy(entry, owner);
       }
     } catch (err) { if (err.code !== 'ENOENT') throw err; }
@@ -153,11 +148,11 @@ export function abandonedBreaker(path, options = {}) {
 }
 
 /**
- * Complete publication, liveness-checked takeover, and release of this generation only.
+ * Complete publication and liveness-checked takeover. Owner override requires stopping all holders.
  * @returns {{ ok: true, release: () => void, holdAlso: (pid: number | undefined) => void } | { ok: false, holder: number | null, path: string, details: string }}
  */
 export function lockFile(path, options = {}) {
-  const owner = { ...identity(), token: randomUUID(), createdAt: Date.now(), heartbeatAt: Date.now() };
+  const owner = { ...identity(options), token: randomUUID(), createdAt: Date.now(), heartbeatAt: Date.now() };
   let railOwner = null;
   let text = JSON.stringify(owner);
   const tmp = `${path}.${owner.token}.tmp`;
@@ -167,7 +162,7 @@ export function lockFile(path, options = {}) {
       try { linkSync(tmp, path); }
       catch (err) {
         if (err.code !== 'EEXIST') throw err;
-        const current = holder(path);
+        const current = holder(path, options);
         if (!current) continue;
         if (current.state === 'alive' || current.directory || (current.state === 'unverifiable' && !options.confirmUnverifiable)) return busy(path, current);
         breakStale(path, current, options);
@@ -186,19 +181,25 @@ export function lockFile(path, options = {}) {
       timer.unref();
       let closed = false;
       const release = () => {
-        if (railOwner && liveness({ ...identity(), pid: railOwner.pid, pidStart: railOwner.pidStart }).state !== 'dead') return;
+        if (railOwner && liveness({ ...identity(options), pid: railOwner.pid, pidStart: railOwner.pidStart }, options).state !== 'dead') return;
         if (closed) return;
-        const released = withBreaker(path, () => {
-          const current = holder(path);
-          if (current?.text === text) { unlinkSync(path); syncDir(dirname(path)); }
-        });
-        if (!released) return;
+        // A live holder cannot be taken over automatically. Release its inode
+        // without the breaker, which may belong to an unverifiable namespace.
+        // Owner overrides require stopping the holder: stat + unlink is not atomic.
+        const current = holder(path, options);
+        if (current?.text === text) {
+          const owned = fstatSync(fd);
+          try {
+            const published = lstatSync(path);
+            if (owned.dev === published.dev && owned.ino === published.ino) { unlinkSync(path); syncDir(dirname(path)); }
+          } catch (err) { if (err.code !== 'ENOENT') throw err; }
+        }
         clearInterval(timer); closeSync(fd); closed = true;
         process.removeListener('exit', release);
       };
       const holdAlso = (pid) => {
-        if (!pid || holder(path)?.text !== text) return;
-        const child = { pid, pidStart: processStart(pid) ?? null };
+        if (!pid || holder(path, options)?.text !== text) return;
+        const child = { pid, pidStart: source(options).start(pid) ?? null };
         // Retain the lock even if publication fails after the child was spawned.
         railOwner = child;
         const next = JSON.stringify({ ...owner, railPid: child.pid, railPidStart: child.pidStart });
@@ -209,12 +210,12 @@ export function lockFile(path, options = {}) {
           let adopted = false;
           try {
             const updated = withBreaker(path, () => {
-              if (holder(path)?.text !== text) throw new Error('operation lock ownership changed');
+              if (holder(path, options)?.text !== text) throw new Error('operation lock ownership changed');
               renameSync(update, path);
               text = next;
               closeSync(fd); fd = updateFd; adopted = true;
               syncDir(dirname(path));
-            });
+            }, options);
             if (!updated) throw new Error('operation lock takeover mutex is busy');
           } finally { if (!adopted) closeSync(updateFd); }
         } finally {
@@ -224,7 +225,7 @@ export function lockFile(path, options = {}) {
       process.on('exit', release);
       return { ok: true, release, holdAlso };
     }
-    return abandonedBreaker(path, options) ?? busy(path);
+    return abandonedBreaker(path, options) ?? busy(path, holder(path, options));
   } finally { unlinkSync(tmp); }
 }
 
@@ -234,7 +235,7 @@ export function lockRecord(dir, op, options = {}) {
   return lockFile(join(dir, `${op}.json.lock`), options);
 }
 export function lockNext(lock, op, rail, chain) {
-  return `${lock.details}. Another process (buy or reconcile) may be working on this op; wait for its RESULT, then superstables budget reconcile --rail ${rail} --chain ${chain} --op ${op}. Ask the owner to check every process, container and host working on this op before running superstables budget unlock --rail ${rail} --chain ${chain} --op ${op} --confirm; live local holders are refused. Overriding an unverifiable holder that is still working can allow a duplicate payment. Never pay again for this op while its outcome is unknown`;
+  return `${lock.details}. Another process (buy or reconcile) may be working on this op; wait for its RESULT, then superstables budget reconcile --rail ${rail} --chain ${chain} --op ${op}. Stop and ask the owner to check and stop all work on this op across processes, containers and hosts. Only the owner handles lock recovery; see budget/CLI.md#operation-lock-recovery and the payment skill rule 5. Overriding a holder that is still working can remove a successor's lock and allow duplicate payments. Never pay again for this op while its outcome is unknown`;
 }
 export function requireRecordLock(dir, op) {
   const lock = lockRecord(dir, op);

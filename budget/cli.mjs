@@ -24,6 +24,7 @@
 import { afterPurchase, ownerCheck } from "./next-steps.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, writeSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
@@ -330,7 +331,7 @@ ${FLOW_HELP}`,
       usage: "superstables budget reconcile --rail evm|tempo|solana --op ID [--chain C]",
       about: `Reads the chain for one purchase, by its --op, and reports what happened to it. Run it after a buy exits 5 (unknown),
 or before reusing an --op. Needs the purchase's journal on this machine. A busy lock returns exit 5, reason op_in_progress,
-with the holder, lock path and a safe unlock command in next. Never buy again while the outcome is unknown.`,
+with the holder, lock path and owner recovery guidance in next. Never buy again while the outcome is unknown.`,
       money: "no. It never signs or sends.",
       who: "anyone, usually the agent.",
       example: "superstables budget reconcile --rail evm --op btc-001",
@@ -341,10 +342,10 @@ with the holder, lock path and a safe unlock command in next. Never buy again wh
     flags: { op: "v", confirm: "b" }, required: ["op"],
     help: helpText({
       usage: "superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm",
-      about: "Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Refuses verifiably live local holders. With --confirm, overrides unverifiable holders regardless of timestamps; a holder still working can cause a duplicate payment. Preserves the journal; reconcile next, never buy again while unknown.",
+      about: "Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects verifiably live local holders on Linux and macOS. Requires --confirm and the op ID typed in a terminal. Overrides unverifiable holders regardless of timestamps; a holder still working can remove a successor's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.",
       money: "no. It never signs or sends.", who: "the owner or operator, after stopping the processes.",
       example: "superstables budget unlock --rail solana --op order-001 --confirm",
-      prints: "one RESULT with op, state, reason and next. Without --confirm: exit 3. Busy: exit 5. Cleared: exit 0.",
+      prints: "one RESULT with op, state, reason and next. Without --confirm, a terminal or the matching typed op ID: exit 3. Busy: exit 5. Cleared or no lock: exit 0.",
     }),
   },
   recover: {
@@ -1294,12 +1295,24 @@ async function buy({ f, ctx }) {
 
 async function unlock({ f, ctx }) {
   const next = `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`;
-  if (!f.confirm) return emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason: "confirmation_required", next: `ask the owner to check and stop all work on this op across processes, containers and hosts, then superstables budget unlock --rail ${f.rail} --chain ${f.chain} --op ${f.op} --confirm. An unverifiable holder may still be working; overriding it can allow a duplicate payment. This preserves the journal; reconcile next` });
+  const ownerNext = "Stop and ask the owner to check and stop all work on this op across processes, containers and hosts. Only the owner handles lock recovery; see budget/CLI.md#operation-lock-recovery and the payment skill rule 5. Preserve the journal and reconcile next; never pay again while the outcome is unknown";
+  const refuse = reason => emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason, next: ownerNext });
+  if (!f.confirm) return refuse("confirmation_required");
+  if (!process.stdin.isTTY) return refuse("owner_terminal_required");
+  const terminal = createInterface({ input: process.stdin, output: process.stderr });
+  let answer;
+  try {
+    const closed = new Promise(resolve => terminal.once('close', () => resolve(null)));
+    answer = await Promise.race([terminal.question(`superstables budget: owner recovery can remove a successor's lock and allow duplicate payments if any holder is still working. After stopping all work on this op, type ${f.op} to confirm: `), closed]);
+  } catch { return refuse("owner_confirmation_mismatch"); }
+  finally { terminal.close(); }
+  if (answer !== f.op) return refuse("owner_confirmation_mismatch");
   const dir = opsDir(f.rail, f.chain);
-  if (!existsSync(journal(f)) && !["buy.lock", "json.lock"].some(suffix => existsSync(join(dir, `${f.op}.${suffix}`)) || existsSync(join(dir, `${f.op}.${suffix}.break`)))) {
+  const hadLocks = ["buy.lock", "json.lock"].some(suffix => existsSync(join(dir, `${f.op}.${suffix}`)) || existsSync(join(dir, `${f.op}.${suffix}.break`)));
+  if (!existsSync(journal(f)) && !hadLocks) {
     return emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason: "op_not_found", next: "check the original rail, chain and op; no journal or operation locks exist" });
   }
-  const options = { confirmUnverifiable: true, onOverride: details => log(`superstables budget: overriding unverifiable lock: ${details}. The owner confirmed all work on this op has stopped.`) };
+  const options = { confirmUnverifiable: true, onOverride: details => log(`superstables budget: overriding unverifiable lock: ${details}. The owner confirmed all work on this op has stopped. A holder still working can remove a successor's lock and allow duplicate payments.`) };
   const locks = [];
   try {
     for (const take of [lockOp, lockRecord]) {
@@ -1312,8 +1325,8 @@ async function unlock({ f, ctx }) {
       if (blocker) { for (const held of locks) held.release(); return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(blocker, f.op, f.rail, f.chain) }); }
     }
     for (const lock of locks) lock.release();
-    log(`superstables budget: abandoned locks cleared for operation ${f.op}; journal preserved. Reconcile before doing anything else.`);
-    return emit(0, { ...ctx, op: f.op, state: "ok", next, reason: "locks_cleared" });
+    log(`superstables budget: ${hadLocks ? 'abandoned locks cleared' : 'no lock'} for operation ${f.op}; journal preserved. Reconcile before doing anything else.`);
+    return emit(0, { ...ctx, op: f.op, state: "ok", next, reason: hadLocks ? "locks_cleared" : "no_lock" });
   } finally { for (const lock of locks) lock.release(); }
 }
 

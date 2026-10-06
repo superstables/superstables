@@ -471,7 +471,7 @@ superstables budget reconcile --rail evm|tempo|solana --op ID [--chain C]
 
 Reads the chain for one purchase, by its --op, and reports what happened to it. Run it after a buy exits 5 (unknown),
 or before reusing an --op. Needs the purchase's journal on this machine. A busy lock returns exit 5, reason op_in_progress,
-with the holder, lock path and a safe unlock command in next. Never buy again while the outcome is unknown.
+with the holder, lock path and owner recovery guidance in next. Never buy again while the outcome is unknown.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
@@ -490,7 +490,7 @@ Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 
 ```text
 superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm
 
-Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Refuses verifiably live local holders. With --confirm, overrides unverifiable holders regardless of timestamps; a holder still working can cause a duplicate payment. Preserves the journal; reconcile next, never buy again while unknown.
+Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects verifiably live local holders on Linux and macOS. Requires --confirm and the op ID typed in a terminal. Overrides unverifiable holders regardless of timestamps; a holder still working can remove a successor's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
@@ -499,7 +499,7 @@ Moves money: no. It never signs or sends.
 Run by: the owner or operator, after stopping the processes.
 Example:
   $ superstables budget unlock --rail solana --op order-001 --confirm
-Prints: one RESULT with op, state, reason and next. Without --confirm: exit 3. Busy: exit 5. Cleared: exit 0.
+Prints: one RESULT with op, state, reason and next. Without --confirm, a terminal or the matching typed op ID: exit 3. Busy: exit 5. Cleared or no lock: exit 0.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 5 unknown (the full table: superstables budget --help)
 ```

@@ -22,15 +22,15 @@ if (process.argv[2] === 'worker') {
   send({ event: 'held', hostPid });
   let calls = 0;
   const descriptors = new Map();
-  for (const name of ['mkdirSync', 'openSync', 'writeFileSync', 'fsyncSync', 'linkSync', 'lstatSync', 'readFileSync', 'readdirSync', 'renameSync', 'unlinkSync', 'rmdirSync', 'closeSync', 'futimesSync']) {
+  for (const name of ['mkdirSync', 'openSync', 'writeFileSync', 'fsyncSync', 'fstatSync', 'linkSync', 'lstatSync', 'readFileSync', 'readdirSync', 'renameSync', 'unlinkSync', 'rmdirSync', 'closeSync', 'futimesSync']) {
     const real = fs[name];
     fs[name] = function (...args) {
       const target = typeof args[0] === 'number' ? descriptors.get(args[0]) : String(args[0]);
       // Heartbeat fd predates instrumentation; futimes and fsync still count.
-      const relevant = target?.startsWith(home) || (action === 'heartbeat' && typeof args[0] === 'number');
+      const relevant = target?.startsWith(home) || (action === 'heartbeat' && typeof args[0] === 'number') || (action === 'release' && name === 'fstatSync');
       const index = relevant ? ++calls : 0;
       const pause = when => {
-        if (relevant && Number(step) > 0 && index === Number(step) && phase === when) { send({ event: 'paused', name, phase, index }); process.kill(process.pid, 'SIGSTOP'); }
+        if (relevant && ((Number(step) > 0 && index === Number(step)) || (step === 'unlink' && name === 'unlinkSync' && target === path)) && phase === when) { send({ event: 'paused', name, phase, index }); process.kill(process.pid, 'SIGSTOP'); }
       };
       pause('before'); const result = real.apply(this, args);
       if (name === 'openSync') descriptors.set(result, target);
@@ -96,7 +96,7 @@ if (process.argv[2] === 'worker') {
     children.delete(state);
   }
   function confirmed(b) {
-    const result = spawnSync(process.execPath, [join(root, 'budget/cli.mjs'), 'unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm'], { env: { ...process.env, SUPERSTABLES_HOME: b.home }, encoding: 'utf8' });
+    const result = spawnSync(process.execPath, ['--import', join(root, 'test/helpers/budget-owner-terminal.mjs'), join(root, 'budget/cli.mjs'), 'unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm'], { env: { ...process.env, SUPERSTABLES_HOME: b.home }, encoding: 'utf8', input: 'paid-op\n' });
     assert.equal(result.status, 0, result.stderr + result.stdout);
   }
   function tryBusy(b) {
@@ -131,7 +131,28 @@ if (process.argv[2] === 'worker') {
     } finally { await kill(state); fs.rmSync(b.home, { recursive: true, force: true }); homes.delete(b.home); }
   }
   try {
-    if (process.argv.includes('--long-pause')) {
+    if (process.argv.includes('--long-release') || process.argv.includes('--override-release')) {
+      const b = box(); const state = await worker(b, 'release', 'unlink', 'before');
+      try {
+        state.p.stdin.write('go\n'); await state.wait(['paused']);
+        while (!fs.readFileSync(`/proc/${state.hostPid}/stat`, 'utf8').includes(') T ')) await sleep(3);
+        if (process.argv.includes('--override-release')) {
+          confirmed(b);
+          const successor = lockFile(b.path); assert.equal(successor.ok, true);
+          process.kill(state.hostPid, 'SIGCONT'); await state.wait(['done']);
+          assert.equal(fs.existsSync(b.path), false, 'documented override race changed');
+          console.log(JSON.stringify({ result: 'documented-risk-reproduced', successorLockRemoved: true }));
+          if (successor.ok) successor.release();
+        } else {
+          console.log(JSON.stringify({ event: 'long-release-started', hostPid: state.hostPid }));
+          for (let i = 0; i < 31; i++) { await sleep(10000); tryBusy(b); }
+          process.kill(state.hostPid, 'SIGCONT'); await state.wait(['done']);
+          assert.equal(fs.existsSync(b.path), false);
+          const successor = lockFile(b.path); assert.equal(successor.ok, true); tryBusy(b); if (successor.ok) successor.release();
+          console.log(JSON.stringify({ result: 'pass', releasePauseMs: 310000, attempts: 31 }));
+        }
+      } finally { await kill(state); fs.rmSync(b.home, { recursive: true, force: true }); homes.delete(b.home); }
+    } else if (process.argv.includes('--long-pause')) {
       const b = box(); const state = await worker(b, 'hold', 0, 'before');
       try {
         process.kill(state.hostPid, 'SIGSTOP'); console.log(JSON.stringify({ event: 'long-pause-started', hostPid: state.hostPid }));

@@ -4,14 +4,19 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { readlinkSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { hostname, tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const REPO = join(import.meta.dirname, "..", "..");
 const CLI = join(REPO, "budget", "cli.mjs");
-const hostIdentity = process.platform === 'linux' ? { platform: process.platform, hostname: hostname(), bootId: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), namespace: readlinkSync('/proc/self/ns/pid') } : {};
+const { createIdentitySource } = await import('../../budget/lock-identity.mjs');
+const identityProcs = await import('../../budget/procs.mjs');
+const identitySource = createIdentitySource({
+  start: pid => identityProcs.processStart(pid) ?? (identityProcs.pidAlive(pid) ? `test:${pid}` : null),
+});
+const hostIdentity = identitySource.record();
 const PROCESS_START = process.platform === "linux" || process.platform === "darwin";
 
 type Procs = typeof import("../../budget/procs.mjs");
@@ -218,9 +223,9 @@ describe("one buy per operation at a time", () => {
 
   it("takes the lock exclusively, keeps it while the rail script runs, and takes over a stale one", () => {
     const dir = join(home, "locks");
-    const first = guard.lockOp(dir, "op-1");
+    const first = guard.lockOp(dir, "op-1", { identitySource });
     expect(first.ok).toBe(true);
-    const second = guard.lockOp(dir, "op-1");
+    const second = guard.lockOp(dir, "op-1", { identitySource });
     expect(second).toMatchObject({ ok: false, holder: process.pid });
     if (!first.ok) throw new Error("unreachable");
     first.release();
@@ -228,13 +233,13 @@ describe("one buy per operation at a time", () => {
 
     // the command was killed, but the rail script it started still runs: still held
     const rail = sleeper();
-    writeFileSync(guard.opLockFile(dir, "op-2"), JSON.stringify({ ...hostIdentity, pid: deadPid(), pidStart: null, railPid: rail.pid, railPidStart: procs.processStart(rail.pid!) ?? null, createdAt: Date.now() }));
-    expect(guard.lockOp(dir, "op-2").ok).toBe(false);
+    writeFileSync(guard.opLockFile(dir, "op-2"), JSON.stringify({ ...hostIdentity, pid: deadPid(), pidStart: "test:dead", railPid: rail.pid, railPidStart: identitySource.start(rail.pid!), createdAt: Date.now() }));
+    expect(guard.lockOp(dir, "op-2", { identitySource }).ok).toBe(false);
     rail.kill("SIGKILL");
 
     // its process is gone: stale, taken over
-    writeFileSync(guard.opLockFile(dir, "op-3"), JSON.stringify({ ...hostIdentity, pid: deadPid(), pidStart: null, createdAt: Date.now() }));
-    const taken = guard.lockOp(dir, "op-3");
+    writeFileSync(guard.opLockFile(dir, "op-3"), JSON.stringify({ ...hostIdentity, pid: deadPid(), pidStart: "test:dead", createdAt: Date.now() }));
+    const taken = guard.lockOp(dir, "op-3", { identitySource });
     expect(taken.ok).toBe(true);
     if (taken.ok) taken.release();
   });
@@ -258,12 +263,12 @@ describe("one buy per operation at a time", () => {
   it("release retains the operation lock until its recorded rail process exits", async () => {
     const dir = join(home, 'locks');
     const rail = sleeper();
-    const lock = guard.lockOp(dir, 'live-rail-release');
+    const lock = guard.lockOp(dir, 'live-rail-release', { identitySource });
     if (!lock.ok) throw new Error('lock was unexpectedly busy');
     lock.holdAlso(rail.pid);
     lock.release();
     expect(existsSync(guard.opLockFile(dir, 'live-rail-release'))).toBe(true);
-    expect(guard.lockOp(dir, 'live-rail-release').ok).toBe(false);
+    expect(guard.lockOp(dir, 'live-rail-release', { identitySource }).ok).toBe(false);
     const exited = new Promise<void>(resolve => rail.once('exit', () => resolve()));
     rail.kill('SIGKILL');
     await exited;
@@ -271,11 +276,11 @@ describe("one buy per operation at a time", () => {
     expect(existsSync(guard.opLockFile(dir, 'live-rail-release'))).toBe(false);
   });
 
-  it.runIf(PROCESS_START)("treats a lock whose pid now names another process as stale", () => {
+  it("treats a lock whose pid now names another process as stale", () => {
     const dir = join(home, "locks");
     // this test's own pid, recorded with another start: the number was reused
     writeFileSync(guard.opLockFile(dir, "op-4"), JSON.stringify({ ...hostIdentity, pid: process.pid, pidStart: "linux:another-start:1", createdAt: Date.now() }));
-    const taken = guard.lockOp(dir, "op-4");
+    const taken = guard.lockOp(dir, "op-4", { identitySource });
     expect(taken.ok).toBe(true);
     if (taken.ok) taken.release();
   });
