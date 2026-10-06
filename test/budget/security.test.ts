@@ -210,7 +210,7 @@ describe("one buy per operation at a time", () => {
     expect(r.code).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck", reason: "op_in_progress", paid: null, op: "same-op" });
     expect(r.result.next).toContain("wait for its RESULT");
-    expect(r.stderr).toContain(`another buy with operation same-op is running (pid ${running.pid})`);
+    expect(r.stderr).toContain(`another process (buy or reconcile) is working on operation same-op`);
     expect(existsSync(join(opsDir(), "same-op.json"))).toBe(false);
     running.kill("SIGKILL");
   });

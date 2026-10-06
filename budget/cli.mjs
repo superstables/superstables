@@ -28,6 +28,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
 import { HOLDER_ENV, WORKER_ENV, adoptWorker, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { abandonedBreaker, lockRecord, lockNext } from "./op-lock.mjs";
 import { lockOp, railResult } from "./buy-guard.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
@@ -328,11 +329,22 @@ ${FLOW_HELP}`,
     help: helpText({
       usage: "superstables budget reconcile --rail evm|tempo|solana --op ID [--chain C]",
       about: `Reads the chain for one purchase, by its --op, and reports what happened to it. Run it after a buy exits 5 (unknown),
-or before reusing an --op. Needs the purchase's journal on this machine.`,
+or before reusing an --op. Needs the purchase's journal on this machine. A busy lock returns exit 5, reason op_in_progress,
+with the holder, lock path and a safe unlock command in next. Never buy again while the outcome is unknown.`,
       money: "no. It never signs or sends.",
       who: "anyone, usually the agent.",
       example: "superstables budget reconcile --rail evm --op btc-001",
-      prints: "the chain reads on stderr, then one RESULT line: state (settled, failed, not_found, unknown), paid, tx, next.",
+      prints: "the chain reads on stderr, then one RESULT line: op, state (settled, failed, not_found, unknown), paid, tx, next.",
+    }),
+  },
+  unlock: {
+    flags: { op: "v", confirm: "b" }, required: ["op"],
+    help: helpText({
+      usage: "superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm",
+      about: "Clears abandoned operation locks after you stop every process or container working on this op. Refuses live holders and heartbeats or damaged records less than five minutes old. Preserves the journal; reconcile next, never buy again while unknown.",
+      money: "no. It never signs or sends.", who: "the owner or operator, after stopping the processes.",
+      example: "superstables budget unlock --rail solana --op order-001 --confirm",
+      prints: "one RESULT with op, state, reason and next. Without --confirm: exit 3. Busy: exit 5. Cleared: exit 0.",
     }),
   },
   recover: {
@@ -496,6 +508,7 @@ Commands (each takes --help):
   preflight   anyone  a seller's price and payee                                         read only
   buy         agent   one purchase under the budget; --max is required                   moves money
   reconcile   anyone  read the chain for one purchase whose outcome is unknown           read only
+  unlock      owner   clear abandoned operation locks after stopping their processes     moves no money
   revoke      owner   end the budget on chain                                            moves no money
   recover     owner   evm: stop the allowance, return stranded USDC to the owner          moves money back
   wait        anyone  the state of an owner approval an agent started (--id, --shown)    read only
@@ -1076,6 +1089,7 @@ const responseOf = (rail) => (typeof rail.responseFile === "string" ? { response
 // Turn the rail's RESULT (or its absence) into the CLI's normalized fields.
 function normalize(cmd, f, rail, code) {
   const base = { command: cmd, rail: f.rail, chain: f.chain, op: f.op };
+  if (rail?.reason === "op_in_progress") return { code: 5, fields: { ...base, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, reason: "op_in_progress", next: rail.next } };
   if (!rail) {
     if (code === 2) return { code: 2, fields: { ...base, state: "failed", next: `fix the command; see superstables budget ${cmd} --help`, reason: "the rail script rejected the input" } };
     const state = ["buy", "reconcile"].includes(cmd) ? "unknown" : "failed";
@@ -1239,8 +1253,8 @@ async function buy({ f, ctx }) {
   // while its rail script runs: two overlapping buys would both find no journal and both pay.
   const lock = lockOp(opsDir(f.rail, f.chain), f.op);
   if (!lock.ok) {
-    log(`superstables budget: refused: another buy with operation ${f.op} is running${lock.holder ? ` (pid ${lock.holder})` : ""}. Nothing was signed.`);
-    return emit(3, { ...ctx, state: "refused_precheck", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `another buy with this --op is running: wait for its RESULT, then superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}. Never start it again meanwhile`, reason: "op_in_progress" });
+    log(`superstables budget: refused: another process (buy or reconcile) is working on operation ${f.op}. ${lock.details}. Nothing was signed by this command.`);
+    return emit(3, { ...ctx, state: "refused_precheck", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f.op, f.rail, f.chain), reason: "op_in_progress" });
   }
   const j = readJournal(f);
   if (j && ["submitted", "unknown", "settled"].includes(j.state)) {
@@ -1249,7 +1263,8 @@ async function buy({ f, ctx }) {
   }
   const journalBefore = existsSync(journal(f));
   const running = run(railCommand("buy", f));
-  lock.holdAlso(currentChild?.pid);
+  try { lock.holdAlso(currentChild?.pid); }
+  catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }
   const r = await running;
   // Stopped (by a signal or on its own) before its rail ever wrote this op's journal: every rail writes the journal
   // before it signs or sends anything, the rail has exited, and this process holds the op's lock, so nothing was signed.
@@ -1277,12 +1292,33 @@ async function buy({ f, ctx }) {
   emit(n.code, n.fields);
 }
 
+async function unlock({ f, ctx }) {
+  const next = `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`;
+  if (!f.confirm) return emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason: "confirmation_required", next: `stop every process or container working on this op, then superstables budget unlock --rail ${f.rail} --chain ${f.chain} --op ${f.op} --confirm. This preserves the journal; reconcile next` });
+  const locks = [];
+  try {
+    for (const take of [lockOp, lockRecord]) {
+      const lock = take(opsDir(f.rail, f.chain), f.op);
+      if (!lock.ok) { for (const held of locks) held.release(); return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(lock, f.op, f.rail, f.chain) }); }
+      locks.push(lock);
+    }
+    for (const suffix of ["buy.lock", "json.lock"]) {
+      const blocker = abandonedBreaker(join(opsDir(f.rail, f.chain), `${f.op}.${suffix}`));
+      if (blocker) { for (const held of locks) held.release(); return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(blocker, f.op, f.rail, f.chain) }); }
+    }
+    for (const lock of locks) lock.release();
+    log(`superstables budget: abandoned locks cleared for operation ${f.op}; journal preserved. Reconcile before doing anything else.`);
+    return emit(0, { ...ctx, op: f.op, state: "ok", next, reason: "locks_cleared" });
+  } finally { for (const lock of locks) lock.release(); }
+}
+
 async function reconcile({ f, ctx }) {
   const lock = lockOp(opsDir(f.rail, f.chain), f.op);
-  if (!lock.ok) return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`, reason: "op_in_progress" });
+  if (!lock.ok) return emit(5, { ...ctx, op: f.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f.op, f.rail, f.chain), reason: "op_in_progress" });
   if (!readJournal(f)) return badInput(ctx, `no journal for op ${f.op} under ${opsDir(f.rail, f.chain)}`);
   const running = run(railCommand("reconcile", f)); // none of the rail scripts signs or sends
-  lock.holdAlso(currentChild?.pid);
+  try { lock.holdAlso(currentChild?.pid); }
+  catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }
   const r = await running;
   const n = normalize("reconcile", f, r.signal || interrupted ? null : railResult(r.stdout, { last: true }), r.code);
   emit(n.code, n.fields);
@@ -1695,7 +1731,7 @@ async function find({ f, ctx }) {
 }
 
 // ---- main -------------------------------------------------------------------------------------------
-const HANDLERS = { setup, "fund-agent": fundAgent, doctor, preflight, status, buy, "buy-once": buyOnce, reconcile, grant, revoke, recover, wait, find };
+const HANDLERS = { unlock, setup, "fund-agent": fundAgent, doctor, preflight, status, buy, "buy-once": buyOnce, reconcile, grant, revoke, recover, wait, find };
 const parsed = parse(process.argv.slice(2));
 if (WORKER_ID) {
   // the worker's backstop: nothing it runs may outlive the link, the send grace and the chain reads. It stops the rail
