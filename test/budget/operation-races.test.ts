@@ -122,7 +122,8 @@ describe.runIf(process.platform === 'linux')('operation writers share serializat
       writeFileSync(path, JSON.stringify({ op, rail, kind: 'buy', state: 'settled', final: false,
         inclusionObserved: true, history: [], notes: [], path: 'approve', tx, settleTx: tx,
         pullTx: tx, pullNonce: 0, agentSig: 'recorded-agent-signature', signed: true,
-        agent: '11111111111111111111111111111111', lastValidBlockHeight: 1, delivered: true,
+        owner: `0x${'22'.repeat(20)}`, agent: rail === 'solana' ? '11111111111111111111111111111111' : `0x${'33'.repeat(20)}`,
+        lastValidBlockHeight: 1, delivered: true,
         createdAt: '2026-10-04T23:59:00Z' }));
       const marker = join(box.home, 'provisional-read');
       const reconcile = child(rail, 'reconcile', box, marker);
