@@ -9,6 +9,7 @@ if (process.env.BUDGET_TEST_SANDBOX === '1') preloads.push(fileURLToPath(new URL
 export default mergeConfig(base, {
   test: {
     setupFiles: preloads,
-    env: { NODE_OPTIONS: [process.env.NODE_OPTIONS ?? '', ...preloads.map(path => `--import=${path}`)].join(' ').trim() },
+    // Child tsx processes still need the real host's esbuild binary under a simulated platform.
+    env: { ...(process.env.BUDGET_TEST_MACOS === '1' ? { ESBUILD_BINARY_PATH: fileURLToPath(new URL(`../../node_modules/@esbuild/${process.platform}-${process.arch}/bin/esbuild`, import.meta.url)) } : {}), NODE_OPTIONS: [process.env.NODE_OPTIONS ?? '', ...preloads.map(path => `--import=${path}`)].join(' ').trim() },
   },
 });

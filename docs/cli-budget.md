@@ -492,9 +492,13 @@ Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 
 ## superstables budget unlock
 
 ```text
-superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm
+superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm [--unverified]
 
-Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects live and possibly live local holders on Linux and macOS. If identity reads are blocked and the PID may exist, stop that process or run unlock outside the sandbox. A holder in another PID namespace cannot be cleared from a sandbox. Run unlock on the host (the initial PID namespace), where it can find live holders and recover dead sandbox holders. Requires --confirm and the op ID typed in a terminal. Overrides holders from a proven different host or boot, PIDs proven absent in an inspectable namespace, and damaged records; a holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.
+Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.
+
+--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.
+
+A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.

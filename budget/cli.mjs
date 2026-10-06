@@ -29,7 +29,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
 import { HOLDER_ENV, WORKER_ENV, adoptWorker, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
-import { abandonedBreaker, lockRecord, lockNext } from "./op-lock.mjs";
+import { abandonedBreaker, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { lockOp, railResult } from "./buy-guard.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
@@ -339,10 +339,10 @@ with the holder, lock path and owner recovery guidance in next. Never buy again 
     }),
   },
   unlock: {
-    flags: { op: "v", confirm: "b" }, required: ["op"],
+    flags: { op: "v", confirm: "b", unverified: "b" }, required: ["op"],
     help: helpText({
-      usage: "superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm",
-      about: "Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects live and possibly live local holders on Linux and macOS. If identity reads are blocked and the PID may exist, stop that process or run unlock outside the sandbox. A holder in another PID namespace cannot be cleared from a sandbox. Run unlock on the host (the initial PID namespace), where it can find live holders and recover dead sandbox holders. Requires --confirm and the op ID typed in a terminal. Overrides holders from a proven different host or boot, PIDs proven absent in an inspectable namespace, and damaged records; a holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.",
+      usage: "superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm [--unverified]",
+      about: "Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.\n\n--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.\n\nA holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.",
       money: "no. It never signs or sends.", who: "the owner or operator, after stopping the processes.",
       example: "superstables budget unlock --rail solana --op order-001 --confirm",
       prints: "one RESULT with op, state, reason and next. Without --confirm, a terminal or the matching typed op ID: exit 3. Busy: exit 5. Cleared or no lock: exit 0.",
@@ -1304,34 +1304,45 @@ async function buy({ f, ctx }) {
 
 async function unlock({ f, ctx }) {
   const next = `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`;
-  const ownerNext = "Stop and ask the owner to check and stop all work on this op across processes, containers and hosts. Only the owner handles lock recovery; see the owner-only unlock --help section of the installed CLI and the payment skill rule 5. Preserve the journal and reconcile next; never pay again while the outcome is unknown";
+  const ownerNext = operationBusy(f.op);
   const refuse = reason => emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason, next: ownerNext });
   if (!f.confirm) return refuse("confirmation_required");
   if (!process.stdin.isTTY) return refuse("owner_terminal_required");
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
-  let answer;
+  const mismatch = () => { log("Confirmation did not match. No locks were cleared."); return refuse("owner_confirmation_mismatch"); };
   try {
-    const closed = new Promise(resolve => terminal.once('close', () => resolve(null)));
-    answer = await Promise.race([terminal.question(`superstables budget: owner recovery can remove a new holder's lock and allow duplicate payments if any holder is still working or unlock pauses before unlinking. After stopping all work on this op, type ${f.op} to confirm: `), closed]);
-  } catch { return refuse("owner_confirmation_mismatch"); }
+    const lines = terminal[Symbol.asyncIterator]();
+    log("A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.");
+    if (f.unverified) {
+      log(`Superstables cannot confirm that every process working on operation ${f.op} has stopped. Clearing its lock while any process can still run may allow a second payment for the same operation. Stop all work on it across processes, containers and hosts, and keep it stopped until unlock finishes.`);
+      log(`To clear the lock without that proof, type ${f.op} unverified exactly:`);
+    } else {
+      log(`After stopping all work on this op, type ${f.op} to confirm:`);
+    }
+    const answer = await lines.next();
+    if (answer.done || answer.value !== (f.unverified ? `${f.op} unverified` : f.op)) return mismatch();
+  } catch { return mismatch(); }
   finally { terminal.close(); }
-  if (answer !== f.op) return refuse("owner_confirmation_mismatch");
   const dir = opsDir(f.rail, f.chain);
   const hadLocks = ["buy.lock", "json.lock"].some(suffix => existsSync(join(dir, `${f.op}.${suffix}`)) || existsSync(join(dir, `${f.op}.${suffix}.break`)));
   if (!existsSync(journal(f)) && !hadLocks) {
     return emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason: "op_not_found", next: "check the original rail, chain and op; no journal or operation locks exist" });
   }
-  const options = { confirmUnverifiable: true, onOverride: details => log(`superstables budget: overriding unverifiable lock: ${details}. The owner confirmed all work on this op has stopped. A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.`) };
+  const options = { confirmUnverifiable: Boolean(f.unverified), confirmPossiblyAlive: Boolean(f.unverified), onOverride: () => log(`Clearing the lock for operation ${f.op} without proof that its process has stopped. You confirmed that all work on this operation has stopped.`) };
+  const blocked = lock => {
+    if (lock.possiblyAlive && !f.unverified) log(`Cannot clear the lock for operation ${f.op} because Superstables cannot confirm that its process has stopped. Run the command in your own terminal, outside any agent's sandbox. If the check still fails, stop every process working on this operation across all containers and hosts, then rerun the same command with --confirm --unverified.`);
+    return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(lock, f.op, f.rail, f.chain) });
+  };
   const locks = [];
   try {
     for (const take of [lockOp, lockRecord]) {
       const lock = take(dir, f.op, options);
-      if (!lock.ok) { for (const held of locks) held.release(); return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(lock, f.op, f.rail, f.chain) }); }
+      if (!lock.ok) { for (const held of locks) held.release(); return blocked(lock); }
       locks.push(lock);
     }
     for (const suffix of ["buy.lock", "json.lock"]) {
       const blocker = abandonedBreaker(join(dir, `${f.op}.${suffix}`), options);
-      if (blocker) { for (const held of locks) held.release(); return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(blocker, f.op, f.rail, f.chain) }); }
+      if (blocker) { for (const held of locks) held.release(); return blocked(blocker); }
     }
     for (const lock of locks) lock.release();
     log(`superstables budget: ${hadLocks ? 'abandoned locks cleared' : 'no lock'} for operation ${f.op}; journal preserved. Reconcile before doing anything else.`);
@@ -1767,7 +1778,7 @@ if (WORKER_ID) {
   setTimeout(async () => {
     const pgid = currentChild?.pid;
     const worker = readApproval(WORKER_ID);
-    if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc }))) {
+    if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc, location: worker ? { ...worker, namespace: 'railNamespace' in worker ? worker.railNamespace : worker.namespace, writtenAt: worker.railWrittenAt, bootElapsedMs: worker.railBootElapsedMs, createdAt: undefined } : {} }))) {
       // no result while its page may still run: the chain stays held, and wait keeps trying to stop the group
       log(`superstables budget: the approval ran past its deadline and process group ${pgid} would not stop; no result is recorded`);
       process.exit(5);

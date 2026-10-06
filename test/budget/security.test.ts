@@ -294,20 +294,20 @@ describe.runIf(PROCESS_START)("a recorded pid is believed only with its process'
     const start = procs.processStart(process.pid);
     expect(typeof start).toBe("string");
     expect(procs.processStart(process.pid)).toBe(start);
-    expect(procs.sameProcess(process.pid, start)).toBe(true);
-    expect(procs.sameProcess(process.pid, `${start}0`)).toBe(false);
+    expect(procs.sameProcess(process.pid, start, undefined, hostIdentity)).toBe(true);
+    expect(procs.sameProcess(process.pid, `${start}0`, undefined, hostIdentity)).toBe(false);
     expect(procs.processStart(deadPid())).toBeNull();
-    expect(approvals.alive(process.pid, `${start}0`)).toBe(false);
+    expect(approvals.alive(process.pid, `${start}0`, undefined, hostIdentity)).toBe(false);
     // a record without a start (an older record) is judged by the pid alone, as before
     expect(approvals.alive(process.pid)).toBe(true);
   });
 
   it("never signals a process group whose leader reused the recorded pid", async () => {
     const other = sleeper(true); // an unrelated group leader that got the recorded number
-    expect(await approvals.stopGroup(other.pid!, { start: "not-its-start", graceMs: 200 })).toBe(true);
+    expect(await approvals.stopGroup(other.pid!, { start: "not-its-start", location: hostIdentity, graceMs: 200 })).toBe(true);
     expect(procs.pidAlive(other.pid!)).toBe(true);
-    expect(approvals.groupAlive(other.pid!, "not-its-start")).toBe(false);
-    expect(approvals.groupAlive(other.pid!, procs.processStart(other.pid!)!)).toBe(true);
+    expect(approvals.groupAlive(other.pid!, "not-its-start", undefined, hostIdentity)).toBe(false);
+    expect(approvals.groupAlive(other.pid!, procs.processStart(other.pid!)!, undefined, hostIdentity)).toBe(true);
     other.kill("SIGKILL");
   });
 
@@ -321,9 +321,9 @@ describe.runIf(PROCESS_START)("a recorded pid is believed only with its process'
       // the approval's worker is long gone, its pid now another process's; its deadline has passed
       writeFileSync(
         join(home, "budget", "approvals", `${id}.json`),
-        JSON.stringify({ id, command: "grant", rail: "evm", chain, state: "waiting_owner", pid: other.pid, pidStart: "the-worker's-start", deadline: Date.now() - 1000, createdAt: new Date().toISOString() }),
+        JSON.stringify({ ...hostIdentity, id, command: "grant", rail: "evm", chain, state: "waiting_owner", pid: other.pid, pidStart: "the-worker's-start", deadline: Date.now() - 1000, createdAt: new Date().toISOString() }),
       );
-      writeFileSync(join(home, "budget", "approvals", `active-evm-${chain}`), JSON.stringify({ id, pid: other.pid, pidStart: "the-worker's-start", createdAt: Date.now() - approvals.STARTUP_GRACE_MS - 1000 }));
+      writeFileSync(join(home, "budget", "approvals", `active-evm-${chain}`), JSON.stringify({ ...hostIdentity, id, pid: other.pid, pidStart: "the-worker's-start", createdAt: Date.now() - approvals.STARTUP_GRACE_MS - 1000 }));
       expect(approvals.findPending("evm", chain)).toBeNull();
       const began = Date.now();
       const outcome = await approvals.waitFor(id, 3_000);

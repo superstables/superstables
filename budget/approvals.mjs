@@ -34,7 +34,7 @@ import { randomBytes } from "node:crypto";
 import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
-import { createIdentitySource, visiblePid } from '../src/core/process-identity.mjs';
+import { createIdentitySource, inspectProcess, visiblePid } from '../src/core/process-identity.mjs';
 import { groupAlive as groupOf, sameProcess } from "./procs.mjs";
 import { cancelSiteRequest, readSiteRequest, siteWord } from "./site.mjs";
 
@@ -328,7 +328,7 @@ export const groupAlive = (pgid, start, startUtc, location) => groupOf(pgid, sta
  * (its rail script and the page's process), and a blocking command's rail group.
  */
 export const processesAlive = (record) =>
-  Boolean(record && (alive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined }) || groupAlive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined }) || groupAlive(record.railPgid, record.railPgidStart, record.railPgidStartUtc, { ...record, writtenAt: record.railWrittenAt, createdAt: undefined })));
+  Boolean(record && (alive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined }) || groupAlive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined }) || groupAlive(record.railPgid, record.railPgidStart, record.railPgidStartUtc, { ...record, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs, createdAt: undefined })));
 
 /** A record without a final result whose processes may still run: it holds its chain. */
 export const isLive = (record) => Boolean(record && !record.final && processesAlive(record));
@@ -342,6 +342,8 @@ export const isLive = (record) => Boolean(record && !record.final && processesAl
 export async function stopGroup(pgid, { start, startUtc, location = {}, graceMs = 3000 } = {}) {
   const left = () => groupAlive(pgid, start, startUtc, location);
   if (!left()) return true;
+  const checked = inspectProcess({ ...location, pid: pgid, pidStart: start, pidStartUtc: startUtc }, undefined, true);
+  if (checked.possiblyAlive) return false;
   const target = visiblePid({ ...location, pid: pgid }, undefined, true);
   if (!target) return false;
   try { process.kill(-target, "SIGTERM"); } catch {}
@@ -354,7 +356,7 @@ export async function stopGroup(pgid, { start, startUtc, location = {}, graceMs 
 /** Stop everything an approval started: its worker's group and a blocking command's rail group. */
 async function stopRecord(record) {
   await stopGroup(record.pid, { start: record.pidStart, startUtc: record.pidStartUtc, location: { ...record, createdAt: record.foreground ? record.createdAt : undefined } });
-  if (record.railPgid) await stopGroup(record.railPgid, { start: record.railPgidStart, startUtc: record.railPgidStartUtc, location: { ...record, writtenAt: record.railWrittenAt, createdAt: undefined } });
+  if (record.railPgid) await stopGroup(record.railPgid, { start: record.railPgidStart, startUtc: record.railPgidStartUtc, location: { ...record, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs, createdAt: undefined } });
 }
 
 // ── one approval at a time per rail and chain ──────────────────────────────────────────────────────────
@@ -477,7 +479,7 @@ export function startForeground({ id, command, rail, chain }) {
 /** The process group of a blocking command's rail script (its page and chain reads run there). */
 export function setRailGroup(id, pgid) {
   const starts = startOf(pgid);
-  return update(id, { railPgid: pgid, railPgidStart: starts.pidStart, railWrittenAt: starts.writtenAt, ...(starts.pidStartUtc !== undefined ? { railPgidStartUtc: starts.pidStartUtc } : {}) });
+  return update(id, { railPgid: pgid, railPgidStart: starts.pidStart, railWrittenAt: starts.writtenAt, railBootElapsedMs: starts.bootElapsedMs, railNamespace: starts.namespace, ...(starts.pidStartUtc !== undefined ? { railPgidStartUtc: starts.pidStartUtc } : {}) });
 }
 
 /** The worker records its own pid at start, so its process group is known even if the caller died before writing it. */

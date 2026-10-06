@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createIdentitySource, inspectProcess } from '../../src/core/process-identity.mjs';
 import { lockFile } from '../../budget/op-lock.mjs';
+const machine = '0123456789abcdef0123456789abcdef';
 const boot = 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a';
 const initial = 'pid:[4026531836]';
 const foreign = 'pid:[4026532600]';
@@ -12,12 +13,12 @@ afterEach(() => { for (const h of homes.splice(0)) rmSync(h, { recursive: true, 
 function source(namespace: string, entries: string[] = []) {
   return createIdentitySource({ platform: 'linux', host: 'host',
     readlink: (path: string) => path.includes('/self/') || path.includes(`/${process.pid}/`) ? namespace : foreign,
-    readFile: (path: string) => path.endsWith('boot_id') ? boot : path.includes('/self/') || path.includes(`/${process.pid}/`) ? `NSpid:\t${process.pid}\n` : 'NSpid:\t7000\t2\nNSpgid:\t7000\t2\n',
+    readFile: (path: string) => path === '/etc/machine-id' ? machine : path.endsWith('boot_id') ? boot : path.includes('/self/') || path.includes(`/${process.pid}/`) ? `NSpid:\t${process.pid}\n` : 'NSpid:\t7000\t2\nNSpgid:\t7000\t2\n',
     readdir: () => entries, start: () => `linux:${boot}:100`,
     probe: () => { throw Object.assign(new Error('absent in this namespace'), { code: 'ESRCH' }); },
   });
 }
-const owner = { platform: 'linux', hostname: 'host', bootId: boot, namespace: foreign, pid: 2, pidStart: `linux:${boot}:100` };
+const owner = { platform: 'linux', hostname: 'host', hostId: machine, bootId: boot, namespace: foreign, pid: 2, pidStart: `linux:${boot}:100` };
 it('recognizes a remounted nested proc with just one NSpid entry', () => {
   const nested = createIdentitySource({ platform: 'linux', readlink: () => foreign, readFile: () => 'NSpid:\t2\n' });
   expect(nested.nested()).toBe(true);
@@ -52,7 +53,7 @@ for (const kind of ['dispatcher', 'rail child', 'breaker']) {
     for (const confirmUnverifiable of [false, true]) {
       const result = lockFile(path, { identitySource: nested, confirmUnverifiable });
       expect(result.ok).toBe(false); expect(readFileSync(target, 'utf8')).toBe(text);
-      if (!result.ok && (kind !== 'breaker' || confirmUnverifiable)) expect(result.details).toContain('run unlock on the host');
+      if (!result.ok && (kind !== 'breaker' || confirmUnverifiable)) expect(result.details).toContain("outside the agent's sandbox");
     }
   });
 }
@@ -74,24 +75,25 @@ it('recovers a zombie dispatcher only after its rail child also stops', () => {
   expect(recovered.ok).toBe(true); if (recovered.ok) recovered.release();
 });
 
-it('finds a live legacy holder without a namespace before judging a local PID collision reused', () => {
+it('retains a legacy holder without namespace evidence despite a local PID collision reused', () => {
   const host = source(initial, ['7000']);
   host.start = pid => `linux:${boot}:${pid === 7000 ? 100 : 99}`;
   host.probe = pid => { expect(pid).toBe(7000); return true; };
   const legacy = { pid: 2, pidStart: owner.pidStart };
   expect(inspectProcess(legacy, host)).toMatchObject({ state: 'alive', possiblyAlive: true });
   host.readdir = () => [];
-  expect(inspectProcess(legacy, host).state).toBe('dead');
+  expect(inspectProcess(legacy, host)).toMatchObject({ state: 'alive', possiblyAlive: true });
 });
 
 it('records the visible host PID and refuses unsafe local checks with an ancestor proc mount', () => {
   const nested = createIdentitySource({ platform: 'linux', host: 'host',
     readlink: () => foreign,
-    readFile: path => String(path).endsWith('boot_id') ? boot : `NSpid:\t7000\t${process.pid}\n`,
+    readFile: path => path === '/etc/machine-id' ? machine : String(path).endsWith('boot_id') ? boot : `NSpid:\t7000\t${process.pid}\n`,
     start: () => owner.pidStart,
     probe: () => { throw Object.assign(new Error('local PID absent'), { code: 'ESRCH' }); },
   });
   expect(nested.record().hostPid).toBe(7000);
   expect(nested.fields(42).pidStart).toBeNull();
-  expect(inspectProcess({ ...owner, namespace: foreign }, nested)).toMatchObject({ state: 'alive', possiblyAlive: true, why: 'process identity is unverifiable from this PID namespace proc view' });
+  expect(nested.fields(42).namespace).toBeNull();
+  expect(inspectProcess({ ...owner, namespace: foreign }, nested)).toMatchObject({ state: 'alive', possiblyAlive: true, why: 'holder in another PID namespace that is unverifiable from here' });
 });
