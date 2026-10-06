@@ -92,6 +92,12 @@ it("reports removed non-final delivered inclusion as uncertain, never a terminal
   expect(result.next).toMatch(/do not pay again/i);
   expect(await cliReceipts(home)).toEqual([expect.objectContaining({ chain: "unchecked", chain_final: null })]);
   expect(result.chain_reason).toBe("The earlier payment inclusion was removed; outcome unknown. Do not pay again.");
+  expect(result.message).toBe("The earlier payment inclusion was removed; outcome unknown. Do not pay again.");
+  expect(result.reason).toBe(result.chain_reason);
+  expect(result.next).toContain("this attempt stays uncertain even after expiry");
+  const human = await run(process.execPath, ["--import", "tsx", new URL("../../src/cli/main.ts", import.meta.url).pathname, "status", attempt.id], { env: { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_RPC_URL: chain.url } }).then(r => r.stdout, (e: { stdout?: string }) => { if (!e.stdout) throw e; return e.stdout; });
+  expect(human).toContain("unchecked: The earlier payment inclusion was removed; outcome unknown. Do not pay again.");
+  expect(human).not.toMatch(/has not confirmed it yet|no reason was recorded|until it says this payment was not made/);
   expect(records.getReceipt(attempt.receiptId!)?.chainReason).toMatch(/do not pay again/i);
   expect(records.spentToday("USDC")).toBe(0.01);
 });

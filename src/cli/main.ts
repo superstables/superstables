@@ -1100,6 +1100,7 @@ function receiptChain(receipt: Receipt): string {
       return `unpaid: the seller reported it paid, but ${receipt.chainReason ?? "the chain shows it was never made"}`;
     default:
       if (receipt.paymentIncluded) return "verified: paid; the payment landed, but is not final on chain yet";
+      if (receipt.chainReason?.startsWith("The earlier payment inclusion")) return `unchecked: ${receipt.chainReason}`;
       return `unchecked: the seller reported it paid, and the chain has not confirmed it yet (${receipt.chainReason ?? "it was not read"})`;
   }
 }
