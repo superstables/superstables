@@ -105,6 +105,7 @@ function finish(state: OpState, f: { tx?: string | null; debit?: bigint | null; 
     if (f.tx) op.tx = f.tx
     if (f.delivered !== undefined && f.delivered !== null) op.delivered = f.delivered
     if (f.reason) op.reason = f.reason
+    if (f.debit != null) op.debit = fromBaseUnits(f.debit)
     writeOp(op, f.reason)
   }
   const delivered = f.delivered ?? null

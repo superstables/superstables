@@ -6,6 +6,8 @@ import { pathToFileURL } from 'node:url';
 const { RACE_ROOT: root, RACE_DIR: dir, RACE_OP: op, RACE_ACTION: action, RACE_RAIL: rail, RACE_MARKER: marker } = process.env;
 const pause = () => {
   fs.writeFileSync(marker, 'paused');
+  // Force the marker-before-SIGSTOP interval so a premature SIGCONT loses the wakeup.
+  if (process.env.RACE_PAUSE_GAP_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.RACE_PAUSE_GAP_MS));
   process.kill(process.pid, 'SIGSTOP');
 };
 if (action === 'break') {

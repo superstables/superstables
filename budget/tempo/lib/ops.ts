@@ -49,6 +49,7 @@ export type Op = {
   signedHash?: string // buy.ts: hash of the seller-bound signed payload (informational; a sponsored tx's final hash differs)
   validBefore?: number // unix seconds after which the signed payment can no longer land (pull mode)
   tx?: string
+  debit?: string
   delivered?: boolean
   httpStatus?: number
   reason?: string

@@ -19,7 +19,7 @@
 import type { Address } from 'viem'
 import { requireRecordLock } from '../op-lock.mjs'
 import { hashCheck, intCheck, opIdCheck, parseCli } from './lib/args.mjs'
-import { explorerTx, fromBaseUnits, oneLine } from './lib/common.ts'
+import { explorerTx, fromBaseUnits, toBaseUnits, oneLine } from './lib/common.ts'
 import { readKey } from './lib/chain.ts'
 import { judge, lookupOnce, waitForOutcome } from './lib/resolve.ts'
 import { OPS_DIR, printResult, readOp, writeOp, type OpState } from './lib/ops.ts'
@@ -50,6 +50,7 @@ async function main() {
     if (state === 'settled' && !alreadySettled) op.chain_final = true
     if (f.tx) op.tx = f.tx
     if (f.reason) op.reason = f.reason
+    if (f.debit != null) op.debit = fromBaseUnits(f.debit)
     if (!alreadySettled) writeOp(op, `reconcile: ${f.reason ?? state}`)
     return readKey(op.intent.owner as Address, op.intent.agent as Address).then(
       (k) => k.remaining,
@@ -73,7 +74,7 @@ async function main() {
   // the reason, recipient and receipt tx may be the seller's text: one line (oneLine)
   console.log(oneLine(`op ${opId} (${op.kind}): journal says ${op.state}${op.reason ? ` (${op.reason})` : ''}; ${op.intent.amountDecimal} pathUSD to ${op.intent.recipient}${op.tx ? `; tx ${op.tx}` : ''}`, 2000))
 
-  if (op.state === 'settled') return done('settled', { tx: op.tx, next: op.delivered === false ? 'paid but not delivered; never pay again, contact the seller with the tx hash' : 'none', exit: 0 })
+  if (op.state === 'settled') return done('settled', { tx: op.tx, debit: op.debit == null ? BigInt(op.intent.amount) : toBaseUnits(op.debit), next: op.delivered === false ? 'paid but not delivered; never pay again, contact the seller with the tx hash' : 'none', exit: 0 })
 
   if (op.state === 'refused_precheck' || op.state === 'refused_chain' || (op.state === 'quoted' && op.reason === 'quote_only')) {
     console.log('Nothing was signed for this operation. Nothing to reconcile.')
