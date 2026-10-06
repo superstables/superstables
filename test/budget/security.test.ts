@@ -4,13 +4,14 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readlinkSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const REPO = join(import.meta.dirname, "..", "..");
 const CLI = join(REPO, "budget", "cli.mjs");
+const hostIdentity = process.platform === 'linux' ? { platform: process.platform, hostname: hostname(), bootId: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), namespace: readlinkSync('/proc/self/ns/pid') } : {};
 const PROCESS_START = process.platform === "linux" || process.platform === "darwin";
 
 type Procs = typeof import("../../budget/procs.mjs");
@@ -204,7 +205,7 @@ describe("one buy per operation at a time", () => {
     const running = sleeper();
     mkdirSync(opsDir(), { recursive: true });
     // the first buy's lock, as it holds it: its own pid with that process's start
-    writeFileSync(join(opsDir(), "same-op.buy.lock"), JSON.stringify({ pid: running.pid, pidStart: procs.processStart(running.pid!) ?? null, createdAt: Date.now() }));
+    writeFileSync(join(opsDir(), "same-op.buy.lock"), JSON.stringify({ ...hostIdentity, pid: running.pid, pidStart: procs.processStart(running.pid!) ?? null, createdAt: Date.now() }));
     // no seller listens here: a buy that got past the lock would fail on the network, not be refused
     const r = await budget(["buy", "--rail", "evm", "--url", "http://127.0.0.1:9/paid", "--max", "0.01", "--op", "same-op"]);
     expect(r.code).toBe(3);
@@ -227,12 +228,12 @@ describe("one buy per operation at a time", () => {
 
     // the command was killed, but the rail script it started still runs: still held
     const rail = sleeper();
-    writeFileSync(guard.opLockFile(dir, "op-2"), JSON.stringify({ pid: deadPid(), pidStart: null, railPid: rail.pid, railPidStart: procs.processStart(rail.pid!) ?? null, createdAt: Date.now() }));
+    writeFileSync(guard.opLockFile(dir, "op-2"), JSON.stringify({ ...hostIdentity, pid: deadPid(), pidStart: null, railPid: rail.pid, railPidStart: procs.processStart(rail.pid!) ?? null, createdAt: Date.now() }));
     expect(guard.lockOp(dir, "op-2").ok).toBe(false);
     rail.kill("SIGKILL");
 
     // its process is gone: stale, taken over
-    writeFileSync(guard.opLockFile(dir, "op-3"), JSON.stringify({ pid: deadPid(), pidStart: null, createdAt: Date.now() }));
+    writeFileSync(guard.opLockFile(dir, "op-3"), JSON.stringify({ ...hostIdentity, pid: deadPid(), pidStart: null, createdAt: Date.now() }));
     const taken = guard.lockOp(dir, "op-3");
     expect(taken.ok).toBe(true);
     if (taken.ok) taken.release();
@@ -273,7 +274,7 @@ describe("one buy per operation at a time", () => {
   it.runIf(PROCESS_START)("treats a lock whose pid now names another process as stale", () => {
     const dir = join(home, "locks");
     // this test's own pid, recorded with another start: the number was reused
-    writeFileSync(guard.opLockFile(dir, "op-4"), JSON.stringify({ pid: process.pid, pidStart: "linux:another-boot:1", createdAt: Date.now() }));
+    writeFileSync(guard.opLockFile(dir, "op-4"), JSON.stringify({ ...hostIdentity, pid: process.pid, pidStart: "linux:another-start:1", createdAt: Date.now() }));
     const taken = guard.lockOp(dir, "op-4");
     expect(taken.ok).toBe(true);
     if (taken.ok) taken.release();

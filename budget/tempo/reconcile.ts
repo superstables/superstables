@@ -72,7 +72,7 @@ async function main() {
   // the reason, recipient and receipt tx may be the seller's text: one line (oneLine)
   console.log(oneLine(`op ${opId} (${op.kind}): journal says ${op.state}${op.reason ? ` (${op.reason})` : ''}; ${op.intent.amountDecimal} pathUSD to ${op.intent.recipient}${op.tx ? `; tx ${op.tx}` : ''}`, 2000))
 
-  if (op.state === 'settled') return done('settled', { tx: op.tx, debit: op.debit == null ? null : toBaseUnits(op.debit), next: op.delivered === false ? 'paid but not delivered; never pay again, contact the seller with the tx hash' : 'none', exit: 0 })
+  if (op.state === 'settled') return done('settled', { tx: op.tx, debit: op.debit == null ? BigInt(op.intent.amount) : toBaseUnits(op.debit), next: op.delivered === false ? 'paid but not delivered; never pay again, contact the seller with the tx hash' : 'none', exit: 0 })
 
   if (op.state === 'refused_precheck' || op.state === 'refused_chain' || (op.state === 'quoted' && op.reason === 'quote_only')) {
     console.log('Nothing was signed for this operation. Nothing to reconcile.')

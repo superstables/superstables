@@ -341,7 +341,7 @@ with the holder, lock path and a safe unlock command in next. Never buy again wh
     flags: { op: "v", confirm: "b" }, required: ["op"],
     help: helpText({
       usage: "superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm",
-      about: "Clears abandoned operation locks after you stop every process or container working on this op. Refuses live holders and heartbeats or damaged records less than five minutes old. Preserves the journal; reconcile next, never buy again while unknown.",
+      about: "Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Refuses verifiably live local holders. With --confirm, overrides unverifiable holders regardless of timestamps; a holder still working can cause a duplicate payment. Preserves the journal; reconcile next, never buy again while unknown.",
       money: "no. It never signs or sends.", who: "the owner or operator, after stopping the processes.",
       example: "superstables budget unlock --rail solana --op order-001 --confirm",
       prints: "one RESULT with op, state, reason and next. Without --confirm: exit 3. Busy: exit 5. Cleared: exit 0.",
@@ -1294,16 +1294,21 @@ async function buy({ f, ctx }) {
 
 async function unlock({ f, ctx }) {
   const next = `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`;
-  if (!f.confirm) return emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason: "confirmation_required", next: `stop every process or container working on this op, then superstables budget unlock --rail ${f.rail} --chain ${f.chain} --op ${f.op} --confirm. This preserves the journal; reconcile next` });
+  if (!f.confirm) return emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason: "confirmation_required", next: `ask the owner to check and stop all work on this op across processes, containers and hosts, then superstables budget unlock --rail ${f.rail} --chain ${f.chain} --op ${f.op} --confirm. An unverifiable holder may still be working; overriding it can allow a duplicate payment. This preserves the journal; reconcile next` });
+  const dir = opsDir(f.rail, f.chain);
+  if (!existsSync(journal(f)) && !["buy.lock", "json.lock"].some(suffix => existsSync(join(dir, `${f.op}.${suffix}`)) || existsSync(join(dir, `${f.op}.${suffix}.break`)))) {
+    return emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason: "op_not_found", next: "check the original rail, chain and op; no journal or operation locks exist" });
+  }
+  const options = { confirmUnverifiable: true, onOverride: details => log(`superstables budget: overriding unverifiable lock: ${details}. The owner confirmed all work on this op has stopped.`) };
   const locks = [];
   try {
     for (const take of [lockOp, lockRecord]) {
-      const lock = take(opsDir(f.rail, f.chain), f.op);
+      const lock = take(dir, f.op, options);
       if (!lock.ok) { for (const held of locks) held.release(); return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(lock, f.op, f.rail, f.chain) }); }
       locks.push(lock);
     }
     for (const suffix of ["buy.lock", "json.lock"]) {
-      const blocker = abandonedBreaker(join(opsDir(f.rail, f.chain), `${f.op}.${suffix}`));
+      const blocker = abandonedBreaker(join(dir, `${f.op}.${suffix}`), options);
       if (blocker) { for (const held of locks) held.release(); return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(blocker, f.op, f.rail, f.chain) }); }
     }
     for (const lock of locks) lock.release();
