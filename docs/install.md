@@ -9,27 +9,27 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
 
 - Node 20 or newer.
 - Linux or macOS. On Windows, use WSL: `superstables budget` refuses to run on native Windows.
-- Network access to sellers and testnet RPCs, and to the approval site when using hosted approvals.
+- Network access to sellers and testnet RPCs, and to the approval site when using approvals on superstables.com.
 - For **local approvals**, an owner browser wallet that can reach the client's `127.0.0.1` page:
   an EVM wallet for EVM/Tempo, or a Solana wallet for a Solana budget. On the same machine, use
   a browser extension wallet. Over SSH, forward the approval link's port first:
   `ssh -L PORT:127.0.0.1:PORT user@host`. No superstables.com account is needed.
-- For **hosted approvals**, the owner can use a wallet on another device. They need a
+- For **approvals on superstables.com**, the owner can use a wallet on another device. They need a
   superstables.com account, created by signing in with an Ethereum wallet; Solana also needs a
   Solana wallet for the budget or payment. An ordinary remote browser without a compatible
-  wallet cannot sign. Choose [hosted budget approvals](budget.md#approve-on-superstablescom-instead)
+  wallet cannot sign. Choose [budget approvals on superstables.com](budget.md#approve-on-superstablescom-instead)
   or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 
-These instructions describe **client 0.3.0** and require that release build. Use the released
-commit and skill from [GitHub Releases](https://github.com/superstables/superstables-client/releases)
-when 0.3.0 is published. Client 0.3.0 is distributed through GitHub and the skill zip,
-not the npm registry. The CLI/skill runs on your own machine or server,
-even with hosted approvals. EVM `recover` still needs a reachable local approval page and the
+These instructions describe **client 0.3.0** and require that release build. Install it from npm
+as `@superstables/client`, or use the released commit and skill from
+[GitHub Releases](https://github.com/superstables/superstables-client/releases).
+The CLI/skill runs on your own machine or server,
+even with approvals on superstables.com. EVM `recover` still needs a reachable local approval page and the
 agent key on that runtime. Test-token and gas requirements belong to the chosen
 [budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
 
 The client runs on your machine and contacts sellers, the facilitators that settle x402 payments,
-testnet RPCs, the Superstables index and, when switched on, the hosted demo catalogue.
+testnet RPCs, the Superstables index and, when switched on, the demo catalogue on superstables.com.
 
 ## Install
 
@@ -40,13 +40,24 @@ has the agent download the skill zip, check its SHA-256 checksum and install it.
 the whole CLI; [The agent skill](#the-agent-skill-with-the-whole-cli-bundled) below installs it by
 hand.
 
-The examples on these pages write the command as `superstables`. A checkout with `npm link` puts
-that command on your PATH. For a git install pinned to a commit, use `npx --no superstables …` in
-the installation folder, as shown below.
+The examples on these pages write the command as `superstables`. Installing from npm with `-g`, or
+a checkout with `npm link`, puts that command on your PATH. For a git install pinned to a commit,
+use `npx --no superstables …` in the installation folder, as shown below.
 
 Don't type `npx superstables` to run the client. Where npx doesn't find this client's command, it
 downloads whatever package the npm registry has under the name `superstables`, which is not this
-client.
+client. The client's package is `@superstables/client`.
+
+### From npm
+
+```bash
+npm install -g @superstables/client@0.3.0
+superstables --version
+```
+
+This installs the `superstables` command, `superstables budget` included. The npm package holds
+the command, not the agent skill: to connect an agent, also install the skill, as described in
+[Set up your agent app](#set-up-your-agent-app).
 
 ### From a checkout
 
@@ -238,11 +249,11 @@ wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 | `SUPERSTABLES_TEMPO_RPC` | `https://rpc.moderato.tempo.xyz` | Tempo Moderato RPC, used to check a `pay` on chain and to search for one whose transaction the page did not report (https, or http on this machine). The budget's tempo rail reads it too |
 | `SUPERSTABLES_SOLANA_RPC` | `https://api.devnet.solana.com` | Solana devnet RPC, used to check a `pay` on chain (https, or http on this machine). The budget's solana rail reads it too |
 | `SUPERSTABLES_INDEX_URL` | `https://www.superstables.com/api/v1/services` | The service index `find` reads. Point it at another index that answers the same API, or set it to `off` to list the built-in catalogue only |
-| `SUPERSTABLES_DEMO_SERVICES` | unset (off) | `on` includes Superstables' testnet services from the hosted catalogue in discovery. Most return prepared sample output, carry `mock: true` and come after the listings not marked simulated; the market data service returns live prices. `find --demo` does the same for one search; leave it off to list no simulated services |
+| `SUPERSTABLES_DEMO_SERVICES` | unset (off) | `on` includes Superstables' testnet services from the catalogue on superstables.com in discovery. Most return prepared sample output, carry `mock: true` and come after the listings not marked simulated; the market data service returns live prices. `find --demo` does the same for one search; leave it off to list no simulated services |
 | `SUPERSTABLES_CATALOGUE_URL` | `https://www.superstables.com/api/demo/catalogue` | Where those services are published, read only when `SUPERSTABLES_DEMO_SERVICES` is on. Point it at another deployment, or set it to `off` |
-| `SUPERSTABLES_SITE` | `https://www.superstables.com` | The site `setup --hosted` uses when `--site` is not given; `budget find` and `buy-once` use it before the site a hosted setup recorded. `setup --hosted` records its site as `SITE=` in the chain's public file, and later owner commands on that chain use that one and refuse a different `--site`. The owner's approvals happen on this site. Only superstables.com, its subdomains and this machine are accepted, unless `SUPERSTABLES_ALLOW_SITE` names the origin |
+| `SUPERSTABLES_SITE` | `https://www.superstables.com` | The site `setup --hosted` uses when `--site` is not given; `budget find` and `buy-once` use it before the site a setup on superstables.com recorded. `setup --hosted` records its site as `SITE=` in the chain's public file, and later owner commands on that chain use that one and refuse a different `--site`. The owner's approvals happen on this site. Only superstables.com, its subdomains and this machine are accepted, unless `SUPERSTABLES_ALLOW_SITE` names the origin |
 | `SUPERSTABLES_ALLOW_SITE` | unset | The owner's opt-in for a site outside superstables.com: the exact `https` origin, or a comma-separated list. Set it yourself, in your own environment, only for a site you have checked; an agent never sets it |
-| `SUPERSTABLES_DOCTOR_OFFLINE` | unset | `1` makes `doctor` skip every check that needs a network |
+| `SUPERSTABLES_DOCTOR_OFFLINE` | unset | `1` makes `doctor` skip every check that needs network access |
 
 `SUPERSTABLES_HOME` is read when state is first touched, so set it before starting a process
 rather than during one. The CLI's `--home <dir>` sets it for you, and `--wallet <mode>` sets
@@ -254,7 +265,7 @@ rather than during one. The CLI's `--home <dir>` sets it for you, and `--wallet 
 | --- | --- | --- | --- |
 | 4412, or a free port when it is busy | the approval page, inside the agent's own process | browser mode, from the first payment | `127.0.0.1` |
 | 4411 | the local wallet | `--wallet local` only | `127.0.0.1` |
-| 4402 | the demo service | only if you run the seller yourself; the hosted one needs no port | `127.0.0.1` |
+| 4402 | the demo service | only if you run the seller yourself; the one on superstables.com needs no port | `127.0.0.1` |
 
 With these defaults, none is reachable from another machine; `SUPERSTABLES_DEMO_HOST` can bind
 the demo service to another interface. If a port is busy, move it with the matching
@@ -277,7 +288,8 @@ Keep the journals and keys needed for those checks. For stranded EVM USDC, see
 [recovery](budget.md#recovery-and-ending-use); revoke alone does not return it.
 
 Then delete the skill folder if you installed it, and delete `~/.superstables`
-(or your `SUPERSTABLES_HOME`). If you linked a checkout with `npm link`, remove the
+(or your `SUPERSTABLES_HOME`). If you installed from npm, run
+`npm uninstall -g @superstables/client`. If you linked a checkout with `npm link`, remove the
 global link with `npm unlink --global @superstables/client`; this removes the linked command,
 without downloading a package. If you installed from git in a separate installation folder, remove
 that installation after preserving any records you still need.

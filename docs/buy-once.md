@@ -23,10 +23,10 @@ There are two ways:
   on Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet. Choose this when the owner's
   wallet is on another device. See [Single purchase on superstables.com](#hosted-buy-once-superstables-budget-buy-once).
 
-**Testnet only.** Test tokens on test networks: USDC, or pathUSD on Tempo Moderato. No real money
+**Testnet only.** Test tokens: USDC, or pathUSD on Tempo Moderato. No real money
 moves. Use the [0.3.0 client install instructions](install.md). A command-capable agent initiates
 purchases using the skill or CLI, then shows the owner the exact approval link and terms. For
-hosted requests, the owner approves and checks activity on the site; linked budget agents are
+requests on superstables.com, the owner approves and checks activity on the site; linked budget agents are
 managed there too. Local approvals use the local browser and [client records](records.md),
 with no account. For an agent unable to run
 commands, the [purchase HTTP reference](https://www.superstables.com/docs/purchase) is the
@@ -38,7 +38,7 @@ secondary route; browsing alone cannot create a purchase.
 
 With `superstables budget buy-once`, the owner approves one purchase on superstables.com, in their
 own wallet, from a device where they are signed in and have a compatible wallet. It needs no
-`setup` command, budget or agent key. It pays on the network the service's listing names, for the
+`setup` command, budget or agent key. It pays on the chain the service's listing names, for the
 services the site lists: Base Sepolia (test USDC), Arc Testnet (test USDC), Tempo Moderato (test
 pathUSD) or Solana devnet (test USDC). It needs a superstables.com account, which you create by
 signing in with an Ethereum wallet, or a compatible deployment the owner names with `--site` or
@@ -144,7 +144,7 @@ superstables-demo-market-data  Superstables demo market data  0.01 USDC per requ
 ```
 
 The Superstables demo market data service is built in and returns live prices.
-`SUPERSTABLES_DEMO_SERVICES=on` adds the services from Superstables' hosted catalogue. Most
+`SUPERSTABLES_DEMO_SERVICES=on` adds the services from the catalogue on superstables.com. Most
 return prepared sample output and are marked simulated; the market data service returns live
 prices. Under the table, `find` prints the commands to pay
 each listing. `pay yes` means
@@ -203,7 +203,7 @@ Then it waits until the owner decides, for up to 5 minutes. The page works only 
 ### 4. Approve or reject (owner)
 
 Open the approval link in the browser that has your wallet, on the same machine. The page shows the
-amount, the recipient and the network, worked out from the seller's payment terms, not from what
+amount, the recipient and the chain, worked out from the seller's payment terms, not from what
 the agent says. What the agent says the payment is for is shown apart, under "Reported by the agent
 (not verified)".
 

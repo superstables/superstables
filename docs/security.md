@@ -40,8 +40,8 @@ payment core uses, and shown as fact:
 | Fact | Where it comes from |
 | --- | --- |
 | Amount (0.01 USDC, and the atomic `10000`) | `amount` in the requirement, divided by the asset's decimals |
-| Asset | the requirement's `asset` address, which must be the network's USDC contract |
-| Network | the requirement's `network`, which must be a supported one (`eip155:84532`) |
+| Asset | the requirement's `asset` address, which must be the chain's USDC contract |
+| Chain | the requirement's `network`, which must be a supported one (`eip155:84532`) |
 | Recipient | the requirement's `payTo`, which must be a well-formed address |
 | Scheme | the requirement's `scheme`, which must be `exact` |
 | Payer | the account the page reports as connected; that the account controls it is checked when its signature arrives |
@@ -63,7 +63,7 @@ verified requirement, field by field: `to` is the requirement's `payTo`, `value`
 There is one place where reported context has an effect: the policy takes the hostname for its
 `allow`/`deny` rules from `reported.target`, because the requirement does not carry the URL that
 was called. A dishonest agent could therefore misreport the host and slip past a host rule. It
-cannot misreport the amount, the asset, the network or the recipient, so `caps.per_call`,
+cannot misreport the amount, the asset, the chain or the recipient, so `caps.per_call`,
 `caps.per_day`, `stablecoins` and `kill_switch` are all judged on verified facts. Treat host
 rules as a convenience, not as a boundary.
 
@@ -133,7 +133,7 @@ injected into it, **could**:
 - ask for payments repeatedly, hoping for a distracted yes.
 
 A browser wallet that is not compromised shows its signing prompt apart from the client's page.
-Check the network, the token contract, the recipient and the amount in that prompt; for USDC, a
+Check the chain, the token contract, the recipient and the amount in that prompt; for USDC, a
 `value` of `10000` is 0.01 USDC. Reject the request if the wallet's terms differ from the page's,
 or if you cannot check them.
 
@@ -375,7 +375,7 @@ code running as your user can. Run that mode with a key that holds testnet funds
 on the machine can read it, they refuse (exit 3) and say which `chmod` fixes it. An initial
 refusal happens before anything is signed. On `tempo` and `solana`, setup checks again before
 writing the owner's address into the agent key file. A refusal at this later check does not
-undo an owner signature or a transaction already sent through hosted setup. `doctor` fails if that file holds an owner key.
+undo an owner signature or a transaction already sent through setup on superstables.com. `doctor` fails if that file holds an owner key.
 - **The chain enforces the budget.** On `evm`, the total allowance. On `solana`, the delegated
   amount. On `tempo`, the access key's total or per-period limit, its expiry, and its seller list
   when one was granted. No rail enforces a per-payment maximum on chain.
@@ -446,7 +446,7 @@ is not trusted to say who the owner is or what was paid.
   verifies the signature for that owner before it records anyone; without a valid proof it records
   nothing. An `already_linked` answer counts only for the owner already recorded, with that owner's
   proof over the add-agent request stored when they were recorded, and never with `--new-owner`.
-  Moving a hosted chain to another site means adding the agent there, with a new owner proof.
+  Moving a chain with approvals on superstables.com to another site means adding the agent there, with a new owner proof.
 - **The owner on record does not move under a live budget.** `--new-owner` is refused while a
   budget is live and, on `evm`, while the agent key holds the budget token, since `recover`
   returns that token to the owner on record. On `solana` and `tempo` the agent key file also
@@ -490,10 +490,10 @@ is not trusted to say who the owner is or what was paid.
 - **An unclear outcome is unknown.** Once the site reports that the owner's wallet was asked, or
   reports a transaction, an unfinished request ends as `unknown` (exit 5), never as "nothing was
   sent". Read the chain before trying again.
-- **`recover` stays local.** On a hosted chain, `grant`, `revoke` and `fund-agent` go through the
+- **`recover` stays local.** On a chain with approvals on superstables.com, `grant`, `revoke` and `fund-agent` go through the
   site; the owner's part of `recover` still uses the page on this machine.
-- **A hosted revoke needs the agent key.** The agent key signs every request to the site. On
-  `solana` and `tempo`, if a hosted `revoke` needs approval but the agent key file is missing,
+- **A revoke on superstables.com needs the agent key.** The agent key signs every request to the site. On
+  `solana` and `tempo`, if a `revoke` on superstables.com needs approval but the agent key file is missing,
   readable by others, not a regular file or holds no usable key, it refuses (exit 3, nothing
   requested) and names the other ways to revoke: Revoke on the owner's account page on the site,
   or a revoke transaction the owner signs in their own wallet.
@@ -521,7 +521,7 @@ says "not supported", there is no command for it yet; do not move key files by h
 
 - **Budget agent key, `tempo`.** Supported. `superstables budget setup --rail tempo --agent LABEL`,
   with a LABEL not used before (a used one reuses the key it already names), adds a new access
-  key next to the old one; on a hosted chain it also adds the new key there. The owner grants it
+  key next to the old one; on a chain with approvals on superstables.com it also adds the new key there. The owner grants it
   with `superstables budget grant --rail tempo --agent LABEL --amount A`, then revokes the old key
   with `superstables budget revoke --rail tempo` (add `--agent OLD` if the old key had a label).
   A key revoked on an owner's account can never be granted again on that account. After this,
