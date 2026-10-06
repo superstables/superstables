@@ -38,7 +38,7 @@ function cli(home: string, args: string[]) {
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 describe('recovering abandoned operation locks', () => {
-  for (const state of ['foreign namespace', 'zero length', 'non JSON', 'unreadable', 'legacy breaker', 'empty owner', 'stray breaker entry']) {
+  for (const state of ['zero length', 'non JSON', 'unreadable', 'legacy breaker', 'empty owner', 'stray breaker entry']) {
     it(`retains an old ${state} until confirmed owner recovery`, () => {
       const b = box();
       aged(b.path, JSON.stringify(dead));
@@ -62,9 +62,9 @@ describe('recovering abandoned operation locks', () => {
       }
     });
   }
-  it('never breaks a fresh foreign heartbeat or fresh damaged record', () => {
+  it('never breaks a fresh damaged record or a record from another boot', () => {
     const b = box();
-    for (const text of ['', JSON.stringify({ ...dead, ...foreign, heartbeatAt: Date.now() })]) {
+    for (const text of ['', JSON.stringify({ ...dead, bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7b', heartbeatAt: Date.now() })]) {
       writeFileSync(b.path, text);
       const lock = locks.lockFile(b.path);
       expect(lock.ok).toBe(false);
@@ -90,11 +90,11 @@ describe('recovering abandoned operation locks', () => {
   });
   it('busy reconcile reports the op, foreign holder, lock path and owner recovery guidance', () => {
     const b = box();
-    writeFileSync(b.path.replace('.json.lock', '.buy.lock'), JSON.stringify({ ...dead, ...foreign, heartbeatAt: Date.now(), createdAt: Date.now() }));
+    writeFileSync(b.path.replace('.json.lock', '.buy.lock'), JSON.stringify({ ...dead, hostname: 'other-host', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7b', heartbeatAt: Date.now(), createdAt: Date.now() }));
     const r = cli(b.home, ['reconcile', '--rail', 'solana', '--op', 'paid-op']);
     expect(r.status).toBe(5);
     expect(r.result).toMatchObject({ op: 'paid-op', state: 'unknown', reason: 'op_in_progress' });
-    expect(r.result.next).toContain(locationReadable ? process.platform === 'linux' ? 'another or unknown container' : 'another host' : 'another or unknown boot');
+    expect(r.result.next).toContain(locationReadable ? 'another host' : 'unreadable boot identity');
     expect(r.result.next).not.toContain('superstables budget unlock');
     expect(r.result.next).not.toContain('--confirm');
     expect(r.result.next).toContain('Stop and ask the owner');
@@ -173,12 +173,8 @@ it('retains the dispatcher lock after a rail-child record write fails until that
     p.stdin.end('exit');
     await new Promise<void>(done => p.once('close', () => done()));
     const lock = locks.lockFile(b.path);
-    expect(lock.ok).toBe(locationReadable);
+    expect(lock.ok).toBe(true);
     if (lock.ok) lock.release();
-    else {
-      expect(cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm']).result).toMatchObject({ reason: 'locks_cleared' });
-      expect(existsSync(b.path)).toBe(false);
-    }
   } finally { p.kill('SIGKILL'); }
 });
 
@@ -215,7 +211,7 @@ it('reconcile names the live breaker owner that prevents dead-lock recovery', ()
   } else {
     // The unreadable primary lock blocks automatic recovery before the breaker is inspected.
     expect(r.result.next).toContain(path);
-    expect(r.result.next).toContain('another or unknown boot');
+    expect(r.result.next).toContain('unreadable boot identity');
     const confirmed = cli(b.home, ['unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm']);
     expect(confirmed.status).toBe(5); expect(confirmed.result.next).toContain(ownerPath);
     expect(confirmed.result.next).toContain('holder may still be running');
@@ -262,7 +258,7 @@ it('names a stray directory and gives inspection guidance for ordinary and confi
     if (locationReadable || args[0] === 'unlock') {
       expect(r.result.next).toContain('owner must inspect and remove this directory'); expect(r.result.next).toContain('somedir');
     } else {
-      expect(r.result.next).toContain('another or unknown boot'); expect(r.result.next).toContain(path);
+      expect(r.result.next).toContain('unreadable boot identity'); expect(r.result.next).toContain(path);
     }
     expect(r.result.next).not.toContain('five minutes'); expect(existsSync(join(path + '.break', 'somedir'))).toBe(true);
   }

@@ -15,8 +15,8 @@ function box() {
   const hostProc = join(home, 'host-proc'); mkdirSync(hostProc);
   return { home, dir, hostProc, path: join(dir, 'paid-op.json.lock') };
 }
-async function hold(b: ReturnType<typeof box>) {
-  const p = spawn('bwrap', ['--unshare-pid', '--die-with-parent', '--dev-bind', '/', '/', '--ro-bind', '/proc', b.hostProc, '--proc', '/proc', process.execPath, helper], {
+async function hold(b: ReturnType<typeof box>, ancestorProc = false) {
+  const p = spawn('bwrap', ['--unshare-pid', '--die-with-parent', '--dev-bind', '/', '/', '--ro-bind', '/proc', b.hostProc, ...(ancestorProc ? [] : ['--proc', '/proc']), process.execPath, helper], {
     env: { ...process.env, PROBE_ROOT: root, PROBE_HOME: b.home, PROBE_ACTION: 'hold', HOST_PROC: b.hostProc },
   });
   let error = ''; p.stderr.on('data', c => { error += c; });
@@ -46,6 +46,16 @@ afterEach(async () => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 describe.runIf(process.platform === 'linux')('real PID namespace ownership', () => {
+  it('records its host PID with an ancestor proc mount and stays recoverable on the host', async () => {
+    const b = box(), holder = await hold(b, true);
+    const record = JSON.parse(readFileSync(b.path, 'utf8'));
+    expect(record.hostPid).toBe(holder.pid);
+    expect(record.pidStart).toBe((await import('../../budget/procs.mjs')).processStart(holder.pid));
+    expect(tryLock(b)).toBe(false); expect(unlock(b).status).toBe(5);
+    process.kill(holder.pid, 'SIGKILL');
+    await waitFor(() => { try { return readFileSync(`/proc/${holder.pid}/stat`, 'utf8').includes(') Z '); } catch { return true; } });
+    expect(unlock(b).status).toBe(0); expect(existsSync(b.path)).toBe(false);
+  });
   it('never takes a running foreign holder after a forward or backward clock jump', async () => {
     const b = box(); await hold(b);
     for (const skew of [0, 330000, 86400000, -86400000]) expect(tryLock(b, skew)).toBe(false);
@@ -68,21 +78,22 @@ describe.runIf(process.platform === 'linux')('real PID namespace ownership', () 
     await waitFor(() => !existsSync(b.path));
     expect(tryLock(b)).toBe(true);
   });
-  it('refuses confirmed owner override for a foreign holder with a live local PID collision', async () => {
+  it('resolves and protects a live foreign holder despite a local PID collision', async () => {
     const b = box(); const old = await hold(b);
     writeFileSync(join(b.dir, 'paid-op.json'), '{"state":"settled"}');
     const text = readFileSync(b.path, 'utf8');
     const r = unlock(b); expect(r.status, r.stderr).toBe(5); expect(r.stdout).toContain('op_in_progress');
-    expect(r.stdout).toContain('holder may still be running'); expect(r.stderr).not.toContain('overriding unverifiable lock');
+    expect(r.stdout).toContain('held by process'); expect(r.stderr).not.toContain('overriding unverifiable lock');
     expect(readFileSync(b.path, 'utf8')).toBe(text); expect(tryLock(b)).toBe(false);
     old.p.stdin?.write('release\n'); await sleep(200);
     expect(existsSync(b.path)).toBe(false);
     const successor = locks.lockFile(b.path); expect(successor.ok).toBe(true);
     if (successor.ok) successor.release();
   });
-  it('does not infer foreign death after the namespace holder exits', async () => {
+  it('recovers a foreign holder after its namespace exits', async () => {
     const b = box(); const holder = await hold(b); process.kill(holder.pid, 'SIGKILL'); await sleep(100);
     const text = readFileSync(b.path, 'utf8');
-    expect(tryLock(b, 86400000)).toBe(false); expect(unlock(b).status).toBe(5); expect(readFileSync(b.path, 'utf8')).toBe(text);
+    expect(unlock(b).status).toBe(0); expect(existsSync(b.path)).toBe(false);
+    writeFileSync(b.path, text); expect(tryLock(b, 86400000)).toBe(true);
   });
 });

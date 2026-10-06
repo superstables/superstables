@@ -94,6 +94,16 @@ if (process.argv[2] === 'worker') {
       const done = new Promise(r => state.p.once('exit', r));
       try { process.kill(state.hostPid, 'SIGKILL'); } catch {} state.p.kill('SIGKILL'); await done;
     }
+    // bwrap can exit before the kernel finishes killing the namespace's process.
+    const deadline = Date.now() + 25000;
+    for (;;) {
+      try {
+        const stat = fs.readFileSync(`/proc/${state.hostPid}/stat`, 'utf8');
+        if (['Z', 'X'].includes(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0])) break;
+      } catch (err) { if (err.code === 'ENOENT') break; throw err; }
+      if (Date.now() > deadline) throw new Error('namespace holder did not finish exiting');
+      await sleep(3);
+    }
     children.delete(state);
   }
   function confirmed(b) {
@@ -125,7 +135,7 @@ if (process.argv[2] === 'worker') {
         successor.release();
       }
       await kill(state);
-      if (fs.existsSync(b.path)) tryBusy(b);
+      if (fs.existsSync(b.path)) { const recovered = lockFile(b.path); assert.equal(recovered.ok, true, JSON.stringify(recovered)); recovered.release(); }
       if (fs.existsSync(b.path) || fs.existsSync(b.path + '.break')) confirmed(b);
       const next = lockFile(b.path); assert.equal(next.ok, true, 'blocked after confirmed recovery'); if (next.ok) next.release();
       cases++; if (cases % 20 === 0) console.log(JSON.stringify({ cases, fired }));
