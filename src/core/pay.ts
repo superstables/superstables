@@ -1134,11 +1134,12 @@ function recordSearch(records: Records, attempt: Attempt, reason: string, search
   const at = new Date().toISOString();
   // A transaction the seller named that is not this payment stays a mismatch; the reason says what the search found.
   const mismatch = attempt.chain === "mismatch";
-  const chainReason = mismatch ? `the transaction the service named is not this payment; ${reason}` : reason;
+  const observation = attempt.paymentIncluded ? `the earlier payment inclusion could not be verified; outcome unknown. Do not pay again. ${reason}` : reason;
+  const chainReason = mismatch ? `the transaction the service named is not this payment; ${observation}` : observation;
   const receipt = receiptOf(records, attempt);
   // A receipt the chain contradicted keeps what the chain said: an undecided search does not undo it.
   if (receipt && !mismatch && receipt.chain !== "mismatch") {
-    const { chainReason: _old, ...rest } = receipt;
+    const { chainReason: _old, paymentIncluded: _included, ...rest } = receipt;
     records.saveReceipt({ ...rest, chain: "unchecked", chainReason });
   }
   const further = searchedToSlot !== undefined && searchedToSlot > (attempt.searchedToSlot ?? -1);
