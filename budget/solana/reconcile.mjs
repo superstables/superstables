@@ -69,8 +69,9 @@ try {
   a = alreadyFinal ? { verdict: "settled", tx: rec.tx, final: true } : await assessOp(conn, rec);
 } catch (e) {
   // a failed read is never "not found": the operation stays unknown
+  updateOp(opId, { state: "unknown" }, "reconcile: chain read failed; do not pay again");
   console.log(`Could not read the chain: ${e?.message ?? e}. Do not pay again.`);
-  emit(result("unknown", { reason: `could not read the chain: ${String(e?.message ?? e).slice(0, 160)}`, next: `node budget/solana/reconcile.mjs --op ${opId}` }), EXIT.UNCERTAIN);
+  emit(result("unknown", { reason: `could not read the chain: ${String(e?.message ?? e).slice(0, 160)}`, next: `node budget/solana/reconcile.mjs --op ${opId}. Do not pay again.` }), EXIT.UNCERTAIN);
 }
 console.log(`Chain read: ${a.verdict}${a.tx ? ` ${explorerTx(a.tx)}` : ""}`);
 

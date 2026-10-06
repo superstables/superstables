@@ -40,6 +40,7 @@ if (action === 'reconcile') {
       eth_getTransactionCount: '0x0', eth_getLogs: [], eth_blockNumber: '0x100',
       eth_getBlockByNumber: { number: '0x100', timestamp: '0xffffffff' },
     };
+    if (req.method === 'getFirstAvailableBlock') return new Response(JSON.stringify({ jsonrpc: '2.0', id: req.id, error: { code: -32000, message: 'history unavailable' } }), { headers: { 'content-type': 'application/json' } });
     return new Response(JSON.stringify({ jsonrpc: '2.0', id: req.id,
       result: req.method in result ? result[req.method] : `0x${'00'.repeat(256)}` }), { headers: { 'content-type': 'application/json' } });
   };
