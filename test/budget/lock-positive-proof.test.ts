@@ -16,6 +16,7 @@ const denied = () => { throw Object.assign(new Error('denied'), { code: 'EACCES'
 function linux({ namespace = initial, readable = true, entries = ['44', '55'], unreadableCandidate = false, start = `linux:${boot}:100`, probeCode = 'ESRCH', elapsed = 10_000_000 } = {}) {
   return createIdentitySource({ platform: 'linux', bootElapsed: () => elapsed,
     readFile: path => {
+      if (path === '/proc/self/mountinfo') return '1 0 0:1 / /proc rw - proc proc rw\n';
       if (path === '/etc/machine-id') return machine;
       if (path === '/proc/sys/kernel/random/boot_id') return boot;
       if (path === '/proc/self/status') return readable ? `NSpid:\t${process.pid}\n` : denied();
@@ -51,7 +52,7 @@ it('never trusts ESRCH when its own proc view is unreadable, even with matching 
 });
 it('recovers a previous boot with a reused live PID only on the same stable host', () => {
   const source = linux({ probeCode: 'ok' });
-  const owner = { ...source.record(), pid: 42, bootId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' };
+  const owner = { ...source.record(), pid: 42, writtenAt: Date.now() - 10_100_000, bootId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' };
   expect(inspectProcess(owner, source)).toEqual({ state: 'dead' });
   expect(inspectProcess({ ...owner, hostId: 'another-host' }, source)).toMatchObject({ state: 'alive', possiblyAlive: true });
   expect(inspectProcess({ ...owner, hostId: null }, source)).toMatchObject({ state: 'alive', possiblyAlive: true });
@@ -148,7 +149,7 @@ it.runIf(process.platform === 'linux')('a real no-proc sandbox cannot take a liv
     const reader = spawnSync('bwrap', [...noProc, process.execPath, '--import', join(root, 'node_modules/tsx/dist/loader.mjs'), '--input-type=module', '-e', `const { withFileLock } = await import(${JSON.stringify(join(root, 'src/core/lock.ts'))}); try { await withFileLock(${JSON.stringify(cap)}, () => console.log('acquired'), 100); process.exitCode = 1; } catch (err) { console.log(err.message); }`], { encoding: 'utf8' });
     expect(reader.status, reader.stderr).toBe(0);
     expect(reader.stdout).not.toContain('acquired');
-    expect(reader.stdout).toContain('outside the sandbox');
+    expect(reader.stdout).toContain("outside the agent's sandbox");
     expect(readFileSync(cap, 'utf8')).toBe(original);
   });
 });

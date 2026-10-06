@@ -122,7 +122,7 @@ try {
       assert.equal(result.final, false, 'sandbox abandoned a live host approval');
       assert.equal(result.orphaned, false);
       assert.deepEqual(result.record, originalApproval, 'wait changed the approval'); cases++;
-      assert.equal(result.acquired, false); assert.match(result.guidance, /outside the sandbox/);
+      assert.equal(result.acquired, false); assert.match(result.guidance, /outside the agent's sandbox/);
       assert.equal(fs.readFileSync(b.core, 'utf8'), originalLock); cases++;
     } finally { await stop(holder); }
   }

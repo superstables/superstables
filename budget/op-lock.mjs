@@ -33,7 +33,7 @@ function holder(path, options = {}) {
     const value = JSON.parse(text);
     const owner = typeof value === 'number' ? { pid: value } : value;
     if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) {
-      return { text, version, pid: owner.pid, owner, ...liveness(owner, options), directory: stat.isDirectory() };
+      return { text, version, pid: owner.pid, owner, ...liveness({ ...owner, mtimeMs: stat.mtimeMs }, options), directory: stat.isDirectory() };
     }
   } catch {}
   return { text, version, pid: null, owner: null, state: 'unverifiable', why: 'unreadable or unrecognised lock record', directory: stat.isDirectory() };

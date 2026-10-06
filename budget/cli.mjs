@@ -28,8 +28,9 @@ import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
-import { HOLDER_ENV, WORKER_ENV, adoptWorker, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, WORKER_ENV, adoptWorker, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
+import { paymentBusy, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
@@ -339,10 +340,10 @@ with the holder, lock path and owner recovery guidance in next. Never buy again 
     }),
   },
   unlock: {
-    flags: { op: "v", confirm: "b", unverified: "b" }, required: ["op"],
+    flags: { op: "v", cap: "b", approvals: "b", approval: "v", attempt: "v", confirm: "b", unverified: "b" }, required: [],
     help: helpText({
-      usage: "superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm [--unverified]",
-      about: "Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.\n\n--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.\n\nA holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.",
+      usage: "superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --attempt ID) --confirm [--unverified]",
+      about: "Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.\n\n--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.\n\n--cap: Recover the core payment lock. --approvals: Recover approval locks on this rail and chain. --approval ID: Also recover the record lock for this approval. --attempt ID: Release an attempt runner for read-only reconciliation. Stop all payment work across processes, containers and hosts first. Payment-lock recovery uses the exact confirmation payment-lock, or payment-lock unverified with --unverified. Preserves payment evidence. Run status for the original attempt or wait for the original approval next.\n\nA holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.",
       money: "no. It never signs or sends.", who: "the owner or operator, after stopping the processes.",
       example: "superstables budget unlock --rail solana --op order-001 --confirm",
       prints: "one RESULT with op, state, reason and next. Without --confirm, a terminal or the matching typed op ID: exit 3. Busy: exit 5. Cleared or no lock: exit 0.",
@@ -667,6 +668,15 @@ function parse(argv) {
     if (v === undefined || (inline === undefined && v.startsWith("--"))) return badInput({ command: cmd }, `--${name} needs a value`);
     if (allowed[name] === "m") (f[name] ??= []).push(v); // a flag that may repeat
     else f[name] = v;
+  }
+  if (cmd === "unlock") {
+    if ([f.op !== undefined, Boolean(f.cap), Boolean(f.approvals), f.approval !== undefined, f.attempt !== undefined].filter(Boolean).length !== 1) return badInput({ command: cmd }, "choose exactly one unlock target: --op, --cap, --approvals, --approval or --attempt");
+    if (f.approval !== undefined && !isApprovalId(f.approval)) return badInput({ command: cmd }, "--approval must be an approval ID");
+    if (f.attempt !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(f.attempt)) return badInput({ command: cmd }, "--attempt must be a record ID");
+    if (f.cap || f.attempt) {
+      if (f.rail || f.chain) return badInput({ command: cmd }, "--cap and --attempt do not take --rail or --chain");
+      return { cmd, f, ctx: { command: cmd } };
+    }
   }
   if (cmd === "buy-once") return parseBuyOnce(cmd, f);
   if (cmd === "find") {
@@ -1303,6 +1313,7 @@ async function buy({ f, ctx }) {
 }
 
 async function unlock({ f, ctx }) {
+  if (!f.op) return unlockPayment({ f, ctx });
   const next = `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`;
   const ownerNext = operationBusy(f.op);
   const refuse = reason => emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason, next: ownerNext });
@@ -1328,7 +1339,8 @@ async function unlock({ f, ctx }) {
   if (!existsSync(journal(f)) && !hadLocks) {
     return emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason: "op_not_found", next: "check the original rail, chain and op; no journal or operation locks exist" });
   }
-  const options = { confirmUnverifiable: Boolean(f.unverified), confirmPossiblyAlive: Boolean(f.unverified), onOverride: () => log(`Clearing the lock for operation ${f.op} without proof that its process has stopped. You confirmed that all work on this operation has stopped.`) };
+  let noticed = false;
+  const options = { confirmUnverifiable: Boolean(f.unverified), confirmPossiblyAlive: Boolean(f.unverified), onOverride: () => { if (!noticed) { noticed = true; log(`Clearing the lock for operation ${f.op} without proof that its process has stopped. You confirmed that all work on this operation has stopped.`); } } };
   const blocked = lock => {
     if (lock.possiblyAlive && !f.unverified) log(`Cannot clear the lock for operation ${f.op} because Superstables cannot confirm that its process has stopped. Run the command in your own terminal, outside any agent's sandbox. If the check still fails, stop every process working on this operation across all containers and hosts, then rerun the same command with --confirm --unverified.`);
     return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(lock, f.op, f.rail, f.chain) });
@@ -1348,6 +1360,37 @@ async function unlock({ f, ctx }) {
     log(`superstables budget: ${hadLocks ? 'abandoned locks cleared' : 'no lock'} for operation ${f.op}; journal preserved. Reconcile before doing anything else.`);
     return emit(0, { ...ctx, op: f.op, state: "ok", next, reason: hadLocks ? "locks_cleared" : "no_lock" });
   } finally { for (const lock of locks) lock.release(); }
+}
+
+async function unlockPayment({ f, ctx }) {
+  const fields = { ...ctx, ...(f.attempt ? { attempt: f.attempt } : {}) };
+  const refused = reason => emit(3, { ...fields, state: 'refused_precheck', reason, next: paymentBusy });
+  if (!f.confirm) return refused('confirmation_required');
+  if (!process.stdin.isTTY) return refused('owner_terminal_required');
+  const terminal = createInterface({ input: process.stdin, output: process.stderr });
+  const mismatch = () => { log('Confirmation did not match. No locks were cleared.'); return refused('owner_confirmation_mismatch'); };
+  try {
+    const lines = terminal[Symbol.asyncIterator]();
+    log("A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.");
+    if (f.unverified) {
+      log('Superstables cannot confirm that every process working under the payment lock has stopped. Clearing the payment lock while any process can still run may allow a second payment. Stop all payment work across processes, containers and hosts, and keep it stopped until unlock finishes.');
+      log('To clear the payment lock without that proof, type payment-lock unverified exactly:');
+    } else log('After stopping all payment work, type payment-lock to confirm:');
+    const answer = await lines.next();
+    if (answer.done || answer.value !== (f.unverified ? 'payment-lock unverified' : 'payment-lock')) return mismatch();
+  } catch { return mismatch(); }
+  finally { terminal.close(); }
+  let noticed = false;
+  const options = { unverified: Boolean(f.unverified), onOverride: () => {
+    if (!noticed) { noticed = true; log('Clearing the payment lock without proof that its process has stopped. You confirmed that all payment work has stopped.'); }
+  } };
+  const ok = f.cap ? recoverCap(HOME, options) : f.attempt ? recoverAttempt(HOME, f.attempt, options) : recoverApprovalLocks(f.rail, f.chain, options, f.approval);
+  if (!ok) {
+    if (!f.unverified) log("Cannot clear the payment lock because Superstables cannot confirm that its process has stopped. Run the command in your own terminal, outside any agent's sandbox. If the check still fails, stop every process working under the payment lock across all containers and hosts, then rerun the same command with --confirm --unverified.");
+    return emit(5, { ...fields, state: 'unknown', reason: 'op_in_progress', next: paymentBusy });
+  }
+  log('Payment lock recovery finished; payment evidence preserved. Check the original attempt or approval before doing anything else.');
+  return emit(0, { ...fields, state: 'ok', reason: 'locks_cleared', next: f.attempt ? `superstables status ${f.attempt}` : 'check the original attempt with status or the original approval with budget wait; do not pay again while its outcome is unknown' });
 }
 
 async function reconcile({ f, ctx }) {
