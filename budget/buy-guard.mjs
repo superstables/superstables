@@ -6,9 +6,9 @@ export { lockRecord } from './op-lock.mjs';
 
 export const opLockFile = (dir, op) => join(dir, `${op}.buy.lock`);
 
-export function lockOp(dir, op) {
+export function lockOp(dir, op, options = {}) {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return lockFile(opLockFile(dir, op));
+  return lockFile(opLockFile(dir, op), options);
 }
 
 /**

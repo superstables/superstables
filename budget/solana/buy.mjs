@@ -65,6 +65,7 @@ import {
 } from "./lib.mjs";
 import { readCapped, saveResponse } from "../response.mjs";
 import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, refusalIsFinal } from "./ops.mjs";
+import { lockNext } from "../op-lock.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
@@ -142,12 +143,14 @@ console.log(`Resource: ${method} ${url}`);
 
 // --- 1. one process per operation; refuse a pending or settled one --------------------------------
 let lock = { ok: true };
-if (!checkOnly) {
+{
   lock = acquireLock(opId);
   if (!lock.ok) {
-    refuse(`operation ${opId} is being worked by another process${lock.holder ? ` (pid ${lock.holder})` : ""}`, { next: `wait, then: node budget/solana/reconcile.mjs --op ${opId}` });
+    finish("unknown", 5, { debit: null, reason: "op_in_progress", next: lockNext(lock, opId, "solana", "devnet") });
   }
-  const gate = gateExistingOp(readOp(opId));
+  const existing = readOp(opId);
+  if (checkOnly && existing) finish("refused_precheck", EXIT.REFUSED, { reason: "op_already_exists", next: `superstables budget reconcile --rail solana --op ${opId}` });
+  const gate = gateExistingOp(existing);
   if (!gate.allow) {
     console.error(`Refused (nothing signed): ${gate.reason}`);
     finish("refused_precheck", EXIT.REFUSED, { tx: gate.tx, reason: gate.reason, next: gate.state === "settled" ? "none: already settled, do not pay again" : `node budget/solana/reconcile.mjs --op ${opId}` });
@@ -195,7 +198,7 @@ for (const a of accepts) {
 const requirement = selectRequirement(accepts);
 const check = checkOffer(requirement, { maxBase, payTo: payToFlag });
 if (!check.ok) {
-  updateOp(opId, {
+  if (!checkOnly) updateOp(opId, {
     rail: "solana", kind: "buy", state: "refused_precheck", url, method, reasons: check.reasons,
     amount: check.amountBase?.toString() ?? null, payTo: requirement?.payTo ?? null, token: requirement?.asset ?? null,
     createdAt: readOp(opId)?.createdAt ?? new Date().toISOString(),
