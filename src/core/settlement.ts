@@ -31,6 +31,8 @@ export interface ChainCheck {
   chain: ChainState;
   /** Matching successful inclusion, still rechecked until chain is verified. */
   included?: true;
+  /** A successful read found no receipt, distinct from an unreadable RPC. */
+  missing?: true;
   /** Why, for mismatch and unchecked: the client's own words. */
   reason?: string;
 }
@@ -88,12 +90,13 @@ export async function checkSettlement(
     // The RPC's own error text is not repeated: it is somebody else's words.
     return { chain: "unchecked", reason: "the chain could not be read: the RPC did not give a usable answer" };
   }
-  if (!receipt) return { chain: "unchecked", reason: "the chain does not show the transaction yet" };
+  if (!receipt) return { chain: "unchecked", missing: true, reason: "the chain does not show the transaction yet" };
   // The answer must be the receipt of the transaction asked for: an RPC that answers with another one's is not read.
   if (!isHash(receipt.transactionHash) || receipt.transactionHash.toLowerCase() !== input.transaction.toLowerCase()) {
     return { chain: "unchecked", reason: "the chain could not be read: the RPC answered with a receipt for another transaction" };
   }
   const proof = await inclusion(rpc.url, receipt, network.finality, options);
+  if (proof === "removed") return { chain: "unchecked", missing: true, reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." };
   if (proof === "unread") return { chain: "unchecked", reason: "the transaction's block could not be verified" };
   if (receipt.status !== "0x1") return { chain: "mismatch", reason: "the transaction failed on chain" };
 
@@ -250,7 +253,7 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
         const check = await checkSettlement({ ...input, network: network.caip2, transaction: log.transactionHash }, options);
         if (check.chain === "verified") return { found: true, transaction: log.transactionHash };
         if (check.included) return { found: true, transaction: log.transactionHash, final: false };
-        if (check.chain === "unchecked") return unreadable;
+        if (check.chain === "unchecked" && !check.missing) return unreadable;
       }
       from = to + 1n;
     }

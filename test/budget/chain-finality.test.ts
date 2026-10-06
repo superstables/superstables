@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { encodeEventTopics, parseAbi, createWalletClient, http, type Hex } from "viem";
+import { encodeEventTopics, parseAbi, createWalletClient, http, BlockNotFoundError, TransactionReceiptNotFoundError, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { readSettlement as hostedSettlement } from "../../budget/settlement.mjs";
 import { sendJson, readBody, startServer } from "../helpers/servers.js";
@@ -57,6 +57,46 @@ afterEach(() => { vi.doUnmock("../../budget/evm/lib.js"); rmSync(dir, { recursiv
 const ops = () => import(new URL("../../budget/evm/ops.ts", import.meta.url).href);
 
 describe("budget EVM finality", () => {
+  it.each(["pull receipt", "settlement logs", "canonical block"])("keeps a delivered EVM payment through a failed %s read", async (where) => {
+    const module = await ops();
+    const rec = (await module.reconcileJournal({ ...journal(), delivered: true }, { quiet: true })).j;
+    const before = structuredClone(rec);
+    if (where === "canonical block") rpc.getBlock.mockRejectedValue(new Error("RPC unavailable"));
+    else rpc.getTransactionReceipt.mockImplementation(async () => {
+      if (where === "settlement logs") return receipt([transfer(OWNER, AGENT)]);
+      throw new Error("RPC unavailable");
+    });
+    if (where === "settlement logs") rpc.getLogs.mockRejectedValue(new Error("RPC unavailable"));
+    expect((await module.reconcileJournal(rec, { quiet: true })).j).toMatchObject({ state: "settled", final: false, delivered: true, inclusionObserved: true });
+    expect(module.readJournal(rec.op)).toEqual(before);
+  });
+  it.each(["settleTx", "cancelTx"] as const)("finds the real settlement after recorded %s never lands", async (field) => {
+    const missing: Hex = `0x${"99".repeat(32)}`;
+    rpc.getBlock.mockImplementation(async ({ blockNumber }) => ({ number: blockNumber ?? 110n, timestamp: 2000n, hash: BLOCK_HASH }));
+    rpc.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+      if (hash === missing) throw new TransactionReceiptNotFoundError({ hash });
+      return receipt([used(), transfer(OWNER, AGENT), transfer()]);
+    });
+    const result = await (await ops()).reconcileJournal({ ...journal(), [field]: missing }, { quiet: true });
+    expect(result).toMatchObject({ verdict: "settled", j: { settleTx: HASH, final: true } });
+  });
+  it.each(["pruned", "null", "viem null block error"])("finds a replaced pull with %s old headers", async (mode) => {
+    const replacement: Hex = `0x${"98".repeat(32)}`;
+    rpc.getTransactionReceipt.mockImplementation(async ({ hash }) => hash === HASH ? null : { ...receipt([]), blockNumber: 80n, transactionHash: replacement });
+    rpc.getTransaction.mockImplementation(async ({ hash }) => hash === replacement ? { from: AGENT, nonce: 7, hash } : null);
+    rpc.getLogs.mockResolvedValue([{ ...used(), blockNumber: 80n, transactionHash: replacement }]);
+    rpc.getBlock.mockImplementation(async ({ blockNumber }) => {
+      if (blockNumber !== undefined && blockNumber < 70n) {
+        if (mode === "pruned") throw new Error("pruned history unavailable");
+        if (mode === "viem null block error") throw new BlockNotFoundError({ blockNumber });
+        return null;
+      }
+      return { number: blockNumber ?? 110n, timestamp: blockNumber ?? 110n, hash: BLOCK_HASH, transactions: [] };
+    });
+    const j = { ...journal(), pullBlock: undefined, createdAt: new Date(680000).toISOString() };
+    expect((await (await ops()).reconcileJournal(j, { quiet: true })).verdict).toBe("not_found");
+    expect(rpc.getLogs).toHaveBeenCalled();
+  });
   it("keeps a receipt read error unknown during a nonce advance", async () => {
     rpc.getTransactionReceipt.mockRejectedValue(new Error("RPC unavailable"));
     expect((await (await ops()).reconcileJournal(journal(), { quiet: true })).verdict).toBe("unknown");
@@ -127,6 +167,23 @@ function solRpc(status: "confirmed" | "finalized" | null = null) {
   };
 }
 describe("budget Solana finality and absence", () => {
+  it.each(["settled", "failed", "not_found"])("keeps a Solana %s journal unchanged through an RPC outage", async (state) => {
+    vi.doMock("../../budget/solana/lib.mjs", async (original) => ({ ...await original<object>(), OPS_DIR: dir, connection: () => ({ getGenesisHash: async () => { throw new Error("RPC unavailable"); } }) }));
+    const argv = process.argv;
+    process.argv = [process.execPath, "reconcile.mjs", "--op", "outage-order"];
+    const lines: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation((line) => { lines.push(String(line)); });
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("test exit"); });
+    try {
+      const module = await import(new URL("../../budget/solana/ops.mjs", import.meta.url).href);
+      const rec = { op: "outage-order", ...solRec, state, inclusionObserved: true, delivered: true, final: false, debit: "0.01" };
+      module.writeOp(rec.op, rec);
+      await expect(import(new URL("../../budget/solana/reconcile.mjs", import.meta.url).href)).rejects.toThrow("test exit");
+      expect(module.readOp(rec.op)).toEqual(rec);
+      const line = lines.find((line) => line.startsWith("RESULT "));
+      expect(JSON.parse(line?.slice(7) ?? "null")).toMatchObject({ state, delivered: true });
+    } finally { process.argv = argv; log.mockRestore(); exit.mockRestore(); vi.doUnmock("../../budget/solana/lib.mjs"); }
+  });
   it("distinguishes a confirmed own transaction from a finalized one", async () => {
     expect(await assessOp(solRpc("confirmed"), solRec)).toMatchObject({ verdict: "settled", final: false });
     expect(await assessOp(solRpc("finalized"), solRec)).toMatchObject({ verdict: "settled", tx: solRec.agentSig });
@@ -400,15 +457,18 @@ describe("round 2: Solana complete history and resumable fallback", () => {
     conn.getBlockTime.mockResolvedValue(1900000000);
     expect((await assessOp(conn, rec)).verdict).toBe("pending");
   });
-  it("proves sponsored absence with finalized paginated history spanning the whole landing window", async () => {
-    const conn = { ...solRpc(), getSignaturesForAddress: vi.fn(async (_address, options, commitment) => {
+  it("never proves sponsored absence from history before the complete block scan", async () => {
+    const conn = { ...scanRpc(), getSignaturesForAddress: vi.fn(async (_address, options, commitment) => {
       expect(commitment).toBe("finalized");
       expect(options.minContextSlot).toBe(361);
       return options.before ? [{ signature: "older", slot: 109, confirmationStatus: "finalized" }] : [{ signature: "unrelated", slot: 120, confirmationStatus: "finalized" }];
     }), getTransaction: vi.fn(async (sig) => ({ slot: 120, meta: { err: null }, transaction: { signatures: [sig, "other-owner"] } })) };
     const rec = { ...solRec, feePayer: "sponsor", tx: null };
+    conn.getBlock.mockImplementation(async (slot) => { if (slot === 115) throw new Error("429"); return { blockHeight: slot - 10, transactions: [] }; });
+    expect(await assessOp(conn, rec, { paceMs: 0 })).toMatchObject({ verdict: "pending", checkedBlocks: 4, totalBlocks: 151 });
+    conn.getBlock.mockImplementation(async (slot) => ({ blockHeight: slot - 10, transactions: [] }));
     expect((await assessOp(conn, rec, { paceMs: 0 })).verdict).toBe("not_found");
-    expect(conn.getSignaturesForAddress).toHaveBeenCalledTimes(2);
+    expect(conn.getBlock.mock.calls.filter(([slot]) => slot !== 115)).toHaveLength(150);
   });
   it("does not conclude absence from an empty or unreadable address page", async () => {
     const conn = solRpc();

@@ -844,7 +844,7 @@ function openUnknown(record, view) {
     ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, purchase: record.hosted?.requestId, service: record.service?.id,
     state: "unknown", final: false, paid: null, delivered: null, amount: null, tx: h ? { settle: h } : {}, ...(h && net ? { txUrl: net.tx(h) } : {}),
     next: `${lostInclusion ? "Do not pay again" : "do not buy again"}. Check again later with superstables budget wait --id ${record.id} --shown. Tell the owner the payment outcome is not known yet`,
-    reason: lostInclusion ? `the earlier payment inclusion could not be verified; outcome unknown. Do not pay again.${view.unreadable ? ` ${scrub(view.unreadable)}` : ""}` : reasonWithHash(openWords({ ...view, seen: record.seen, hash: h }, site), h),
+    reason: lostInclusion ? `The earlier payment inclusion could not be verified; outcome unknown. Do not pay again.${view.unreadable ? ` ${scrub(view.unreadable)}` : ""}` : reasonWithHash(openWords({ ...view, seen: record.seen, hash: h }, site), h),
   };
 }
 

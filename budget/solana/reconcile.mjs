@@ -21,7 +21,7 @@ import { OP_ID_RE, readOp, updateOp, assessOp, readTransfer } from "./ops.mjs";
 import { USDC_MINT, explorerTx } from "./lib.mjs";
 import { requireRecordLock } from "../op-lock.mjs";
 
-const USAGE = `Usage: node budget/solana/reconcile.mjs --op <id>
+const USAGE = `Usage: superstables budget reconcile --rail solana --op <id>
 
 Read the chain for operation <id> and set its journal state to settled, failed or not_found
 (or leave it unknown while its transaction may still land). Never pays, never signs.
@@ -68,12 +68,20 @@ let a;
 try {
   a = alreadyFinal ? { verdict: "settled", tx: rec.tx, final: true } : await assessOp(conn, rec);
 } catch (e) {
-  // a failed read is never "not found": the operation stays unknown
-  updateOp(opId, { state: "unknown" }, "reconcile: chain read failed; do not pay again");
+  // A failed read changes no payment evidence already observed.
+  if (rec.state === "settled" && rec.inclusionObserved) {
+    console.log(`Could not read the chain: ${e?.message ?? e}. Keeping the earlier payment inclusion.`);
+    emit(result("settled", { debit: rec.debit ?? rec.amountUsdc ?? "0", final: false, next: `Run superstables budget reconcile --rail solana --op ${opId} later to check finality. Do not pay again.${rec.delivered === false ? " Contact the seller." : ""}` }), EXIT.OK);
+  }
+  if (["failed", "not_found", "refused_chain"].includes(rec.state)) {
+    console.log(`Could not read the chain: ${e?.message ?? e}. Keeping the recorded state: ${rec.state}.`);
+    emit(result(rec.state, { reason: rec.reason, next: `Run superstables budget reconcile --rail solana --op ${opId} again later.` }), EXIT.OK);
+  }
   console.log(`Could not read the chain: ${e?.message ?? e}. Do not pay again.`);
-  emit(result("unknown", { reason: `could not read the chain: ${String(e?.message ?? e).slice(0, 160)}`, next: `node budget/solana/reconcile.mjs --op ${opId}. Do not pay again.` }), EXIT.UNCERTAIN);
+  emit(result("unknown", { reason: `could not read the chain: ${String(e?.message ?? e).slice(0, 160)}`, next: `superstables budget reconcile --rail solana --op ${opId}. Do not pay again.` }), EXIT.UNCERTAIN);
 }
 console.log(`Chain read: ${a.verdict}${a.tx ? ` ${explorerTx(a.tx)}` : ""}`);
+if (a.totalBlocks) console.log(`Checked ${a.checkedBlocks} of ${a.totalBlocks} finalized landing blocks. Run superstables budget reconcile --rail solana --op ${opId} again to continue. Do not pay again.`);
 
 if (a.verdict === "no_tx") {
   updateOp(opId, { state: "not_found" }, "reconcile: nothing was ever signed for this operation");
@@ -86,7 +94,7 @@ if (a.verdict === "no_tx") {
   if (!alreadyFinal) updateOp(opId, { state: "settled", final: a.final !== false, inclusionObserved: true, tx: a.tx, debit, movement }, "reconcile: own transaction succeeded");
   console.log(`Settled: our transaction succeeded on chain, debit ${debit} USDC${moved}.`);
   console.log(`Delivered: ${rec.delivered ?? "unknown (the seller's answer was not recorded)"}. A delivery problem never triggers a new payment.`);
-  emit(result("settled", { tx: a.tx, debit, final: a.final !== false, next: a.final === false ? `the payment landed, but is not final on chain yet. Run node budget/solana/reconcile.mjs --op ${opId} later.` : rec.delivered === false ? `settled but not delivered: do not pay again; contact the seller with tx ${a.tx}` : "none" }), EXIT.OK);
+  emit(result("settled", { tx: a.tx, debit, final: a.final !== false, next: a.final === false ? `the payment landed, but is not final on chain yet. Run superstables budget reconcile --rail solana --op ${opId} later. Do not pay again.${rec.delivered === false ? " Contact the seller." : ""}` : rec.delivered === false ? `settled but not delivered: do not pay again; contact the seller with tx ${a.tx}` : "none" }), EXIT.OK);
 } else if (a.verdict === "failed") {
   updateOp(opId, { state: "failed", tx: a.tx, error: a.err }, "reconcile: own transaction failed on chain");
   console.log(`Failed on chain: ${JSON.stringify(a.err)}. Nothing moved.`);
@@ -98,5 +106,5 @@ if (a.verdict === "no_tx") {
 } else {
   updateOp(opId, { state: "unknown" }, `reconcile: pending, ${a.blocksLeft ?? "?"} blocks until the blockhash is provably dead`);
   console.log(a.reason ?? (a.blocksLeft != null ? `Still unresolved: about ${a.blocksLeft} blocks remain before the blockhash expires. Do not pay again.` : "Still unresolved: no final settlement or final absence proof. Do not pay again."));
-  emit(result("unknown", { ...(a.reason ? { reason: a.reason } : {}), next: `run node budget/solana/reconcile.mjs --op ${opId} again later. Do not pay again.` }), EXIT.UNCERTAIN);
+  emit(result("unknown", { ...(a.reason ? { reason: a.reason } : {}), next: `run superstables budget reconcile --rail solana --op ${opId} again later. Do not pay again.` }), EXIT.UNCERTAIN);
 }

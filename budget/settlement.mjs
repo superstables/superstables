@@ -115,7 +115,7 @@ async function evmSettlement({ rpc, rail, chain, tx, payer, payTo, asset, amount
   if (!hexNumber(receipt.blockNumber) || !hash(receipt.blockHash) || receipt.logs?.some((l) => l.removed)) return { state: "unread", reason: `transaction ${tx} has no usable block inclusion` };
   const block = await rpc("eth_getBlockByNumber", [receipt.blockNumber, false]);
   if (!hexNumber(block?.number) || BigInt(block.number) !== BigInt(receipt.blockNumber) || !hash(block?.hash) || block.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) return { state: "unread", reason: `the canonical block of transaction ${tx} could not be verified` };
-  if (receipt.status !== "0x1") return { state: "mismatch", reason: `transaction ${tx} failed on chain` };
+  if (receipt.status !== "0x1") return { state: final && hexNumber(final.number) && BigInt(receipt.blockNumber) <= BigInt(final.number) ? "mismatch" : "unread", reason: `transaction ${tx} failed on chain` };
   const logs = Array.isArray(receipt.logs) ? receipt.logs : [];
   const tokenLogs = logs.filter((l) => !l.removed && sameHex(l.address, asset));
   const paid = tokenLogs.filter((l) =>

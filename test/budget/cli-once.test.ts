@@ -1094,9 +1094,19 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
       expect(done.code, String(why)).toBe(5);
       expect(done.result).toMatchObject({ state: "unknown", paid: null });
       expect(done.result.reason).toMatch(why);
-      // stored as final: the chain shows that transaction, and it is not this payment
+      let final = done;
+      if (chain.failed) {
+        expect(done.result.final).toBe(false);
+        expect(recordOf(done.result.id).final).toBeUndefined();
+        expect((await budget(["wait", "--id", done.result.id, "--shown", "--timeout", "0"])).result).toMatchObject({ state: "unknown", paid: null, final: false });
+        site.finalizedBlock = 1000;
+        final = await budget(["wait", "--id", done.result.id, "--shown", "--timeout", "0"]);
+        expect(final.result).toMatchObject({ state: "unknown", paid: null });
+        expect(recordOf(done.result.id).final).toBeDefined();
+      }
+      // Permanent mismatch evidence is cached only after failed execution reaches finality.
       const again = await budget(["wait", "--id", done.result.id]);
-      expect(again.result).toEqual(done.result);
+      expect(again.result).toEqual(final.result);
       rmSync(join(home, "budget"), { recursive: true, force: true });
     }
   }, 120_000);

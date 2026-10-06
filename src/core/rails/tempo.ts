@@ -178,7 +178,7 @@ async function checkTempoPayment(facts: PaymentFacts, options: ChainReadOptions)
   } catch {
     return { chain: "unchecked", reason: "the chain could not be read: the RPC did not give a usable answer" };
   }
-  if (!receipt) return { chain: "unchecked", reason: "the chain does not show the transaction yet" };
+  if (!receipt) return { chain: "unchecked", missing: true, reason: "the chain does not show the transaction yet" };
   if (!isHash(receipt.transactionHash) || receipt.transactionHash.toLowerCase() !== facts.transaction.toLowerCase()) {
     return { chain: "unchecked", reason: "the chain could not be read: the RPC answered with a receipt for another transaction" };
   }

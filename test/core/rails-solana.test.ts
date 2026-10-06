@@ -375,7 +375,7 @@ describe("what the chain must show", () => {
   });
 
   it("leaves a payment unchecked when the chain cannot say: no transaction yet, nothing to match, another answer, no RPC", async () => {
-    expect(await solanaRail.checkPayment(facts({ transaction: bs58.encode(randomBytes(64)) }), options())).toEqual({ chain: "unchecked", reason: "the chain does not show the transaction yet" });
+    expect(await solanaRail.checkPayment(facts({ transaction: bs58.encode(randomBytes(64)) }), options())).toEqual({ chain: "unchecked", missing: true, reason: "the chain does not show the transaction yet" });
     expect(await solanaRail.checkPayment(facts({ transaction: "pending" }), options())).toEqual({ chain: "unchecked", reason: "no transaction signature was given" });
     const tx = chain.land(signed);
     expect(await solanaRail.checkPayment(facts({ transaction: tx, ownerSignature: undefined }), options())).toMatchObject({ chain: "unchecked", reason: expect.stringMatching(/not recorded/) });

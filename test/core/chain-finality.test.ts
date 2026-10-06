@@ -84,6 +84,40 @@ it("reports removed non-final delivered inclusion as uncertain, never a terminal
   expect(records.getReceipt(attempt.receiptId!)?.chainReason).toMatch(/do not pay again/i);
   expect(records.spentToday("USDC")).toBe(0.01);
 });
+it("preserves a delivered provisional payment and its receipt through failed reads", async () => {
+  const { chain, records, attempt } = await deliveredNonFinalPayment();
+  const before = records.getAttempt(attempt.id);
+  const receipt = records.getReceipt(attempt.receiptId!);
+  const options = { rpcUrlFor: () => chain.url, fetchImpl: async () => { throw new Error("RPC unavailable"); } };
+  expect(await recheckChain(records, attempt.id, options)).toEqual(before);
+  expect(records.getReceipt(attempt.receiptId!)).toEqual(receipt);
+  expect(records.spentToday("USDC")).toBe(0.01);
+  chain.receipts.delete(attempt.transaction!); chain.used.delete(attempt.authorizationNonce!);
+  const searchFails = { rpcUrlFor: () => chain.url, fetchImpl: async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const call = JSON.parse(String(init?.body));
+    if (call.method === "eth_call") throw new Error("nonce read failed");
+    return fetch(input, init);
+  } };
+  expect(await recheckChain(records, attempt.id, searchFails)).toEqual(before);
+  expect(records.getReceipt(attempt.receiptId!)).toEqual(receipt);
+  expect(await recheckChain(records, attempt.id, chain.url)).toMatchObject({ state: "uncertain", paymentIncluded: true });
+});
+it.each(["block hash changed", "log removed"])("reports a successful read showing %s as removed inclusion", async (change) => {
+  const { chain, records, attempt } = await deliveredNonFinalPayment();
+  const options = { rpcUrlFor: () => chain.url, fetchImpl: async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const call = JSON.parse(String(init?.body));
+    const response = await fetch(input, init);
+    if (call.method !== "eth_getTransactionReceipt") return response;
+    const answer = await response.json();
+    if (change === "block hash changed") answer.result.blockHash = `0x${"ff".repeat(32)}`;
+    else for (const log of answer.result.logs) log.removed = true;
+    return Response.json(answer);
+  } };
+  expect(await recheckChain(records, attempt.id, options)).toMatchObject({ state: "uncertain", chain: "unchecked", paymentIncluded: true });
+  expect(records.getReceipt(attempt.receiptId!)?.paymentIncluded).toBeUndefined();
+  expect(records.getReceipt(attempt.receiptId!)?.chainReason).toMatch(/Do not pay again\. [A-Z]/);
+  expect(records.spentToday("USDC")).toBe(0.01);
+});
 it.each(["unchecked", "mismatch"] as const)("status rechecks provisional payment after a reorg removes its receipt, initially %s", async (initialChain) => {
   const chain = await startFakeBaseSepolia(); cleanup.push(() => chain.close());
   const dir = mkdtempSync(join(tmpdir(), "pay-finality-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
