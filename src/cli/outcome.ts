@@ -74,6 +74,22 @@ export function requoteCommand(quote: Pick<Quote, "url" | "serviceId" | "request
   return `superstables quote ${shellWord(quote.url)}`;
 }
 
+/** The status command that searches the payment's chain for it, when its rail can search. */
+function searchCommand(attempt: Attempt): string {
+  return railFor(networkFor(attempt.terms?.network ?? ""))?.findPayment ? `Run \`superstables status ${attempt.id}\`: it searches the chain for this payment. ` : "";
+}
+
+/** An attempt whose matching payment was seen on chain and then removed from it. */
+export function inclusionRemoved(attempt: Attempt): boolean {
+  return attempt.state === "uncertain" && attempt.paymentIncluded === true;
+}
+
+/** The terminal's Next line. A removed inclusion's warning is already in the opening, so it is not repeated here. */
+export function humanNextFor(attempt: Attempt, quote?: Quote): string {
+  if (inclusionRemoved(attempt)) return `${searchCommand(attempt)}This attempt stays uncertain even after expiry. Ask the owner to check their wallet activity and report the payment to the seller.`;
+  return nextFor(attempt, quote);
+}
+
 /** The next thing to run (or not to run) after an attempt, in one sentence. */
 export function nextFor(attempt: Attempt, quote?: Quote): string {
   const requote = requoteCommand(quote);
@@ -93,7 +109,7 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
     case "uncertain": {
       // The payment's own chain: its explorer (on the right cluster), and the command that searches that chain for it.
       const network = networkFor(attempt.terms?.network ?? "");
-      const search = railFor(network)?.findPayment ? `Run \`superstables status ${attempt.id}\`: it searches the chain for this payment. ` : "";
+      const search = searchCommand(attempt);
       if (attempt.paymentIncluded) return `Do not pay again. ${search}An earlier matching inclusion was removed; this attempt stays uncertain even after expiry. Ask the owner to check their wallet activity and report the payment to the seller.`;
       const explorer = !network ? "the chain's explorer" : network.explorerQuery ? `${network.explorer}/${network.explorerQuery}` : network.explorer;
       // A Tempo transfer has no expiry: the chain never says it can no longer happen, so the owner decides.

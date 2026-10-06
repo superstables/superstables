@@ -269,7 +269,7 @@ function checkedFinal(record) {
   const hash = canonTx(result?.tx?.settle);
   const payerConflict = Object.hasOwn(payers, hash) && payers[hash] !== canonAddr(result.payer);
   if (result?.paid === true && record.attributionVersion === undefined && !record.final.attribution && !payerConflict) {
-    const attribution = "not verified (recorded by an older version)";
+    const attribution = "verification not recorded (older version)";
     const kept = { ...result, attribution };
     updateApproval(record.id, (now) => now.final?.result?.paid === true && now.attributionVersion === undefined && !now.final.attribution
       ? { final: { ...now.final, result: { ...now.final.result, attribution } } } : null);
@@ -299,7 +299,7 @@ function overruled(record, result) {
     reason: result?.paid === true
       ? !verdictHolds(record.seen, result)
         ? `transaction ${h} was read on chain as paid by ${result.payer}, but another answer for this purchase named a different payer for it, so whether it was this owner's payment is unknown`
-        : `transaction ${h} has no verified attribution to this purchase's payment identity, so whether it was paid is unknown`
+        : `transaction ${h} could not be verified as payment for this single purchase. Whether this purchase was paid is unknown. Do not pay again.`
       : "the site's last answer said not paid, but another answer for this purchase named a transaction, a payment or money that may have moved, so whether it was paid is unknown",
   };
 }
@@ -782,8 +782,8 @@ async function chainCheck(record, net, hash, payer, deadline) {
   if (!hash) return { state: "unread", reason: "the site names no transaction for it" };
   if (!isDecimal(h.amount) || !isAddress(h.payTo, net)) return { state: "mismatch", reason: "this purchase's record has no amount or recipient to check the payment against" };
   const attribution = attributionStatus(record, hash);
-  if (attribution === "unread") return { state: "unread", reason: `transaction ${hash} cannot be attributed because its attribution claim could not be read` };
-  if (attribution === "elsewhere") return { state: "mismatch", reason: `transaction ${hash} is already attributed to another hosted purchase` };
+  if (attribution === "unread") return { state: "unread", reason: `the saved record linking transaction ${hash} to a single purchase could not be read. Whether this purchase was paid is unknown. Do not pay again.` };
+  if (attribution === "elsewhere") return { state: "mismatch", reason: `transaction ${hash} is already recorded as payment for another single purchase on superstables.com. Whether this purchase was paid is unknown. Do not pay again.` };
   const notBefore = Math.floor(Date.parse(record.createdAt) / 1000);
   return readSettlement({ rail: net.rail, chain: net.chain, tx: hash, payer, payTo: h.payTo, asset: net.asset, amount: micro(h.amount), notBefore: Number.isFinite(notBefore) ? notBefore : 0, nonce: record.seen?.nonce, deadline });
 }
