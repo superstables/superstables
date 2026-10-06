@@ -295,3 +295,5 @@ it ends the attempt as `abandoned` before the owner can act.
   [Install the client](install.md#the-local-wallet-for-a-machine-with-no-browser).
 
 Every command and flag: [CLI reference](cli.md).
+
+A buy-once whose earlier inclusion was removed can stay `unknown`, `final: false` indefinitely, even after finality passes its old block. The read token remains available, as in 0.3.0's existing site-paid but chain-unverified unknown case. Stop automatic polling in that case and report it to the owner. `superstables budget wait --id <id> --abandon` ends local waiting without proving the purchase unpaid or permitting payment again.

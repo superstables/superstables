@@ -258,7 +258,9 @@ export interface Attempt {
   paymentIncluded?: true;
   /** True for final matching inclusion, false for provisional matching inclusion, null when none is established or finality was not observed. */
   chainFinal?: boolean | null;
-  /** Only provisional execution mismatches can be rechecked. Missing on legacy mismatches, which stay terminal. */
+  /** Observed EVM inclusion height, used only to test later final evidence of removal. */
+  paymentBlock?: string;
+  /** Classifies the rejected transaction. Uncertain attempts still recover by their own payment identity. */
   chainMismatch?: ChainMismatch;
   receiptId?: string;
   history: AttemptTransition[];
@@ -292,7 +294,9 @@ export interface Receipt {
   paymentIncluded?: true;
   /** True for final matching inclusion, false for provisional matching inclusion, null when none is established or finality was not observed. */
   chainFinal?: boolean | null;
-  /** Only provisional execution mismatches can be rechecked. Missing on legacy mismatches, which stay terminal. */
+  /** Observed EVM inclusion height, used only to test later final evidence of removal. */
+  paymentBlock?: string;
+  /** Classifies the rejected transaction. Uncertain attempts still recover by their own payment identity. */
   chainMismatch?: ChainMismatch;
   /** Payment success and service success are two different facts. */
   serviceOutcome: ServiceOutcome;

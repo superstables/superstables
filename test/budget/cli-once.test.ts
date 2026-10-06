@@ -1254,3 +1254,15 @@ describe("buy-once preserves the 0.3.0 final contract", () => {
     expect((await wait()).result).toMatchObject({ state: "settled", paid: true, delivered: true, final: true, chain_final: true });
   });
 });
+
+it("keeps a provisional buy-once execution failure rereadable until a final failure", async () => {
+  const first = await once();
+  const p = site.purchases[0];
+  site.settle(p, "ok", { transaction: TX, payer: PAYER, chain: { failed: true } });
+  const wait = () => budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+  expect((await wait()).result).toMatchObject({ state: "unknown", paid: null, final: false });
+  expect(recordOf(first.result.id).hosted.token).toBeTruthy();
+  site.finalizedBlock = 1000;
+  expect((await wait()).result).toMatchObject({ state: "unknown", paid: null, final: true });
+  expect(recordOf(first.result.id).hosted.token).toBeUndefined();
+});
