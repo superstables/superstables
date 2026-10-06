@@ -59,7 +59,7 @@ for (const platform of ['linux', 'darwin']) {
     expect(lockFile(b.path, { identitySource, confirmUnverifiable: true }).ok).toBe(false);
     expect(readFileSync(b.path, 'utf8')).toBe(JSON.stringify(record));
   });
-  it(`retains a dead ${platform} holder after a hostname change without proof of location`, () => {
+  it(`recovers a dead ${platform} holder after a hostname change with matching boot identity`, () => {
     const b = box();
     const record = { ...createIdentitySource().record(), platform, hostname: 'machine.lan', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', pid: 42, pidStart: null, pidStartUtc: null, namespace: platform === 'linux' ? 'pid:[test]' : null };
     const identitySource = { pids: () => [process.pid], record: () => ({ ...record, hostname: 'machine.local', pid: process.pid }), start: () => null, probe: (pid: number) => {
@@ -68,7 +68,7 @@ for (const platform of ['linux', 'darwin']) {
     } };
     writeFileSync(b.path, JSON.stringify(record));
     const lock = lockFile(b.path, { identitySource });
-    try { expect(lock.ok).toBe(false); } finally { if (lock.ok) lock.release(); }
+    try { expect(lock.ok).toBe(true); } finally { if (lock.ok) lock.release(); }
   });
 }
 it('retains old clock-based macOS boot records and malformed boot-session UUIDs as unverifiable', () => {
