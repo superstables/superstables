@@ -1,4 +1,5 @@
 import "./cli-guard.mjs";
+import { requireRecordLock } from "../op-lock.mjs";
 // reconcile (B4): READ ONLY. Reads an operation's journal and the chain, then sets settled / failed / unknown / not_found in the
 // journal file. It opens no key file and never signs, sends or pays. (Returning stranded funds is recover.ts --op <id>, an owner command.)
 //   settled    the pull landed and this operation's own authorization was used by a successful transaction that paid the recipient
@@ -7,10 +8,11 @@ import "./cli-guard.mjs";
 //   not_found  nothing can land: no pull was signed, or the agent's nonce at the pull's position was used by a different transaction
 // npx tsx budget/evm/reconcile.ts [--chain <name>] --op <id>
 // Exit codes: 0 settled and delivered, 1 failed or not_found, 4 settled on chain but delivery not confirmed, 5 unknown.
-import { SYM, CFG, tx, usdc, usdcBalance, emit } from "./lib.ts";
+import { OPS_DIR, SYM, CFG, tx, usdc, usdcBalance, emit } from "./lib.ts";
 import { checkOpId, readJournal, reconcileJournal, resultLine, exitCodeFor, journalPath } from "./ops.ts";
 
 const op = checkOpId(process.argv[process.argv.indexOf("--op") + 1]);
+requireRecordLock(OPS_DIR, op);
 const j = readJournal(op);
 if (!j) {
   console.log(`no journal for operation ${op} at ${journalPath(op)}`);

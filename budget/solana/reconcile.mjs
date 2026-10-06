@@ -14,11 +14,12 @@
 //
 // Exit: 0 when the chain gave an answer (settled, failed or not_found; read the RESULT state),
 // 1 for a missing journal, 2 bad flags, 4 unknown (still pending).
-import { connection, parseStrict, formatUnits, retryRead, EXIT } from "./lib.mjs";
+import { connection, parseStrict, formatUnits, retryRead, EXIT, OPS_DIR } from "./lib.mjs";
 import { getAssociatedTokenAddressSync, getAccount } from "./token.mjs";
 import { PublicKey } from "@solana/web3.js";
 import { OP_ID_RE, readOp, updateOp, assessOp, readTransfer } from "./ops.mjs";
 import { USDC_MINT, explorerTx } from "./lib.mjs";
+import { requireRecordLock } from "../op-lock.mjs";
 
 const USAGE = `Usage: node budget/solana/reconcile.mjs --op <id>
 
@@ -39,6 +40,7 @@ if (!OP_ID_RE.test(opId)) {
   process.exit(EXIT.USAGE);
 }
 
+requireRecordLock(OPS_DIR, opId);
 const rec = readOp(opId);
 if (!rec) {
   console.error(`No journal for operation ${opId}. Nothing to reconcile.`);
@@ -63,7 +65,7 @@ const emit = (r, code) => {
 
 let a;
 try {
-  a = await assessOp(conn, rec);
+  a = rec.state === "settled" ? { verdict: "settled", tx: rec.tx } : await assessOp(conn, rec);
 } catch (e) {
   // a failed read is never "not found": the operation stays unknown
   console.log(`Could not read the chain: ${e?.message ?? e}. Do not pay again.`);
@@ -76,10 +78,10 @@ if (a.verdict === "no_tx") {
   console.log("Nothing was signed for this operation, so nothing was paid.");
   emit(result("not_found", { reason: "never signed", delivered: false, next: `nothing was paid; buy again (this --op may be reused)` }), EXIT.OK);
 } else if (a.verdict === "settled") {
-  const movement = await readTransfer(conn, a.tx);
-  const debit = movement?.amount ? formatUnits(movement.amount) : (rec.amountUsdc ?? "0");
+  const movement = rec.state === "settled" ? rec.movement : await readTransfer(conn, a.tx);
+  const debit = movement?.amount ? formatUnits(movement.amount) : (rec.debit ?? rec.amountUsdc ?? "0");
   const moved = movement?.amount && rec.amount && movement.amount !== rec.amount ? ` (journal expected ${rec.amount})` : "";
-  updateOp(opId, { state: "settled", tx: a.tx, debit, movement }, "reconcile: own transaction succeeded");
+  if (rec.state !== "settled") updateOp(opId, { state: "settled", tx: a.tx, debit, movement }, "reconcile: own transaction succeeded");
   console.log(`Settled: our transaction succeeded on chain, debit ${debit} USDC${moved}.`);
   console.log(`Delivered: ${rec.delivered ?? "unknown (the seller's answer was not recorded)"}. A delivery problem never triggers a new payment.`);
   emit(result("settled", { tx: a.tx, debit, next: rec.delivered === false ? `settled but not delivered: do not pay again; contact the seller with tx ${a.tx}` : "none" }), EXIT.OK);
