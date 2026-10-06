@@ -224,7 +224,7 @@ export async function allListings(
   try {
     hosted = await fetchHostedCatalogue(url);
   } catch (err) {
-    warnings.push(`The hosted catalogue could not be read (${message(err)}); showing the built-in listings only.`);
+    warnings.push(`The service catalogue could not be read (${message(err)}); showing the built-in listings only.`);
     return { listings: builtIn, warnings };
   }
 

@@ -11,16 +11,16 @@ activity before deciding what to do; approval, payment and delivery are separate
 | Flow | Read the original outcome | Follow-up |
 | --- | --- | --- |
 | Local `pay` | `superstables status <attempt-id>` | For `uncertain`, follow [the chain and authorization checks below](#why-failed-and-uncertain-are-different). Do not start another payment while unresolved |
-| Budget purchase, local or hosted owner approvals | `superstables budget reconcile --rail <rail> --chain <chain> --op <op>` | Use the original rail, chain and operation id. It needs the local journal and never pays. Do not replace the purchase with a new id |
+| Budget purchase, local or owner approvals on superstables.com | `superstables budget reconcile --rail <rail> --chain <chain> --op <op>` | Use the original rail, chain and operation id. It needs the local journal and never pays. Do not replace the purchase with a new id |
 | Single purchase on superstables.com | `superstables budget wait --id <id> --shown` | Re-read the same request later when `unknown` has `final: false`. Waiting never approves or retries payment |
 | Budget owner transaction | `superstables budget wait --id <id> --shown`, then `budget status` for that rail and chain | Check wallet activity and chain confirmation. An expired link does not cancel a wallet transaction |
 
 `--shown` means the agent wrote the approval link, terms and match code when present in a visible
 reply to the owner.
-Hosted approval leaves budget journals and the agent key on your runtime; the site account is not
+Approval on superstables.com leaves budget journals and the agent key on your runtime; the site account is not
 a complete budget purchase ledger. To stop spending, [revoke](budget.md#7-revoke-owner). To return
 stranded EVM USDC, use [recovery](budget.md#recovery-and-ending-use), which requires the agent key
-and uses local owner approvals even with hosted setup. Preserve these files until unresolved
+and uses local owner approvals even with setup on superstables.com. Preserve these files until unresolved
 outcomes and key-held funds are checked, then follow [Uninstalling](install.md#uninstalling).
 
 ## The files
@@ -55,7 +55,7 @@ Set `SUPERSTABLES_HOME` to put all of this somewhere else.
 A quote is a read. It asks a paid endpoint for its 402 challenge, judges what the endpoint
 offers, and writes down the answer. Nothing is signed, nothing is paid, nothing is committed.
 
-What it freezes is the exact requirement the seller published — amount, asset, network,
+What it freezes is the exact requirement the seller published — amount, asset, chain,
 recipient — so that the owner later approves the same payment the agent was quoted. The payment terms come from that requirement, not from the seller's
 self-declared resource URL, which a seller can write anything in.
 
@@ -239,7 +239,7 @@ check (`mismatch`), or found on a later check that the payment was never made an
 (`unpaid`); the transaction link is how you check it yourself.
 
 It records the terms that were paid, the payer (the account that signed — your MetaMask
-account, in the default mode), the transaction and its explorer URL, selected fields of the settlement response (success, payer, transaction, network, error
+account, in the default mode), the transaction and its explorer URL, selected fields of the settlement response (`success`, `payer`, `transaction`, `network`, `error`
 reason), how long the whole attempt took, and, separately, what the service did:
 
 | Field | Meaning |

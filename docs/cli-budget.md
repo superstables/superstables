@@ -121,7 +121,7 @@ Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount i
 while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read.
 next is the command to run next, or none.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
-approval link, the match code (hosted), the amount and network, the testnet line. The agent sends it and ends its turn.
+approval link, the match code (on superstables.com), the amount and chain, the testnet line. The agent sends it and ends its turn.
 budget_spent: true when buy was refused because the budget cannot cover the purchase (spent, revoked, never granted).
 --json (every command): stdout is only that object, as JSON without the RESULT prefix, like the rest of superstables;
 the APPROVE line goes to stderr with the logs. The fields and exit codes are the same.
@@ -140,7 +140,7 @@ Exit codes (the same numbers as superstables):
 
 Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
   keys/budget/<rail>-agent.env               the agent key (mode 600). No owner key is ever stored here
-  budget/public/<rail>-<chain>.env           the owner's and agent's addresses, no secret (hosted: APPROVALS, SITE, LINK_ID
+  budget/public/<rail>-<chain>.env           the owner's and agent's addresses, no secret (on superstables.com: APPROVALS, SITE, LINK_ID
                                              and LINK_CODE)
   budget/ops/<rail>-<chain>/<op>.json        one journal per purchase, and <op>.response, the seller's answer when saved
   budget/approvals/                          owner approvals started in the background, and buy-once purchases
@@ -168,7 +168,7 @@ owner. Needs a superstables.com account. --site URL picks another site (default 
 a superstables.com subdomain, or another origin only when the owner set SUPERSTABLES_ALLOW_SITE to it. Without --hosted:
 the page on 127.0.0.1, no account. An agent already added to an account is taken only for the owner recorded here, with
 that owner's signed proof; otherwise the owner removes the agent on the site's account page and adds it again.
-setup --new-owner without --hosted moves a hosted chain back to the page on this machine.
+setup --new-owner without --hosted moves a chain with approvals on superstables.com back to the page on this machine.
 --grant A and --fund [AMOUNT] (with --hosted): one approval link for the whole set-up. After the owner adds this agent,
 the same page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain; not on
 tempo) and then the grant of A (tempo: for 24 hours), in that order. The command reads each transaction from the chain
@@ -177,8 +177,7 @@ grant, say), the agent is still added and recorded, and state is that step's. Th
 agent is added. An agent already added on the chain is refused (exit 3): ask for gas and a budget
 with fund-agent and grant. Without --hosted, --grant and --fund are refused: run fund-agent and grant after setup.
 tempo: also tops up the owner from the Moderato faucet when it holds less than 1 pathUSD. --agent LABEL adds a new agent
-key for the next budget (a revoked or expired key can never be granted again); it needs no page, except on a hosted
-chain, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
+key for the next budget (a revoked or expired key can never be granted again); it needs no page, except on a chain with approvals on superstables.com, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
 nothing else; it needs no page either.
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on
@@ -226,7 +225,7 @@ Run by: the owner. An agent may start it and hand the owner the approval link.
 Example:
   $ superstables budget setup --rail evm --hosted --chain base-sepolia --grant 5 --fund
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
-  false, id, url, matchCode (hosted), expires and next; or, when it waited, the final RESULT: state settled (or ok), owner, agent, approvals (local or hosted), site, next;
+  false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), owner, agent, approvals (`local` or `hosted`), site, next;
   with --grant or --fund also linked (true once the agent is added), steps (kind, state, tx, amount, reason
   for each), tx, amount, remaining.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
@@ -280,7 +279,7 @@ Run by: the owner. An agent may start it and hand the owner the approval link.
 Example:
   $ superstables budget fund-agent --rail evm
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
-  false, id, url, matchCode (hosted), expires and next; or, when it waited, the final RESULT: state settled (or ok), amount (what was sent), tx, next.
+  false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), amount (what was sent), tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
 Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
   the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
@@ -358,7 +357,7 @@ Run by: the owner. An agent may start it and hand the owner the approval link.
 Example:
   $ superstables budget grant --rail evm --amount 5
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
-  false, id, url, matchCode (hosted), expires and next; or, when it waited, the final RESULT: state settled (or ok), amount, remaining, tx, next.
+  false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), amount, remaining, tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
 Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
   the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
@@ -522,7 +521,7 @@ Run by: the owner. An agent may start it and hand the owner the approval link.
 Example:
   $ superstables budget revoke --rail evm
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
-  false, id, url, matchCode (hosted), expires and next; or, when it waited, the final RESULT: state settled (or ok), revoked, remaining, tx, next.
+  false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), revoked, remaining, tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
 Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
   the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
@@ -599,7 +598,7 @@ Moves money: no. It never approves, signs or sends anything.
 Run by: anyone, usually the agent that started the owner command, after the owner says they've approved.
 Example:
   $ superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60
-Prints: one RESULT line: state, final, id, url, matchCode (hosted), expires, terms, next; reason describes the page's state while
+Prints: one RESULT line: state, final, id, url, matchCode (on superstables.com), expires, terms, next; reason describes the page's state while
   waiting.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 waiting (final false) or done, 1 failed, 2 bad input, unknown id or no --shown, 3 refused (rejected,

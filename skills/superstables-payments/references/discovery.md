@@ -9,17 +9,17 @@
 - Chain names
 - `quote`: the price for `pay`
 - Pricing for a budget
-- A self-hosted index: what the client reads
+- An index you run: what the client reads
 - Troubleshooting
 
 ## Where listings come from
 
 `superstables find [words]` reads two sources side by side:
 
-- **Built-in listings**: services this client knows how to call, request parameters included. They work with no network for the listing itself; `find` asks each one for its price, unpaid.
+- **Built-in listings**: services this client knows how to call, request parameters included. They work with no network access for the listing itself; `find` asks each one for its price, unpaid.
 - **The index**: `https://www.superstables.com/api/v1/services` by default, every x402 service Superstables has found, with its payment protocols (`rails`) and `chains`. `SUPERSTABLES_INDEX_URL` points at another index with the same API, or `off` switches it off.
 
-With `SUPERSTABLES_DEMO_SERVICES=on` or `find --demo`, it also reads the hosted catalogue of Superstables' testnet services (`SUPERSTABLES_CATALOGUE_URL`; `off` skips it). Most of them return prepared sample output: those listings carry `mock: true` and come after listings not marked simulated. The market data service returns live prices and carries `mock: false`.
+With `SUPERSTABLES_DEMO_SERVICES=on` or `find --demo`, it also reads the catalogue on superstables.com of Superstables' testnet services (`SUPERSTABLES_CATALOGUE_URL`; `off` skips it). Most of them return prepared sample output: those listings carry `mock: true` and come after listings not marked simulated. The market data service returns live prices and carries `mock: false`.
 
 Listings that match the words come first, then index listings. A source that cannot be read is skipped and named in `warnings`; `find` still exits 0.
 
@@ -30,7 +30,7 @@ Listings that match the words come first, then index listings. A source that can
 | (none) | Only listings `pay` can call as listed |
 | `--budget` | Listings a `superstables budget` rail could pay, instead. Adds what `pay` cannot call as listed, such as index listings without parameters. When every match is a listing `pay` can call, both show the same |
 | `--all` | Every listing, including those this client cannot pay, with the reason |
-| `--demo` | Include Superstables' testnet services from the hosted catalogue: most are simulated, the market data service returns live prices |
+| `--demo` | Include Superstables' testnet services from the catalogue on superstables.com: most are simulated, the market data service returns live prices |
 | `--limit N` | How many to ask for (default 20) |
 | `--json` | `{services: [...], warnings: [...]}` on stdout |
 
@@ -105,7 +105,7 @@ superstables quote --service ID --param k=v [--param k2=v2]
 superstables quote 'https://seller.example/path?k=v'
 ```
 
-- It reads the seller's HTTP 402 challenge and records the exact terms the owner will be asked to approve: price, network, recipient, expiry. Nothing is signed or paid.
+- It reads the seller's HTTP 402 challenge and records the exact terms the owner will be asked to approve: price, chain, recipient, expiry. Nothing is signed or paid.
 - It checks the terms against the spend policy and prints each rule (`kill_switch`, `deny`, `allow`, `stablecoins`, `caps.per_call`, `caps.per_day`). Without a policy file the built-in defaults apply: at most 0.05 USDC per payment and 1 USDC per day.
 - The quote lasts 10 minutes and starts at most one payment. After that payment ends, however it ends, take a new quote.
 - `--json` prints the quote record: `id` (the quote id for `pay`; for example `superstables quote ... --json | jq -r .id`), `expiresAt`, `url`, `terms`, `requirement`, `policy` (`allowed`, `checks[]`), `next`.
@@ -116,7 +116,9 @@ superstables quote 'https://seller.example/path?k=v'
 - `evm`: `superstables budget preflight --rail evm --url URL [--chain C]`. `RESULT` has `amount` (the price), `payTo` (the seller's address) and `offer`. A seller on another chain fails, and `next` names the `--chain` it offers. It needs no setup and no budget: with none, it prints `note: no owner address in the public file ...`, which is expected and not an error.
 - `tempo` and `solana`: `superstables budget preflight --rail tempo|solana --url URL [--method POST --body JSON]`: the same `amount`, `payTo` and `offer`, from the seller's MPP `tempo.charge` on Moderato or x402 `exact` offer on devnet. It needs no setup either.
 
-## A self-hosted index: what the client reads
+<a id="a-self-hosted-index-what-the-client-reads"></a>
+
+## An index you run: what the client reads
 
 `SUPERSTABLES_INDEX_URL=https://index.example/api/v1/services` makes `find` call:
 

@@ -522,7 +522,7 @@ describe("the hosted catalogue", () => {
     stubIndex({ services: [] }, { catalogueStatus: 503 });
     const { listings, warnings } = await allListings();
     expect(listings.map((s) => s.id)).toEqual([DEMO_SERVICE_ID, EXTERNAL_COIN_PRICE_ID]);
-    expect(warnings).toEqual(["The hosted catalogue could not be read (HTTP 503); showing the built-in listings only."]);
+    expect(warnings).toEqual(["The service catalogue could not be read (HTTP 503); showing the built-in listings only."]);
     // findServices carries the same warning to the agent.
     const found = await findServices({});
     expect(found.warnings).toContain(warnings[0]);
