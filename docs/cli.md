@@ -465,8 +465,8 @@ Example:
   $ superstables pay <quote-id> --json > pay.json 2> pay.log &
 Prints: each state as it happens, the approval link once, the outcome in one sentence, the receipt,
   the service's response and the next command. With --json, one object: attempt_id, quote_id, state,
-  final, message, next, reason, refusal, receipt (or transaction, for a payment without one),
-  service_response, history.
+  final, chain_final, message, next, reason, refusal, receipt (or transaction, for a payment without
+  one), service_response, history.
 Exit codes: 0 paid and delivered, 1 failed, expired or abandoned; nothing was paid when no
   transaction is reported, or chain is unpaid, 2 bad input (unknown, used or expired quote), 3
   refused (the owner rejected it, or a spend policy refused it), 4 paid but the service failed, 5
@@ -515,8 +515,8 @@ Options:
   -h, --help   display help for command
 
 One receipt for each payment the seller reported settled, or the chain showed. The chain column says
-verified when a matching payment is final on chain. A matching landed payment is reported paid
-immediately; delivery is recorded separately. Unchecked means permanent verification is pending
+verified when the client read the transaction on chain and it is this payment. JSON chain_final
+reports permanent finality separately. Unchecked means a matching payment has not been established
 (`superstables status` checks again). A later check can mark the receipt mismatch and the attempt
 uncertain, or unpaid when the chain shows the payment was never made and can no longer be (the
 attempt is then failed, and the receipt no longer counts against the daily cap). Do not pay again. A

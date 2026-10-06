@@ -10,7 +10,7 @@ import { WalletSigner } from "../../src/core/signer/wallet.js";
 import type { Hex } from "viem";
 import { afterEach, expect, it } from "vitest";
 import { BASE_SEPOLIA, SOLANA_DEVNET, SKALE_BASE_SEPOLIA, TEMPO_MODERATO } from "../../src/core/chain.js";
-import { PaymentEngine, recheckChain } from "../../src/core/pay.js";
+import { PaymentEngine, recheckChain, shownAttempt, shownReceipt } from "../../src/core/pay.js";
 import { Records } from "../../src/core/records.js";
 import { tempoRail } from "../../src/core/rails/tempo.js";
 import { startFakeTempoPay } from "../helpers/fake-tempo-pay.js";
@@ -33,6 +33,10 @@ async function cliStatus(home: string, rpc: string, id = "a") {
   const env = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_RPC_URL: rpc };
   const stdout = await run(process.execPath, args, { env }).then(r => r.stdout, (e: { stdout?: string }) => { if (!e.stdout) throw e; return e.stdout; });
   return JSON.parse(stdout);
+}
+async function cliReceipts(home: string) {
+  const args = ["--import", "tsx", new URL("../../src/cli/main.ts", import.meta.url).pathname, "receipts", "--json"];
+  return JSON.parse((await run(process.execPath, args, { env: { ...process.env, SUPERSTABLES_HOME: home } })).stdout);
 }
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()?.(); });
@@ -62,15 +66,20 @@ async function deliveredNonFinalPayment() {
   return { chain, records, home, attempt };
 }
 
-it("reports a delivered non-final payment with final false and the saved service response", async () => {
+it("reports a delivered non-final payment with the 0.3.0 final field and chain_final false and the saved service response", async () => {
   const { chain, records, home, attempt } = await deliveredNonFinalPayment();
   const result = await cliStatus(home, chain.url, attempt.id);
-  expect(result).toMatchObject({ state: "settled", chain: "unchecked", final: false, exit_code: 0, service_response: { asset: "BTC", price: 64000 } });
+  expect(result).toMatchObject({ state: "settled", chain: "verified", final: true, chain_final: false, exit_code: 0, receipt: { chain: "verified", chain_final: false }, service_response: { asset: "BTC", price: 64000 } });
+  expect(await cliReceipts(home)).toEqual([expect.objectContaining({ chain: "verified", chain_final: false })]);
   expect(result.message).toMatch(/paid/i);
   expect(result.next).toMatch(/payment landed.*not final on chain yet/i);
   expect(records.spentToday("USDC")).toBe(0.01);
   chain.advance(10);
-  expect(await cliStatus(home, chain.url, attempt.id)).toMatchObject({ state: "settled", chain: "verified", final: true, exit_code: 0 });
+  expect(await cliStatus(home, chain.url, attempt.id)).toMatchObject({ state: "settled", chain: "verified", final: true, chain_final: true, exit_code: 0 });
+  const finalAttempt = records.getAttempt(attempt.id)!;
+  const finalReceipt = records.getReceipt(attempt.receiptId!)!;
+  expect(shownAttempt({ ...finalAttempt, chain_final: undefined })).toMatchObject({ chain: "verified", chain_final: null });
+  expect(shownReceipt({ ...finalReceipt, chain_final: undefined })).toMatchObject({ chain: "verified", chain_final: null });
 });
 
 it("reports removed non-final delivered inclusion as uncertain, never a terminal service failure", async () => {
@@ -78,8 +87,9 @@ it("reports removed non-final delivered inclusion as uncertain, never a terminal
   chain.receipts.delete(attempt.transaction!);
   chain.used.delete(attempt.authorizationNonce!);
   const result = await cliStatus(home, chain.url, attempt.id);
-  expect(result).toMatchObject({ state: "uncertain", chain: "unchecked", final: false, exit_code: 5 });
+  expect(result).toMatchObject({ state: "uncertain", chain: "unchecked", final: true, chain_final: null, exit_code: 5 });
   expect(result.next).toMatch(/do not pay again/i);
+  expect(await cliReceipts(home)).toEqual([expect.objectContaining({ chain: "unchecked", chain_final: null })]);
   expect(result.chain_reason).toBe("The earlier payment inclusion was removed; outcome unknown. Do not pay again.");
   expect(records.getReceipt(attempt.receiptId!)?.chainReason).toMatch(/do not pay again/i);
   expect(records.spentToday("USDC")).toBe(0.01);
@@ -128,19 +138,19 @@ it.each(["unchecked", "mismatch"] as const)("status rechecks provisional payment
   const a: Attempt = { id: "a", quoteId: "q", createdAt: at, updatedAt: at, state: "settled", chain: initialChain, transaction, url: "https://seller.example", payer: PAYER, authorizationNonce: NONCE, authorizationValidBefore: new Date((chain.head.timestamp + 300) * 1000).toISOString(), terms: { network: BASE_SEPOLIA.caip2, networkLabel: BASE_SEPOLIA.label, asset: "USDC", assetAddress: BASE_SEPOLIA.usdc.address, amountAtomic: "10000", amountDecimal: 0.01, recipient: TO, scheme: "exact" }, history: [] };
   records.saveAttempt(a);
   const first = await recheckChain(records, "a", chain.url);
-  expect(await cliStatus(dir, chain.url)).toMatchObject({ state: "settled", final: false, exit_code: 0 });
+  expect(await cliStatus(dir, chain.url)).toMatchObject({ state: "settled", final: true, chain_final: false, exit_code: 0 });
   chain.receipts.delete(transaction); chain.used.delete(NONCE);
   const second = await recheckChain(records, "a", chain.url);
   expect(first?.chain).toBe("unchecked"); expect(second?.chain).toBe("unchecked");
   expect(second?.state).toBe("uncertain");
   expect(second?.chainReason).toMatch(/do not pay again/i);
   const removed = await cliStatus(dir, chain.url);
-  expect(removed).toMatchObject({ state: "uncertain", final: false, exit_code: 5 });
+  expect(removed).toMatchObject({ state: "uncertain", final: true, chain_final: null, exit_code: 5 });
   expect(removed.next).toMatch(/do not pay again/i);
   const replacement = chain.settle({ from: PAYER, to: TO, value: "10000", nonce: NONCE });
   chain.advance(10);
   expect(await recheckChain(records, "a", chain.url)).toMatchObject({ chain: "verified", transaction: replacement });
-  expect(await cliStatus(dir, chain.url)).toMatchObject({ chain: "verified", final: true });
+  expect(await cliStatus(dir, chain.url)).toMatchObject({ chain: "verified", final: true, chain_final: true });
 });
 it("rejects a successful EVM receipt whose canonical block hash changed", async () => {
   const chain = await startFakeBaseSepolia(); cleanup.push(() => chain.close());

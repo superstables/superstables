@@ -6,7 +6,7 @@
 // whether the chain confirmed it), and every view carries a `message` that says so in words an
 // agent can repeat to the owner verbatim.
 
-import { SERVICE_BODY_LIMIT, shownPayer, shownTransaction } from "../core/pay.js";
+import { paymentOutput, SERVICE_BODY_LIMIT, shownPayer, shownTransaction } from "../core/pay.js";
 import { railFor } from "../core/rails/index.js";
 import type { Records } from "../core/records.js";
 import type { Attempt, Receipt } from "../core/types.js";
@@ -36,18 +36,21 @@ export function attemptView(deps: { records: Records }, attempt: Attempt): Recor
 }
 
 /** chain and chain_reason for a paid attempt (or one the chain contradicted); nothing for any other. */
-function chainView(attempt: Attempt): Record<string, string> {
+function chainView(attempt: Attempt) {
   const paid = attempt.state === "settled" || attempt.state === "paid_service_failed";
   if (!paid && !attempt.chain) return {};
-  const chain = attempt.chain ?? "unchecked";
+  const output = paymentOutput(attempt);
+  const chain = output.chain ?? "unchecked";
   const reason = chain === "verified" ? undefined : (attempt.chainReason ?? "it was not read");
-  return { chain, ...(reason ? { chain_reason: reason } : {}) };
+  return { ...output, chain, ...(reason ? { chain_reason: reason } : {}) };
 }
 
 function receiptView(receipt: Receipt): object {
   const tx = shownTransaction(receipt.transaction, receipt.terms.network);
+  const output = paymentOutput(receipt);
   return {
-    chain: receipt.chain ?? "unchecked",
+    ...output,
+    chain: output.chain ?? "unchecked",
     transaction: tx.hash ?? "",
     transaction_url: tx.url ?? "",
     amount: receipt.terms.amountDecimal,

@@ -27,7 +27,7 @@ import {
   recordsDir,
   walletDir,
 } from "../core/home.js";
-import { PaymentEngine, QuoteUsedError, SERVICE_BODY_LIMIT, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
+import { PaymentEngine, QuoteUsedError, SERVICE_BODY_LIMIT, paymentOutput, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
 import { POLICY_EXAMPLE, loadPolicy, type Policy } from "../core/policy.js";
 import { QUOTE_TTL_MS, getQuote, quote as takeQuote } from "../core/quote.js";
 import { Records } from "../core/records.js";
@@ -51,7 +51,6 @@ import {
   badInput,
   exitCodeFor,
   isFinalAttempt,
-  isFinalResult,
   nextFor,
   requoteCommand,
   usedQuoteMessage,
@@ -685,7 +684,7 @@ explain(
     prints:
       "each state as it happens, the approval link once, the outcome in one sentence, the receipt, the " +
       "service's response and the next command. With --json, one object: attempt_id, quote_id, state, " +
-      "final, message, next, reason, refusal, receipt (or transaction, for a payment without one), service_response, history.",
+      "final, chain_final, message, next, reason, refusal, receipt (or transaction, for a payment without one), service_response, history.",
     exits:
       "0 paid and delivered, 1 failed, expired or abandoned; nothing was paid when no transaction is reported, or chain is unpaid, 2 bad input (unknown, used " +
       "or expired quote), 3 refused (the owner rejected it, or a spend policy refused it), 4 paid but the " +
@@ -716,7 +715,7 @@ explain(
       const receipt = attempt.receiptId ? records.getReceipt(attempt.receiptId) : undefined;
       console.log(field("attempt", attempt.id));
       console.log(field("quote", attempt.quoteId));
-      console.log(field("state", `${attempt.state}${isFinalResult(attempt) ? "" : " (not final)"}`));
+      console.log(field("state", `${attempt.state}${isFinalAttempt(attempt) ? "" : " (not final)"}`));
       console.log(field("url", attempt.url));
       console.log(field("price", money(attempt.terms.amountDecimal, attempt.terms.asset)));
       if (receipt) console.log(field("transaction", shownTransaction(receipt.transaction, receipt.terms.network).url ?? "no transaction hash was given"));
@@ -770,7 +769,7 @@ explain(
             money(receipt.terms.amountDecimal, receipt.terms.asset),
             receipt.serviceName ?? receipt.url,
             receipt.serviceOutcome,
-            receipt.chain ?? "unchecked",
+            paymentOutput(receipt).chain ?? "unchecked",
             receipt.attemptId,
             shownTransaction(receipt.transaction, receipt.terms.network).url ?? "(no hash)",
           ]),
@@ -780,7 +779,7 @@ explain(
   {
     notes: [
       "One receipt for each payment the seller reported settled, or the chain showed. The chain column says verified " +
-        "when a matching payment is final on chain. A matching landed payment is reported paid immediately; delivery is recorded separately. Unchecked means permanent verification is pending " +
+        "when the client read the transaction on chain and it is this payment. JSON chain_final reports permanent finality separately. Unchecked means a matching payment has not been established " +
         "(`superstables status` checks again). A later check can mark the receipt mismatch and the attempt uncertain, " +
         "or unpaid when the chain shows the payment was never made and can no longer be (the attempt is then failed, " +
         "and the receipt no longer counts against the daily cap). Do not pay again. A receipt records the payment and " +
@@ -1042,7 +1041,8 @@ function attemptJson(records: Records, attempt: Attempt): Record<string, unknown
   if (!isFinalAttempt(attempt) && approval_url) rest.approval_url = approval_url;
   return {
     ...rest,
-    final: isFinalResult(attempt),
+    final: isFinalAttempt(attempt),
+    chain_final: paymentOutput(attempt).chain_final,
     exit_code: exitCodeFor(attempt),
     next: nextFor(attempt, getQuote(attempt.quoteId, records)),
     url: attempt.url,
@@ -1099,7 +1099,7 @@ function receiptChain(receipt: Receipt): string {
     case "unpaid":
       return `unpaid: the seller reported it paid, but ${receipt.chainReason ?? "the chain shows it was never made"}`;
     default:
-      if (receipt.paymentIncluded) return "unchecked: paid; the payment landed, but is not final on chain yet";
+      if (receipt.paymentIncluded) return "verified: paid; the payment landed, but is not final on chain yet";
       return `unchecked: the seller reported it paid, and the chain has not confirmed it yet (${receipt.chainReason ?? "it was not read"})`;
   }
 }

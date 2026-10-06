@@ -1,5 +1,7 @@
 # `superstables budget` CLI contract
 
+`budget` keeps the 0.3.0 command-completion meaning of `final`. It is `false` while an owner approval is open or a buy-once `unknown` can still be read by `wait`, and `true` otherwise. `chain_final` describes the current matching payment separately: `true` after chain finality, `false` while included but not final, and `null` when no current matching inclusion is established, including an unknown after removal. A provisional paid purchase is `settled`, with `final: true`, `chain_final: false`, and exit 0 when delivered or exit 4 when not delivered. Check finality later with `reconcile` or `wait`; never pay again for that purchase. Owner-command transactions are not seller payments and have `chain_final: null`. Older stored results without finality evidence also have `chain_final: null`.
+
 One command for the budget rails. `superstables budget` is a thin dispatcher over the rail scripts, which follow `CONTRACT.md`. It normalizes their `RESULT` lines into one shape. `buy-once` is the other way to pay: one purchase the owner approves on superstables.com, with no budget. Testnet only. Test tokens, no real money.
 
 | `--rail` | Path | Chains (`--chain`) | Implementation |
@@ -146,7 +148,7 @@ stdout carries one JSON object on its last line, prefixed `RESULT `; human logs 
 
 ```json
 {"ok":true,"command":"buy","rail":"evm","chain":"base-sepolia","op":"weather-001",
- "state":"settled","final":true,"paid":true,"delivered":true,
+ "state":"settled","final":true,"chain_final":true,"paid":true,"delivered":true,
  "amount":"0.001","remaining":"0.009",
  "tx":{"pull":"0x...","settle":"0x..."},
  "responseFile":"/home/me/.superstables/budget/ops/evm-base-sepolia/weather-001.response",

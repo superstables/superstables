@@ -1,5 +1,7 @@
 # On-chain budgets: superstables budget
 
+`budget` keeps the 0.3.0 command-completion meaning of `final`. It is `false` while an owner approval is open or a buy-once `unknown` can still be read by `wait`, and `true` otherwise. `chain_final` describes the current matching payment separately: `true` after chain finality, `false` while included but not final, and `null` when no current matching inclusion is established, including an unknown after removal. A provisional paid purchase is `settled`, with `final: true`, `chain_final: false`, and exit 0 when delivered or exit 4 when not delivered. Check finality later with `reconcile` or `wait`; never pay again for that purchase. Owner-command transactions are not seller payments and have `chain_final: null`. Older stored results without finality evidence also have `chain_final: null`.
+
 The owner approves a spending cap once, in their own wallet. You then buy from sellers with no approval per purchase, until the cap is spent or the owner revokes it. The chain enforces the cap, and no Superstables service is in the path of a purchase. You hold only the agent key. Testnet only. Test tokens, no real money.
 
 ## Contents
@@ -89,14 +91,14 @@ Run by an agent (stdout not a terminal), an owner command returns in seconds:
 
 ```
 APPROVE {"action","url","expires","terms","matchCode"}
-RESULT {"ok":true,"command":"grant","state":"waiting_owner","complete":false,"final":false,"id":"oa-...","url","matchCode","expires","terms","next"}
+RESULT {"ok":true,"command":"grant","state":"waiting_owner","final":false,"chain_final":null,"id":"oa-...","url","matchCode","expires","terms","next"}
 ```
 
 - The owner does not see your tool output. Write `url` in your reply text, exactly as printed. The command also opens the page in the default browser by itself, except over SSH or with `--no-open`; that is the command's doing, not yours (safety rule 1 still holds: you never open it).
 - `terms` holds the page's plain words: `title`, `amount`, `unit`, `summary`, `enforced`, `notEnforced`. Write them with the approval link. They come from the command's own plan.
 - `matchCode` is there on a hosted chain: the page on superstables.com offers three codes, and the owner picks yours. Write it next to the approval link.
 - The page on this machine listens on `127.0.0.1` on a random port. Over SSH the owner forwards it first; `next` gives the exact `ssh -L` command.
-- Reply with `message_for_owner` word for word and end your turn (SKILL.md, safety rule 10). When the owner says they've approved, run `superstables budget wait --id ID --shown [--timeout S]`: it waits up to S seconds (default 30, at most 300), then prints the state. Without `--shown` it refuses (exit 2, `show_owner_first`) and reads nothing. While open: `waiting_owner`, `complete: false`, exit 0, and `reason` describes the page state (not proof of anything): say so in one line and end your turn again. Once ended: the command's own final `RESULT` and exit code with `complete: true`, the same on every later call.
+- Reply with `message_for_owner` word for word and end your turn (SKILL.md, safety rule 10). When the owner says they've approved, run `superstables budget wait --id ID --shown [--timeout S]`: it waits up to S seconds (default 30, at most 300), then prints the state. Without `--shown` it refuses (exit 2, `show_owner_first`) and reads nothing. While open: `waiting_owner`, `final: false`, exit 0, and `reason` describes the page state (not proof of anything): say so in one line and end your turn again. Once ended: the command's own final `RESULT` and exit code with `final: true`, the same on every later call.
 - Final states:
   - `ok` (setup recorded the address) or `settled` (the transaction was read back from the chain, with `tx`).
   - `refused_precheck`, exit 3: the owner rejected before the wallet was asked to send, the approval link expired before the wallet was asked to send (default 10 minutes; that step sent nothing, but an earlier one may have: read `steps`, `tx` and `superstables budget status`), or the chain shows something other than the plan. A `reason` saying the transaction on chain is not the one planned, or that the allowance differs (the owner edited the cap in the wallet), means something may be live: tell the owner to revoke.

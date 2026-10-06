@@ -293,7 +293,7 @@ function overruled(record, result) {
   const net = networkOfChain(record.chain);
   const h = (result?.paid === true ? result.tx?.settle : undefined) ?? record.seen?.hashes?.[0];
   return {
-    ...result, ok: false, state: "unknown", paid: null, delivered: null, amount: null,
+    ...result, ok: false, state: "unknown", chain_final: null, paid: null, delivered: null, amount: null,
     tx: h ? { settle: h } : {}, ...(h && net ? { txUrl: net.tx(h) } : {}),
     next: `never buy this again. Ask the owner to check their wallet activity and the receipts on their ${siteName(record.hosted?.site ?? "")} account`,
     reason: result?.paid === true
@@ -713,6 +713,7 @@ async function finalOf(record, view, { deadline } = {}) {
   // resolved (paid, or shown on chain to be something else); one the chain cannot show yet keeps it open, read again later.
   let chainWords = null;
   let keep = true;
+  let chainFinal = null;
   const candidates = [...new Set([...now.hashes, ...seen.hashes])];
   if (paid === true || (paid === null && candidates.length)) {
     let unresolved = false;
@@ -721,7 +722,7 @@ async function finalOf(record, view, { deadline } = {}) {
       const who = seen.payers?.[h] ?? null;
       // the chain check fits in the command's deadline: one that runs out is unread, so the answer is unknown and not final
       const c = await chainCheck(record, net, h, who, deadline);
-      if ((c.state === "settled" || c.state === "included") && who) { hash = h; payer = who; paid = true; keep = c.state === "settled" && view.final === true; chainWords = c.reason; break; }
+      if ((c.state === "settled" || c.state === "included") && who) { hash = h; payer = who; paid = true; chainFinal = c.state === "settled"; keep = chainFinal && view.final === true; chainWords = c.reason; break; }
       if (c.state !== "mismatch") unresolved = true;
       first ??= c.reason;
     }
@@ -740,7 +741,7 @@ async function finalOf(record, view, { deadline } = {}) {
   const base = {
     command: "buy-once", rail: net.rail, chain: net.chain, id: record.id, purchase: record.hosted?.requestId, service: record.service?.id,
     amount: paid === true ? amountText : paid === false ? "0" : null, paid, delivered,
-    ...(paid === true && !keep ? { final: false } : {}),
+    final: true, chain_final: chainFinal,
     tx: hash ? { settle: hash } : {}, ...(hash ? { txUrl: net.tx(hash) } : {}),
     // the payer the chain check used; spelled as this answer spells it when it is the same address
     ...(payer ? { payer: isAddress(p.payer, net) && canonAddr(p.payer) === payer ? p.payer : payer } : isAddress(p.payer, net) ? { payer: p.payer } : {}),
@@ -842,7 +843,7 @@ function openUnknown(record, view) {
   const lostInclusion = record.included?.result?.paid === true;
   return {
     ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, purchase: record.hosted?.requestId, service: record.service?.id,
-    state: "unknown", final: false, paid: null, delivered: null, amount: null, tx: h ? { settle: h } : {}, ...(h && net ? { txUrl: net.tx(h) } : {}),
+    state: "unknown", final: false, chain_final: null, paid: null, delivered: null, amount: null, tx: h ? { settle: h } : {}, ...(h && net ? { txUrl: net.tx(h) } : {}),
     next: `${lostInclusion ? "Do not pay again" : "do not buy again"}. Check again later with superstables budget wait --id ${record.id} --shown. Tell the owner the payment outcome is not known yet`,
     reason: lostInclusion ? `The earlier payment inclusion could not be verified; outcome unknown. Do not pay again.${view.unreadable ? ` ${scrub(view.unreadable)}` : ""}` : reasonWithHash(openWords({ ...view, seen: record.seen, hash: h }, site), h),
   };
@@ -957,7 +958,7 @@ export async function waitOnce(record, timeoutMs, { fetchImpl, unknownGraceMs = 
       if (rest > 0) await sleep(Math.min(1000, rest)); // a site that answers at once must not spin
     }
     if (s.unreachable && Date.now() > Date.parse(record.expires) + AFTER_EXPIRY_MS) {
-      return { final: true, code: 5, record, result: { ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, purchase: record.hosted?.requestId, service: record.service?.id, state: "unknown", final: false, paid: null, delivered: null, amount: null, tx: seenTx(s.record ?? record), next: `superstables budget wait --id ${record.id} --shown again when ${record.hosted?.site} answers; never buy this again. Ask the owner to check their wallet activity and account page`, reason: `the purchase cannot be read: ${s.unreachable}` } };
+      return { final: true, code: 5, record, result: { ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, purchase: record.hosted?.requestId, service: record.service?.id, state: "unknown", final: false, chain_final: null, paid: null, delivered: null, amount: null, tx: seenTx(s.record ?? record), next: `superstables budget wait --id ${record.id} --shown again when ${record.hosted?.site} answers; never buy this again. Ask the owner to check their wallet activity and account page`, reason: `the purchase cannot be read: ${s.unreachable}` } };
     }
     if (Date.now() >= until) return s;
     // a long poll that failed at once must not spin (once unknown, the pause above already did that, within the grace)

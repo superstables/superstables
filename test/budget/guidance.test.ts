@@ -57,7 +57,7 @@ describe("a buy with no budget set up here", () => {
     it(`is refused on ${rail} before anything is signed, and names the owner's commands`, async () => {
       const r = await budget(["buy", "--rail", rail, "--url", "http://127.0.0.1:9/paid", "--max", "0.02"]);
       expect(r.code).toBe(3);
-      expect(r.result).toMatchObject({ ok: false, command: "buy", rail, state: "refused_precheck", complete: true, final: false, paid: false, delivered: false, amount: "0", tx: {} });
+      expect(r.result).toMatchObject({ ok: false, command: "buy", rail, state: "refused_precheck", final: true, paid: false, delivered: false, amount: "0", tx: {} });
       expect(r.result.reason).toMatch(/^no budget has been set up here for /);
       expect(r.result.reason).toContain("Nothing was signed or paid");
       expect(r.result.next).toContain(`superstables budget ${owners[rail]}`);
@@ -202,7 +202,7 @@ describe("--json", () => {
   it("is accepted by every command, and stdout is the RESULT object alone", async () => {
     const r = await budget(["status", "--rail", "evm", "--json"]);
     expect(r.code).toBe(1);
-    expect(json(r)).toMatchObject({ ok: false, command: "status", state: "failed", complete: true, final: false, home });
+    expect(json(r)).toMatchObject({ ok: false, command: "status", state: "failed", final: true, home });
     expect(r.stderr).toContain("no budget has been set up here for evm on base-sepolia");
   });
 
@@ -273,8 +273,8 @@ describe("help", () => {
 
   it("wait --help documents command completion", async () => {
     const r = await budget(["wait", "--help"]);
-    expect(r.stdout).toContain("complete false");
-    expect(r.stdout).toContain("Scripts test complete, not the exit code");
+    expect(r.stdout).toContain("final false");
+    expect(r.stdout).toContain("Scripts test final, not the exit code");
   });
 
   it("names the build on --version only: doctor does not print it", async () => {
@@ -288,16 +288,16 @@ describe("one RESULT line", () => {
     // a seller that is not there: the rail prints a RESULT of its own, which the dispatcher replaces
     const r = await budget(["preflight", "--rail", "evm", "--url", "http://127.0.0.1:9/paid"]);
     expect(r.code).toBe(1);
-    expect(r.result).toMatchObject({ command: "preflight", state: "failed", complete: true, final: false });
+    expect(r.result).toMatchObject({ command: "preflight", state: "failed", final: true });
     expect(`${r.stdout}\n${r.stderr}`.split("\n").filter((l) => l.startsWith("RESULT "))).toHaveLength(1);
   }, 60_000);
 });
 
 describe("an owner approval an agent started", () => {
-  it("prints its link once, reports complete false while it waits, and ends refused once the link expires", async () => {
+  it("prints its link once, reports final false while it waits, and ends refused once the link expires", async () => {
     const setup = await budget(["setup", "--rail", "evm", "--no-open", "--timeout", "10"]);
     expect(setup.code).toBe(0);
-    expect(setup.result).toMatchObject({ command: "setup", state: "waiting_owner", complete: false, final: false });
+    expect(setup.result).toMatchObject({ command: "setup", state: "waiting_owner", final: false });
     const { id, url } = setup.result;
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/owner\//);
     const port = new URL(url).port;
@@ -316,12 +316,12 @@ describe("an owner approval an agent started", () => {
 
     const waiting = await budget(["wait", "--id", id, "--shown", "--timeout", "1"]);
     expect(waiting.code).toBe(0);
-    expect(waiting.result).toMatchObject({ state: "waiting_owner", complete: false, final: false, id });
+    expect(waiting.result).toMatchObject({ state: "waiting_owner", final: false, id });
 
     // nobody approves: the link expires, nothing was sent, and the next step is to run it again
     const ended = await budget(["wait", "--id", id, "--shown", "--timeout", "40"]);
     expect(ended.code).toBe(3);
-    expect(ended.result).toMatchObject({ command: "setup", state: "refused_precheck", complete: true, final: false, id });
+    expect(ended.result).toMatchObject({ command: "setup", state: "refused_precheck", final: true, id });
     expect(ended.result.reason).toMatch(/expired/);
     expect(ended.result.next).toContain("run the same command again for a new one (setup reuses the agent key it created)");
   }, 90_000);
@@ -332,12 +332,12 @@ describe("an owner approval an agent started", () => {
     const lines = setup.stdout.trim().split("\n");
     expect(lines).toHaveLength(1);
     const out = JSON.parse(lines[0]);
-    expect(out).toMatchObject({ command: "setup", state: "waiting_owner", complete: false, final: false });
+    expect(out).toMatchObject({ command: "setup", state: "waiting_owner", final: false });
     expect(setup.stderr.split("\n").filter((l) => l.startsWith("APPROVE "))).toHaveLength(1);
     expect(JSON.parse(setup.stderr.split("\n").find((l) => l.startsWith("APPROVE "))!.slice(8)).url).toBe(out.url);
 
     const ended = await budget(["wait", "--id", out.id, "--shown", "--timeout", "40", "--json"]);
     expect(ended.code).toBe(3);
-    expect(JSON.parse(ended.stdout.trim())).toMatchObject({ command: "setup", state: "refused_precheck", complete: true, final: false, id: out.id });
+    expect(JSON.parse(ended.stdout.trim())).toMatchObject({ command: "setup", state: "refused_precheck", final: true, id: out.id });
   }, 90_000);
 });

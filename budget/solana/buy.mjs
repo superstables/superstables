@@ -413,7 +413,7 @@ if (own && !own.err) {
   updateOp(opId, { state: "settled", final: own.final !== false, inclusionObserved: true, tx: own.sig, debit: amountUi, delivered: deliveredHttp, movement }, "own transaction succeeded");
   console.log(`\n=> Our transfer LANDED: ${explorerTx(own.sig)}`);
   console.log(`   ${deliveredHttp ? "Delivered (seller answered 2xx)." : `NOT delivered (seller answered ${httpStatus ?? paidError}). The payment is settled; do not pay again, ask the seller to honour tx ${own.sig}.`}`);
-  result = { ...result, tx: own.sig, debit: amountUi, final: own.final !== false, next: own.final === false ? `the payment landed, but is not final on chain yet. Run superstables budget reconcile --rail solana --op ${opId} later. Do not pay again.${deliveredHttp ? "" : " Contact the seller."}` : deliveredHttp ? "none" : `settled but not delivered: do not pay again; contact the seller with tx ${own.sig}` };
+  result = { ...result, tx: own.sig, debit: amountUi, chain_final: own.final !== false, next: own.final === false ? `the payment landed, but is not final on chain yet. Run superstables budget reconcile --rail solana --op ${opId} later. Do not pay again.${deliveredHttp ? "" : " Contact the seller."}` : deliveredHttp ? "none" : `settled but not delivered: do not pay again; contact the seller with tx ${own.sig}` };
   finish("settled", EXIT.OK);
 }
 if (own && own.err && own.final === false) {
@@ -442,7 +442,7 @@ if (sim?.value?.err && !String(sim.value.err).startsWith("simulation unavailable
   const assessment = await assessOp(conn, rec).catch(() => ({ verdict: "pending" }));
   if (assessment.verdict === "settled") {
     updateOp(opId, { state: "settled", final: assessment.final !== false, inclusionObserved: true, tx: assessment.tx, delivered: deliveredHttp, debit: amountUi }, "own transaction landed while checking the refusal");
-    finish("settled", EXIT.OK, { tx: assessment.tx, debit: amountUi, delivered: deliveredHttp, final: assessment.final !== false, next: assessment.final === false ? `superstables budget reconcile --rail solana --op ${opId} later to check finality. Do not pay again.${deliveredHttp ? "" : " Contact the seller."}` : deliveredHttp ? "none" : "paid but not delivered; do not pay again; contact the seller" });
+    finish("settled", EXIT.OK, { tx: assessment.tx, debit: amountUi, delivered: deliveredHttp, chain_final: assessment.final !== false, next: assessment.final === false ? `superstables budget reconcile --rail solana --op ${opId} later to check finality. Do not pay again.${deliveredHttp ? "" : " Contact the seller."}` : deliveredHttp ? "none" : "paid but not delivered; do not pay again; contact the seller" });
   }
   if (assessment.verdict === "failed") {
     updateOp(opId, { state: "failed", tx: assessment.tx, error: assessment.err, delivered: false }, "own transaction landed and failed");

@@ -100,6 +100,25 @@ describe("budget EVM finality", () => {
       ? { state: "unknown", reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." }
       : { state: "settled", final: false, delivered: true });
   });
+  it.each(["first", "second"])("preserves settlement at block 100 when the %s unused nonce read is at head 95", async (lagging) => {
+    const module = await ops();
+    const pullHash: Hex = `0x${"97".repeat(32)}`;
+    rpc.getTransactionReceipt.mockImplementation(async ({ hash }) => hash === pullHash
+      ? { ...receipt([transfer(OWNER, AGENT)]), transactionHash: pullHash, blockNumber: 90n }
+      : receipt());
+    const rec = (await module.reconcileJournal({ ...journal(), pullTx: pullHash, delivered: true }, { quiet: true })).j;
+    expect(rec).toMatchObject({ state: "settled", final: false });
+    rec.settleBlock = "100"; module.writeJournal(rec);
+    const before = structuredClone(rec);
+    let latestReads = 0;
+    rpc.getBlock.mockImplementation(async ({ blockTag, blockNumber }) => {
+      const latest = blockTag === "latest" ? ++latestReads : 0;
+      return { number: blockNumber ?? (blockTag === "finalized" ? 90n : lagging === "first" || latest >= 3 ? 95n : 110n), timestamp: 2000n, hash: BLOCK_HASH };
+    });
+    rpc.readContract.mockResolvedValue(false);
+    expect((await module.reconcileJournal(rec, { quiet: true })).j).toEqual(before);
+    expect(module.readJournal(rec.op)).toEqual(before);
+  });
   it.each(["settleTx", "cancelTx"] as const)("finds the real settlement after recorded %s never lands", async (field) => {
     const missing: Hex = `0x${"99".repeat(32)}`;
     rpc.getBlock.mockImplementation(async ({ blockNumber }) => ({ number: blockNumber ?? 110n, timestamp: 2000n, hash: BLOCK_HASH }));
@@ -403,9 +422,12 @@ describe("round 2: EVM landed results and recovery", () => {
     const j = { ...journal(), delivered: true };
     const result = await module.reconcileJournal(j, { quiet: true });
     expect(result.j).toMatchObject({ state: "settled", final: false });
-    expect(JSON.parse((await module.resultLine(result.j, "buy")).slice(7))).toMatchObject({ ok: true, state: "settled", paid: true, delivered: true, final: false });
+    expect(JSON.parse((await module.resultLine(result.j, "buy")).slice(7))).toMatchObject({ ok: true, state: "settled", paid: true, delivered: true, chain_final: false });
     rpc.getBlock.mockImplementation(async ({ blockNumber }) => ({ number: blockNumber ?? 110n, timestamp: 2000n, hash: BLOCK_HASH }));
-    expect((await module.reconcileJournal(result.j, { quiet: true })).j).toMatchObject({ state: "settled", final: true });
+    const final = (await module.reconcileJournal(result.j, { quiet: true })).j;
+    expect(final).toMatchObject({ state: "settled", final: true, settleBlock: "100" });
+    expect(JSON.parse((await module.resultLine(final, "reconcile")).slice(7))).toMatchObject({ paid: true, chain_final: true });
+    expect(JSON.parse((await module.resultLine({ ...final, final: undefined }, "reconcile")).slice(7))).toMatchObject({ paid: true, chain_final: null });
   });
   it("keeps a reorged inclusion unknown even after authorization expiry", async () => {
     const module = await ops();
