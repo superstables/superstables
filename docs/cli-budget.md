@@ -14,6 +14,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | [`superstables budget preflight`](#superstables-budget-preflight) | a seller's price and payee | anyone | read only |
 | [`superstables budget buy`](#superstables-budget-buy) | one purchase under the budget; --max is required | agent | moves money |
 | [`superstables budget reconcile`](#superstables-budget-reconcile) | read the chain for one purchase whose outcome is unknown | anyone | read only |
+| [`superstables budget unlock`](#superstables-budget-unlock) | clear abandoned operation locks after stopping their processes | owner | moves no money |
 | [`superstables budget revoke`](#superstables-budget-revoke) | end the budget on chain | owner | moves no money |
 | [`superstables budget recover`](#superstables-budget-recover) | evm: stop the allowance, return stranded USDC to the owner | owner | moves money back |
 | [`superstables budget wait`](#superstables-budget-wait) | the state of an owner approval an agent started (--id, --shown) | anyone | read only |
@@ -87,6 +88,7 @@ Commands (each takes --help):
   preflight   anyone  a seller's price and payee                                         read only
   buy         agent   one purchase under the budget; --max is required                   moves money
   reconcile   anyone  read the chain for one purchase whose outcome is unknown           read only
+  unlock      owner   clear abandoned operation locks after stopping their processes     moves no money
   revoke      owner   end the budget on chain                                            moves no money
   recover     owner   evm: stop the allowance, return stranded USDC to the owner          moves money back
   wait        anyone  the state of an owner approval an agent started (--id, --shown)    read only
@@ -472,7 +474,8 @@ Exit codes: 0 paid and delivered, 1 failed (not settled; reason, tx and amount s
 superstables budget reconcile --rail evm|tempo|solana --op ID [--chain C]
 
 Reads the chain for one purchase, by its --op, and reports what happened to it. Run it after a buy exits 5 (unknown),
-or before reusing an --op. Needs the purchase's journal on this machine.
+or before reusing an --op. Needs the purchase's journal on this machine. A busy lock returns exit 5, reason op_in_progress,
+with the holder, lock path and owner recovery guidance in next. Never buy again while the outcome is unknown.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
@@ -481,7 +484,26 @@ Moves money: no. It never signs or sends.
 Run by: anyone, usually the agent.
 Example:
   $ superstables budget reconcile --rail evm --op btc-001
-Prints: the chain reads on stderr, then one RESULT line: state (settled, failed, not_found, unknown), paid, tx, next.
+Prints: the chain reads on stderr, then one RESULT line: op, state (settled, failed, not_found, unknown), paid, tx, next.
+  --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
+Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 5 unknown (the full table: superstables budget --help)
+```
+
+## superstables budget unlock
+
+```text
+superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm
+
+Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects verifiably live local holders on Linux and macOS. Requires --confirm and the op ID typed in a terminal. Overrides unverifiable holders regardless of timestamps; a holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.
+
+--chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
+
+Moves money: no. It never signs or sends.
+Run by: the owner or operator, after stopping the processes.
+Example:
+  $ superstables budget unlock --rail solana --op order-001 --confirm
+Prints: one RESULT with op, state, reason and next. Without --confirm, a terminal or the matching typed op ID: exit 3. Busy: exit 5. Cleared or no lock: exit 0.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 5 unknown (the full table: superstables budget --help)
 ```
