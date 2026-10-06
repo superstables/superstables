@@ -74,7 +74,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
     expect(budget).toMatch(/Use the chain the owner named; otherwise propose Base Sepolia/);
     expect(budget).toMatch(/before you propose it or set it up, even one the owner chose/);
     expect(budget).toMatch(/offer them only if the owner asks, or if the service the budget is for takes a budget there and you checked it/);
-    expect(budget).toMatch(/Offer approval on superstables\.com first if its setup page \(`start\.md`\) brought you here/);
+    expect(budget).toMatch(/If superstables\.com\x27s setup page \(`start\.md`\) brought you here.*use approval on superstables\.com without asking the owner where to approve/);
     expect(budget).toMatch(/\*\*Arc Testnet\*\* \(`--chain arc-testnet`\), only if the owner asks for it or the service they want is on it/);
     expect(budget).not.toMatch(/Poll for about five minutes/);
     for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/wait --id ID --shown/);
