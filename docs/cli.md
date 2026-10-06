@@ -125,7 +125,7 @@ Where state lives:
 
 Discovery:
   find reads a built-in catalogue and the public index at https://www.superstables.com/api/v1/services.
-  SUPERSTABLES_INDEX_URL points it at another index with the same API (a self-hosted one), or
+  SUPERSTABLES_INDEX_URL points it at another index with the same API (one you run), or
   switches it off with `off`. Index listings show their payment protocols (rails) and chains, and
   whether pay or a budget rail could pay them. Only testnets are ever payable.
 
@@ -134,11 +134,11 @@ Environment:
   SUPERSTABLES_WALLET            browser (default) or local: who signs pay's payments
   SUPERSTABLES_POLICY            the spend policy file (default $SUPERSTABLES_HOME/policy.yaml)
   SUPERSTABLES_INDEX_URL         the index find reads; `off` to skip it
-  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the hosted catalogue
+  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the catalogue on superstables.com
                                  (most are simulated; the market data service returns live prices)
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; `off` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
-  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances, the network MetaMask adds, and the chain
+  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances, the chain MetaMask adds, and the chain
                                  check on a settlement (https, or http on this machine)
   SUPERSTABLES_TEMPO_RPC         the Tempo Moderato RPC for pay's chain checks (https, or http on this machine)
   SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine)
@@ -319,9 +319,9 @@ Options:
                of the ones pay can
   --all        show every listing, including those this client cannot pay, and
                why
-  --demo       also list Superstables' testnet services from the hosted
-               catalogue: most return prepared sample output and are marked
-               simulated; the market data service returns live prices
+  --demo       also list Superstables' testnet services from the catalogue on
+               superstables.com: most return prepared sample output and are
+               marked simulated; the market data service returns live prices
                (SUPERSTABLES_DEMO_SERVICES=on does the same)
   --json       print {services, warnings} as JSON
   -h, --help   display help for command
