@@ -11,7 +11,10 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 let bootId;
-function linuxBootId() {
+function linuxBootId(readFile = readFileSync) {
+  if (readFile !== readFileSync) {
+    try { return readFile("/proc/sys/kernel/random/boot_id", "utf8").trim(); } catch { return ""; }
+  }
   if (bootId === undefined) {
     try { bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(); } catch { bootId = ""; }
   }
@@ -39,19 +42,20 @@ export function compareProcessStarts(recorded, current) {
  * The start identity of process `pid`: a string, or null when no such process exists, or undefined when this system gives
  * no way to tell (then only the pid can be checked).
  */
-export function processStart(pid, platform = process.platform, run = execFileSync, utc = true) {
+export function processStart(pid, platform = process.platform, run = execFileSync, utc = true, readFile = readFileSync) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   if (platform === "linux") {
     let stat;
     try {
-      stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      stat = readFile(`/proc/${pid}/stat`, "utf8");
     } catch (err) {
       return err.code === "ENOENT" || err.code === "ESRCH" ? null : undefined;
     }
     // the command name (field 2) is in parentheses and may hold spaces or ')': fields are counted after the last ')'
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     const start = fields[19]; // field 22, starttime
-    return /^\d+$/.test(start ?? "") ? `linux:${linuxBootId()}:${start}` : undefined;
+    const boot = linuxBootId(readFile);
+    return boot && /^\d+$/.test(start ?? "") ? `linux:${boot}:${start}` : undefined;
   }
   if (platform === "darwin") {
     try {
@@ -87,7 +91,7 @@ export function pidAlive(pid) {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    return err.code === "EPERM";
+    return err.code !== "ESRCH";
   }
 }
 
@@ -100,7 +104,7 @@ export function sameProcess(pid, start, startUtc) {
   if (!pid) return false;
   if (!start) return pidAlive(pid);
   const now = processStart(pid);
-  if (now === undefined) return pidAlive(pid);
+  if (now === undefined || now === null) return pidAlive(pid);
   return compareProcessStarts(start, now) ?? pidAlive(pid);
 }
 
@@ -110,7 +114,7 @@ function anyInGroup(pgid) {
     process.kill(-pgid, 0);
     return true;
   } catch (err) {
-    return err.code === "EPERM";
+    return err.code !== "ESRCH";
   }
 }
 

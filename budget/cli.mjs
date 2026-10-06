@@ -342,7 +342,7 @@ with the holder, lock path and owner recovery guidance in next. Never buy again 
     flags: { op: "v", confirm: "b" }, required: ["op"],
     help: helpText({
       usage: "superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm",
-      about: "Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects verifiably live local holders on Linux and macOS. Requires --confirm and the op ID typed in a terminal. Overrides unverifiable holders regardless of timestamps; a holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.",
+      about: "Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects live and possibly live local holders on Linux and macOS. If identity reads are blocked and the PID may exist, stop that process or run unlock outside the sandbox. Requires --confirm and the op ID typed in a terminal. Overrides holders from a proven different host or boot, absent PIDs, and damaged records regardless of timestamps; a holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.",
       money: "no. It never signs or sends.", who: "the owner or operator, after stopping the processes.",
       example: "superstables budget unlock --rail solana --op order-001 --confirm",
       prints: "one RESULT with op, state, reason and next. Without --confirm, a terminal or the matching typed op ID: exit 3. Busy: exit 5. Cleared or no lock: exit 0.",

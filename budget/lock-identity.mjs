@@ -4,7 +4,7 @@ import { hostname } from 'node:os';
 import { processStart, processStartFields } from './procs.mjs';
 
 // Inject the OS reads together so tests can exercise the macOS path on Linux.
-export function createIdentitySource({ platform = process.platform, host = hostname(), readFile = readFileSync, readlink = readlinkSync, run = (command, args, options) => execFileSync(command, args, options), start = pid => processStart(pid, platform, run), probe = pid => process.kill(pid, 0) } = {}) {
+export function createIdentitySource({ platform = process.platform, host = hostname(), readFile = readFileSync, readlink = readlinkSync, run = (command, args, options) => execFileSync(command, args, options), start = pid => processStart(pid, platform, run, true, readFile), probe = pid => process.kill(pid, 0) } = {}) {
   let bootId = null, namespace = null;
   if (platform === 'linux') {
     try { bootId = readFile('/proc/sys/kernel/random/boot_id', 'utf8').trim() || null; } catch {}
