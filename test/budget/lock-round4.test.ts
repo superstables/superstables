@@ -206,3 +206,22 @@ it('hidepid does not weaken a readable verified live holder in the same PID name
   const src = { ...base, probe: () => true };
   expect(inspectProcess({ ...src.record(), pid: 77 }, src)).toEqual({ state: 'alive' });
 });
+
+it('explicit approval recovery refuses the wrong rail and preserves its record lock', () => {
+  const b = box(), id = 'oa-20261006200000-01234567';
+  const path = join(b.home, `budget/approvals/${id}.json.lock`);
+  writeFileSync(path, unknown);
+  writeFileSync(join(b.home, `budget/approvals/${id}.json`), JSON.stringify({ id, rail: 'evm', chain: 'base-sepolia', ...createIdentitySource().record() }));
+  const result = unlock(b.home, ['--rail', 'solana', '--approval', id]);
+  expect(result.status).toBe(5); expect(readFileSync(path, 'utf8')).toBe(unknown);
+});
+
+it('attempt recovery preserves a torn ledger tail and starts its recovery row on a new line', () => {
+  const b = box(), ledger = join(b.home, 'records/attempts.jsonl');
+  const attempt = { id: 'original', state: 'submitting', transaction: 'retained-payment', runner: JSON.parse(unknown) };
+  const before = JSON.stringify(attempt) + '\n{"id":"torn'; writeFileSync(ledger, before);
+  const result = unlock(b.home, ['--attempt', 'original']);
+  expect(result.status, result.stderr).toBe(0);
+  const expected = { id: 'original', state: 'submitting', transaction: 'retained-payment' };
+  expect(readFileSync(ledger, 'utf8')).toBe(before + '\n' + JSON.stringify(expected) + '\n');
+});

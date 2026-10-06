@@ -875,6 +875,8 @@ export async function replacePending(record, byId) {
 /** Owner recovery preserves approvals and submitted-payment evidence. Never fabricates a final RESULT. */
 export function recoverApprovalLocks(rail, chain, options, id) {
   if (!existsSync(approvalsDir())) return true;
+  const selected = id ? readApproval(id) : null;
+  if (selected && (selected.rail !== rail || selected.chain !== chain)) return false;
   const records = readdirSync(approvalsDir()).filter(name => /^oa-.*\.json$/.test(name)).map(name => readApproval(name.slice(0, -5))).filter(record => record?.rail === rail && record.chain === chain);
   const recordChecks = record => {
     if (!record || record.final) return [];
@@ -890,9 +892,13 @@ export function recoverApprovalLocks(rail, chain, options, id) {
     const checks = [inspectLockText(text), ...recordChecks(readApproval(lock?.id))];
     return checks.find(check => check.state === 'alive' && !check.possiblyAlive) ?? checks.find(check => check.state === 'alive') ?? { state: 'dead' };
   };
-  if (id && !clearFileLock(recordLockFile(id), options)) return false;
+  const inspectRecordLock = id => text => {
+    const checks = [inspectLockText(text), ...recordChecks(readApproval(id))];
+    return checks.find(check => check.state === 'alive' && !check.possiblyAlive) ?? checks.find(check => check.state === 'alive') ?? { state: 'dead' };
+  };
+  if (id && !clearFileLock(recordLockFile(id), options, inspectRecordLock(id))) return false;
   for (const record of records) {
-    if (!clearFileLock(recordLockFile(record.id), options)) return false;
+    if (!clearFileLock(recordLockFile(record.id), options, inspectRecordLock(record.id))) return false;
   }
   return clearFileLock(activeFile(rail, chain), options, inspectApproval);
 }
