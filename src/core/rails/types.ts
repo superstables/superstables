@@ -85,7 +85,7 @@ export interface PaymentFacts {
  * the payment could have landed in says how far it got (`searchedToSlot`), for the next search to read on from.
  */
 export type FoundPayment =
-  | { found: true; transaction: string }
+  | { found: true; transaction: string; final?: false }
   | { found: false; reason: string; unreadable?: boolean; never?: boolean; searchedToSlot?: number };
 
 /** What a signed result records on the attempt before anything leaves this machine. */
