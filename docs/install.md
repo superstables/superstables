@@ -20,10 +20,10 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
   wallet cannot sign. Choose [hosted budget approvals](budget.md#approve-on-superstablescom-instead)
   or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 
-These instructions describe **client 0.3.0** and require that release build. Use the released
-commit and skill from [GitHub Releases](https://github.com/superstables/superstables-client/releases)
-when 0.3.0 is published. Client 0.3.0 is distributed through GitHub and the skill zip,
-not the npm registry. The CLI/skill runs on your own machine or server,
+These instructions describe **client 0.3.0** and require that release build. Install it from npm
+as `@superstables/client`, or use the released commit and skill from
+[GitHub Releases](https://github.com/superstables/superstables-client/releases).
+The CLI/skill runs on your own machine or server,
 even with hosted approvals. EVM `recover` still needs a reachable local approval page and the
 agent key on that runtime. Test-token and gas requirements belong to the chosen
 [budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
@@ -40,13 +40,24 @@ has the agent download the skill zip, check its SHA-256 checksum and install it.
 the whole CLI; [The agent skill](#the-agent-skill-with-the-whole-cli-bundled) below installs it by
 hand.
 
-The examples on these pages write the command as `superstables`. A checkout with `npm link` puts
-that command on your PATH. For a git install pinned to a commit, use `npx --no superstables …` in
-the installation folder, as shown below.
+The examples on these pages write the command as `superstables`. Installing from npm with `-g`, or
+a checkout with `npm link`, puts that command on your PATH. For a git install pinned to a commit,
+use `npx --no superstables …` in the installation folder, as shown below.
 
 Don't type `npx superstables` to run the client. Where npx doesn't find this client's command, it
 downloads whatever package the npm registry has under the name `superstables`, which is not this
-client.
+client. The client's package is `@superstables/client`.
+
+### From npm
+
+```bash
+npm install -g @superstables/client@0.3.0
+superstables --version
+```
+
+This installs the `superstables` command, `superstables budget` included. The npm package holds
+the command, not the agent skill: to connect an agent, also install the skill, as described in
+[Set up your agent app](#set-up-your-agent-app).
 
 ### From a checkout
 
@@ -277,7 +288,8 @@ Keep the journals and keys needed for those checks. For stranded EVM USDC, see
 [recovery](budget.md#recovery-and-ending-use); revoke alone does not return it.
 
 Then delete the skill folder if you installed it, and delete `~/.superstables`
-(or your `SUPERSTABLES_HOME`). If you linked a checkout with `npm link`, remove the
+(or your `SUPERSTABLES_HOME`). If you installed from npm, run
+`npm uninstall -g @superstables/client`. If you linked a checkout with `npm link`, remove the
 global link with `npm unlink --global @superstables/client`; this removes the linked command,
 without downloading a package. If you installed from git in a separate installation folder, remove
 that installation after preserving any records you still need.
