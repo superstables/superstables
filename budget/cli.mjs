@@ -529,7 +529,7 @@ Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount i
 while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read.
 next is the command to run next, or none.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
-approval link, the match code (hosted), the amount and chain, the testnet line. The agent sends it and ends its turn.
+approval link, the match code (on superstables.com), the amount and chain, the testnet line. The agent sends it and ends its turn.
 budget_spent: true when buy was refused because the budget cannot cover the purchase (spent, revoked, never granted).
 --json (every command): stdout is only that object, as JSON without the RESULT prefix, like the rest of superstables;
 the APPROVE line goes to stderr with the logs. The fields and exit codes are the same.
@@ -758,7 +758,7 @@ function parse(argv) {
     if (typeof f.fund === "string" && f.rail === "evm" && !(/^\d+(\.\d{1,18})?$/.test(f.fund) && Number(f.fund) > 0 && Number(f.fund) <= 5)) badInput(ctx, `--fund takes an amount of the chain's gas token above 0 and at most 5, or nothing for fund-agent's default (got "${f.fund}")`);
   }
   if (f.hosted) {
-    if (f.agent !== undefined) badInput(ctx, "setup --agent on a hosted chain adds the new key there by itself: drop --hosted");
+    if (f.agent !== undefined) badInput(ctx, "setup --agent on a chain with approvals on superstables.com adds the new key there by itself: drop --hosted");
     if (f["owner-key-file"] !== undefined) badInput(ctx, "--hosted asks the owner on superstables.com; with --owner-key-file there is no owner to ask");
     const site = chosenSite(f.site);
     if (site.error) badInput(ctx, `--site: ${site.error}`);
@@ -1185,8 +1185,8 @@ async function status({ f, ctx }) {
     log(`  Checked the home ${HOME} (${process.env.SUPERSTABLES_HOME?.trim() ? "SUPERSTABLES_HOME" : "SUPERSTABLES_HOME is not set: the default ~/.superstables"}), chain ${f.chain}.`);
     log(`  Looked for: ${gaps.agentKey} and ${gaps.publicFile}.`);
     log(`  ${elsewhere}.`);
-    log(`  The owner sets one up, in this order: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain)}.`);
-    return emit(1, { ...ctx, state: "failed", remaining: null, home: HOME, next: `no budget yet in ${HOME}: the owner runs ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain)}. An agent may start each one and hand the owner the approval link. ${elsewhere}`, reason });
+    log(`  The owner sets one up, in this order: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain, gaps.owner)}.`);
+    return emit(1, { ...ctx, state: "failed", remaining: null, home: HOME, next: `no budget yet in ${HOME}: the owner runs ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain, gaps.owner)}. An agent may start each one and hand the owner the approval link. ${elsewhere}`, reason });
   }
   const owner = recordedOwner(f);
   log(ownerLine(owner));
@@ -1230,7 +1230,7 @@ async function buy({ f, ctx }) {
     const reason = `${noBudgetWords(f, gaps)}. Nothing was signed or paid`;
     log(`superstables budget: refused: ${reason}.`);
     log(`  Looked for: ${gaps.agentKey} and ${gaps.publicFile}.`);
-    return emit(3, { ...ctx, op: f.op, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: `ask the owner to set up a budget: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain)} (an agent may start each one and hand the owner the approval link). Then check with superstables budget status --rail ${f.rail}${chainFlag(f)}`, reason });
+    return emit(3, { ...ctx, op: f.op, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: `ask the owner to set up a budget: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain, gaps.owner)} (an agent may start each one and hand the owner the approval link). Then check with superstables budget status --rail ${f.rail}${chainFlag(f)}`, reason });
   }
   f.op ??= newOp();
   ctx.op = f.op;
