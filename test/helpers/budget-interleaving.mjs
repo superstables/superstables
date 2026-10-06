@@ -32,6 +32,8 @@ if (action === 'reconcile') {
   globalThis.fetch = async (_url, init) => {
     const req = JSON.parse(init.body);
     const result = {
+      getGenesisHash: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+      getEpochInfo: { absoluteSlot: 1000, blockHeight: 1000 },
       getSignatureStatuses: { context: { slot: 1000 }, value: [null] },
       getSignaturesForAddress: [], getBlockHeight: 1000,
       eth_getTransactionReceipt: null, eth_getTransactionByHash: null,

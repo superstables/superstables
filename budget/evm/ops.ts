@@ -418,7 +418,7 @@ export async function authDead(j: Journal, s: Settlement): Promise<boolean> {
  *             by a different transaction while this pull is not on chain
  */
 export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {}): Promise<{ j: Journal; verdict: "settled" | "failed" | "unknown" | "not_found" }> {
-  if (j.state === "settled") return { j, verdict: "settled" };
+  if (j.state === "settled" && j.final !== false) return { j, verdict: "settled" };
   const log = (s: string) => { if (!opts.quiet) console.log(s); };
   const save = (state: OpState, reason: string | undefined, next: string, note: string) => {
     j.state = state; if (state !== "settled") delete j.final; j.reason = reason; j.next = next; j.notes.push(`reconcile: ${note}`); writeJournal(j);

@@ -63,9 +63,10 @@ const emit = (r, code) => {
   process.exit(code);
 };
 
+const alreadyFinal = rec.state === "settled" && rec.final !== false;
 let a;
 try {
-  a = rec.state === "settled" ? { verdict: "settled", tx: rec.tx } : await assessOp(conn, rec);
+  a = alreadyFinal ? { verdict: "settled", tx: rec.tx, final: true } : await assessOp(conn, rec);
 } catch (e) {
   // a failed read is never "not found": the operation stays unknown
   console.log(`Could not read the chain: ${e?.message ?? e}. Do not pay again.`);
@@ -78,14 +79,10 @@ if (a.verdict === "no_tx") {
   console.log("Nothing was signed for this operation, so nothing was paid.");
   emit(result("not_found", { reason: "never signed", delivered: false, next: `nothing was paid; buy again (this --op may be reused)` }), EXIT.OK);
 } else if (a.verdict === "settled") {
-  const movement = rec.state === "settled" ? rec.movement : await readTransfer(conn, a.tx);
+  const movement = alreadyFinal ? rec.movement : await readTransfer(conn, a.tx);
   const debit = movement?.amount ? formatUnits(movement.amount) : (rec.debit ?? rec.amountUsdc ?? "0");
   const moved = movement?.amount && rec.amount && movement.amount !== rec.amount ? ` (journal expected ${rec.amount})` : "";
-<<<<<<< HEAD
-  if (rec.state !== "settled") updateOp(opId, { state: "settled", tx: a.tx, debit, movement }, "reconcile: own transaction succeeded");
-=======
-  updateOp(opId, { state: "settled", final: a.final !== false, inclusionObserved: true, tx: a.tx, debit, movement }, "reconcile: own transaction succeeded");
->>>>>>> 79ca43f (Separate authorization reads and resume finalized Solana recovery)
+  if (!alreadyFinal) updateOp(opId, { state: "settled", final: a.final !== false, inclusionObserved: true, tx: a.tx, debit, movement }, "reconcile: own transaction succeeded");
   console.log(`Settled: our transaction succeeded on chain, debit ${debit} USDC${moved}.`);
   console.log(`Delivered: ${rec.delivered ?? "unknown (the seller's answer was not recorded)"}. A delivery problem never triggers a new payment.`);
   emit(result("settled", { tx: a.tx, debit, final: a.final !== false, next: a.final === false ? `the payment landed, but is not final on chain yet. Run node budget/solana/reconcile.mjs --op ${opId} later.` : rec.delivered === false ? `settled but not delivered: do not pay again; contact the seller with tx ${a.tx}` : "none" }), EXIT.OK);
