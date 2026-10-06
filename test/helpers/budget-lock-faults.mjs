@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import { fork } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { tmpdir } from 'node:os';
+import { tmpdir, hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
@@ -103,7 +103,7 @@ if (process.argv[2] === 'worker') {
         const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
         fs.writeFileSync(file, JSON.stringify({ ...rec, pid: 2147483646, pidStart: null, railPid: holder.p.pid, railPidStart: rec.pidStart }));
       }
-    } else if (scenario === 'stale') fs.writeFileSync(join(home, 'op.lock'), '{"pid":2147483646}');
+    } else if (scenario === 'stale') fs.writeFileSync(join(home, 'op.lock'), JSON.stringify({pid:2147483646, platform:process.platform, hostname:hostname(), bootId:fs.readFileSync('/proc/sys/kernel/random/boot_id','utf8').trim(), namespace:fs.readlinkSync('/proc/self/ns/pid')}));
     return { home, states };
   }
   async function contenders(b) {
@@ -121,7 +121,9 @@ if (process.argv[2] === 'worker') {
   }
   try {
     if (process.argv[2] !== 'pairs') {
-      for (const scenario of ['stale', 'free', 'live', 'rail-child']) {
+      const selected = process.argv.find(arg => arg.startsWith('--scenario='))?.split('=')[1];
+      assert.ok(!selected || ['stale', 'free', 'live', 'rail-child'].includes(selected), 'invalid scenario');
+      for (const scenario of selected ? [selected] : ['stale', 'free', 'live', 'rail-child']) {
         for (const action of scenario === 'stale' || scenario === 'free' ? ['hold', 'release'] : ['hold']) {
           const sample = await box(scenario);
           const discovery = await worker(sample.home, action); sample.states.push(discovery);

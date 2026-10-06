@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readlinkSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -11,6 +11,7 @@ const helper = fileURLToPath(new URL('../helpers/budget-interleaving.mjs', impor
 const children: ChildProcess[] = [];
 const dirs: string[] = [];
 const op = 'same-order';
+const dead = { pid: 2147483647, pidStart: null, platform: process.platform, hostname: hostname(), bootId: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), namespace: readlinkSync('/proc/self/ns/pid') };
 function sandbox(rail: string) {
   const home = mkdtempSync(join(tmpdir(), 'budget-race-'));
   dirs.push(home);
@@ -66,7 +67,7 @@ describe.runIf(process.platform === 'linux')('operation ownership under forced p
   it('dispatcher: recovers an empty breaker left by an interrupted release', async () => {
     const box = sandbox('dispatcher');
     const path = join(box.dir, `${op}.buy.lock`);
-    writeFileSync(path, JSON.stringify({ pid: 2147483647, pidStart: null }));
+    writeFileSync(path, JSON.stringify(dead));
     mkdirSync(`${path}.break`);
     const marker = join(box.home, 'empty-breaker');
     child('dispatcher', 'hold', box, marker);
@@ -83,7 +84,7 @@ describe.runIf(process.platform === 'linux')('operation ownership under forced p
     it(`${rail}: a paused stale-lock breaker cannot displace a live successor`, async () => {
       const box = sandbox(rail);
       const path = join(box.dir, rail === 'solana' ? `${op}.json.lock` : `${op}.buy.lock`);
-      writeFileSync(path, rail === 'solana' ? '2147483647' : JSON.stringify({ pid: 2147483647, pidStart: null }));
+      writeFileSync(path, JSON.stringify(dead));
       const marker = join(box.home, 'first');
       const first = child(rail, 'break', box, marker);
       await untilFile(marker, first);
@@ -129,12 +130,12 @@ describe.runIf(process.platform === 'linux')('operation writers share serializat
         expect(JSON.parse(readFileSync(path, 'utf8')).state).toBe(state);
       }, 90_000);
     }
-    it(`${rail}: a later negative RPC result preserves settled evidence and delivery`, async () => {
+    for (const legacy of rail === 'tempo' ? [false, true] : [false]) it(`${rail}: a later negative RPC result preserves settled evidence and delivery${legacy ? ' for a legacy journal without debit' : ''}`, async () => {
       const box = sandbox(rail);
       const path = join(box.dir, `${op}.json`);
       const tx = `0x${'ab'.repeat(32)}`;
       const rec = { op, rail, kind: 'buy', state: 'settled', history: [], notes: [], path: 'approve',
-        tx, settleTx: tx, settleStatus: 'success', delivered: false, debit: '0.001', signed: true,
+        tx, settleTx: tx, settleStatus: 'success', delivered: false, ...(legacy ? {} : { debit: '0.001' }), signed: true,
         agentSig: 'recorded-agent-signature', lastValidBlockHeight: 1, pullTx: tx, pullNonce: 0,
         memo: `0x${'aa'.repeat(32)}`, startBlock: '1', validBefore: 1,
         createdAt: '2026-10-04T23:59:00Z', owner: `0x${'22'.repeat(20)}`, agent: `0x${'33'.repeat(20)}`,
@@ -151,8 +152,9 @@ describe.runIf(process.platform === 'linux')('operation writers share serializat
       if (!line) throw new Error(`reconcile omitted its RESULT: ${r.stderr}`);
       expect(JSON.parse(line.slice(7))).toMatchObject({ state: 'settled', delivered: false });
       if (rail === 'tempo') expect(JSON.parse(line.slice(7)).debit).toBe('0.001');
+      if (legacy) expect(readFileSync(path, 'utf8')).toBe(JSON.stringify(rec));
       expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ state: 'settled', tx, settleTx: tx,
-        delivered: false, debit: '0.001', createdAt: rec.createdAt });
+        delivered: false, ...(legacy ? {} : { debit: '0.001' }), createdAt: rec.createdAt });
     }, 90_000);
   }
 });
