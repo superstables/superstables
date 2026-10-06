@@ -380,7 +380,16 @@ describe("round 2: Solana complete history and resumable fallback", () => {
     conn.getBlock.mockClear().mockImplementation(async (slot) => ({ blockHeight: slot - 10, transactions: [] }));
     expect((await assessOp(conn, rec, { paceMs: 0 })).verdict).toBe("not_found");
     expect(conn.getBlock.mock.calls[0][0]).toBe(115);
-    expect(conn.getBlock.mock.calls.every(([, options]) => options?.maxSupportedTransactionVersion === 0)).toBe(true);
+    expect(conn.getBlock.mock.calls.every(([, options]) => options?.maxSupportedTransactionVersion === 1)).toBe(true);
+  });
+  it("finishes the fallback when landing blocks contain version 1 transactions", async () => {
+    const conn = scanRpc();
+    conn.getBlock.mockImplementation(async (slot, options) => {
+      if ((options?.maxSupportedTransactionVersion ?? -1) < 1) throw new Error("version 1 transaction unsupported");
+      return { blockHeight: slot - 10, transactions: [{ version: 1, transaction: { signatures: ["unrelated-v1"] } }] };
+    });
+    expect((await assessOp(conn, { ...solRec, feePayer: "sponsor", tx: null }, { paceMs: 0 })).verdict).toBe("not_found");
+    expect(conn.getBlock).toHaveBeenCalledTimes(151);
   });
   it("keeps a removed earlier inclusion unknown even after finalized expiry", async () => {
     expect(await assessOp(solRpc(), { ...solRec, inclusionObserved: true })).toMatchObject({ verdict: "pending", reason: expect.stringContaining("Do not pay again") });

@@ -80,11 +80,13 @@ export function acquireLock(op) {
 // agent's signature for this operation; otherwise it is unrelated and the search goes on.
 // A failed read throws (never "not found"): the caller keeps the outcome unknown.
 const DEVNET_GENESIS = SOLANA_DEVNET_GENESIS;
+// As in the core rail, candidate reads must include version 1 transactions found on devnet.
+const CANDIDATE_VERSION = 1;
 const count = (n) => Number.isSafeInteger(n) && n >= 0;
 const ownFeePayer = (rec) => (typeof rec.agent === "string" && rec.feePayer === rec.agent) || rec.tx === rec.agentSig;
 
 async function matchingTransaction(conn, sig, rec, commitment = "finalized") {
-  const t = await conn.getTransaction(sig, { commitment, maxSupportedTransactionVersion: 0 });
+  const t = await conn.getTransaction(sig, { commitment, maxSupportedTransactionVersion: CANDIDATE_VERSION });
   if (!t || !Array.isArray(t.transaction?.signatures) || t.transaction.signatures[0] !== sig) throw new Error("transaction inclusion unreadable");
   if (!t.transaction.signatures.includes(rec.agentSig)) return null;
   if (!t.meta || t.meta.err === undefined) throw new Error("transaction execution unreadable");
@@ -171,7 +173,7 @@ async function landingWindow(conn, rec, options, progress) {
     await options.pause(options.paceMs);
     let block;
     try {
-      block = await conn.getBlock(window[i], { commitment: "finalized", transactionDetails: "accounts", rewards: false, maxSupportedTransactionVersion: 0 });
+      block = await conn.getBlock(window[i], { commitment: "finalized", transactionDetails: "accounts", rewards: false, maxSupportedTransactionVersion: CANDIDATE_VERSION });
     } catch {
       // Completed slots are already saved. A 429 ends this run instead of starting web3 retry storms.
       return { complete: false };
@@ -254,7 +256,7 @@ export async function refusalIsFinal(conn, rec) {
 // Token movement of a landed transaction: the transferChecked our operation built.
 export async function readTransfer(conn, sig) {
   const t = await retryRead(() =>
-    conn.getParsedTransaction(sig, { commitment: "finalized", maxSupportedTransactionVersion: 0 })
+    conn.getParsedTransaction(sig, { commitment: "finalized", maxSupportedTransactionVersion: CANDIDATE_VERSION })
   ).catch(() => null);
   if (!t) return null;
   const ix = t.transaction.message.instructions.find((i) => i.parsed?.type === "transferChecked");
