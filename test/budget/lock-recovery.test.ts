@@ -1,3 +1,4 @@
+import { stopHolder } from '../helpers/budget-holder-cleanup.mjs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
@@ -164,7 +165,7 @@ it('refreshes the lock inode heartbeat while working and protects a SIGSTOPped l
     writeFileSync(b.path, JSON.stringify({ ...JSON.parse(text), heartbeatAt: old }));
     utimesSync(b.path, old / 1000, old / 1000);
     expect(locks.lockFile(b.path).ok).toBe(false);
-  } finally { p.kill('SIGCONT'); p.kill('SIGKILL'); await new Promise<void>(done => p.once('close', () => done())); }
+  } finally { await stopHolder(p); }
 }, 25_000);
 it('retains the dispatcher lock after a rail-child record write fails until that child exits', async () => {
   const b = box();
@@ -177,7 +178,7 @@ it('retains the dispatcher lock after a rail-child record write fails until that
     const lock = locks.lockFile(b.path);
     expect(lock.ok).toBe(true);
     if (lock.ok) lock.release();
-  } finally { p.kill('SIGKILL'); }
+  } finally { await stopHolder(p); }
 });
 
 it('requires confirmed owner recovery for an unreadable lock file', () => {
