@@ -167,6 +167,8 @@ export interface AttemptTransition {
 /** What ended an `abandoned` attempt. Never the owner: the owner's "no" is `denied`. */
 export type AbandonCause = "stopped" | "wait" | "page_closed";
 
+export type ChainMismatch = "content" | "provisional_execution" | "final_execution";
+
 export interface Attempt {
   id: string;
   quoteId: string;
@@ -252,6 +254,14 @@ export interface Attempt {
   chain?: ChainState;
   /** Why, for mismatch and unchecked. */
   chainReason?: string;
+  /** Inclusion was proven; a later reorg cannot authorize repayment. */
+  paymentIncluded?: true;
+  /** True for final matching inclusion, false for provisional matching inclusion, null when none is established or finality was not observed. */
+  chainFinal?: boolean | null;
+  /** Observed EVM inclusion height, used only to test later final evidence of removal. */
+  paymentBlock?: string;
+  /** Classifies the rejected transaction. Uncertain attempts still recover by their own payment identity. */
+  chainMismatch?: ChainMismatch;
   receiptId?: string;
   history: AttemptTransition[];
 }
@@ -280,6 +290,14 @@ export interface Receipt {
   /** What the chain says about the settlement: see Attempt.chain. Absent on receipts written before it was read. */
   chain?: ChainState;
   chainReason?: string;
+  /** Inclusion was proven; a later reorg cannot authorize repayment. */
+  paymentIncluded?: true;
+  /** True for final matching inclusion, false for provisional matching inclusion, null when none is established or finality was not observed. */
+  chainFinal?: boolean | null;
+  /** Observed EVM inclusion height, used only to test later final evidence of removal. */
+  paymentBlock?: string;
+  /** Classifies the rejected transaction. Uncertain attempts still recover by their own payment identity. */
+  chainMismatch?: ChainMismatch;
   /** Payment success and service success are two different facts. */
   serviceOutcome: ServiceOutcome;
   serviceStatus?: number;

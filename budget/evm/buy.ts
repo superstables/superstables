@@ -16,7 +16,7 @@ import "./cli-guard.mjs";
 import { isAddress } from "viem";
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { OPS_DIR, SYM, oneLine, arg, flag, agentCtx, toUsdc, usdc, usdcBalance, nativeBalance, gasFmt, tx, usageError, posInt, CFG, GAS } from "./lib.ts";
+import { OPS_DIR, SYM, cmd, oneLine, arg, flag, agentCtx, toUsdc, usdc, usdcBalance, nativeBalance, gasFmt, tx, usageError, posInt, CFG, GAS } from "./lib.ts";
 import { purchase, MAX_RESPONSE_BYTES } from "./purchase.ts";
 import { checkOpId, newOpId, resultLine, type ResponseInfo } from "./ops.ts";
 import { refusedChainWords } from "../next-steps.mjs";
@@ -60,7 +60,7 @@ else if (j.state === "quoted") console.log("QUOTE OK. Nothing was signed or sent
 else if (j.state === "refused_chain") console.log(refusedChainWords(j.pullTx).line);
 else if (j.state === "refused_precheck") console.log("PURCHASE REFUSED. Nothing was paid.");
 else if (j.state === "failed" && j.returned) console.log(`PURCHASE DID NOT SETTLE. The pulled ${j.returned} ${SYM} was returned to the owner. Never re-paid.`);
-else console.log("PURCHASE OUTCOME NOT CONFIRMED (or it failed). Not retrying. Read the RESULT line, then reconcile.ts.");
+else console.log(`PURCHASE OUTCOME NOT CONFIRMED (or it failed). Not retrying. Read the RESULT line, then run ${cmd("reconcile.ts", `--op ${j.op}`)}.`);
 if (j.next && j.next !== "none") console.log(`next: ${oneLine(j.next, 1000)}`);
 
 // What was bought: the seller's answer to the paid request, saved as bytes next to the journal (mode 600), named after the op

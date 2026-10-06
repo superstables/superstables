@@ -61,7 +61,7 @@ describe("checkSettlement", () => {
   });
 
   it("leaves it unchecked when the chain does not show the transaction yet", async () => {
-    expect(await withReceipt(undefined)).toEqual({ chain: "unchecked", reason: "the chain does not show the transaction yet" });
+    expect(await withReceipt(undefined)).toEqual({ chain: "unchecked", missing: true, reason: "the chain does not show the transaction yet" });
   });
 
   it("leaves it unchecked when the RPC is down or does not answer", async () => {

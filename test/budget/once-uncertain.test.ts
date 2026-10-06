@@ -94,7 +94,7 @@ const ROWS: Row[] = [
     name: "settled, chain not confirmed",
     final: false,
     withHash: true,
-    reason: /^the seller reports it paid; the chain has not confirmed the payment yet \(transaction /,
+    reason: /says paid, but this purchase has no payment identity or payer to verify$/,
     view: (id, hash, payer) => ({ id, state: "settled", final: false, payment: { status: "paid", transaction: hash, payer }, delivery: { status: "delivered", http_status: 200 }, next_action: { type: "wait_for_chain" } }),
   },
   {
@@ -199,7 +199,7 @@ describe("buy once: an outcome that is not established is unknown, on every rail
     process.env.B4_RPC = rpc;
     let reads = 0;
     // the first read is uncertain (the read-on starts); the next is final and says paid, with a transaction to check
-    answer = () => (++reads === 1 ? ROWS[0].view(id, EVM_HASH, PAYER) : { id, state: "settled", final: true, payment: { status: "paid", transaction: EVM_HASH, payer: PAYER }, delivery: { status: "delivered", http_status: 200, result: { ok: true } } });
+    answer = () => (++reads === 1 ? ROWS[0].view(id, EVM_HASH, PAYER) : { id, state: "settled", final: true, payment: { status: "paid", transaction: EVM_HASH, payer: PAYER, authorization: { nonce: `0x${"9a".repeat(32)}` } }, delivery: { status: "delivered", http_status: 200, result: { ok: true } } });
     try {
       const grace = 2_000;
       const t = Date.now();
@@ -266,7 +266,7 @@ describe("buy once, as the CLI: wait and the next buy-once never say waiting for
       site.readAnswer = (p) => ({ status: 200, body: row.view(p.id, rail.hash, rail.payer) });
       const w = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
       expect(w.code, w.stderr).toBe(5);
-      expect(w.result).toMatchObject({ state: "unknown", paid: null, final: !row.final ? false : true });
+      expect(w.result).toMatchObject({ state: "unknown", paid: null, final: row.final });
       expect(w.result.reason).toMatch(row.reason);
       clean(w.stdout + w.stderr, "wait");
       const next = await buyOnce(rail);

@@ -1,5 +1,9 @@
 # Quotes, attempts and receipts
 
+For `pay` and `status`, `final` keeps its 0.3.0 meaning: the attempt's running workflow has ended, including `uncertain`. It does not prove payment or stop read-only recovery. `chain: verified` means a matching payment was read on chain. `chain_final` separately reports `true` after finality, `false` for matching provisional inclusion, or `null` when no current matching inclusion is established. Read `status` again when finality is pending or the outcome is uncertain. The SDK exposes the same finality as `Attempt.chainFinal` and `Receipt.chainFinal`; its `chain` field also keeps the matching-inclusion meaning. See [SDK payment records](sdk.md) for the 0.3.0 to 0.3.1 field audit and legacy record handling.
+
+`budget` keeps the 0.3.0 command-completion meaning of `final`. It is `false` while an owner approval is open or a buy-once `unknown` can still be read by `wait`, and `true` otherwise. `chain_final` describes the current matching payment separately: `true` after chain finality, `false` while included but not final, and `null` when no current matching inclusion is established, including an unknown after removal. A provisional paid purchase is `settled`, with `final: true`, `chain_final: false`, and exit 0 when delivered or exit 4 when not delivered. Check finality later with `reconcile` or `wait`; never pay again for that purchase. Owner-command transactions are not seller payments and have `chain_final: null`. Older stored results without finality evidence also have `chain_final: null`.
+
 The client records quotes, payment attempts, approval decisions and receipts on this machine. They
 are what you read to find out how a payment ended, including when its outcome is uncertain.
 
@@ -259,6 +263,8 @@ not yet hashed (`pending`, and `transactionUrl` is empty). The receipt says whic
 pretending to a hash it does not have.
 
 ## What the daily cap counts
+
+A matching included payment counts once, on its receipt's paid day, even while finality is pending or unreadable. This includes 0.3.0 `verified` records. An earlier inclusion that was positively removed stays uncertain and holds its amount across days until a matching payment is found again.
 
 `caps.per_day` is checked against the records in this directory, per asset and UTC day. A payment
 counts on the day it ended, and on every day while it can still move money (signed or sent and not

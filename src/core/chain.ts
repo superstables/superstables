@@ -6,6 +6,7 @@
 // The six EVM chains are the budget's (budget/evm/chains.mjs, its own program with its own build); a test checks that
 // this table agrees with that one field by field.
 
+import { finalityFor, SOLANA_DEVNET_GENESIS } from "./finality-policy.js";
 import { createPublicClient, http } from "viem";
 import type { PaymentRequirements } from "@x402/core/types";
 
@@ -92,7 +93,6 @@ function evm(input: {
   nativeCurrency: { name: string; symbol: string; decimals: number };
   blockSeconds: number;
   logRange?: number;
-  finality?: "finalized" | "instant";
 }): EvmNetwork {
   return {
     rail: "evm",
@@ -111,7 +111,7 @@ function evm(input: {
     wallet: { chainName: input.chainName, nativeCurrency: input.nativeCurrency },
     blockSeconds: input.blockSeconds,
     logRange: input.logRange ?? 1_000,
-    finality: input.finality ?? "finalized",
+    finality: finalityFor("evm", input.key),
   };
 }
 
@@ -188,7 +188,6 @@ export const SKALE_BASE_SEPOLIA: EvmNetwork = evm({
   blockSeconds: 1,
   logRange: 2_000,
   // SKALE chains have instant (BFT) finality, and their RPC answers the `finalized` tag with INVALID_PARAMS.
-  finality: "instant",
 });
 
 export const ETHEREUM_SEPOLIA: EvmNetwork = evm({
@@ -245,7 +244,7 @@ export const SOLANA_DEVNET: SolanaNetwork = {
   defaultRpc: "https://api.devnet.solana.com",
   // The same variable the budget's solana rail reads.
   rpcEnv: "SUPERSTABLES_SOLANA_RPC",
-  genesisHash: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  genesisHash: SOLANA_DEVNET_GENESIS,
   token: { symbol: "USDC", address: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", decimals: 6 },
   wallet: { chainName: "Solana devnet", nativeCurrency: { name: "SOL", symbol: "SOL", decimals: 9 }, walletChain: "solana:devnet" },
 };

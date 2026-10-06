@@ -1,3 +1,5 @@
+import { finalityFor } from "../finality-policy.js";
+import { inclusion } from "../finality.js";
 // The MPP tempo.charge rail on Tempo Moderato, push mode: the owner's own wallet sends one pathUSD transferWithMemo,
 // with the memo bound to the seller's challenge, and the seller is then shown the transaction's hash. Pinned in code:
 // Tempo Moderato and its pathUSD. A challenge that asks for anything else is refused before the owner is asked: another
@@ -133,6 +135,7 @@ const same = (a: unknown, b: string) => typeof a === "string" && a.toLowerCase()
 const isHash = (value: unknown): value is string => typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
 
 interface RpcLog {
+  removed?: boolean;
   address?: string;
   topics?: string[];
   data?: string;
@@ -169,17 +172,21 @@ async function checkTempoPayment(facts: PaymentFacts, options: ChainReadOptions)
   }
   const rpc = rpcOf(options);
   if ("error" in rpc) return { chain: "unchecked", reason: `the chain was not read: ${rpc.error}` };
-  let receipt: { status?: string; transactionHash?: string; blockNumber?: string; logs?: RpcLog[] } | null;
+  let receipt: { status?: string; transactionHash?: string; blockNumber?: string; blockHash?: string; logs?: RpcLog[] } | null;
   try {
     receipt = await rpcCall(rpc.url, "eth_getTransactionReceipt", [facts.transaction], options);
   } catch {
     return { chain: "unchecked", reason: "the chain could not be read: the RPC did not give a usable answer" };
   }
-  if (!receipt) return { chain: "unchecked", reason: "the chain does not show the transaction yet" };
+  if (!receipt) return { chain: "unchecked", missing: true, reason: "the chain does not show the transaction yet" };
   if (!isHash(receipt.transactionHash) || receipt.transactionHash.toLowerCase() !== facts.transaction.toLowerCase()) {
     return { chain: "unchecked", reason: "the chain could not be read: the RPC answered with a receipt for another transaction" };
   }
-  if (receipt.status !== "0x1") return { chain: "mismatch", reason: "the transaction failed on chain" };
+  // Tempo Moderato uses committed BFT blocks with instant finality, but still requires canonical inclusion.
+  const proof = await inclusion(rpc.url, receipt, finalityFor("tempo", "moderato"), options);
+  if (proof === "removed") return { chain: "unchecked", missing: true, removed: true, reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." };
+  if (proof === "unread") return { chain: "unchecked", reason: "the transaction has not reached a final block on chain" };
+  if (receipt.status !== "0x1") return { chain: "mismatch", mismatchKind: proof === "final" ? "final_execution" : "provisional_execution", reason: "the transaction failed on chain" };
   // Mined before the wallet was asked to send: an older transfer, whatever it shows, is not this payment.
   const boundary = /^\d+$/.test(facts.searchFromBlock ?? "") ? BigInt(facts.searchFromBlock!) : undefined;
   const block = blockOf(receipt.blockNumber);
@@ -192,7 +199,7 @@ async function checkTempoPayment(facts: PaymentFacts, options: ChainReadOptions)
   if (!logs.some((log) => showsPayment(log, facts))) {
     return { chain: "mismatch", reason: "the transaction does not carry this payment: its payer, amount, recipient, token or memo differ" };
   }
-  return { chain: "verified" };
+  return proof === "final" ? { chain: "verified" } : { chain: "unchecked", included: true, reason: "the payment landed, but is not final on chain yet" };
 }
 
 /** Tempo Moderato's blocks are well under a second apart; the search errs on the side of more blocks. */
@@ -231,11 +238,11 @@ async function findTempoPayment(facts: PaymentFacts, options: ChainReadOptions):
     if (isHash(facts.transaction) && !attributed.has(facts.transaction.toLowerCase())) {
       // checkTempoPayment holds the transaction to the block the wallet was asked after, when that was recorded.
       const byHash = await checkTempoPayment(facts, options);
-      const receipt = byHash.chain === "verified" && boundary === undefined
+      const receipt = (byHash.chain === "verified" || byHash.included) && boundary === undefined
         ? await rpcCall<{ blockNumber?: string } | null>(rpc.url, "eth_getTransactionReceipt", [facts.transaction], options)
         : undefined;
-      if (byHash.chain === "verified" && (boundary !== undefined || (await after(blockOf(receipt?.blockNumber))))) {
-        return { found: true, transaction: facts.transaction };
+      if ((byHash.chain === "verified" || byHash.included) && (boundary !== undefined || (await after(blockOf(receipt?.blockNumber))))) {
+        return { found: true, transaction: facts.transaction, ...(byHash.included ? { final: false } : {}) };
       }
     }
     const latest = await rpcCall<{ number?: string; timestamp?: string } | null>(rpc.url, "eth_getBlockByNumber", ["latest", false], options);
@@ -269,7 +276,7 @@ async function findTempoPayment(facts: PaymentFacts, options: ChainReadOptions):
         if (!(await after(blockOf(log.blockNumber)))) continue;
         // The log is the chain's own answer to a search by memo; the receipt is read again to be sure it succeeded.
         const check = await checkTempoPayment({ ...facts, transaction: log.transactionHash }, options);
-        if (check.chain === "verified") return { found: true, transaction: log.transactionHash };
+        if (check.chain === "verified" || check.included) return { found: true, transaction: log.transactionHash, ...(check.included ? { final: false } : {}) };
       }
       from = to + 1n;
     }

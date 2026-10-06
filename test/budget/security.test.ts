@@ -11,6 +11,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const REPO = join(import.meta.dirname, "..", "..");
 const CLI = join(REPO, "budget", "cli.mjs");
+const { createIdentitySource } = await import('../../budget/lock-identity.mjs');
+const identityProcs = await import('../../budget/procs.mjs');
+const identitySource = createIdentitySource({
+  start: pid => identityProcs.processStart(pid) ?? (identityProcs.pidAlive(pid) ? `test:${pid}` : null),
+});
+const hostIdentity = identitySource.record();
 const PROCESS_START = process.platform === "linux" || process.platform === "darwin";
 
 type Procs = typeof import("../../budget/procs.mjs");
@@ -204,22 +210,22 @@ describe("one buy per operation at a time", () => {
     const running = sleeper();
     mkdirSync(opsDir(), { recursive: true });
     // the first buy's lock, as it holds it: its own pid with that process's start
-    writeFileSync(join(opsDir(), "same-op.buy.lock"), JSON.stringify({ pid: running.pid, pidStart: procs.processStart(running.pid!) ?? null, createdAt: Date.now() }));
+    writeFileSync(join(opsDir(), "same-op.buy.lock"), JSON.stringify({ ...hostIdentity, pid: running.pid, ...identitySource.starts(running.pid!), createdAt: Date.now() }));
     // no seller listens here: a buy that got past the lock would fail on the network, not be refused
     const r = await budget(["buy", "--rail", "evm", "--url", "http://127.0.0.1:9/paid", "--max", "0.01", "--op", "same-op"]);
     expect(r.code).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck", reason: "op_in_progress", paid: null, op: "same-op" });
     expect(r.result.next).toContain("wait for its RESULT");
-    expect(r.stderr).toContain(`another buy with operation same-op is running (pid ${running.pid})`);
+    expect(r.stderr).toContain(`another process (buy or reconcile) is working on operation same-op`);
     expect(existsSync(join(opsDir(), "same-op.json"))).toBe(false);
     running.kill("SIGKILL");
   });
 
   it("takes the lock exclusively, keeps it while the rail script runs, and takes over a stale one", () => {
     const dir = join(home, "locks");
-    const first = guard.lockOp(dir, "op-1");
+    const first = guard.lockOp(dir, "op-1", { identitySource });
     expect(first.ok).toBe(true);
-    const second = guard.lockOp(dir, "op-1");
+    const second = guard.lockOp(dir, "op-1", { identitySource });
     expect(second).toMatchObject({ ok: false, holder: process.pid });
     if (!first.ok) throw new Error("unreachable");
     first.release();
@@ -227,22 +233,57 @@ describe("one buy per operation at a time", () => {
 
     // the command was killed, but the rail script it started still runs: still held
     const rail = sleeper();
-    writeFileSync(guard.opLockFile(dir, "op-2"), JSON.stringify({ pid: deadPid(), pidStart: null, railPid: rail.pid, railPidStart: procs.processStart(rail.pid!) ?? null, createdAt: Date.now() }));
-    expect(guard.lockOp(dir, "op-2").ok).toBe(false);
+    const dispatcherPid = deadPid();
+    const railStarts = identitySource.starts(rail.pid!);
+    writeFileSync(guard.opLockFile(dir, "op-2"), JSON.stringify({ ...hostIdentity, pid: dispatcherPid, ...identitySource.starts(dispatcherPid), railPid: rail.pid, railPidStart: railStarts.pidStart, railPidStartUtc: railStarts.pidStartUtc, createdAt: Date.now() }));
+    expect(guard.lockOp(dir, "op-2", { identitySource }).ok).toBe(false);
     rail.kill("SIGKILL");
 
     // its process is gone: stale, taken over
-    writeFileSync(guard.opLockFile(dir, "op-3"), JSON.stringify({ pid: deadPid(), pidStart: null, createdAt: Date.now() }));
-    const taken = guard.lockOp(dir, "op-3");
+    const gone = deadPid();
+    writeFileSync(guard.opLockFile(dir, "op-3"), JSON.stringify({ ...hostIdentity, pid: gone, ...identitySource.starts(gone), createdAt: Date.now() }));
+    const taken = guard.lockOp(dir, "op-3", { identitySource });
     expect(taken.ok).toBe(true);
     if (taken.ok) taken.release();
   });
 
-  it.runIf(PROCESS_START)("treats a lock whose pid now names another process as stale", () => {
+  it("reconcile shares the dispatcher's buy lock and keeps its outcome unknown while busy", async () => {
+    const dir = opsDir();
+    const op = 'reconcile-busy';
+    mkdirSync(dir, { recursive: true });
+    const record = JSON.stringify({ op, path: 'approve', state: 'submitted', signed: true });
+    writeFileSync(join(dir, `${op}.json`), record);
+    const lock = guard.lockOp(dir, op);
+    expect(lock.ok).toBe(true);
+    try {
+      const r = await budget(['reconcile', '--rail', 'evm', '--op', op]);
+      expect(r.code).toBe(5);
+      expect(r.result).toMatchObject({ state: 'unknown', paid: null, reason: 'op_in_progress' });
+      expect(readFileSync(join(dir, `${op}.json`), 'utf8')).toBe(record);
+    } finally { if (lock.ok) lock.release(); }
+  });
+
+  it("release retains the operation lock until its recorded rail process exits", async () => {
+    const dir = join(home, 'locks');
+    const rail = sleeper();
+    const lock = guard.lockOp(dir, 'live-rail-release', { identitySource });
+    if (!lock.ok) throw new Error('lock was unexpectedly busy');
+    lock.holdAlso(rail.pid);
+    lock.release();
+    expect(existsSync(guard.opLockFile(dir, 'live-rail-release'))).toBe(true);
+    expect(guard.lockOp(dir, 'live-rail-release', { identitySource }).ok).toBe(false);
+    const exited = new Promise<void>(resolve => rail.once('exit', () => resolve()));
+    rail.kill('SIGKILL');
+    await exited;
+    lock.release();
+    expect(existsSync(guard.opLockFile(dir, 'live-rail-release'))).toBe(false);
+  });
+
+  it("treats a lock whose pid now names another process as stale", () => {
     const dir = join(home, "locks");
     // this test's own pid, recorded with another start: the number was reused
-    writeFileSync(guard.opLockFile(dir, "op-4"), JSON.stringify({ pid: process.pid, pidStart: "linux:another-boot:1", createdAt: Date.now() }));
-    const taken = guard.lockOp(dir, "op-4");
+    writeFileSync(guard.opLockFile(dir, "op-4"), JSON.stringify({ ...hostIdentity, pid: process.pid, pidStart: "linux:another-start:1", ...(typeof hostIdentity.pidStartUtc === "number" ? { pidStartUtc: hostIdentity.pidStartUtc + 1 } : {}), createdAt: Date.now() }));
+    const taken = guard.lockOp(dir, "op-4", { identitySource });
     expect(taken.ok).toBe(true);
     if (taken.ok) taken.release();
   });
@@ -296,10 +337,13 @@ describe.runIf(PROCESS_START)("a recorded pid is believed only with its process'
 });
 
 describe("a Solana payment the chain refuses today", () => {
-  const rec = { agentSig: "our-agent-sig", agent: "11111111111111111111111111111111", lastValidBlockHeight: 1000, submittedAt: new Date().toISOString() };
+  const rec = { agentSig: "our-agent-sig", tx: "our-agent-sig", agent: "11111111111111111111111111111111", lastValidBlockHeight: 1000, submittedAt: new Date().toISOString() };
   const conn = (height: number, over: Record<string, unknown> = {}) => ({
+    getGenesisHash: async () => "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+    getEpochInfo: async () => ({ blockHeight: height, absoluteSlot: height }),
+    getFirstAvailableBlock: async () => 0,
     getBlockHeight: async () => height,
-    getSignatureStatuses: async (sigs: string[]) => ({ value: sigs.map(() => null) }),
+    getSignatureStatuses: async (sigs: string[]) => ({ context: { slot: height }, value: sigs.map(() => null) }),
     getSignaturesForAddress: async () => [],
     getTransaction: async () => null,
     ...over,
@@ -309,11 +353,12 @@ describe("a Solana payment the chain refuses today", () => {
     const { refusalIsFinal } = await import("../../budget/solana/ops.mjs");
     // still valid: the seller could submit it after a new grant or deposit
     expect(await refusalIsFinal(conn(990), rec)).toBe(false);
-    expect(await refusalIsFinal(conn(1010), rec)).toBe(false); // within the margin
+    expect(await refusalIsFinal(conn(1000), rec)).toBe(false); // finalized expiry has not passed
+    expect(await refusalIsFinal(conn(1010), rec)).toBe(true); // finalized expiry and complete direct history
     expect(await refusalIsFinal(conn(2000), rec)).toBe(true);
     // a read that fails is never an answer
     expect(await refusalIsFinal(conn(2000, { getSignatureStatuses: async () => { throw new Error("fetch failed"); } }), rec)).toBe(false);
-    expect(await refusalIsFinal(conn(2000, { getBlockHeight: async () => { throw new Error("fetch failed"); } }), rec)).toBe(false);
+    expect(await refusalIsFinal(conn(2000, { getEpochInfo: async () => { throw new Error("fetch failed"); } }), rec)).toBe(false);
     expect(await refusalIsFinal(conn(2000), { ...rec, lastValidBlockHeight: undefined })).toBe(false);
   });
 });

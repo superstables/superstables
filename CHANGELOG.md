@@ -7,6 +7,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - Safer payment recovery
+
+This release makes budget payments and single purchases on superstables.com safer to recover. Agents arriving from superstables.com's setup page are directed to approval there.
+
+Testnet only.
+
+Stop every 0.3.0 client process before upgrading, including agents, servers and approval processes.
+
+On Linux, run commands sharing a client home either inside the same sandbox or outside it. Mixing the two can exceed the daily cap or misreport an approval as "abandoned"; do not pay again on that status alone. To clear a lock, the owner must first stop every process working on that operation, then run `superstables budget unlock --confirm` in their own terminal, outside any agent's sandbox.
+
+- For scripts: the additive `chain_final` CLI and `chainFinal` SDK fields report chain finality. `final` and `verified` keep their 0.3.0 meanings. An included payment with provisional or legacy evidence can become uncertain again after a reorg; treat uncertain as "don't pay again". Established final proof stays final.
+
+The installation docs cover `npm install -g @superstables/client`.
+
+For cap accounting, chain evidence rules and recovery commands, see [`budget/CLI.md`](https://github.com/superstables/superstables/blob/v0.3.1/budget/CLI.md).
+
+
 ## [0.3.0] - Agent budgets and single purchases
 
 Give an agent a budget to buy compatible services without approving each purchase. Approve the budget in your wallet, and revoke it by signing a transaction.

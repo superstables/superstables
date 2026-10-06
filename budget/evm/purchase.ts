@@ -12,6 +12,7 @@
 //   5. The settlement is read back from the chain (the operation's own authorization nonce), not from the seller.
 //   6. If the pull landed and the payment did not settle: never re-pay. Cancel the open authorization on chain, then
 //      return the price to the owner (USDC.transfer), after a fresh chain read. See ops.ts makeSafe.
+import { requireRecordLock } from "../op-lock.mjs";
 import { encodeFunctionData, isAddress, parseUnits, type Address } from "viem";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
@@ -19,7 +20,7 @@ import { ExactEvmScheme } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import { refusedChainWords } from "../next-steps.mjs";
 import {
-  SYM, oneLine,
+  OPS_DIR, SYM, oneLine,
   sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, chainReason, publicClient, sleep,
   agentGas, gasWords, fundAgentNext, GasShort, ChainRefused,
   type AgentCtx, type Wallet, type GasNeed, type GasOp,
@@ -135,6 +136,12 @@ const gasStop = (g: GasNeed) =>
 export { exitCodeFor };
 
 export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
+  const lock = requireRecordLock(OPS_DIR, o.op);
+  try { return await purchaseLocked(o); }
+  finally { lock.release(); }
+}
+
+async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
   const { c, url, max } = o;
   // one line per call: reasons can quote the seller's 402 (asset, payTo, domain name)
   const log = (s: string) => console.log(oneLine(o.tag ? `[${o.tag}] ${s}` : s, 2000));
@@ -325,7 +332,8 @@ export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
         throw new Stop("chain", `REFUSED ON CHAIN at the pull: ${why}`);
       }
       // The pull is only good if the chain shows exactly the price leaving the owner.
-      const seen = await readPull(j);
+      // A provisional canonical pull can fund the original payment; permanent conclusions wait for reconcile finality.
+      const seen = await readPull(j, { final: false });
       if (!seen.found || seen.moved !== price) {
         throw (stop = new Stop("reconciled", `the pull landed but the chain shows ${seen.found ? usdc(seen.moved ?? 0n) : "no"} ${SYM} moving from the owner instead of ${usdc(price)}; not paying`));
       }

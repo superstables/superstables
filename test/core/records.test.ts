@@ -358,7 +358,7 @@ describe("Records", () => {
       const r = records();
       const t = { ...terms(0.01), network };
       r.saveAttempt({ id: "a", quoteId: "q", createdAt: at, updatedAt: at, state, url: "https://seller.example/x", terms: t, receiptId: "a", chain, history: [{ at, state: "approved" }, { at, state }], ...extra });
-      r.saveReceipt({ ...receipt("a", at, 0.01), terms: t, network, chain });
+      r.saveReceipt({ ...receipt("a", at, 0.01), terms: t, network, chain, chainFinal: extra.chainFinal ?? null });
       return [r.spentToday("USDC", new Date(at)), r.spentToday("USDC", nextDay), r.spentToday("USDC", later)];
     };
     // A seller's success with nothing the chain confirms, at 23:59:30: the EVM authorization is good until 00:04:30.
@@ -367,14 +367,14 @@ describe("Records", () => {
     expect(counts("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1", { lastValidBlockHeight: 1000 }, "unchecked")).toEqual([0.01, 0.01, 0.01]);
     // Contradicted (the seller named another transaction), and uncertain: the same.
     expect(counts("eip155:84532", { authorizationValidBefore: "2026-03-05T00:04:30.000Z" }, "mismatch", "uncertain")).toEqual([0.01, 0.01, 0]);
-    // Confirmed, or shown never paid: as before, the receipt's day only, or nowhere.
-    expect(counts("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1", { lastValidBlockHeight: 1000 }, "verified")).toEqual([0.01, 0, 0]);
+    // Final matching evidence, or shown never paid: as before, the receipt's day only, or nowhere.
+    expect(counts("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1", { lastValidBlockHeight: 1000, chainFinal: true }, "verified")).toEqual([0.01, 0, 0]);
     expect(counts("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1", { lastValidBlockHeight: 1000 }, "unpaid", "failed")).toEqual([0, 0, 0]);
-    // An attempt the chain verified is resolved, even when a stale receipt line says the chain has not confirmed it.
+    // An attempt with final chain evidence is resolved, even when a stale receipt line says the chain has not confirmed it.
     const stale = (() => {
       const r = records();
       const t = { ...terms(0.01), network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1" };
-      r.saveAttempt({ id: "a", quoteId: "q", createdAt: at, updatedAt: at, state: "settled", url: "https://seller.example/x", terms: t, receiptId: "a", chain: "verified", lastValidBlockHeight: 1000, history: [{ at, state: "settled" }] });
+      r.saveAttempt({ id: "a", quoteId: "q", createdAt: at, updatedAt: at, state: "settled", url: "https://seller.example/x", terms: t, receiptId: "a", chain: "verified", chainFinal: true, lastValidBlockHeight: 1000, history: [{ at, state: "settled" }] });
       r.saveReceipt({ ...receipt("a", at, 0.01), terms: t, chain: "unchecked" });
       return [r.spentToday("USDC", new Date(at)), r.spentToday("USDC", nextDay), r.spentToday("USDC", later)];
     })();
