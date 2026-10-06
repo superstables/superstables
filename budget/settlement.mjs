@@ -9,6 +9,7 @@
 // On every network the transaction must be mined after the purchase was created (less a minute for clock skew), so an older
 // payment to the same recipient does not count. The RPC is the rail's, or its replacement (B4_RPC, SUPERSTABLES_TEMPO_RPC,
 // SUPERSTABLES_SOLANA_RPC; https or this computer only).
+import { finalityFor } from "../src/core/finality-policy.js";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { DEFAULT_RPC, jsonRpc, rpcFromEnv } from "./rpc.mjs";
 
@@ -40,7 +41,7 @@ export async function readSettlement({ rail, chain, tx, payer, payTo, asset, amo
     return jsonRpc(url, method, params, left);
   };
   try {
-    return rail === "solana" ? await solanaSettlement({ rpc, tx, payer, payTo, asset, amount, notBefore }) : await evmSettlement({ rpc, tx, payer, payTo, asset, amount, notBefore });
+    return rail === "solana" ? await solanaSettlement({ rpc, tx, payer, payTo, asset, amount, notBefore }) : await evmSettlement({ rpc, rail, chain, tx, payer, payTo, asset, amount, notBefore });
   } catch (e) {
     // a call cut short by the deadline is said as such, not as an RPC error
     if (deadline !== undefined && Date.now() >= deadline - 50) return { state: "unread", reason: "the chain did not answer before this command's deadline" };
@@ -51,9 +52,17 @@ export async function readSettlement({ rail, chain, tx, payer, payTo, asset, amo
 /** How long one RPC call may take when no deadline is closer (rpc.mjs's own default). */
 const RPC_TIMEOUT_MS = 15_000;
 
-async function evmSettlement({ rpc, tx, payer, payTo, asset, amount, notBefore }) {
+async function evmSettlement({ rpc, rail, chain, tx, payer, payTo, asset, amount, notBefore }) {
   const receipt = await rpc("eth_getTransactionReceipt", [tx]);
   if (!receipt) return { state: "unread", reason: `the chain does not show transaction ${tx} (yet)` };
+  // Only the pinned Tempo and SKALE configurations use committed blocks with instant BFT finality.
+  const tag = finalityFor(rail, chain) === "instant" ? "latest" : "finalized";
+  const final = await rpc("eth_getBlockByNumber", [tag, false]).catch(() => null);
+  const hexNumber = (n) => typeof n === "string" && /^0x[0-9a-fA-F]+$/.test(n);
+  const hash = (h) => typeof h === "string" && /^0x[0-9a-fA-F]{64}$/.test(h);
+  if (!hexNumber(receipt.blockNumber) || !hash(receipt.blockHash) || receipt.logs?.some((l) => l.removed)) return { state: "unread", reason: `transaction ${tx} has no usable block inclusion` };
+  const block = await rpc("eth_getBlockByNumber", [receipt.blockNumber, false]);
+  if (!hexNumber(block?.number) || BigInt(block.number) !== BigInt(receipt.blockNumber) || !hash(block?.hash) || block.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) return { state: "unread", reason: `the canonical block of transaction ${tx} could not be verified` };
   if (receipt.status !== "0x1") return { state: "mismatch", reason: `transaction ${tx} failed on chain` };
   const logs = Array.isArray(receipt.logs) ? receipt.logs : [];
   const paid = logs.find((l) =>
@@ -63,17 +72,21 @@ async function evmSettlement({ rpc, tx, payer, payTo, asset, amount, notBefore }
     (!payer || topicAddress(l.topics[1]) === payer.toLowerCase()) &&
     (() => { try { return BigInt(l.data) === amount; } catch { return false; } })());
   if (!paid) return { state: "mismatch", reason: `transaction ${tx} has no transfer of exactly ${amount} base units of ${asset} ${payer ? `from ${payer} ` : ""}to ${payTo}` };
-  const block = await rpc("eth_getBlockByNumber", [receipt.blockNumber, false]);
   const at = block?.timestamp ? Number(BigInt(block.timestamp)) : null;
   if (at === null) return { state: "unread", reason: `the block of transaction ${tx} could not be read` };
   if (at < notBefore - SKEW_S) return { state: "mismatch", reason: `transaction ${tx} was mined before this purchase was created` };
-  return { state: "settled" };
+  return hexNumber(final?.number) && BigInt(receipt.blockNumber) <= BigInt(final.number)
+    ? { state: "settled" }
+    : { state: "included", reason: "the payment landed, but is not final on chain yet" };
 }
 
 async function solanaSettlement({ rpc, tx, payer, payTo, asset, amount, notBefore }) {
-  const t = await rpc("getTransaction", [tx, { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 }]);
+  let t = await rpc("getTransaction", [tx, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }]);
+  const final = Boolean(t);
+  if (!t) t = await rpc("getTransaction", [tx, { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 }]);
   if (!t) return { state: "unread", reason: `the chain does not show transaction ${tx} (yet)` };
-  if (t.meta?.err) return { state: "mismatch", reason: `transaction ${tx} failed on chain` };
+  if (!t.meta || t.meta.err === undefined) return { state: "unread", reason: "transaction execution could not be read" };
+  if (t.meta.err) return { state: "mismatch", reason: `transaction ${tx} failed on chain` };
   const balances = (list) => new Map((Array.isArray(list) ? list : []).filter((b) => b && b.mint === asset).map((b) => [b.owner, BigInt(b.uiTokenAmount?.amount ?? "0")]));
   const pre = balances(t.meta?.preTokenBalances);
   const post = balances(t.meta?.postTokenBalances);
@@ -82,5 +95,5 @@ async function solanaSettlement({ rpc, tx, payer, payTo, asset, amount, notBefor
   if (payer && delta(payer) !== -amount) return { state: "mismatch", reason: `transaction ${tx} did not take ${amount} base units of ${asset} from ${payer}` };
   if (typeof t.blockTime !== "number") return { state: "unread", reason: `the time of transaction ${tx} could not be read` };
   if (t.blockTime < notBefore - SKEW_S) return { state: "mismatch", reason: `transaction ${tx} landed before this purchase was created` };
-  return { state: "settled" };
+  return final ? { state: "settled" } : { state: "included", reason: "the payment landed, but is not final on chain yet" };
 }

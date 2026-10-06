@@ -313,7 +313,8 @@ instructions.push(
 );
 instructions.push(new TransactionInstruction({ programId: SOLANA_MEMO_PROGRAM, keys: [], data: Buffer.from(identity.memo, "utf8") }));
 
-const { blockhash, lastValidBlockHeight } = await retryRead(() => conn.getLatestBlockhash("confirmed"));
+const builtBlockhash = await retryRead(() => conn.getLatestBlockhashAndContext("confirmed"));
+const { blockhash, lastValidBlockHeight } = builtBlockhash.value;
 const message = new TransactionMessage({ payerKey: feePayerPk, recentBlockhash: blockhash, instructions }).compileToV0Message();
 const tx = new VersionedTransaction(message);
 tx.sign([agent]); // partial when the fee payer is a facilitator key: it adds its signature at /settle
@@ -323,7 +324,7 @@ const base64Tx = Buffer.from(tx.serialize()).toString("base64");
 // The intent is on disk with the signature BEFORE the payment leaves this process.
 let rec = updateOp(
   opId,
-  { state: "submitted", agentSig, blockhash, lastValidBlockHeight, submittedAt: new Date().toISOString(), tx: feePayerPk.equals(agent.publicKey) ? agentSig : null },
+  { state: "submitted", agentSig, blockhash, lastValidBlockHeight, searchFromSlot: builtBlockhash.context.slot, submittedAt: new Date().toISOString(), tx: feePayerPk.equals(agent.publicKey) ? agentSig : null },
   "signed; sending the payment to the seller"
 );
 console.log(`Agent signature (our transaction's id in the journal): ${agentSig}`);

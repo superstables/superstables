@@ -140,6 +140,7 @@ function pushes(attempt: Attempt): boolean {
  */
 function paidSentence(attempt: Attempt, amount: string, transaction: string): string {
   const network = attempt.terms.networkLabel;
+  if (attempt.paymentIncluded && attempt.chain === "unchecked") return `Paid ${amount} on ${network} (${transaction}). The payment landed, but is not final on chain yet; \`superstables status ${attempt.id}\` checks again.`;
   if (attempt.chain === "verified") return `Paid ${amount} on ${network} (${transaction}); checked on chain: the transaction is this payment.`;
   return (
     `The seller reported it paid: ${amount} on ${network} (${transaction}). ` +

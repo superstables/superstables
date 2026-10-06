@@ -78,73 +78,108 @@ export function acquireLock(op) {
 // seller can name any old successful transaction. It counts only if that transaction carries the
 // agent's signature for this operation; otherwise it is unrelated and the search goes on.
 // A failed read throws (never "not found"): the caller keeps the outcome unknown.
+const DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
+const count = (n) => Number.isSafeInteger(n) && n >= 0;
+const ownFeePayer = (rec) => (typeof rec.agent === "string" && rec.feePayer === rec.agent) || rec.tx === rec.agentSig;
+
+async function matchingTransaction(conn, sig, rec) {
+  const t = await retryRead(() => conn.getTransaction(sig, { commitment: "finalized", maxSupportedTransactionVersion: 1 }));
+  if (!t || !Array.isArray(t.transaction?.signatures) || t.transaction.signatures[0] !== sig) throw new Error("transaction inclusion unreadable");
+  if (!t.transaction.signatures.includes(rec.agentSig)) return null;
+  if (!t.meta || t.meta.err === undefined) throw new Error("transaction execution unreadable");
+  return { sig, err: t.meta.err, slot: t.slot };
+}
+
 export async function findOwnTx(conn, rec) {
   if (!rec.agentSig) return null;
-  const known = [...new Set([rec.agentSig, rec.tx, rec.sellerTx].filter(Boolean))];
+  const known = ownFeePayer(rec) ? [rec.agentSig] : [...new Set([rec.agentSig, rec.tx, rec.sellerTx].filter(Boolean))];
   const st = await retryRead(() => conn.getSignatureStatuses(known, { searchTransactionHistory: true }));
+  if (!Array.isArray(st.value) || st.value.length !== known.length) throw new Error("signature history unreadable");
   for (let i = 0; i < known.length; i++) {
-    const s = st.value[i];
-    if (!(s && (s.confirmationStatus === "confirmed" || s.confirmationStatus === "finalized" || s.err))) continue;
-    if (known[i] === rec.agentSig) return { sig: known[i], err: s.err ?? null, slot: s.slot };
-    const t = await retryRead(() =>
-      conn.getTransaction(known[i], { commitment: "confirmed", maxSupportedTransactionVersion: 0 })
-    );
-    if (t?.transaction.signatures.includes(rec.agentSig)) return { sig: known[i], err: t.meta?.err ?? s.err ?? null, slot: t.slot ?? s.slot };
-    // unrelated to this operation: not our settlement
+    const status = st.value[i];
+    if (!status || status.confirmationStatus !== "finalized") continue;
+    // The agent's signature is the ID only when the agent occupies the first signature slot.
+    if (known[i] === rec.agentSig && ownFeePayer(rec)) {
+      if (status.err === undefined) throw new Error("transaction execution unreadable");
+      return { sig: known[i], err: status.err, slot: status.slot };
+    }
+    const matched = await matchingTransaction(conn, known[i], rec);
+    if (matched) return matched;
   }
-  if (!rec.agent) return null;
-  const sigs = await retryRead(() =>
-    conn.getSignaturesForAddress(new PublicKey(rec.agent), { limit: 40 }, "confirmed")
-  );
+  if (ownFeePayer(rec) || !rec.agent) return null;
+  const sigs = await retryRead(() => conn.getSignaturesForAddress(new PublicKey(rec.agent), { limit: 40 }, "finalized"));
   const since = rec.submittedAt ? Date.parse(rec.submittedAt) / 1000 - 120 : 0;
   for (const s of sigs) {
     if (s.blockTime && s.blockTime < since) break;
-    const t = await retryRead(() =>
-      conn.getTransaction(s.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 })
-    );
-    if (t?.transaction.signatures.includes(rec.agentSig)) {
-      return { sig: s.signature, err: t.meta?.err ?? s.err ?? null, slot: t.slot };
-    }
+    const matched = await matchingTransaction(conn, s.signature, rec);
+    if (matched) return matched;
   }
   return null;
 }
 
-// What the chain says about an operation. Never pays.
-//   settled    our transaction landed and succeeded
-//   failed     our transaction landed and failed
-//   not_found  no transaction, and its blockhash has expired so it can no longer land
-//   pending    no transaction yet and the blockhash may still be valid
-//   no_tx      nothing was ever signed for this operation
-const EXPIRY_MARGIN_BLOCKS = 30;
-export async function assessOp(conn, rec) {
-  if (!rec.agentSig) return { verdict: "no_tx" };
-  const own = await findOwnTx(conn, rec);
-  if (own) {
-    if (own.err) return { verdict: "failed", tx: own.sig, err: own.err, slot: own.slot };
-    return { verdict: "settled", tx: own.sig, slot: own.slot };
+/** All produced finalized blocks in the signed blockhash's landing window, with every matching candidate readable. */
+async function landingWindow(conn, rec) {
+  if (!count(rec.searchFromSlot) || !count(rec.lastValidBlockHeight)) return { complete: false };
+  const slots = await retryRead(() => conn.getBlocks(rec.searchFromSlot + 1, rec.searchFromSlot + 1000, "finalized"));
+  if (!Array.isArray(slots) || slots.length < 151) return { complete: false };
+  const window = slots.slice(0, 151);
+  let previous = rec.searchFromSlot;
+  for (let i = 0; i < window.length; i++) {
+    const slot = window[i];
+    if (!count(slot) || slot <= previous) return { complete: false };
+    const block = await retryRead(() => conn.getBlock(slot, { commitment: "finalized", transactionDetails: "accounts", rewards: false, maxSupportedTransactionVersion: 1 }));
+    if (!block || block.blockHeight !== rec.lastValidBlockHeight - 149 + i || !Array.isArray(block.transactions)) return { complete: false };
+    for (const entry of block.transactions) {
+      const signatures = entry.transaction?.signatures;
+      if (!Array.isArray(signatures) || typeof signatures[0] !== "string" || !signatures.every((s) => typeof s === "string")) return { complete: false };
+      if (signatures.includes(rec.agentSig)) {
+        const own = await matchingTransaction(conn, signatures[0], rec);
+        if (!own || own.slot !== slot) return { complete: false };
+        return { complete: true, own };
+      }
+    }
+    previous = slot;
   }
-  const height = await retryRead(() => conn.getBlockHeight("confirmed"));
-  const last = rec.lastValidBlockHeight;
-  if (typeof last === "number" && height > last + EXPIRY_MARGIN_BLOCKS) {
-    return { verdict: "not_found", blockHeight: height, lastValidBlockHeight: last };
-  }
-  return {
-    verdict: "pending",
-    blockHeight: height,
-    lastValidBlockHeight: last ?? null,
-    blocksLeft: typeof last === "number" ? Math.max(0, last + EXPIRY_MARGIN_BLOCKS - height) : null,
-  };
+  return { complete: true };
 }
 
-// Whether a signed payment the chain refuses today (a failed simulation) can be reported as refused for good. A simulation
-// is only the state now: the seller holds the signed transaction and can submit it until its blockhash expires, and a new
-// grant or deposit in that window can make it succeed. So only once the block height is past lastValidBlockHeight (plus
-// the margin) and a successful read finds no transaction of ours; until then the outcome is unknown. Never throws.
+// Discovery misses preserve uncertainty. Absence requires finalized expiry plus direct history or all landing blocks.
+export async function assessOp(conn, rec) {
+  if (!rec.agentSig) return { verdict: "no_tx" };
+  if (await retryRead(() => conn.getGenesisHash()) !== DEVNET_GENESIS) throw new Error("RPC is not Solana devnet");
+  const own = await findOwnTx(conn, rec);
+  const landed = (t) => t.err === null
+    ? { verdict: "settled", tx: t.sig, slot: t.slot }
+    : { verdict: "failed", tx: t.sig, err: t.err, slot: t.slot };
+  if (own) return landed(own);
+  const epoch = await retryRead(() => conn.getEpochInfo("finalized"));
+  const height = epoch.blockHeight;
+  if (!count(height) || !count(epoch.absoluteSlot)) throw new Error("finalized height unreadable");
+  const last = rec.lastValidBlockHeight;
+  const expired = count(last) && height > last;
+  const pending = { verdict: "pending", blockHeight: height, lastValidBlockHeight: last ?? null, blocksLeft: count(last) && !expired ? last - height : null };
+  if (!expired) return pending;
+  if (ownFeePayer(rec)) {
+    // Read history AFTER finalized expiry; a status read error or lagging context is never absence.
+    const first = await retryRead(() => conn.getFirstAvailableBlock());
+    if (!count(first) || (count(rec.searchFromSlot) ? first > rec.searchFromSlot : first !== 0)) return pending;
+    const st = await retryRead(() => conn.getSignatureStatuses([rec.agentSig], { searchTransactionHistory: true }));
+    if (!count(st.context?.slot) || st.context.slot < epoch.absoluteSlot || !Array.isArray(st.value) || st.value.length !== 1) return pending;
+    const status = st.value[0];
+    if (status === null) return { verdict: "not_found", blockHeight: height, lastValidBlockHeight: last };
+    if (status?.confirmationStatus === "finalized" && status.err !== undefined) return landed({ sig: rec.agentSig, err: status.err, slot: status.slot });
+    return pending;
+  }
+  const window = await landingWindow(conn, rec);
+  if (window.own) return landed(window.own);
+  return window.complete ? { verdict: "not_found", blockHeight: height, lastValidBlockHeight: last } : pending;
+}
+
+/** A simulation refusal becomes permanent only with the same final absence or execution-failure proof as reconcile. */
 export async function refusalIsFinal(conn, rec) {
   try {
-    const height = await retryRead(() => conn.getBlockHeight("confirmed"));
-    if (typeof rec.lastValidBlockHeight !== "number" || !(height > rec.lastValidBlockHeight + EXPIRY_MARGIN_BLOCKS)) return false;
-    return (await findOwnTx(conn, rec)) === null;
+    const result = await assessOp(conn, rec);
+    return result.verdict === "not_found" || result.verdict === "failed";
   } catch {
     return false;
   }
@@ -153,7 +188,7 @@ export async function refusalIsFinal(conn, rec) {
 // Token movement of a landed transaction: the transferChecked our operation built.
 export async function readTransfer(conn, sig) {
   const t = await retryRead(() =>
-    conn.getParsedTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 })
+    conn.getParsedTransaction(sig, { commitment: "finalized", maxSupportedTransactionVersion: 0 })
   ).catch(() => null);
   if (!t) return null;
   const ix = t.transaction.message.instructions.find((i) => i.parsed?.type === "transferChecked");

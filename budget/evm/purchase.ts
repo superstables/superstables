@@ -332,7 +332,8 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
         throw new Stop("chain", `REFUSED ON CHAIN at the pull: ${why}`);
       }
       // The pull is only good if the chain shows exactly the price leaving the owner.
-      const seen = await readPull(j);
+      // A provisional canonical pull can fund the original payment; permanent conclusions wait for reconcile finality.
+      const seen = await readPull(j, { final: false });
       if (!seen.found || seen.moved !== price) {
         throw (stop = new Stop("reconciled", `the pull landed but the chain shows ${seen.found ? usdc(seen.moved ?? 0n) : "no"} ${SYM} moving from the owner instead of ${usdc(price)}; not paying`));
       }

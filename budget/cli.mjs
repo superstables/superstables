@@ -1107,7 +1107,7 @@ function normalize(cmd, f, rail, code) {
   const amount = state === "unknown" ? null : nothingMoved ? "0" : rail.debit == null ? null : String(rail.debit);
   return {
     code: exitFor(cmd, state, delivered),
-    fields: { ...base, state, paid, delivered, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
+    fields: { ...base, state, paid, delivered, ...(rail.final === false ? { final: false } : {}), amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.final === false && typeof rail.next === "string" ? rail.next : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
   };
 }
 
