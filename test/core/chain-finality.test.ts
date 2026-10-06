@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import bs58 from "bs58";
+import { encodePaymentResponseHeader } from "@x402/core/http";
+import { WalletSigner } from "../../src/core/signer/wallet.js";
 import type { Hex } from "viem";
 import { afterEach, expect, it } from "vitest";
 import { BASE_SEPOLIA, SOLANA_DEVNET, SKALE_BASE_SEPOLIA, TEMPO_MODERATO } from "../../src/core/chain.js";
@@ -17,7 +19,7 @@ import type { Attempt } from "../../src/core/types.js";
 import { DEFAULT_POLICY } from "../../src/core/policy.js";
 import { quote } from "../../src/core/quote.js";
 import { SignRefused } from "../../src/core/signer/types.js";
-import { startFacilitator, startPaidEndpoint } from "../helpers/servers.js";
+import { startFacilitator, startPaidEndpoint, startWallet } from "../helpers/servers.js";
 import { startFakeBaseSepolia } from "../helpers/fake-base-sepolia.js";
 import { MINT, randomAddress, signAsOwner, solanaKey, startFakeDevnet } from "../helpers/fake-solana-pay.js";
 const PAYER = "0x1111111111111111111111111111111111111111";
@@ -132,5 +134,27 @@ it("counts an included provisional receipt after UTC midnight even when the sign
   const terms = { network: BASE_SEPOLIA.caip2, networkLabel: BASE_SEPOLIA.label, asset: "USDC", assetAddress: BASE_SEPOLIA.usdc.address, amountAtomic: "10000", amountDecimal: 0.01, recipient: TO, scheme: "exact" };
   records.saveAttempt({ id: "a", quoteId: "q", createdAt: yesterday, updatedAt: yesterday, state: "settled", chain: "unchecked", paymentIncluded: true, authorizationValidBefore: yesterday, url: "https://seller.example", terms, receiptId: "a", history: [] });
   records.saveReceipt({ id: "a", at: yesterday, attemptId: "a", quoteId: "q", url: "https://seller.example", terms, payer: PAYER, transaction: `0x${"ab".repeat(32)}`, transactionKind: "hash", transactionUrl: "", network: BASE_SEPOLIA.caip2, settlement: { success: true, transaction: "", network: "eip155:84532" }, chain: "unchecked", paymentIncluded: true, serviceOutcome: "ok", ms: 0 });
+  expect(records.spentToday("USDC")).toBe(0.01);
+});
+
+
+it("reports a matching included payment as paid even when the seller says settlement failed", async () => {
+  const chain = await startFakeBaseSepolia(); cleanup.push(() => chain.close());
+  chain.finalizedLag = 2;
+  const facilitator = await startFacilitator(); cleanup.push(() => facilitator.close());
+  const seller = await startPaidEndpoint(facilitator.url); cleanup.push(() => seller.close());
+  const wallet = await startWallet(); cleanup.push(() => wallet.close());
+  const dir = mkdtempSync(join(tmpdir(), "included-denied-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+  const records = new Records(dir);
+  const engine = new PaymentEngine({ records, policy: DEFAULT_POLICY, rpcUrl: chain.url, signer: new WalletSigner({ url: wallet.url, agentToken: wallet.token, pollMs: 5, timeoutMs: 3000 }), fetchImpl: async (input, init) => {
+    const res = await fetch(input, init);
+    if (!new Headers(init?.headers).has("payment-signature")) return res;
+    const transaction = chain.settle(facilitator.lastAuthorization!);
+    return new Response("{}", { status: 402, headers: { "payment-response": encodePaymentResponseHeader({ success: false, transaction, network: "eip155:84532" }) } });
+  } });
+  const q = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
+  const a = await engine.waitForAttempt(engine.startPayment(q.id).id, 5000);
+  expect(a).toMatchObject({ state: "paid_service_failed", chain: "unchecked", paymentIncluded: true });
+  expect(records.getReceipt(a.receiptId!)?.paymentIncluded).toBe(true);
   expect(records.spentToday("USDC")).toBe(0.01);
 });

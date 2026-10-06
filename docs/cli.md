@@ -515,11 +515,12 @@ Options:
   -h, --help   display help for command
 
 One receipt for each payment the seller reported settled, or the chain showed. The chain column says
-verified when the client read the transaction on chain and it is this payment, unchecked when it has
-not yet (`superstables status` checks again). A later check can mark the receipt mismatch and the
-attempt uncertain, or unpaid when the chain shows the payment was never made and can no longer be
-(the attempt is then failed, and the receipt no longer counts against the daily cap). Do not pay
-again. A receipt records the payment and the service's answer separately.
+verified when a matching payment is final on chain. A matching landed payment is reported paid
+immediately; delivery is recorded separately. Unchecked means permanent verification is pending
+(`superstables status` checks again). A later check can mark the receipt mismatch and the attempt
+uncertain, or unpaid when the chain shows the payment was never made and can no longer be (the
+attempt is then failed, and the receipt no longer counts against the daily cap). Do not pay again. A
+receipt records the payment and the service's answer separately.
 
 Moves money: no.
 Run by: the agent or the owner.
