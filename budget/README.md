@@ -51,7 +51,7 @@ In both modes the agent key stays on this machine, the owner's key stays in thei
 Budget approvals on superstables.com support Base Sepolia, Arc Testnet, Arbitrum Sepolia,
 Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet. Approval on superstables.com keeps the CLI, agent key and journals on your own runtime; it lets the
 owner use a wallet on another device. The account uses Ethereum wallet sign-in, with a Solana
-wallet additionally needed to sign Solana transactions. Solana sign-in is not supported in 0.3.0.
+wallet additionally needed to sign Solana transactions. Solana sign-in is not supported in 0.3.1.
 Linking an agent does not grant a budget.
 
 Approvals on superstables.com, `buy-once` and `budget find` need superstables.com, or a compatible deployment the owner names with `--site` or `SUPERSTABLES_SITE`. An origin outside superstables.com and its subdomains is used only when the owner also sets `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own environment; an agent never sets it. Everything else works with no account: local approvals, budgets on every rail, `buy`, `reconcile` and `pay`. What a compatible site must do is in [CLI.md](CLI.md#hosted-approvals-what-a-compatible-site-must-do).
@@ -113,7 +113,7 @@ You need Node 20 or newer and a browser wallet: any EVM browser wallet (MetaMask
 
 Install. Pick one; all run the same commands on the same keys and state.
 
-- **With the client from GitHub.** Follow [the git install](../docs/install.md#with-npm-from-git), pinned to the full 0.3.0 release commit: `npm install github:superstables/superstables-client#<commit>`. It builds the client on your machine and includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone. In that installation folder, run `npx --no superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+- **With the client from GitHub.** Follow [the git install](../docs/install.md#with-npm-from-git), pinned to the full 0.3.1 release commit: `npm install github:superstables/superstables-client#<commit>`. It builds the client on your machine and includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone. In that installation folder, run `npx --no superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 - **From a checkout of this repository.** At the repository root:
 
   ```sh
@@ -239,7 +239,7 @@ An SPL token account has one delegate slot. A new grant would overwrite a live o
 
 ## Single purchase on superstables.com
 
-`superstables budget buy-once` asks superstables.com for one purchase of a service it lists for this, and the owner approves it there, signed in with an Ethereum wallet. Solana purchases additionally need a Solana wallet to sign the payment transaction; Solana sign-in is not supported in 0.3.0. There is no setup, no budget or agent key: the owner's wallet approves one payment of exactly the amount, to the recipient, the page shows. It runs on the chain the service's listing names: Base Sepolia, Arc Testnet or Solana devnet (test USDC, from faucet.circle.com; the seller's facilitator pays the fee), or Tempo Moderato (test pathUSD; the owner pays the fee).
+`superstables budget buy-once` asks superstables.com for one purchase of a service it lists for this, and the owner approves it there, signed in with an Ethereum wallet. Solana purchases additionally need a Solana wallet to sign the payment transaction; Solana sign-in is not supported in 0.3.1. There is no setup, no budget or agent key: the owner's wallet approves one payment of exactly the amount, to the recipient, the page shows. It runs on the chain the service's listing names: Base Sepolia, Arc Testnet or Solana devnet (test USDC, from faucet.circle.com; the seller's facilitator pays the fee), or Tempo Moderato (test pathUSD; the owner pays the fee).
 
 ```
 superstables budget find --once                                          # what can be bought this way, with inputs and prices

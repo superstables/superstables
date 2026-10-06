@@ -159,11 +159,18 @@ export const solanaRail: X402Rail = {
     let found: RpcTransaction | null;
     try {
       found = await readTransaction(rpc.url, facts.transaction, options);
+      if (!found) {
+        const confirmed = await rpcCall<RpcTransaction | null>(rpc.url, "getTransaction", [facts.transaction, { commitment: "confirmed", maxSupportedTransactionVersion: 0, encoding: "json" }], options);
+        if (confirmed) {
+          const check = judgeTransaction(confirmed, facts.transaction, facts, false);
+          return check.chain === "verified" ? { chain: "unchecked", included: true, reason: "the payment landed, but is not final on chain yet" } : check;
+        }
+      }
     } catch {
       // The RPC's own error text is not repeated: it is somebody else's words.
       return { chain: "unchecked", reason: "the chain could not be read: the RPC did not give a usable answer" };
     }
-    if (!found) return { chain: "unchecked", reason: "the chain does not show the transaction yet" };
+    if (!found) return { chain: "unchecked", missing: true, reason: "the chain does not show the transaction yet" };
     return judgeTransaction(found, facts.transaction, facts);
   },
 
@@ -204,6 +211,7 @@ export const solanaRail: X402Rail = {
     if (isTransactionId(SOLANA_DEVNET.caip2, facts.transaction) && !attributed.has(facts.transaction)) {
       const named = await solanaRail.checkPayment(facts, options);
       if (named.chain === "verified") return { found: true, transaction: facts.transaction };
+      if (named.included) return { found: true, transaction: facts.transaction, final: false };
     }
     /** A transaction carrying the owner's signature, read and judged: paid, or why not. */
     const judge = async (signature: string): Promise<FoundPayment | "unreadable"> => {
@@ -356,7 +364,7 @@ export async function devnetBlockHeight(options: ChainReadOptions = {}): Promise
   return height;
 }
 
-/** A confirmed transaction as getTransaction answers it (json encoding). */
+/** A finalized transaction as getTransaction answers it (json encoding). */
 interface RpcTransaction {
   meta?: { err?: unknown; loadedAddresses?: { writable?: unknown; readonly?: unknown } } | null;
   transaction?: {
@@ -369,7 +377,7 @@ interface RpcTransaction {
 }
 
 function readTransaction(url: string, signature: string, options: RpcOptions, version = 0): Promise<RpcTransaction | null> {
-  return rpcCall<RpcTransaction | null>(url, "getTransaction", [signature, { commitment: "confirmed", maxSupportedTransactionVersion: version, encoding: "json" }], options);
+  return rpcCall<RpcTransaction | null>(url, "getTransaction", [signature, { commitment: "finalized", maxSupportedTransactionVersion: version, encoding: "json" }], options);
 }
 
 /** What a search read of the blocks a payment could have landed in. */
@@ -456,18 +464,18 @@ function matchable(facts: PaymentFacts): boolean {
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
 
 /**
- * Whether a confirmed transaction is this payment: it is the transaction asked for, it carries the owner's signature, it
+ * Whether a finalized transaction is this payment: it is the transaction asked for, it carries the owner's signature, it
  * succeeded, and its one token instruction is a TransferChecked of the amount of devnet USDC from the owner's token
  * account to the recipient's, by the owner.
  */
-function judgeTransaction(found: RpcTransaction, signature: string, facts: PaymentFacts): ChainCheck {
+function judgeTransaction(found: RpcTransaction, signature: string, facts: PaymentFacts, final = true): ChainCheck {
   const signatures = found.transaction?.signatures;
   if (!Array.isArray(signatures) || signatures[0] !== signature) {
     return { chain: "unchecked", reason: "the chain could not be read: the RPC answered with another transaction" };
   }
   if (!signatures.includes(facts.ownerSignature)) return { chain: "mismatch", reason: "the transaction does not carry the owner's signature over this payment" };
   if (!found.meta) return { chain: "unchecked", reason: "the chain could not be read: the RPC did not say whether the transaction succeeded" };
-  if (found.meta.err !== null && found.meta.err !== undefined) return { chain: "mismatch", reason: "the transaction failed on chain" };
+  if (found.meta.err !== null && found.meta.err !== undefined) return { chain: "mismatch", mismatchKind: final ? "final_execution" : "provisional_execution", reason: "the transaction failed on chain" };
 
   const message = found.transaction?.message;
   const keys = [

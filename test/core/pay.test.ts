@@ -991,6 +991,31 @@ describe("PaymentEngine", () => {
     expect(() => s.engine.startPayment(q.id)).not.toThrow();
   });
 
+  it.each(["kill switch", "denied host"])("honours a quote refused by %s with a default-policy engine", async (rule) => {
+    const s = await stack();
+    const policy = { ...DEFAULT_POLICY, ...(rule === "kill switch" ? { killSwitch: true } : { deny: [new URL(s.url).hostname] }) };
+    const q = await quote({ url: s.url }, { records: s.records, policy });
+    expect(q.policy.allowed).toBe(false);
+
+    const final = await s.engine.waitForAttempt(s.engine.startPayment(q.id).id, 10_000);
+    expect(final).toMatchObject({ state: "failed", refusal: "policy", reason: `the local spend policy refuses this payment: ${q.policy.reason}` });
+    expect(final.walletRequestId).toBeUndefined();
+    expect(s.engine.listReceipts()).toHaveLength(0);
+    expect(s.facilitator.calls).toEqual({ verify: 0, settle: 0 });
+    expect(s.seller.requests).toBe(1);
+  });
+
+  it("refuses an allowed quote when the engine's current policy is stricter", async () => {
+    const s = await stack({ policy: { killSwitch: true } });
+    const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    expect(q.policy.allowed).toBe(true);
+
+    const final = await s.engine.waitForAttempt(s.engine.startPayment(q.id).id, 10_000);
+    expect(final).toMatchObject({ state: "failed", refusal: "policy" });
+    expect(final.walletRequestId).toBeUndefined();
+    expect(s.facilitator.calls).toEqual({ verify: 0, settle: 0 });
+  });
+
   it("stops before the wallet when the local policy already said no", async () => {
     const s = await stack({ policy: { perCall: { amount: 0.001, asset: "USDC" } } });
     const q = await quote(

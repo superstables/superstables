@@ -1,5 +1,9 @@
 # Single purchase
 
+For `pay` and `status`, `final` keeps its 0.3.0 meaning: the attempt's running workflow has ended, including `uncertain`. It does not prove payment or stop read-only recovery. `chain: verified` means a matching payment was read on chain. `chain_final` separately reports `true` after finality, `false` for matching provisional inclusion, or `null` when no current matching inclusion is established. Read `status` again when finality is pending or the outcome is uncertain. SDK `Attempt.chain` and `Receipt.chain` use the same matching-inclusion meaning; additive `chainFinal` maps to CLI `chain_final`. See [SDK payment records](sdk.md).
+
+`budget` keeps the 0.3.0 command-completion meaning of `final`. It is `false` while an owner approval is open or a buy-once `unknown` can still be read by `wait`, and `true` otherwise. `chain_final` describes the current matching payment separately: `true` after chain finality, `false` while included but not final, and `null` when no current matching inclusion is established, including an unknown after removal. A provisional paid purchase is `settled`, with `final: true`, `chain_final: false`, and exit 0 when delivered or exit 4 when not delivered. Check finality later with `reconcile` or `wait`; never pay again for that purchase. Owner-command transactions are not seller payments and have `chain_final: null`. Older stored results without finality evidence also have `chain_final: null`.
+
 <a id="one-purchase-at-a-time"></a>
 
 Use this when the owner is there to approve. The agent finds a paid service and reads its price
@@ -220,7 +224,7 @@ and the service's response:
   submitting
   settled
 
-Paid 0.01 USDC on Base Sepolia (testnet) (transaction 0x12e62de0d1c67278c2a181a04df63a883671d648eeecf4be60e4e368c7def0e6); checked on chain: the transaction is this payment. The service answered HTTP 200.
+Paid 0.01 USDC on Base Sepolia (testnet) (transaction 0x12e62de0d1c67278c2a181a04df63a883671d648eeecf4be60e4e368c7def0e6). The payment landed, but is not final on chain yet; `superstables status <attempt-id>` checks again. The service answered HTTP 200.
 
   receipt         b65773de-a08b-4c91-b5c9-0729b4675a3a
   paid            0.01 USDC
@@ -291,3 +295,5 @@ it ends the attempt as `abandoned` before the owner can act.
   [Install the client](install.md#the-local-wallet-for-a-machine-with-no-browser).
 
 Every command and flag: [CLI reference](cli.md).
+
+A buy-once whose earlier inclusion was removed can stay `unknown`, `final: false` indefinitely, even after finality passes its old block. The read token remains available, as in 0.3.0's existing site-paid but chain-unverified unknown case. Stop automatic polling in that case and report it to the owner. `superstables budget wait --id <id> --abandon` ends local waiting without proving the purchase unpaid or permitting payment again.

@@ -192,7 +192,7 @@ describe("reading the chain for the owner's transfer", () => {
 
   it("leaves it unchecked when the transaction is not on chain yet, the RPC is down, or no hash or memo was recorded", async () => {
     chain = await startFakeTempoPay();
-    expect(await tempoRail.checkPayment(facts({ transaction: `0x${"cd".repeat(32)}` }), options())).toEqual({ chain: "unchecked", reason: "the chain does not show the transaction yet" });
+    expect(await tempoRail.checkPayment(facts({ transaction: `0x${"cd".repeat(32)}` }), options())).toEqual({ chain: "unchecked", missing: true, reason: "the chain does not show the transaction yet" });
     expect((await tempoRail.checkPayment(facts({ transaction: "not a hash" }), options())).reason).toBe("no transaction hash was given");
     expect((await tempoRail.checkPayment(facts({ transaction: `0x${"cd".repeat(32)}`, memo: undefined }), options())).reason).toMatch(/memo was not recorded/);
     chain.down = true;

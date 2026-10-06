@@ -1,4 +1,5 @@
 import "./cli-guard.mjs";
+import { requireRecordLock } from "../op-lock.mjs";
 // recover (B4): stop the agent's authority and get stranded USDC back to the owner.
 // The agent-side steps are signed by the agent key file (it is on this machine). The owner's steps go through the owner's
 // own wallet (owner page, owner.ts), each as its own approval, and only when needed. No owner key file is used unless
@@ -24,7 +25,7 @@ import "./cli-guard.mjs";
 import { existsSync } from "node:fs";
 import { encodeFunctionData, parseUnits, type Hex } from "viem";
 import { pendingJournalsFor, makeSafe, readJournal, checkOpId, type Journal } from "./ops.ts";
-import { SYM, CFG, GAS, AGENT_ENV, OWNER_KEY_FILE, arg, flag, cmd, emit, agentCtx, ownerCtx, escrowCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, usdc, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC, assertRpcChain, agentGas, gasWords, gasRound, GasShort, type Wallet, type SelfRevoke, type GasOp, type GasNeed } from "./lib.ts";
+import { OPS_DIR, SYM, CFG, GAS, AGENT_ENV, OWNER_KEY_FILE, arg, flag, cmd, emit, agentCtx, ownerCtx, escrowCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, usdc, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC, assertRpcChain, agentGas, gasWords, gasRound, GasShort, type Wallet, type SelfRevoke, type GasOp, type GasNeed } from "./lib.ts";
 import { revokeInWallet, fundInWallet } from "./owner.ts";
 
 const plan = flag("plan");
@@ -50,6 +51,10 @@ if (opId) {
   pending = pendingJournalsFor(pub.agent).filter((p) => p.op === opId);
   if (!pending.length) console.log(`operation ${opId} is ${j.state}${j.returned ? ` (returned ${j.returned} ${SYM})` : ""}: nothing stranded for it`);
 } else pending = pendingJournalsFor(pub.agent);
+
+// Re-read the planned operations after taking the same locks used by buy and reconcile.
+for (const id of opId ? [opId] : pending.map(j => j.op)) requireRecordLock(OPS_DIR, id);
+pending = pending.flatMap(j => { const current = readJournal(j.op); return current ? [current] : []; });
 
 const returnsNeeded = pending.length > 0 || (!opId && held > KEEP);
 // Gas for the agent's own steps at the current fee: selfRevoke (step 1), then a cancel and a return per pending operation and the sweep.

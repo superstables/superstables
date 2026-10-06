@@ -115,7 +115,8 @@ describe("skills/superstables-payments/references/pay.md: seller text", () => {
     expect(ref("references/pay.md")).toContain("| `failed` | yes | no, when it names no transaction or `chain` is `unpaid` |");
     // An uncertain payment is never quoted again until status resolves it.
     expect(ref("references/pay.md")).toContain("- After `uncertain`: do not pay again, and do not quote the same request again.");
-    expect(skill).toContain('after `uncertain`, do not quote the same request again either until `superstables status` ends it `failed` with `chain: "unpaid"` (on Tempo, which never ends that way, only if the owner decides to pay again)');
+    expect(skill).toContain('after `uncertain`, do not quote the same request again either until `superstables status` ends it `failed` with `chain: "unpaid"`.');
+    expect(skill).toContain("Tempo wallet calls and removed inclusions on every rail have no automatic `unpaid` resolution");
     expect(ref("references/pay.md")).toContain("paying again for the same request is the owner's decision, not yours");
   });
 

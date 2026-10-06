@@ -22,6 +22,7 @@ export type Op = {
   op: string
   rail: 'tempo'
   kind: 'buy' | 'pay'
+  chain_final?: boolean | null
   state: OpState
   createdAt: string
   updatedAt: string
@@ -48,6 +49,7 @@ export type Op = {
   signedHash?: string // buy.ts: hash of the seller-bound signed payload (informational; a sponsored tx's final hash differs)
   validBefore?: number // unix seconds after which the signed payment can no longer land (pull mode)
   tx?: string
+  debit?: string
   delivered?: boolean
   httpStatus?: number
   reason?: string
@@ -85,6 +87,7 @@ export const BLOCKING: OpState[] = ['submitted', 'unknown', 'settled']
 
 export type ResultLine = {
   op: string
+  chain_final?: boolean | null
   state: OpState
   tx: string | null
   debit: string | null
@@ -96,5 +99,5 @@ export type ResultLine = {
 
 /** The final, machine-readable line of every purchase command. */
 export function printResult(r: ResultLine) {
-  console.log('RESULT ' + JSON.stringify({ rail: 'tempo', ...r }))
+  console.log('RESULT ' + JSON.stringify({ rail: 'tempo', ...r, chain_final: r.state === 'settled' ? r.chain_final ?? null : null }))
 }

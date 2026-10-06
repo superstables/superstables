@@ -6,7 +6,7 @@
 // whether the chain confirmed it), and every view carries a `message` that says so in words an
 // agent can repeat to the owner verbatim.
 
-import { SERVICE_BODY_LIMIT, shownPayer, shownTransaction } from "../core/pay.js";
+import { paymentOutput, SERVICE_BODY_LIMIT, shownPayer, shownTransaction } from "../core/pay.js";
 import { railFor } from "../core/rails/index.js";
 import type { Records } from "../core/records.js";
 import type { Attempt, Receipt } from "../core/types.js";
@@ -36,18 +36,21 @@ export function attemptView(deps: { records: Records }, attempt: Attempt): Recor
 }
 
 /** chain and chain_reason for a paid attempt (or one the chain contradicted); nothing for any other. */
-function chainView(attempt: Attempt): Record<string, string> {
+function chainView(attempt: Attempt) {
   const paid = attempt.state === "settled" || attempt.state === "paid_service_failed";
   if (!paid && !attempt.chain) return {};
-  const chain = attempt.chain ?? "unchecked";
+  const output = paymentOutput(attempt);
+  const chain = output.chain ?? "unchecked";
   const reason = chain === "verified" ? undefined : (attempt.chainReason ?? "it was not read");
-  return { chain, ...(reason ? { chain_reason: reason } : {}) };
+  return { ...output, chain, ...(reason ? { chain_reason: reason } : {}) };
 }
 
 function receiptView(receipt: Receipt): object {
   const tx = shownTransaction(receipt.transaction, receipt.terms.network);
+  const output = paymentOutput(receipt);
   return {
-    chain: receipt.chain ?? "unchecked",
+    ...output,
+    chain: output.chain ?? "unchecked",
     transaction: tx.hash ?? "",
     transaction_url: tx.url ?? "",
     amount: receipt.terms.amountDecimal,
@@ -121,6 +124,7 @@ export function messageFor(attempt: Attempt, receipt?: Receipt): string {
       if (hash) return `Whether the payment settled is unknown: ${attempt.reason ?? "no reason was recorded"}, but it names ${transaction}. It was not retried. Check the transaction before trying again.`;
       return `Payment did not happen: ${attempt.reason ?? "no reason was recorded"}.`;
     case "uncertain":
+      if (attempt.paymentIncluded) return "The earlier payment inclusion was removed; outcome unknown. Do not pay again.";
       return (
         `The payment may or may not have settled: ${attempt.reason ?? "no reason was recorded"}. ` +
         `It was not retried. \`superstables status ${attempt.id}\` looks for it on chain; ` +
@@ -140,6 +144,7 @@ function pushes(attempt: Attempt): boolean {
  */
 function paidSentence(attempt: Attempt, amount: string, transaction: string): string {
   const network = attempt.terms.networkLabel;
+  if (attempt.chainFinal === false && attempt.chain === "verified") return `Paid ${amount} on ${network} (${transaction}). The payment landed, but is not final on chain yet; \`superstables status ${attempt.id}\` checks again.`;
   if (attempt.chain === "verified") return `Paid ${amount} on ${network} (${transaction}); checked on chain: the transaction is this payment.`;
   return (
     `The seller reported it paid: ${amount} on ${network} (${transaction}). ` +

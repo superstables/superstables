@@ -1,5 +1,7 @@
 # Budget
 
+`budget` keeps the 0.3.0 command-completion meaning of `final`. It is `false` while an owner approval is open or a buy-once `unknown` can still be read by `wait`, and `true` otherwise. `chain_final` describes the current matching payment separately: `true` after chain finality, `false` while included but not final, and `null` when no current matching inclusion is established, including an unknown after removal. A provisional paid purchase is `settled`, with `final: true`, `chain_final: false`, and exit 0 when delivered or exit 4 when not delivered. Check finality later with `reconcile` or `wait`; never pay again for that purchase. Owner-command transactions are not seller payments and have `chain_final: null`. Older stored results without finality evidence also have `chain_final: null`.
+
 Use this when the agent should buy without asking each time. The owner grants a budget once, from
 their own wallet. The agent then buys on its own, purchase by purchase, until the budget is spent
 or the owner revokes it. The chain enforces the allowance; no Superstables server authorizes purchases. To approve each payment instead, see [Single purchase](buy-once.md).
@@ -104,7 +106,7 @@ superstables budget doctor --rail evm --chain arc-testnet
   ok    RPC answers: chain id 5042002
   ok    owner USDC balance: 14.750458 at 0x37DeDeEa845A7772BD4decfe573EaaBf660ad537 (need at least 0.2)
   ok    agent USDC (gas) balance: 0.1 at 0xC4b4871F0D082C2f62E14fc8cAb62EFc1FE9B8E8 (need at least 0.014; ...)
-RESULT {"ok":true,"command":"doctor","rail":"evm","chain":"arc-testnet","state":"ok","final":true,"next":"none"}
+RESULT {"ok":true,"command":"doctor","rail":"evm","chain":"arc-testnet","state":"ok","final":true,"chain_final":null,"next":"none"}
 ```
 
 ## 4. Grant the budget (owner)
@@ -120,7 +122,7 @@ offers to change the spending cap, keep the requested one. The command then read
 from the chain:
 
 ```
-RESULT {"ok":true,"command":"grant","rail":"evm","chain":"arc-testnet","state":"settled","final":true,"amount":"0.06","remaining":"0.06","tx":{"grant":"0x3500864caba62204475387fe2f578e7da08ca6e233ae8c18a8c4b77b11eb5763"},"expiry":null,"next":"none"}
+RESULT {"ok":true,"command":"grant","rail":"evm","chain":"arc-testnet","state":"settled","final":true,"chain_final":null,"amount":"0.06","remaining":"0.06","tx":{"grant":"0x3500864caba62204475387fe2f578e7da08ca6e233ae8c18a8c4b77b11eb5763"},"expiry":null,"next":"none"}
 ```
 
 A live budget is never replaced silently. If the owner explicitly asks to change it, revoke it
@@ -136,8 +138,8 @@ superstables budget preflight --rail evm --chain arc-testnet --url "https://www.
 ```
 
 ```
-RESULT {"ok":true,"command":"status","rail":"evm","chain":"arc-testnet","state":"ok","final":true,"remaining":"0.06","expiry":null,"revoked":false,"atRisk":"0.06","owner":"0x37DeDeEa845A7772BD4decfe573EaaBf660ad537","next":"none"}
-RESULT {"ok":true,"command":"preflight","rail":"evm","chain":"arc-testnet","state":"ok","final":true,"amount":"0.05","payTo":"0x0e56d191219fa7a4a8a50d17d4ce838e80bf566e",...}
+RESULT {"ok":true,"command":"status","rail":"evm","chain":"arc-testnet","state":"ok","final":true,"chain_final":null,"remaining":"0.06","expiry":null,"revoked":false,"atRisk":"0.06","owner":"0x37DeDeEa845A7772BD4decfe573EaaBf660ad537","next":"none"}
+RESULT {"ok":true,"command":"preflight","rail":"evm","chain":"arc-testnet","state":"ok","final":true,"chain_final":null,"amount":"0.05","payTo":"0x0e56d191219fa7a4a8a50d17d4ce838e80bf566e",...}
 ```
 
 Buy only if the price is within what the owner allows. Set `--max` to that maximum in USDC, use the
@@ -150,7 +152,7 @@ superstables budget buy --rail evm --chain arc-testnet --url "https://www.watche
 ```
 
 ```
-RESULT {"ok":true,"command":"buy","rail":"evm","chain":"arc-testnet","op":"gold-001","state":"settled","final":true,"paid":true,"delivered":true,"amount":"0.05","remaining":"0.01","tx":{"pull":"0xd70ea349…","settle":"0x462a30f1…","cancel":null,"return":null},"responseFile":"/home/you/.superstables/budget/ops/evm-arc-testnet/gold-001.response","responseType":"application/json; charset=utf-8","responseBytes":1577,"responseTruncated":false,"next":"none"}
+RESULT {"ok":true,"command":"buy","rail":"evm","chain":"arc-testnet","op":"gold-001","state":"settled","final":true,"chain_final":true,"paid":true,"delivered":true,"amount":"0.05","remaining":"0.01","tx":{"pull":"0xd70ea349…","settle":"0x462a30f1…","cancel":null,"return":null},"responseFile":"/home/you/.superstables/budget/ops/evm-arc-testnet/gold-001.response","responseType":"application/json; charset=utf-8","responseBytes":1577,"responseTruncated":false,"next":"none"}
 ```
 
 `paid` and `delivered` are separate facts. What the seller sent back is in `responseFile`: read it
@@ -172,7 +174,7 @@ superstables budget status --rail evm --chain arc-testnet
 ```
 
 ```
-RESULT {"ok":true,"command":"status","rail":"evm","chain":"arc-testnet","state":"ok","final":true,"remaining":"0.01","expiry":null,"revoked":false,"atRisk":"0.01","owner":"0x37DeDeEa845A7772BD4decfe573EaaBf660ad537","next":"none"}
+RESULT {"ok":true,"command":"status","rail":"evm","chain":"arc-testnet","state":"ok","final":true,"chain_final":null,"remaining":"0.01","expiry":null,"revoked":false,"atRisk":"0.01","owner":"0x37DeDeEa845A7772BD4decfe573EaaBf660ad537","next":"none"}
 ```
 
 With no budget set up in this client home, `status` exits 1, names the home it checked and lists
@@ -189,13 +191,13 @@ withdrawals, even if the agent key was stolen. It does not reverse confirmed pay
 purchase whose price was already pulled from settling. Gas left at the agent's address stays there.
 
 ```
-RESULT {"ok":true,"command":"revoke","rail":"evm","chain":"arc-testnet","state":"settled","final":true,"remaining":"0","tx":{"revoke":"0x5cb560bb08e6a339859104e64f0bd83ababfcf225fc06b42d57f089fb638fcfd"},"revoked":true,"next":"none"}
+RESULT {"ok":true,"command":"revoke","rail":"evm","chain":"arc-testnet","state":"settled","final":true,"chain_final":null,"remaining":"0","tx":{"revoke":"0x5cb560bb08e6a339859104e64f0bd83ababfcf225fc06b42d57f089fb638fcfd"},"revoked":true,"next":"none"}
 ```
 
 A buy after the revoke is refused, with nothing signed:
 
 ```
-RESULT {"ok":false,"command":"buy",...,"state":"refused_precheck","final":true,"paid":false,...,"next":"no allowance is available: it may be spent, revoked or never granted. Nothing was signed. Report that in one reply (message_for_owner) and end your turn. Do not propose or start a grant, a revoke or gas unless the owner explicitly asks for one","reason":"REFUSED AT THE PULL: the allowance is 0 (revoked, spent or never set). No transferFrom was sent."}
+RESULT {"ok":false,"command":"buy",...,"state":"refused_precheck","final":true,"chain_final":null,"paid":false,...,"next":"no allowance is available: it may be spent, revoked or never granted. Nothing was signed. Report that in one reply (message_for_owner) and end your turn. Do not propose or start a grant, a revoke or gas unless the owner explicitly asks for one","reason":"REFUSED AT THE PULL: the allowance is 0 (revoked, spent or never set). No transferFrom was sent."}
 ```
 
 Report the refusal and stop. A fresh grant starts only when the owner explicitly asks for one.
@@ -238,7 +240,7 @@ with its own approval link and code, and the owner approves the transaction in t
 still uses the page on this machine. The CLI, agent key and purchase journals stay on your own runtime; the owner's key stays in their wallet. Purchases need no approval from
 the site: the client pays the seller directly. On Solana the owner also connects a Solana wallet on
 the site's page; that address is the owner on record, and it signs each transaction the site builds.
-Solana sign-in is not supported in 0.3.0.
+Solana sign-in is not supported in 0.3.1.
 
 The [site account](https://www.superstables.com/account) lets the owner inspect linked agents and
 revoke budgets. It shows Single purchase requests made on superstables.com, not a complete history of budget purchases;
@@ -262,7 +264,7 @@ for the owner. It returns in seconds with an `APPROVE` line and a `RESULT` whose
 with nothing to revoke, returns its final result at once. `--wait` makes it block instead:
 
 ```
-RESULT {"ok":true,"command":"grant",...,"state":"waiting_owner","final":false,"id":"oa-20261001231446-3c6ea55b","url":"http://127.0.0.1:33847/owner/013825489bc9de0494cd76603c7ff9e6","expires":"2026-10-01T23:15:10.110Z","terms":{...},"next":"show the owner the exact url and terms; ..."}
+RESULT {"ok":true,"command":"grant",...,"state":"waiting_owner","final":false,"chain_final":null,"id":"oa-20261001231446-3c6ea55b","url":"http://127.0.0.1:33847/owner/013825489bc9de0494cd76603c7ff9e6","expires":"2026-10-01T23:15:10.110Z","terms":{...},"next":"show the owner the exact url and terms; ..."}
 ```
 
 `waiting_owner` is not an approval. The agent sends the `RESULT`'s `message_for_owner` (the approval link,

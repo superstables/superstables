@@ -16,10 +16,9 @@ describe("withFileLock", () => {
     const path = lockPath();
     // Another process takes the lock the same way, then stops itself (SIGSTOP): alive, but doing nothing.
     const child = spawn(process.execPath, [
-      "-e",
-      `const fs=require("fs");const s=fs.readFileSync("/proc/"+process.pid+"/stat","utf8");` +
-        `const st=s.slice(s.lastIndexOf(")")+2).split(" ")[19];const boot=fs.readFileSync("/proc/sys/kernel/random/boot_id","utf8").trim();` +
-        `fs.writeFileSync(${JSON.stringify(path)},JSON.stringify({pid:process.pid,pidStart:"linux:"+boot+":"+st,owner:"paused"}),{flag:"wx"});` +
+      "--import", "tsx", "--input-type=module", "-e",
+      `import fs from "node:fs";import { processStart } from ${JSON.stringify(resolve(import.meta.dirname, '../../src/core/lock.ts'))};` +
+        `fs.writeFileSync(${JSON.stringify(path)},JSON.stringify({pid:process.pid,pidStart:processStart(process.pid)??null,owner:"paused"}),{flag:"wx"});` +
         `console.log("held");process.kill(process.pid,"SIGSTOP");setTimeout(()=>{},60000);`,
     ]);
     try {
@@ -40,8 +39,10 @@ describe("withFileLock", () => {
     writeFileSync(path, JSON.stringify({ pid: gone, pidStart: "linux:x:1", owner: "dead" }));
     expect(await withFileLock(path, () => "mine", 1_000)).toBe("mine");
     // This process's own pid, recorded with another start: a reused pid, so the holder is gone.
-    writeFileSync(path, JSON.stringify({ pid: process.pid, pidStart: "linux:another-boot:1", owner: "reused" }));
-    if (processStart(process.pid)) expect(await withFileLock(path, () => "mine", 1_000)).toBe("mine");
+    if (processStart(process.pid)) {
+      writeFileSync(path, JSON.stringify({ pid: process.pid, pidStart: "linux:another-boot:1", owner: "reused" }));
+      expect(await withFileLock(path, () => "mine", 1_000)).toBe("mine");
+    }
     expect(existsSync(path)).toBe(false);
   });
 

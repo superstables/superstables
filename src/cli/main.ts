@@ -27,7 +27,7 @@ import {
   recordsDir,
   walletDir,
 } from "../core/home.js";
-import { PaymentEngine, QuoteUsedError, SERVICE_BODY_LIMIT, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
+import { PaymentEngine, QuoteUsedError, SERVICE_BODY_LIMIT, paymentOutput, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
 import { POLICY_EXAMPLE, loadPolicy, type Policy } from "../core/policy.js";
 import { QUOTE_TTL_MS, getQuote, quote as takeQuote } from "../core/quote.js";
 import { Records } from "../core/records.js";
@@ -50,6 +50,8 @@ import {
   EXIT,
   badInput,
   exitCodeFor,
+  humanNextFor,
+  inclusionRemoved,
   isFinalAttempt,
   nextFor,
   requoteCommand,
@@ -684,7 +686,7 @@ explain(
     prints:
       "each state as it happens, the approval link once, the outcome in one sentence, the receipt, the " +
       "service's response and the next command. With --json, one object: attempt_id, quote_id, state, " +
-      "final, message, next, reason, refusal, receipt (or transaction, for a payment without one), service_response, history.",
+      "final, chain_final, message, next, reason, refusal, receipt (or transaction, for a payment without one), service_response, history.",
     exits:
       "0 paid and delivered, 1 failed, expired or abandoned; nothing was paid when no transaction is reported, or chain is unpaid, 2 bad input (unknown, used " +
       "or expired quote), 3 refused (the owner rejected it, or a spend policy refused it), 4 paid but the " +
@@ -769,7 +771,7 @@ explain(
             money(receipt.terms.amountDecimal, receipt.terms.asset),
             receipt.serviceName ?? receipt.url,
             receipt.serviceOutcome,
-            receipt.chain ?? "unchecked",
+            paymentOutput(receipt).chain ?? "unchecked",
             receipt.attemptId,
             shownTransaction(receipt.transaction, receipt.terms.network).url ?? "(no hash)",
           ]),
@@ -779,7 +781,7 @@ explain(
   {
     notes: [
       "One receipt for each payment the seller reported settled, or the chain showed. The chain column says verified " +
-        "when the client read the transaction on chain and it is this payment, unchecked when it has not yet " +
+        "when the client read the transaction on chain and it is this payment. JSON chain_final reports permanent finality separately. Unchecked means a matching payment has not been established " +
         "(`superstables status` checks again). A later check can mark the receipt mismatch and the attempt uncertain, " +
         "or unpaid when the chain shows the payment was never made and can no longer be (the attempt is then failed, " +
         "and the receipt no longer counts against the daily cap). Do not pay again. A receipt records the payment and " +
@@ -1042,6 +1044,7 @@ function attemptJson(records: Records, attempt: Attempt): Record<string, unknown
   return {
     ...rest,
     final: isFinalAttempt(attempt),
+    chain_final: paymentOutput(attempt).chain_final,
     exit_code: exitCodeFor(attempt),
     next: nextFor(attempt, getQuote(attempt.quoteId, records)),
     url: attempt.url,
@@ -1060,12 +1063,12 @@ function attemptJson(records: Records, attempt: Attempt): Record<string, unknown
 function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt): void {
   const receipt = known ?? (attempt.receiptId ? records.getReceipt(attempt.receiptId) : undefined);
   console.log("");
-  console.log(messageFor(attempt, receipt));
+  console.log(inclusionRemoved(attempt) ? "Payment outcome unknown. Do not pay again." : messageFor(attempt, receipt));
   if (receipt) {
     console.log("");
     console.log(field("receipt", receipt.id));
     // Paid only when the chain says so; otherwise the amount the seller reported paid.
-    console.log(field(receipt.chain === "verified" ? "paid" : "amount", money(receipt.terms.amountDecimal, receipt.terms.asset)));
+    console.log(field(receipt.chain === "verified" || receipt.paymentIncluded ? "paid" : "amount", money(receipt.terms.amountDecimal, receipt.terms.asset)));
     console.log(field("transaction", shownTransaction(receipt.transaction, receipt.terms.network).url ?? "no transaction hash was given"));
     console.log(field("payer", shownPayer(receipt.payer, receipt.terms.network) ?? "unknown"));
     console.log(field("chain", receiptChain(receipt)));
@@ -1085,19 +1088,22 @@ function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt
     console.log(untrustedText(attempt.serviceBody, SERVICE_BODY_LIMIT));
   }
   console.log("");
-  console.log(`Next: ${nextFor(attempt, getQuote(attempt.quoteId, records))}`);
+  console.log(`Next: ${humanNextFor(attempt, getQuote(attempt.quoteId, records))}`);
 }
 
-/** What the chain says about a receipt, in words: only "verified" confirms the payment. */
+/** What the chain says about a receipt; matching inclusion is paid while finality is pending. */
 function receiptChain(receipt: Receipt): string {
   switch (receipt.chain) {
     case "verified":
-      return "verified: the transaction is this payment";
+      return receipt.chainFinal === false ? "verified: paid; the payment landed, but is not final on chain yet" : "verified: the transaction is this payment";
     case "mismatch":
       return `mismatch: ${receipt.chainReason ?? "the transaction is not this payment"}`;
     case "unpaid":
       return `unpaid: the seller reported it paid, but ${receipt.chainReason ?? "the chain shows it was never made"}`;
     default:
+      if (receipt.paymentIncluded) return "verified: paid; the payment landed, but is not final on chain yet";
+      if (receipt.chainReason === "The earlier payment inclusion was removed; outcome unknown. Do not pay again.") return "unchecked: the earlier matching payment was removed from the chain.";
+      if (receipt.chainReason?.startsWith("The earlier payment inclusion")) return `unchecked: ${receipt.chainReason}`;
       return `unchecked: the seller reported it paid, and the chain has not confirmed it yet (${receipt.chainReason ?? "it was not read"})`;
   }
 }

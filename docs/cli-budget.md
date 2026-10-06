@@ -14,6 +14,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | [`superstables budget preflight`](#superstables-budget-preflight) | a seller's price and payee | anyone | read only |
 | [`superstables budget buy`](#superstables-budget-buy) | one purchase under the budget; --max is required | agent | moves money |
 | [`superstables budget reconcile`](#superstables-budget-reconcile) | read the chain for one purchase whose outcome is unknown | anyone | read only |
+| [`superstables budget unlock`](#superstables-budget-unlock) | clear abandoned operation locks after stopping their processes | owner | moves no money |
 | [`superstables budget revoke`](#superstables-budget-revoke) | end the budget on chain | owner | moves no money |
 | [`superstables budget recover`](#superstables-budget-recover) | evm: stop the allowance, return stranded USDC to the owner | owner | moves money back |
 | [`superstables budget wait`](#superstables-budget-wait) | the state of an owner approval an agent started (--id, --shown) | anyone | read only |
@@ -87,6 +88,7 @@ Commands (each takes --help):
   preflight   anyone  a seller's price and payee                                         read only
   buy         agent   one purchase under the budget; --max is required                   moves money
   reconcile   anyone  read the chain for one purchase whose outcome is unknown           read only
+  unlock      owner   clear abandoned operation locks after stopping their processes     moves no money
   revoke      owner   end the budget on chain                                            moves no money
   recover     owner   evm: stop the allowance, return stranded USDC to the owner          moves money back
   wait        anyone  the state of an owner approval an agent started (--id, --shown)    read only
@@ -100,7 +102,7 @@ The owner opens it in the browser that has their wallet. The page is on this mac
 first (ssh -L PORT:127.0.0.1:PORT user@this-host, PORT from the approval link). On a chain set up with --hosted (and for
 buy-once), the approval link is on superstables.com instead: it opens on any device where the owner is signed in with
 an Ethereum wallet. Solana actions additionally use a Solana wallet to sign transactions; Solana sign-in is not
-supported in 0.3.0. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
+supported in 0.3.1. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
 command returns at once with state waiting_owner and final false. Write the approval link, the match code and the terms
 in your reply to the owner and end your turn; when they say they've approved, run
 superstables budget wait --id ID --shown. The approval link expires after --timeout seconds (default 600): if the wallet
@@ -115,10 +117,14 @@ B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC:
 RESULT names one in use as rpc.
 
 Output: logs go to stderr. stdout ends with one line
-  RESULT {"ok","command","rail","chain","op","state","final","paid","delivered","amount","remaining","tx","rpc","id","url",
+  RESULT {"ok","command","rail","chain","op","state","final","chain_final","paid","delivered","amount","remaining","tx","rpc","id","url",
           "matchCode","message_for_owner","budget_spent","next","reason"}
 Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
-while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read.
+while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read,
+true otherwise, unchanged from 0.3.0. Scripts test final for command completion.
+chain_final is true only after the payment meets the chain finality rule, false for included-but-not-final payments,
+and null when no current matching payment inclusion is established. A paid provisional result has final true and
+chain_final false; reconcile or wait checks finality again. Command completion never proves payment finality.
 next is the command to run next, or none.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
 approval link, the match code (on superstables.com), the amount and chain, the testnet line. The agent sends it and ends its turn.
@@ -467,7 +473,8 @@ Exit codes: 0 paid and delivered, 1 failed (not settled; reason, tx and amount s
 superstables budget reconcile --rail evm|tempo|solana --op ID [--chain C]
 
 Reads the chain for one purchase, by its --op, and reports what happened to it. Run it after a buy exits 5 (unknown),
-or before reusing an --op. Needs the purchase's journal on this machine.
+or before reusing an --op. Needs the purchase's journal on this machine. A busy lock returns exit 5, reason op_in_progress,
+with the holder, lock path and owner recovery guidance in next. Never buy again while the outcome is unknown.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
@@ -476,7 +483,26 @@ Moves money: no. It never signs or sends.
 Run by: anyone, usually the agent.
 Example:
   $ superstables budget reconcile --rail evm --op btc-001
-Prints: the chain reads on stderr, then one RESULT line: state (settled, failed, not_found, unknown), paid, tx, next.
+Prints: the chain reads on stderr, then one RESULT line: op, state (settled, failed, not_found, unknown), paid, tx, next.
+  --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
+Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 5 unknown (the full table: superstables budget --help)
+```
+
+## superstables budget unlock
+
+```text
+superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm
+
+Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects verifiably live local holders on Linux and macOS. Requires --confirm and the op ID typed in a terminal. Overrides unverifiable holders regardless of timestamps; a holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.
+
+--chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
+
+Moves money: no. It never signs or sends.
+Run by: the owner or operator, after stopping the processes.
+Example:
+  $ superstables budget unlock --rail solana --op order-001 --confirm
+Prints: one RESULT with op, state, reason and next. Without --confirm, a terminal or the matching typed op ID: exit 3. Busy: exit 5. Cleared or no lock: exit 0.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 5 unknown (the full table: superstables budget --help)
 ```
@@ -598,7 +624,7 @@ Moves money: no. It never approves, signs or sends anything.
 Run by: anyone, usually the agent that started the owner command, after the owner says they've approved.
 Example:
   $ superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60
-Prints: one RESULT line: state, final, id, url, matchCode (on superstables.com), expires, terms, next; reason describes the page's state while
+Prints: one RESULT line: state, final, chain_final, id, url, matchCode (on superstables.com), expires, terms, next; reason describes the page's state while
   waiting.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 waiting (final false) or done, 1 failed, 2 bad input, unknown id or no --shown, 3 refused (rejected,
@@ -652,7 +678,7 @@ The command asks the site for the purchase and prints the owner's approval link 
 same as the owner commands. Write the approval link, the code and the terms in your reply to the owner, a visible
 message, not only in your reasoning or a tool call, and end your turn there. The first approval link the owner opens
 asks them to sign in with an Ethereum wallet (a message, no fee). For Solana devnet, they also
-connect a Solana wallet to sign the payment transaction; Solana sign-in is not supported in 0.3.0.
+connect a Solana wallet to sign the payment transaction; Solana sign-in is not supported in 0.3.1.
 Not in a terminal (an agent), or with --detach: returns at
 once with state waiting_owner and an approval id; when the owner says they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: blocks until the purchase ends. One buy-once
