@@ -8,8 +8,11 @@ export const paymentBusy = "The payment lock is held. Its process may still be r
 const snapshot = path => {
   try {
     const stat = lstatSync(path);
-    if (!stat.isFile()) return { text: null, version: null };
-    return { text: readFileSync(path, 'utf8'), version: `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.size}` };
+    if (!stat.isFile()) return { file: false, text: null, version: null };
+    let text = null;
+    try { text = readFileSync(path, 'utf8'); }
+    catch (err) { if (err.code === 'ENOENT') return null; if (!['EACCES', 'EPERM'].includes(err.code)) throw err; }
+    return { file: true, text, version: `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.size}` };
   } catch (err) { if (err.code === 'ENOENT') return null; throw err; }
 };
 const unchanged = (path, before) => {
@@ -41,7 +44,7 @@ export function withRecoveryMutex(path, work, options) {
     catch (err) {
       if (err.code !== 'EEXIST') throw err;
       const before = snapshot(path);
-      if (!before || before.text === null || !permitted(inspect(before.text), options) || !unchanged(path, before)) return false;
+      if (!before || !before.file || !permitted(inspect(before.text), options) || !unchanged(path, before)) return false;
       // Recheck liveness after a notice that may block, then check the generation immediately before unlink.
       if (!permitted(inspect(before.text), options) || !unchanged(path, before)) return false;
       unlinkSync(path);
@@ -58,7 +61,7 @@ export function clearFileLock(path, options, inspect = inspectLockText) {
   return withRecoveryMutex(`${path}.break`, () => {
     const before = snapshot(path);
     if (!before) return true;
-    if (before.text === null || !permitted(inspect(before.text), options) || !unchanged(path, before)) return false;
+    if (!before.file || !permitted(inspect(before.text), options) || !unchanged(path, before)) return false;
     if (!permitted(inspect(before.text), options) || !unchanged(path, before)) return false;
     unlinkSync(path);
     return true;
