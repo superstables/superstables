@@ -191,7 +191,7 @@ describe("hosted client finality", () => {
     });
     try {
       const input = { rail: "evm", chain: "base-sepolia", tx: HASH, payer: AGENT, payTo: TO, asset: TOKEN, amount: 10000n, notBefore: 1000, rpcUrl: server.url, deadline: Date.now() + 10000 };
-      expect((await hostedSettlement(input)).state).toBe("unread");
+      expect((await hostedSettlement(input)).state).toBe("included");
       final = "0x6e";
       expect((await hostedSettlement(input)).state).toBe("settled");
       canonical = NONCE;
@@ -219,7 +219,7 @@ describe("hosted client finality", () => {
     });
     try {
       const input = { rail: "solana", chain: "devnet", tx: "signature", payer: AGENT, payTo: TO, asset: TOKEN, amount: 10000n, notBefore: 1000, rpcUrl: server.url, deadline: Date.now() + 10000 };
-      expect((await hostedSettlement(input)).state).toBe("unread");
+      expect((await hostedSettlement(input)).state).toBe("included");
       finalized = true;
       expect((await hostedSettlement(input)).state).toBe("settled");
     } finally { await server.close(); }
