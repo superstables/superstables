@@ -45,7 +45,11 @@ afterEach(async () => {
   }
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
-describe.runIf(process.platform === 'linux')('real PID namespace ownership', () => {
+// CI runners can forbid unprivileged PID namespaces or mounting /proc inside them; those runs skip.
+const canUnsharePid = process.platform === 'linux'
+  && spawnSync('bwrap', ['--unshare-pid', '--die-with-parent', '--dev-bind', '/', '/', '--proc', '/proc', 'true']).status === 0;
+
+describe.runIf(canUnsharePid)('real PID namespace ownership', () => {
   it('never takes a running foreign holder after a forward or backward clock jump', async () => {
     const b = box(); await hold(b);
     for (const skew of [0, 330000, 86400000, -86400000]) expect(tryLock(b, skew)).toBe(false);
