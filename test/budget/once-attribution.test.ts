@@ -293,10 +293,10 @@ describe("hosted purchase payment identity", () => {
     });
   }
 
-  it("explicit conflicting payer evidence overrules a legacy paid outcome", async () => {
+  for (const tx of [TX, `0x${TX.slice(2).toUpperCase()}`]) it(`explicit conflicting payer evidence overrules a legacy paid outcome with transaction ${tx}`, async () => {
     const { record } = await purchase(rails[0]);
     approvals.updateApproval(record.id, () => ({ attributionVersion: undefined, seen: { hashes: [TX], payers: { [TX]: null }, named: true, paid: true } }));
-    approvals.recordFinal(record.id, 0, { paid: true, payer: PAYER, tx: { settle: TX } });
+    approvals.recordFinal(record.id, 0, { paid: true, payer: PAYER, tx: { settle: tx } });
     unknown(await settleOnce(record));
     expect(approvals.readApproval(record.id).final.result.paid).toBeNull();
   });

@@ -266,7 +266,8 @@ function checkedFinal(record) {
   // Older paid records cannot regain their discarded access token. Preserve the recorded proof under I21 and mark
   // its limit, rather than applying a new attribution requirement retroactively. Explicit payer conflicts still overrule it.
   const payers = record.seen?.payers ?? {};
-  const payerConflict = Object.hasOwn(payers, result?.tx?.settle) && payers[result.tx.settle] !== canonAddr(result.payer);
+  const hash = canonTx(result?.tx?.settle);
+  const payerConflict = Object.hasOwn(payers, hash) && payers[hash] !== canonAddr(result.payer);
   if (result?.paid === true && record.attributionVersion === undefined && !record.final.attribution && !payerConflict) {
     const attribution = "not verified (recorded by an older version)";
     const kept = { ...result, attribution };
