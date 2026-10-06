@@ -878,6 +878,7 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
   // second layer: nothing shaped like a token is printed or stored
   result.reason = scrub(result.reason);
   result.next = scrub(result.next);
+  if (r.view.final !== true && result.paid !== true) return { final: false, code, result: { ...result, final: false, next: openUnknown(record, r.view).next }, record, view: r.view };
   // a payment the chain cannot show yet is not stored: a later wait reads the site and the chain again
   if (!keep) {
     if (result.paid === true) {
