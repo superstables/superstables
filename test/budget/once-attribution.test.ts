@@ -55,6 +55,17 @@ function unknown(result: Awaited<ReturnType<typeof settleOnce>>) {
 }
 
 describe("hosted purchase payment identity", () => {
+  it("rechecks a non-final reverted hosted receipt instead of caching permanent unknown", async () => {
+    site.finalizedBlock = 10;
+    const rail = rails[0];
+    const { p, record } = await purchase(rail);
+    site.settle(p, "ok", { transaction: rail.tx, payer: rail.payer, chain: { failed: true } });
+    expect(await settleOnce(record)).toMatchObject({ code: 5, result: { state: "unknown", final: false } });
+    expect(approvals.readApproval(record.id).final).toBeUndefined();
+    site.pay(p, { transaction: rail.tx, payer: rail.payer });
+    site.finalizedBlock = 1000;
+    expect(await settleOnce(approvals.readApproval(record.id))).toMatchObject({ code: 0, result: { paid: true, delivered: true } });
+  });
   for (const rail of rails) {
     it(`${rail.rail}: genuine purchase verifies`, async () => {
       const { p, record } = await purchase(rail);

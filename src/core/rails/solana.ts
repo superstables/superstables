@@ -167,7 +167,7 @@ export const solanaRail: X402Rail = {
       // The RPC's own error text is not repeated: it is somebody else's words.
       return { chain: "unchecked", reason: "the chain could not be read: the RPC did not give a usable answer" };
     }
-    if (!found) return { chain: "unchecked", reason: "the chain does not show the transaction yet" };
+    if (!found) return { chain: "unchecked", missing: true, reason: "the chain does not show the transaction yet" };
     return judgeTransaction(found, facts.transaction, facts);
   },
 

@@ -4,7 +4,7 @@
 // refusal) or in a stand-in for the built copy.
 
 import { spawn } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -134,6 +134,19 @@ describe("setup --fund-only", () => {
 });
 
 describe("a checkout without its dev packages", () => {
+  it.each(["evm", "solana", "tempo"])("published %s reconcile prints a runnable provisional next command", async (rail) => {
+    const repo = checkoutWithoutDevPackages();
+    unlinkSync(join(repo, "budget", "owner-page.ts"));
+    const chain = rail === "evm" ? "base-sepolia" : rail === "solana" ? "devnet" : "moderato";
+    const op = "provisional-order";
+    const dir = join(work, "home", "budget", "ops", `${rail}-${chain}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${op}.json`), JSON.stringify({ op, state: "settled", final: false, path: "approve" }));
+    writeFileSync(join(repo, "budget", rail, "reconcile.mjs"), `console.log('RESULT ' + JSON.stringify({ state: 'settled', final: false, delivered: false, debit: '0.01', next: 'node budget/${rail}/reconcile.mjs' }));`);
+    const r = await run([join(repo, "budget", "cli.mjs"), "reconcile", "--rail", rail, "--op", op]);
+    expect(r.code).toBe(4);
+    expect(result(r.stdout)).toMatchObject({ state: "settled", paid: true, delivered: false, final: false, next: `Run superstables budget reconcile --rail ${rail}${rail === "evm" ? " --chain base-sepolia" : ""} --op ${op} later to check finality. Do not pay again. Contact the seller.` });
+  });
   it("says what to run when it has no build either", async () => {
     const repo = checkoutWithoutDevPackages();
     const r = await run([join(repo, "budget", "cli.mjs"), "doctor", "--rail", "evm"]);

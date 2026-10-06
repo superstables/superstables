@@ -34,9 +34,14 @@ function child(rail: string, action: string, box: ReturnType<typeof sandbox>, ma
   });
   return { p, done };
 }
-async function untilFile(path: string) {
+async function untilFile(path: string, running?: ReturnType<typeof child>) {
   const end = Date.now() + 8000;
-  while (!existsSync(path)) {
+  while (true) {
+    if (existsSync(path)) {
+      if (!running) return;
+      const stat = readFileSync(`/proc/${running.p.pid}/stat`, 'utf8');
+      if (stat.slice(stat.lastIndexOf(')') + 2).startsWith('T')) return;
+    }
     if (Date.now() > end) throw new Error(`child did not reach ${path}`);
     await sleep(10);
   }
@@ -127,7 +132,7 @@ describe.runIf(process.platform === 'linux')('operation writers share serializat
         createdAt: '2026-10-04T23:59:00Z' }));
       const marker = join(box.home, 'provisional-read');
       const reconcile = child(rail, 'reconcile', box, marker);
-      await untilFile(marker);
+      await untilFile(marker, reconcile);
       reconcile.p.kill('SIGCONT');
       const r = await reconcile.done;
       const line = r.stdout.trim().split('\n').reverse().find(l => l.startsWith('RESULT '));

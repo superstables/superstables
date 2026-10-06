@@ -290,8 +290,12 @@ configured public RPC. Use an RPC you trust when that matters. The budget rails 
 On chains that require finalized evidence, a custom RPC without the `finalized` block tag can
 show a matching paid transaction but cannot make its verification permanent. The payment is
 reported paid and its delivered response is saved; `status` or budget `reconcile` keeps checking
-it. Use an RPC that serves finalized history to finish verification. Read errors or missing
-inclusion remain unknown, with “Do not pay again”.
+it. Use an RPC that serves finalized history to finish verification. Read errors preserve the
+last observed payment state. Removed inclusion leaves the outcome unknown, with "Do not pay again".
+
+Ethereum Sepolia's public RPC may prune logs after about 10,000 blocks, roughly 33 hours. Budget
+recovery searches recent logs first and resumes a block scan for older replacements. Unavailable
+history preserves the unknown outcome. Use an RPC with the required history to finish recovery.
 
 The per-day cap (`caps.per_day`): a payment counts on the day it ended, and on every day while it
 can still move money: waiting for the owner within its approval window, or signed or sent and not

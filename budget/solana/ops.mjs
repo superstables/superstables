@@ -134,7 +134,7 @@ async function historyBoundary(conn, rec) {
   return typeof time === "number" && time < since ? { since, first } : null;
 }
 
-/** Finalized address history must cross the entire landing window, with every candidate read. */
+/** Address history discovers landed payments; it never proves absence. */
 async function addressHistory(conn, rec, epoch, boundary, options, progress) {
   if (boundary === null || !rec.agent) return { complete: false };
   let before = rec.historyBefore;
@@ -146,11 +146,11 @@ async function addressHistory(conn, rec, epoch, boundary, options, progress) {
     for (const entry of sigs) {
       if (typeof entry.signature !== "string" || !count(entry.slot) || entry.confirmationStatus !== "finalized") return { complete: false };
       const crossed = typeof boundary === "number" ? entry.slot <= boundary : typeof entry.blockTime === "number" && entry.blockTime < boundary.since;
-      if (crossed) return { complete: true };
+      if (crossed) return { complete: false };
       if (Date.now() + options.paceMs >= options.deadline || read >= initialRead + 8) return { complete: false };
       await options.pause(options.paceMs);
       const own = await matchingTransaction(conn, entry.signature, rec);
-      if (own) return { complete: true, own };
+      if (own) return { complete: false, own };
       before = entry.signature;
       read++;
       progress({ historyBefore: before, historyRead: read });
@@ -168,23 +168,24 @@ async function landingWindow(conn, rec, options, progress) {
   const window = slots.slice(0, 151);
   if (!window.every((slot, i) => count(slot) && slot > (i ? window[i - 1] : rec.searchFromSlot))) return { complete: false };
   const resumed = count(rec.searchedToSlot) ? window.indexOf(rec.searchedToSlot) : -1;
+  const incomplete = () => ({ complete: false, checkedBlocks: count(rec.searchedToSlot) ? window.indexOf(rec.searchedToSlot) + 1 : 0, totalBlocks: window.length });
   for (let i = resumed + 1; i < window.length; i++) {
-    if (Date.now() + options.paceMs >= options.deadline) return { complete: false };
+    if (Date.now() + options.paceMs >= options.deadline) return incomplete();
     await options.pause(options.paceMs);
     let block;
     try {
       block = await conn.getBlock(window[i], { commitment: "finalized", transactionDetails: "accounts", rewards: false, maxSupportedTransactionVersion: CANDIDATE_VERSION });
     } catch {
       // Completed slots are already saved. A 429 ends this run instead of starting web3 retry storms.
-      return { complete: false };
+      return incomplete();
     }
-    if (!block || block.blockHeight !== rec.lastValidBlockHeight - 149 + i || !Array.isArray(block.transactions)) return { complete: false };
+    if (!block || block.blockHeight !== rec.lastValidBlockHeight - 149 + i || !Array.isArray(block.transactions)) return incomplete();
     for (const entry of block.transactions) {
       const signatures = entry.transaction?.signatures;
-      if (!Array.isArray(signatures) || typeof signatures[0] !== "string" || !signatures.every((s) => typeof s === "string")) return { complete: false };
+      if (!Array.isArray(signatures) || typeof signatures[0] !== "string" || !signatures.every((s) => typeof s === "string")) return incomplete();
       if (signatures.includes(rec.agentSig)) {
         const own = await matchingTransaction(conn, signatures[0], rec);
-        if (!own || own.slot !== window[i]) return { complete: false };
+        if (!own || own.slot !== window[i]) return incomplete();
         return { complete: true, own };
       }
     }
@@ -193,7 +194,7 @@ async function landingWindow(conn, rec, options, progress) {
   return { complete: true };
 }
 
-// Discovery misses preserve uncertainty. Absence requires finalized expiry plus direct history or all landing blocks.
+// Absence requires finalized expiry plus known-ID signature history or all landing blocks.
 /** @param {{searchMs?: number, paceMs?: number, pause?: (ms: number) => Promise<unknown>, onProgress?: (patch: Record<string, unknown>) => void}} [options] */
 export async function assessOp(conn, rec, options = {}) {
   const { searchMs = 15_000, paceMs = 2000, pause = sleep, onProgress } = options;
@@ -203,7 +204,7 @@ export async function assessOp(conn, rec, options = {}) {
     if (onProgress) onProgress(patch);
     else if (rec.op && readOp(rec.op)) updateOp(rec.op, patch, "reconcile: saved completed history reads");
   };
-  const lostInclusion = { verdict: "pending", reason: "the earlier payment inclusion could not be verified; outcome unknown. Do not pay again" };
+  const lostInclusion = { verdict: "pending", reason: "The earlier payment inclusion could not be verified; outcome unknown. Do not pay again" };
   if (!rec.agentSig) return rec.inclusionObserved ? lostInclusion : { verdict: "no_tx" };
   if (await conn.getGenesisHash() !== DEVNET_GENESIS) throw new Error("RPC is not Solana devnet");
   const own = await findOwnTx(conn, rec, { discover: false, paceMs, pause });
@@ -219,7 +220,7 @@ export async function assessOp(conn, rec, options = {}) {
   const expired = count(last) && height > last;
   const pending = { verdict: "pending", blockHeight: height, lastValidBlockHeight: last ?? null, blocksLeft: count(last) && !expired ? last - height : null };
   const absent = () => rec.inclusionObserved
-    ? { ...pending, reason: "the earlier payment inclusion could not be found; its outcome is unknown. Do not pay again" }
+    ? { ...pending, reason: "The earlier payment inclusion could not be found; its outcome is unknown. Do not pay again" }
     : { verdict: "not_found", blockHeight: height, lastValidBlockHeight: last };
   if (!expired) {
     const discovered = ownFeePayer(rec) ? null : await findOwnTx(conn, rec, { paceMs, pause });
@@ -239,10 +240,9 @@ export async function assessOp(conn, rec, options = {}) {
   const boundary = await historyBoundary(conn, rec);
   const history = await addressHistory(conn, rec, epoch, boundary, readOptions, progress);
   if (history.own) return landed(history.own);
-  if (history.complete) return absent();
   const window = await landingWindow(conn, rec, readOptions, progress);
   if (window.own) return landed(window.own);
-  return window.complete ? absent() : pending;
+  return window.complete ? absent() : { ...pending, checkedBlocks: window.checkedBlocks, totalBlocks: window.totalBlocks };
 }
 
 /** A simulation refusal becomes permanent only when finalized reads prove no transaction landed. */

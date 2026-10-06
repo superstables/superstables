@@ -16,7 +16,7 @@ import { finalityFor } from "../../src/core/finality-policy.js";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
+import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, BlockNotFoundError, TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
 import {
   SYM,
   OPS_DIR, USDC, CFG, RAIL, cmd, erc20Abi, publicClient, usdc, sleep, tx, retry, allowanceOf, usdcBalance, readUntil, feeOf, sendJournaled, receiptOf,
@@ -224,7 +224,10 @@ export async function readPull(j: Journal, options: { final?: boolean } = {}): P
   }
   try {
     const head = await publicClient.getBlock({ blockTag: "latest" });
-    if (receipt.transactionHash.toLowerCase() !== j.pullTx.toLowerCase() || !(await canonicalReceipt(receipt, head))) return { found: false, unknown: true };
+    if (receipt.transactionHash.toLowerCase() !== j.pullTx.toLowerCase() || head.number === null || receipt.blockNumber > head.number) return { found: false, unknown: true };
+    const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
+    if (!block?.hash || block.number !== receipt.blockNumber) return { found: false, unknown: true };
+    if (receipt.logs.some((l) => l.removed) || block.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) return { found: false };
   } catch {
     return { found: false, unknown: true };
   }
@@ -238,15 +241,32 @@ export async function readPull(j: Journal, options: { final?: boolean } = {}): P
 }
 
 /** Timestamp searches read blocks, never pruned historical account state. */
-async function operationStart(j: Journal, head: Awaited<ReturnType<typeof finalHead>>): Promise<bigint> {
+export async function operationStart(j: Journal, head: Awaited<ReturnType<typeof finalHead>>): Promise<bigint> {
   if (j.pullBlock) return BigInt(j.pullBlock);
   const since = Date.parse(j.createdAt) / 1000 - 600;
   if (!Number.isFinite(since) || head.number === null) throw new Error("operation start unavailable");
-  let lo = 0n, hi = head.number;
+  const header = async (number: bigint) => {
+    try { return await publicClient.getBlock({ blockNumber: number }); }
+    catch (e) {
+      if (e instanceof BlockNotFoundError || /pruned|history unavailable|header not found/i.test(String(e))) return null;
+      throw e;
+    }
+  };
+  // Bracket the operation near the head before searching. Pruned headers only move the lower bound forward.
+  let lo = 0n, hi = head.number, step = 1024n;
+  while (hi > 0n) {
+    const probe = head.number > step ? head.number - step : 0n;
+    const block = await header(probe);
+    if (!block) { lo = probe + 1n; break; }
+    if (Number(block.timestamp) < since) { lo = probe; break; }
+    hi = probe;
+    if (probe === 0n) break;
+    step *= 2n;
+  }
   while (lo < hi) {
     const mid = (lo + hi) / 2n;
-    const block = await publicClient.getBlock({ blockNumber: mid });
-    if (Number(block.timestamp) < since) lo = mid + 1n;
+    const block = await header(mid);
+    if (!block || Number(block.timestamp) < since) lo = mid + 1n;
     else hi = mid;
   }
   return lo;
@@ -277,7 +297,8 @@ async function differentFinalNonceTransaction(j: Journal): Promise<Hex | undefin
     ];
     for (const filter of filters) {
       let step = BigInt(CFG.logRange ?? 1000);
-      for (let from = start, pages = 0; from <= head.number && pages < 50; pages++) {
+      const logStart = CFG.key === "ethereum-sepolia" && head.number > 9000n && start < head.number - 9000n ? head.number - 9000n : start;
+      for (let from = logStart, pages = 0; from <= head.number && pages < 50; pages++) {
         const to = from + step - 1n < head.number ? from + step - 1n : head.number;
         let logs;
         try { logs = await filter(from, to); }
@@ -346,8 +367,16 @@ export async function readSettlement(j: Journal): Promise<Settlement> {
       "event AuthorizationCanceled(address indexed authorizer, bytes32 indexed nonce)",
     ]);
     const inspect = async (hash: Hex): Promise<Settlement | undefined> => {
-      const receipt = await publicClient.getTransactionReceipt({ hash });
-      if (!receipt || receipt.transactionHash.toLowerCase() !== hash.toLowerCase() || receipt.status !== "success" || !(await canonicalReceipt(receipt, latest))) return undefined;
+      let receipt: Receipt;
+      try { receipt = await publicClient.getTransactionReceipt({ hash }); }
+      catch (e) {
+        if (e instanceof TransactionReceiptNotFoundError) return undefined;
+        throw e;
+      }
+      if (!receipt || receipt.transactionHash.toLowerCase() !== hash.toLowerCase() || receipt.status !== "success") return undefined;
+      const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
+      if (!block?.hash || block.number !== receipt.blockNumber) throw new Error("canonical block unavailable");
+      if (receipt.blockNumber > latest.number || receipt.logs.some((l) => l.removed) || block.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) return undefined;
       const final = head !== null && await canonicalReceipt(receipt, head);
       const matches = (name: "AuthorizationUsed" | "AuthorizationCanceled") => parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: name }).some((l) => l.address.toLowerCase() === USDC.toLowerCase() && l.args.authorizer.toLowerCase() === j.agent.toLowerCase() && l.args.nonce.toLowerCase() === auth.nonce.toLowerCase());
       if (matches("AuthorizationCanceled")) {
@@ -424,7 +453,7 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
     j.state = state; if (state !== "settled") delete j.final; j.reason = reason; j.next = next; j.notes.push(`reconcile: ${note}`); writeJournal(j);
   };
   const lostInclusion = (): { j: Journal; verdict: "unknown" } => {
-    save("unknown", "the earlier payment inclusion was removed; outcome unknown. Do not pay again.", `${cmd("reconcile.ts", `--op ${j.op}`)}. Do not pay again.`, "earlier inclusion missing");
+    save("unknown", "The earlier payment inclusion was removed; outcome unknown. Do not pay again.", `${cmd("reconcile.ts", `--op ${j.op}`)}. Do not pay again.`, "earlier inclusion missing");
     return { j, verdict: "unknown" };
   };
   if (!j.pullTx) {
@@ -434,6 +463,7 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   }
   const pull = await readPull(j);
   if (!pull.found) {
+    if (pull.unknown && j.state === "settled" && j.inclusionObserved) return { j, verdict: "settled" };
     const replacement = !pull.unknown && !pull.pendingInPool ? await differentFinalNonceTransaction(j) : undefined;
     if (replacement) {
       save("not_found", `a different final transaction ${replacement} consumed the pull nonce ${j.pullNonce}`, "nothing moved for this op. A new purchase needs a new --op.", "not_found (different final nonce-consuming transaction identified)");
@@ -446,7 +476,7 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   j.pullStatus = pull.status;
   if (pull.status === "reverted" && j.inclusionObserved) return lostInclusion();
   if (pull.status === "reverted" && !pull.final) {
-    save("unknown", "the pull landed and failed, but is not final on chain yet", cmd("reconcile.ts", `--op ${j.op}`), "pull failure not final");
+    save("unknown", "the pull landed and failed, but is not final on chain yet", `${cmd("reconcile.ts", `--op ${j.op}`)}. Do not pay again.`, "pull failure not final");
     return { j, verdict: "unknown" };
   }
   if (pull.status === "reverted") {
@@ -457,6 +487,7 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   j.pulled = usdc(pull.moved ?? 0n);
 
   const s = await readSettlement(j);
+  if (s.kind === "unread" && j.state === "settled" && j.inclusionObserved) return { j, verdict: "settled" };
   if (s.used) {
     j.settleTx = s.settleTx;
     j.settleStatus = s.status;
