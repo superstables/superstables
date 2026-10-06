@@ -345,6 +345,7 @@ describe("a Solana payment the chain refuses today", () => {
     // still valid: the seller could submit it after a new grant or deposit
     expect(await refusalIsFinal(conn(990), rec)).toBe(false);
     expect(await refusalIsFinal(conn(1000), rec)).toBe(false); // finalized expiry has not passed
+    expect(await refusalIsFinal(conn(1010), rec)).toBe(true); // finalized expiry and complete direct history
     expect(await refusalIsFinal(conn(2000), rec)).toBe(true);
     // a read that fails is never an answer
     expect(await refusalIsFinal(conn(2000, { getSignatureStatuses: async () => { throw new Error("fetch failed"); } }), rec)).toBe(false);

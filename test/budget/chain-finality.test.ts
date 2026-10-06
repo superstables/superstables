@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeEventTopics, parseAbi, type Hex } from "viem";
 import { readSettlement as hostedSettlement } from "../../budget/settlement.mjs";
 import { sendJson, readBody, startServer } from "../helpers/servers.js";
+import { SOLANA_MARKET, SOLANA_PAYER, startFakePurchaseSite } from "../helpers/fake-purchase-site.js";
 import { assessOp, refusalIsFinal } from "../../budget/solana/ops.mjs";
 
 const OWNER = "0x1111111111111111111111111111111111111111";
@@ -16,6 +17,7 @@ const BLOCK_HASH: Hex = `0x${"cd".repeat(32)}`;
 const NONCE: Hex = `0x${"ef".repeat(32)}`;
 const abi = parseAbi([
   "event Transfer(address indexed from, address indexed to, uint256 value)",
+  "event TransferWithMemo(address indexed from, address indexed to, uint256 value, bytes32 indexed memo)",
   "event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)",
   "event AuthorizationCanceled(address indexed authorizer, bytes32 indexed nonce)",
 ]);
@@ -183,14 +185,14 @@ describe("hosted client finality", () => {
     const server = await startServer(async (req, res) => {
       const call = JSON.parse(await readBody(req));
       const result = call.method === "eth_getTransactionReceipt"
-        ? { transactionHash: HASH, blockNumber: "0x64", blockHash: BLOCK_HASH, status: "0x1", logs: [transfer()] }
+        ? { transactionHash: HASH, blockNumber: "0x64", blockHash: BLOCK_HASH, status: "0x1", logs: [{ address: TOKEN, topics: used().topics, data: "0x" }, transfer(), { address: TOKEN, topics: encodeEventTopics({ abi, eventName: "TransferWithMemo", args: { from: AGENT, to: TO, memo: NONCE } }), data: transfer().data }] }
         : call.params[0] === "finalized"
           ? { number: final }
           : { number: call.params[0] === "latest" ? "0x6e" : "0x64", hash: canonical, timestamp: "0x7d0" };
       sendJson(res, 200, { jsonrpc: "2.0", id: call.id, result });
     });
     try {
-      const input = { rail: "evm", chain: "base-sepolia", tx: HASH, payer: AGENT, payTo: TO, asset: TOKEN, amount: 10000n, notBefore: 1000, rpcUrl: server.url, deadline: Date.now() + 10000 };
+      const input = { rail: "evm", chain: "base-sepolia", tx: HASH, payer: AGENT, payTo: TO, asset: TOKEN, amount: 10000n, notBefore: 1000, nonce: NONCE, rpcUrl: server.url, deadline: Date.now() + 10000 };
       expect((await hostedSettlement(input)).state).toBe("included");
       final = "0x6e";
       expect((await hostedSettlement(input)).state).toBe("settled");
@@ -201,28 +203,38 @@ describe("hosted client finality", () => {
       expect((await hostedSettlement({ ...input, rail: "tempo", chain: "moderato" })).state).toBe("settled");
     } finally { await server.close(); }
   });
-  it("reads hosted Solana payment at finalized commitment", async () => {
-    let finalized = false;
-    const server = await startServer(async (req, res) => {
-      const call = JSON.parse(await readBody(req));
-      const result = call.params[1].commitment === "finalized" && !finalized ? null : {
-        blockTime: 2000,
-        meta: { err: null, preTokenBalances: [
-          { mint: TOKEN, owner: AGENT, uiTokenAmount: { amount: "10000" } },
-          { mint: TOKEN, owner: TO, uiTokenAmount: { amount: "0" } },
-        ], postTokenBalances: [
-          { mint: TOKEN, owner: AGENT, uiTokenAmount: { amount: "0" } },
-          { mint: TOKEN, owner: TO, uiTokenAmount: { amount: "10000" } },
-        ] },
-      };
-      sendJson(res, 200, { jsonrpc: "2.0", id: call.id, result });
+  it("reads the hosted Solana payment identity at the same commitment as its execution", async () => {
+    const site = await startFakePurchaseSite();
+    site.services.push(SOLANA_MARKET);
+    site.finalizedSlot = 10;
+    const reads: unknown[] = [];
+    const proxy = await startServer(async (req, res) => {
+      const raw = await readBody(req);
+      const call = JSON.parse(raw);
+      reads.push(call.params[1]);
+      const response = await fetch(site.chainUrl, { method: "POST", headers: { "content-type": "application/json" }, body: raw });
+      sendJson(res, 200, await response.json());
     });
     try {
-      const input = { rail: "solana", chain: "devnet", tx: "signature", payer: AGENT, payTo: TO, asset: TOKEN, amount: 10000n, notBefore: 1000, rpcUrl: server.url, deadline: Date.now() + 10000 };
+      await fetch(`${site.url}/api/v1/purchases`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ service_id: SOLANA_MARKET.id }) });
+      const p = site.purchases[0];
+      const tx = "5".repeat(87);
+      site.settle(p, "ok", { transaction: tx, payer: SOLANA_PAYER });
+      const input = { rail: "solana", chain: "devnet", tx, payer: SOLANA_PAYER, payTo: SOLANA_MARKET.payTo, asset: SOLANA_MARKET.asset, amount: 10000n, notBefore: 0, nonce: p.nonce, rpcUrl: proxy.url, deadline: undefined };
       expect((await hostedSettlement(input)).state).toBe("included");
-      finalized = true;
+      site.finalizedSlot = 1000;
       expect((await hostedSettlement(input)).state).toBe("settled");
-    } finally { await server.close(); }
+      expect((await hostedSettlement({ ...input, nonce: NONCE })).state).toBe("mismatch");
+      expect(reads).toEqual([
+        expect.objectContaining({ encoding: "json", commitment: "finalized" }),
+        expect.objectContaining({ encoding: "json", commitment: "confirmed" }),
+        expect.objectContaining({ encoding: "base64", commitment: "confirmed" }),
+        expect.objectContaining({ encoding: "json", commitment: "finalized" }),
+        expect.objectContaining({ encoding: "base64", commitment: "finalized" }),
+        expect.objectContaining({ encoding: "json", commitment: "finalized" }),
+        expect.objectContaining({ encoding: "base64", commitment: "finalized" }),
+      ]);
+    } finally { await proxy.close(); await site.close(); }
   });
 });
 
