@@ -99,6 +99,6 @@ if (a.verdict === "no_tx") {
   emit(result("not_found", { reason: "blockhash expired", delivered: false, next: `nothing was paid; safe to buy again (this --op may be reused)` }), EXIT.OK);
 } else {
   updateOp(opId, { state: "unknown" }, `reconcile: pending, ${a.blocksLeft ?? "?"} blocks until the blockhash is provably dead`);
-  console.log(a.blocksLeft != null ? `Still unresolved: about ${a.blocksLeft} blocks remain before the blockhash expires. Do not pay again.` : "Still unresolved: no final settlement or final absence proof. Do not pay again.");
-  emit(result("unknown", { next: `run node budget/solana/reconcile.mjs --op ${opId} again later. Do not pay again.` }), EXIT.UNCERTAIN);
+  console.log(a.reason ?? (a.blocksLeft != null ? `Still unresolved: about ${a.blocksLeft} blocks remain before the blockhash expires. Do not pay again.` : "Still unresolved: no final settlement or final absence proof. Do not pay again."));
+  emit(result("unknown", { ...(a.reason ? { reason: a.reason } : {}), next: `run node budget/solana/reconcile.mjs --op ${opId} again later. Do not pay again.` }), EXIT.UNCERTAIN);
 }

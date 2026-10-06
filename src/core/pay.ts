@@ -589,7 +589,7 @@ export class PaymentEngine {
       settlement.transaction,
       await rail.checkPayment({ ...paymentFacts(attempt, signed.signer), transaction: settlement.transaction }, this.chainRead),
     );
-    if (failedWithTx && check.chain !== "verified") {
+    if (failedWithTx && check.chain !== "verified" && !check.included) {
       // The service says the payment did not settle, but names a transaction the chain does not confirm as this payment
       // (yet): not paid and not unpaid. Unknown, never retried.
       const said = settlement.errorReason ?? settlement.errorMessage;
@@ -600,7 +600,7 @@ export class PaymentEngine {
         serviceBody: body,
         ...facts,
         chain: check.chain,
-      ...(check.included ? { paymentIncluded: true } : {}),
+        ...(check.included ? { paymentIncluded: true } : {}),
         chainReason: check.reason,
         reason: `the service reported that the payment did not settle, but named transaction ${settlement.transaction}, and the chain does not confirm it is this payment (${check.reason}), so whether it was paid is unknown`,
         ...(said ? { serviceReason: said } : {}),
@@ -695,10 +695,10 @@ export class PaymentEngine {
       signed.hash,
       await this.waitForChain(rail, { ...paymentFacts(attempt, signed.signer), transaction: signed.hash }, rail.confirmWaitMs),
     );
-    if (check.chain !== "verified") {
+    if (check.chain !== "verified" && !check.included) {
       this.settleState(attempt, "uncertain", {
         chain: check.chain,
-      ...(check.included ? { paymentIncluded: true } : {}),
+        ...(check.included ? { paymentIncluded: true } : {}),
         chainReason: check.reason,
         reason:
           check.chain === "mismatch"

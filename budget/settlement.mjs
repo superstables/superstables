@@ -29,7 +29,8 @@ const topicAddress = (t) => (typeof t === "string" && t.length === 66 ? `0x${t.s
 
 /**
  * Whether transaction `tx` paid `amount` (atomic units, bigint) of `asset` to `payTo` (from `payer`, when the site named
- * one), after `notBefore` (unix seconds). { state: "settled" }, { state: "mismatch", reason } when the chain shows that
+ * one), after `notBefore` (unix seconds). Final payments return { state: "settled" }; matching landed
+ * payments waiting for finality return { state: "included", reason }. { state: "mismatch", reason } when the chain shows that
  * transaction and it is not that payment, or { state: "unread", reason } when the chain cannot say (not found, RPC down).
  */
 export async function readSettlement({ rail, chain, tx, payer, payTo, asset, amount, notBefore, rpcUrl, deadline }) {
