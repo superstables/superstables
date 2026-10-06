@@ -71,7 +71,7 @@ try {
   // A failed read changes no payment evidence already observed.
   if (rec.state === "settled" && rec.inclusionObserved) {
     console.log(`Could not read the chain: ${e?.message ?? e}. Keeping the earlier payment inclusion.`);
-    emit(result("settled", { debit: rec.debit ?? rec.amountUsdc ?? "0", final: false, next: `Run superstables budget reconcile --rail solana --op ${opId} later to check finality. Do not pay again.${rec.delivered === false ? " Contact the seller." : ""}` }), EXIT.OK);
+    emit(result("settled", { debit: rec.debit ?? rec.amountUsdc ?? "0", chain_final: false, next: `Run superstables budget reconcile --rail solana --op ${opId} later to check finality. Do not pay again.${rec.delivered === false ? " Contact the seller." : ""}` }), EXIT.OK);
   }
   if (["failed", "not_found", "refused_chain"].includes(rec.state)) {
     console.log(`Could not read the chain: ${e?.message ?? e}. Keeping the recorded state: ${rec.state}.`);
@@ -94,7 +94,7 @@ if (a.verdict === "no_tx") {
   if (!alreadyFinal) updateOp(opId, { state: "settled", final: a.final !== false, inclusionObserved: true, tx: a.tx, debit, movement }, "reconcile: own transaction succeeded");
   console.log(`Settled: our transaction succeeded on chain, debit ${debit} USDC${moved}.`);
   console.log(`Delivered: ${rec.delivered ?? "unknown (the seller's answer was not recorded)"}. A delivery problem never triggers a new payment.`);
-  emit(result("settled", { tx: a.tx, debit, final: a.final !== false, next: a.final === false ? `the payment landed, but is not final on chain yet. Run superstables budget reconcile --rail solana --op ${opId} later. Do not pay again.${rec.delivered === false ? " Contact the seller." : ""}` : rec.delivered === false ? `settled but not delivered: do not pay again; contact the seller with tx ${a.tx}` : "none" }), EXIT.OK);
+  emit(result("settled", { tx: a.tx, debit, chain_final: alreadyFinal ? rec.final ?? null : a.final !== false, next: a.final === false ? `the payment landed, but is not final on chain yet. Run superstables budget reconcile --rail solana --op ${opId} later. Do not pay again.${rec.delivered === false ? " Contact the seller." : ""}` : rec.delivered === false ? `settled but not delivered: do not pay again; contact the seller with tx ${a.tx}` : "none" }), EXIT.OK);
 } else if (a.verdict === "failed") {
   updateOp(opId, { state: "failed", tx: a.tx, error: a.err }, "reconcile: own transaction failed on chain");
   console.log(`Failed on chain: ${JSON.stringify(a.err)}. Nothing moved.`);

@@ -254,6 +254,8 @@ export interface Attempt {
   chainReason?: string;
   /** Inclusion was proven; a later reorg cannot authorize repayment. */
   paymentIncluded?: true;
+  /** Present only when this version observed matching chain evidence. */
+  chain_final?: boolean | null;
   receiptId?: string;
   history: AttemptTransition[];
 }
@@ -284,6 +286,8 @@ export interface Receipt {
   chainReason?: string;
   /** Inclusion was proven; a later reorg cannot authorize repayment. */
   paymentIncluded?: true;
+  /** Present only when this version observed matching chain evidence. */
+  chain_final?: boolean | null;
   /** Payment success and service success are two different facts. */
   serviceOutcome: ServiceOutcome;
   serviceStatus?: number;

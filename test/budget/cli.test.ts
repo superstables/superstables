@@ -142,10 +142,10 @@ describe("a checkout without its dev packages", () => {
     const dir = join(work, "home", "budget", "ops", `${rail}-${chain}`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${op}.json`), JSON.stringify({ op, state: "settled", final: false, path: "approve" }));
-    writeFileSync(join(repo, "budget", rail, "reconcile.mjs"), `console.log('RESULT ' + JSON.stringify({ state: 'settled', final: false, delivered: false, debit: '0.01', next: 'node budget/${rail}/reconcile.mjs' }));`);
+    writeFileSync(join(repo, "budget", rail, "reconcile.mjs"), `console.log('RESULT ' + JSON.stringify({ state: 'settled', chain_final: false, delivered: false, debit: '0.01', next: 'node budget/${rail}/reconcile.mjs' }));`);
     const r = await run([join(repo, "budget", "cli.mjs"), "reconcile", "--rail", rail, "--op", op]);
     expect(r.code).toBe(4);
-    expect(result(r.stdout)).toMatchObject({ state: "settled", paid: true, delivered: false, final: false, next: `Run superstables budget reconcile --rail ${rail}${rail === "evm" ? " --chain base-sepolia" : ""} --op ${op} later to check finality. Do not pay again. Contact the seller.` });
+    expect(result(r.stdout)).toMatchObject({ state: "settled", paid: true, delivered: false, final: true, chain_final: false, next: `Run superstables budget reconcile --rail ${rail}${rail === "evm" ? " --chain base-sepolia" : ""} --op ${op} later to check finality. Do not pay again. Contact the seller.` });
   });
   it.each(["unknown", "settled"])("published reconcile separates command completion from chain finality: %s", async (state) => {
     const repo = checkoutWithoutDevPackages();
@@ -155,7 +155,7 @@ describe("a checkout without its dev packages", () => {
     writeFileSync(join(dir, "test-order.json"), JSON.stringify({ op: "test-order", state: "unknown" }));
     writeFileSync(join(repo, "budget", "solana", "reconcile.mjs"), `console.log('RESULT ' + JSON.stringify({ state: '${state}', delivered: true, debit: '0.01' }));`);
     const r = await run([join(repo, "budget", "cli.mjs"), "reconcile", "--rail", "solana", "--op", "test-order"]);
-    expect(result(r.stdout)).toMatchObject({ state, complete: true, final: state === "settled" });
+    expect(result(r.stdout)).toMatchObject({ state, final: true, chain_final: null });
   });
   it.each(["unknown", "refused_precheck", "settled"])("published wait normalizes a legacy stored %s result", async (state) => {
     const repo = checkoutWithoutDevPackages();
@@ -164,10 +164,36 @@ describe("a checkout without its dev packages", () => {
     const dir = join(work, "home", "budget", "approvals");
     mkdirSync(dir, { recursive: true });
     const paid = state === "settled";
-    writeFileSync(join(dir, `${id}.json`), JSON.stringify({ id, command: "grant", rail: "evm", chain: "base-sepolia", final: { code: paid ? 0 : 5, result: { command: "grant", state, final: true } } }));
+    writeFileSync(join(dir, `${id}.json`), JSON.stringify({ id, command: "grant", rail: "evm", chain: "base-sepolia", final: { code: paid ? 0 : 5, result: { command: "grant", state, final: true, complete: true } } }));
     const r = await run([join(repo, "budget", "cli.mjs"), "wait", "--id", id, "--shown", "--json"]);
-    expect(JSON.parse(r.stdout)).toMatchObject({ state, complete: true, final: false });
+    expect(JSON.parse(r.stdout)).toMatchObject({ state, final: true, chain_final: null });
+    expect(JSON.parse(r.stdout)).not.toHaveProperty("complete");
   });
+  for (const rail of ["evm", "solana", "tempo"]) for (const command of ["buy", "reconcile"]) {
+    for (const json of [false, true]) for (const [state, chainFinal, delivered, code] of [
+      ["settled", false, true, 0], ["settled", false, false, 4],
+      ["settled", true, true, 0], ["unknown", null, true, 5],
+    ] as const) it(`${rail} ${command} keeps the 0.3.0 completion contract: ${state}/${chainFinal}/${delivered}, json=${json}`, async () => {
+      const repo = checkoutWithoutDevPackages();
+      unlinkSync(join(repo, "budget", "owner-page.ts"));
+      const chain = rail === "evm" ? "base-sepolia" : rail === "solana" ? "devnet" : "moderato";
+      const dir = join(work, "home", "budget", "ops", `${rail}-${chain}`);
+      mkdirSync(dir, { recursive: true });
+      if (command === "reconcile") writeFileSync(join(dir, "contract.json"), JSON.stringify({ op: "contract", state: "unknown" }));
+      // An existing setup lets buy reach the stand-in rail without a wallet or a payment.
+      mkdirSync(join(work, "home", "keys", "budget"), { recursive: true });
+      mkdirSync(join(work, "home", "budget", "public"), { recursive: true });
+      writeFileSync(join(work, "home", "keys", "budget", `${rail}-agent.env`), "B4_AGENT_KEY=test\nAGENT_PRIVATE_KEY=test\nSOLANA_AGENT_SECRET_BASE58=test", { mode: 0o600 });
+      writeFileSync(join(work, "home", "budget", "public", `${rail}-${chain}.env`), "B4_OWNER_ADDRESS=test\nOWNER_ADDRESS=test\nSOLANA_OWNER_ADDRESS=test");
+      writeFileSync(join(repo, "budget", rail, `${command}.mjs`), `console.log('RESULT ' + JSON.stringify(${JSON.stringify({ state, final: chainFinal !== false, chain_final: chainFinal, delivered, debit: "0.01" })}));`);
+      const args = [join(repo, "budget", "cli.mjs"), command, "--rail", rail, "--op", "contract", ...(json ? ["--json"] : []), ...(command === "buy" ? ["--url", "https://seller.example", "--max", "1"] : [])];
+      const r = await run(args);
+      const out = json ? JSON.parse(r.stdout) : result(r.stdout);
+      expect(r.code, r.stderr).toBe(code);
+      expect(out).toMatchObject({ state, final: true, chain_final: chainFinal, paid: state === "settled" ? true : null, delivered });
+      expect(out).not.toHaveProperty("complete");
+    });
+  }
   it("says what to run when it has no build either", async () => {
     const repo = checkoutWithoutDevPackages();
     const r = await run([join(repo, "budget", "cli.mjs"), "doctor", "--rail", "evm"]);

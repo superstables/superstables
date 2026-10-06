@@ -329,13 +329,13 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(statSync(done.result.responseFile).mode & 0o777).toBe(0o600);
     expect(done.result).toMatchObject({ responseType: "application/json", responseTruncated: false });
     // Landing delivers now while the token remains private for finality rechecks.
-    expect(done.result.final).toBe(false);
+    expect(done.result).toMatchObject({ final: true, chain_final: false });
     expect(recordOf(id).final).toBeUndefined();
     expect(recordOf(id).hosted.token).toBe(site.purchases[0].token);
     site.finalizedBlock = 1000;
     const final = await budget(["wait", "--shown", "--id", id]);
     expect(final.code).toBe(0);
-    expect(final.result.final).not.toBe(false);
+    expect(final.result).toMatchObject({ final: true, chain_final: true });
     expect(readFileSync(path, "utf8")).not.toContain("sspt_");
     const again = await budget(["wait", "--id", id]); // a finished purchase needs no --shown
     expect(again.code).toBe(0);
@@ -417,7 +417,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const first = await once();
     const second = await once();
     expect(second.code).toBe(3);
-    expect(second.result).toMatchObject({ state: "refused_pending", complete: true, final: false, paid: null, delivered: null, amount: null, pending: { id: first.result.id, state: "waiting_owner", url: first.result.url, matchCode: "KPT-RWD" } });
+    expect(second.result).toMatchObject({ state: "refused_pending", final: true, paid: null, delivered: null, amount: null, pending: { id: first.result.id, state: "waiting_owner", url: first.result.url, matchCode: "KPT-RWD" } });
     expect(second.result.id).toBeUndefined();
     expect(second.result.reason).toMatch(/^no new purchase was started: /);
     expect(second.result.next).toMatch(new RegExp(`superstables budget wait --id ${first.result.id}`));
@@ -627,7 +627,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     Object.assign(site.purchases[0], { state: "uncertain", final: false, payment: { status: "unknown" } });
     const given = await budget(["wait", "--id", first.result.id, "--abandon"]);
     expect(given.code).toBe(5);
-    expect(given.result).toMatchObject({ state: "unknown", complete: true, final: false, paid: null, delivered: null, amount: null, id: first.result.id });
+    expect(given.result).toMatchObject({ state: "unknown", final: true, paid: null, delivered: null, amount: null, id: first.result.id });
     expect(Date.parse(given.result.abandonedAt)).toBeGreaterThan(Date.now() - 60_000);
     expect(given.stderr).toMatch(/Whether a payment left is unknown/);
     // the record stays, without its access token, with the final answer
@@ -733,7 +733,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const after = await once();
     expect(after.code, after.stderr).toBe(0);
     expect(site.purchases).toHaveLength(2);
-    expect(recordOf(first.result.id).included).toMatchObject({ code: 0, result: { paid: true, final: false } });
+    expect(recordOf(first.result.id).included).toMatchObject({ code: 0, result: { paid: true, final: true, chain_final: false } });
     expect(recordOf(first.result.id).final).toBeUndefined();
   }, 90_000);
 
@@ -1210,4 +1210,47 @@ describe("buy-once on Arc Testnet", () => {
     expect(r.approve).toBeNull();
     expect(site.purchases.every((p) => p.state === "denied")).toBe(true);
   }, 60_000);
+});
+
+// Matching inclusion completes the command. It remains re-readable until chain finality.
+describe("buy-once preserves the 0.3.0 final contract", () => {
+  it.each([["evm", true], ["evm", false], ["solana", true], ["solana", false]] as const)("%s provisional, removed and finalized results through the real dispatcher, delivered=%s", async (rail, delivered) => {
+    const service = rail === "evm" ? MARKET : SOLANA_MARKET;
+    if (rail === "solana") site.services.push(structuredClone(service));
+    site.finalizedSlot = 10;
+    const first = await once([], ["--service", service.id, "--param", "asset=BTC", "--max", "0.01"]);
+    expect(first.result).toMatchObject({ state: "waiting_owner", final: false, chain_final: null });
+    const tx = rail === "evm" ? TX : "5".repeat(87);
+    const payer = rail === "evm" ? PAYER : SOLANA_PAYER;
+    const p = site.purchases[0];
+    site.settle(p, { delivered: true }, { transaction: tx, payer });
+    if (!delivered) p.delivery = { status: "failed", http_status: 500 };
+    const wait = () => budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+    const included = await wait();
+    expect(included.code, included.stderr).toBe(delivered ? 0 : 4);
+    expect(included.result).toMatchObject({ state: "settled", paid: true, delivered, final: true, chain_final: false });
+    expect(included.result).not.toHaveProperty("complete");
+    site.removePayment(tx);
+    const removed = await wait();
+    expect(removed.code).toBe(5);
+    expect(removed.result).toMatchObject({ state: "unknown", paid: null, final: false, chain_final: null });
+    expect(removed.result.next).toMatch(/do not pay again|never buy this again/i);
+    expect(recordOf(first.result.id).final).toBeUndefined();
+    site.pay(p, { transaction: tx, payer });
+    site.finalizedBlock = 1000; site.finalizedSlot = 1000;
+    const final = await wait();
+    expect(final.code, final.stderr).toBe(delivered ? 0 : 4);
+    expect(final.result).toMatchObject({ state: "settled", final: true, chain_final: true });
+    expect(site.purchases).toHaveLength(1);
+  });
+  it("Tempo requires canonical committed inclusion and uses additive chain_final", async () => {
+    site.services.push(structuredClone(TEMPO_MARKET));
+    const first = await once([], ["--service", TEMPO_MARKET.id, "--param", "asset=BTC", "--max", "0.01"]);
+    const p = site.purchases[0];
+    site.settle(p, { delivered: true }, { transaction: TX, payer: PAYER, chain: false });
+    const wait = () => budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+    expect((await wait()).result).toMatchObject({ state: "unknown", final: false, chain_final: null });
+    site.pay(p, { transaction: TX, payer: PAYER });
+    expect((await wait()).result).toMatchObject({ state: "settled", paid: true, delivered: true, final: true, chain_final: true });
+  });
 });

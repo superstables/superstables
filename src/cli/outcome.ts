@@ -43,13 +43,6 @@ export function isFinalAttempt(attempt: Attempt): boolean {
   return FINAL_ATTEMPT_STATES.includes(attempt.state);
 }
 
-/** A completed buy can still await chain finality; reporting paid does not make its evidence permanent. */
-export function isFinalResult(attempt: Attempt): boolean {
-  if (attempt.state === "uncertain") return false;
-  if (attempt.state === "settled" || attempt.state === "paid_service_failed") return attempt.chain === "verified";
-  return isFinalAttempt(attempt);
-}
-
 /** The exit code an attempt's state stands for. A state that is not final yet is 0: nothing has gone wrong. */
 export function exitCodeFor(attempt: Attempt): ExitCode {
   switch (attempt.state) {

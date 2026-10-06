@@ -33,6 +33,7 @@ export type Journal = {
   state: OpState;
   /** false keeps a landed result reconcilable; omitted on older permanent records. */
   final?: boolean;
+  settleBlock?: string;
   inclusionObserved?: true;
   replacementSearchTo?: string;
   createdAt: string;
@@ -169,7 +170,7 @@ export async function resultLine(j: Journal, command: "buy" | "reconcile", extra
     path: "approve",
     op: j.op,
     state: outState(j.state),
-    ...(j.final === false ? { final: false } : {}),
+    chain_final: j.state === "settled" ? j.final ?? null : null,
     paid: j.state === "settled" ? true : j.state === "unknown" || j.state === "submitted" ? null : false,
     delivered: j.delivered,
     amount: j.price ?? null,
@@ -357,7 +358,7 @@ export type Settlement =
   | { kind: "unread"; used: false; canceled: false; reason: string }
   | { kind: "pending"; used: false; canceled: false; reason: string }
   | { kind: "canceled"; used: false; canceled: boolean; final: boolean }
-  | { kind: "used"; used: true; canceled: false; settleTx: Hex; status: "success"; transferOk: boolean; final: boolean };
+  | { kind: "used"; used: true; canceled: false; settleTx: Hex; status: "success"; transferOk: boolean; final: boolean; block: bigint };
 
 /** Latest use, canonical inclusion, and finality are separate observations. Read errors never imply use. */
 export async function readSettlement(j: Journal): Promise<Settlement> {
@@ -367,7 +368,10 @@ export async function readSettlement(j: Journal): Promise<Settlement> {
     const latest = await publicClient.getBlock({ blockTag: "latest" });
     if (latest.number === null) throw new Error("latest block unavailable");
     const done = await retry(() => publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: "authorizationState", args: [j.agent, auth.nonce], blockNumber: latest.number }));
-    if (!done) return { kind: "unused", used: false, canceled: false };
+    if (!done) {
+      if (j.inclusionObserved && (!j.settleBlock || latest.number < BigInt(j.settleBlock))) return { kind: "unread", used: false, canceled: false, reason: "latest head has not reached the observed settlement block" };
+      return { kind: "unused", used: false, canceled: false };
+    }
     const head = await finalHead().catch(() => null);
     const events = parseAbi([
       "event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)",
@@ -393,7 +397,7 @@ export async function readSettlement(j: Journal): Promise<Settlement> {
       }
       if (!matches("AuthorizationUsed")) return undefined;
       const transferOk = parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: "Transfer" }).some((l) => l.address.toLowerCase() === USDC.toLowerCase() && l.args.from.toLowerCase() === auth.from.toLowerCase() && l.args.to.toLowerCase() === auth.to.toLowerCase() && l.args.value === BigInt(auth.value));
-      return { kind: "used", used: true, canceled: false, settleTx: hash, status: "success", transferOk, final };
+      return { kind: "used", used: true, canceled: false, settleTx: hash, status: "success", transferOk, final, block: receipt.blockNumber };
     };
     for (const hash of [j.settleTx, j.cancelTx]) {
       if (!hash) continue;
@@ -509,6 +513,7 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   if (s.used) {
     j.settleTx = s.settleTx;
     j.settleStatus = s.status;
+    j.settleBlock = String(s.block);
     if (s.status === "success" && s.transferOk) {
       j.inclusionObserved = true;
       j.final = pull.final && s.final;

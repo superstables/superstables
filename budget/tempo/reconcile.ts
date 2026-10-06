@@ -47,6 +47,7 @@ async function main() {
   const done = (state: OpState, f: { tx?: string; debit?: bigint | null; reason?: string; next?: string; exit: number }): never => {
     const alreadySettled = op.state === 'settled'
     op.state = state
+    if (state === 'settled' && !alreadySettled) op.chain_final = true
     if (f.tx) op.tx = f.tx
     if (f.reason) op.reason = f.reason
     if (!alreadySettled) writeOp(op, `reconcile: ${f.reason ?? state}`)
@@ -57,6 +58,7 @@ async function main() {
       printResult({
         op: opId,
         state,
+        chain_final: state === 'settled' ? op.chain_final ?? null : null,
         tx: op.tx ?? null,
         debit: f.debit === undefined || f.debit === null ? null : fromBaseUnits(f.debit),
         remaining: remaining === null ? null : fromBaseUnits(remaining),

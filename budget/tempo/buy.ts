@@ -101,6 +101,7 @@ let saved: Record<string, unknown> | null = null
 function finish(state: OpState, f: { tx?: string | null; debit?: bigint | null; remaining?: bigint | null; delivered?: boolean | null; next?: string; reason?: string }): never {
   if (op) {
     op.state = state
+    if (state === 'settled') op.chain_final = true
     if (f.tx) op.tx = f.tx
     if (f.delivered !== undefined && f.delivered !== null) op.delivered = f.delivered
     if (f.reason) op.reason = f.reason
@@ -110,6 +111,7 @@ function finish(state: OpState, f: { tx?: string | null; debit?: bigint | null; 
   printResult({
     op: opId,
     state,
+    chain_final: state === 'settled' ? true : null,
     tx: f.tx ?? null,
     debit: f.debit === undefined || f.debit === null ? null : fromBaseUnits(f.debit),
     remaining: f.remaining === undefined || f.remaining === null ? null : fromBaseUnits(f.remaining),

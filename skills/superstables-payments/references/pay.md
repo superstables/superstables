@@ -1,5 +1,7 @@
 # Paying one payment at a time: pay
 
+For `pay` and `status`, `final` keeps its 0.3.0 meaning: the attempt's running workflow has ended, including `uncertain`. It does not prove payment or stop read-only recovery. `chain: verified` means a matching payment was read on chain. `chain_final` separately reports `true` after finality, `false` for matching provisional inclusion, or `null` when no current matching inclusion is established. Read `status` again when finality is pending or the outcome is uncertain.
+
 ## Contents
 
 - How `pay` runs
