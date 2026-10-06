@@ -62,12 +62,12 @@ describe('recovering abandoned operation locks', () => {
       }
     });
   }
-  it('retains fresh damaged records and automatically recovers a proven earlier boot', () => {
+  it('retains fresh damaged records and fresh records from a different boot', () => {
     const b = box();
     for (const text of ['', JSON.stringify({ ...dead, bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7b', heartbeatAt: Date.now() })]) {
       writeFileSync(b.path, text);
       const lock = locks.lockFile(b.path);
-      expect(lock.ok).toBe(text !== '');
+      expect(lock.ok).toBe(false);
       if (lock.ok) lock.release();
     }
   });

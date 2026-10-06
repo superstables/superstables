@@ -14,7 +14,7 @@ import { linkSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 
-import { createIdentitySource, inspectProcess, preferredProcessStart, sameProcess } from "./process-identity.mjs";
+import { createIdentitySource, inspectProcess, inspectLegacyCap, preferredProcessStart, sameProcess } from "./process-identity.mjs";
 export { processStart } from "./process-identity.mjs";
 const identity = createIdentitySource();
 
@@ -64,13 +64,13 @@ async function acquire(path: string, me: string, deadline: number, breakDead?: (
         if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       }
       const { text, holder } = readHolder(path);
-      if (text !== null && holder && !sameProcess(Number(holder.pid), holder.pidStart, holder.pidStartUtc, holder)) {
+      if (text !== null && holder && (path.endsWith("cap.lock") && !holder.bootId ? inspectLegacyCap(holder).state === "dead" : !sameProcess(Number(holder.pid), holder.pidStart, holder.pidStartUtc, holder))) {
         if (breakDead) await breakDead(text);
         else removeIfSame(path, text);
       } else if (Date.now() >= deadline) {
         throw new Error(
           holder
-            ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}${inspectProcess(holder).possiblyAlive ? "; the holder may still be running; stop all work and retry on the host, outside the sandbox, where process identity and the PID namespace can be read" : ""}`
+            ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}${inspectProcess(holder).possiblyAlive ? "; the holder may still be running; stop and ask the owner to check the payment lock in their own terminal, outside the agent's sandbox. Agents must not clear payment locks" : ""}`
             : `the lock ${path} cannot be read; if no payment is being made, remove it`,
         );
       }

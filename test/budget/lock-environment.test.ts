@@ -59,7 +59,7 @@ for (const platform of ['linux', 'darwin']) {
     expect(lockFile(b.path, { identitySource, confirmUnverifiable: true }).ok).toBe(false);
     expect(readFileSync(b.path, 'utf8')).toBe(JSON.stringify(record));
   });
-  it(`recovers a dead ${platform} holder after a hostname change on the same boot`, () => {
+  it(`retains a dead ${platform} holder after a hostname change without proof of location`, () => {
     const b = box();
     const record = { ...createIdentitySource().record(), platform, hostname: 'machine.lan', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', pid: 42, pidStart: null, pidStartUtc: null, namespace: platform === 'linux' ? 'pid:[test]' : null };
     const identitySource = { pids: () => [process.pid], record: () => ({ ...record, hostname: 'machine.local', pid: process.pid }), start: () => null, probe: (pid: number) => {
@@ -68,7 +68,7 @@ for (const platform of ['linux', 'darwin']) {
     } };
     writeFileSync(b.path, JSON.stringify(record));
     const lock = lockFile(b.path, { identitySource });
-    try { expect(lock.ok).toBe(true); } finally { if (lock.ok) lock.release(); }
+    try { expect(lock.ok).toBe(false); } finally { if (lock.ok) lock.release(); }
   });
 }
 it('retains old clock-based macOS boot records and malformed boot-session UUIDs as unverifiable', () => {
@@ -93,7 +93,7 @@ it('rechecks the lock after the override warning so a normally released holder a
   const system = createIdentitySource();
   const real = { ...system, record: () => ({ ...system.record(), bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', namespace: 'pid:[test]' }) };
   const old = lockFile(b.path, { identitySource: real }); expect(old.ok).toBe(true);
-  const foreign = { ...real, record: () => ({ ...real.record(), hostId: 'another-host' }) };
+  const foreign = { ...real, record: () => ({ ...real.record(), namespace: null, hostId: 'another-host' }) };
   let successor: ReturnType<typeof lockFile> | undefined;
   const result = lockFile(b.path, { identitySource: foreign, confirmUnverifiable: true, confirmPossiblyAlive: true, onOverride: () => {
     if (old.ok) old.release();
