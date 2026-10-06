@@ -147,6 +147,27 @@ describe("a checkout without its dev packages", () => {
     expect(r.code).toBe(4);
     expect(result(r.stdout)).toMatchObject({ state: "settled", paid: true, delivered: false, final: false, next: `Run superstables budget reconcile --rail ${rail}${rail === "evm" ? " --chain base-sepolia" : ""} --op ${op} later to check finality. Do not pay again. Contact the seller.` });
   });
+  it.each(["unknown", "settled"])("published reconcile separates command completion from chain finality: %s", async (state) => {
+    const repo = checkoutWithoutDevPackages();
+    unlinkSync(join(repo, "budget", "owner-page.ts"));
+    const dir = join(work, "home", "budget", "ops", "solana-devnet");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "test-order.json"), JSON.stringify({ op: "test-order", state: "unknown" }));
+    writeFileSync(join(repo, "budget", "solana", "reconcile.mjs"), `console.log('RESULT ' + JSON.stringify({ state: '${state}', delivered: true, debit: '0.01' }));`);
+    const r = await run([join(repo, "budget", "cli.mjs"), "reconcile", "--rail", "solana", "--op", "test-order"]);
+    expect(result(r.stdout)).toMatchObject({ state, complete: true, final: state === "settled" });
+  });
+  it.each(["unknown", "refused_precheck", "settled"])("published wait normalizes a legacy stored %s result", async (state) => {
+    const repo = checkoutWithoutDevPackages();
+    unlinkSync(join(repo, "budget", "owner-page.ts"));
+    const id = "oa-20260930120000-1a2b3c4d";
+    const dir = join(work, "home", "budget", "approvals");
+    mkdirSync(dir, { recursive: true });
+    const paid = state === "settled";
+    writeFileSync(join(dir, `${id}.json`), JSON.stringify({ id, command: "grant", rail: "evm", chain: "base-sepolia", final: { code: paid ? 0 : 5, result: { command: "grant", state, final: true } } }));
+    const r = await run([join(repo, "budget", "cli.mjs"), "wait", "--id", id, "--shown", "--json"]);
+    expect(JSON.parse(r.stdout)).toMatchObject({ state, complete: true, final: false });
+  });
   it("says what to run when it has no build either", async () => {
     const repo = checkoutWithoutDevPackages();
     const r = await run([join(repo, "budget", "cli.mjs"), "doctor", "--rail", "evm"]);

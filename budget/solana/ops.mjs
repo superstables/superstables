@@ -287,7 +287,7 @@ export function gateExistingOp(rec) {
     return { allow: false, state: "settled", tx: rec.tx ?? null, reason: `operation ${rec.op} is already settled (${rec.tx ?? "no tx id"}); use a new --op for a new purchase` };
   }
   if (pending) {
-    return { allow: false, state: rec.state, tx: rec.tx ?? null, reason: `operation ${rec.op} is ${rec.state}; its transaction may still land. Run: node budget/solana/reconcile.mjs --op ${rec.op}` };
+    return { allow: false, state: rec.state, tx: rec.tx ?? null, reason: `operation ${rec.op} is ${rec.state}; its transaction may still land. Run: superstables budget reconcile --rail solana --op ${rec.op}` };
   }
   return { allow: true };
 }

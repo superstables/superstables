@@ -266,7 +266,7 @@ describe("buy once, as the CLI: wait and the next buy-once never say waiting for
       site.readAnswer = (p) => ({ status: 200, body: row.view(p.id, rail.hash, rail.payer) });
       const w = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
       expect(w.code, w.stderr).toBe(5);
-      expect(w.result).toMatchObject({ state: "unknown", paid: null, final: !row.final ? false : true });
+      expect(w.result).toMatchObject({ state: "unknown", paid: null, complete: row.final, final: false });
       expect(w.result.reason).toMatch(row.reason);
       clean(w.stdout + w.stderr, "wait");
       const next = await buyOnce(rail);

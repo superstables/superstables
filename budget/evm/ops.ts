@@ -218,6 +218,13 @@ export async function readPull(j: Journal, options: { final?: boolean } = {}): P
     receipt = null;
   }
   if (!receipt) {
+    if (j.inclusionObserved) {
+      if (!j.pullBlock) return { found: false, unknown: true };
+      try {
+        const head = await publicClient.getBlock({ blockTag: "latest" });
+        if (head.number === null || head.number < BigInt(j.pullBlock)) return { found: false, unknown: true };
+      } catch { return { found: false, unknown: true }; }
+    }
     let inPool = false;
     try { inPool = !!(await publicClient.getTransaction({ hash: j.pullTx })); } catch {}
     return { found: false, pendingInPool: inPool };
@@ -462,8 +469,13 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
     return { j, verdict: "not_found" };
   }
   const pull = await readPull(j);
+  if (j.inclusionObserved && (!pull.found || pull.status === "reverted")) {
+    if (!pull.found && pull.unknown) return { j, verdict: j.state === "settled" ? "settled" : "unknown" };
+    const confirmation = await readPull(j);
+    if ((!confirmation.found && !confirmation.unknown) || (confirmation.found && confirmation.status === "reverted")) return lostInclusion();
+    return { j, verdict: j.state === "settled" ? "settled" : "unknown" };
+  }
   if (!pull.found) {
-    if (pull.unknown && j.state === "settled" && j.inclusionObserved) return { j, verdict: "settled" };
     const replacement = !pull.unknown && !pull.pendingInPool ? await differentFinalNonceTransaction(j) : undefined;
     if (replacement) {
       save("not_found", `a different final transaction ${replacement} consumed the pull nonce ${j.pullNonce}`, "nothing moved for this op. A new purchase needs a new --op.", "not_found (different final nonce-consuming transaction identified)");
@@ -474,7 +486,6 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   }
   j.pullBlock = String(pull.block);
   j.pullStatus = pull.status;
-  if (pull.status === "reverted" && j.inclusionObserved) return lostInclusion();
   if (pull.status === "reverted" && !pull.final) {
     save("unknown", "the pull landed and failed, but is not final on chain yet", `${cmd("reconcile.ts", `--op ${j.op}`)}. Do not pay again.`, "pull failure not final");
     return { j, verdict: "unknown" };
@@ -486,8 +497,15 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   }
   j.pulled = usdc(pull.moved ?? 0n);
 
-  const s = await readSettlement(j);
-  if (s.kind === "unread" && j.state === "settled" && j.inclusionObserved) return { j, verdict: "settled" };
+  let s = await readSettlement(j);
+  if (j.inclusionObserved && !s.used) {
+    if (s.kind === "unused" || (s.kind === "canceled" && s.final)) {
+      const confirmation = await readSettlement(j);
+      if (confirmation.kind === "unused" || (confirmation.kind === "canceled" && confirmation.final)) return lostInclusion();
+      if (confirmation.used) s = confirmation;
+      else return { j, verdict: j.state === "settled" ? "settled" : "unknown" };
+    } else return { j, verdict: j.state === "settled" ? "settled" : "unknown" };
+  }
   if (s.used) {
     j.settleTx = s.settleTx;
     j.settleStatus = s.status;
@@ -599,7 +617,7 @@ export async function makeSafe(j: Journal, w: Wallet, o: { log?: (s: string) => 
     }
     s = await readUntil(() => readSettlement(j), (x) => x.kind === "canceled" || x.used, 6, 2000);
     if (s.used) return (await reconcileJournal(j, { quiet: true })).j;
-    if (s.kind !== "canceled") { log("the cancel is not visible on chain yet; nothing is returned. Run recover.ts --op again."); return (await reconcileJournal(j, { quiet: true })).j; }
+    if (s.kind !== "canceled") { log(`the cancel is not visible on chain yet; nothing is returned. Run ${cmd("recover.ts", `--op ${j.op}`)} again.`); return (await reconcileJournal(j, { quiet: true })).j; }
   }
 
   // the authorization is dead (never signed, cancelled or expired unused): the price is stranded in the agent key

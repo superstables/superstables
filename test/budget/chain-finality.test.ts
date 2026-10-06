@@ -70,6 +70,36 @@ describe("budget EVM finality", () => {
     expect((await module.reconcileJournal(rec, { quiet: true })).j).toMatchObject({ state: "settled", final: false, delivered: true, inclusionObserved: true });
     expect(module.readJournal(rec.op)).toEqual(before);
   });
+  it.each(["missing", "restored", "unreadable", "lagging head", "unreadable head", "unknown pull block"])("confirms a missing paid pull with a second successful read: %s", async (second) => {
+    const module = await ops();
+    const rec = (await module.reconcileJournal({ ...journal(), delivered: true }, { quiet: true })).j;
+    if (second === "unknown pull block") { delete rec.pullBlock; module.writeJournal(rec); }
+    const before = structuredClone(rec);
+    rpc.getTransactionReceipt.mockRejectedValue(new TransactionReceiptNotFoundError({ hash: HASH }));
+    if (second === "restored") rpc.getTransactionReceipt.mockRejectedValueOnce(new TransactionReceiptNotFoundError({ hash: HASH })).mockResolvedValue(receipt());
+    if (second === "unreadable") rpc.getTransactionReceipt.mockRejectedValueOnce(new TransactionReceiptNotFoundError({ hash: HASH })).mockRejectedValue(new Error("RPC unavailable"));
+    if (second === "lagging head") rpc.getBlock.mockResolvedValue({ number: 89n, timestamp: 2000n, hash: BLOCK_HASH });
+    if (second === "unreadable head") rpc.getBlock.mockRejectedValue(new Error("RPC unavailable"));
+    const result = await module.reconcileJournal(rec, { quiet: true });
+    if (second === "missing") {
+      expect(result.j).toMatchObject({ state: "unknown", delivered: true, reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." });
+      expect(rpc.getTransactionReceipt).toHaveBeenCalledTimes(4);
+    } else {
+      expect(result.j).toEqual(before);
+      expect(module.readJournal(rec.op)).toEqual(before);
+    }
+  });
+  it.each(["unused twice", "restored", "unreadable"])("confirms removal after a latest unused nonce read: %s", async (second) => {
+    const module = await ops();
+    const rec = (await module.reconcileJournal({ ...journal(), delivered: true }, { quiet: true })).j;
+    rpc.readContract.mockResolvedValue(false);
+    if (second === "restored") rpc.readContract.mockResolvedValueOnce(false).mockResolvedValue(true);
+    if (second === "unreadable") rpc.readContract.mockResolvedValueOnce(false).mockRejectedValue(new Error("RPC unavailable"));
+    const result = await module.reconcileJournal(rec, { quiet: true });
+    expect(result.j).toMatchObject(second === "unused twice"
+      ? { state: "unknown", reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." }
+      : { state: "settled", final: false, delivered: true });
+  });
   it.each(["settleTx", "cancelTx"] as const)("finds the real settlement after recorded %s never lands", async (field) => {
     const missing: Hex = `0x${"99".repeat(32)}`;
     rpc.getBlock.mockImplementation(async ({ blockNumber }) => ({ number: blockNumber ?? 110n, timestamp: 2000n, hash: BLOCK_HASH }));
