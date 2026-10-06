@@ -228,3 +228,11 @@ it('attempt recovery preserves a torn ledger tail and starts its recovery row on
   const expected = { id: 'original', state: 'submitting', transaction: 'retained-payment' };
   expect(readFileSync(ledger, 'utf8')).toBe(before + '\n' + JSON.stringify(expected) + '\n');
 });
+
+it('the cap owner can recover unreadable record bytes with the same exact gate and inode checks', () => {
+  const b = box(), preload = join(b.home, 'deny-cap.mjs'); writeFileSync(b.cap, unknown);
+  writeFileSync(preload, `import fs from 'node:fs';import{syncBuiltinESMExports}from'node:module';const read=fs.readFileSync;fs.readFileSync=function(path,...args){if(String(path)===${JSON.stringify(b.cap)})throw Object.assign(Error('denied'),{code:'EACCES'});return read.call(this,path,...args);};syncBuiltinESMExports();`);
+  const run = (unverified: boolean) => spawnSync(process.execPath, ['--import', preload, '--import', join(root, 'test/helpers/budget-owner-terminal.mjs'), join(root, 'budget/cli.mjs'), 'unlock', '--cap', '--confirm', ...(unverified ? ['--unverified'] : [])], { env: { ...process.env, SUPERSTABLES_HOME: b.home }, input: unverified ? 'payment-lock unverified\n' : 'payment-lock\n', encoding: 'utf8' });
+  expect(run(false).status).toBe(5); expect(readFileSync(b.cap, 'utf8')).toBe(unknown);
+  const result = run(true); expect(result.status, result.stderr).toBe(0); expect(existsSync(b.cap)).toBe(false);
+});
