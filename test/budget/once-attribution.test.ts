@@ -20,6 +20,7 @@ const rails = [
 beforeEach(async () => {
   rmSync(join(home, "budget"), { recursive: true, force: true });
   site = await startFakePurchaseSite();
+  site.finalizedBlock = 1000;
   site.services.push(TEMPO_MARKET, SOLANA_MARKET);
   for (const key of ["B4_RPC", "SUPERSTABLES_TEMPO_RPC", "SUPERSTABLES_SOLANA_RPC"]) process.env[key] = site.chainUrl;
 });
@@ -60,6 +61,28 @@ describe("hosted purchase payment identity", () => {
       site.settle(p, "ok", { transaction: rail.tx, payer: rail.payer });
       expect(await settleOnce(record)).toMatchObject({ code: 0, result: { state: "settled", paid: true } });
     });
+    if (rail.rail !== "tempo") {
+      it(`${rail.rail}: claims a provisional payment and finalizes only its original purchase`, async () => {
+        site.finalizedBlock = 10;
+        site.finalizedSlot = 10;
+        const original = await purchase(rail);
+        site.settle(original.p, "ok", { transaction: rail.tx, payer: rail.payer });
+        expect(await settleOnce(original.record)).toMatchObject({ code: 0, result: { paid: true, delivered: true, final: false } });
+        expect(approvals.readApproval(original.record.id)).toMatchObject({ included: { code: 0 }, hosted: { token: original.p.token } });
+        expect(approvals.readApproval(original.record.id).final).toBeUndefined();
+        expect(existsSync(claimFile(rail))).toBe(true);
+        const target = await purchase(rail);
+        site.settle(target.p, "ok", { transaction: rail.tx, payer: rail.payer, chain: false });
+        target.p.nonce = original.p.nonce;
+        unknown(await settleOnce(target.record));
+        site.finalizedBlock = 1000;
+        site.finalizedSlot = 1000;
+        expect(await settleOnce(original.record)).toMatchObject({ code: 0, result: { paid: true } });
+        expect(approvals.readApproval(original.record.id)).toMatchObject({ final: { code: 0, attribution: { nonce: original.p.nonce } } });
+        expect(approvals.readApproval(original.record.id).hosted.token).toBeUndefined();
+        unknown(await settleOnce(target.record));
+      });
+    }
     if (rail.rail !== "solana") {
       it(`${rail.rail}: rejects another purchase's matching transfer`, async () => {
         const original = await purchase(rail);
@@ -101,7 +124,8 @@ describe("hosted purchase payment identity", () => {
       if (name === "signed by someone else" || name === "with an invalid payer signature") expect(result.result.reason).toContain("does not carry this payer's signature");
     });
   }
-  it("evm: concurrent processes can attribute a transfer to only one purchase", async () => {
+  for (const provisional of [false, true]) it(`evm: concurrent processes can attribute a ${provisional ? "provisional" : "final"} transfer to only one purchase`, async () => {
+    site.finalizedBlock = provisional ? 10 : 1000;
     const rail = rails[0];
     const original = await purchase(rail);
     site.settle(original.p, "ok", { transaction: rail.tx, payer: rail.payer });
@@ -124,7 +148,7 @@ describe("hosted purchase payment identity", () => {
     expect(paid.filter((value) => value === null)).toHaveLength(1);
     expect(arrived).toBe(2);
     const records = [original.record, target.record].map((record) => approvals.readApproval(record.id));
-    expect(records.filter((record) => record.final?.result?.paid === true)).toHaveLength(1);
+    expect(records.filter((record) => (provisional ? record.included : record.final)?.result?.paid === true)).toHaveLength(1);
   });
 
   it("a transfer claim survives a failed final-record write and permits only its purchase's retry", async () => {
@@ -268,6 +292,14 @@ describe("hosted purchase payment identity", () => {
       unknown(await settleOnce(target.record));
     });
   }
+
+  it("explicit conflicting payer evidence overrules a legacy paid outcome", async () => {
+    const { record } = await purchase(rails[0]);
+    approvals.updateApproval(record.id, () => ({ attributionVersion: undefined, seen: { hashes: [TX], payers: { [TX]: null }, named: true, paid: true } }));
+    approvals.recordFinal(record.id, 0, { paid: true, payer: PAYER, tx: { settle: TX } });
+    unknown(await settleOnce(record));
+    expect(approvals.readApproval(record.id).final.result.paid).toBeNull();
+  });
 
   it("a new cached paid verdict without verified attribution becomes unknown", async () => {
     const { record } = await purchase(rails[0]);

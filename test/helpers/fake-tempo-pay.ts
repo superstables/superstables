@@ -83,11 +83,11 @@ export async function startFakeTempoPay(): Promise<FakeTempoPay> {
       case "eth_getBlockByNumber": {
         if (params[0] === "latest" && chain.headless) return null;
         const n = params[0] === "latest" ? chain.head.number : BigInt(params[0]);
-        return { number: hex(n), timestamp: hex(chain.head.timestamp - Number(chain.head.number - n)) };
+        return { number: hex(n), hash: keccak256(toBytes(`tempo:${n}`)), timestamp: hex(chain.head.timestamp - Number(chain.head.number - n)) };
       }
       case "eth_getTransactionReceipt": {
         const t = chain.transfers.get(String(params[0]).toLowerCase());
-        return t ? { transactionHash: t.hash, status: t.reverted ? "0x0" : "0x1", blockNumber: hex(t.block), from: t.from, logs: logsOf(t) } : null;
+        return t ? { transactionHash: t.hash, status: t.reverted ? "0x0" : "0x1", blockNumber: hex(t.block), blockHash: keccak256(toBytes(`tempo:${t.block}`)), from: t.from, logs: logsOf(t) } : null;
       }
       case "eth_getLogs": {
         const q = params[0] as { address: string; fromBlock: string; toBlock: string; topics: (string | null)[] };

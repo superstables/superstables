@@ -24,6 +24,7 @@ const VALID_BEFORE_MARGIN_MS = 120_000;
  * reads the chain and records what it found. Undefined for an EVM record without a validBefore (an older record).
  */
 function mayStillMove(attempt: Attempt, now: Date): boolean | undefined {
+  if (attempt.paymentIncluded && attempt.chain !== "verified" && attempt.chain !== "unpaid") return true;
   const rail = networkFor(attempt.terms?.network ?? "")?.rail;
   if (rail === "tempo" || rail === "solana") return true;
   const validBefore = attempt.authorizationValidBefore ? Date.parse(attempt.authorizationValidBefore) : NaN;

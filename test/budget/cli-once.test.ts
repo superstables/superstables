@@ -328,11 +328,18 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(JSON.parse(readFileSync(done.result.responseFile, "utf8"))).toEqual({ asset: "BTC", price_usd: 65000 });
     expect(statSync(done.result.responseFile).mode & 0o777).toBe(0o600);
     expect(done.result).toMatchObject({ responseType: "application/json", responseTruncated: false });
-    // final: the token is gone from the record, and every later wait gives the same answer
+    // Landing delivers now while the token remains private for finality rechecks.
+    expect(done.result.final).toBe(false);
+    expect(recordOf(id).final).toBeUndefined();
+    expect(recordOf(id).hosted.token).toBe(site.purchases[0].token);
+    site.finalizedBlock = 1000;
+    const final = await budget(["wait", "--shown", "--id", id]);
+    expect(final.code).toBe(0);
+    expect(final.result.final).not.toBe(false);
     expect(readFileSync(path, "utf8")).not.toContain("sspt_");
     const again = await budget(["wait", "--id", id]); // a finished purchase needs no --shown
     expect(again.code).toBe(0);
-    expect(again.result).toEqual(done.result);
+    expect(again.result).toEqual(final.result);
   }, 90_000);
 
   it("blocking (--wait) prints the final RESULT when the purchase ends", async () => {
@@ -721,12 +728,13 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(next.result).toMatchObject({ state: "refused_pending", paid: null, amount: null, pending: { id: first.result.id, state: "unknown" } });
     expect(next.result.reason).toMatch(/has no final answer yet \(.*says paid, but the chain does not show transaction/);
     expect(site.purchases).toHaveLength(1);
-    // once the chain shows it, the record is final and buy-once starts
+    // Inclusion releases workflow admission while permanence continues to be rechecked.
     site.pay(site.purchases[0]);
     const after = await once();
     expect(after.code, after.stderr).toBe(0);
     expect(site.purchases).toHaveLength(2);
-    expect(JSON.parse(readFileSync(join(approvals(), `${first.result.id}.json`), "utf8")).final).toMatchObject({ code: 0 });
+    expect(recordOf(first.result.id).included).toMatchObject({ code: 0, result: { paid: true, final: false } });
+    expect(recordOf(first.result.id).final).toBeUndefined();
   }, 90_000);
 
   it("a purchase id that is not the site's UUID, or a link that carries the access token, is refused and the token is never shown", async () => {

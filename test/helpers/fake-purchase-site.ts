@@ -7,6 +7,7 @@
 import { createHash, createPrivateKey, randomUUID, sign } from "node:crypto";
 import { Keypair, PublicKey, TransactionMessage } from "@solana/web3.js";
 import bs58 from "bs58";
+import { keccak256, toBytes } from "viem";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readBody, startServer, type TestServer } from "./servers.js";
 
@@ -87,6 +88,10 @@ export interface FakePurchaseSite extends TestServer {
   pay(p: FakePurchase, paid?: Paid): void;
   /** The fake chain's JSON-RPC URL: B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC point at it. */
   chainUrl: string;
+  /** Defaults below all payments to exercise delivery before finality. */
+  finalizedBlock?: number;
+  /** Highest finalized Solana slot; defaults above all fake payments. */
+  finalizedSlot?: number;
 }
 
 /** A payment as the site reports it, and what the chain shows for it: false for nothing, or other values. */
@@ -221,13 +226,15 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
       switch (method) {
         case "eth_getTransactionReceipt":
           if (!t || !t.evm) return null;
-          return { transactionHash: t.receiptHash, status: t.failed ? "0x0" : "0x1", blockNumber: `0x${t.block.toString(16)}`, logs: [...(t.tempo ? [{ address: t.asset, topics: [TRANSFER_TOPIC, word(t.payer), word(t.payTo)], data: `0x${t.amount.toString(16).padStart(64, "0")}` }] : []), { address: t.asset, topics: [t.tempo ? MEMO_TOPIC : TRANSFER_TOPIC, word(t.payer), word(t.payTo), ...(t.tempo ? [t.nonce] : [])], data: `0x${t.amount.toString(16).padStart(64, "0")}` }, ...(!t.tempo ? [{ address: t.asset, topics: [AUTH_TOPIC, word(t.payer), t.nonce], data: "0x" }] : [])] };
+          return { transactionHash: t.receiptHash, status: t.failed ? "0x0" : "0x1", blockNumber: `0x${t.block.toString(16)}`, blockHash: keccak256(toBytes(`purchase:${t.block}`)), logs: [...(t.tempo ? [{ address: t.asset, topics: [TRANSFER_TOPIC, word(t.payer), word(t.payTo)], data: `0x${t.amount.toString(16).padStart(64, "0")}` }] : []), { address: t.asset, topics: [t.tempo ? MEMO_TOPIC : TRANSFER_TOPIC, word(t.payer), word(t.payTo), ...(t.tempo ? [t.nonce] : [])], data: `0x${t.amount.toString(16).padStart(64, "0")}` }, ...(!t.tempo ? [{ address: t.asset, topics: [AUTH_TOPIC, word(t.payer), t.nonce], data: "0x" }] : [])] };
         case "eth_getBlockByNumber": {
-          const at = [...landed.values()].find((x) => x.evm && x.block === Number(params[0]))?.at ?? Math.floor(Date.now() / 1000);
-          return { number: params[0], timestamp: `0x${at.toString(16)}` };
+          const n = params[0] === "finalized" ? site.finalizedBlock ?? 10 : params[0] === "latest" ? 1000 : Number(params[0]);
+          const at = [...landed.values()].find((x) => x.evm && x.block === n)?.at ?? Math.floor(Date.now() / 1000);
+          return { number: `0x${n.toString(16)}`, hash: keccak256(toBytes(`purchase:${n}`)), timestamp: `0x${at.toString(16)}` };
         }
         case "getTransaction":
           if (!t || t.evm) return null;
+          if (params[1]?.commitment === "finalized" && (site.finalizedSlot ?? 1000) < 100) return null;
           if (params[1]?.encoding === "base64") return { transaction: [t.raw, "base64"] };
           return {
             slot: 100, blockTime: t.at,
