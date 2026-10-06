@@ -58,6 +58,7 @@ it.each(["unchecked", "mismatch"] as const)("status rechecks provisional payment
   const replacement = chain.settle({ from: PAYER, to: TO, value: "10000", nonce: NONCE });
   chain.advance(10);
   expect(await recheckChain(records, "a", chain.url)).toMatchObject({ chain: "verified", transaction: replacement });
+  expect(await cliStatus(dir, chain.url)).toMatchObject({ chain: "verified", final: true });
 });
 it("rejects a successful EVM receipt whose canonical block hash changed", async () => {
   const chain = await startFakeBaseSepolia(); cleanup.push(() => chain.close());
