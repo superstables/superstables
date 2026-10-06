@@ -279,8 +279,8 @@ describe("hosted purchase payment identity", () => {
       const result = await settleOnce(record);
       unknown(result);
       expect(result).toMatchObject({ result: { final: false } });
-      expect(result.result.reason).toContain("its attribution claim could not be read");
-      expect(result.result.reason).not.toContain("already attributed");
+      expect(result.result.reason).toBe(`${new URL(site.url).host} says paid, but the saved record linking transaction ${TX} to a single purchase could not be read. Whether this purchase was paid is unknown. Do not pay again.`);
+      expect(result.result.reason).not.toContain("already recorded as payment for another single purchase");
       expect(result.result.next).not.toContain("the chain does not show");
       expect(approvals.readApproval(record.id)).toMatchObject({ hosted: { token: p.token } });
       expect(approvals.readApproval(record.id).final).toBeUndefined();
@@ -348,7 +348,7 @@ describe("hosted purchase payment identity", () => {
       approvals.updateApproval(record.id, () => ({ attributionVersion: undefined }));
       const result = { state: "settled", paid: true, delivered: code === 0, amount: "0.01", payer: PAYER, tx: { settle: TX }, responseFile: "saved-response", next: "recorded instructions", reason: "recorded reason" };
       approvals.recordFinal(record.id, code, result);
-      const expected = { ...result, attribution: "not verified (recorded by an older version)" };
+      const expected = { ...result, attribution: "verification not recorded (older version)" };
       expect(await settleOnce(record)).toMatchObject({ code, result: expected });
       expect(approvals.readApproval(record.id).final).toEqual({ code, result: expected });
       expect(await settleOnce(record)).toMatchObject({ code, result: expected });

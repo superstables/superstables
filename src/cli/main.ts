@@ -50,6 +50,8 @@ import {
   EXIT,
   badInput,
   exitCodeFor,
+  humanNextFor,
+  inclusionRemoved,
   isFinalAttempt,
   nextFor,
   requoteCommand,
@@ -1061,7 +1063,7 @@ function attemptJson(records: Records, attempt: Attempt): Record<string, unknown
 function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt): void {
   const receipt = known ?? (attempt.receiptId ? records.getReceipt(attempt.receiptId) : undefined);
   console.log("");
-  console.log(messageFor(attempt, receipt));
+  console.log(inclusionRemoved(attempt) ? "Payment outcome unknown. Do not pay again." : messageFor(attempt, receipt));
   if (receipt) {
     console.log("");
     console.log(field("receipt", receipt.id));
@@ -1086,7 +1088,7 @@ function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt
     console.log(untrustedText(attempt.serviceBody, SERVICE_BODY_LIMIT));
   }
   console.log("");
-  console.log(`Next: ${nextFor(attempt, getQuote(attempt.quoteId, records))}`);
+  console.log(`Next: ${humanNextFor(attempt, getQuote(attempt.quoteId, records))}`);
 }
 
 /** What the chain says about a receipt; matching inclusion is paid while finality is pending. */
@@ -1100,6 +1102,7 @@ function receiptChain(receipt: Receipt): string {
       return `unpaid: the seller reported it paid, but ${receipt.chainReason ?? "the chain shows it was never made"}`;
     default:
       if (receipt.paymentIncluded) return "verified: paid; the payment landed, but is not final on chain yet";
+      if (receipt.chainReason === "The earlier payment inclusion was removed; outcome unknown. Do not pay again.") return "unchecked: the earlier matching payment was removed from the chain.";
       if (receipt.chainReason?.startsWith("The earlier payment inclusion")) return `unchecked: ${receipt.chainReason}`;
       return `unchecked: the seller reported it paid, and the chain has not confirmed it yet (${receipt.chainReason ?? "it was not read"})`;
   }

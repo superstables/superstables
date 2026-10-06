@@ -28,7 +28,7 @@ The CLI maps `chainFinal` to `chain_final` in `pay --json`, `status --json`, the
 
 ## Compatibility audit from 0.3.0 to 0.3.1
 
-The baseline is `46469a5`, the `v0.3.0` release. The following behavior differences are deliberate. They include the hosted identity checks and journal locking carried by this patch.
+The baseline is `46469a5`, the `v0.3.0` release. The following behavior differences are deliberate. They include payment identity checks for single purchases on superstables.com and journal locking.
 
 | Behavior or field | 0.3.0 | 0.3.1 and justification |
 | --- | --- | --- |
@@ -46,9 +46,9 @@ The baseline is `46469a5`, the `v0.3.0` release. The following behavior differen
 | Failed or empty-effect execution below finality | Treated as a mismatch | Explicitly provisional. Execution may change after a reorg, so a later full matching check can establish payment |
 | Core `final` and exit codes | Command ended, including uncertainty. Paid service failure exits 4, uncertainty 5, final unpaid 1 | Same initial mapping. A later proven reorg changes state and exit to uncertainty, as required by the recovery rule |
 | Core `message`, `next`, receipt label and help | Matching inclusion called verified without a separate finality fact | Explain pending finality and read-only status, or proven removal and no repayment. Prevents command completion from implying permanent payment |
-| Hosted buy-once identity | Independent amount and recipient sanity check | Also checks the purchase nonce, memo or signed message and prevents cross-purchase attribution. Prevents a different same-price transfer from counting as this purchase |
-| Hosted legacy paid cache | Returned as stored | Retains paid and command completion, with unknown finality and an explicit older-version attribution note. Explicit conflicting payer evidence still invalidates the cache. Never invents identity or finality evidence |
-| Hosted payment attribution and cache writes | No durable cross-purchase claim or later identity revalidation | Publishes a durable payment claim before saving paid, then validates new cached identity and payer evidence. Prevents duplicate attribution across purchases and stale paid answers after conflicting evidence |
+| Payment identity for single purchases on superstables.com | Independent amount and recipient sanity check | Also checks the purchase nonce, memo or signed message and prevents cross-purchase attribution. Prevents a different same-price transfer from counting as this purchase |
+| Older saved paid results for single purchases on superstables.com | Returned as stored | Retains paid and command completion, with unknown finality and an explicit older-version attribution note. Explicit conflicting payer evidence still invalidates the cache. Never invents identity or finality evidence |
+| Linking payments to single purchases on superstables.com and saving results | No durable cross-purchase claim or later identity revalidation | Publishes a durable payment claim before saving paid, then validates new cached identity and payer evidence. Prevents duplicate attribution across purchases and stale paid answers after conflicting evidence |
 | Paid provisional buy-once | Stored as completed and never reread | Still `final: true` and exit 0 or 4, but retains its read token. Later `wait` can establish finality or detect removal |
 | Buy-once failed execution below finality | Permanent unknown, `final: true` | Rereadable unknown, `final: false`, token retained. `wait` genuinely rereads the chain and can observe successful execution or final failure. A final failure is permanent unknown again |
 | Removed buy-once inclusion | Earlier paid cache never reread | Becomes unknown, `final: false`, with token retained. It may stay open indefinitely, matching 0.3.0's existing site-paid/chain-unreadable unknown behavior. `wait --abandon` ends local waiting without proving unpaid or permitting repayment |
@@ -56,7 +56,7 @@ The baseline is `46469a5`, the `v0.3.0` release. The following behavior differen
 | Budget `reconcile` without a rail RESULT | Failed with `paid: false` | Unknown with `paid: null`, exit 5. A crashed or interrupted reader cannot prove no payment |
 | EVM budget settlement, cancellation and pull recovery | Some decisions used latest receipts or nonce counts | Permanent decisions require canonical final evidence. Missing pulls need a different identified final nonce-consuming transaction. Prevents false unpaid or premature return conclusions |
 | Solana budget negative recovery | Confirmed expiry or a limited address index could conclude absence | Uses finalized history and the complete landing window when the final ID is unknown. Progress is bounded and resumable. An address index alone never proves absence |
-| Tempo budget and hosted chain reads | Receipt success without complete canonical inclusion checks | Require canonical committed inclusion. Unreadable evidence preserves uncertainty |
+| Tempo chain checks for budget payments and single purchases on superstables.com | Receipt success without complete canonical inclusion checks | Require canonical committed inclusion. Unreadable evidence preserves uncertainty |
 | Budget reconciliation writers | Could race buys and overwrite newer journal evidence | Share operation locks and preserve final evidence. A busy operation returns unknown with `op_in_progress`, exit 5. Prevents stale recovery from admitting another payment |
 | Concurrent core writers | Preserved all matching verification permanently | Preserve final matching proof permanently. Provisional proof can change only with positive removal evidence. Late seller answers enrich delivery without accepting a rejected hash |
 | Recovery logs, progress and docs | Some commands named source scripts | Name published `superstables budget reconcile` commands and show resumable scan progress, so recovery works from an installed package |

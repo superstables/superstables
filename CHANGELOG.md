@@ -7,39 +7,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.1] - Payment recovery and budget set-up on superstables.com
+## [0.3.1] - Safer payment recovery
 
-Draft release notes. Wording review is pending.
+This release makes budget payments and single purchases on superstables.com safer to recover. Agents arriving from superstables.com's setup page are directed to approval there.
 
 Testnet only.
 
-### Before upgrading
+Stop every 0.3.0 client process before upgrading, including agents, servers and approval processes.
 
-Stop every 0.3.0 client process before upgrading, including agents, servers and approval processes. On macOS, a 0.3.0 process in another time zone can misjudge a live lock holder. Downgrading to 0.3.0 loses the new reorg and finality recovery rules.
+For a lock left by a stopped process, the owner can run `superstables budget unlock --confirm` in a terminal.
 
-### Added
+- For scripts: the additive `chain_final` CLI and `chainFinal` SDK fields report chain finality. `final` and `verified` keep their 0.3.0 meanings. An included payment with provisional or legacy evidence can become uncertain again after a reorg; treat uncertain as "don't pay again". Established final proof stays final.
 
-- Payment results now include `chain_final`, and SDK attempts and receipts include `chainFinal`. These report chain finality separately. `final` still means command completion, and `chain: verified` still means a matching payment was found on chain. A completed command can describe a payment that is not final yet.
-- The owner can clear a stale budget lock with `superstables budget unlock --confirm`. Run it in a terminal and type the operation ID when asked. It preserves the journal and permits reconciliation, never a second payment. Locks whose host or process identity cannot be read need the owner's decision.
+The installation docs cover `npm install -g @superstables/client`.
 
-### Changed
-
-- The installation docs now use npm: `npm install -g @superstables/client`. The npm package holds the `superstables` command; install the agent skill separately. See [Installation](https://superstables.com/docs/client).
-- When superstables.com's setup page brings an agent to the skill, the agent sets up a budget with approval on superstables.com (`setup --hosted`) without asking where to approve. Otherwise the page on your machine stays the default, and it remains the fallback.
-- With no budget and no owner on record, `superstables budget status` and `superstables budget buy` also print the one-link set-up on superstables.com, after the steps on your machine.
-- The package links to the public repository, `github.com/superstables/superstables`.
-
-### Payment recovery
-
-- A proven reorg turns an earlier `verified` payment into `uncertain`, with `chain: unchecked`. Report the unknown outcome and do not pay again. Missing receipts, pruned history and RPC errors preserve earlier payment evidence. `status` rechecks legacy and provisional payments while finality is unknown; final evidence remains final.
-- An included payment counts against the daily cap once, on its paid day. Pending or unreadable finality does not charge later days. A removed inclusion stays uncertain and holds its approved amount across days.
-- Before `pay`, earlier-day seller reports without matching inclusion or final unpaid evidence are rechecked, even when they no longer reserve today's cap. The current spend policy is also checked before refreshing the seller's terms.
-- Mismatches still become uncertain and `status` searches by the original payment identity. The rejected transaction itself cannot count as payment. Non-final failed or empty-effect executions can be checked again after a reorg.
-- Single purchases on superstables.com now check the payment's full identity and retain a durable claim to prevent the same transaction from counting for another purchase. Older paid records keep their paid result with an explicit note that attribution was not verified by the older client. Explicit conflicting payer evidence still invalidates them.
-- A paid single purchase with pending finality keeps `final: true`; a later `wait` can check finality or detect removal. A non-final failed execution remains readable by `wait`, with `final: false`, until a final outcome. A removed inclusion stays unknown and may stay open indefinitely. `wait --abandon` ends local waiting without proving unpaid or permitting repayment.
-- Budget recovery requires final chain evidence before concluding a cancellation, missing payment or return of funds. Solana history scans are bounded and resumable; Tempo reads check canonical inclusion. Recovery messages name installed `superstables budget reconcile` commands and show scan progress.
-- Budget buys and reconciliation share operation locks. Busy reconciliation returns `unknown` with `reason: op_in_progress` and exit 5. A crashed reconciliation that returns no result reports payment as unknown rather than unpaid. Concurrent SDK updates preserve final payment evidence.
-- Record listings may include `chainReason` for pending finality, `paymentIncluded`, `paymentBlock`, and `chain_mismatch` in CLI JSON or `chainMismatch` in the SDK. These add evidence without changing payment identity, service responses or approval facts. No automatic payment retry is added.
+For cap accounting, chain evidence rules and recovery commands, see [`budget/CLI.md`](https://github.com/superstables/superstables/blob/v0.3.1/budget/CLI.md).
 
 
 ## [0.3.0] - Agent budgets and single purchases
