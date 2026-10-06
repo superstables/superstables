@@ -25,18 +25,17 @@ Read the [security model](docs/security.md) before granting one.
 
 ## Use the CLI
 
-Follow [Install from a checkout](docs/install.md#from-a-checkout) to clone and select the release commit, then run:
+Install the CLI from npm:
 
 ```bash
-npm ci
-npm run build
-npm link
+npm install -g @superstables/client
 superstables --help
 superstables budget --help
 ```
 
+To build it from source instead, follow [Install from a checkout](docs/install.md#from-a-checkout).
 Continue with [Budgets](docs/budget.md) or [Single purchase](docs/buy-once.md).
-The client is distributed through GitHub. Don't run `npx superstables`; it can download a different package.
+Don't run `npx superstables`; it can download a different package.
 
 ## Next steps
 
