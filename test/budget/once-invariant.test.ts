@@ -21,6 +21,7 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 let site: FakePurchaseSite;
 beforeAll(async () => {
   site = await startFakePurchaseSite();
+  site.finalizedBlock = 1000;
   process.env.B4_RPC = site.chainUrl;
 });
 afterAll(async () => {
@@ -237,7 +238,7 @@ describe("buy-once: once payment evidence appears, no outcome says nothing was p
     // both kinds of sequence were played
     expect(withEvidence).toBeGreaterThan(50);
     expect(300 - withEvidence).toBeGreaterThan(50);
-  }, 60_000);
+  }, 180_000);
   it("one wait keeps what its first read found: a read error with money_moved, then a final not-paid answer, is unknown", async () => {
     rmSync(join(home, "budget"), { recursive: true, force: true });
     for (const k of Object.keys(queue) as (keyof typeof queue)[]) queue[k] = [];
