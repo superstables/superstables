@@ -14,10 +14,11 @@
 //   refused_chain     the chain refused it (simulation) and it cannot land while that holds
 //   not_found         the blockhash expired and no transaction was ever found (safe to retry)
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, unlinkSync, linkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PublicKey } from "@solana/web3.js";
 import { OPS_DIR, retryRead, sleep, formatUnits } from "./lib.mjs";
+import { lockRecord } from "../op-lock.mjs";
 
 export const OP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
@@ -61,53 +62,9 @@ export function updateOp(op, patch, event) {
   return next;
 }
 
-// Exclusive lock so two processes never work the same operation at once. The pid is written to a
-// private file first and then hard-linked to the lock name, so the lock either exists with its pid
-// or does not exist (no window where a second process sees an empty lock). A lock whose process is
-// gone is stale and is taken over.
+// Shared with reconcile, including direct rail commands.
 export function acquireLock(op) {
-  mkdirSync(OPS_DIR, { recursive: true, mode: 0o700 });
-  const path = `${opPath(op)}.lock`;
-  const mine = `${path}.${process.pid}.tmp`;
-  writeFileSync(mine, String(process.pid), { mode: 0o600 });
-  try {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        linkSync(mine, path);
-        const release = () => {
-          try {
-            unlinkSync(path);
-          } catch {}
-        };
-        process.on("exit", release);
-        return { ok: true, release };
-      } catch (e) {
-        if (e.code !== "EEXIST") throw e;
-        let holder = NaN;
-        try {
-          holder = Number(readFileSync(path, "utf8"));
-        } catch {}
-        let alive = false;
-        if (Number.isInteger(holder) && holder > 0) {
-          try {
-            process.kill(holder, 0);
-            alive = true;
-          } catch (err) {
-            alive = err.code === "EPERM";
-          }
-        }
-        if (alive) return { ok: false, holder };
-        try {
-          unlinkSync(path);
-        } catch {}
-      }
-    }
-    return { ok: false, holder: null };
-  } finally {
-    try {
-      unlinkSync(mine);
-    } catch {}
-  }
+  return lockRecord(OPS_DIR, op);
 }
 
 // ---------------------------------------------------------------------------
