@@ -119,14 +119,6 @@ export function createIdentitySource({ platform = process.platform, host = hostn
       if (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(out)) bootId = out.toLowerCase();
     } catch {}
   }
-  const bootStartedAt = () => {
-    if (platform !== 'darwin') return Date.now() - bootElapsed();
-    try {
-      const out = run('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8', timeout: 5000 });
-      const seconds = out.match(/sec\s*=\s*(\d+)/)?.[1];
-      return seconds ? Number(seconds) * 1000 : undefined;
-    } catch { return undefined; }
-  };
   const starts = pid => processStartFields(pid, platform, run, start);
   const pids = pid => {
     try { return readFile(`/proc/${pid}/status`, 'utf8').match(/^NSpid:\s+(.+)$/m)?.[1].trim().split(/\s+/).map(Number) ?? []; } catch { return []; }
@@ -143,7 +135,7 @@ export function createIdentitySource({ platform = process.platform, host = hostn
     return { platform, hostname: host, hostId, bootId, namespace: ns, hostPid: ns === 'pid:[4026531836]' || ids.length > 1 ? ids[0] ?? null : null, ...starts(pid), writtenAt: Date.now(), bootElapsedMs: bootElapsed() };
   };
   let ownFields;
-  return { record: () => ({ pid: process.pid, ...(ownFields ??= fields(process.pid)), writtenAt: Date.now(), bootElapsedMs: bootElapsed() }), starts, fields, start, probe, nested, readFile, readlink, readdir, pids, run, bootElapsed, bootStartedAt };
+  return { record: () => ({ pid: process.pid, ...(ownFields ??= fields(process.pid)), writtenAt: Date.now(), bootElapsedMs: bootElapsed() }), starts, fields, start, probe, nested, readFile, readlink, readdir, pids, run, bootElapsed };
 }
 
 /**
@@ -160,8 +152,6 @@ export function createIdentitySource({ platform = process.platform, host = hostn
  * @property {number|string} [createdAt]
  * @property {number} [writtenAt]
  * @property {number|null} [hostPid]
- * @property {number} [mtimeMs]
- * @property {number} [heartbeatAt]
  */
 
 const systemIdentity = createIdentitySource();
@@ -206,6 +196,7 @@ export function inspectLegacyCap(owner, source = systemIdentity) {
   }
   const current = source.start(owner.pid);
   if (current === null || (typeof current === 'string' && typeof owner.pidStart === 'string' && compareProcessStarts(owner.pidStart, current) === false)) return { state: 'dead' };
+  if (typeof current === 'string' && compareProcessStarts(owner.pidStart, current) === true) return { state: 'alive' };
   return possible;
 }
 
@@ -282,14 +273,8 @@ export function inspectProcess(owner, source = systemIdentity, group = false) {
   /** @type {(why: string) => ProcessInspection} */
   const possible = why => ({ state: 'alive', possiblyAlive: true, pid: owner.pid, why });
   if (owner.platform && owner.platform !== local.platform) return possible('another OS');
-  if (owner.hostname && local.hostname && owner.hostname !== local.hostname) return possible('another hostname');
   if (!uuid(owner.bootId) || !uuid(local.bootId)) return possible('unreadable boot identity');
-  if (!sameBoot(owner, local)) {
-    const bootStart = source.bootStartedAt?.();
-    const predates = time => Number.isFinite(time) && Number.isFinite(bootStart) && time < bootStart - 60_000;
-    if (sameHost(owner, local) && predates(owner.writtenAt) && (owner.mtimeMs === undefined || (predates(owner.mtimeMs) && (owner.heartbeatAt === undefined || predates(owner.heartbeatAt))))) return { state: 'dead' };
-    return possible('another boot without proof that the record predates this boot');
-  }
+  if (!sameBoot(owner, local)) return possible('another boot');
   // Equal boot UUIDs prove a common kernel without a machine-id. Foreign namespace scans still require host evidence.
   if (!(local.platform === 'linux' && owner.namespace && owner.namespace === local.namespace) && !sameHost(owner, local)) return possible('unreadable or different host identity');
   if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) return possible('unrecognised process identity');

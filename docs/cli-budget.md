@@ -509,7 +509,7 @@ Moves money: no. It never signs or sends.
 Run by: the owner or operator, after stopping the processes.
 Example:
   $ superstables budget unlock --rail solana --op order-001 --confirm
-Prints: one RESULT with state, reason and next, plus the operation or attempt ID when selected. Without --confirm, a terminal or matching typed confirmation: exit 3. Busy: exit 5. Cleared or no lock: exit 0.
+Prints: one RESULT with state, reason and next, plus the operation or attempt ID when selected. Without --confirm, a terminal or matching typed confirmation: exit 3. Missing operation, attempt or approval: exit 3. Busy: exit 5. Cleared or no lock: exit 0.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 5 unknown (the full table: superstables budget --help)
 ```

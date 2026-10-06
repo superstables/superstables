@@ -50,10 +50,10 @@ it('never trusts ESRCH when its own proc view is unreadable, even with matching 
   expect(source.nested()).toBe(true);
   expect(inspectProcess({ ...source.record(), pid: 42, namespace: initial }, source)).toMatchObject({ state: 'alive', possiblyAlive: true });
 });
-it('recovers a previous boot with a reused live PID only on the same stable host', () => {
+it('a previous boot with a reused live PID stays possibly alive even on the same stable host', () => {
   const source = linux({ probeCode: 'ok' });
   const owner = { ...source.record(), pid: 42, writtenAt: Date.now() - 10_100_000, bootId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' };
-  expect(inspectProcess(owner, source)).toEqual({ state: 'dead' });
+  expect(inspectProcess(owner, source)).toMatchObject({ state: 'alive', possiblyAlive: true });
   expect(inspectProcess({ ...owner, hostId: 'another-host' }, source)).toMatchObject({ state: 'alive', possiblyAlive: true });
   expect(inspectProcess({ ...owner, hostId: null }, source)).toMatchObject({ state: 'alive', possiblyAlive: true });
 });
@@ -129,7 +129,7 @@ it('unlock help gives the exact owner-only flag description', () => {
   expect(help.stdout).toContain('--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.');
 });
 
-const noProc = ['--unshare-pid', '--unshare-user', '--dev-bind', '/', '/', '--tmpfs', '/proc'];
+const noProc = ['--die-with-parent', '--new-session', '--unshare-pid', '--unshare-user', '--dev-bind', '/', '/', '--tmpfs', '/proc'];
 it.runIf(process.platform === 'linux')('a real no-proc sandbox refuses a live host holder without changing its locks', () => {
   const b = box(), holder = lockFile(b.path);
   expect(holder.ok).toBe(true);

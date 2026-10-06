@@ -56,6 +56,12 @@ describe('macOS identity on any test host', () => {
     const lock = lockFile(b.path, { identitySource }); expect(lock.ok).toBe(true);
     if (lock.ok) lock.release();
   });
+  it('recovers a dead same-boot Mac holder after its network hostname changes', () => {
+    const b = box(); const identitySource = mac({ dead: true });
+    record(b.path, identitySource, { hostname: 'previous-network-hostname' });
+    const lock = lockFile(b.path, { identitySource }); expect(lock.ok).toBe(true);
+    if (lock.ok) lock.release();
+  });
   it('automatically recovers a reused macOS PID from ps start identity', () => {
     const b = box(); const identitySource = mac(); record(b.path, identitySource, { pidStart: 'darwin:Tue Oct  6 00:00:59 2026', pidStartUtc: 1791244859 });
     const lock = lockFile(b.path, { identitySource }); expect(lock.ok).toBe(true);

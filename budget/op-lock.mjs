@@ -33,7 +33,7 @@ function holder(path, options = {}) {
     const value = JSON.parse(text);
     const owner = typeof value === 'number' ? { pid: value } : value;
     if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) {
-      return { text, version, pid: owner.pid, owner, ...liveness({ ...owner, mtimeMs: stat.mtimeMs }, options), directory: stat.isDirectory() };
+      return { text, version, pid: owner.pid, owner, ...liveness(owner, options), directory: stat.isDirectory() };
     }
   } catch {}
   return { text, version, pid: null, owner: null, state: 'unverifiable', why: 'unreadable or unrecognised lock record', directory: stat.isDirectory() };
@@ -154,7 +154,7 @@ export function abandonedBreaker(path, options = {}) {
  * @returns {{ ok: true, release: () => void, holdAlso: (child: number | import("node:child_process").ChildProcess | undefined) => void } | { ok: false, holder: number | null, path: string, details: string }}
  */
 export function lockFile(path, options = {}) {
-  const owner = { ...identity(options), token: randomUUID(), createdAt: Date.now(), heartbeatAt: Date.now() };
+  const owner = { ...identity(options), token: randomUUID(), createdAt: Date.now() };
   let railOwner = null;
   let text = JSON.stringify(owner);
   const tmp = `${path}.${owner.token}.tmp`;

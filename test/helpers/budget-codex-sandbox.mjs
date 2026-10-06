@@ -1,8 +1,8 @@
 // Real Codex PID namespace regression checks. No wallets or payments.
 // Run: CODEX_BIN=/path/to/codex node test/helpers/budget-codex-sandbox.mjs
+import { stopHolder } from './budget-holder-cleanup.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { once } from 'node:events';
 import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -64,10 +64,7 @@ async function hold(b, sandbox = false, core = false, approval = false) {
   return { p, hostPid, info };
 }
 async function stop(holder) {
-  const done = holder.p.exitCode === null ? once(holder.p, 'exit') : Promise.resolve();
-  try { process.kill(holder.hostPid, 'SIGKILL'); } catch {}
-  await done; children.delete(holder.p);
-  for (let i = 0; i < 100 && fs.existsSync(`/proc/${holder.hostPid}`); i++) await sleep(10);
+  await stopHolder(holder.p, holder.hostPid); children.delete(holder.p);
 }
 function unlock(b, sandbox) {
   const a = ['--import', join(root, 'test/helpers/budget-owner-terminal.mjs'), join(root, 'budget/cli.mjs'), 'unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm'];
@@ -133,7 +130,10 @@ try {
   }
   console.log(JSON.stringify({ result: 'pass', cases, realCodexSandbox: true, payments: 0 }));
 } finally {
-  for (const p of children) { try { process.kill(-(p.pid), 'SIGKILL'); } catch {} try { process.kill(p.holderHostPid ?? p.pid, 'SIGKILL'); } catch {} }
+  for (const p of children) {
+    try { process.kill(-p.pid, 'SIGKILL'); } catch (err) { if (err.code !== 'ESRCH') throw err; }
+    await stopHolder(p, p.holderHostPid ?? p.pid);
+  }
   for (const fd of namespaceFds) fs.closeSync(fd);
   for (const home of homes) fs.rmSync(home, { recursive: true, force: true });
 }
