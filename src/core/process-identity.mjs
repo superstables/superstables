@@ -193,6 +193,8 @@ export function inspectLegacyCap(owner, source = systemIdentity) {
   if (Object.keys(owner).some(key => !['pid', 'pidStart', 'owner'].includes(key)) || typeof owner.owner !== 'string') return possible;
   const local = source.record();
   if (local.platform !== 'linux' || source.nested() || !completeProcView(source) || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return possible;
+  const bootId = typeof owner.pidStart === 'string' ? owner.pidStart.match(/^linux:([^:]+):\d+$/)?.[1] : undefined;
+  if (!sameBoot({ bootId }, local)) return possible;
   let entries;
   try { entries = source.readdir('/proc'); } catch { return possible; }
   for (const entry of entries) {

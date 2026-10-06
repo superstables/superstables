@@ -28,7 +28,7 @@ const oldBoot = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const machine = '0123456789abcdef0123456789abcdef';
 const initial = 'pid:[4026531836]';
 const denied = () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); };
-function source({ hidepid = '0', machineId = machine, nested = false, entries = ['77'], candidatePid = 77, candidateNested = false, elapsed = 100_000, start = `linux:${boot}:200` } = {}) {
+function source({ hidepid = '0', machineId = machine, nested = false, entries = ['77'], candidatePid = 77, candidateNested = false, elapsed = 100_000, start = `linux:${boot}:200` }: { hidepid?: string; machineId?: string; nested?: boolean; entries?: string[]; candidatePid?: number; candidateNested?: boolean; elapsed?: number; start?: string | null } = {}) {
   return createIdentitySource({ platform: 'linux', host: 'local', bootElapsed: () => elapsed,
     readFile: (path: string) => {
       if (path === '/etc/machine-id' || path === '/var/lib/dbus/machine-id') return machineId;
@@ -58,12 +58,19 @@ it('equal boot IDs and PID namespaces prove the same kernel without a machine ID
   expect(inspectProcess({ ...src.record(), pid: 77 }, src)).toEqual({ state: 'dead' });
 });
 it('legacy cap upgrade proof requires an unrestricted initial namespace and no matching nested PID', () => {
-  const owner = { pid: 2, pidStart: 'old-start', owner: 'old-owner' };
+  const owner = { pid: 2, pidStart: `linux:${boot}:100`, owner: 'old-owner' };
   expect(inspectLegacyCap(owner, source())).toEqual({ state: 'dead' });
   for (const src of [source({ nested: true }), source({ hidepid: '2' }), source({ candidateNested: true, candidatePid: 2 })]) {
     expect(inspectLegacyCap(owner, src)).toMatchObject({ state: 'alive', possiblyAlive: true });
   }
   expect(inspectLegacyCap({ ...owner, platform: 'linux', bootId: null }, source())).toMatchObject({ state: 'alive', possiblyAlive: true });
+});
+it('legacy cap records from another boot cannot locate a holder even with a readable local PID', () => {
+  for (const start of [`linux:${boot}:200`, null]) {
+    for (const pidStart of [`linux:${oldBoot}:200`, null]) {
+      expect(inspectLegacyCap({ pid: 77, pidStart, owner: 'legacy' }, source({ start }))).toMatchObject({ state: 'alive', possiblyAlive: true });
+    }
+  }
 });
 for (const hidepid of ['1', '2', 'invisible', 'ptraceable']) {
   it(`hidden-process injection with hidepid=${hidepid} never proves an unlisted nested holder dead`, () => {
