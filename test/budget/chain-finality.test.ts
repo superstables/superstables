@@ -325,7 +325,7 @@ describe("round 2: EVM landed results and recovery", () => {
   it("identifies a replaced pull from event logs without querying pruned account state", async () => {
     const replacement: Hex = `0x${"15".repeat(32)}`;
     rpc.getTransactionReceipt.mockImplementation(async ({ hash }) => hash === HASH ? null : { ...receipt([]), blockNumber: 80n, transactionHash: replacement });
-    rpc.getTransactionCount.mockImplementation(async ({ blockNumber }) => { if (blockNumber !== 90n) throw new Error("missing trie node"); return 8; });
+    rpc.getTransactionCount.mockRejectedValue(new Error("missing trie node for historical state"));
     rpc.getTransaction.mockImplementation(async ({ hash }) => hash === replacement ? { from: AGENT, nonce: 7, hash } : null);
     rpc.getLogs.mockResolvedValue([{ ...used(), blockNumber: 80n, transactionHash: replacement }]);
     expect((await (await ops()).reconcileJournal(journal(), { quiet: true })).verdict).toBe("not_found");
