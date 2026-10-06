@@ -267,12 +267,22 @@ export class PaymentEngine {
   private async run(attempt: Attempt, quote: Quote): Promise<void> {
     const started = Date.now();
 
-    // The local policy already judged this at quote time. Honour it here rather than
-    // bothering the owner with something this machine has already decided against.
-    if (!quote.policy.allowed) {
+    // Resolve older reported payments before their provisional holds consume another day's cap.
+    const day = new Date(this.now()).toISOString().slice(0, 10);
+    for (const prior of this.records.listAttempts()) {
+      if ((prior.state === "settled" || prior.state === "paid_service_failed") && prior.chain !== "verified" && prior.chain !== "unpaid" && !prior.createdAt.startsWith(day)) await this.recheckChain(prior.id);
+    }
+
+    const currentPolicy = evaluatePolicy(this.policy, {
+      domain: hostOf(quote.url),
+      amountDecimal: quote.terms.amountDecimal,
+      asset: quote.terms.asset,
+      spentTodayDecimal: this.records.spentToday(quote.terms.asset, new Date(this.now()), { exclude: attempt.id }),
+    });
+    if (!currentPolicy.allowed) {
       this.settleState(attempt, "failed", {
         refusal: "policy",
-        reason: `the local spend policy refuses this payment: ${quote.policy.reason ?? "no reason given"}`,
+        reason: `the local spend policy refuses this payment: ${currentPolicy.reason ?? "no reason given"}`,
       });
       return;
     }
@@ -307,12 +317,6 @@ export class PaymentEngine {
         this.settleState(attempt, "failed", { refusal: "invalid", reason: reusedChallenge(reused.id) });
         return;
       }
-    }
-
-    // Resolve older reported payments before their provisional holds consume another day's cap.
-    const day = new Date(this.now()).toISOString().slice(0, 10);
-    for (const prior of this.records.listAttempts()) {
-      if ((prior.state === "settled" || prior.state === "paid_service_failed") && prior.chain !== "verified" && prior.chain !== "unpaid" && !prior.createdAt.startsWith(day)) await this.recheckChain(prior.id);
     }
 
     // Reserve the amount against the daily cap before anyone is asked. Two `pay` processes asking at

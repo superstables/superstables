@@ -64,7 +64,7 @@ import {
   OPS_DIR,
 } from "./lib.mjs";
 import { readCapped, saveResponse } from "../response.mjs";
-import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, refusalIsFinal } from "./ops.mjs";
+import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, assessOp } from "./ops.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
@@ -410,13 +410,17 @@ result = { ...result, remaining, delivered: deliveredHttp };
 
 if (own && !own.err) {
   const movement = await readTransfer(conn, own.sig);
-  updateOp(opId, { state: "settled", tx: own.sig, debit: amountUi, delivered: deliveredHttp, movement }, "own transaction succeeded");
+  updateOp(opId, { state: "settled", final: own.final !== false, inclusionObserved: true, tx: own.sig, debit: amountUi, delivered: deliveredHttp, movement }, "own transaction succeeded");
   console.log(`\n=> Our transfer LANDED: ${explorerTx(own.sig)}`);
   console.log(`   ${deliveredHttp ? "Delivered (seller answered 2xx)." : `NOT delivered (seller answered ${httpStatus ?? paidError}). The payment is settled; do not pay again, ask the seller to honour tx ${own.sig}.`}`);
-  result = { ...result, tx: own.sig, debit: amountUi, next: deliveredHttp ? "none" : `settled but not delivered: do not pay again; contact the seller with tx ${own.sig}` };
+  result = { ...result, tx: own.sig, debit: amountUi, final: own.final !== false, next: own.final === false ? `the payment landed, but is not final on chain yet. Run node budget/solana/reconcile.mjs --op ${opId} later.` : deliveredHttp ? "none" : `settled but not delivered: do not pay again; contact the seller with tx ${own.sig}` };
   finish("settled", EXIT.OK);
 }
-if (own && own.err) {
+if (own && own.err && own.final === false) {
+  updateOp(opId, { state: "unknown", tx: own.sig, error: own.err, delivered: false }, "own transaction landed and failed; waiting for finality");
+  finish("unknown", EXIT.UNCERTAIN, { tx: own.sig, delivered: false, reason: "the transaction landed and failed, but is not final on chain yet", next: `node budget/solana/reconcile.mjs --op ${opId}` });
+}
+if (own && own.err && own.final !== false) {
   updateOp(opId, { state: "failed", tx: own.sig, error: own.err, delivered: false }, "own transaction failed on chain");
   console.log(`\n=> Our transfer FAILED on chain: ${JSON.stringify(own.err)}  ${explorerTx(own.sig)}`);
   finish("failed", EXIT.FAILED, { tx: own.sig, delivered: false, next: "nothing moved; fix the cause, then buy again with a new --op" });
@@ -435,7 +439,16 @@ if (sim?.value?.err && !String(sim.value.err).startsWith("simulation unavailable
   console.log(`\n=> The chain refuses this payment now: ${JSON.stringify(sim.value.err)}${failLine ? ` | ${failLine}` : ""}`);
   console.log("   Our transaction was not found on chain.");
   // refused for good only once the signed transaction can no longer land (refusalIsFinal); until then it is unknown
-  if (await refusalIsFinal(conn, rec)) {
+  const assessment = await assessOp(conn, rec).catch(() => ({ verdict: "pending" }));
+  if (assessment.verdict === "settled") {
+    updateOp(opId, { state: "settled", final: assessment.final !== false, inclusionObserved: true, tx: assessment.tx, delivered: deliveredHttp, debit: amountUi }, "own transaction landed while checking the refusal");
+    finish("settled", EXIT.OK, { tx: assessment.tx, debit: amountUi, delivered: deliveredHttp, final: assessment.final !== false, next: assessment.final === false ? `node budget/solana/reconcile.mjs --op ${opId} later to check finality` : deliveredHttp ? "none" : "paid but not delivered; do not pay again; contact the seller" });
+  }
+  if (assessment.verdict === "failed") {
+    updateOp(opId, { state: "failed", tx: assessment.tx, error: assessment.err, delivered: false }, "own transaction landed and failed");
+    finish("failed", EXIT.FAILED, { tx: assessment.tx, delivered: false, reason: JSON.stringify(assessment.err), next: "nothing moved; fix the cause, then buy again with a new --op" });
+  }
+  if (assessment.verdict === "not_found") {
     updateOp(opId, { state: "refused_chain", chainError: sim.value.err, chainLog: failLine, delivered: false }, "chain refuses the transaction (simulation), and its blockhash has expired");
     finish("refused_chain", EXIT.FAILED, { delivered: false, chainError: sim.value.err, next: `run reconcile before reusing this --op: node budget/solana/reconcile.mjs --op ${opId}` });
   }

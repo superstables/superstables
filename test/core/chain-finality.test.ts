@@ -6,7 +6,7 @@ import bs58 from "bs58";
 import type { Hex } from "viem";
 import { afterEach, expect, it } from "vitest";
 import { BASE_SEPOLIA, SOLANA_DEVNET, SKALE_BASE_SEPOLIA, TEMPO_MODERATO } from "../../src/core/chain.js";
-import { recheckChain } from "../../src/core/pay.js";
+import { PaymentEngine, recheckChain } from "../../src/core/pay.js";
 import { Records } from "../../src/core/records.js";
 import { tempoRail } from "../../src/core/rails/tempo.js";
 import { startFakeTempoPay } from "../helpers/fake-tempo-pay.js";
@@ -14,6 +14,10 @@ import { solanaRail } from "../../src/core/rails/solana.js";
 import { buildPayment, checkSigned } from "../../src/core/rails/solana-transaction.js";
 import { checkSettlement } from "../../src/core/settlement.js";
 import type { Attempt } from "../../src/core/types.js";
+import { DEFAULT_POLICY } from "../../src/core/policy.js";
+import { quote } from "../../src/core/quote.js";
+import { SignRefused } from "../../src/core/signer/types.js";
+import { startFacilitator, startPaidEndpoint } from "../helpers/servers.js";
 import { startFakeBaseSepolia } from "../helpers/fake-base-sepolia.js";
 import { MINT, randomAddress, signAsOwner, solanaKey, startFakeDevnet } from "../helpers/fake-solana-pay.js";
 const PAYER = "0x1111111111111111111111111111111111111111";
@@ -94,4 +98,39 @@ it("uses the EVM instant-finality exception only for pinned SKALE", async () => 
   expect((await checkSettlement({ transaction: baseTx, payer: PAYER, recipient: TO, amountAtomic: "10000", nonce: NONCE }, { rpcUrl: chain.url })).chain).toBe("unchecked");
   const transaction = chain.settle({ from: PAYER, to: TO, value: "10000", nonce: NONCE, token: SKALE_BASE_SEPOLIA.usdc.address });
   expect(await checkSettlement({ network: SKALE_BASE_SEPOLIA.caip2, transaction, payer: PAYER, recipient: TO, amountAtomic: "10000", nonce: NONCE }, { rpcUrl: chain.url })).toEqual({ chain: "verified" });
+});
+
+
+it("rechecks a prior day's landed payment before admitting the next payment under the daily cap", async () => {
+  const chain = await startFakeBaseSepolia(); cleanup.push(() => chain.close());
+  const dir = mkdtempSync(join(tmpdir(), "cap-finality-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+  const records = new Records(dir);
+  const yesterday = new Date(Date.now() - 86400000).toISOString();
+  const transaction = chain.settle({ from: PAYER, to: TO, value: "10000", nonce: NONCE });
+  const terms = { network: BASE_SEPOLIA.caip2, networkLabel: BASE_SEPOLIA.label, asset: "USDC", assetAddress: BASE_SEPOLIA.usdc.address, amountAtomic: "10000", amountDecimal: 0.01, recipient: TO, scheme: "exact" };
+  const prior: Attempt = { id: "prior", quoteId: "old-quote", createdAt: yesterday, updatedAt: yesterday, state: "settled", chain: "unchecked", paymentIncluded: true, transaction, url: "https://seller.example", payer: PAYER, authorizationNonce: NONCE, authorizationValidBefore: new Date(Date.now() + 86400000).toISOString(), terms, receiptId: "prior", history: [] };
+  records.saveAttempt(prior);
+  records.saveReceipt({ id: "prior", at: yesterday, attemptId: "prior", quoteId: "old-quote", url: prior.url, terms, payer: PAYER, transaction, transactionKind: "hash", transactionUrl: "", network: BASE_SEPOLIA.caip2, settlement: { success: true, transaction, network: "eip155:84532" }, chain: "unchecked", paymentIncluded: true, serviceOutcome: "ok", ms: 0 });
+  expect(records.spentToday("USDC")).toBe(0.01);
+  const facilitator = await startFacilitator(); cleanup.push(() => facilitator.close());
+  const seller = await startPaidEndpoint(facilitator.url); cleanup.push(() => seller.close());
+  let asked = 0;
+  const policy = { ...DEFAULT_POLICY, perDay: { amount: 0.01, asset: "USDC" } };
+  const engine = new PaymentEngine({ records, policy, rpcUrl: chain.url, signer: { kind: "wallet", async address() { return PAYER; }, async sign() { asked++; throw new SignRefused("denied", "test declined before signing"); } } });
+  const next = await quote({ url: `${seller.url}/v1/market?asset=BTC` }, { records, policy });
+  const attempt = engine.startPayment(next.id);
+  await engine.waitForAttempt(attempt.id, 5000);
+  expect(asked).toBe(1);
+  expect(records.getAttempt("prior")?.chain).toBe("verified");
+  expect(records.spentToday("USDC")).toBe(0);
+});
+
+it("counts an included provisional receipt after UTC midnight even when the signed authorization expired", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "included-cap-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+  const records = new Records(dir);
+  const yesterday = new Date(Date.now() - 86400000).toISOString();
+  const terms = { network: BASE_SEPOLIA.caip2, networkLabel: BASE_SEPOLIA.label, asset: "USDC", assetAddress: BASE_SEPOLIA.usdc.address, amountAtomic: "10000", amountDecimal: 0.01, recipient: TO, scheme: "exact" };
+  records.saveAttempt({ id: "a", quoteId: "q", createdAt: yesterday, updatedAt: yesterday, state: "settled", chain: "unchecked", paymentIncluded: true, authorizationValidBefore: yesterday, url: "https://seller.example", terms, receiptId: "a", history: [] });
+  records.saveReceipt({ id: "a", at: yesterday, attemptId: "a", quoteId: "q", url: "https://seller.example", terms, payer: PAYER, transaction: `0x${"ab".repeat(32)}`, transactionKind: "hash", transactionUrl: "", network: BASE_SEPOLIA.caip2, settlement: { success: true, transaction: "", network: "eip155:84532" }, chain: "unchecked", paymentIncluded: true, serviceOutcome: "ok", ms: 0 });
+  expect(records.spentToday("USDC")).toBe(0.01);
 });

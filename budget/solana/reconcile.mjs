@@ -81,20 +81,24 @@ if (a.verdict === "no_tx") {
   const movement = rec.state === "settled" ? rec.movement : await readTransfer(conn, a.tx);
   const debit = movement?.amount ? formatUnits(movement.amount) : (rec.debit ?? rec.amountUsdc ?? "0");
   const moved = movement?.amount && rec.amount && movement.amount !== rec.amount ? ` (journal expected ${rec.amount})` : "";
+<<<<<<< HEAD
   if (rec.state !== "settled") updateOp(opId, { state: "settled", tx: a.tx, debit, movement }, "reconcile: own transaction succeeded");
+=======
+  updateOp(opId, { state: "settled", final: a.final !== false, inclusionObserved: true, tx: a.tx, debit, movement }, "reconcile: own transaction succeeded");
+>>>>>>> 79ca43f (Separate authorization reads and resume finalized Solana recovery)
   console.log(`Settled: our transaction succeeded on chain, debit ${debit} USDC${moved}.`);
   console.log(`Delivered: ${rec.delivered ?? "unknown (the seller's answer was not recorded)"}. A delivery problem never triggers a new payment.`);
-  emit(result("settled", { tx: a.tx, debit, next: rec.delivered === false ? `settled but not delivered: do not pay again; contact the seller with tx ${a.tx}` : "none" }), EXIT.OK);
+  emit(result("settled", { tx: a.tx, debit, final: a.final !== false, next: a.final === false ? `the payment landed, but is not final on chain yet. Run node budget/solana/reconcile.mjs --op ${opId} later.` : rec.delivered === false ? `settled but not delivered: do not pay again; contact the seller with tx ${a.tx}` : "none" }), EXIT.OK);
 } else if (a.verdict === "failed") {
   updateOp(opId, { state: "failed", tx: a.tx, error: a.err }, "reconcile: own transaction failed on chain");
   console.log(`Failed on chain: ${JSON.stringify(a.err)}. Nothing moved.`);
   emit(result("failed", { tx: a.tx, delivered: false, reason: JSON.stringify(a.err), next: "nothing moved; buy again with a new --op" }), EXIT.OK);
-} else if (a.verdict === "not_found") {
+} else if (a.verdict === "not_found" && !rec.inclusionObserved) {
   updateOp(opId, { state: "not_found" }, `reconcile: no transaction and the blockhash expired (height ${a.blockHeight} > ${a.lastValidBlockHeight})`);
   console.log(`Not found: finalized block height ${a.blockHeight} is past ${a.lastValidBlockHeight}, and final history proves no transaction landed. Nothing was paid.`);
   emit(result("not_found", { reason: "blockhash expired", delivered: false, next: `nothing was paid; safe to buy again (this --op may be reused)` }), EXIT.OK);
 } else {
   updateOp(opId, { state: "unknown" }, `reconcile: pending, ${a.blocksLeft ?? "?"} blocks until the blockhash is provably dead`);
-  console.log("Still unresolved: no final settlement or final absence proof. Do not pay again.");
+  console.log(a.blocksLeft != null ? `Still unresolved: about ${a.blocksLeft} blocks remain before the blockhash expires. Do not pay again.` : "Still unresolved: no final settlement or final absence proof. Do not pay again.");
   emit(result("unknown", { next: `run node budget/solana/reconcile.mjs --op ${opId} again later. Do not pay again.` }), EXIT.UNCERTAIN);
 }

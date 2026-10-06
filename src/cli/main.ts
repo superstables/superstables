@@ -779,7 +779,7 @@ explain(
   {
     notes: [
       "One receipt for each payment the seller reported settled, or the chain showed. The chain column says verified " +
-        "when a matching payment is final on chain. A matching landed payment is paid and delivered immediately; unchecked means permanent verification is pending " +
+        "when a matching payment is final on chain. A matching landed payment is reported paid immediately; delivery is recorded separately. Unchecked means permanent verification is pending " +
         "(`superstables status` checks again). A later check can mark the receipt mismatch and the attempt uncertain, " +
         "or unpaid when the chain shows the payment was never made and can no longer be (the attempt is then failed, " +
         "and the receipt no longer counts against the daily cap). Do not pay again. A receipt records the payment and " +
@@ -1098,6 +1098,7 @@ function receiptChain(receipt: Receipt): string {
     case "unpaid":
       return `unpaid: the seller reported it paid, but ${receipt.chainReason ?? "the chain shows it was never made"}`;
     default:
+      if (receipt.paymentIncluded) return "unchecked: paid; the payment landed, but is not final on chain yet";
       return `unchecked: the seller reported it paid, and the chain has not confirmed it yet (${receipt.chainReason ?? "it was not read"})`;
   }
 }

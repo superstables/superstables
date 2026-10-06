@@ -328,10 +328,13 @@ describe.runIf(PROCESS_START)("a recorded pid is believed only with its process'
 });
 
 describe("a Solana payment the chain refuses today", () => {
-  const rec = { agentSig: "our-agent-sig", agent: "11111111111111111111111111111111", lastValidBlockHeight: 1000, submittedAt: new Date().toISOString() };
+  const rec = { tx: "our-agent-sig", agentSig: "our-agent-sig", agent: "11111111111111111111111111111111", lastValidBlockHeight: 1000, submittedAt: new Date().toISOString() };
   const conn = (height: number, over: Record<string, unknown> = {}) => ({
+    getGenesisHash: async () => "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+    getEpochInfo: async () => ({ blockHeight: height, absoluteSlot: height }),
+    getFirstAvailableBlock: async () => 0,
     getBlockHeight: async () => height,
-    getSignatureStatuses: async (sigs: string[]) => ({ value: sigs.map(() => null) }),
+    getSignatureStatuses: async (sigs: string[]) => ({ context: { slot: height }, value: sigs.map(() => null) }),
     getSignaturesForAddress: async () => [],
     getTransaction: async () => null,
     ...over,
@@ -341,11 +344,11 @@ describe("a Solana payment the chain refuses today", () => {
     const { refusalIsFinal } = await import("../../budget/solana/ops.mjs");
     // still valid: the seller could submit it after a new grant or deposit
     expect(await refusalIsFinal(conn(990), rec)).toBe(false);
-    expect(await refusalIsFinal(conn(1010), rec)).toBe(false); // within the margin
+    expect(await refusalIsFinal(conn(1010), rec)).toBe(true); // finalized expiry and complete direct history
     expect(await refusalIsFinal(conn(2000), rec)).toBe(true);
     // a read that fails is never an answer
     expect(await refusalIsFinal(conn(2000, { getSignatureStatuses: async () => { throw new Error("fetch failed"); } }), rec)).toBe(false);
-    expect(await refusalIsFinal(conn(2000, { getBlockHeight: async () => { throw new Error("fetch failed"); } }), rec)).toBe(false);
+    expect(await refusalIsFinal(conn(2000, { getEpochInfo: async () => { throw new Error("fetch failed"); } }), rec)).toBe(false);
     expect(await refusalIsFinal(conn(2000), { ...rec, lastValidBlockHeight: undefined })).toBe(false);
   });
 });
