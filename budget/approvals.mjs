@@ -35,7 +35,7 @@ import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFi
 import { join } from "node:path";
 import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
 import { createIdentitySource, inspectProcess, visiblePid } from '../src/core/process-identity.mjs';
-import { clearFileLock, inspectLockText, paymentBusy } from '../src/core/owner-recovery.mjs';
+import { clearFileLock, inspectLockText, recoveryResult, paymentBusy } from '../src/core/owner-recovery.mjs';
 import { groupAlive as groupOf, sameProcess } from "./procs.mjs";
 import { cancelSiteRequest, readSiteRequest, siteWord } from "./site.mjs";
 
@@ -874,31 +874,34 @@ export async function replacePending(record, byId) {
 
 /** Owner recovery preserves approvals and submitted-payment evidence. Never fabricates a final RESULT. */
 export function recoverApprovalLocks(rail, chain, options, id) {
-  if (!existsSync(approvalsDir())) return true;
   const selected = id ? readApproval(id) : null;
-  if (selected && (selected.rail !== rail || selected.chain !== chain)) return false;
-  const records = readdirSync(approvalsDir()).filter(name => /^oa-.*\.json$/.test(name)).map(name => readApproval(name.slice(0, -5))).filter(record => record?.rail === rail && record.chain === chain);
-  const recordChecks = record => {
-    if (!record || record.final) return [];
-    const checks = [inspectProcess(record), inspectProcess(record, undefined, true)];
-    if (record.railPgid) checks.push(inspectProcess({ ...record, pid: record.railPgid, pidStart: record.railPgidStart, pidStartUtc: record.railPgidStartUtc, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs }, undefined, true));
-    return checks;
-  };
-  // A verified live worker or rail child protects even an unverifiable lock in its approval.
-  if (records.flatMap(recordChecks).some(check => check.state === 'alive' && !check.possiblyAlive)) return false;
-  const inspectApproval = text => {
-    let lock;
-    try { lock = JSON.parse(text); } catch { return inspectLockText(text); }
-    const checks = [inspectLockText(text), ...recordChecks(readApproval(lock?.id))];
-    return checks.find(check => check.state === 'alive' && !check.possiblyAlive) ?? checks.find(check => check.state === 'alive') ?? { state: 'dead' };
-  };
-  const inspectRecordLock = id => text => {
-    const checks = [inspectLockText(text), ...recordChecks(readApproval(id))];
-    return checks.find(check => check.state === 'alive' && !check.possiblyAlive) ?? checks.find(check => check.state === 'alive') ?? { state: 'dead' };
-  };
-  if (id && !clearFileLock(recordLockFile(id), options, inspectRecordLock(id))) return false;
-  for (const record of records) {
-    if (!clearFileLock(recordLockFile(record.id), options, inspectRecordLock(record.id))) return false;
-  }
-  return clearFileLock(activeFile(rail, chain), options, inspectApproval);
+  if (id && ((!selected && !existsSync(recordLockFile(id)) && !existsSync(recordLockFile(id) + '.break')) || (selected && (selected.rail !== rail || selected.chain !== chain)))) return { outcome: 'not_found' };
+  return recoveryResult(options, options => {
+    if (!existsSync(approvalsDir())) return true;
+    const records = readdirSync(approvalsDir()).filter(name => /^oa-.*\.json$/.test(name)).map(name => readApproval(name.slice(0, -5))).filter(record => record?.rail === rail && record.chain === chain);
+    const recordChecks = record => {
+      if (!record || record.final) return [];
+      const checks = [inspectProcess(record), inspectProcess(record, undefined, true)];
+      if (record.railPgid) checks.push(inspectProcess({ ...record, pid: record.railPgid, pidStart: record.railPgidStart, pidStartUtc: record.railPgidStartUtc, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs }, undefined, true));
+      return checks;
+    };
+    // A verified live worker or rail child protects even an unverifiable lock in its approval.
+    const live = records.flatMap(recordChecks).find(check => check.state === 'alive' && !check.possiblyAlive);
+    if (live) { options.onBlocked?.(live); return false; }
+    const inspectApproval = text => {
+      let lock;
+      try { lock = JSON.parse(text); } catch { return inspectLockText(text); }
+      const checks = [inspectLockText(text), ...recordChecks(readApproval(lock?.id))];
+      return checks.find(check => check.state === 'alive' && !check.possiblyAlive) ?? checks.find(check => check.state === 'alive') ?? { state: 'dead' };
+    };
+    const inspectRecordLock = id => text => {
+      const checks = [inspectLockText(text), ...recordChecks(readApproval(id))];
+      return checks.find(check => check.state === 'alive' && !check.possiblyAlive) ?? checks.find(check => check.state === 'alive') ?? { state: 'dead' };
+    };
+    if (id && !clearFileLock(recordLockFile(id), options, inspectRecordLock(id))) return false;
+    for (const record of records) {
+      if (!clearFileLock(recordLockFile(record.id), options, inspectRecordLock(record.id))) return false;
+    }
+    return clearFileLock(activeFile(rail, chain), options, inspectApproval);
+  });
 }

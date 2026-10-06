@@ -1,5 +1,6 @@
 // Run released 0.3.0 readers against live and dead candidate holders, without wallets.
 // BUDGET_RACE_ROOT selects another candidate export for regression reproduction.
+import { stopHolder } from './budget-holder-cleanup.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync, fork, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
@@ -88,7 +89,7 @@ if (process.argv[2] === 'holder') {
         assert.equal((await a.waitFor(${JSON.stringify(id)}, 0)).orphaned, false);
       `);
       cases++;
-      const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited; children.delete(child);
+      await stopHolder(child); children.delete(child);
       read(old, home, tz, `
         const lock = lockOp(${JSON.stringify(join(home, 'ops'))}, 'upgrade');
         assert.equal(lock.ok, true, '0.3.0 cannot recover a dead candidate holder');
@@ -100,7 +101,7 @@ if (process.argv[2] === 'holder') {
     }
     console.log(JSON.stringify({ cases, result: 'pass', released: '46469a5', nativeMacOS: false }));
   } finally {
-    await Promise.all([...children].map(async child => { const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited; }));
+    await Promise.all([...children].map(child => stopHolder(child)));
     rmSync(scratch, { recursive: true, force: true });
   }
 }

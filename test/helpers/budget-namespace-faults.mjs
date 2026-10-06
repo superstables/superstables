@@ -1,5 +1,6 @@
 // Fault each filesystem boundary of heartbeat and release in a real PID namespace.
 // Run: node test/helpers/budget-namespace-faults.mjs [--long-pause]
+import { assertHolderStopped } from './budget-holder-cleanup.mjs';
 import fs from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
@@ -67,7 +68,7 @@ if (process.argv[2] === 'worker') {
     return { home, path: join(home, 'budget/ops/solana-devnet/paid-op.json.lock') };
   }
   async function worker(b, action, step, phase) {
-    const p = spawn('/usr/bin/bwrap', ['--unshare-pid', '--die-with-parent', '--dev-bind', '/', '/', '--ro-bind', '/proc', join(b.home, 'host-proc'), '--proc', '/proc', process.execPath, script, 'worker', b.home, action, String(step), phase]);
+    const p = spawn('/usr/bin/bwrap', ['--unshare-pid', '--die-with-parent', '--new-session', '--dev-bind', '/', '/', '--ro-bind', '/proc', join(b.home, 'host-proc'), '--proc', '/proc', process.execPath, script, 'worker', b.home, action, String(step), phase]);
     const state = { p, events: [], hostPid: null, exited: false, error: '' }; children.add(state);
     p.stderr.on('data', c => { state.error += c; });
     let stdout = '';
@@ -104,6 +105,7 @@ if (process.argv[2] === 'worker') {
       if (Date.now() > deadline) throw new Error('namespace holder did not finish exiting');
       await sleep(3);
     }
+    await assertHolderStopped(state.hostPid);
     children.delete(state);
   }
   function confirmed(b) {
@@ -204,5 +206,5 @@ if (process.argv[2] === 'worker') {
       for (let step = 1; step <= 2; step++) for (const phase of ['before', 'after']) for (const crash of [false, true]) await run('heartbeat', step, phase, crash);
       console.log(JSON.stringify({ result: 'pass', cases, fired, doubleHolders: 0, lostSuccessors: 0, unsafeForeignTakeovers: 0 }));
     }
-  } finally { stop(); for (const home of homes) fs.rmSync(home, { recursive: true, force: true }); }
+  } finally { for (const state of [...children]) await kill(state); for (const home of homes) fs.rmSync(home, { recursive: true, force: true }); }
 }

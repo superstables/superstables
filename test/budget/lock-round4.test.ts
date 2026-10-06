@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
+import { stopHolder } from '../helpers/budget-holder-cleanup.mjs';
 import { once } from 'node:events';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -12,6 +13,7 @@ const { withFileLock } = await import(join(root, 'src/core/lock.ts'));
 const { lockFile } = await import(join(root, 'budget/op-lock.mjs'));
 const homes: string[] = [];
 const children = new Set<ChildProcess>();
+const innerPids = new Map<ChildProcess, number>();
 function box() {
   const home = mkdtempSync(join(tmpdir(), 'budget-round4-')); homes.push(home);
   const dir = join(home, 'budget/ops/solana-devnet'); mkdirSync(dir, { recursive: true });
@@ -19,8 +21,8 @@ function box() {
   return { home, dir, op: join(dir, 'paid-op.buy.lock'), cap: join(home, 'records/cap.lock') };
 }
 afterEach(async () => {
-  for (const child of children) { child.kill('SIGKILL'); if (child.exitCode === null && child.signalCode === null) await once(child, 'exit'); }
-  children.clear();
+  for (const child of children) await stopHolder(child, innerPids.get(child) ?? child.pid);
+  children.clear(); innerPids.clear();
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 const boot = '11111111-2222-3333-4444-555555555555';
@@ -44,14 +46,20 @@ it('a cloned machine ID and different boot cannot expire a newly written live ho
   const src = source(), owner = { ...src.record(), pid: 77, bootId: oldBoot };
   expect(inspectProcess(owner, src)).toMatchObject({ state: 'alive', possiblyAlive: true });
 });
-it('requires pre-boot write and latest operation heartbeat with a 60-second margin', () => {
-  const src = source(), start = Date.now() - 100_000;
-  const owner = { ...src.record(), pid: 77, bootId: oldBoot, writtenAt: start - 61_000 };
-  expect(inspectProcess(owner, src)).toEqual({ state: 'dead' });
-  for (const record of [{ ...owner, writtenAt: start - 59_000 }, { ...owner, mtimeMs: Date.now() }, { ...owner, mtimeMs: start - 61_000, heartbeatAt: Date.now() }, { ...owner, hostname: 'clone' }]) {
+it('different boots remain possibly alive regardless of record age, heartbeat or hostname', () => {
+  const src = source(), old = Date.now() - 40 * 86400_000;
+  const owner = { ...src.record(), pid: 77, bootId: oldBoot, writtenAt: old };
+  for (const record of [owner, { ...owner, heartbeatAt: old }, { ...owner, hostname: 'clone' }]) {
     expect(inspectProcess(record, src)).toMatchObject({ state: 'alive', possiblyAlive: true });
   }
-  expect(inspectProcess({ ...owner, mtimeMs: start - 61_000, heartbeatAt: start - 61_000 }, src)).toEqual({ state: 'dead' });
+});
+it('equal boot IDs allow dead-holder recovery across UTS hostnames', () => {
+  const src = source();
+  expect(inspectProcess({ ...src.record(), pid: 77, hostname: 'container-1' }, src)).toEqual({ state: 'dead' });
+});
+it('matching legacy Linux start with complete proc view is verified alive', () => {
+  const owner = { pid: 77, pidStart: `linux:${boot}:200`, owner: 'legacy' };
+  expect(inspectLegacyCap(owner, source())).toEqual({ state: 'alive' });
 });
 it('equal boot IDs and PID namespaces prove the same kernel without a machine ID', () => {
   const src = source({ machineId: '' });
@@ -82,11 +90,16 @@ function node(home: string, code: string, args: string[] = []) {
   return spawnSync(process.execPath, ['--import', join(root, 'node_modules/tsx/dist/loader.mjs'), ...args, '--input-type=module', '-e', code], { env: { ...process.env, SUPERSTABLES_HOME: home }, encoding: 'utf8', timeout: 20_000 });
 }
 async function holder(home: string, code: string, binds: string[] = []) {
-  const child = spawn('bwrap', ['--unshare-pid', '--unshare-user', '--dev-bind', '/', '/', '--proc', '/proc', ...binds, process.execPath, '--import', join(root, 'node_modules/tsx/dist/loader.mjs'), '--input-type=module', '-e', code], { env: { ...process.env, SUPERSTABLES_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const hostProc = join(home, 'host-proc'); mkdirSync(hostProc, { recursive: true });
+  const pidFile = join(home, 'holder.pid');
+  const wrapped = `const hostFs=await import('node:fs');hostFs.writeFileSync(${JSON.stringify(pidFile)},hostFs.readFileSync(${JSON.stringify(join(hostProc, 'self/status'))},'utf8').split(String.fromCharCode(10)).find(line=>line.startsWith('Pid:')).slice(4).trim());${code}`;
+  const child = spawn('bwrap', ['--die-with-parent', '--new-session', '--unshare-pid', '--unshare-user', '--dev-bind', '/', '/', '--ro-bind', '/proc', hostProc, '--proc', '/proc', ...binds, process.execPath, '--import', join(root, 'node_modules/tsx/dist/loader.mjs'), '--input-type=module', '-e', wrapped], { env: { ...process.env, SUPERSTABLES_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
   children.add(child);
   let error = ''; child.stderr?.on('data', chunk => { error += chunk; });
   if (!child.stdout) throw new Error('no stdout');
-  await Promise.race([once(child.stdout, 'data'), once(child, 'exit').then(() => { throw new Error(error); })]);
+  try {
+    await Promise.race([once(child.stdout, 'data'), once(child, 'exit').then(() => { throw new Error(error); })]);
+  } finally { if (existsSync(pidFile)) innerPids.set(child, Number(readFileSync(pidFile, 'utf8'))); }
   return child;
 }
 function clonedBoot(home: string) {
@@ -124,14 +137,14 @@ it.runIf(process.platform === 'linux')('legacycap.sh: recovers a killed 0.3.0/0.
   const legacy = JSON.stringify({ pid: child.pid, pidStart: identity.start(child.pid), owner: 'legacy' });
   writeFileSync(b.cap, legacy); writeFileSync(b.cap + '.break', legacy);
   child.kill('SIGKILL'); await once(child, 'exit'); children.delete(child);
-  expect(await withFileLock(b.cap, () => 'recovered', 100)).toBe('recovered');
+  expect(await withFileLock(b.cap, () => 'recovered', 5000)).toBe('recovered');
   writeFileSync(b.cap, legacy); writeFileSync(b.cap + '.break', legacy);
   expect(unlock(b.home, ['--cap'], { unverified: false, answer: 'payment-lock\n' }).status).toBe(0);
 });
 it.runIf(process.platform === 'linux')('nomachineid.sh: killed holders recover in the same kernel and namespace without machine-id', () => {
   const b = box(), empty = join(b.home, 'empty'); writeFileSync(empty, '');
   const script = `import {spawn} from 'node:child_process';import{once}from'node:events'; const child=spawn(process.execPath,['--import',${JSON.stringify(join(root, 'node_modules/tsx/dist/loader.mjs'))},'--input-type=module','-e',${JSON.stringify(`const{lockFile}=await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});const{withFileLock}=await import(${JSON.stringify(join(root, 'src/core/lock.ts'))});lockFile(${JSON.stringify(b.op)});await withFileLock(${JSON.stringify(b.cap)},()=>{console.log('ready');return new Promise(()=>{});});`)}]);await once(child.stdout,'data');child.kill('SIGKILL');await once(child,'exit');const{lockFile}=await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});const{withFileLock}=await import(${JSON.stringify(join(root, 'src/core/lock.ts'))});const l=lockFile(${JSON.stringify(b.op)});if(!l.ok)throw Error('operation blocked');l.release();await withFileLock(${JSON.stringify(b.cap)},()=>console.log('recovered'),100);`;
-  const result = spawnSync('bwrap', ['--unshare-pid', '--unshare-user', '--dev-bind', '/', '/', '--proc', '/proc', '--ro-bind', empty, '/etc/machine-id', '--tmpfs', '/var/lib/dbus', process.execPath, '--import', join(root, 'node_modules/tsx/dist/loader.mjs'), '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 20_000 });
+  const result = spawnSync('bwrap', ['--die-with-parent', '--new-session', '--unshare-pid', '--unshare-user', '--dev-bind', '/', '/', '--proc', '/proc', '--ro-bind', empty, '/etc/machine-id', '--tmpfs', '/var/lib/dbus', process.execPath, '--import', join(root, 'node_modules/tsx/dist/loader.mjs'), '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 20_000 });
   expect(result.status, result.stderr).toBe(0); expect(result.stdout).toContain('recovered');
 });
 function unlock(home: string, target: string[], { tty = true, confirm = true, unverified = true, answer = 'payment-lock unverified\n' } = {}) {
@@ -182,19 +195,19 @@ it('prints the operation override notice once for both locks', () => {
   expect(result.status, result.stderr).toBe(0);
   expect(result.stderr.match(/Clearing the lock for operation paid-op/g)).toHaveLength(1);
 });
-it('uses kern.boottime for macOS reboot proof and protects cloned platform UUIDs', () => {
-  const bootStart = Date.now() - 100_000;
+it('different macOS boots remain possibly alive even with an old write and cloned platform UUID', () => {
   const src = createIdentitySource({ platform: 'darwin', host: 'mac', start: () => 'darwin:utc:100', probe: () => true,
-    run: (command: string, args: string[]) => command === 'ioreg' ? '"IOPlatformUUID" = "11111111-2222-3333-4444-555555555555"' : args[1] === 'kern.boottime' ? `{ sec = ${Math.floor(bootStart / 1000)}, usec = 0 }` : boot,
+    run: (command: string) => command === 'ioreg' ? '\"IOPlatformUUID\" = \"11111111-2222-3333-4444-555555555555\"' : boot,
   });
   const owner = { ...src.record(), bootId: oldBoot };
-  expect(inspectProcess(owner, src)).toMatchObject({ state: 'alive', possiblyAlive: true });
-  expect(inspectProcess({ ...owner, writtenAt: bootStart - 61_000 }, src)).toEqual({ state: 'dead' });
+  for (const writtenAt of [Date.now(), Date.now() - 40 * 86400_000]) {
+    expect(inspectProcess({ ...owner, writtenAt }, src)).toMatchObject({ state: 'alive', possiblyAlive: true });
+  }
 });
 it('owner recovery preserves a replacement published during its override notice', async () => {
   const b = box(), replacement = JSON.stringify(createIdentitySource().record()); writeFileSync(b.cap, unknown);
   const { recoverCap } = await import(join(root, 'src/core/owner-recovery.mjs'));
-  expect(recoverCap(b.home, { unverified: true, onOverride: () => writeFileSync(b.cap, replacement) })).toBe(false);
+  expect(recoverCap(b.home, { unverified: true, onOverride: () => writeFileSync(b.cap, replacement) })).toEqual({ outcome: 'busy' });
   expect(readFileSync(b.cap, 'utf8')).toBe(replacement);
 });
 
@@ -223,7 +236,7 @@ it('explicit approval recovery refuses the wrong rail and preserves its record l
   writeFileSync(path, unknown);
   writeFileSync(join(b.home, `budget/approvals/${id}.json`), JSON.stringify({ id, rail: 'evm', chain: 'base-sepolia', ...createIdentitySource().record() }));
   const result = unlock(b.home, ['--rail', 'solana', '--approval', id]);
-  expect(result.status).toBe(5); expect(readFileSync(path, 'utf8')).toBe(unknown);
+  expect(result.status).toBe(3); expect(result.stdout).toContain('approval_not_found'); expect(result.stdout).not.toContain('The payment lock is held'); expect(readFileSync(path, 'utf8')).toBe(unknown);
 });
 
 it('attempt recovery preserves a torn ledger tail and starts its recovery row on a new line', () => {

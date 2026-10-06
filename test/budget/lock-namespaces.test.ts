@@ -1,3 +1,4 @@
+import { stopHolder } from '../helpers/budget-holder-cleanup.mjs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
@@ -16,15 +17,16 @@ function box() {
   return { home, dir, hostProc, path: join(dir, 'paid-op.json.lock') };
 }
 async function hold(b: ReturnType<typeof box>, ancestorProc = false) {
-  const p = spawn('bwrap', ['--unshare-pid', '--die-with-parent', '--dev-bind', '/', '/', '--ro-bind', '/proc', b.hostProc, ...(ancestorProc ? [] : ['--proc', '/proc']), process.execPath, helper], {
+  const p = spawn('bwrap', ['--unshare-pid', '--die-with-parent', '--new-session', '--dev-bind', '/', '/', '--ro-bind', '/proc', b.hostProc, ...(ancestorProc ? [] : ['--proc', '/proc']), process.execPath, helper], {
     env: { ...process.env, PROBE_ROOT: root, PROBE_HOME: b.home, PROBE_ACTION: 'hold', HOST_PROC: b.hostProc },
   });
+  const tracked = { p, pid: p.pid ?? 0 }; children.push(tracked);
   let error = ''; p.stderr.on('data', c => { error += c; });
   const ready = await new Promise<{ ok: boolean; pid: number }>((resolveReady, reject) => {
     p.stdout.once('data', c => resolveReady(JSON.parse(String(c)))); p.once('error', reject);
     p.once('exit', code => reject(new Error(`bwrap exited ${code}: ${error}`)));
   });
-  children.push({ p, pid: ready.pid }); expect(ready.ok).toBe(true);
+  tracked.pid = ready.pid; expect(ready.ok).toBe(true);
   return { p, pid: ready.pid };
 }
 function tryLock(b: ReturnType<typeof box>, skew = 0) {
@@ -40,8 +42,7 @@ async function waitFor(fn: () => boolean) {
 }
 afterEach(async () => {
   for (const { p, pid } of children.splice(0)) {
-    try { process.kill(pid, 'SIGCONT'); process.kill(pid, 'SIGKILL'); } catch {}
-    if (p.exitCode === null) { const done = new Promise<void>(resolveDone => p.once('close', () => resolveDone())); p.kill('SIGKILL'); await done; }
+    await stopHolder(p, pid);
   }
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
