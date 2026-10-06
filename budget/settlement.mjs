@@ -78,7 +78,8 @@ const topicAddress = (t) => (typeof t === "string" && t.length === 66 ? `0x${t.s
 
 /**
  * Whether transaction `tx` paid `amount` (atomic units, bigint) of `asset` to `payTo` (from `payer`, when the site named
- * one), after `notBefore` (unix seconds). { state: "settled" } after finality, { state: "included", reason } before it, { state: "mismatch", reason } when the chain shows that
+ * one), after `notBefore` (unix seconds). Final payments return { state: "settled" }; matching landed
+ * payments waiting for finality return { state: "included", reason }. { state: "mismatch", reason } when the chain shows that
  * transaction and it is not that payment, or { state: "unread", reason } when the chain cannot say (not found, RPC down).
  */
 export async function readSettlement({ rail, chain, tx, payer, payTo, asset, amount, notBefore, nonce, rpcUrl, deadline }) {
@@ -114,7 +115,7 @@ async function evmSettlement({ rpc, rail, chain, tx, payer, payTo, asset, amount
   if (!hexNumber(receipt.blockNumber) || !hash(receipt.blockHash) || receipt.logs?.some((l) => l.removed)) return { state: "unread", reason: `transaction ${tx} has no usable block inclusion` };
   const block = await rpc("eth_getBlockByNumber", [receipt.blockNumber, false]);
   if (!hexNumber(block?.number) || BigInt(block.number) !== BigInt(receipt.blockNumber) || !hash(block?.hash) || block.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) return { state: "unread", reason: `the canonical block of transaction ${tx} could not be verified` };
-  if (receipt.status !== "0x1") return { state: "mismatch", reason: `transaction ${tx} failed on chain` };
+  if (receipt.status !== "0x1") return { state: final && hexNumber(final.number) && BigInt(receipt.blockNumber) <= BigInt(final.number) ? "mismatch" : "unread", reason: `transaction ${tx} failed on chain` };
   const logs = Array.isArray(receipt.logs) ? receipt.logs : [];
   const tokenLogs = logs.filter((l) => !l.removed && sameHex(l.address, asset));
   const paid = tokenLogs.filter((l) =>

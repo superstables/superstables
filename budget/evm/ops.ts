@@ -12,10 +12,11 @@
 //   return:      transfer(owner, price) (stranded funds go back to the owner) is journaled the same way
 //   settlement:  read back from the chain (USDC AuthorizationUsed + Transfer), never from the seller
 // A purchase has two transactions that matter: the pull (agent) and the settlement (the seller's facilitator).
+import { finalityFor } from "../../src/core/finality-policy.js";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
+import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, BlockNotFoundError, TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
 import {
   SYM,
   OPS_DIR, USDC, CFG, RAIL, cmd, erc20Abi, publicClient, usdc, sleep, tx, retry, allowanceOf, usdcBalance, readUntil, feeOf, sendJournaled, receiptOf,
@@ -30,6 +31,11 @@ export type Journal = {
   rail: string;
   path: "approve";
   state: OpState;
+  /** false keeps a landed result reconcilable; omitted on older permanent records. */
+  final?: boolean;
+  settleBlock?: string;
+  inclusionObserved?: true;
+  replacementSearchTo?: string;
   createdAt: string;
   updatedAt: string;
   // intent
@@ -164,6 +170,7 @@ export async function resultLine(j: Journal, command: "buy" | "reconcile", extra
     path: "approve",
     op: j.op,
     state: outState(j.state),
+    chain_final: j.state === "settled" ? j.final ?? null : null,
     paid: j.state === "settled" ? true : j.state === "unknown" || j.state === "submitted" ? null : false,
     delivered: j.delivered,
     amount: j.price ?? null,
@@ -182,7 +189,7 @@ export async function resultLine(j: Journal, command: "buy" | "reconcile", extra
 
 /** SKALE's pinned BFT configuration is the only EVM budget network with instant finality. */
 async function finalHead() {
-  return publicClient.getBlock({ blockTag: CFG.key === "skale-base-sepolia" ? "latest" : "finalized" });
+  return publicClient.getBlock({ blockTag: finalityFor("evm", CFG.key) === "instant" ? "latest" : "finalized" });
 }
 
 type Receipt = Awaited<ReturnType<typeof publicClient.getTransactionReceipt>>;
@@ -198,7 +205,7 @@ async function canonicalReceipt(receipt: Receipt, head?: Awaited<ReturnType<type
 }
 
 export type PullRead =
-  | { found: true; status: "success" | "reverted"; block: bigint; moved: bigint }
+  | { found: true; status: "success" | "reverted"; block: bigint; moved: bigint; final: boolean }
   | { found: false; unknown?: boolean; pendingInPool?: boolean };
 
 /** Receipt errors and provisional inclusion preserve uncertainty. Only a readable absence permits nonce investigation. */
@@ -212,13 +219,23 @@ export async function readPull(j: Journal, options: { final?: boolean } = {}): P
     receipt = null;
   }
   if (!receipt) {
+    if (j.inclusionObserved) {
+      if (!j.pullBlock) return { found: false, unknown: true };
+      try {
+        const head = await publicClient.getBlock({ blockTag: "latest" });
+        if (head.number === null || head.number < BigInt(j.pullBlock)) return { found: false, unknown: true };
+      } catch { return { found: false, unknown: true }; }
+    }
     let inPool = false;
     try { inPool = !!(await publicClient.getTransaction({ hash: j.pullTx })); } catch {}
     return { found: false, pendingInPool: inPool };
   }
   try {
-    const head = options.final === false ? await publicClient.getBlock({ blockTag: "latest" }) : undefined;
-    if (receipt.transactionHash.toLowerCase() !== j.pullTx.toLowerCase() || !(await canonicalReceipt(receipt, head))) return { found: false, unknown: true };
+    const head = await publicClient.getBlock({ blockTag: "latest" });
+    if (receipt.transactionHash.toLowerCase() !== j.pullTx.toLowerCase() || head.number === null || receipt.blockNumber > head.number) return { found: false, unknown: true };
+    const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
+    if (!block?.hash || block.number !== receipt.blockNumber) return { found: false, unknown: true };
+    if (receipt.logs.some((l) => l.removed) || block.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) return { found: false };
   } catch {
     return { found: false, unknown: true };
   }
@@ -228,36 +245,100 @@ export async function readPull(j: Journal, options: { final?: boolean } = {}): P
       if (l.address.toLowerCase() === USDC.toLowerCase() && l.args.from.toLowerCase() === j.owner.toLowerCase() && l.args.to.toLowerCase() === j.agent.toLowerCase()) moved += l.args.value;
     }
   }
-  return { found: true, status: receipt.status, block: receipt.blockNumber, moved };
+  return { found: true, status: receipt.status, block: receipt.blockNumber, moved, final: await canonicalReceipt(receipt) };
 }
 
-/** Identify the different transaction that consumed the pull nonce in final canonical history. */
+/** Timestamp searches read blocks, never pruned historical account state. */
+export async function operationStart(j: Journal, head: Awaited<ReturnType<typeof finalHead>>): Promise<bigint> {
+  if (j.pullBlock) return BigInt(j.pullBlock);
+  const since = Date.parse(j.createdAt) / 1000 - 600;
+  if (!Number.isFinite(since) || head.number === null) throw new Error("operation start unavailable");
+  const header = async (number: bigint) => {
+    try { return await publicClient.getBlock({ blockNumber: number }); }
+    catch (e) {
+      if (e instanceof BlockNotFoundError || /pruned|history unavailable|header not found/i.test(String(e))) return null;
+      throw e;
+    }
+  };
+  // Bracket the operation near the head before searching. Pruned headers only move the lower bound forward.
+  let lo = 0n, hi = head.number, step = 1024n;
+  while (hi > 0n) {
+    const probe = head.number > step ? head.number - step : 0n;
+    const block = await header(probe);
+    if (!block) { lo = probe + 1n; break; }
+    if (Number(block.timestamp) < since) { lo = probe; break; }
+    hi = probe;
+    if (probe === 0n) break;
+    step *= 2n;
+  }
+  while (lo < hi) {
+    const mid = (lo + hi) / 2n;
+    const block = await header(mid);
+    if (!block || Number(block.timestamp) < since) lo = mid + 1n;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Identify the nonce-consuming transaction from token logs, then verify its sender, nonce and final receipt. */
 async function differentFinalNonceTransaction(j: Journal): Promise<Hex | undefined> {
-  if (j.pullNonce === undefined || !j.pullTx) return undefined;
+  if (j.pullNonce === undefined || !j.pullTx || j.inclusionObserved) return undefined;
   try {
     const head = await finalHead();
     if (head.number === null) return undefined;
-    const countAt = (blockNumber: bigint) => publicClient.getTransactionCount({ address: j.agent, blockNumber });
-    if (await countAt(head.number) <= j.pullNonce) return undefined;
-    let lo = 0n, hi = head.number;
-    while (lo < hi) {
-      const mid = (lo + hi) / 2n;
-      if (await countAt(mid) > j.pullNonce) hi = mid;
-      else lo = mid + 1n;
+    const start = await operationStart(j, head);
+    const candidate = async (hash: Hex): Promise<Hex | undefined> => {
+      if (hash.toLowerCase() === j.pullTx?.toLowerCase()) return undefined;
+      const transaction = await publicClient.getTransaction({ hash });
+      if (transaction.from.toLowerCase() !== j.agent.toLowerCase() || transaction.nonce !== j.pullNonce) return undefined;
+      const receipt = await publicClient.getTransactionReceipt({ hash });
+      return receipt.transactionHash.toLowerCase() === hash.toLowerCase() && await canonicalReceipt(receipt, head) ? hash : undefined;
+    };
+    const [transfer, used] = parseAbi([
+      "event Transfer(address indexed from, address indexed to, uint256 value)",
+      "event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)",
+    ]);
+    const filters = [
+      (fromBlock: bigint, toBlock: bigint) => publicClient.getLogs({ address: USDC, event: transfer, args: { from: j.agent }, fromBlock, toBlock }),
+      (fromBlock: bigint, toBlock: bigint) => publicClient.getLogs({ address: USDC, event: transfer, args: { to: j.agent }, fromBlock, toBlock }),
+      (fromBlock: bigint, toBlock: bigint) => publicClient.getLogs({ address: USDC, event: used, args: { authorizer: j.agent, ...(j.auth ? { nonce: j.auth.nonce } : {}) }, fromBlock, toBlock }),
+    ];
+    for (const filter of filters) {
+      let step = BigInt(CFG.logRange ?? 1000);
+      const logStart = CFG.key === "ethereum-sepolia" && head.number > 9000n && start < head.number - 9000n ? head.number - 9000n : start;
+      for (let from = logStart, pages = 0; from <= head.number && pages < 50; pages++) {
+        const to = from + step - 1n < head.number ? from + step - 1n : head.number;
+        let logs;
+        try { logs = await filter(from, to); }
+        catch (e) { if (step <= 100n) throw e; step /= 10n; continue; }
+        for (const log of logs) {
+          if (log.removed || !log.transactionHash || log.blockNumber === null || log.blockNumber > head.number) continue;
+          const identified = await candidate(log.transactionHash);
+          if (identified) return identified;
+        }
+        from = to + 1n;
+      }
     }
-    const block = await publicClient.getBlock({ blockNumber: hi, includeTransactions: true });
-    if (block.number !== hi || !block.hash) return undefined;
-    const other = block.transactions.find((t) => typeof t !== "string" && t.from.toLowerCase() === j.agent.toLowerCase() && t.nonce === j.pullNonce);
-    if (!other || typeof other === "string" || other.hash.toLowerCase() === j.pullTx.toLowerCase()) return undefined;
-    const receipt = await publicClient.getTransactionReceipt({ hash: other.hash });
-    if (receipt.transactionHash.toLowerCase() !== other.hash.toLowerCase() || receipt.blockNumber !== hi || receipt.blockHash !== block.hash || !(await canonicalReceipt(receipt, head))) return undefined;
-    return other.hash;
+    // A replacement can be a native transfer with no token logs. Resume a bounded block scan for that case.
+    const from = j.replacementSearchTo ? BigInt(j.replacementSearchTo) + 1n : start;
+    for (let n = from, read = 0; n <= head.number && read < 8; n++, read++) {
+      const block = await publicClient.getBlock({ blockNumber: n, includeTransactions: true });
+      if (block.number !== n || !block.hash) return undefined;
+      for (const transaction of block.transactions) {
+        if (typeof transaction === "string" || transaction.from.toLowerCase() !== j.agent.toLowerCase() || transaction.nonce !== j.pullNonce) continue;
+        const identified = await candidate(transaction.hash);
+        if (identified) return identified;
+      }
+      j.replacementSearchTo = String(n);
+      writeJournal(j);
+    }
+    return undefined;
   } catch {
     return undefined;
   }
 }
 
-/** A return is recorded as completed only after final canonical inclusion. */
+/** A return is recorded as completed only after it is final on chain. */
 async function readReturn(j: Journal): Promise<{ found: boolean; status?: "success" | "reverted"; moved: bigint }> {
   if (!j.returnTx) return { found: false, moved: 0n };
   let receipt: Receipt;
@@ -272,52 +353,81 @@ async function readReturn(j: Journal): Promise<{ found: boolean; status?: "succe
   return { found: true, status: receipt.status, moved };
 }
 
-export type Settlement = { used: boolean; canceled: boolean; settleTx?: Hex; status?: "success" | "reverted"; transferOk?: boolean };
-/** Latest use can block recovery; settlement or cancellation requires final canonical evidence. */
+export type Settlement =
+  | { kind: "unused"; used: false; canceled: false }
+  | { kind: "unread"; used: false; canceled: false; reason: string }
+  | { kind: "pending"; used: false; canceled: false; reason: string }
+  | { kind: "canceled"; used: false; canceled: boolean; final: boolean }
+  | { kind: "used"; used: true; canceled: false; settleTx: Hex; status: "success"; transferOk: boolean; final: boolean; block: bigint };
+
+/** Latest use, canonical inclusion, and finality are separate observations. Read errors never imply use. */
 export async function readSettlement(j: Journal): Promise<Settlement> {
   const auth = j.auth;
-  if (!auth) return { used: false, canceled: false };
-  const done = await retry(() => publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: "authorizationState", args: [j.agent, auth.nonce] }));
-  if (!done) return { used: false, canceled: false };
-  const unresolved: Settlement = { used: true, canceled: false };
+  if (!auth) return { kind: "unused", used: false, canceled: false };
   try {
-    const head = await finalHead();
-    if (head.number === null) return unresolved;
-    const finalUsed = await publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: "authorizationState", args: [j.agent, auth.nonce], blockNumber: head.number });
-    if (!finalUsed) return unresolved;
-    const fromBlock = j.pullBlock ? BigInt(j.pullBlock) : head.number > 3000n ? head.number - 3000n : 0n;
+    const latest = await publicClient.getBlock({ blockTag: "latest" });
+    if (latest.number === null) throw new Error("latest block unavailable");
+    const done = await retry(() => publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: "authorizationState", args: [j.agent, auth.nonce], blockNumber: latest.number }));
+    if (!done) {
+      if (j.inclusionObserved && (!j.settleBlock || latest.number < BigInt(j.settleBlock))) return { kind: "unread", used: false, canceled: false, reason: "latest head has not reached the observed settlement block" };
+      return { kind: "unused", used: false, canceled: false };
+    }
+    const head = await finalHead().catch(() => null);
     const events = parseAbi([
       "event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)",
       "event AuthorizationCanceled(address indexed authorizer, bytes32 indexed nonce)",
     ]);
+    const inspect = async (hash: Hex): Promise<Settlement | undefined> => {
+      let receipt: Receipt;
+      try { receipt = await publicClient.getTransactionReceipt({ hash }); }
+      catch (e) {
+        if (e instanceof TransactionReceiptNotFoundError) return undefined;
+        throw e;
+      }
+      if (!receipt || receipt.transactionHash.toLowerCase() !== hash.toLowerCase() || receipt.status !== "success") return undefined;
+      const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
+      if (!block?.hash || block.number !== receipt.blockNumber) throw new Error("canonical block unavailable");
+      if (receipt.blockNumber > latest.number || receipt.logs.some((l) => l.removed) || block.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) return undefined;
+      const final = head !== null && await canonicalReceipt(receipt, head);
+      const matches = (name: "AuthorizationUsed" | "AuthorizationCanceled") => parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: name }).some((l) => l.address.toLowerCase() === USDC.toLowerCase() && l.args.authorizer.toLowerCase() === j.agent.toLowerCase() && l.args.nonce.toLowerCase() === auth.nonce.toLowerCase());
+      if (matches("AuthorizationCanceled")) {
+        const finalCanceled = final && head !== null && await publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: "authorizationState", args: [j.agent, auth.nonce], blockNumber: head.number ?? undefined });
+        if (final && !finalCanceled) return { kind: "pending", used: false, canceled: false, reason: "the cancellation's final nonce state could not be verified" };
+        return { kind: "canceled", used: false, canceled: finalCanceled, final: finalCanceled };
+      }
+      if (!matches("AuthorizationUsed")) return undefined;
+      const transferOk = parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: "Transfer" }).some((l) => l.address.toLowerCase() === USDC.toLowerCase() && l.args.from.toLowerCase() === auth.from.toLowerCase() && l.args.to.toLowerCase() === auth.to.toLowerCase() && l.args.value === BigInt(auth.value));
+      return { kind: "used", used: true, canceled: false, settleTx: hash, status: "success", transferOk, final, block: receipt.blockNumber };
+    };
+    for (const hash of [j.settleTx, j.cancelTx]) {
+      if (!hash) continue;
+      const found = await inspect(hash);
+      if (found) return found;
+    }
+    const fromBlock = j.pullBlock ? BigInt(j.pullBlock) : latest.number > 3000n ? latest.number - 3000n : 0n;
     for (const event of events) {
       let step = BigInt(CFG.logRange ?? 10_000);
-      for (let from = fromBlock; from <= head.number;) {
-        const to = from + step - 1n < head.number ? from + step - 1n : head.number;
+      for (let from = fromBlock; from <= latest.number;) {
+        const to = from + step - 1n < latest.number ? from + step - 1n : latest.number;
         let logs;
         try {
           logs = await publicClient.getLogs({ address: USDC, event, args: { authorizer: j.agent, nonce: auth.nonce }, fromBlock: from, toBlock: to });
         } catch (e) {
           if (step <= 100n) throw e;
-          step = step / 10n;
+          step /= 10n;
           continue;
         }
         for (const log of logs) {
-          if (log.removed || log.blockNumber === null || log.blockNumber > head.number || !log.blockHash || !log.transactionHash) continue;
-          const receipt = await publicClient.getTransactionReceipt({ hash: log.transactionHash });
-          if (!receipt || receipt.transactionHash !== log.transactionHash || receipt.blockHash !== log.blockHash || receipt.blockNumber !== log.blockNumber || receipt.status !== "success" || !(await canonicalReceipt(receipt, head))) continue;
-          const matching = parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: event.name }).some((l) => l.address.toLowerCase() === USDC.toLowerCase() && l.args.authorizer.toLowerCase() === j.agent.toLowerCase() && l.args.nonce.toLowerCase() === auth.nonce.toLowerCase());
-          if (!matching) continue;
-          if (event.name === "AuthorizationCanceled") return { used: false, canceled: true };
-          const transferOk = parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: "Transfer" }).some((l) => l.address.toLowerCase() === USDC.toLowerCase() && l.args.from.toLowerCase() === j.agent.toLowerCase() && l.args.to.toLowerCase() === auth.to.toLowerCase() && l.args.value === BigInt(auth.value));
-          return { used: true, canceled: false, settleTx: log.transactionHash, status: receipt.status, transferOk };
+          if (log.removed || log.blockNumber === null || log.blockNumber > latest.number || !log.blockHash || !log.transactionHash) continue;
+          const found = await inspect(log.transactionHash);
+          if (found) return found;
         }
         from = to + 1n;
       }
     }
-    return unresolved;
+    return { kind: "pending", used: false, canceled: false, reason: "the nonce is used, but its payment or cancellation could not be identified" };
   } catch {
-    return unresolved;
+    return { kind: "unread", used: false, canceled: false, reason: "the payment or cancellation could not be read from the chain" };
   }
 }
 
@@ -326,7 +436,7 @@ export async function authDead(j: Journal, s: Settlement): Promise<boolean> {
   const auth = j.auth;
   if (!auth) return true;
   if (s.canceled) return true;
-  if (s.used) return false;
+  if (s.kind !== "unused") return false;
   try {
     const b = await finalHead();
     if (b.number === null || Number(b.timestamp) < auth.validBefore) return false;
@@ -348,27 +458,42 @@ export async function authDead(j: Journal, s: Settlement): Promise<boolean> {
  *             by a different transaction while this pull is not on chain
  */
 export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {}): Promise<{ j: Journal; verdict: "settled" | "failed" | "unknown" | "not_found" }> {
-  if (j.state === "settled") return { j, verdict: "settled" };
+  if (j.state === "settled" && j.final !== false) return { j, verdict: "settled" };
   const log = (s: string) => { if (!opts.quiet) console.log(s); };
   const save = (state: OpState, reason: string | undefined, next: string, note: string) => {
-    j.state = state; j.reason = reason; j.next = next; j.notes.push(`reconcile: ${note}`); writeJournal(j);
+    j.state = state; if (state !== "settled") delete j.final; j.reason = reason; j.next = next; j.notes.push(`reconcile: ${note}`); writeJournal(j);
+  };
+  const lostInclusion = (): { j: Journal; verdict: "unknown" } => {
+    save("unknown", "The earlier payment inclusion was removed; outcome unknown. Do not pay again.", `${cmd("reconcile.ts", `--op ${j.op}`)}. Do not pay again.`, "earlier inclusion missing");
+    return { j, verdict: "unknown" };
   };
   if (!j.pullTx) {
+    if (j.inclusionObserved) return lostInclusion();
     save("not_found", "no pull transaction was recorded: the process stopped before anything was signed", "nothing moved for this op. A new purchase needs a new --op.", "not_found (no pull hash in the journal)");
     return { j, verdict: "not_found" };
   }
   const pull = await readPull(j);
+  if (j.inclusionObserved && (!pull.found || pull.status === "reverted")) {
+    if (!pull.found && pull.unknown) return { j, verdict: j.state === "settled" ? "settled" : "unknown" };
+    const confirmation = await readPull(j);
+    if ((!confirmation.found && !confirmation.unknown) || (confirmation.found && confirmation.status === "reverted")) return lostInclusion();
+    return { j, verdict: j.state === "settled" ? "settled" : "unknown" };
+  }
   if (!pull.found) {
     const replacement = !pull.unknown && !pull.pendingInPool ? await differentFinalNonceTransaction(j) : undefined;
     if (replacement) {
       save("not_found", `a different final transaction ${replacement} consumed the pull nonce ${j.pullNonce}`, "nothing moved for this op. A new purchase needs a new --op.", "not_found (different final nonce-consuming transaction identified)");
       return { j, verdict: "not_found" };
     }
-    save("unknown", "the signed pull has no final canonical receipt and no different final nonce-consuming transaction was identified", `run reconcile --op ${j.op} again later. Do not pay again.`, "unknown (pull unresolved)");
+    save("unknown", pull.pendingInPool ? "the signed pull is still in the pool" : "the signed pull is missing or unreadable; no different final transaction consuming its nonce was identified", `run "${cmd("reconcile.ts", `--op ${j.op}`)}" again later. Do not pay again.`, "unknown (pull unresolved)");
     return { j, verdict: "unknown" };
   }
   j.pullBlock = String(pull.block);
   j.pullStatus = pull.status;
+  if (pull.status === "reverted" && !pull.final) {
+    save("unknown", "the pull landed and failed, but is not final on chain yet", `${cmd("reconcile.ts", `--op ${j.op}`)}. Do not pay again.`, "pull failure not final");
+    return { j, verdict: "unknown" };
+  }
   if (pull.status === "reverted") {
     j.pulled = "0";
     save("failed", `the pull reverted on chain (${tx(j.pullTx)}); no funds moved`, "nothing moved. A new purchase needs a new --op.", "failed (pull reverted)");
@@ -376,16 +501,37 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   }
   j.pulled = usdc(pull.moved ?? 0n);
 
-  const s = await readSettlement(j);
+  let s = await readSettlement(j);
+  if (j.inclusionObserved && !s.used) {
+    if (s.kind === "unused" || (s.kind === "canceled" && s.final)) {
+      const confirmation = await readSettlement(j);
+      if (confirmation.kind === "unused" || (confirmation.kind === "canceled" && confirmation.final)) return lostInclusion();
+      if (confirmation.used) s = confirmation;
+      else return { j, verdict: j.state === "settled" ? "settled" : "unknown" };
+    } else return { j, verdict: j.state === "settled" ? "settled" : "unknown" };
+  }
   if (s.used) {
     j.settleTx = s.settleTx;
     j.settleStatus = s.status;
+    j.settleBlock = String(s.block);
     if (s.status === "success" && s.transferOk) {
-      save("settled", undefined, "none", `settled (pull ${j.pullTx}, settlement ${j.settleTx})`);
+      j.inclusionObserved = true;
+      j.final = pull.final && s.final;
+      save("settled", j.final ? undefined : "the payment landed, but is not final on chain yet", j.final ? "none" : `run "${cmd("reconcile.ts", `--op ${j.op}`)}" later to check finality. Do not pay again for this op.`, `settled (pull ${j.pullTx}, settlement ${j.settleTx})`);
       return { j, verdict: "settled" };
     }
     save("unknown", "the authorization was used but the settlement transfer does not match the recorded recipient and amount", `read ${s.settleTx ? tx(s.settleTx) : `the ${SYM} AuthorizationUsed log`} by hand. Do not pay again.`, "unknown (authorization used, transfer mismatch)");
     return { j, verdict: "unknown" };
+  }
+
+  if (s.kind === "unread" || s.kind === "pending" || (s.kind === "canceled" && !s.final) || !pull.final) {
+    const reason = s.kind === "unread" || s.kind === "pending" ? s.reason : s.kind === "canceled" ? "the cancellation landed, but is not final on chain yet" : "the pull landed, but is not final on chain yet";
+    save("unknown", reason, `run "${cmd("reconcile.ts", `--op ${j.op}`)}" again later. Do not pay again.`, "chain read unresolved");
+    return { j, verdict: "unknown" };
+  }
+
+  if (j.inclusionObserved) {
+    return lostInclusion();
   }
 
   // Not settled. Has the price already gone back to the owner?
@@ -452,9 +598,9 @@ export async function makeSafe(j: Journal, w: Wallet, o: { log?: (s: string) => 
   if (j.pullStatus !== "success") return j; // pull reverted or not visible: nothing to make safe
 
   let s = await readSettlement(j);
-  if (s.used) return (await reconcileJournal(j, { quiet: true })).j;
+  if (s.used || s.kind === "unread" || s.kind === "pending") return (await reconcileJournal(j, { quiet: true })).j;
 
-  if (j.auth && !(await authDead(j, s))) {
+  if (j.auth && s.kind !== "canceled" && !(await authDead(j, s))) {
     log(`the signed authorization ${j.auth.nonce} is still open (validBefore ${new Date(j.auth.validBefore * 1000).toISOString()}); cancelling it on chain before returning the price`);
     try {
       const { v, r, s: sg } = await signCancel(w, j.auth.nonce);
@@ -471,12 +617,12 @@ export async function makeSafe(j: Journal, w: Wallet, o: { log?: (s: string) => 
       // the seller may have settled first: the chain decides
       s = await readSettlement(j);
       if (s.used) return (await reconcileJournal(j, { quiet: true })).j;
-      log("the cancel did not land and the authorization is not used; the outcome stays unknown, nothing is returned");
+      log("the cancel could not be verified; the outcome stays unknown, nothing is returned");
       return (await reconcileJournal(j, { quiet: true })).j;
     }
-    s = await readUntil(() => readSettlement(j), (x) => x.canceled || x.used, 6, 2000);
+    s = await readUntil(() => readSettlement(j), (x) => x.kind === "canceled" || x.used, 6, 2000);
     if (s.used) return (await reconcileJournal(j, { quiet: true })).j;
-    if (!s.canceled) { log("the cancel is not visible on chain yet; nothing is returned. Run recover.ts --op again."); return (await reconcileJournal(j, { quiet: true })).j; }
+    if (s.kind !== "canceled") { log(`the cancel is not visible on chain yet; nothing is returned. Run ${cmd("recover.ts", `--op ${j.op}`)} again.`); return (await reconcileJournal(j, { quiet: true })).j; }
   }
 
   // the authorization is dead (never signed, cancelled or expired unused): the price is stranded in the agent key

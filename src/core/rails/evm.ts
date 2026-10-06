@@ -124,6 +124,7 @@ export const evmRail: X402Rail = {
         validBefore: facts.validBefore,
         since: facts.since,
         transaction: facts.transaction,
+        paymentBlock: facts.paymentBlock,
       },
       { ...(network && options.rpcUrlFor?.(network) ? { rpcUrl: options.rpcUrlFor(network) } : {}), fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs },
     );

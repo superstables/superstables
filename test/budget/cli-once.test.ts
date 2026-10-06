@@ -329,13 +329,13 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(statSync(done.result.responseFile).mode & 0o777).toBe(0o600);
     expect(done.result).toMatchObject({ responseType: "application/json", responseTruncated: false });
     // Landing delivers now while the token remains private for finality rechecks.
-    expect(done.result.final).toBe(false);
+    expect(done.result).toMatchObject({ final: true, chain_final: false });
     expect(recordOf(id).final).toBeUndefined();
     expect(recordOf(id).hosted.token).toBe(site.purchases[0].token);
     site.finalizedBlock = 1000;
     const final = await budget(["wait", "--shown", "--id", id]);
     expect(final.code).toBe(0);
-    expect(final.result.final).not.toBe(false);
+    expect(final.result).toMatchObject({ final: true, chain_final: true });
     expect(readFileSync(path, "utf8")).not.toContain("sspt_");
     const again = await budget(["wait", "--id", id]); // a finished purchase needs no --shown
     expect(again.code).toBe(0);
@@ -733,7 +733,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const after = await once();
     expect(after.code, after.stderr).toBe(0);
     expect(site.purchases).toHaveLength(2);
-    expect(recordOf(first.result.id).included).toMatchObject({ code: 0, result: { paid: true, final: false } });
+    expect(recordOf(first.result.id).included).toMatchObject({ code: 0, result: { paid: true, final: true, chain_final: false } });
     expect(recordOf(first.result.id).final).toBeUndefined();
   }, 90_000);
 
@@ -1094,9 +1094,19 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
       expect(done.code, String(why)).toBe(5);
       expect(done.result).toMatchObject({ state: "unknown", paid: null });
       expect(done.result.reason).toMatch(why);
-      // stored as final: the chain shows that transaction, and it is not this payment
+      let final = done;
+      if (chain.failed) {
+        expect(done.result.final).toBe(false);
+        expect(recordOf(done.result.id).final).toBeUndefined();
+        expect((await budget(["wait", "--id", done.result.id, "--shown", "--timeout", "0"])).result).toMatchObject({ state: "unknown", paid: null, final: false });
+        site.finalizedBlock = 1000;
+        final = await budget(["wait", "--id", done.result.id, "--shown", "--timeout", "0"]);
+        expect(final.result).toMatchObject({ state: "unknown", paid: null });
+        expect(recordOf(done.result.id).final).toBeDefined();
+      }
+      // Permanent mismatch evidence is cached only after failed execution reaches finality.
       const again = await budget(["wait", "--id", done.result.id]);
-      expect(again.result).toEqual(done.result);
+      expect(again.result).toEqual(final.result);
       rmSync(join(home, "budget"), { recursive: true, force: true });
     }
   }, 120_000);
@@ -1200,4 +1210,59 @@ describe("buy-once on Arc Testnet", () => {
     expect(r.approve).toBeNull();
     expect(site.purchases.every((p) => p.state === "denied")).toBe(true);
   }, 60_000);
+});
+
+// Matching inclusion completes the command. It remains re-readable until chain finality.
+describe("buy-once preserves the 0.3.0 final contract", () => {
+  it.each([["evm", true], ["evm", false], ["solana", true], ["solana", false]] as const)("%s provisional, removed and finalized results through the real dispatcher, delivered=%s", async (rail, delivered) => {
+    const service = rail === "evm" ? MARKET : SOLANA_MARKET;
+    if (rail === "solana") site.services.push(structuredClone(service));
+    site.finalizedSlot = 10;
+    const first = await once([], ["--service", service.id, "--param", "asset=BTC", "--max", "0.01"]);
+    expect(first.result).toMatchObject({ state: "waiting_owner", final: false, chain_final: null });
+    const tx = rail === "evm" ? TX : "5".repeat(87);
+    const payer = rail === "evm" ? PAYER : SOLANA_PAYER;
+    const p = site.purchases[0];
+    site.settle(p, { delivered: true }, { transaction: tx, payer });
+    if (!delivered) p.delivery = { status: "failed", http_status: 500 };
+    const wait = () => budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+    const included = await wait();
+    expect(included.code, included.stderr).toBe(delivered ? 0 : 4);
+    expect(included.result).toMatchObject({ state: "settled", paid: true, delivered, final: true, chain_final: false });
+    expect(included.result).not.toHaveProperty("complete");
+    site.removePayment(tx);
+    const removed = await wait();
+    expect(removed.code).toBe(5);
+    expect(removed.result).toMatchObject({ state: "unknown", paid: null, final: false, chain_final: null });
+    expect(removed.result.next).toMatch(/do not pay again|never buy this again/i);
+    expect(recordOf(first.result.id).final).toBeUndefined();
+    site.pay(p, { transaction: tx, payer });
+    site.finalizedBlock = 1000; site.finalizedSlot = 1000;
+    const final = await wait();
+    expect(final.code, final.stderr).toBe(delivered ? 0 : 4);
+    expect(final.result).toMatchObject({ state: "settled", final: true, chain_final: true });
+    expect(site.purchases).toHaveLength(1);
+  });
+  it("Tempo requires canonical committed inclusion and uses additive chain_final", async () => {
+    site.services.push(structuredClone(TEMPO_MARKET));
+    const first = await once([], ["--service", TEMPO_MARKET.id, "--param", "asset=BTC", "--max", "0.01"]);
+    const p = site.purchases[0];
+    site.settle(p, { delivered: true }, { transaction: TX, payer: PAYER, chain: false });
+    const wait = () => budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+    expect((await wait()).result).toMatchObject({ state: "unknown", final: false, chain_final: null });
+    site.pay(p, { transaction: TX, payer: PAYER });
+    expect((await wait()).result).toMatchObject({ state: "settled", paid: true, delivered: true, final: true, chain_final: true });
+  });
+});
+
+it("keeps a provisional buy-once execution failure rereadable until a final failure", async () => {
+  const first = await once();
+  const p = site.purchases[0];
+  site.settle(p, "ok", { transaction: TX, payer: PAYER, chain: { failed: true } });
+  const wait = () => budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+  expect((await wait()).result).toMatchObject({ state: "unknown", paid: null, final: false });
+  expect(recordOf(first.result.id).hosted.token).toBeTruthy();
+  site.finalizedBlock = 1000;
+  expect((await wait()).result).toMatchObject({ state: "unknown", paid: null, final: true });
+  expect(recordOf(first.result.id).hosted.token).toBeUndefined();
 });

@@ -13,7 +13,7 @@
 //              Run again later.
 // An operation that never got past `quoted` was never signed: it becomes not_found.
 //
-// Usage: npx tsx budget/tempo/reconcile.ts --op <id> [--tx <hash>] [--wait <seconds>]
+// Usage: superstables budget reconcile --rail tempo --op <id> [--tx <hash>] [--wait <seconds>]
 // Exit codes: 0 settled or already final without loss, 1 failed / not_found, 2 bad usage, 5 unknown.
 
 import type { Address } from 'viem'
@@ -32,7 +32,7 @@ const { values: args } = parseCli({
     tx: { type: 'string', metavar: 'hash', desc: 'A transaction hash to check as well (e.g. from the seller)', check: hashCheck },
     wait: { type: 'string', metavar: 'seconds', desc: 'Keep polling up to this long while the outcome is undecided (default: one pass)', check: intCheck(1) },
   },
-  examples: ['npx tsx budget/tempo/reconcile.ts --op tempo-20260929120000-a1b2c3'],
+  examples: ['superstables budget reconcile --rail tempo --op tempo-20260929120000-a1b2c3'],
 })
 
 const opId = args.op as string
@@ -47,6 +47,7 @@ async function main() {
   const done = (state: OpState, f: { tx?: string; debit?: bigint | null; reason?: string; next?: string; exit: number }): never => {
     const alreadySettled = op.state === 'settled'
     op.state = state
+    if (state === 'settled' && !alreadySettled) op.chain_final = true
     if (f.tx) op.tx = f.tx
     if (f.reason) op.reason = f.reason
     if (f.debit != null) op.debit = fromBaseUnits(f.debit)
@@ -58,6 +59,7 @@ async function main() {
       printResult({
         op: opId,
         state,
+        chain_final: state === 'settled' ? op.chain_final ?? null : null,
         tx: op.tx ?? null,
         debit: f.debit === undefined || f.debit === null ? null : fromBaseUnits(f.debit),
         remaining: remaining === null ? null : fromBaseUnits(remaining),
@@ -109,7 +111,7 @@ async function main() {
     return done('not_found', { debit: 0n, reason: 'signed payment expired unsent; nothing on chain for its memo', next: 'no funds moved; safe to retry with a new op id', exit: 1 })
   }
   console.log('UNKNOWN: nothing on chain yet, and the signed payment may still land. Run reconcile again after its validBefore has passed.')
-  return done('unknown', { reason: 'not on chain yet', next: `npx tsx budget/tempo/reconcile.ts --op ${opId}`, exit: 5 })
+  return done('unknown', { reason: 'not on chain yet', next: `superstables budget reconcile --rail tempo --op ${opId}`, exit: 5 })
 }
 
 main().catch((err) => {

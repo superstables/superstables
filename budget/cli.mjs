@@ -387,7 +387,7 @@ payment stays unknown; buy-once can start a new purchase. An agent never runs it
       money: "no. It never approves, signs or sends anything.",
       who: "anyone, usually the agent that started the owner command, after the owner says they've approved.",
       example: "superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60",
-      prints: "one RESULT line: state, final, id, url, matchCode (hosted), expires, terms, next; reason describes the page's state while\n  waiting.",
+      prints: "one RESULT line: state, final, chain_final, id, url, matchCode (hosted), expires, terms, next; reason describes the page's state while\n  waiting.",
       exits: "Exit codes: 0 waiting (final false) or done, 1 failed, 2 bad input, unknown id or no --shown, 3 refused (rejected,\n  expired), 4 paid but not delivered (buy-once), 5 unknown (the wallet may have sent it)",
     }),
   },
@@ -538,10 +538,14 @@ B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC:
 RESULT names one in use as rpc.
 
 Output: logs go to stderr. stdout ends with one line
-  RESULT {"ok","command","rail","chain","op","state","final","paid","delivered","amount","remaining","tx","rpc","id","url",
+  RESULT {"ok","command","rail","chain","op","state","final","chain_final","paid","delivered","amount","remaining","tx","rpc","id","url",
           "matchCode","message_for_owner","budget_spent","next","reason"}
 Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
-while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read.
+while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read,
+true otherwise, unchanged from 0.3.0. Scripts test final for command completion.
+chain_final is true only after the payment meets the chain finality rule, false for included-but-not-final payments,
+and null when no current matching payment inclusion is established. A paid provisional result has final true and
+chain_final false; reconcile or wait checks finality again. Command completion never proves payment finality.
 next is the command to run next, or none.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
 approval link, the match code (hosted), the amount and network, the testnet line. The agent sends it and ends its turn.
@@ -577,7 +581,7 @@ const JSON_OUT = process.argv.slice(3).includes("--json");
 /** The one RESULT object, written synchronously so the process can exit right after it. */
 // Every line this dispatcher prints goes through scrubAgentTokens (site.mjs): an agent access token never reaches its
 // output, whatever a rail or a site put in a text. An owner's link keeps its own token after #.
-const writeResult = (out) => writeSync(1, scrubAgentTokens((JSON_OUT ? "" : "RESULT ") + JSON.stringify(out) + "\n"));
+const writeResult = (out) => writeSync(1, scrubAgentTokens((JSON_OUT ? "" : "RESULT ") + JSON.stringify(resultFacts(out)) + "\n"));
 /** An APPROVE line: stdout, or stderr under --json (its link is also in the RESULT's url once the command returns). */
 const writeApprove = (line) => writeSync(JSON_OUT ? 2 : 1, scrubAgentTokens(line + "\n"));
 const clean = (s) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "").trim().slice(0, 300);
@@ -595,12 +599,17 @@ let FOREGROUND = false;
 
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 // A worker also stores it (and the exit code) in its approval record, for every later `wait`.
+function resultFacts(fields) {
+  const { complete: _removed, ...rest } = fields;
+  const final = fields.state === "settled" && fields.paid === true || fields.final !== false && fields.state !== "waiting_owner";
+  const chain_final = fields.state === "settled" && fields.paid === true ? fields.chain_final ?? null : null;
+  return { ...rest, final, chain_final };
+}
+
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
-  // final: false while an owner approval is still open, or while an unknown outcome is one a later wait can still read
-  // (the caller says so with final: false); a script polls wait until it is true
-  fields = { ...fields, final: fields.final === false ? false : fields.state !== "waiting_owner" };
+  fields = resultFacts(fields);
   // an RPC other than the rail's default (B4_RPC, SUPERSTABLES_TEMPO_RPC, SUPERSTABLES_SOLANA_RPC) is named in every RESULT
   if (fields.rpc === undefined && fields.rail) fields.rpc = customRpc(fields.rail);
   const out = { ok: code === 0 };
@@ -1108,7 +1117,7 @@ function normalize(cmd, f, rail, code) {
   const amount = state === "unknown" ? null : nothingMoved ? "0" : rail.debit == null ? null : String(rail.debit);
   return {
     code: exitFor(cmd, state, delivered),
-    fields: { ...base, state, paid, delivered, ...(rail.final === false ? { final: false } : {}), amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.final === false && typeof rail.next === "string" ? rail.next : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
+    fields: { ...base, state, paid, delivered, chain_final: rail.chain_final ?? null, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.chain_final === false && state === "settled" ? `Run superstables budget reconcile --rail ${f.rail}${f.rail === "evm" ? ` --chain ${f.chain}` : ""} --op ${f.op} later to check finality. Do not pay again.${delivered === false ? " Contact the seller." : ""}` : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
   };
 }
 
@@ -1615,7 +1624,7 @@ async function wait({ f }) {
   const r = await waitFor(f.id, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);
   if (!r) return badInput({ command: "wait" }, `no owner approval with id ${f.id} under ${approvalsDir()}`);
   if (r.final) {
-    // a result stored by an older build has no final field: every stored result is final
+    // Stored command completion is separate from payment finality, including older records.
     writeResult({ ...r.result, final: true });
     process.exit(r.code);
   }

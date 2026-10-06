@@ -117,10 +117,14 @@ B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC:
 RESULT names one in use as rpc.
 
 Output: logs go to stderr. stdout ends with one line
-  RESULT {"ok","command","rail","chain","op","state","final","paid","delivered","amount","remaining","tx","rpc","id","url",
+  RESULT {"ok","command","rail","chain","op","state","final","chain_final","paid","delivered","amount","remaining","tx","rpc","id","url",
           "matchCode","message_for_owner","budget_spent","next","reason"}
 Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
-while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read.
+while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read,
+true otherwise, unchanged from 0.3.0. Scripts test final for command completion.
+chain_final is true only after the payment meets the chain finality rule, false for included-but-not-final payments,
+and null when no current matching payment inclusion is established. A paid provisional result has final true and
+chain_final false; reconcile or wait checks finality again. Command completion never proves payment finality.
 next is the command to run next, or none.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
 approval link, the match code (hosted), the amount and network, the testnet line. The agent sends it and ends its turn.
@@ -621,7 +625,7 @@ Moves money: no. It never approves, signs or sends anything.
 Run by: anyone, usually the agent that started the owner command, after the owner says they've approved.
 Example:
   $ superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60
-Prints: one RESULT line: state, final, id, url, matchCode (hosted), expires, terms, next; reason describes the page's state while
+Prints: one RESULT line: state, final, chain_final, id, url, matchCode (hosted), expires, terms, next; reason describes the page's state while
   waiting.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 waiting (final false) or done, 1 failed, 2 bad input, unknown id or no --shown, 3 refused (rejected,

@@ -271,7 +271,7 @@ describe("help", () => {
     expect(r.stdout).toContain("superstables budget status --rail R");
   });
 
-  it("wait --help documents final", async () => {
+  it("wait --help documents command completion", async () => {
     const r = await budget(["wait", "--help"]);
     expect(r.stdout).toContain("final false");
     expect(r.stdout).toContain("Scripts test final, not the exit code");

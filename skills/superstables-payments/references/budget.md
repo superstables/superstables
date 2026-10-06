@@ -1,5 +1,7 @@
 # On-chain budgets: superstables budget
 
+`budget` keeps the 0.3.0 command-completion meaning of `final`. It is `false` while an owner approval is open or a buy-once `unknown` can still be read by `wait`, and `true` otherwise. `chain_final` describes the current matching payment separately: `true` after chain finality, `false` while included but not final, and `null` when no current matching inclusion is established, including an unknown after removal. A provisional paid purchase is `settled`, with `final: true`, `chain_final: false`, and exit 0 when delivered or exit 4 when not delivered. Check finality later with `reconcile` or `wait`; never pay again for that purchase. Owner-command transactions are not seller payments and have `chain_final: null`. Older stored results without finality evidence also have `chain_final: null`.
+
 The owner approves a spending cap once, in their own wallet. You then buy from sellers with no approval per purchase, until the cap is spent or the owner revokes it. The chain enforces the cap, and no Superstables service is in the path of a purchase. You hold only the agent key. Testnet only. Test tokens, no real money.
 
 ## Contents
@@ -89,7 +91,7 @@ Run by an agent (stdout not a terminal), an owner command returns in seconds:
 
 ```
 APPROVE {"action","url","expires","terms","matchCode"}
-RESULT {"ok":true,"command":"grant","state":"waiting_owner","final":false,"id":"oa-...","url","matchCode","expires","terms","next"}
+RESULT {"ok":true,"command":"grant","state":"waiting_owner","final":false,"chain_final":null,"id":"oa-...","url","matchCode","expires","terms","next"}
 ```
 
 - The owner does not see your tool output. Write `url` in your reply text, exactly as printed. The command also opens the page in the default browser by itself, except over SSH or with `--no-open`; that is the command's doing, not yours (safety rule 1 still holds: you never open it).

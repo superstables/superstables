@@ -132,6 +132,27 @@ describe.runIf(['linux', 'darwin'].includes(process.platform))('operation writer
         expect(JSON.parse(readFileSync(path, 'utf8')).state).toBe(state);
       }, 90_000);
     }
+    if (rail !== 'tempo') it(`${rail}: provisional settled evidence is rechecked without becoming unpaid`, async () => {
+      const box = sandbox(rail);
+      const path = join(box.dir, `${op}.json`);
+      const tx = `0x${'ab'.repeat(32)}`;
+      writeFileSync(path, JSON.stringify({ op, rail, kind: 'buy', state: 'settled', final: false,
+        inclusionObserved: true, history: [], notes: [], path: 'approve', tx, settleTx: tx,
+        pullTx: tx, pullNonce: 0, pullBlock: "90", agentSig: 'recorded-agent-signature', signed: true,
+        owner: `0x${'22'.repeat(20)}`, agent: rail === 'solana' ? '11111111111111111111111111111111' : `0x${'33'.repeat(20)}`,
+        lastValidBlockHeight: 1, delivered: true,
+        createdAt: '2026-10-04T23:59:00Z' }));
+      const marker = join(box.home, 'provisional-read');
+      const reconcile = child(rail, 'reconcile', box, marker);
+      await untilFile(marker, reconcile);
+      reconcile.p.kill('SIGCONT');
+      const r = await reconcile.done;
+      const line = r.stdout.trim().split('\n').reverse().find(l => l.startsWith('RESULT '));
+      if (!line) throw new Error(`reconcile omitted its RESULT: ${r.stderr}`);
+      expect(JSON.parse(line.slice(7))).toMatchObject({ state: 'unknown' });
+      expect(JSON.parse(line.slice(7)).next).toMatch(/do not pay again/i);
+      expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ state: 'unknown', inclusionObserved: true, delivered: true });
+    });
     for (const legacy of rail === 'tempo' ? [false, true] : [false]) it(`${rail}: a later negative RPC result preserves settled evidence and delivery${legacy ? ' for a legacy journal without debit' : ''}`, async () => {
       const box = sandbox(rail);
       const path = join(box.dir, `${op}.json`);
