@@ -1,4 +1,5 @@
 // Real-process lock fault matrix. Run: node test/helpers/budget-lock-faults.mjs [single|pairs]
+// Pair ranges can be bounded with --start=N --end=N, numbered from 1 through 576.
 import fs from 'node:fs';
 import { fork } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
@@ -47,6 +48,12 @@ if (process.argv[2] === 'worker') {
   } catch (err) { process.send({ event: 'error', message: err.stack }); process.exit(1); }
 } else {
   const children = new Set();
+  const first = Number(process.argv.find(arg => arg.startsWith('--start='))?.split('=')[1] ?? 1);
+  const last = Number(process.argv.find(arg => arg.startsWith('--end='))?.split('=')[1] ?? 576);
+  assert.ok(Number.isInteger(first) && Number.isInteger(last) && first >= 1 && last <= 576 && first <= last, 'invalid pair range');
+  const stopChildren = () => { for (const child of children) child.kill('SIGKILL'); };
+  process.once('SIGTERM', () => { stopChildren(); process.exit(143); });
+  process.once('SIGINT', () => { stopChildren(); process.exit(130); });
   let cases = 0, stops = 0;
   async function worker(home, action = 'hold', fault = 0, phase = 'before') {
     const p = fork(script, ['worker', home, action, String(fault), phase, process.argv[2] === 'pairs' ? 'protocol' : 'all'], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
@@ -139,7 +146,9 @@ if (process.argv[2] === 'worker') {
     } else {
       // These 12 calls cover publication, both holder reads, stale unlink, and breaker cleanup.
       // Fsync and descriptor calls are covered exhaustively by the single-fault matrix.
+      let ordinal = 0;
       for (let i = 1; i <= 12; i++) for (let j = 1; j <= 12; j++) for (const order of [0, 1]) for (const crash of [false, true]) {
+        if (++ordinal < first || ordinal > last) continue;
         const b = await box('stale');
         const a = await worker(b.home, 'hold', i, 'before'); b.states.push(a); await a.wait();
         const second = await worker(b.home, 'hold', j, 'before'); b.states.push(second); await second.wait();
@@ -157,6 +166,6 @@ if (process.argv[2] === 'worker') {
         await finish(b);
       }
     }
-    console.log(JSON.stringify({ cases, stops, doubleHolders: 0, permanentBlocks: 0, result: 'pass' }));
-  } finally { for (const child of children) child.kill('SIGKILL'); }
+    console.log(JSON.stringify({ cases, stops, ...(process.argv[2] === 'pairs' ? { first, last } : {}), doubleHolders: 0, permanentBlocks: 0, result: 'pass' }));
+  } finally { stopChildren(); }
 }
