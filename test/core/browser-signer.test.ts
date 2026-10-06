@@ -1798,7 +1798,9 @@ describe("settlement binding and failed reads on the chain", () => {
     // the facilitator's transaction that carries our signature is
     statuses.set("new-settle", { confirmationStatus: "confirmed", err: null, slot: 11 });
     txs.set("new-settle", { slot: 11, transaction: { signatures: ["new-settle", "our-agent-sig"] }, meta: { err: null } });
-    expect(await assessOp(conn, { ...rec, sellerTx: "new-settle" })).toMatchObject({ verdict: "settled", tx: "new-settle" });
+    expect(await assessOp(conn, { ...rec, sellerTx: "new-settle" })).toMatchObject({ verdict: "settled", tx: "new-settle", final: false });
+    statuses.set("new-settle", { confirmationStatus: "finalized", err: null, slot: 11 });
+    expect(await assessOp(conn, { ...rec, sellerTx: "new-settle" })).toMatchObject({ verdict: "settled", tx: "new-settle", final: true });
     // a failed read is not "not found": it throws, and the caller keeps the purchase unknown
     await expect(assessOp({ ...conn, getSignatureStatuses: async () => { throw new Error("fetch failed"); } }, rec)).rejects.toThrow("fetch failed");
   });
