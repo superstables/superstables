@@ -136,6 +136,7 @@ describe.runIf(process.platform === 'linux')('operation writers share serializat
       const line = r.stdout.trim().split('\n').reverse().find(l => l.startsWith('RESULT '));
       if (!line) throw new Error(`reconcile omitted its RESULT: ${r.stderr}`);
       expect(JSON.parse(line.slice(7))).toMatchObject({ state: 'settled', delivered: false });
+      if (rail === 'tempo') expect(JSON.parse(line.slice(7)).debit).toBe('0.001');
       expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ state: 'settled', tx, settleTx: tx,
         delivered: false, debit: '0.001', createdAt: rec.createdAt });
     });
