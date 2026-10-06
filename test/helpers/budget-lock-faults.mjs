@@ -14,7 +14,7 @@ if (process.argv[2] === 'worker') {
   const protocolCalls = new Set(['writeFileSync', 'linkSync', 'lstatSync', 'readFileSync', 'mkdirSync', 'renameSync', 'unlinkSync', 'rmdirSync']);
   const descriptors = new Map();
   let calls = 0;
-  for (const name of ['mkdirSync', 'openSync', 'writeFileSync', 'fsyncSync', 'linkSync', 'lstatSync', 'readFileSync', 'readdirSync', 'renameSync', 'unlinkSync', 'rmdirSync', 'closeSync', 'futimesSync']) {
+  for (const name of ['mkdirSync', 'openSync', 'writeFileSync', 'fsyncSync', 'fstatSync', 'linkSync', 'lstatSync', 'readFileSync', 'readdirSync', 'renameSync', 'unlinkSync', 'rmdirSync', 'closeSync', 'futimesSync']) {
     const real = fs[name];
     fs[name] = function (...args) {
       const path = typeof args[0] === 'number' ? descriptors.get(args[0]) : String(args[0]);

@@ -1,19 +1,20 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { tmpdir, hostname } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const root = resolve(process.env.BUDGET_RACE_ROOT ?? join(import.meta.dirname, '../..'));
 const locks = await import(join(root, 'budget/op-lock.mjs'));
 const dirs: string[] = [];
 const old = Date.now() - 600_000;
-const namespace = readlinkSync('/proc/self/ns/pid');
-const hostIdentity = { platform: process.platform, hostname: hostname(), bootId: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), namespace };
-const dead = { ...hostIdentity, pid: 2147483646, pidStart: 'linux:missing:1' };
-const live = { ...hostIdentity, pid: process.pid };
+const { createIdentitySource } = await import('../../budget/lock-identity.mjs');
+const hostIdentity = createIdentitySource().record();
+const dead = { ...hostIdentity, pid: 2147483646, pidStart: 'missing-start' };
+const live = hostIdentity;
+const foreign = process.platform === 'linux' ? { namespace: 'pid:[foreign]' } : { hostname: 'other-host' };
 function box() {
   const home = mkdtempSync(join(tmpdir(), 'budget-lock-recovery-'));
   dirs.push(home);
@@ -26,7 +27,9 @@ function aged(path: string, text = '') {
   utimesSync(path, old / 1000, old / 1000);
 }
 function cli(home: string, args: string[]) {
-  const r = spawnSync(process.execPath, [join(root, 'budget/cli.mjs'), ...args], { env: { ...process.env, SUPERSTABLES_HOME: home }, encoding: 'utf8' });
+  const terminal = args[0] === 'unlock' && args.includes('--confirm') ? ['--import', join(import.meta.dirname, '../helpers/budget-owner-terminal.mjs')] : [];
+  const op = args[args.indexOf('--op') + 1];
+  const r = spawnSync(process.execPath, [...terminal, join(root, 'budget/cli.mjs'), ...args], { env: { ...process.env, SUPERSTABLES_HOME: home }, encoding: 'utf8', input: `${op}\n` });
   const line = r.stdout.trim().split('\n').reverse().find(l => l.startsWith('RESULT '));
   return { ...r, result: line ? JSON.parse(line.slice(7)) : null };
 }
@@ -37,7 +40,7 @@ describe('recovering abandoned operation locks', () => {
     it(`retains an old ${state} until confirmed owner recovery`, () => {
       const b = box();
       aged(b.path, JSON.stringify(dead));
-      if (state === 'foreign namespace') aged(b.path, JSON.stringify({ ...dead, namespace: 'pid:[foreign]', heartbeatAt: old }));
+      if (state === 'foreign namespace') aged(b.path, JSON.stringify({ ...dead, ...foreign, heartbeatAt: old }));
       if (state === 'zero length') aged(b.path);
       if (state === 'non JSON') aged(b.path, '{');
       if (state === 'unreadable') { rmSync(b.path); mkdirSync(b.path); utimesSync(b.path, old / 1000, old / 1000); }
@@ -59,7 +62,7 @@ describe('recovering abandoned operation locks', () => {
   }
   it('never breaks a fresh foreign heartbeat or fresh damaged record', () => {
     const b = box();
-    for (const text of ['', JSON.stringify({ ...dead, namespace: 'pid:[foreign]', heartbeatAt: Date.now() })]) {
+    for (const text of ['', JSON.stringify({ ...dead, ...foreign, heartbeatAt: Date.now() })]) {
       writeFileSync(b.path, text);
       const lock = locks.lockFile(b.path);
       expect(lock.ok).toBe(false);
@@ -83,14 +86,17 @@ describe('recovering abandoned operation locks', () => {
     expect(cli(b.home, [...args, '--confirm']).result).toMatchObject({ reason: 'op_in_progress' });
     expect(readFileSync(b.path, 'utf8')).toBe(JSON.stringify(live));
   });
-  it('busy reconcile reports the op, foreign holder, lock path and safe unlock command', () => {
+  it('busy reconcile reports the op, foreign holder, lock path and owner recovery guidance', () => {
     const b = box();
-    writeFileSync(b.path.replace('.json.lock', '.buy.lock'), JSON.stringify({ ...dead, namespace: 'pid:[foreign]', heartbeatAt: Date.now(), createdAt: Date.now() }));
+    writeFileSync(b.path.replace('.json.lock', '.buy.lock'), JSON.stringify({ ...dead, ...foreign, heartbeatAt: Date.now(), createdAt: Date.now() }));
     const r = cli(b.home, ['reconcile', '--rail', 'solana', '--op', 'paid-op']);
     expect(r.status).toBe(5);
     expect(r.result).toMatchObject({ op: 'paid-op', state: 'unknown', reason: 'op_in_progress' });
-    expect(r.result.next).toContain('another or unknown container');
-    expect(r.result.next).toContain('superstables budget unlock --rail solana --chain devnet --op paid-op --confirm');
+    expect(r.result.next).toContain(process.platform === 'linux' ? 'another or unknown container' : 'another host');
+    expect(r.result.next).not.toContain('superstables budget unlock');
+    expect(r.result.next).not.toContain('--confirm');
+    expect(r.result.next).toContain('Stop and ask the owner');
+    expect(r.result.next).toContain('budget/CLI.md#operation-lock-recovery');
     expect(r.result.next).toContain('.buy.lock');
   });
   for (const rail of ['solana', 'evm', 'tempo']) {
@@ -212,7 +218,7 @@ it('does not clear an old regular-file breaker with a verifiable live owner', ()
 for (const [why, patch] of [
   ['another host', { hostname: 'other-host' }],
   ['another boot', { bootId: 'other-boot' }],
-  ['another OS', { platform: 'darwin', namespace: null }],
+  ['another OS', { platform: process.platform === 'darwin' ? 'linux' : 'darwin', namespace: null }],
   ['missing identity', { platform: undefined, bootId: undefined }],
 ] satisfies [string, object][]) {
   it(`never checks a ${why} record against local PIDs, even with future timestamps`, () => {

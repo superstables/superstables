@@ -32,7 +32,7 @@ function tryLock(b: ReturnType<typeof box>, skew = 0) {
   expect(r.status, r.stderr).toBe(0); return JSON.parse(r.stdout).ok;
 }
 function unlock(b: ReturnType<typeof box>) {
-  return spawnSync(process.execPath, [join(root, 'budget/cli.mjs'), 'unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm'], { env: { ...process.env, SUPERSTABLES_HOME: b.home }, encoding: 'utf8' });
+  return spawnSync(process.execPath, ['--import', join(root, 'test/helpers/budget-owner-terminal.mjs'), join(root, 'budget/cli.mjs'), 'unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm'], { env: { ...process.env, SUPERSTABLES_HOME: b.home }, encoding: 'utf8', input: 'paid-op\n' });
 }
 async function waitFor(fn: () => boolean) {
   const end = Date.now() + 5000;
@@ -61,9 +61,12 @@ describe.runIf(process.platform === 'linux')('real PID namespace ownership', () 
     // The host publishes a real generation, then dies. The foreign holder cannot verify that death.
     const host = spawnSync(process.execPath, ['-e', `const fs=require('fs'); const os=require('os'); fs.writeFileSync(process.argv[1], JSON.stringify({pid:process.pid,namespace:fs.readlinkSync('/proc/self/ns/pid'),platform:process.platform,hostname:os.hostname(),bootId:fs.readFileSync('/proc/sys/kernel/random/boot_id','utf8').trim()}))`, join(b.path + '.break', '0a1b2c3d-0000-4000-8000-000000000000.owner')]);
     expect(host.status).toBe(0);
-    await hold(b); const before = statSync(b.path).mtimeMs; await sleep(350);
+    const holder = await hold(b); const before = statSync(b.path).mtimeMs; await sleep(350);
     expect(statSync(b.path).mtimeMs).toBeGreaterThan(before);
     expect(tryLock(b, 86400000)).toBe(false);
+    holder.p.stdin?.write('release\n');
+    await waitFor(() => !existsSync(b.path));
+    expect(tryLock(b)).toBe(true);
   });
   it('requires confirmed owner override for a foreign holder and preserves its successor on release', async () => {
     const b = box(); const old = await hold(b);

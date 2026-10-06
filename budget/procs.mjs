@@ -22,9 +22,9 @@ function linuxBootId() {
  * The start identity of process `pid`: a string, or null when no such process exists, or undefined when this system gives
  * no way to tell (then only the pid can be checked).
  */
-export function processStart(pid) {
+export function processStart(pid, platform = process.platform, run = execFileSync) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  if (process.platform === "linux") {
+  if (platform === "linux") {
     let stat;
     try {
       stat = readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -36,9 +36,9 @@ export function processStart(pid) {
     const start = fields[19]; // field 22, starttime
     return /^\d+$/.test(start ?? "") ? `linux:${linuxBootId()}:${start}` : undefined;
   }
-  if (process.platform === "darwin") {
+  if (platform === "darwin") {
     try {
-      const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, env: { ...process.env, LC_ALL: "C" } }).trim();
+      const out = run("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, env: { ...process.env, LC_ALL: "C" } }).trim();
       return out ? `darwin:${out}` : null;
     } catch (err) {
       // ps exits 1 when no process matches; any other failure means this cannot tell
