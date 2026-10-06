@@ -24,7 +24,7 @@ const VALID_BEFORE_MARGIN_MS = 120_000;
  * reads the chain and records what it found. Undefined for an EVM record without a validBefore (an older record).
  */
 function mayStillMove(attempt: Attempt, now: Date): boolean | undefined {
-  if ((attempt.paymentIncluded || attempt.chain === "verified") && attempt.chainFinal !== true && attempt.chain !== "unpaid") return true;
+  if (attempt.paymentIncluded && attempt.state === "uncertain" && attempt.chain !== "unpaid") return true;
   const rail = networkFor(attempt.terms?.network ?? "")?.rail;
   if (rail === "tempo" || rail === "solana") return true;
   const validBefore = attempt.authorizationValidBefore ? Date.parse(attempt.authorizationValidBefore) : NaN;
@@ -291,9 +291,9 @@ export class Records {
       if (receipt) {
         // One payment: counted through its receipt on the receipt's day. A receipt the chain has not confirmed (the
         // seller's word) or has contradicted leaves the payment unresolved: it keeps counting on later days, once, while it
-        // can still move money, as an unresolved attempt without a receipt would. An attempt with final chain evidence is resolved,
+        // can still move money, as an unresolved attempt without a receipt would. An attempt with matching inclusion is paid on its recorded day,
         // whatever an older receipt line says.
-        if (receipt.at?.startsWith(day) || attempt.chainFinal === true || receipt.chainFinal === true || receipt.chain === "unpaid") continue;
+        if (receipt.at?.startsWith(day) || attempt.chain === "verified" || receipt.chain === "verified" || attempt.chainFinal === true || receipt.chainFinal === true || receipt.chain === "unpaid") continue;
         if (attempt.state !== "failed" && mayStillMove(attempt, now) === true) total += attempt.terms.amountDecimal;
         continue;
       }

@@ -264,6 +264,8 @@ pretending to a hash it does not have.
 
 ## What the daily cap counts
 
+A matching included payment counts once, on its receipt's paid day, even while finality is pending or unreadable. This includes 0.3.0 `verified` records. An earlier inclusion that was positively removed stays uncertain and holds its amount across days until a matching payment is found again.
+
 `caps.per_day` is checked against the records in this directory, per asset and UTC day. A payment
 counts on the day it ended, and on every day while it can still move money (signed or sent and not
 resolved, or waiting for the owner within its approval window). So a receipt counts on its own day

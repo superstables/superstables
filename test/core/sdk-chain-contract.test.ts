@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +37,7 @@ async function setup(rail: "evm" | "solana" | "tempo") {
     transaction = landed;
     facts = { authorizationNonce: nonce, authorizationValidBefore: new Date(Date.now() + 86400000).toISOString() };
     const receipt = chain.receipts.get(landed)!; const used = chain.used.get(nonce)!;
-    remove = () => { chain.receipts.delete(landed); chain.used.delete(nonce); };
+    remove = () => { chain.receipts.set(landed, { ...(receipt as object), status: "0x0" }); chain.used.delete(nonce); };
     restore = () => { chain.receipts.set(landed, receipt); chain.used.set(nonce, used); };
   } else if (rail === "tempo") {
     const chain = await startFakeTempoPay(); cleanup.push(() => chain.close());
@@ -47,7 +47,7 @@ async function setup(rail: "evm" | "solana" | "tempo") {
     transaction = landed;
     facts = { paymentMemo: nonce, searchFromBlock: "0" };
     const transfer = chain.transfers.get(landed)!;
-    remove = () => { chain.transfers.delete(landed); };
+    remove = () => { chain.transfers.set(landed, { ...transfer, reverted: true }); };
     restore = () => { chain.transfers.set(landed, transfer); };
   } else {
     const chain = await startFakeDevnet(); cleanup.push(() => chain.close());
@@ -61,7 +61,7 @@ async function setup(rail: "evm" | "solana" | "tempo") {
     transaction = chain.land(signed);
     facts = { ownerSignature: checked.signature, searchFromSlot: 300010, lastValidBlockHeight: 300150 };
     const tx = chain.txs.get(transaction)!;
-    remove = () => { chain.txs.delete(transaction); };
+    remove = () => { chain.txs.set(transaction, { ...tx, meta: { ...tx.meta!, err: { InstructionError: [0, "Custom"] } } }); };
     restore = () => { chain.txs.set(transaction, tx); };
   }
   const at = new Date(Date.now() - 86400000).toISOString();
@@ -90,7 +90,7 @@ it.each(["evm", "solana", "tempo"] as const)("keeps the 0.3.0 SDK chain contract
   expect(s.records.listReceipts()).toEqual([expect.objectContaining({ chain: "verified", chainFinal: false })]);
   expect(shownAttempt(included!)).toMatchObject({ chain: "verified", chain_final: false });
   expect(shownReceipt(s.records.getReceipt("a")!)).toMatchObject({ chain: "verified", chain_final: false });
-  expect(s.records.spentToday("USDC")).toBe(0.01);
+  expect(s.records.spentToday("USDC")).toBe(0);
   expect(await recheckChain(s.records, "a", { rpcUrlFor: s.options.rpcUrlFor, fetchImpl: async () => { throw new Error("RPC unavailable"); } })).toEqual(included);
   s.finalize();
   expect(await recheckChain(s.records, "a", s.options)).toMatchObject({ chain: "verified", chainFinal: true });
@@ -149,25 +149,27 @@ it.each(["evm", "solana", "tempo"] as const)("keeps final SDK evidence when an o
   expect(s.records.getReceipt("a")).toMatchObject({ chain: "verified", chainFinal: true });
 });
 
-it.each(["evm", "solana", "tempo"] as const)("keeps a recorded content mismatch terminal despite matching-looking reads on %s", async rail => {
+it.each(["evm", "solana", "tempo"] as const)("rejects the recorded content-mismatch hash despite matching-looking reads on %s", async rail => {
   const s = await setup(rail);
-  const mismatch = s.records.saveAttempt({ ...s.attempt, chain: "mismatch", chainMismatch: "content", chainFinal: null });
+  const mismatch = s.records.saveAttempt({ ...s.attempt, state: "uncertain", chain: "mismatch", chainMismatch: "content", chainFinal: null });
   s.records.saveReceipt({ ...s.receipt, chain: "mismatch", chainMismatch: "content", chainFinal: null });
   s.finalize();
   let reads = 0;
   const options = { ...s.options, fetchImpl: async (...args: Parameters<typeof fetch>) => { reads++; return s.options.fetchImpl(...args); } };
-  expect(await recheckChain(s.records, "a", options)).toEqual(mismatch);
+  expect(await recheckChain(s.records, "a", options)).toMatchObject({ state: "uncertain", chain: "mismatch", chainFinal: null });
   expect(s.records.getReceipt("a")).toMatchObject({ chain: "mismatch", chainMismatch: "content", chainFinal: null });
-  expect(reads).toBe(0);
+  expect(reads).toBeGreaterThan(0);
 });
 
-it.each(["evm", "solana", "tempo"] as const)("keeps an actual 0.3.0 mismatch terminal on %s", async rail => {
-  const s = await setup(rail);
-  appendFileSync(join(s.dir, "attempts.jsonl"), JSON.stringify({ ...s.attempt, chain: "mismatch" }) + "\n");
-  appendFileSync(join(s.dir, "receipts.jsonl"), JSON.stringify({ ...s.receipt, chain: "mismatch" }) + "\n");
-  s.finalize();
-  expect(await recheckChain(s.records, "a", s.options)).toEqual({ ...s.attempt, chain: "mismatch", chainFinal: null });
-  expect(s.records.getReceipt("a")).toEqual({ ...s.receipt, chain: "mismatch", chainFinal: null });
+it("loads the mismatch record actually written by 0.3.0 as uncertain without a receipt", async () => {
+  const s = await setup("evm");
+  const fixture = JSON.parse(readFileSync(new URL("fixtures/030-mismatch.json", import.meta.url), "utf8"));
+  appendFileSync(join(s.dir, "attempts.jsonl"), JSON.stringify(fixture.attempt) + "\n");
+  const loaded = s.records.getAttempt(fixture.attempt.id);
+  expect(loaded).toEqual({ ...fixture.attempt, chainFinal: null });
+  expect(loaded).toMatchObject({ state: "uncertain", chain: "mismatch" });
+  expect(s.records.getReceipt(fixture.attempt.id)).toBeUndefined();
+  expect(await recheckChain(s.records, fixture.attempt.id, { ...s.options, fetchImpl: async () => { throw new Error("RPC unavailable"); } })).toMatchObject({ state: "uncertain", chain: "mismatch" });
 });
 
 it.each(["evm", "solana", "tempo"] as const)("rechecks provisional failed execution with the full payment identity on %s", async rail => {
@@ -203,7 +205,7 @@ it.each(["evm", "solana", "tempo"] as const)("rejects a successful execution tha
   const mismatch = await recheckChain(s.records, "a", s.options);
   expect(mismatch).toMatchObject({ state: "uncertain", chain: "mismatch", chainMismatch: "content", chainFinal: null });
   expect(s.records.getReceipt("a")).toMatchObject({ chain: "mismatch", chainMismatch: "content", chainFinal: null });
-  expect(await recheckChain(s.records, "a", s.options)).toEqual(mismatch);
+  expect(await recheckChain(s.records, "a", s.options)).toMatchObject({ chain: "mismatch", state: "uncertain", chainFinal: null });
 });
 
 it.each(["evm", "solana", "tempo"] as const)("makes a finalized execution mismatch terminal on %s", async rail => {
@@ -224,15 +226,15 @@ it.each(["evm", "solana", "tempo"] as const)("makes a finalized execution mismat
   };
   const mismatch = await recheckChain(s.records, "a", { ...s.options, fetchImpl });
   expect(mismatch).toMatchObject({ state: "uncertain", chain: "mismatch", chainMismatch: "final_execution", chainFinal: null });
-  expect(await recheckChain(s.records, "a", s.options)).toEqual(mismatch);
+  expect(await recheckChain(s.records, "a", s.options)).toMatchObject({ chain: "mismatch", state: "uncertain", chainFinal: null });
 });
 
 it.each(["content", undefined] as const)("keeps a %s mismatch when a late seller answer looks paid", async kind => {
   const s = await setup("evm");
-  const mismatch = s.records.saveAttempt({ ...s.attempt, chain: "mismatch", chainMismatch: kind, chainFinal: null });
+  const mismatch = s.records.saveAttempt({ ...s.attempt, state: "uncertain", chain: "mismatch", chainMismatch: kind, chainFinal: null });
   s.records.saveReceipt({ ...s.receipt, chain: "mismatch", chainMismatch: kind });
   s.records.savePendingAnswer({ ...s.receipt, chain: "verified", chainFinal: true });
-  expect(await recheckChain(s.records, "a", s.options)).toEqual(mismatch);
+  expect(await recheckChain(s.records, "a", s.options)).toMatchObject({ chain: "mismatch", state: "uncertain", chainFinal: null });
   expect(s.records.getReceipt("a")).toMatchObject({ chain: "mismatch", chainFinal: null });
   expect(s.records.pendingAnswer("a")).toBeUndefined();
 });

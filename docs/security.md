@@ -297,7 +297,9 @@ Ethereum Sepolia's public RPC may prune logs after about 10,000 blocks, roughly 
 recovery searches recent logs first and resumes a block scan for older replacements. Unavailable
 history preserves the unknown outcome. Use an RPC with the required history to finish recovery.
 
-The per-day cap (`caps.per_day`): a payment counts on the day it ended, and on every day while it
+Matching included payments count once on their paid day, including legacy `verified` records and custom RPCs that cannot read finality. A pruned receipt or block does not prove removal. Positively removed inclusions stay uncertain and hold the amount across days.
+
+The per-day cap (`caps.per_day`): an unresolved payment counts on the day it ended, and on every day while it
 can still move money: waiting for the owner within its approval window, or signed or sent and not
 resolved (an EVM authorization until its `validBefore` and two minutes; a Tempo transfer, which has
 no expiry, or a Solana transaction until `superstables status` resolves it on chain). That includes

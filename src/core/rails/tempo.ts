@@ -184,7 +184,7 @@ async function checkTempoPayment(facts: PaymentFacts, options: ChainReadOptions)
   }
   // Tempo Moderato uses committed BFT blocks with instant finality, but still requires canonical inclusion.
   const proof = await inclusion(rpc.url, receipt, finalityFor("tempo", "moderato"), options);
-  if (proof === "removed") return { chain: "unchecked", missing: true, reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." };
+  if (proof === "removed") return { chain: "unchecked", missing: true, removed: true, reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." };
   if (proof === "unread") return { chain: "unchecked", reason: "the transaction has not reached a final block on chain" };
   if (receipt.status !== "0x1") return { chain: "mismatch", mismatchKind: proof === "final" ? "final_execution" : "provisional_execution", reason: "the transaction failed on chain" };
   // Mined before the wallet was asked to send: an older transfer, whatever it shows, is not this payment.

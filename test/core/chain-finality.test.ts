@@ -86,6 +86,7 @@ it("reports removed non-final delivered inclusion as uncertain, never a terminal
   const { chain, records, home, attempt } = await deliveredNonFinalPayment();
   chain.receipts.delete(attempt.transaction!);
   chain.used.delete(attempt.authorizationNonce!);
+  chain.advance(10);
   const result = await cliStatus(home, chain.url, attempt.id);
   expect(result).toMatchObject({ state: "uncertain", chain: "unchecked", final: true, chain_final: null, exit_code: 5 });
   expect(result.next).toMatch(/do not pay again/i);
@@ -103,6 +104,7 @@ it("preserves a delivered provisional payment and its receipt through failed rea
   expect(records.getReceipt(attempt.receiptId!)).toEqual(receipt);
   expect(records.spentToday("USDC")).toBe(0.01);
   chain.receipts.delete(attempt.transaction!); chain.used.delete(attempt.authorizationNonce!);
+  chain.advance(10);
   const searchFails = { rpcUrlFor: () => chain.url, fetchImpl: async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const call = JSON.parse(String(init?.body));
     if (call.method === "eth_call") throw new Error("nonce read failed");
@@ -114,6 +116,7 @@ it("preserves a delivered provisional payment and its receipt through failed rea
 });
 it.each(["block hash changed", "log removed"])("reports a successful read showing %s as removed inclusion", async (change) => {
   const { chain, records, attempt } = await deliveredNonFinalPayment();
+  chain.used.delete(attempt.authorizationNonce!);
   const options = { rpcUrlFor: () => chain.url, fetchImpl: async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const call = JSON.parse(String(init?.body));
     const response = await fetch(input, init);
@@ -140,7 +143,7 @@ it.each(["unchecked", "mismatch"] as const)("status rechecks provisional payment
   if (initialChain === "mismatch") records.saveReceipt({ id: "a", attemptId: "a", quoteId: "q", at, url: a.url, terms: a.terms, payer: PAYER, transaction, transactionKind: "hash", transactionUrl: "", network: BASE_SEPOLIA.caip2, settlement: { success: true, transaction, network: "eip155:84532" }, chain: "mismatch", chainMismatch: "provisional_execution", serviceOutcome: "ok", serviceStatus: 200, ms: 0 });
   const first = await recheckChain(records, "a", chain.url);
   expect(await cliStatus(dir, chain.url)).toMatchObject({ state: "settled", final: true, chain_final: false, exit_code: 0 });
-  chain.receipts.delete(transaction); chain.used.delete(NONCE);
+  chain.receipts.delete(transaction); chain.used.delete(NONCE); chain.advance(10);
   const second = await recheckChain(records, "a", chain.url);
   expect(first).toMatchObject({ chain: "verified", chainFinal: false }); expect(second?.chain).toBe("unchecked");
   expect(second?.state).toBe("uncertain");
@@ -211,7 +214,7 @@ it("uses the EVM instant-finality exception only for pinned SKALE", async () => 
 });
 
 
-it("rechecks a prior day's landed payment before admitting the next payment under the daily cap", async () => {
+it("admits a new payment without rereading a prior day's matching inclusion", async () => {
   const chain = await startFakeBaseSepolia(); cleanup.push(() => chain.close());
   const dir = mkdtempSync(join(tmpdir(), "cap-finality-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
   const records = new Records(dir);
@@ -221,7 +224,7 @@ it("rechecks a prior day's landed payment before admitting the next payment unde
   const prior: Attempt = { id: "prior", quoteId: "old-quote", createdAt: yesterday, updatedAt: yesterday, state: "settled", chain: "verified", chainFinal: false, paymentIncluded: true, transaction, url: "https://seller.example", payer: PAYER, authorizationNonce: NONCE, authorizationValidBefore: new Date(Date.now() + 86400000).toISOString(), terms, receiptId: "prior", history: [] };
   records.saveAttempt(prior);
   records.saveReceipt({ id: "prior", at: yesterday, attemptId: "prior", quoteId: "old-quote", url: prior.url, terms, payer: PAYER, transaction, transactionKind: "hash", transactionUrl: "", network: BASE_SEPOLIA.caip2, settlement: { success: true, transaction, network: "eip155:84532" }, chain: "verified", chainFinal: false, paymentIncluded: true, serviceOutcome: "ok", ms: 0 });
-  expect(records.spentToday("USDC")).toBe(0.01);
+  expect(records.spentToday("USDC")).toBe(0);
   const facilitator = await startFacilitator(); cleanup.push(() => facilitator.close());
   const seller = await startPaidEndpoint(facilitator.url); cleanup.push(() => seller.close());
   let asked = 0;
@@ -235,14 +238,15 @@ it("rechecks a prior day's landed payment before admitting the next payment unde
   expect(records.spentToday("USDC")).toBe(0);
 });
 
-it("counts an included provisional receipt after UTC midnight even when the signed authorization expired", async () => {
+it("counts an included provisional receipt once on its paid day", async () => {
   const dir = mkdtempSync(join(tmpdir(), "included-cap-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
   const records = new Records(dir);
   const yesterday = new Date(Date.now() - 86400000).toISOString();
   const terms = { network: BASE_SEPOLIA.caip2, networkLabel: BASE_SEPOLIA.label, asset: "USDC", assetAddress: BASE_SEPOLIA.usdc.address, amountAtomic: "10000", amountDecimal: 0.01, recipient: TO, scheme: "exact" };
   records.saveAttempt({ id: "a", quoteId: "q", createdAt: yesterday, updatedAt: yesterday, state: "settled", chain: "verified", chainFinal: false, paymentIncluded: true, authorizationValidBefore: yesterday, url: "https://seller.example", terms, receiptId: "a", history: [] });
   records.saveReceipt({ id: "a", at: yesterday, attemptId: "a", quoteId: "q", url: "https://seller.example", terms, payer: PAYER, transaction: `0x${"ab".repeat(32)}`, transactionKind: "hash", transactionUrl: "", network: BASE_SEPOLIA.caip2, settlement: { success: true, transaction: "", network: "eip155:84532" }, chain: "verified", chainFinal: false, paymentIncluded: true, serviceOutcome: "ok", ms: 0 });
-  expect(records.spentToday("USDC")).toBe(0.01);
+  expect(records.spentToday("USDC", new Date(yesterday))).toBe(0.01);
+  expect(records.spentToday("USDC")).toBe(0);
 });
 
 
@@ -267,6 +271,7 @@ it("reports a matching included payment as paid even when the seller says settle
   expect(records.spentToday("USDC")).toBe(0.01);
   chain.receipts.delete(a.transaction!);
   chain.used.delete(a.authorizationNonce!);
+  chain.advance(10);
   expect(await recheckChain(records, a.id, chain.url)).toMatchObject({ state: "uncertain", paymentIncluded: true });
   expect(records.getReceipt(a.receiptId!)?.paymentIncluded).toBeUndefined();
   expect(records.getReceipt(a.receiptId!)?.chainReason).toContain("Do not pay again");

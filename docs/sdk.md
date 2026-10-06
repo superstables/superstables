@@ -1,6 +1,6 @@
 # SDK payment records
 
-`PaymentEngine` and `Records` return `Attempt` and `Receipt` records. `chain` keeps its 0.3.0 meaning: `verified` means the client read matching landed evidence for this payment. It does not establish permanent finality.
+`PaymentEngine` and `Records` return `Attempt` and `Receipt` records. As in 0.3.0, `chain: verified` means the client read matching landed evidence for this payment. It does not establish permanent finality.
 
 The additive `chainFinal` field reports finality separately:
 
@@ -8,50 +8,60 @@ The additive `chainFinal` field reports finality separately:
 - `false`: the matching payment is included but not final.
 - `null`: no current matching inclusion is established, or the stored record has no finality observation.
 
-Records loaded from 0.3.0 retain their existing fields and get `chainFinal: null`. A legacy `chain: verified` is matching evidence with unknown finality. Read-only `PaymentEngine.recheckChain(id)` checks it again. It never asks a wallet or sends a payment.
+EVM requires canonical finalized inclusion, except the pinned SKALE instant-finality rule. Solana requires finalized commitment. Tempo requires canonical committed inclusion under its instant-finality rule. A matching canonical receipt with an unavailable final head remains provisional.
 
-EVM waits for canonical finalized inclusion, except the pinned SKALE instant-finality rule. Solana waits for finalized commitment. Tempo uses canonical committed inclusion under its instant-finality rule. A readable matching canonical Tempo receipt with an unavailable or lagging committed head remains provisional.
+0.3.0 records load with their existing fields and `chainFinal: null`. Read-only `PaymentEngine.recheckChain(id)` checks legacy and provisional matching evidence again, until finality is established. It never asks a wallet or sends a payment. `attempts` and `receipts` list stored observations without chain reads. Starting another `pay` does not reread earlier `verified` payments just to check spending room. Only older unresolved seller reports that still reserve today's cap are checked there.
 
-Recovery and daily-cap accounting use `chainFinal`, independently of `chain`. Provisional evidence keeps its hold across UTC midnight, including when an EVM authorization's local expiry has passed. Explicit final evidence counts on the receipt's recorded day only. Legacy matching evidence also holds conservatively until a finality read resolves it. A missing or contradictory provisional transaction needs two successful observations followed by a successful identity search before it becomes `uncertain`, `chain: unchecked`, `chainFinal: null`. Read failures preserve earlier evidence. Final evidence never demotes, including when an older read finishes later. A reorg never authorizes payment again.
+Included payments count once, on their receipt's paid day, including legacy records and payments whose finality RPC never succeeds. Pending finality does not reserve every later day's cap. An attempt whose previously observed inclusion was positively removed becomes uncertain and holds its approved amount until recovery, as specified for removed inclusions. This paid-day rule follows the website's accounting rule and the distinction between included payment and pending finality.
 
-The CLI maps SDK `chainFinal` to `chain_final` in `pay`, `status`, `attempts` and `receipts`, including nested receipt JSON. The CLI's `final` still describes workflow completion. `FINAL_ATTEMPT_STATES` still includes `uncertain`; a completed workflow can still need read-only recovery.
+A missing receipt, pruned block, unavailable final head, or used authorization with an unreadable transaction does not prove removal. Two successful reads must positively contradict the earlier effect, or show the authorization unused at a final head past the observed payment block. EVM records keep `paymentBlock` for that comparison. Legacy records without that block need positive contradictory effect evidence or final unused expiry. A confirmed removal changes `settled` or `paid_service_failed` to `uncertain`, `chain: unchecked`, and `chainFinal: null`. Final evidence never demotes, including when an older read finishes later. A reorg never authorizes payment again.
 
-## Mismatches
+## Mismatch recovery
 
-A content mismatch is terminal. A transaction hash commits to its payer, recipient, amount, token and signed payment identity. A stored mismatch without metadata, including a 0.3.0 record, also stays terminal. A fresh seller-hash check can search for the original payment before it records a terminal mismatch; every found payment still passes the full identity check.
+As in 0.3.0, a mismatch makes the attempt `uncertain`. The next `status` searches by the payment's own authorization nonce, Tempo memo, or signed Solana message. This includes the uncertain mismatch records 0.3.0 actually wrote, which have no mismatch classification and normally no receipt.
 
-The additive `chainMismatch` field distinguishes `content`, `provisional_execution` and `final_execution`. Only `provisional_execution` permits rechecking a recorded mismatch. A failed execution below finality can change after a reorg; a later successful read must pass every check used for a fresh payment before it becomes `verified`. `chainFinal` then follows the normal finality rule. A successful transaction with the wrong amount or identity remains a content mismatch. A final execution failure stays terminal. A missing or noncanonical inclusion stays unchecked and recoverable; it is never permanent content proof.
+The rejected transaction hash never becomes this payment through a later matching-looking answer. A different transaction found by the original identity must pass the full identity and effect checks. It then produces a receipt and becomes `settled` or `paid_service_failed`, with `chainFinal: false` for provisional inclusion or `true` for final inclusion. If final evidence proves the authorization expired unused, an attempt with no prior matching inclusion becomes `failed`, `chain: unpaid`. Otherwise it remains uncertain. The initial `pay` records uncertainty exactly as 0.3.0 did; recovery is a read, not another submission.
 
-This recovery exception is intended in 0.3.1. It changes which newly marked execution observations can be rechecked; the existing `mismatch` field still means the chain observation does not confirm this payment. It never authorizes a fresh payment.
+`chainMismatch` classifies the rejected transaction as `content`, `provisional_execution`, or `final_execution`. A provisional execution can change after a reorg, so its hash can be checked again with every check required for a fresh payment. A non-final EVM receipt without payment effect logs is provisional execution evidence. A transaction carrying a different payment identity or explicit wrong transfer remains a content mismatch. Content, final execution, and legacy rejected hashes are excluded from acceptance, while their attempts still allow the identity search above.
 
-## Compatibility from 0.3.0 to 0.3.1
+The CLI maps `chainFinal` to `chain_final` and `chainMismatch` to `chain_mismatch`, including nested receipt and listing JSON. Existing fields such as `chainReason` and `paymentIncluded` in record listings keep their existing spelling. `final` remains workflow completion; `FINAL_ATTEMPT_STATES` still includes `uncertain`.
 
-Every existing field retains its meaning. The following audit covers the payment records and their CLI projections.
+## Compatibility audit from 0.3.0 to 0.3.1
 
-| Field | 0.3.0 meaning | 0.3.1 meaning |
+The baseline is `46469a5`, the `v0.3.0` release. The following behavior differences are deliberate. They include the hosted identity checks and journal locking carried by this patch.
+
+| Behavior or field | 0.3.0 | 0.3.1 and justification |
 | --- | --- | --- |
-| `Attempt.chain`, `Receipt.chain`, CLI `chain` | `verified` for matching landed payment evidence; `unchecked` when the chain cannot establish it; `mismatch` for a named transaction that is not this payment; `unpaid` for proof it never paid and cannot pay | Unchanged |
-| `chainReason`, CLI `chain_reason` | The client's explanation of its chain observation | Unchanged; can describe pending finality or removed inclusion |
-| `Attempt.state`, CLI `state` | Workflow outcome, with payment and delivery represented separately | Unchanged; matching provisional payment can be `settled` or `paid_service_failed` |
-| CLI `final`, `FINAL_ATTEMPT_STATES` | The running workflow has ended, including `uncertain` | Unchanged |
-| CLI `exit_code` | Outcome exit code; delivered settled payment is 0, paid service failure is 4, uncertainty is 5 | Unchanged |
-| CLI `message`, `next` | Outcome explanation and next action | Unchanged; pending finality can request a later read |
-| CLI `reason`, `refusal` | Why the attempt stopped and the check that refused it | Unchanged |
-| CLI `receipt`, `transaction` | Recorded payment receipt or transaction identifier | Unchanged |
-| CLI `service_response`, `history` | Seller response and attempt transitions | Unchanged |
-| `Receipt.serviceOutcome`, `serviceStatus`, `serviceBodyPreview` | Delivery outcome, HTTP status and saved response preview | Unchanged |
-| `Receipt.settlement` | The seller's settlement report | Unchanged |
-| `Attempt.serviceStatus`, `serviceBody`, `serviceReason` | Seller HTTP status, saved response and seller's reason | Unchanged |
-| `Attempt.id`, `quoteId`, `url`, `serviceId`, `serviceName`, `terms`, `payer`, `transaction`, `transactionUrl`, `receiptId` | Payment identity, checked terms, payer, transaction and receipt references | Unchanged |
-| `Attempt.createdAt`, `updatedAt`, `history`, `runner` | Workflow timestamps, transitions and runner identity | Unchanged |
-| `Attempt.walletRequestId`, `approvalUrl`, `reason`, `refusal`, `abandonedBy` | Owner approval and closure details | Unchanged |
-| `Attempt.reservedAt`, `reservedUntil` | Local daily-cap reservation window | Unchanged |
-| `Attempt.authorizationValidBefore`, `authorizationNonce`, `paymentMemo`, `ownerSignature`, `lastValidBlockHeight`, `searchFromBlock`, `searchFromSlot`, `searchedToSlot` | Signed payment identity, lifetime and chain search boundaries or progress | Unchanged |
-| `Receipt.id`, `at`, `quoteId`, `attemptId`, `url`, `serviceId`, `serviceName`, `terms`, `payer`, `transaction`, `transactionKind`, `transactionUrl`, `network`, `ms` | Receipt identity, accounting day, checked terms, payment references and elapsed time | Unchanged |
-| CLI `untrusted_seller_data`, `untrusted_seller_report`, projected `settlement` | Seller claims kept separate from checked payment identifiers | Unchanged |
-| SDK `chainMismatch`, CLI `chainMismatch` in record views | Absent | Added mismatch classification; only `provisional_execution` can be rechecked, and success requires the full original payment identity |
-| SDK `chainFinal` | Absent | Added with `true`, `false`, `null` semantics above |
-| CLI `chain_final` | Absent | Added with the same semantics as SDK `chainFinal` |
-| `paymentIncluded` | Absent | Added historical inclusion marker used to prevent repayment after a reorg; does not prove current inclusion or finality |
+| Matching `chain: verified` and paid `state` | Matching landed evidence, retained permanently | Same initial paid meaning. Provisional and legacy evidence can later become `uncertain` and `unchecked` after proven removal, to prevent stale payment conclusions after a reorg |
+| Status of an earlier `verified` record | No new chain read | Rereads only while finality is unknown or false. This includes legacy records, to establish finality or identify a reorg. RPC errors and pruning retain earlier evidence |
+| Prior payments before another `pay` | Older unresolved seller reports may be reconciled | Included and legacy `verified` records are not reread for cap admission. Only unresolved reports that can still hold the cap are checked, avoiding serial reads of old paid records |
+| Daily cap for included or legacy paid receipts | Counts on paid day | Same. Pending or unreadable finality does not charge later days. Proven removed inclusions hold across days to prevent an unknown late debit from releasing admission room |
+| `chainFinal`, CLI `chain_final` | Absent | Additive true, false, or null. Separates final payment proof from matching inclusion and command completion |
+| `paymentIncluded` | Absent | Historical inclusion marker. Keeps removed inclusions uncertain even after expiry, to prevent an automatic repayment conclusion |
+| `paymentBlock` | Absent | Observed EVM inclusion height. Supports block-pinned final negative recovery without treating a null receipt as removal |
+| `chainReason` on `verified` SDK records and `attempts --json` | Normally absent | Explains pending finality on matching included records. Final verification removes that provisional explanation |
+| `chainMismatch`, CLI `chain_mismatch` | Absent | Classifies content and execution observations. Permits a provisional execution recheck with full identity and effect checks |
+| Uncertain content or legacy mismatch | Searches by original identity and can resolve paid or final unpaid | Same recovery. The rejected hash itself cannot be accepted. A different found payment uses explicit finality metadata |
+| Failed or empty-effect execution below finality | Treated as a mismatch | Explicitly provisional. Execution may change after a reorg, so a later full matching check can establish payment |
+| Core `final` and exit codes | Command ended, including uncertainty. Paid service failure exits 4, uncertainty 5, final unpaid 1 | Same initial mapping. A later proven reorg changes state and exit to uncertainty, as required by the recovery rule |
+| Core `message`, `next`, receipt label and help | Matching inclusion called verified without a separate finality fact | Explain pending finality and read-only status, or proven removal and no repayment. Prevents command completion from implying permanent payment |
+| Hosted buy-once identity | Independent amount and recipient sanity check | Also checks the purchase nonce, memo or signed message and prevents cross-purchase attribution. Prevents a different same-price transfer from counting as this purchase |
+| Hosted legacy paid cache | Returned as stored | Retains paid and command completion, with unknown finality and an explicit older-version attribution note. Never invents identity or finality evidence |
+| Paid provisional buy-once | Stored as completed and never reread | Still `final: true` and exit 0 or 4, but retains its read token. Later `wait` can establish finality or detect removal |
+| Buy-once failed execution below finality | Permanent unknown, `final: true` | Rereadable unknown, `final: false`, token retained. `wait` genuinely rereads the chain and can observe successful execution or final failure. A final failure is permanent unknown again |
+| Removed buy-once inclusion | Earlier paid cache never reread | Becomes unknown, `final: false`, with token retained. It may stay open indefinitely, matching 0.3.0's existing site-paid/chain-unreadable unknown behavior. `wait --abandon` ends local waiting without proving unpaid or permitting repayment |
+| Budget dispatcher `final`, `paid`, `delivered` and exit codes | Command completion, payment and delivery separate | Same. Paid provisional RESULTs stay `final: true`. `chain_final` is additive, and `next` names a published reconciliation command |
+| EVM budget settlement, cancellation and pull recovery | Some decisions used latest receipts or nonce counts | Permanent decisions require canonical final evidence. Missing pulls need a different identified final nonce-consuming transaction. Prevents false unpaid or premature return conclusions |
+| Solana budget negative recovery | Confirmed expiry or a limited address index could conclude absence | Uses finalized history and the complete landing window when the final ID is unknown. Progress is bounded and resumable. An address index alone never proves absence |
+| Tempo budget and hosted chain reads | Receipt success without complete canonical inclusion checks | Require canonical committed inclusion. Unreadable evidence preserves uncertainty |
+| Budget reconciliation writers | Could race buys and overwrite newer journal evidence | Share operation locks and preserve final evidence. Prevents stale recovery from admitting another payment |
+| Concurrent core writers | Preserved all matching verification permanently | Preserve final matching proof permanently. Provisional proof can change only with positive removal evidence. Late seller answers enrich delivery without accepting a rejected hash |
+| Recovery logs, progress and docs | Some commands named source scripts | Name published `superstables budget reconcile` commands and show resumable scan progress, so recovery works from an installed package |
 
-The SDK declarations are generated from `src/core/types.ts` by `npm run build` and shipped in `dist/core/types.d.ts`, exported through `dist/index.d.ts`. `chainFinal` is optional in the input type so existing callers can construct or save 0.3.0 records; loaded records and new engine attempts supply `null` when finality has not been observed.
+Other payment identity fields, checked terms, seller reports, service responses, approval facts, receipt accounting timestamps, and quote reuse rules are unchanged. No automatic payment retry is added.
+
+## Reading newer records with 0.3.0
+
+0.3.0 ignores finality metadata and reads a provisional `verified` record as paid under its own inclusion meaning. It can reread a provisional buy-once and store it as permanently completed. A removed core inclusion read by 0.3.0 can become `failed`, `chain: unpaid`, exit 1 after final unused expiry. That conclusion has final negative evidence, but differs from 0.3.1's historical-inclusion rule that keeps it uncertain and says "Do not pay again". Downgrading therefore loses the new reorg and finality recovery rules.
+
+SDK declarations are generated by `npm run build` and shipped in `dist/core/types.d.ts`, exported through `dist/index.d.ts`. The additive fields are optional on input so existing callers can construct or save 0.3.0 records. Loaded records and new attempts supply `chainFinal: null` when no finality observation exists.

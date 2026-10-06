@@ -35,6 +35,9 @@ export interface ChainCheck {
   included?: true;
   /** A successful read found no receipt, distinct from an unreadable RPC. */
   missing?: true;
+  /** Positive canonical evidence of removal, distinct from a null receipt. */
+  removed?: true;
+  paymentBlock?: string;
   /** Why, for mismatch and unchecked: the client's own words. */
   reason?: string;
 }
@@ -98,7 +101,7 @@ export async function checkSettlement(
     return { chain: "unchecked", reason: "the chain could not be read: the RPC answered with a receipt for another transaction" };
   }
   const proof = await inclusion(rpc.url, receipt, network.finality, options);
-  if (proof === "removed") return { chain: "unchecked", missing: true, reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." };
+  if (proof === "removed") return { chain: "unchecked", missing: true, removed: true, reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." };
   if (proof === "unread") return { chain: "unchecked", reason: "the transaction's block could not be verified" };
   if (receipt.status !== "0x1") return { chain: "mismatch", mismatchKind: proof === "final" ? "final_execution" : "provisional_execution", reason: "the transaction failed on chain" };
 
@@ -107,7 +110,7 @@ export async function checkSettlement(
   const used = logs.some(
     (l) => l.topics![0] === AUTHORIZATION_USED_TOPIC && same(l.topics![1], topicOf(input.payer)) && same(l.topics![2], input.nonce!),
   );
-  if (!used) return { chain: "mismatch", reason: "the transaction did not use the authorization the owner signed for this payment" };
+  if (!used) return { chain: "mismatch", mismatchKind: proof !== "final" && !logs.some(l => l.topics?.[0] === AUTHORIZATION_USED_TOPIC) ? "provisional_execution" : "content", reason: "the transaction did not use the authorization the owner signed for this payment" };
   const paid = logs.some((l) => {
     if (l.topics![0] !== TRANSFER_TOPIC || !same(l.topics![1], topicOf(input.payer)) || !same(l.topics![2], topicOf(input.recipient))) return false;
     try {
@@ -116,8 +119,8 @@ export async function checkSettlement(
       return false;
     }
   });
-  if (!paid) return { chain: "mismatch", reason: "the transaction did not transfer the signed amount to the checked recipient" };
-  return proof === "final" ? { chain: "verified" } : { chain: "unchecked", included: true, reason: "the payment landed, but is not final on chain yet" };
+  if (!paid) return { chain: "mismatch", mismatchKind: proof !== "final" && !logs.some(l => l.topics?.[0] === TRANSFER_TOPIC) ? "provisional_execution" : "content", reason: "the transaction did not transfer the signed amount to the checked recipient" };
+  return proof === "final" ? { chain: "verified" } : { chain: "unchecked", included: true, paymentBlock: receipt.blockNumber, reason: "the payment landed, but is not final on chain yet" };
 }
 
 // ── Finding an authorization nobody reported ─────────────────────────────────────────────────────────────────
@@ -148,6 +151,7 @@ export interface AuthorizationToFind {
   nonce?: string;
   /** The signed validBefore, ISO. */
   validBefore?: string;
+  paymentBlock?: string;
   /** When the attempt began: the authorization did not exist before. */
   since?: string;
   /** A transaction the seller named, read first. */
@@ -186,11 +190,12 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
   if (isHash(input.transaction)) {
     const named = await checkSettlement({ ...input, network: network.caip2 }, options);
     if (named.chain === "verified") return { found: true, transaction: input.transaction };
-    if (named.included) return { found: true, transaction: input.transaction, final: false };
+    if (named.included) return { found: true, transaction: input.transaction, final: false, paymentBlock: named.paymentBlock };
   }
   const rpc = options.rpcUrl ? { url: options.rpcUrl } : chainRpc(network);
   if ("error" in rpc) return { found: false, unreadable: true, reason: `the chain was not read: ${rpc.error}` };
   const unreadable: FoundPayment = { found: false, unreadable: true, reason: "the chain could not be read: the RPC did not give a usable answer" };
+  let authorizationUsed = false;
   try {
     const head = await blockAt(rpc.url, "latest", options);
     if (!head) return unreadable;
@@ -208,6 +213,11 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
     if (!(await usedAt(head.number))) {
       const validBefore = Date.parse(input.validBefore ?? "") / 1000;
       if (!Number.isFinite(validBefore)) return { found: false, reason: "the chain shows the owner's authorization unused so far" };
+      const priorBlock = typeof input.paymentBlock === "string" && /^0x[0-9a-fA-F]+$/.test(input.paymentBlock) ? BigInt(input.paymentBlock) : undefined;
+      if (priorBlock !== undefined) {
+        const final = await finalBlock(rpc.url, network, head, options);
+        if (final && final.number > priorBlock && !(await usedAt(final.number))) return { found: false, inclusionGone: true, reason: "the authorization is unused at a final head past the earlier payment block" };
+      }
       if (head.timestamp < validBefore) return { found: false, reason: `the chain shows the owner's authorization unused so far; it can still be used until ${iso(validBefore)}` };
       // Past validBefore by the latest block. "Never" is the word of a final block: one dated at or past validBefore,
       // at which the authorization is still unused. No block after it can be dated earlier, so none can use it.
@@ -222,6 +232,7 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
         reason: `the chain shows the owner's authorization was never used, and it can no longer be: it expired at ${iso(validBefore)}, and the chain's final block is dated ${iso(final.timestamp)}`,
       };
     }
+    authorizationUsed = true;
     // Used: by a transfer (this payment) or, never through this client, a cancellation. Its log names the transaction.
     // The final block is read before the logs, so a cancellation at or below it is one the chain has made final.
     const final = await finalBlock(rpc.url, network, head, options);
@@ -254,14 +265,14 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
         if (!same(log.topics?.[0], AUTHORIZATION_USED_TOPIC) || !isHash(log.transactionHash)) continue;
         const check = await checkSettlement({ ...input, network: network.caip2, transaction: log.transactionHash }, options);
         if (check.chain === "verified") return { found: true, transaction: log.transactionHash };
-        if (check.included) return { found: true, transaction: log.transactionHash, final: false };
-        if (check.chain === "unchecked" && !check.missing) return unreadable;
+        if (check.included) return { found: true, transaction: log.transactionHash, final: false, paymentBlock: check.paymentBlock };
+        if (check.chain === "unchecked") return { ...unreadable, authorizationUsed: true };
       }
       from = to + 1n;
     }
-    return { found: false, reason: "the chain shows the owner's authorization was used, but its transaction was not found in the blocks searched" };
+    return { found: false, unreadable: true, authorizationUsed: true, reason: "the chain shows the owner's authorization was used, but its transaction was not found in the blocks searched" };
   } catch {
-    return unreadable;
+    return authorizationUsed ? { ...unreadable, authorizationUsed: true } : unreadable;
   }
 }
 
