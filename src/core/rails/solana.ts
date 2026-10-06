@@ -159,6 +159,10 @@ export const solanaRail: X402Rail = {
     let found: RpcTransaction | null;
     try {
       found = await readTransaction(rpc.url, facts.transaction, options);
+      if (!found) {
+        const confirmed = await rpcCall<RpcTransaction | null>(rpc.url, "getTransaction", [facts.transaction, { commitment: "confirmed", maxSupportedTransactionVersion: 0, encoding: "json" }], options);
+        if (confirmed && judgeTransaction(confirmed, facts.transaction, facts).chain === "verified") return { chain: "unchecked", included: true, reason: "the payment landed, but is not final on chain yet" };
+      }
     } catch {
       // The RPC's own error text is not repeated: it is somebody else's words.
       return { chain: "unchecked", reason: "the chain could not be read: the RPC did not give a usable answer" };
@@ -204,6 +208,7 @@ export const solanaRail: X402Rail = {
     if (isTransactionId(SOLANA_DEVNET.caip2, facts.transaction) && !attributed.has(facts.transaction)) {
       const named = await solanaRail.checkPayment(facts, options);
       if (named.chain === "verified") return { found: true, transaction: facts.transaction };
+      if (named.included) return { found: true, transaction: facts.transaction, final: false };
     }
     /** A transaction carrying the owner's signature, read and judged: paid, or why not. */
     const judge = async (signature: string): Promise<FoundPayment | "unreadable"> => {

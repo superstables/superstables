@@ -252,6 +252,8 @@ export interface Attempt {
   chain?: ChainState;
   /** Why, for mismatch and unchecked. */
   chainReason?: string;
+  /** Inclusion was proven; a later reorg cannot authorize repayment. */
+  paymentIncluded?: true;
   receiptId?: string;
   history: AttemptTransition[];
 }
@@ -280,6 +282,8 @@ export interface Receipt {
   /** What the chain says about the settlement: see Attempt.chain. Absent on receipts written before it was read. */
   chain?: ChainState;
   chainReason?: string;
+  /** Inclusion was proven; a later reorg cannot authorize repayment. */
+  paymentIncluded?: true;
   /** Payment success and service success are two different facts. */
   serviceOutcome: ServiceOutcome;
   serviceStatus?: number;

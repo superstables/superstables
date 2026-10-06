@@ -22,13 +22,15 @@
 import { decodeFunctionResult, encodeFunctionData, keccak256, toBytes } from "viem";
 import { BASE_SEPOLIA, evmNetworkFor, isAddress, type EvmNetwork } from "./chain.js";
 import { chainRpc, rpcCall, type RpcOptions } from "./rpc.js";
-import { finalInclusion } from "./finality.js";
+import { inclusion } from "./finality.js";
 import type { FoundPayment } from "./rails/types.js";
 
 /** "unpaid": the chain shows this payment was never made and can no longer be (recorded by a later check). */
 export type ChainState = "verified" | "mismatch" | "unchecked" | "unpaid";
 export interface ChainCheck {
   chain: ChainState;
+  /** Matching successful inclusion, still rechecked until chain is verified. */
+  included?: true;
   /** Why, for mismatch and unchecked: the client's own words. */
   reason?: string;
 }
@@ -91,9 +93,8 @@ export async function checkSettlement(
   if (!isHash(receipt.transactionHash) || receipt.transactionHash.toLowerCase() !== input.transaction.toLowerCase()) {
     return { chain: "unchecked", reason: "the chain could not be read: the RPC answered with a receipt for another transaction" };
   }
-  if (!(await finalInclusion(rpc.url, receipt, network.finality, options))) {
-    return { chain: "unchecked", reason: "the transaction has not reached final canonical inclusion" };
-  }
+  const proof = await inclusion(rpc.url, receipt, network.finality, options);
+  if (proof === "unread") return { chain: "unchecked", reason: "the transaction's block could not be verified" };
   if (receipt.status !== "0x1") return { chain: "mismatch", reason: "the transaction failed on chain" };
 
   const usdc = network.usdc.address;
@@ -111,7 +112,7 @@ export async function checkSettlement(
     }
   });
   if (!paid) return { chain: "mismatch", reason: "the transaction did not transfer the signed amount to the checked recipient" };
-  return { chain: "verified" };
+  return proof === "final" ? { chain: "verified" } : { chain: "unchecked", included: true, reason: "the payment landed, but is not final on chain yet" };
 }
 
 // ── Finding an authorization nobody reported ─────────────────────────────────────────────────────────────────
@@ -180,6 +181,7 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
   if (isHash(input.transaction)) {
     const named = await checkSettlement({ ...input, network: network.caip2 }, options);
     if (named.chain === "verified") return { found: true, transaction: input.transaction };
+    if (named.included) return { found: true, transaction: input.transaction, final: false };
   }
   const rpc = options.rpcUrl ? { url: options.rpcUrl } : chainRpc(network);
   if ("error" in rpc) return { found: false, unreadable: true, reason: `the chain was not read: ${rpc.error}` };
@@ -247,6 +249,7 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
         if (!same(log.topics?.[0], AUTHORIZATION_USED_TOPIC) || !isHash(log.transactionHash)) continue;
         const check = await checkSettlement({ ...input, network: network.caip2, transaction: log.transactionHash }, options);
         if (check.chain === "verified") return { found: true, transaction: log.transactionHash };
+        if (check.included) return { found: true, transaction: log.transactionHash, final: false };
         if (check.chain === "unchecked") return unreadable;
       }
       from = to + 1n;
