@@ -369,7 +369,7 @@ describe("what the chain must show", () => {
     const twice = chain.land(signed, { edit: (t) => { t.transaction.message.instructions.push({ ...tokenIx(t) }); } });
     expect(await solanaRail.checkPayment(facts({ transaction: twice }), options())).toMatchObject({ chain: "mismatch", reason: "the transaction does not make exactly one token transfer" });
     const failed = chain.land(signed, { err: { InstructionError: [2, { Custom: 1 }] } });
-    expect(await solanaRail.checkPayment(facts({ transaction: failed }), options())).toEqual({ chain: "mismatch", reason: "the transaction failed on chain" });
+    expect(await solanaRail.checkPayment(facts({ transaction: failed }), options())).toEqual({ chain: "mismatch", mismatchKind: "final_execution", reason: "the transaction failed on chain" });
     const withoutOwner = chain.land(signed, { edit: (t) => { t.transaction.signatures[built.ownerIndex] = bs58.encode(randomBytes(64)); } });
     expect(await solanaRail.checkPayment(facts({ transaction: withoutOwner }), options())).toEqual({ chain: "mismatch", reason: "the transaction does not carry the owner's signature over this payment" });
   });

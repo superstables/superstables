@@ -23,12 +23,14 @@ import { decodeFunctionResult, encodeFunctionData, keccak256, toBytes } from "vi
 import { BASE_SEPOLIA, evmNetworkFor, isAddress, type EvmNetwork } from "./chain.js";
 import { chainRpc, rpcCall, type RpcOptions } from "./rpc.js";
 import { inclusion } from "./finality.js";
+import type { ChainMismatch } from "./types.js";
 import type { FoundPayment } from "./rails/types.js";
 
 /** "unpaid": the chain shows this payment was never made and can no longer be (recorded by a later check). */
 export type ChainState = "verified" | "mismatch" | "unchecked" | "unpaid";
 export interface ChainCheck {
   chain: ChainState;
+  mismatchKind?: ChainMismatch;
   /** Matching successful inclusion, still rechecked until chain is verified. */
   included?: true;
   /** A successful read found no receipt, distinct from an unreadable RPC. */
@@ -98,7 +100,7 @@ export async function checkSettlement(
   const proof = await inclusion(rpc.url, receipt, network.finality, options);
   if (proof === "removed") return { chain: "unchecked", missing: true, reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." };
   if (proof === "unread") return { chain: "unchecked", reason: "the transaction's block could not be verified" };
-  if (receipt.status !== "0x1") return { chain: "mismatch", reason: "the transaction failed on chain" };
+  if (receipt.status !== "0x1") return { chain: "mismatch", mismatchKind: proof === "final" ? "final_execution" : "provisional_execution", reason: "the transaction failed on chain" };
 
   const usdc = network.usdc.address;
   const logs = (Array.isArray(receipt.logs) ? receipt.logs : []).filter((l) => same(l?.address, usdc) && Array.isArray(l.topics));

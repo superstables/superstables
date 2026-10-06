@@ -762,7 +762,7 @@ describe("a Single purchase on Solana devnet", () => {
     expect(s.records.spentToday("USDC")).toBe(0);
   });
 
-  it("does not take someone else's transaction as this payment: uncertain, then found by the owner's signature", async () => {
+  it("keeps a recorded content mismatch uncertain and terminal", async () => {
     const s = await stack();
     // another owner's payment to the same seller, on chain already
     const stranger = solanaKey();
@@ -774,8 +774,9 @@ describe("a Single purchase on Solana devnet", () => {
     expect(final.reason).toMatch(/the chain does not confirm it \(the transaction does not carry the owner's signature over this payment\)/);
     expect(final.receiptId).toBeUndefined();
     const rechecked = await recheckChain(s.records, final.id, chain.url);
-    expect(rechecked?.state).toBe("paid_service_failed");
-    expect(rechecked?.transaction).toBe(s.seller.landed);
-    expect(rechecked?.transaction).not.toBe(s.seller.names);
+    expect(rechecked).toEqual(final);
+    expect(rechecked?.chainMismatch).toBe("content");
+    expect(rechecked?.transaction).toBe(s.seller.names);
+    expect(s.records.getReceipt(final.id)).toBeUndefined();
   });
 });

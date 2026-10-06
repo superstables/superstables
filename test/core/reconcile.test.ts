@@ -77,7 +77,7 @@ describe("status on EVM chains", () => {
     chain.receipts.delete(cancelled);
     // A new matching payment is paid while finality waits; this reorg removed a cancellation.
     const landed = chain.settle({ from: PAYER, to: RECIPIENT, value: "10000", nonce: NONCE });
-    expect(await recheckChain(r, "a", chain.url)).toMatchObject({ state: "paid_service_failed", chain: "unchecked", paymentIncluded: true, transaction: landed });
+    expect(await recheckChain(r, "a", chain.url)).toMatchObject({ state: "paid_service_failed", chain: "verified", chainFinal: false, paymentIncluded: true, transaction: landed });
     expect(r.spentToday("USDC")).toBe(0.01);
     chain.advance(10);
     expect(await recheckChain(r, "a", chain.url)).toMatchObject({ state: "paid_service_failed", chain: "verified", transaction: landed });

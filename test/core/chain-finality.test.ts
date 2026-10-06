@@ -61,7 +61,7 @@ async function deliveredNonFinalPayment() {
   } });
   const q = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
   const attempt = await engine.waitForAttempt(engine.startPayment(q.id).id, 5000);
-  expect(attempt).toMatchObject({ state: "settled", chain: "unchecked", paymentIncluded: true });
+  expect(attempt).toMatchObject({ state: "settled", chain: "verified", chainFinal: false, paymentIncluded: true });
   expect(records.getReceipt(attempt.receiptId!)?.serviceOutcome).toBe("ok");
   return { chain, records, home, attempt };
 }
@@ -78,8 +78,8 @@ it("reports a delivered non-final payment with the 0.3.0 final field and chain_f
   expect(await cliStatus(home, chain.url, attempt.id)).toMatchObject({ state: "settled", chain: "verified", final: true, chain_final: true, exit_code: 0 });
   const finalAttempt = records.getAttempt(attempt.id)!;
   const finalReceipt = records.getReceipt(attempt.receiptId!)!;
-  expect(shownAttempt({ ...finalAttempt, chain_final: undefined })).toMatchObject({ chain: "verified", chain_final: null });
-  expect(shownReceipt({ ...finalReceipt, chain_final: undefined })).toMatchObject({ chain: "verified", chain_final: null });
+  expect(shownAttempt({ ...finalAttempt, chainFinal: undefined })).toMatchObject({ chain: "verified", chain_final: null });
+  expect(shownReceipt({ ...finalReceipt, chainFinal: undefined })).toMatchObject({ chain: "verified", chain_final: null });
 });
 
 it("reports removed non-final delivered inclusion as uncertain, never a terminal service failure", async () => {
@@ -135,13 +135,14 @@ it.each(["unchecked", "mismatch"] as const)("status rechecks provisional payment
   const transaction = chain.settle({ from: PAYER, to: TO, value: "10000", nonce: NONCE });
   chain.finalizedLag = 2;
   const at = new Date().toISOString();
-  const a: Attempt = { id: "a", quoteId: "q", createdAt: at, updatedAt: at, state: "settled", chain: initialChain, transaction, url: "https://seller.example", payer: PAYER, authorizationNonce: NONCE, authorizationValidBefore: new Date((chain.head.timestamp + 300) * 1000).toISOString(), terms: { network: BASE_SEPOLIA.caip2, networkLabel: BASE_SEPOLIA.label, asset: "USDC", assetAddress: BASE_SEPOLIA.usdc.address, amountAtomic: "10000", amountDecimal: 0.01, recipient: TO, scheme: "exact" }, history: [] };
+  const a: Attempt = { id: "a", quoteId: "q", createdAt: at, updatedAt: at, state: "settled", chain: initialChain, ...(initialChain === "mismatch" ? { chainMismatch: "provisional_execution" as const } : {}), transaction, url: "https://seller.example", payer: PAYER, authorizationNonce: NONCE, authorizationValidBefore: new Date((chain.head.timestamp + 300) * 1000).toISOString(), terms: { network: BASE_SEPOLIA.caip2, networkLabel: BASE_SEPOLIA.label, asset: "USDC", assetAddress: BASE_SEPOLIA.usdc.address, amountAtomic: "10000", amountDecimal: 0.01, recipient: TO, scheme: "exact" }, history: [] };
   records.saveAttempt(a);
+  if (initialChain === "mismatch") records.saveReceipt({ id: "a", attemptId: "a", quoteId: "q", at, url: a.url, terms: a.terms, payer: PAYER, transaction, transactionKind: "hash", transactionUrl: "", network: BASE_SEPOLIA.caip2, settlement: { success: true, transaction, network: "eip155:84532" }, chain: "mismatch", chainMismatch: "provisional_execution", serviceOutcome: "ok", serviceStatus: 200, ms: 0 });
   const first = await recheckChain(records, "a", chain.url);
   expect(await cliStatus(dir, chain.url)).toMatchObject({ state: "settled", final: true, chain_final: false, exit_code: 0 });
   chain.receipts.delete(transaction); chain.used.delete(NONCE);
   const second = await recheckChain(records, "a", chain.url);
-  expect(first?.chain).toBe("unchecked"); expect(second?.chain).toBe("unchecked");
+  expect(first).toMatchObject({ chain: "verified", chainFinal: false }); expect(second?.chain).toBe("unchecked");
   expect(second?.state).toBe("uncertain");
   expect(second?.chainReason).toMatch(/do not pay again/i);
   const removed = await cliStatus(dir, chain.url);
@@ -217,9 +218,9 @@ it("rechecks a prior day's landed payment before admitting the next payment unde
   const yesterday = new Date(Date.now() - 86400000).toISOString();
   const transaction = chain.settle({ from: PAYER, to: TO, value: "10000", nonce: NONCE });
   const terms = { network: BASE_SEPOLIA.caip2, networkLabel: BASE_SEPOLIA.label, asset: "USDC", assetAddress: BASE_SEPOLIA.usdc.address, amountAtomic: "10000", amountDecimal: 0.01, recipient: TO, scheme: "exact" };
-  const prior: Attempt = { id: "prior", quoteId: "old-quote", createdAt: yesterday, updatedAt: yesterday, state: "settled", chain: "unchecked", paymentIncluded: true, transaction, url: "https://seller.example", payer: PAYER, authorizationNonce: NONCE, authorizationValidBefore: new Date(Date.now() + 86400000).toISOString(), terms, receiptId: "prior", history: [] };
+  const prior: Attempt = { id: "prior", quoteId: "old-quote", createdAt: yesterday, updatedAt: yesterday, state: "settled", chain: "verified", chainFinal: false, paymentIncluded: true, transaction, url: "https://seller.example", payer: PAYER, authorizationNonce: NONCE, authorizationValidBefore: new Date(Date.now() + 86400000).toISOString(), terms, receiptId: "prior", history: [] };
   records.saveAttempt(prior);
-  records.saveReceipt({ id: "prior", at: yesterday, attemptId: "prior", quoteId: "old-quote", url: prior.url, terms, payer: PAYER, transaction, transactionKind: "hash", transactionUrl: "", network: BASE_SEPOLIA.caip2, settlement: { success: true, transaction, network: "eip155:84532" }, chain: "unchecked", paymentIncluded: true, serviceOutcome: "ok", ms: 0 });
+  records.saveReceipt({ id: "prior", at: yesterday, attemptId: "prior", quoteId: "old-quote", url: prior.url, terms, payer: PAYER, transaction, transactionKind: "hash", transactionUrl: "", network: BASE_SEPOLIA.caip2, settlement: { success: true, transaction, network: "eip155:84532" }, chain: "verified", chainFinal: false, paymentIncluded: true, serviceOutcome: "ok", ms: 0 });
   expect(records.spentToday("USDC")).toBe(0.01);
   const facilitator = await startFacilitator(); cleanup.push(() => facilitator.close());
   const seller = await startPaidEndpoint(facilitator.url); cleanup.push(() => seller.close());
@@ -239,8 +240,8 @@ it("counts an included provisional receipt after UTC midnight even when the sign
   const records = new Records(dir);
   const yesterday = new Date(Date.now() - 86400000).toISOString();
   const terms = { network: BASE_SEPOLIA.caip2, networkLabel: BASE_SEPOLIA.label, asset: "USDC", assetAddress: BASE_SEPOLIA.usdc.address, amountAtomic: "10000", amountDecimal: 0.01, recipient: TO, scheme: "exact" };
-  records.saveAttempt({ id: "a", quoteId: "q", createdAt: yesterday, updatedAt: yesterday, state: "settled", chain: "unchecked", paymentIncluded: true, authorizationValidBefore: yesterday, url: "https://seller.example", terms, receiptId: "a", history: [] });
-  records.saveReceipt({ id: "a", at: yesterday, attemptId: "a", quoteId: "q", url: "https://seller.example", terms, payer: PAYER, transaction: `0x${"ab".repeat(32)}`, transactionKind: "hash", transactionUrl: "", network: BASE_SEPOLIA.caip2, settlement: { success: true, transaction: "", network: "eip155:84532" }, chain: "unchecked", paymentIncluded: true, serviceOutcome: "ok", ms: 0 });
+  records.saveAttempt({ id: "a", quoteId: "q", createdAt: yesterday, updatedAt: yesterday, state: "settled", chain: "verified", chainFinal: false, paymentIncluded: true, authorizationValidBefore: yesterday, url: "https://seller.example", terms, receiptId: "a", history: [] });
+  records.saveReceipt({ id: "a", at: yesterday, attemptId: "a", quoteId: "q", url: "https://seller.example", terms, payer: PAYER, transaction: `0x${"ab".repeat(32)}`, transactionKind: "hash", transactionUrl: "", network: BASE_SEPOLIA.caip2, settlement: { success: true, transaction: "", network: "eip155:84532" }, chain: "verified", chainFinal: false, paymentIncluded: true, serviceOutcome: "ok", ms: 0 });
   expect(records.spentToday("USDC")).toBe(0.01);
 });
 
@@ -261,7 +262,7 @@ it("reports a matching included payment as paid even when the seller says settle
   } });
   const q = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
   const a = await engine.waitForAttempt(engine.startPayment(q.id).id, 5000);
-  expect(a).toMatchObject({ state: "paid_service_failed", chain: "unchecked", paymentIncluded: true });
+  expect(a).toMatchObject({ state: "paid_service_failed", chain: "verified", chainFinal: false, paymentIncluded: true });
   expect(records.getReceipt(a.receiptId!)?.paymentIncluded).toBe(true);
   expect(records.spentToday("USDC")).toBe(0.01);
   chain.receipts.delete(a.transaction!);

@@ -127,6 +127,7 @@ export class PaymentEngine {
       createdAt: at,
       updatedAt: at,
       state: "awaiting_approval",
+      chainFinal: null,
       url: quote.url,
       serviceId: quote.serviceId,
       serviceName: quote.serviceName,
@@ -270,7 +271,7 @@ export class PaymentEngine {
     // Resolve older reported payments before their provisional holds consume another day's cap.
     const day = new Date(this.now()).toISOString().slice(0, 10);
     for (const prior of this.records.listAttempts()) {
-      if ((prior.state === "settled" || prior.state === "paid_service_failed") && prior.chain !== "verified" && prior.chain !== "unpaid" && !prior.createdAt.startsWith(day)) await this.recheckChain(prior.id);
+      if ((prior.state === "settled" || prior.state === "paid_service_failed") && prior.chainFinal !== true && prior.chain !== "unpaid" && !prior.createdAt.startsWith(day)) await this.recheckChain(prior.id);
     }
 
     const currentPolicy = evaluatePolicy(this.policy, {
@@ -599,7 +600,7 @@ export class PaymentEngine {
         serviceStatus: res.status,
         serviceBody: body,
         ...facts,
-        chain: check.chain, chain_final: undefined,
+        ...chainEvidence(check),
         ...(check.included ? { paymentIncluded: true } : {}),
         chainReason: check.reason,
         reason: `the service reported that the payment did not settle, but named transaction ${settlement.transaction}, and the chain does not confirm it is this payment (${check.reason}), so whether it was paid is unknown`,
@@ -616,7 +617,7 @@ export class PaymentEngine {
         serviceStatus: res.status,
         serviceBody: body,
         ...facts,
-        chain: "mismatch",
+        ...chainEvidence(check),
         chainReason: check.reason,
         reason: `the service reported the payment settled, but the chain does not confirm it (${check.reason}), so whether it was paid is unknown`,
       });
@@ -657,7 +658,7 @@ export class PaymentEngine {
       serviceBody: body,
       receiptId: receipt.id,
       ...facts,
-      chain: check.chain, chain_final: check.chain === "verified" ? true : check.included ? false : undefined,
+      ...chainEvidence(check),
       ...(check.included ? { paymentIncluded: true } : {}),
       ...(check.reason ? { chainReason: check.reason } : {}),
       reason: ok
@@ -697,7 +698,7 @@ export class PaymentEngine {
     );
     if (check.chain !== "verified" && !check.included) {
       this.settleState(attempt, "uncertain", {
-        chain: check.chain, chain_final: undefined,
+        ...chainEvidence(check),
         ...(check.included ? { paymentIncluded: true } : {}),
         chainReason: check.reason,
         reason:
@@ -754,7 +755,7 @@ export class PaymentEngine {
       transactionUrl: receipt.transactionUrl,
       ...(res ? { serviceStatus: res.status, serviceBody: body } : {}),
       receiptId: receipt.id,
-      chain: check.chain, chain_final: check.chain === "verified" ? true : check.included ? false : undefined,
+      ...chainEvidence(check),
       ...(check.included ? { paymentIncluded: true } : {}),
       reason: ok
         ? undefined
@@ -990,9 +991,20 @@ export async function recheckChain(records: Records, id: string, rpc?: string | 
     if (processRunning(attempt.runner)) return attempt;
     attempt = await commit(records, attempt, orphaned);
   }
-  if (attempt.state === "uncertain") return reconcile(records, attempt, rail, options);
+  if (terminalMismatch(attempt) || terminalMismatch(receiptOf(records, attempt))) return attempt;
+  if (attempt.chain === "mismatch" && attempt.chainMismatch === "provisional_execution") {
+    const check = attributedCheck(records, attempt, rail, attempt.transaction,
+      await rail.checkPayment({ ...paymentFacts(attempt, attempt.payer ?? ""), transaction: attempt.transaction }, options));
+    if ((check.chain === "verified" || check.included) && attempt.transaction) {
+      const transaction = attempt.transaction;
+      return commit(records, attempt, (r, current) => recordFound(r, current, rail, transaction, check.chain === "verified"));
+    }
+    if (check.chain === "mismatch") return commit(records, attempt, (r, current) => recordChain(r, current, check));
+    if (!check.missing) return attempt;
+  }
+  if (receiptOf(records, attempt)?.chainFinal === true || attempt.state === "uncertain") return reconcile(records, attempt, rail, options);
   if (attempt.state !== "settled" && attempt.state !== "paid_service_failed") return attempt;
-  if (attempt.chain === "verified" || attempt.chain === "unpaid") return attempt;
+  if (attempt.chainFinal === true || attempt.chain === "unpaid") return attempt;
 
   const named = attributedCheck(
     records,
@@ -1002,15 +1014,18 @@ export async function recheckChain(records: Records, id: string, rpc?: string | 
     await rail.checkPayment({ ...paymentFacts(attempt, attempt.payer ?? ""), transaction: attempt.transaction }, options),
   );
   if (named.included) return commit(records, attempt, (r, current) => recordChain(r, current, named));
-  if (attempt.paymentIncluded && named.chain !== "verified") {
+  if ((attempt.chain === "verified" || attempt.paymentIncluded) && named.chain !== "verified") {
     if (!named.missing && named.chain !== "mismatch") return attempt;
+    const second = attributedCheck(records, attempt, rail, attempt.transaction,
+      await rail.checkPayment({ ...paymentFacts(attempt, attempt.payer ?? ""), transaction: attempt.transaction }, options));
+    if (second.chain === "verified" || second.included) return commit(records, attempt, (r, current) => recordChain(r, current, second));
+    if (!second.missing && second.chain !== "mismatch") return attempt;
     return reconcile(records, attempt, rail, options);
   }
   if (named.chain === "verified") return commit(records, attempt, (r, current) => recordChain(r, current, named));
   if (named.chain === "mismatch") {
     // The seller named a transaction that is not this payment. This payment may still be on chain under another one.
-    const contradicted = await commit(records, attempt, (r, current) => recordChain(r, current, named));
-    return reconcile(records, contradicted, rail, options);
+    return reconcile(records, attempt, rail, options, named.reason, named);
   }
   return reconcile(records, { ...attempt, chainReason: named.reason }, rail, options, named.reason);
 }
@@ -1018,7 +1033,7 @@ export async function recheckChain(records: Records, id: string, rpc?: string | 
 /**
  * Write what a chain read decided, under a short lock every status shares: the attempt and its receipt are read again
  * inside it, and the writer applies to them as they are now, not as they were when the chain was read. Writers never
- * undo a newer and stronger word: a payment the chain verified stays verified, whatever an older read says. No chain is
+ * undo a newer and stronger word: a payment with final chain evidence stays final, whatever an older read says. No chain is
  * read while the lock is held. When the lock cannot be taken, nothing is written, and the attempt is returned as it is.
  * A write that fails under the lock (a full disk) is thrown to the caller; a waiting answer it was recording stays for
  * the next status.
@@ -1043,23 +1058,28 @@ async function commit(records: Records, attempt: Attempt, write: (records: Recor
   }
 }
 
-/** Has the chain already verified this attempt's payment (on the attempt, or on its receipt)? Then nothing undoes it. */
-function verifiedPayment(records: Records, attempt: Attempt): boolean {
-  return attempt.chain === "verified" || receiptOf(records, attempt)?.chain === "verified";
+/** Content, final execution and legacy mismatches are terminal. */
+function terminalMismatch(record: Attempt | Receipt | undefined): boolean {
+  return record?.chain === "mismatch" && record.chainMismatch !== "provisional_execution";
+}
+
+/** Final payment evidence cannot be undone by a later read. */
+function finalPayment(records: Records, attempt: Attempt): boolean {
+  return attempt.chainFinal === true || receiptOf(records, attempt)?.chainFinal === true;
 }
 
 /** A paid attempt's chain check, recorded on it and on its receipt; a mismatch makes it uncertain. */
 function recordChain(records: Records, attempt: Attempt, check: ChainCheck): Attempt {
   // Decided from a settled attempt whose chain was unchecked: only that attempt is changed by it.
-  if ((attempt.state !== "settled" && attempt.state !== "paid_service_failed") || attempt.chain === "unpaid") return attempt;
-  if (verifiedPayment(records, attempt)) return attempt;
+  if ((attempt.state !== "settled" && attempt.state !== "paid_service_failed" && !(attempt.state === "uncertain" && attempt.chainMismatch === "provisional_execution")) || attempt.chain === "unpaid") return attempt;
+  if (finalPayment(records, attempt) || terminalMismatch(attempt) || terminalMismatch(receiptOf(records, attempt))) return attempt;
   const receipt = attempt.receiptId ? records.getReceipt(attempt.receiptId) : undefined;
   if (receipt) {
     const { chainReason: _old, ...rest } = receipt;
-    records.saveReceipt({ ...rest, chain: check.chain, chain_final: check.chain === "verified" ? true : check.included ? false : undefined, ...(check.included ? { paymentIncluded: true } : {}), ...(check.reason ? { chainReason: check.reason } : {}) });
+    records.saveReceipt({ ...rest, ...chainEvidence(check), ...(check.included ? { paymentIncluded: true } : {}), ...(check.reason ? { chainReason: check.reason } : {}) });
   }
   const { chainReason: _was, ...kept } = attempt;
-  const updated: Attempt = { ...kept, ...(check.included ? { paymentIncluded: true } : {}), chain: check.chain, chain_final: check.chain === "verified" ? true : check.included ? false : undefined, ...(check.reason ? { chainReason: check.reason } : {}), updatedAt: new Date().toISOString() };
+  const updated: Attempt = { ...kept, ...(check.included ? { paymentIncluded: true } : {}), ...chainEvidence(check), ...(check.reason ? { chainReason: check.reason } : {}), updatedAt: new Date().toISOString() };
   if (check.chain === "mismatch") {
     updated.state = "uncertain";
     updated.reason = `the service reported the payment settled, but the chain does not confirm it (${check.reason}), so whether it was paid is unknown`;
@@ -1091,19 +1111,20 @@ function orphaned(records: Records, attempt: Attempt): Attempt {
  * Look for an attempt's payment by its own identity, and record what the chain says: see recheckChain. `named` is what
  * the transaction a seller named showed, kept as the reason when the search itself could not read the chain.
  */
-async function reconcile(records: Records, attempt: Attempt, rail: RailAdapter, options: ChainReadOptions, named?: string): Promise<Attempt> {
-  // Another status has already found it.
-  if (attempt.chain === "verified") return attempt;
+async function reconcile(records: Records, attempt: Attempt, rail: RailAdapter, options: ChainReadOptions, named?: string, contradiction?: ChainCheck): Promise<Attempt> {
+  // Another status has already observed finality.
+  if (attempt.chainFinal === true || terminalMismatch(attempt) || terminalMismatch(receiptOf(records, attempt))) return attempt;
   // A receipt the chain already verified as this payment (a run that went on after its caller stopped, and read the
   // chain): paid, whatever else is unread.
   const receipt = receiptOf(records, attempt);
-  if (receipt?.chain === "verified" && rail.isTransaction(receipt.transaction)) {
+  if (receipt?.chainFinal === true && rail.isTransaction(receipt.transaction)) {
     const owner = rail.rail === "evm" ? undefined : records.paymentOwner(attempt.terms.network, receipt.transaction, attempt.id);
-    if (!owner) return commit(records, attempt, (r, current) => recordFound(r, current, rail, receipt.transaction, true, receipt.chain_final === true));
+    if (!owner) return commit(records, attempt, (r, current) => recordFound(r, current, rail, receipt.transaction, true));
   }
   // Only an attempt that recorded what ties a transaction to it can be looked for: the nonce, the memo, the signature.
   // (An attempt recorded by an earlier version may have none.)
   if (!rail.findPayment || !attempt.payer || (!attempt.authorizationNonce && !attempt.paymentMemo && !attempt.ownerSignature)) {
+    if (contradiction) return commit(records, attempt, (r, current) => recordChain(r, current, contradiction));
     return named !== undefined ? commit(records, attempt, (r, current) => recordSearch(r, current, named)) : attempt;
   }
   // The transaction to read first: the one the attempt names, or the one its receipt names.
@@ -1118,8 +1139,9 @@ async function reconcile(records: Records, attempt: Attempt, rail: RailAdapter, 
     const reason = `transaction ${found.transaction} is already recorded as the payment of attempt ${owner}`;
     return commit(records, attempt, (r, current) => recordSearch(r, current, reason));
   }
-  if (attempt.paymentIncluded && found.unreadable) return attempt;
-  if (attempt.paymentIncluded) return commit(records, attempt, (r, current) => recordSearch(r, { ...current, state: "uncertain" }, "The earlier payment inclusion was removed; outcome unknown. Do not pay again.", found.searchedToSlot, true));
+  if ((attempt.paymentIncluded || attempt.chain === "verified") && found.unreadable) return attempt;
+  if (attempt.paymentIncluded || attempt.chain === "verified") return commit(records, attempt, (r, current) => recordSearch(r, current, "The earlier payment inclusion was removed; outcome unknown. Do not pay again.", found.searchedToSlot, true));
+  if (contradiction) return commit(records, attempt, (r, current) => recordChain(r, current, contradiction));
   if (found.never) return commit(records, attempt, (r, current) => recordUnpaid(r, current, found.reason));
   const reason = found.unreadable && named ? named : found.reason;
   return commit(records, attempt, (r, current) => recordSearch(r, current, reason, found.searchedToSlot));
@@ -1131,8 +1153,8 @@ async function reconcile(records: Records, attempt: Attempt, rail: RailAdapter, 
  */
 function recordSearch(records: Records, attempt: Attempt, reason: string, searchedToSlot?: number, inclusionRemoved = false): Attempt {
   // Resolved meanwhile (found, or shown never paid): an undecided search says nothing new.
-  if (verifiedPayment(records, attempt) || attempt.chain === "unpaid" || attempt.state === "failed") return attempt;
-  if (attempt.paymentIncluded && attempt.state !== "uncertain") return attempt;
+  if (finalPayment(records, attempt) || terminalMismatch(attempt) || terminalMismatch(receiptOf(records, attempt)) || attempt.chain === "unpaid" || attempt.state === "failed") return attempt;
+  if (attempt.paymentIncluded && attempt.state !== "uncertain" && !inclusionRemoved) return attempt;
   const at = new Date().toISOString();
   // A transaction the seller named that is not this payment stays a mismatch; the reason says what the search found.
   const mismatch = attempt.chain === "mismatch";
@@ -1143,10 +1165,10 @@ function recordSearch(records: Records, attempt: Attempt, reason: string, search
   // A receipt the chain contradicted keeps what the chain said: an undecided search does not undo it.
   if (receipt && !mismatch && receipt.chain !== "mismatch") {
     const { chainReason: _old, paymentIncluded: _included, ...rest } = receipt;
-    records.saveReceipt({ ...rest, chain: "unchecked", chain_final: undefined, chainReason });
+    records.saveReceipt({ ...rest, chain: "unchecked", chainFinal: null, chainReason });
   }
   const further = searchedToSlot !== undefined && searchedToSlot > (attempt.searchedToSlot ?? -1);
-  const updated: Attempt = { ...attempt, chain: mismatch ? "mismatch" : "unchecked", chain_final: undefined, chainReason, ...(further ? { searchedToSlot } : {}), updatedAt: at };
+  const updated: Attempt = { ...attempt, ...(inclusionRemoved ? { state: "uncertain", paymentIncluded: true } : {}), chain: mismatch ? "mismatch" : "unchecked", chainFinal: null, chainReason, ...(further ? { searchedToSlot } : {}), updatedAt: at };
   records.saveAttempt(updated);
   return updated;
 }
@@ -1154,18 +1176,19 @@ function recordSearch(records: Records, attempt: Attempt, reason: string, search
 /**
  * The chain shows this attempt's payment in `transaction`. Paid: with a receipt, or with its receipt corrected to the
  * transaction found (the seller had named another, or none). One payment, one receipt, whatever the seller said. A
- * payment another status already verified is left as it is.
+ * payment another status already finalized is left as it is.
  */
-function recordFound(records: Records, attempt: Attempt, rail: RailAdapter, transaction: string, final = true, finalityKnown = true): Attempt {
-  const check: ChainCheck = final ? { chain: "verified" } : { chain: "unchecked", included: true, reason: "the payment landed, but is not final on chain yet" };
-  if (attempt.chain === "verified") return attempt;
-  const at = new Date().toISOString();
+function recordFound(records: Records, attempt: Attempt, rail: RailAdapter, transaction: string, final = true): Attempt {
+  if (attempt.chainFinal === true || terminalMismatch(attempt) || terminalMismatch(receiptOf(records, attempt))) return attempt;
   const existing = receiptOf(records, attempt);
+  if (existing?.chainFinal === true) { transaction = existing.transaction; final = true; }
+  const check: ChainCheck = final ? { chain: "verified" } : { chain: "unchecked", included: true, reason: "the payment landed, but is not final on chain yet" };
+  const at = new Date().toISOString();
   let receipt: Receipt;
   if (existing) {
     const { chainReason: _old, ...rest } = existing;
     const network = attempt.terms.network;
-    receipt = records.saveReceipt({ ...rest, transaction, transactionKind: "hash", transactionUrl: txUrl(network, transaction), chain: check.chain, chain_final: finalityKnown ? check.chain === "verified" : undefined, ...(check.included ? { paymentIncluded: true, chainReason: check.reason } : {}) });
+    receipt = records.saveReceipt({ ...rest, transaction, transactionKind: "hash", transactionUrl: txUrl(network, transaction), ...chainEvidence(check), ...(check.included ? { paymentIncluded: true, chainReason: check.reason } : {}) });
   } else {
     receipt = records.saveReceipt(
       receiptFor({
@@ -1191,7 +1214,7 @@ function recordFound(records: Records, attempt: Attempt, rail: RailAdapter, tran
     transaction: receipt.transaction,
     transactionUrl: receipt.transactionUrl,
     receiptId: receipt.id,
-    chain: check.chain, chain_final: finalityKnown ? check.chain === "verified" : undefined, ...(check.included ? { paymentIncluded: true, chainReason: check.reason } : {}),
+    ...chainEvidence(check), ...(check.included ? { paymentIncluded: true, chainReason: check.reason } : {}),
     ...(reason ? { reason } : {}),
     updatedAt: at,
     history: [...attempt.history, { at, state, note: `the chain shows this payment in transaction ${transaction}` }],
@@ -1234,10 +1257,13 @@ function servedOn(receipt: Receipt | undefined, attempt: Attempt, flow: RailAdap
 function recordAnswer(records: Records, fresh: Receipt): Receipt {
   const record = records.getAttempt(fresh.attemptId);
   const current = records.getReceipt(fresh.id);
-  if (record?.chain === "unpaid") {
-    return records.saveReceipt({ ...fresh, at: current?.at ?? fresh.at, chain: "unpaid", chain_final: undefined, chainReason: record.chainReason ?? "the chain shows this payment was never made, and it can no longer be" });
+  if (terminalMismatch(record)) {
+    return records.saveReceipt({ ...fresh, at: current?.at ?? fresh.at, chain: "mismatch", chainFinal: null, chainMismatch: record?.chainMismatch, chainReason: record?.chainReason });
   }
-  const receipt = records.saveReceipt(current?.chain === "verified" ? mergedReceipt(current, fresh) : fresh);
+  if (record?.chain === "unpaid") {
+    return records.saveReceipt({ ...fresh, at: current?.at ?? fresh.at, chain: "unpaid", chainFinal: null, chainReason: record.chainReason ?? "the chain shows this payment was never made, and it can no longer be" });
+  }
+  const receipt = records.saveReceipt(current && (current.chain === "verified" || terminalMismatch(current)) ? mergedReceipt(current, fresh) : fresh);
   if (record?.chain === "verified" && (record.state === "settled" || record.state === "paid_service_failed") && (record.receiptId ?? record.id) === receipt.id) {
     const at = new Date().toISOString();
     const { state, reason } = servedOn(receipt, record, railFor(record.terms.network)?.flow ?? "x402");
@@ -1260,8 +1286,10 @@ function recordAnswer(records: Records, fresh: Receipt): Receipt {
  * the seller answered (its report, the service's outcome and answer) is added.
  */
 function mergedReceipt(current: Receipt, fresh: Receipt): Receipt {
+  if (terminalMismatch(current)) return { ...fresh, at: current.at, transaction: current.transaction, transactionKind: current.transactionKind, transactionUrl: current.transactionUrl, chain: "mismatch", chainFinal: null, chainMismatch: current.chainMismatch, chainReason: current.chainReason };
   if (current.chain !== "verified") return fresh;
   const { chainReason: _fresh, ...answer } = fresh;
+  const chainFinal = current.chainFinal === true || (fresh.transaction === current.transaction && fresh.chainFinal === true) ? true : current.chainFinal ?? null;
   return {
     ...answer,
     at: current.at,
@@ -1269,24 +1297,27 @@ function mergedReceipt(current: Receipt, fresh: Receipt): Receipt {
     transactionKind: current.transactionKind,
     transactionUrl: current.transactionUrl,
     chain: "verified",
-    chain_final: current.chain_final,
+    chainFinal,
+    ...(current.paymentIncluded ? { paymentIncluded: true } : {}),
+    ...(chainFinal === false && current.chainReason ? { chainReason: current.chainReason } : {}),
   };
 }
 
 /**
  * The chain shows this attempt's payment was never made, and can no longer be: nothing was paid. The attempt is `failed`
  * with chain "unpaid", and a receipt the seller's report had written is marked so; neither counts against the cap. Never
- * over a payment the chain has verified meanwhile.
+ * over a payment finalized meanwhile.
  */
 function recordUnpaid(records: Records, attempt: Attempt, chainReason: string): Attempt {
-  if (verifiedPayment(records, attempt) || attempt.chain === "unpaid") return attempt;
+  if (finalPayment(records, attempt) || terminalMismatch(attempt) || terminalMismatch(receiptOf(records, attempt)) || attempt.chain === "unpaid") return attempt;
   const at = new Date().toISOString();
   const receipt = receiptOf(records, attempt);
-  if (receipt) records.saveReceipt({ ...receipt, chain: "unpaid", chain_final: undefined, chainReason });
+  if (receipt) records.saveReceipt({ ...receipt, chain: "unpaid", chainFinal: null, chainReason });
   const updated: Attempt = {
     ...attempt,
     state: "failed",
     chain: "unpaid",
+    chainFinal: null,
     chainReason,
     reason: receipt
       ? "the service reported this payment settled, but the chain shows it was never made, and it can no longer be"
@@ -1372,8 +1403,7 @@ function receiptFor(input: {
       network: settlement.network,
       errorReason: settlement.errorReason,
     },
-    chain: input.check.chain,
-    chain_final: input.check.chain === "verified" ? true : input.check.included ? false : undefined,
+    ...chainEvidence(input.check),
     ...(input.check.included ? { paymentIncluded: true } : {}),
     ...(input.check.reason ? { chainReason: input.check.reason } : {}),
     serviceOutcome: input.serviceOutcome,
@@ -1445,13 +1475,16 @@ export function shownPayer(payer: string | undefined, network?: string): string 
   return isAddressOn(network ?? "", payer) ? payer : undefined;
 }
 
-export function paymentOutput(record: Attempt | Receipt) {
-  const paid = !("state" in record) || record.state === "settled" || record.state === "paid_service_failed";
-  const matching = paid && (record.chain === "verified" || record.chain === "unchecked" && record.paymentIncluded === true);
+function chainEvidence(check: ChainCheck): Pick<Attempt, "chain" | "chainFinal" | "chainMismatch"> {
   return {
-    chain: matching ? "verified" as const : record.chain,
-    chain_final: matching ? record.chain_final ?? (record.chain === "unchecked" ? false : null) : null,
+    chain: check.included ? "verified" : check.chain,
+    chainFinal: check.chain === "verified" ? true : check.included ? false : null,
+    chainMismatch: check.chain === "mismatch" ? check.mismatchKind ?? "content" : undefined,
   };
+}
+
+export function paymentOutput(record: Attempt | Receipt) {
+  return { chain: record.chain, chain_final: record.chain === "verified" ? record.chainFinal ?? null : null };
 }
 
 /**
@@ -1459,11 +1492,11 @@ export function paymentOutput(record: Attempt | Receipt) {
  * seller's own text (its answer and its reason) moved under `untrusted_seller_data`, together with any transaction,
  * link or payer the record holds that did not pass the check (a record from an earlier version may).
  */
-export function shownAttempt(attempt: Attempt): Omit<Attempt, "serviceBody" | "serviceReason"> & {
+export function shownAttempt(attempt: Attempt): Omit<Attempt, "serviceBody" | "serviceReason" | "chainFinal"> & {
   chain_final: boolean | null;
   untrusted_seller_data?: { serviceBody?: string; serviceReason?: string; transaction?: string; transactionUrl?: string; payer?: string };
 } {
-  const { serviceBody, serviceReason, transaction, transactionUrl, payer, ...rest } = attempt;
+  const { serviceBody, serviceReason, transaction, transactionUrl, payer, chainFinal: _finality, ...rest } = attempt;
   const tx = shownTransaction(transaction, attempt.terms.network);
   const checkedPayer = shownPayer(payer, attempt.terms.network);
   const untrusted = {
@@ -1487,12 +1520,12 @@ export function shownAttempt(attempt: Attempt): Omit<Attempt, "serviceBody" | "s
  * rebuilt from the checked network), and the network the client checked. The seller's settlement report, as it was
  * received, is kept under `untrusted_seller_report`, so nothing a seller wrote sits in a field that reads as checked.
  */
-export function shownReceipt(receipt: Receipt): Omit<Receipt, "settlement"> & {
+export function shownReceipt(receipt: Receipt): Omit<Receipt, "settlement" | "chainFinal"> & {
   chain_final: boolean | null;
   settlement: { success: boolean; transaction: string; payer: string; network: string };
   untrusted_seller_report: Receipt["settlement"];
 } {
-  const { settlement, ...rest } = receipt;
+  const { settlement, chainFinal: _finality, ...rest } = receipt;
   const tx = shownTransaction(receipt.transaction, receipt.terms.network);
   const payer = shownPayer(receipt.payer, receipt.terms.network) ?? "";
   return {
