@@ -39,7 +39,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
     expect(top).toMatch(/using test USDC or test pathUSD\. Testnet only\. Budgets let the owner grant[^\n]*Single purchase lets the owner approve one purchase/);
     const ask = skill.indexOf("## First, ask the owner what they would like to try");
     expect(ask).toBeGreaterThan(0);
-    expect(skill).toContain('"This uses test USDC, no real money. Would you like one purchase you approve, or a budget?"');
+    expect(skill).toContain('"This uses test tokens, no real money. Would you like a budget or a single purchase you approve?"');
     expect(skill.indexOf("references/once.md", ask)).toBeGreaterThan(ask);
     expect(skill).toMatch(/superstables budget buy-once/);
     expect(skill).toMatch(/superstables budget find --once/);
