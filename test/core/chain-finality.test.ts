@@ -80,7 +80,7 @@ it("reports removed non-final delivered inclusion as uncertain, never a terminal
   const result = await cliStatus(home, chain.url, attempt.id);
   expect(result).toMatchObject({ state: "uncertain", chain: "unchecked", final: false, exit_code: 5 });
   expect(result.next).toMatch(/do not pay again/i);
-  expect(result.chain_reason).toMatch(/earlier payment inclusion/i);
+  expect(result.chain_reason).toBe("The earlier payment inclusion was removed; outcome unknown. Do not pay again.");
   expect(records.getReceipt(attempt.receiptId!)?.chainReason).toMatch(/do not pay again/i);
   expect(records.spentToday("USDC")).toBe(0.01);
 });
@@ -115,7 +115,7 @@ it.each(["block hash changed", "log removed"])("reports a successful read showin
   } };
   expect(await recheckChain(records, attempt.id, options)).toMatchObject({ state: "uncertain", chain: "unchecked", paymentIncluded: true });
   expect(records.getReceipt(attempt.receiptId!)?.paymentIncluded).toBeUndefined();
-  expect(records.getReceipt(attempt.receiptId!)?.chainReason).toMatch(/Do not pay again\. [A-Z]/);
+  expect(records.getReceipt(attempt.receiptId!)?.chainReason).toBe("The earlier payment inclusion was removed; outcome unknown. Do not pay again.");
   expect(records.spentToday("USDC")).toBe(0.01);
 });
 it.each(["unchecked", "mismatch"] as const)("status rechecks provisional payment after a reorg removes its receipt, initially %s", async (initialChain) => {

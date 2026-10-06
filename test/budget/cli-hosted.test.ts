@@ -938,7 +938,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
     expect(done.code, done.stderr).toBe(0);
     expect(done.result).toMatchObject({
-      ok: true, command: "setup", state: "ok", final: true, owner: OWNER, agent: AGENT, approvals: "hosted", site: site.url, linked: true,
+      ok: true, command: "setup", state: "ok", complete: true, final: false, owner: OWNER, agent: AGENT, approvals: "hosted", site: site.url, linked: true,
       amount: "0.01", remaining: "0.01", tx: { fundAgent: FUND_HASH, grant: GRANT_HASH },
       steps: [{ kind: "fund_agent", state: "settled", tx: FUND_HASH, amount: "0.0001" }, { kind: "grant", state: "settled", tx: GRANT_HASH, amount: "0.01" }],
     });
@@ -1004,7 +1004,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
     expect(done.code, done.stderr).toBe(3);
     expect(done.result).toMatchObject({
-      ok: false, state: "refused_precheck", final: true, owner: OWNER, linked: true, approvals: "hosted", tx: { fundAgent: FUND_HASH },
+      ok: false, state: "refused_precheck", complete: true, final: false, owner: OWNER, linked: true, approvals: "hosted", tx: { fundAgent: FUND_HASH },
       steps: [{ kind: "fund_agent", state: "settled", tx: FUND_HASH }, { kind: "grant", state: "refused_precheck", reasonCode: "owner_rejected" }],
     });
     // the site's code in the client's words; the site's own sentence is not repeated

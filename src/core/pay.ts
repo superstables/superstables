@@ -1119,7 +1119,7 @@ async function reconcile(records: Records, attempt: Attempt, rail: RailAdapter, 
     return commit(records, attempt, (r, current) => recordSearch(r, current, reason));
   }
   if (attempt.paymentIncluded && found.unreadable) return attempt;
-  if (attempt.paymentIncluded) return commit(records, attempt, (r, current) => recordSearch(r, { ...current, state: "uncertain" }, "The earlier payment inclusion was removed; outcome unknown. Do not pay again.", found.searchedToSlot));
+  if (attempt.paymentIncluded) return commit(records, attempt, (r, current) => recordSearch(r, { ...current, state: "uncertain" }, "The earlier payment inclusion was removed; outcome unknown. Do not pay again.", found.searchedToSlot, true));
   if (found.never) return commit(records, attempt, (r, current) => recordUnpaid(r, current, found.reason));
   const reason = found.unreadable && named ? named : found.reason;
   return commit(records, attempt, (r, current) => recordSearch(r, current, reason, found.searchedToSlot));
@@ -1129,7 +1129,7 @@ async function reconcile(records: Records, attempt: Attempt, rail: RailAdapter, 
  * Not found yet, or the chain could not say: the attempt keeps its state, with the chain's latest answer, and how far a
  * Solana search read the blocks the payment could have landed in (never less far than another search already had).
  */
-function recordSearch(records: Records, attempt: Attempt, reason: string, searchedToSlot?: number): Attempt {
+function recordSearch(records: Records, attempt: Attempt, reason: string, searchedToSlot?: number, inclusionRemoved = false): Attempt {
   // Resolved meanwhile (found, or shown never paid): an undecided search says nothing new.
   if (verifiedPayment(records, attempt) || attempt.chain === "unpaid" || attempt.state === "failed") return attempt;
   if (attempt.paymentIncluded && attempt.state !== "uncertain") return attempt;
@@ -1137,7 +1137,7 @@ function recordSearch(records: Records, attempt: Attempt, reason: string, search
   // A transaction the seller named that is not this payment stays a mismatch; the reason says what the search found.
   const mismatch = attempt.chain === "mismatch";
   const detail = reason.charAt(0).toUpperCase() + reason.slice(1);
-  const observation = attempt.paymentIncluded ? `The earlier payment inclusion could not be verified; outcome unknown. Do not pay again. ${detail}` : reason;
+  const observation = attempt.paymentIncluded && !inclusionRemoved ? `The earlier payment inclusion could not be verified; outcome unknown. Do not pay again. ${detail}` : reason;
   const chainReason = mismatch ? `the transaction the service named is not this payment; ${observation}` : observation;
   const receipt = receiptOf(records, attempt);
   // A receipt the chain contradicted keeps what the chain said: an undecided search does not undo it.

@@ -417,7 +417,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const first = await once();
     const second = await once();
     expect(second.code).toBe(3);
-    expect(second.result).toMatchObject({ state: "refused_pending", final: true, paid: null, delivered: null, amount: null, pending: { id: first.result.id, state: "waiting_owner", url: first.result.url, matchCode: "KPT-RWD" } });
+    expect(second.result).toMatchObject({ state: "refused_pending", complete: true, final: false, paid: null, delivered: null, amount: null, pending: { id: first.result.id, state: "waiting_owner", url: first.result.url, matchCode: "KPT-RWD" } });
     expect(second.result.id).toBeUndefined();
     expect(second.result.reason).toMatch(/^no new purchase was started: /);
     expect(second.result.next).toMatch(new RegExp(`superstables budget wait --id ${first.result.id}`));
@@ -627,7 +627,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     Object.assign(site.purchases[0], { state: "uncertain", final: false, payment: { status: "unknown" } });
     const given = await budget(["wait", "--id", first.result.id, "--abandon"]);
     expect(given.code).toBe(5);
-    expect(given.result).toMatchObject({ state: "unknown", final: true, paid: null, delivered: null, amount: null, id: first.result.id });
+    expect(given.result).toMatchObject({ state: "unknown", complete: true, final: false, paid: null, delivered: null, amount: null, id: first.result.id });
     expect(Date.parse(given.result.abandonedAt)).toBeGreaterThan(Date.now() - 60_000);
     expect(given.stderr).toMatch(/Whether a payment left is unknown/);
     // the record stays, without its access token, with the final answer
