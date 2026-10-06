@@ -44,14 +44,14 @@ describe("skills/superstables-payments/SKILL.md", () => {
     expect(skill).toMatch(/superstables budget buy-once/);
     expect(skill).toMatch(/superstables budget find --once/);
     expect(skill).toMatch(/setup --rail evm --hosted/);
-    // a first budget goes to Base Sepolia, where most budget services (Superstables' market data among them) are; a network
+    // a first budget goes to Base Sepolia, where most budget services (Superstables' market data among them) are; a chain
     // is proposed for a particular service only after checking that the service takes a budget there
-    expect(skill).toMatch(/use the network the owner named; otherwise propose Base Sepolia/);
+    expect(skill).toMatch(/use the chain the owner named; otherwise propose Base Sepolia/);
     expect(skill).toMatch(/before you propose it or set it up, even one the owner chose/);
-    expect(skill).toMatch(/do not switch networks without their agreement/);
+    expect(skill).toMatch(/do not switch chains without their agreement/);
     expect(skill).not.toMatch(/Base Sepolia or Arc Testnet/);
     expect(skill).toMatch(/superstables budget find --chain C` lists it/);
-    expect(skill).toMatch(/superstables budget preflight --rail R --chain C --url U` \(R: the rail of that network\)/);
+    expect(skill).toMatch(/superstables budget preflight --rail R --chain C --url U` \(R: the rail of that chain\)/);
     expect(skill).not.toMatch(/preflight --chain C`/);
     // local approval stays the default; an owner sent by superstables.com's setup page is offered the site first
     expect(skill).toMatch(/on this machine, with no account \(the default\)/);
@@ -70,8 +70,8 @@ describe("skills/superstables-payments/SKILL.md", () => {
     const budget = ref("references/budget.md");
     expect(budget).toMatch(/Offer Single purchase on superstables.com only if that service is in `superstables budget find --once`/);
     expect(budget).toMatch(/say the budget is spent and end your turn/);
-    expect(budget).toMatch(/## A hosted budget on superstables\.com/);
-    expect(budget).toMatch(/Use the network the owner named; otherwise propose Base Sepolia/);
+    expect(budget).toMatch(/## A budget on superstables\.com/);
+    expect(budget).toMatch(/Use the chain the owner named; otherwise propose Base Sepolia/);
     expect(budget).toMatch(/before you propose it or set it up, even one the owner chose/);
     expect(budget).toMatch(/offer them only if the owner asks, or if the service the budget is for takes a budget there and you checked it/);
     expect(budget).toMatch(/Offer approval on superstables\.com first if its setup page \(`start\.md`\) brought you here/);
