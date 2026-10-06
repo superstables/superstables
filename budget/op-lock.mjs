@@ -18,27 +18,34 @@ function durableRecord(path, text) {
 }
 function liveness(owner, options = {}) {
   const local = identity(options);
-  if (owner.platform !== local.platform) return { state: 'unverifiable', why: owner.platform ? 'another OS' : 'missing host identity' };
+  let why;
+  if (owner.platform && owner.platform !== local.platform) return { state: 'unverifiable', why: 'another OS' };
+  if (!owner.platform) why = 'missing host identity';
   if (['linux', 'darwin'].includes(local.platform)) {
     // A matching per-boot UUID identifies both the machine and the boot. DHCP names and clock corrections do not.
-    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(local.bootId ?? '') || typeof owner.bootId !== 'string' || owner.bootId.toLowerCase() !== local.bootId.toLowerCase()) return { state: 'unverifiable', why: owner.hostname !== local.hostname ? 'another host' : 'another or unknown boot' };
-  } else if (owner.hostname !== local.hostname) return { state: 'unverifiable', why: 'another host' };
-  if (local.platform === 'linux' && (!local.namespace || owner.namespace !== local.namespace)) return { state: 'unverifiable', why: 'another or unknown container' };
-  let unknown = false;
+    const uuid = value => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value ?? '');
+    if (uuid(local.bootId) && uuid(owner.bootId)) {
+      if (owner.bootId.toLowerCase() !== local.bootId.toLowerCase()) return { state: 'unverifiable', why: owner.hostname !== local.hostname ? 'another host' : 'another or unknown boot' };
+    } else why ??= 'another or unknown boot';
+  } else if (owner.hostname !== local.hostname) why ??= 'unknown host';
+  if (local.platform === 'linux' && (!local.namespace || owner.namespace !== local.namespace)) why ??= 'another or unknown container';
+  let unknown = Boolean(why);
   for (const [pid, start] of [[owner.pid, preferredProcessStart(owner.pidStart, owner.pidStartUtc)], [owner.railPid, preferredProcessStart(owner.railPidStart, owner.railPidStartUtc)]]) {
     if (pid === undefined) continue;
     if (!Number.isSafeInteger(pid) || pid <= 0) { unknown = true; continue; }
     const current = source(options).start(pid);
-    if (!['linux', 'darwin'].includes(local.platform) && (current === undefined || typeof start !== 'string')) { unknown = true; continue; }
+    const unreadable = Boolean(why) || current === undefined || current === null || typeof start !== 'string' || compareProcessStarts(start, current) === undefined;
+    if (!why && typeof current === 'string' && typeof start === 'string' && compareProcessStarts(start, current) === false) continue;
+    if (!['linux', 'darwin'].includes(local.platform) && unreadable) unknown = true;
     if (typeof start === 'string' && compareProcessStarts(start, current) === undefined) unknown = true;
-    if (typeof current === 'string' && typeof start === 'string' && compareProcessStarts(start, current) === false) continue;
-    try { source(options).probe(pid); return { state: 'alive' }; }
+    const possiblyAlive = () => ({ state: 'alive', ...(unreadable ? { why: 'unreadable process identity', possiblyAlive: true, pid } : {}) });
+    try { source(options).probe(pid); return possiblyAlive(); }
     catch (err) {
-      if (err.code === 'EPERM') return { state: 'alive' };
-      if (err.code !== 'ESRCH') unknown = true;
+      if (err.code === 'EPERM') return possiblyAlive();
+      if (err.code !== 'ESRCH') return { state: 'alive', why: 'unreadable process identity or PID probe', possiblyAlive: true, pid };
     }
   }
-  return unknown ? { state: 'unverifiable', why: 'unreadable process identity' } : { state: 'dead' };
+  return unknown ? { state: 'unverifiable', why: why ?? 'unreadable process identity' } : { state: 'dead' };
 }
 const fileVersion = stat => `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.size}`;
 function holder(path, options = {}) {
@@ -61,7 +68,9 @@ function busy(path, current = holder(path), agent = true) {
   const owner = current?.owner;
   const created = Number.isFinite(owner?.createdAt) ? new Date(owner.createdAt) : null;
   const time = created && !Number.isNaN(created.getTime()) ? created.toISOString() : 'an unknown time';
-  const details = current?.state === 'alive'
+  const details = current?.possiblyAlive
+    ? `possibly live holder process ${current.pid} since ${time}: ${current.why}; the holder may still be running; the owner must stop that process or run unlock outside the sandbox where process identity can be read`
+    : current?.state === 'alive'
     ? `held by process ${current.pid} since ${time}; wait for its RESULT or ask the owner to check it`
     : current?.directory
       ? 'unrecognised directory in the lock or takeover mutex; the owner must inspect and remove this directory after stopping all work on this op'
@@ -134,6 +143,7 @@ function breakStale(path, stale, options) {
       // The warning can block on terminal output while the old holder releases and a new one publishes.
       const afterWarning = holder(path, options);
       if (!afterWarning || afterWarning.version !== current.version || afterWarning.text !== current.text) { changed = true; return; }
+      if (afterWarning.state === 'alive') { changed = true; return; }
       // Process inspection may spawn ps. Recheck the file after that work, immediately before unlink.
       try {
         if ((afterWarning.text !== null && readFileSync(path, 'utf8') !== afterWarning.text) || fileVersion(lstatSync(path)) !== afterWarning.version) { changed = true; return; }

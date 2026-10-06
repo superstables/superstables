@@ -37,12 +37,13 @@ export function processStart(pid: number): string | null | undefined {
   try {
     stat = readFileSync(`/proc/${pid}/stat`, "utf8");
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
+    const code = err instanceof Error && 'code' in err ? err.code : undefined;
     return code === "ENOENT" || code === "ESRCH" ? null : undefined;
   }
   // the command name (field 2) is in parentheses and may hold spaces or ')': fields are counted after the last ')'
   const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]; // field 22, starttime
-  return /^\d+$/.test(start ?? "") ? `linux:${linuxBootId()}:${start}` : undefined;
+  const boot = linuxBootId();
+  return boot && /^\d+$/.test(start ?? "") ? `linux:${boot}:${start}` : undefined;
 }
 
 function pidAlive(pid: number): boolean {
@@ -51,7 +52,7 @@ function pidAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    return !(err instanceof Error && 'code' in err && err.code === "ESRCH");
   }
 }
 
@@ -60,7 +61,7 @@ function sameProcess(pid: number, start: string | null | undefined): boolean {
   if (!pid) return false;
   if (!start) return pidAlive(pid);
   const now = processStart(pid);
-  if (now === undefined) return pidAlive(pid);
+  if (now === undefined || now === null) return pidAlive(pid);
   return now === start;
 }
 

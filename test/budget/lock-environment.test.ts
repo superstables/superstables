@@ -9,6 +9,7 @@ const root = resolve(process.env.BUDGET_RACE_ROOT ?? join(import.meta.dirname, '
 const procs = await import(join(root, 'budget/procs.mjs'));
 const { createIdentitySource } = await import(join(root, 'budget/lock-identity.mjs'));
 const { lockFile } = await import(join(root, 'budget/op-lock.mjs'));
+const psReadable = typeof procs.processStart(process.pid, 'darwin') === 'string';
 const helper = join(import.meta.dirname, '../helpers/budget-identity-worker.mjs');
 const preload = join(root, 'test/helpers/budget-macos-identity.mjs');
 const homes: string[] = [];
@@ -87,22 +88,25 @@ it('never automatically clears a legacy macOS start mismatch even with a matchin
 });
 it('rechecks the lock after the override warning so a normally released holder and its successor survive', () => {
   const b = box();
-  const old = lockFile(b.path); expect(old.ok).toBe(true);
-  const real = createIdentitySource();
-  const foreign = { ...real, record: () => ({ ...real.record(), bootId: 'another-boot' }) };
+  const system = createIdentitySource();
+  const real = { ...system, record: () => ({ ...system.record(), bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', namespace: 'pid:[test]' }) };
+  const old = lockFile(b.path, { identitySource: real }); expect(old.ok).toBe(true);
+  const foreign = { ...real, record: () => ({ ...real.record(), bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7b' }) };
   let successor: ReturnType<typeof lockFile> | undefined;
   const result = lockFile(b.path, { identitySource: foreign, confirmUnverifiable: true, onOverride: () => {
     if (old.ok) old.release();
-    successor = lockFile(b.path); expect(successor.ok).toBe(true);
+    successor = lockFile(b.path, { identitySource: real }); expect(successor.ok).toBe(true);
   } });
   try {
     expect(result.ok).toBe(false);
+    expect(successor?.ok).toBe(true);
     expect(JSON.parse(readFileSync(b.path, 'utf8')).bootId).toBe(real.record().bootId);
-    expect(lockFile(b.path).ok).toBe(false);
+    expect(lockFile(b.path, { identitySource: real }).ok).toBe(false);
   } finally { if (result.ok) result.release(); if (successor?.ok) successor.release(); if (old.ok) old.release(); }
 });
 for (const [holderTZ, contenderTZ] of [['UTC', 'America/Los_Angeles'], ['Asia/Tokyo', 'UTC'], ['America/Los_Angeles', 'Asia/Tokyo']]) {
-  it(`protects the real-ps macOS holder in ${holderTZ} from takeover and unlock in ${contenderTZ}`, async () => {
+  it(`protects the real-ps macOS holder in ${holderTZ} from takeover and unlock in ${contenderTZ}`, async (context) => {
+    if (!psReadable) context.skip('mixed-time-zone identity requires ps; blocked-identity safety still runs in lock-sandbox.test.ts');
     const b = box();
     const holder = spawn(process.execPath, ['--import', preload, helper, root, b.path, 'hold'], { env: { ...process.env, TZ: holderTZ }, stdio: ['ignore', 'pipe', 'pipe'] });
     try {
@@ -167,7 +171,8 @@ it.each(['record', 'inode'])('preserves a replacement %s published during the fi
   } finally { if (result.ok) result.release(); }
 });
 
-it('approval and group readers prefer numeric UTC seconds over the legacy start field', async () => {
+it('approval and group readers prefer numeric UTC seconds over the legacy start field', async (context) => {
+  if (!psReadable) context.skip('numeric UTC start identity requires ps; blocked-identity readers still run in lock-sandbox.test.ts');
   const r = spawn(process.execPath, ['--import', preload, '--input-type=module', '-e', `
     import { processStartFields, sameProcess, groupAlive } from ${JSON.stringify(join(root, 'budget/procs.mjs'))};
     import { alive, groupAlive as approvalGroup, processesAlive } from ${JSON.stringify(join(root, 'budget/approvals.mjs'))};

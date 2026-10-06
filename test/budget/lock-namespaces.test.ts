@@ -68,18 +68,21 @@ describe.runIf(process.platform === 'linux')('real PID namespace ownership', () 
     await waitFor(() => !existsSync(b.path));
     expect(tryLock(b)).toBe(true);
   });
-  it('requires confirmed owner override for a foreign holder and preserves its successor on release', async () => {
+  it('refuses confirmed owner override for a foreign holder with a live local PID collision', async () => {
     const b = box(); const old = await hold(b);
     writeFileSync(join(b.dir, 'paid-op.json'), '{"state":"settled"}');
-    const r = unlock(b); expect(r.status, r.stderr).toBe(0); expect(r.stderr).toContain('overriding unverifiable lock');
-    const successor = locks.lockFile(b.path); expect(successor.ok).toBe(true);
     const text = readFileSync(b.path, 'utf8');
-    old.p.stdin?.write('release\n'); await sleep(200);
+    const r = unlock(b); expect(r.status, r.stderr).toBe(5); expect(r.stdout).toContain('op_in_progress');
+    expect(r.stdout).toContain('holder may still be running'); expect(r.stderr).not.toContain('overriding unverifiable lock');
     expect(readFileSync(b.path, 'utf8')).toBe(text); expect(tryLock(b)).toBe(false);
+    old.p.stdin?.write('release\n'); await sleep(200);
+    expect(existsSync(b.path)).toBe(false);
+    const successor = locks.lockFile(b.path); expect(successor.ok).toBe(true);
     if (successor.ok) successor.release();
   });
   it('does not infer foreign death after the namespace holder exits', async () => {
     const b = box(); const holder = await hold(b); process.kill(holder.pid, 'SIGKILL'); await sleep(100);
-    expect(tryLock(b, 86400000)).toBe(false); expect(unlock(b).status).toBe(0); expect(existsSync(b.path)).toBe(false);
+    const text = readFileSync(b.path, 'utf8');
+    expect(tryLock(b, 86400000)).toBe(false); expect(unlock(b).status).toBe(5); expect(readFileSync(b.path, 'utf8')).toBe(text);
   });
 });
