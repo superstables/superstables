@@ -114,9 +114,12 @@ it.runIf(process.platform === 'linux')('legacycap.sh: recovers a killed 0.3.0/0.
   const child = spawn('sleep', ['60']); children.add(child);
   const identity = createIdentitySource();
   if (!child.pid) throw new Error('no child pid');
-  writeFileSync(b.cap, JSON.stringify({ pid: child.pid, pidStart: identity.start(child.pid), owner: 'legacy' }));
+  const legacy = JSON.stringify({ pid: child.pid, pidStart: identity.start(child.pid), owner: 'legacy' });
+  writeFileSync(b.cap, legacy); writeFileSync(b.cap + '.break', legacy);
   child.kill('SIGKILL'); await once(child, 'exit'); children.delete(child);
   expect(await withFileLock(b.cap, () => 'recovered', 100)).toBe('recovered');
+  writeFileSync(b.cap, legacy); writeFileSync(b.cap + '.break', legacy);
+  expect(unlock(b.home, ['--cap'], { unverified: false, answer: 'payment-lock\n' }).status).toBe(0);
 });
 it.runIf(process.platform === 'linux')('nomachineid.sh: killed holders recover in the same kernel and namespace without machine-id', () => {
   const b = box(), empty = join(b.home, 'empty'); writeFileSync(empty, '');

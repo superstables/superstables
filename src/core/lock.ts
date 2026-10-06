@@ -64,7 +64,7 @@ async function acquire(path: string, me: string, deadline: number, breakDead?: (
         if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       }
       const { text, holder } = readHolder(path);
-      if (text !== null && holder && (path.endsWith("cap.lock") && !holder.bootId ? inspectLegacyCap(holder).state === "dead" : !sameProcess(Number(holder.pid), holder.pidStart, holder.pidStartUtc, holder))) {
+      if (text !== null && holder && ((path.endsWith("cap.lock") || path.endsWith("cap.lock.break")) && !holder.bootId ? inspectLegacyCap(holder).state === "dead" : !sameProcess(Number(holder.pid), holder.pidStart, holder.pidStartUtc, holder))) {
         if (breakDead) await breakDead(text);
         else removeIfSame(path, text);
       } else if (Date.now() >= deadline) {

@@ -34,15 +34,16 @@ function permitted(check, options) {
 export function withRecoveryMutex(path, work, options) {
   const me = JSON.stringify({ ...identity.record(), owner: randomUUID() });
   const mine = `${path}.${randomUUID()}.tmp`;
+  const inspect = text => inspectLockText(text, path.endsWith('cap.lock.break'));
   writeFileSync(mine, me, { mode: 0o600, flag: 'wx' });
   try {
     try { linkSync(mine, path); }
     catch (err) {
       if (err.code !== 'EEXIST') throw err;
       const before = snapshot(path);
-      if (!before || before.text === null || !permitted(inspectLockText(before.text), options) || !unchanged(path, before)) return false;
+      if (!before || before.text === null || !permitted(inspect(before.text), options) || !unchanged(path, before)) return false;
       // Recheck liveness after a notice that may block, then check the generation immediately before unlink.
-      if (!permitted(inspectLockText(before.text), options) || !unchanged(path, before)) return false;
+      if (!permitted(inspect(before.text), options) || !unchanged(path, before)) return false;
       unlinkSync(path);
       try { linkSync(mine, path); } catch (err) { if (err.code === 'EEXIST') return false; throw err; }
     }
