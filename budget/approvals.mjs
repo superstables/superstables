@@ -35,7 +35,7 @@ import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFi
 import { join } from "node:path";
 import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
 import { createIdentitySource, inspectProcess, visiblePid } from '../src/core/process-identity.mjs';
-import { clearFileLock, inspectLockText } from '../src/core/owner-recovery.mjs';
+import { clearFileLock, inspectLockText, paymentBusy } from '../src/core/owner-recovery.mjs';
 import { groupAlive as groupOf, sameProcess } from "./procs.mjs";
 import { cancelSiteRequest, readSiteRequest, siteWord } from "./site.mjs";
 
@@ -178,9 +178,9 @@ function acquireSync(path, me, deadline, breakDead) {
       }
       if (Date.now() >= deadline) {
         throw new Error(holder
-          ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}, which is still running`
+          ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}${inspectProcess(holder).possiblyAlive ? "; " + paymentBusy : ", which is still running"}`
           : text === null ? `the lock ${path} could not be taken in time`
-            : `the lock ${path} cannot be read; if no superstables budget command is running, remove it`);
+            : `the lock ${path} cannot be read; ${paymentBusy}`);
       }
       pauseSync(LOCK_RETRY_MS);
     }
@@ -396,7 +396,7 @@ function lockHeld(lock) {
 
 /** What a refusal can say about the holder: its record, or what the lock alone knows while it starts. */
 const holderOf = (lock, rail, chain) => lock.unreadable
-  ? { id: "unknown", rail, chain, command: `an unreadable lock (${lock.unreadable}); if no superstables budget command is running, remove that file` }
+  ? { id: "unknown", rail, chain, command: `an unreadable lock (${lock.unreadable}); ${paymentBusy}` }
   : readApproval(lock.id) ?? { id: lock.id, rail, chain, command: "an owner command (starting)" };
 
 /** The approval that holds this rail and chain, or null. */
