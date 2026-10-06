@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, fstatSync, fsyncSync, futimesSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createIdentitySource } from './lock-identity.mjs';
+import { compareProcessStarts } from './procs.mjs';
 import { dirname, join } from 'node:path';
 
 export const HEARTBEAT_MS = 15_000;
@@ -18,8 +19,10 @@ function durableRecord(path, text) {
 function liveness(owner, options = {}) {
   const local = identity(options);
   if (owner.platform !== local.platform) return { state: 'unverifiable', why: owner.platform ? 'another OS' : 'missing host identity' };
-  if (owner.hostname !== local.hostname) return { state: 'unverifiable', why: 'another host' };
-  if (['linux', 'darwin'].includes(local.platform) && (!local.bootId || owner.bootId !== local.bootId)) return { state: 'unverifiable', why: 'another or unknown boot' };
+  if (['linux', 'darwin'].includes(local.platform)) {
+    // A matching per-boot UUID identifies both the machine and the boot. DHCP names and clock corrections do not.
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(local.bootId ?? '') || typeof owner.bootId !== 'string' || owner.bootId.toLowerCase() !== local.bootId.toLowerCase()) return { state: 'unverifiable', why: owner.hostname !== local.hostname ? 'another host' : 'another or unknown boot' };
+  } else if (owner.hostname !== local.hostname) return { state: 'unverifiable', why: 'another host' };
   if (local.platform === 'linux' && (!local.namespace || owner.namespace !== local.namespace)) return { state: 'unverifiable', why: 'another or unknown container' };
   let unknown = false;
   for (const [pid, start] of [[owner.pid, owner.pidStart], [owner.railPid, owner.railPidStart]]) {
@@ -27,7 +30,8 @@ function liveness(owner, options = {}) {
     if (!Number.isSafeInteger(pid) || pid <= 0) { unknown = true; continue; }
     const current = source(options).start(pid);
     if (!['linux', 'darwin'].includes(local.platform) && (current === undefined || typeof start !== 'string')) { unknown = true; continue; }
-    if (typeof current === 'string' && typeof start === 'string' && current !== start) continue;
+    if (typeof start === 'string' && compareProcessStarts(start, current) === undefined) unknown = true;
+    if (typeof current === 'string' && typeof start === 'string' && compareProcessStarts(start, current) === false) continue;
     try { source(options).probe(pid); return { state: 'alive' }; }
     catch (err) {
       if (err.code === 'EPERM') return { state: 'alive' };
@@ -52,7 +56,7 @@ function holder(path, options = {}) {
   return { text, version, pid: null, owner: null, state: 'unverifiable', why: 'unreadable or unrecognised lock record', directory: stat.isDirectory() };
 }
 /** @returns {{ ok: false, holder: number | null, path: string, details: string }} */
-function busy(path, current = holder(path)) {
+function busy(path, current = holder(path), agent = true) {
   const owner = current?.owner;
   const created = Number.isFinite(owner?.createdAt) ? new Date(owner.createdAt) : null;
   const time = created && !Number.isNaN(created.getTime()) ? created.toISOString() : 'an unknown time';
@@ -60,7 +64,7 @@ function busy(path, current = holder(path)) {
     ? `held by process ${current.pid} since ${time}; wait for its RESULT or ask the owner to check it`
     : current?.directory
       ? 'unrecognised directory in the lock or takeover mutex; the owner must inspect and remove this directory after stopping all work on this op'
-      : `unverifiable holder${current?.pid ? ` process ${current.pid} since ${time}` : ''}: ${current?.why ?? 'lock changed during inspection'}; timestamps cannot prove it has exited; stop and ask the owner; see budget/CLI.md#operation-lock-recovery`;
+      : `unverifiable holder${current?.pid ? ` process ${current.pid} since ${time}` : ''}: ${current?.why ?? 'lock changed during inspection'}; timestamps cannot prove it has exited${agent ? '; stop and ask the owner; see the owner-only unlock --help section of the installed CLI' : ''}`;
   return { ok: false, holder: current?.pid ?? null, path, details: `${details} (${path})` };
 }
 function removeBreaker(path, generation) {
@@ -95,7 +99,7 @@ function removable(path, record, options) {
   if (!record || record.directory || record.state === 'alive') return false;
   if (record.state === 'dead') return true;
   if (!options.confirmUnverifiable) return false;
-  options.onOverride?.(busy(path, record).details);
+  options.onOverride?.(busy(path, record, false).details);
   return true;
 }
 function withBreaker(path, action, options = {}) {
@@ -122,13 +126,18 @@ function withBreaker(path, action, options = {}) {
 }
 
 function breakStale(path, stale, options) {
+  let changed = false;
   withBreaker(path, () => {
     const current = holder(path, options);
     if (current && current.version === stale.version && current.text === stale.text && removable(path, current, options)) {
+      // The warning can block on terminal output while the old holder releases and a new one publishes.
+      const afterWarning = holder(path, options);
+      if (!afterWarning || afterWarning.version !== current.version || afterWarning.text !== current.text) { changed = true; return; }
       unlinkSync(path);
       syncDir(dirname(path));
     }
   }, options);
+  return changed;
 }
 
 export function abandonedBreaker(path, options = {}) {
@@ -165,7 +174,7 @@ export function lockFile(path, options = {}) {
         const current = holder(path, options);
         if (!current) continue;
         if (current.state === 'alive' || current.directory || (current.state === 'unverifiable' && !options.confirmUnverifiable)) return busy(path, current);
-        breakStale(path, current, options);
+        if (breakStale(path, current, options)) return busy(path, holder(path, options));
         continue;
       }
       syncDir(dirname(path));
@@ -235,7 +244,7 @@ export function lockRecord(dir, op, options = {}) {
   return lockFile(join(dir, `${op}.json.lock`), options);
 }
 export function lockNext(lock, op, rail, chain) {
-  return `${lock.details}. Another process (buy or reconcile) may be working on this op; wait for its RESULT, then superstables budget reconcile --rail ${rail} --chain ${chain} --op ${op}. Stop and ask the owner to check and stop all work on this op across processes, containers and hosts. Only the owner handles lock recovery; see budget/CLI.md#operation-lock-recovery and the payment skill rule 5. Overriding a holder that is still working can remove a successor's lock and allow duplicate payments. Never pay again for this op while its outcome is unknown`;
+  return `${lock.details}. Another process (buy or reconcile) may be working on this op; wait for its RESULT, then superstables budget reconcile --rail ${rail} --chain ${chain} --op ${op}. Stop and ask the owner to check and stop all work on this op across processes, containers and hosts. Only the owner handles lock recovery; see the owner-only unlock --help section of the installed CLI and the payment skill rule 5. A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments. Never pay again for this op while its outcome is unknown`;
 }
 export function requireRecordLock(dir, op) {
   const lock = lockRecord(dir, op);

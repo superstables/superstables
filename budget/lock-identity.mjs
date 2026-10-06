@@ -11,9 +11,8 @@ export function createIdentitySource({ platform = process.platform, host = hostn
     try { namespace = readlink('/proc/self/ns/pid'); } catch {}
   } else if (platform === 'darwin') {
     try {
-      const out = run('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
-      const match = out.match(/sec\s*=\s*(\d+),\s*usec\s*=\s*(\d+)/);
-      if (match) bootId = `darwin:${match[1]}:${match[2]}`;
+      const out = run('sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim();
+      if (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(out)) bootId = out.toLowerCase();
     } catch {}
   }
   return { record: () => ({ platform, hostname: host, bootId, namespace, pid: process.pid, pidStart: start(process.pid) ?? null }), start, probe };

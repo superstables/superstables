@@ -490,7 +490,7 @@ Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 
 ```text
 superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm
 
-Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects verifiably live local holders on Linux and macOS. Requires --confirm and the op ID typed in a terminal. Overrides unverifiable holders regardless of timestamps; a holder still working can remove a successor's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.
+Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects verifiably live local holders on Linux and macOS. Requires --confirm and the op ID typed in a terminal. Overrides unverifiable holders regardless of timestamps; a holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.

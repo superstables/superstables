@@ -14,7 +14,7 @@ const { createIdentitySource } = await import('../../budget/lock-identity.mjs');
 const hostIdentity = createIdentitySource().record();
 const dead = { ...hostIdentity, pid: 2147483646, pidStart: 'missing-start' };
 const live = hostIdentity;
-const foreign = process.platform === 'linux' ? { namespace: 'pid:[foreign]' } : { hostname: 'other-host' };
+const foreign = process.platform === 'linux' ? { namespace: 'pid:[foreign]' } : { hostname: 'other-host', bootId: 'other-boot' };
 function box() {
   const home = mkdtempSync(join(tmpdir(), 'budget-lock-recovery-'));
   dirs.push(home);
@@ -96,7 +96,7 @@ describe('recovering abandoned operation locks', () => {
     expect(r.result.next).not.toContain('superstables budget unlock');
     expect(r.result.next).not.toContain('--confirm');
     expect(r.result.next).toContain('Stop and ask the owner');
-    expect(r.result.next).toContain('budget/CLI.md#operation-lock-recovery');
+    expect(r.result.next).toContain('the owner-only unlock --help section of the installed CLI');
     expect(r.result.next).toContain('.buy.lock');
   });
   for (const rail of ['solana', 'evm', 'tempo']) {
@@ -216,7 +216,7 @@ it('does not clear an old regular-file breaker with a verifiable live owner', ()
 });
 
 for (const [why, patch] of [
-  ['another host', { hostname: 'other-host' }],
+  ['another host', { hostname: 'other-host', bootId: 'other-boot' }],
   ['another boot', { bootId: 'other-boot' }],
   ['another OS', { platform: process.platform === 'darwin' ? 'linux' : 'darwin', namespace: null }],
   ['missing identity', { platform: undefined, bootId: undefined }],

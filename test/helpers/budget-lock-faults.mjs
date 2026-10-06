@@ -54,9 +54,10 @@ if (process.argv[2] === 'worker') {
   const stopChildren = () => { for (const child of children) child.kill('SIGKILL'); };
   process.once('SIGTERM', () => { stopChildren(); process.exit(143); });
   process.once('SIGINT', () => { stopChildren(); process.exit(130); });
-  let cases = 0, stops = 0;
+  let cases = 0, stops = 0, workers = 0;
   async function worker(home, action = 'hold', fault = 0, phase = 'before') {
-    const p = fork(script, ['worker', home, action, String(fault), phase, process.argv[2] === 'pairs' ? 'protocol' : 'all'], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+    const env = process.argv.includes('--mixed-tz') ? { ...process.env, TZ: ['UTC', 'America/Los_Angeles', 'Asia/Tokyo'][workers++ % 3] } : process.env;
+    const p = fork(script, ['worker', home, action, String(fault), phase, process.argv[2] === 'pairs' ? 'protocol' : 'all'], { env, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
     children.add(p);
     const state = { p, home, held: false, events: [], error: '', exited: false };
     p.stderr.on('data', chunk => { state.error += chunk; });
@@ -146,8 +147,8 @@ if (process.argv[2] === 'worker') {
         }
       }
     } else {
-      // These 12 calls cover publication, both holder reads, stale unlink, and breaker cleanup.
-      // Fsync and descriptor calls are covered exhaustively by the single-fault matrix.
+      // These 12 calls cover publication, all holder reads, and stale unlink.
+      // Breaker cleanup, fsync, and descriptor calls are covered by the single-fault matrix.
       let ordinal = 0;
       for (let i = 1; i <= 12; i++) for (let j = 1; j <= 12; j++) for (const order of [0, 1]) for (const crash of [false, true]) {
         if (++ordinal < first || ordinal > last) continue;

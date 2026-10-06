@@ -17,9 +17,9 @@ afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: 
 function mac({ dead = false, readable = true, bootReadable = true } = {}) {
   const run = vi.fn((command: string, args: string[]) => {
     if (command === 'sysctl') {
-      expect(args).toEqual(['-n', 'kern.boottime']);
+      expect(args).toEqual(['-n', 'kern.bootsessionuuid']);
       if (!bootReadable) throw new Error('sysctl unavailable');
-      return '{ sec = 1791234000, usec = 12345 } Tue Oct 6 00:00:00 2026';
+      return 'B0AAAEAB-5578-4A8D-BB24-2FA546301F7A';
     }
     expect(command).toBe('ps'); expect(args.slice(0, 3)).toEqual(['-o', 'lstart=', '-p']);
     if (!readable) throw Object.assign(new Error('ps unavailable'), { status: 2 });
@@ -33,14 +33,14 @@ function mac({ dead = false, readable = true, bootReadable = true } = {}) {
   return createIdentitySource({ platform: 'darwin', host: 'test-mac', run, probe });
 }
 function record(path: string, identitySource: ReturnType<typeof createIdentitySource>, patch = {}) {
-  const owner = { ...identitySource.record(), pid: 42, pidStart: 'darwin:Tue Oct  6 00:01:00 2026', ...patch };
+  const owner = { ...identitySource.record(), pid: 42, pidStart: 'darwin:utc:1791244860', ...patch };
   writeFileSync(path, JSON.stringify(owner)); return readFileSync(path, 'utf8');
 }
 describe('macOS identity on any test host', () => {
-  it('publishes hostname, sysctl boot time, PID and ps start time without a namespace', () => {
+  it('publishes hostname, sysctl boot-session UUID, PID and ps start time without a namespace', () => {
     const b = box(); const identitySource = mac(); const lock = lockFile(b.path, { identitySource });
     expect(lock.ok).toBe(true);
-    expect(JSON.parse(readFileSync(b.path, 'utf8'))).toMatchObject({ platform: 'darwin', hostname: 'test-mac', bootId: 'darwin:1791234000:12345', namespace: null, pid: process.pid, pidStart: 'darwin:Tue Oct  6 00:01:00 2026' });
+    expect(JSON.parse(readFileSync(b.path, 'utf8'))).toMatchObject({ platform: 'darwin', hostname: 'test-mac', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', namespace: null, pid: process.pid, pidStart: 'darwin:utc:1791244860' });
     if (lock.ok) lock.release();
   });
   it('protects a running same-Mac holder even during confirmed recovery', () => {
@@ -56,22 +56,22 @@ describe('macOS identity on any test host', () => {
     if (lock.ok) lock.release();
   });
   it('automatically recovers a reused macOS PID from ps start identity', () => {
-    const b = box(); const identitySource = mac(); record(b.path, identitySource, { pidStart: 'darwin:older start' });
+    const b = box(); const identitySource = mac(); record(b.path, identitySource, { pidStart: 'darwin:utc:1791244859' });
     const lock = lockFile(b.path, { identitySource }); expect(lock.ok).toBe(true);
     if (lock.ok) lock.release();
   });
   it('retains a dead dispatcher while its macOS rail child is alive', () => {
     const b = box(); const identitySource = mac({ dead: true });
-    record(b.path, identitySource, { railPid: 43, railPidStart: 'darwin:Tue Oct  6 00:01:00 2026' });
+    record(b.path, identitySource, { railPid: 43, railPidStart: 'darwin:utc:1791244860' });
     expect(lockFile(b.path, { identitySource }).ok).toBe(false);
   });
-  for (const patch of [{ hostname: 'another-mac' }, { platform: 'linux' }, { bootId: 'another-boot' }]) {
+  for (const patch of [{ hostname: 'another-mac', bootId: 'another-boot' }, { platform: 'linux' }, { bootId: 'another-boot' }]) {
     it(`does not recover a foreign macOS record ${JSON.stringify(patch)}`, () => {
       const b = box(); const identitySource = mac({ dead: true }); const text = record(b.path, identitySource, patch);
       expect(lockFile(b.path, { identitySource }).ok).toBe(false); expect(readFileSync(b.path, 'utf8')).toBe(text);
     });
   }
-  it('retains holders if macOS boot time cannot be read', () => {
+  it('retains holders if macOS boot-session UUID cannot be read', () => {
     const b = box(); const identitySource = mac({ dead: true, bootReadable: false }); record(b.path, identitySource);
     expect(lockFile(b.path, { identitySource }).ok).toBe(false);
   });
@@ -100,7 +100,7 @@ it('normally releases despite an orphaned foreign takeover mutex', () => {
 it('agent busy guidance stops at the owner recovery docs', () => {
   const b = box(); writeFileSync(b.path, '{'); const lock = lockFile(b.path); expect(lock.ok).toBe(false);
   const next = lockNext(lock, 'mac-op', 'solana', 'devnet');
-  expect(next).toContain('Stop and ask the owner'); expect(next).toContain('budget/CLI.md#operation-lock-recovery');
+  expect(next).toContain('Stop and ask the owner'); expect(next).toContain('the owner-only unlock --help section of the installed CLI');
   expect(next).not.toContain('superstables budget unlock'); expect(next).not.toContain('--confirm');
 });
 function unlock(b: ReturnType<typeof box>, terminal: boolean, answer = 'mac-op') {

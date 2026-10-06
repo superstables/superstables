@@ -131,7 +131,30 @@ if (process.argv[2] === 'worker') {
     } finally { await kill(state); fs.rmSync(b.home, { recursive: true, force: true }); homes.delete(b.home); }
   }
   try {
-    if (process.argv.includes('--long-release') || process.argv.includes('--override-release')) {
+    if (process.argv.includes('--override-unlock')) {
+      const b = box(); const state = await worker(b, 'release', 0, 'before');
+      const unlock = spawn(process.execPath, ['--import', join(root, 'test/helpers/budget-owner-terminal.mjs'), '--import', join(root, 'test/helpers/budget-unlock-pause.mjs'), join(root, 'budget/cli.mjs'), 'unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm'], { env: { ...process.env, SUPERSTABLES_HOME: b.home, BUDGET_TEST_PAUSE_LOCK: b.path } });
+      let stderr = ''; unlock.stderr.on('data', data => { stderr += data; });
+      let stdout = '';
+      let successor;
+      try {
+        const exited = new Promise(resolve => unlock.once('exit', resolve));
+        const paused = new Promise((resolve, reject) => {
+          unlock.stdout.on('data', data => { stdout += data; if (stdout.includes('unlock-paused')) resolve(); });
+          unlock.once('exit', () => { if (!stdout.includes('unlock-paused')) reject(new Error(`unlock exited without pausing: ${stderr}`)); });
+        });
+        unlock.stdin.end('paid-op\n'); await paused;
+        while (!fs.readFileSync(`/proc/${unlock.pid}/stat`, 'utf8').includes(') T ')) await sleep(3);
+        // The inspected holder finishes normally, then a new holder publishes before unlock resumes.
+        state.p.stdin.write('go\n'); await state.wait(['done']); assert.equal(fs.existsSync(b.path), false);
+        successor = lockFile(b.path); assert.equal(successor.ok, true);
+        unlock.kill('SIGCONT'); assert.equal(await exited, 0, stderr);
+        assert.equal(fs.existsSync(b.path), false, 'documented unlock race changed');
+        const third = lockFile(b.path); assert.equal(third.ok, true); if (third.ok) third.release();
+        assert.ok(stderr.includes("unlock paused before unlinking can remove a new holder's lock"));
+        console.log(JSON.stringify({ result: 'documented-risk-reproduced', unlockRemovedNewHolder: true, thirdAcquired: true }));
+      } finally { unlock.kill('SIGCONT'); unlock.kill('SIGKILL'); if (successor?.ok) successor.release(); await kill(state); fs.rmSync(b.home, { recursive: true, force: true }); homes.delete(b.home); }
+    } else if (process.argv.includes('--long-release') || process.argv.includes('--override-release')) {
       const b = box(); const state = await worker(b, 'release', 'unlink', 'before');
       try {
         state.p.stdin.write('go\n'); await state.wait(['paused']);

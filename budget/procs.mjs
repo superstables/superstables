@@ -4,7 +4,7 @@
 // believes the pid only while a process with that number AND that start time exists.
 //
 //   Linux  the start time in /proc/<pid>/stat (clock ticks since boot), with the boot id: unique for the machine's uptime
-//   macOS  `ps -o lstart= -p <pid>` (to the second)
+//   macOS  `ps -o lstart= -p <pid>` in UTC, parsed to epoch seconds
 //
 // When neither can be read (another system, or no ps), the identity is null and the checks fall back to the pid alone.
 import { execFileSync } from "node:child_process";
@@ -16,6 +16,23 @@ function linuxBootId() {
     try { bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(); } catch { bootId = ""; }
   }
   return bootId;
+}
+
+/** Parse only the C-locale ps date read with TZ=UTC0. Legacy unzoned dates cannot be converted safely. */
+export function parseDarwinStart(text) {
+  const match = text.trim().match(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/);
+  if (!match) return undefined;
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(match[2]);
+  const [day, hour, minute, second, year] = match.slice(3).map(Number);
+  const date = new Date(Date.UTC(year, month, day, hour, minute, second));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month || date.getUTCDate() !== day || date.getUTCHours() !== hour || date.getUTCMinutes() !== minute || date.getUTCSeconds() !== second) return undefined;
+  return `darwin:utc:${date.getTime() / 1000}`;
+}
+
+/** Undefined means at least one macOS record has no zone, so a mismatch cannot prove PID reuse. */
+export function compareProcessStarts(recorded, current) {
+  if ([recorded, current].some(start => typeof start === 'string' && start.startsWith('darwin:') && !/^darwin:utc:\d+$/.test(start))) return undefined;
+  return recorded === current;
 }
 
 /**
@@ -38,8 +55,8 @@ export function processStart(pid, platform = process.platform, run = execFileSyn
   }
   if (platform === "darwin") {
     try {
-      const out = run("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, env: { ...process.env, LC_ALL: "C" } }).trim();
-      return out ? `darwin:${out}` : null;
+      const out = run("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, env: { ...process.env, LC_ALL: "C", TZ: "UTC0" } }).trim();
+      return out ? parseDarwinStart(out) : null;
     } catch (err) {
       // ps exits 1 when no process matches; any other failure means this cannot tell
       return err.status === 1 ? null : undefined;
@@ -68,7 +85,7 @@ export function sameProcess(pid, start) {
   if (!start) return pidAlive(pid);
   const now = processStart(pid);
   if (now === undefined) return pidAlive(pid);
-  return now === start;
+  return compareProcessStarts(start, now) ?? pidAlive(pid);
 }
 
 /** Whether any process is left in process group `pgid` (EPERM: there is one, under another user). */
@@ -91,7 +108,7 @@ export function groupAlive(pgid, start) {
   if (!pgid) return false;
   if (start) {
     const now = processStart(pgid);
-    if (now !== undefined && now !== null && now !== start) return false;
+    if (now !== undefined && now !== null && compareProcessStarts(start, now) === false) return false;
   }
   return anyInGroup(pgid);
 }
