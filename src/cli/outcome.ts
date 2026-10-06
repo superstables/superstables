@@ -45,6 +45,7 @@ export function isFinalAttempt(attempt: Attempt): boolean {
 
 /** A completed buy can still await chain finality; reporting paid does not make its evidence permanent. */
 export function isFinalResult(attempt: Attempt): boolean {
+  if (attempt.state === "uncertain") return false;
   if (attempt.state === "settled" || attempt.state === "paid_service_failed") return attempt.chain === "verified";
   return isFinalAttempt(attempt);
 }
