@@ -4,14 +4,20 @@
 // along by changing its state, as the owner and the seller would. A payment it reports is also put on its fake chain
 // (`chainUrl`: one JSON-RPC server answering as Base Sepolia, Arc Testnet, Tempo Moderato and Solana devnet), where the CLI reads it
 // before it says paid; a test can make the site lie by reporting a payment the chain does not show. No network.
+import { createHash, createPrivateKey, randomUUID, sign } from "node:crypto";
+import { Keypair, PublicKey, TransactionMessage } from "@solana/web3.js";
+import bs58 from "bs58";
 import { keccak256, toBytes } from "viem";
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readBody, startServer, type TestServer } from "./servers.js";
 
 export const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 export const SELLER = "0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E";
 export const PAYER = "0x2222222222222222222222222222222222222222";
+const solanaOwner = Keypair.fromSeed(new Uint8Array(32).fill(7));
+export const SOLANA_PAYER = solanaOwner.publicKey.toBase58();
+const AUTH_TOPIC = "0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5";
+const MEMO_TOPIC = "0x57bc7354aa85aed339e000bccffabbc529466af35f0772c8f8ee1145927de7f0";
 export const TX = `0x${"ab".repeat(32)}`;
 
 export interface FakePurchase {
@@ -21,6 +27,7 @@ export interface FakePurchase {
   body: { service_id: string; params?: Record<string, string>; max_amount?: string };
   service: Service;
   state: string;
+  nonce?: string;
   payment: Record<string, unknown>;
   delivery: Record<string, unknown>;
   reason?: string;
@@ -56,6 +63,7 @@ export interface FakePurchaseSite extends TestServer {
   purchases: FakePurchase[];
   /** Called on every read of a purchase, before the answer. */
   onPoll?: (p: FakePurchase) => void;
+  onChainRead?: (method: string) => Promise<void>;
   /** Answer POST /api/v1/purchases with this status and error instead of creating one. */
   refuseCreate?: { status: number; error: { code: string; message: string; allowed?: unknown } };
   /** Answer reads of a purchase with this instead of its view (an error the site returns). */
@@ -82,10 +90,12 @@ export interface FakePurchaseSite extends TestServer {
   chainUrl: string;
   /** Defaults below all payments to exercise delivery before finality. */
   finalizedBlock?: number;
+  /** Highest finalized Solana slot; defaults above all fake payments. */
+  finalizedSlot?: number;
 }
 
 /** A payment as the site reports it, and what the chain shows for it: false for nothing, or other values. */
-export type Paid = { transaction: string; payer: string; chain?: false | { amount?: bigint; payTo?: string; asset?: string; failed?: boolean; at?: number } };
+export type Paid = { transaction: string; payer: string; chain?: false | { amount?: bigint; payTo?: string; asset?: string; failed?: boolean; at?: number; nonce?: string; receiptHash?: string; signer?: string; badSignature?: boolean; firstSignature?: string; missingMeta?: boolean } };
 
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const word = (addr: string) => `0x${addr.slice(2).toLowerCase().padStart(64, "0")}`;
@@ -171,16 +181,28 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
     id: p.id, state: p.state, final: p.final, livemode: false,
     service: { id: p.service.id, name: p.service.name, simulated: p.service.simulated === true, testnet: true },
     request: { method: "GET", url: `https://seller.example/${p.service.id}`, params: p.body.params ?? {} },
-    terms: terms(p), payment: p.payment, delivery: p.delivery,
+    terms: terms(p), payment: { ...p.payment, ...(p.nonce ? { authorization: { nonce: p.nonce } } : {}) }, delivery: p.delivery,
     ...(p.state === "settled" || p.state === "paid_service_failed" ? { receipt: { id: p.id, purchase_id: p.id, transaction: (p.payment.transaction as string) ?? TX, payer: (p.payment.payer as string) ?? PAYER } } : {}),
     ...(p.reason ? { reason: p.reason } : {}), ...(p.reason_code ? { reason_code: p.reason_code } : {}),
     message: `purchase ${p.state}`, next: "see state", next_action: { type: p.final ? "done" : "wait_for_owner" },
   });
   // the fake chain: payments by transaction id
-  const landed = new Map<string, { evm: boolean; payer: string; payTo: string; asset: string; amount: bigint; failed: boolean; at: number; block: number }>();
+  const landed = new Map<string, { evm: boolean; payer: string; payTo: string; asset: string; amount: bigint; failed: boolean; at: number; block: number; nonce: string; receiptHash: string; tempo: boolean; raw?: string; missingMeta: boolean }>();
   site.pay = (p, paid = { transaction: TX, payer: PAYER }) => {
+    const c = paid.chain === false ? {} : paid.chain ?? {};
+    p.nonce ??= `0x${createHash("sha256").update(p.id).digest("hex")}`;
+    let raw: string | undefined;
+    if ((p.service.network ?? "").startsWith("solana:")) {
+      const signer = c.signer ? Keypair.fromSeed(new Uint8Array(32).fill(8)) : solanaOwner;
+      const message = new TransactionMessage({ payerKey: new PublicKey(SOLANA_SELLER), recentBlockhash: new PublicKey(new Uint8Array(32).fill(9)).toBase58(), instructions: [{ programId: new PublicKey(SOLANA_SELLER), keys: [{ pubkey: signer.publicKey, isSigner: true, isWritable: true }], data: Buffer.from(p.id) }] }).compileToV0Message().serialize();
+      const key = createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(signer.secretKey.slice(0, 32))]), format: "der", type: "pkcs8" });
+      const sig = sign(null, message, key);
+      if (c.badSignature) sig[0] ^= 1;
+      const first = bs58.decode(c.firstSignature ?? paid.transaction);
+      raw = Buffer.concat([Buffer.from([2]), first, sig, message]).toString("base64");
+      p.nonce = `0x${createHash("sha256").update(Buffer.from(message).toString("base64")).digest("hex")}`;
+    }
     if (paid.chain === false) return;
-    const c = paid.chain ?? {};
     landed.set(paid.transaction, {
       evm: !(p.service.network ?? "").startsWith("solana:"),
       payer: paid.payer,
@@ -189,7 +211,7 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
       amount: c.amount ?? BigInt(atomic(p.service.amount)),
       failed: c.failed === true,
       at: c.at ?? Math.floor(Date.now() / 1000),
-      block: 16 + landed.size,
+      block: 16 + landed.size, nonce: c.nonce ?? p.nonce, receiptHash: c.receiptHash ?? paid.transaction, tempo: p.service.protocol === "mpp", raw, missingMeta: c.missingMeta === true,
     });
   };
   site.settle = (p, result = { asset: "BTC", price_usd: 65000 }, paid = { transaction: TX, payer: PAYER }) => {
@@ -198,12 +220,13 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
   };
   const chain = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const body = JSON.parse(await readBody(req));
+    if (!Array.isArray(body)) await site.onChainRead?.(body.method);
     const answer = (method: string, params: any[]): unknown => {
       const t = landed.get(params[0]);
       switch (method) {
         case "eth_getTransactionReceipt":
           if (!t || !t.evm) return null;
-          return { transactionHash: params[0], status: t.failed ? "0x0" : "0x1", blockNumber: `0x${t.block.toString(16)}`, blockHash: keccak256(toBytes(`purchase:${t.block}`)), logs: [{ address: t.asset, topics: [TRANSFER_TOPIC, word(t.payer), word(t.payTo)], data: `0x${t.amount.toString(16).padStart(64, "0")}` }] };
+          return { transactionHash: t.receiptHash, status: t.failed ? "0x0" : "0x1", blockNumber: `0x${t.block.toString(16)}`, blockHash: keccak256(toBytes(`purchase:${t.block}`)), logs: [...(t.tempo ? [{ address: t.asset, topics: [TRANSFER_TOPIC, word(t.payer), word(t.payTo)], data: `0x${t.amount.toString(16).padStart(64, "0")}` }] : []), { address: t.asset, topics: [t.tempo ? MEMO_TOPIC : TRANSFER_TOPIC, word(t.payer), word(t.payTo), ...(t.tempo ? [t.nonce] : [])], data: `0x${t.amount.toString(16).padStart(64, "0")}` }, ...(!t.tempo ? [{ address: t.asset, topics: [AUTH_TOPIC, word(t.payer), t.nonce], data: "0x" }] : [])] };
         case "eth_getBlockByNumber": {
           const n = params[0] === "finalized" ? site.finalizedBlock ?? 10 : params[0] === "latest" ? 1000 : Number(params[0]);
           const at = [...landed.values()].find((x) => x.evm && x.block === n)?.at ?? Math.floor(Date.now() / 1000);
@@ -211,9 +234,11 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
         }
         case "getTransaction":
           if (!t || t.evm) return null;
+          if (params[1]?.commitment === "finalized" && (site.finalizedSlot ?? 1000) < 100) return null;
+          if (params[1]?.encoding === "base64") return { transaction: [t.raw, "base64"] };
           return {
             slot: 100, blockTime: t.at,
-            meta: { err: t.failed ? { InstructionError: [0, "Custom"] } : null,
+            meta: t.missingMeta ? null : { err: t.failed ? { InstructionError: [0, "Custom"] } : null,
               preTokenBalances: [{ accountIndex: 1, mint: t.asset, owner: t.payer, uiTokenAmount: { amount: String(5_000_000n) } }, { accountIndex: 2, mint: t.asset, owner: t.payTo, uiTokenAmount: { amount: "0" } }],
               postTokenBalances: [{ accountIndex: 1, mint: t.asset, owner: t.payer, uiTokenAmount: { amount: String(5_000_000n - t.amount) } }, { accountIndex: 2, mint: t.asset, owner: t.payTo, uiTokenAmount: { amount: String(t.amount) } }] },
           };
