@@ -203,11 +203,13 @@ export async function assessOp(conn, rec, options = {}) {
     if (onProgress) onProgress(patch);
     else if (rec.op && readOp(rec.op)) updateOp(rec.op, patch, "reconcile: saved completed history reads");
   };
-  if (!rec.agentSig) return { verdict: "no_tx" };
+  const lostInclusion = { verdict: "pending", reason: "the earlier payment inclusion could not be verified; outcome unknown. Do not pay again" };
+  if (!rec.agentSig) return rec.inclusionObserved ? lostInclusion : { verdict: "no_tx" };
   if (await conn.getGenesisHash() !== DEVNET_GENESIS) throw new Error("RPC is not Solana devnet");
   const own = await findOwnTx(conn, rec, { discover: false, paceMs, pause });
   const landed = (t) => t.err === null
     ? { verdict: "settled", tx: t.sig, slot: t.slot, final: t.final !== false }
+    : rec.inclusionObserved ? { ...lostInclusion, tx: t.sig }
     : t.final === false ? { verdict: "pending", tx: t.sig, reason: "the transaction landed and failed, but is not final on chain yet" } : { verdict: "failed", tx: t.sig, err: t.err, slot: t.slot };
   if (own) return landed(own);
   const epoch = await conn.getEpochInfo("finalized");

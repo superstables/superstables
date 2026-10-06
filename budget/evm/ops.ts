@@ -423,7 +423,12 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   const save = (state: OpState, reason: string | undefined, next: string, note: string) => {
     j.state = state; if (state !== "settled") delete j.final; j.reason = reason; j.next = next; j.notes.push(`reconcile: ${note}`); writeJournal(j);
   };
+  const lostInclusion = (): { j: Journal; verdict: "unknown" } => {
+    save("unknown", "the earlier payment inclusion was removed; outcome unknown. Do not pay again.", `${cmd("reconcile.ts", `--op ${j.op}`)}. Do not pay again.`, "earlier inclusion missing");
+    return { j, verdict: "unknown" };
+  };
   if (!j.pullTx) {
+    if (j.inclusionObserved) return lostInclusion();
     save("not_found", "no pull transaction was recorded: the process stopped before anything was signed", "nothing moved for this op. A new purchase needs a new --op.", "not_found (no pull hash in the journal)");
     return { j, verdict: "not_found" };
   }
@@ -439,6 +444,7 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   }
   j.pullBlock = String(pull.block);
   j.pullStatus = pull.status;
+  if (pull.status === "reverted" && j.inclusionObserved) return lostInclusion();
   if (pull.status === "reverted" && !pull.final) {
     save("unknown", "the pull landed and failed, but is not final on chain yet", cmd("reconcile.ts", `--op ${j.op}`), "pull failure not final");
     return { j, verdict: "unknown" };
@@ -471,8 +477,7 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   }
 
   if (j.inclusionObserved) {
-    save("unknown", "the earlier payment inclusion was removed; outcome unknown. Do not pay again.", cmd("reconcile.ts", `--op ${j.op}`), "earlier inclusion missing");
-    return { j, verdict: "unknown" };
+    return lostInclusion();
   }
 
   // Not settled. Has the price already gone back to the owner?
