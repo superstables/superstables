@@ -98,7 +98,7 @@ superstables budget find --chain devnet  # only that chain: any --chain key the 
 superstables budget find --once          # the services Single purchase on superstables.com can pay (Superstables' own), with the chain of each
 ```
 
-With a budget set up through superstables.com, look in `superstables budget find` first: it lists sellers on the hosted chains that the index may not have (for example on Arc Testnet). Its URL goes straight to `budget preflight` and `budget buy`. Its `simulated` column (`simulated` in `--json`) says whether each listing is marked as returning prepared sample output, read the same way as below.
+With a budget set up through superstables.com, look in `superstables budget find` first: it lists sellers on the chains with approvals on superstables.com that the index may not have (for example on Arc Testnet). Its URL goes straight to `budget preflight` and `budget buy`. Its `simulated` column (`simulated` in `--json`) says whether each listing is marked as returning prepared sample output, read the same way as below.
 
 Under each listing, `find` prints the commands for each way it can be paid (`commands` in `--json`): for a listing Superstables operates, `budget buy-once` first (the owner approves on superstables.com from any device: use it for one purchase); `quote` then `pay`; on a budget, `preflight` then `buy`. Fill in every `<...>` placeholder before running one. `--budget` shows the listings a budget rail can pay instead, which adds those `pay` cannot call as listed (such as index listings without parameters); when every match is a listing `pay` can call, both show the same.
 
