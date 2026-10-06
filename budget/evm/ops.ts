@@ -257,7 +257,7 @@ async function differentFinalNonceTransaction(j: Journal): Promise<Hex | undefin
   if (j.pullNonce === undefined || !j.pullTx || j.inclusionObserved) return undefined;
   try {
     const head = await finalHead();
-    if (head.number === null || await publicClient.getTransactionCount({ address: j.agent, blockNumber: head.number }) <= j.pullNonce) return undefined;
+    if (head.number === null) return undefined;
     const start = await operationStart(j, head);
     const candidate = async (hash: Hex): Promise<Hex | undefined> => {
       if (hash.toLowerCase() === j.pullTx?.toLowerCase()) return undefined;
