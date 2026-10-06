@@ -50,7 +50,7 @@ for (const platform of ['linux', 'darwin']) {
   it(`protects a live ${platform} holder after hostname changes when its boot UUID matches`, () => {
     const b = box();
     const local = createIdentitySource().record();
-    const record = { ...local, platform, hostname: 'machine.lan', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', pidStart: platform === 'darwin' ? 'darwin:utc:1791244860' : local.pidStart };
+    const record = { ...local, platform, hostname: 'machine.lan', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', pidStart: platform === 'darwin' ? 'darwin:utc:1791244860' : local.pidStart, pidStartUtc: platform === 'darwin' ? 1791244860 : null, namespace: platform === 'linux' ? 'pid:[test]' : null };
     const identitySource = { record: () => ({ ...record, hostname: 'machine.local' }), start: () => record.pidStart, probe: () => true };
     writeFileSync(b.path, JSON.stringify(record));
     expect(lockFile(b.path, { identitySource, confirmUnverifiable: true }).ok).toBe(false);
@@ -58,7 +58,7 @@ for (const platform of ['linux', 'darwin']) {
   });
   it(`recovers a dead ${platform} holder after a hostname change on the same boot`, () => {
     const b = box();
-    const record = { ...createIdentitySource().record(), platform, hostname: 'machine.lan', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', pid: 42, pidStart: null };
+    const record = { ...createIdentitySource().record(), platform, hostname: 'machine.lan', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', pid: 42, pidStart: null, pidStartUtc: null, namespace: platform === 'linux' ? 'pid:[test]' : null };
     const identitySource = { record: () => ({ ...record, hostname: 'machine.local', pid: process.pid }), start: () => null, probe: (pid: number) => {
       if (pid === 42) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
       return true;
@@ -115,6 +115,8 @@ for (const [holderTZ, contenderTZ] of [['UTC', 'America/Los_Angeles'], ['Asia/To
       expect(unlock.status, unlock.stderr).toBe(5); expect(unlock.stdout).toContain('op_in_progress');
       expect(unlock.stderr).not.toContain('overriding unverifiable lock'); expect(readFileSync(b.path, 'utf8')).toBe(original);
     } finally { const exit = once(holder, 'exit'); holder.kill('SIGKILL'); await exit; }
+    const recovered = spawnSync(process.execPath, ['--import', preload, helper, root, b.path, 'try'], { env: { ...process.env, TZ: contenderTZ }, encoding: 'utf8' });
+    expect(recovered.status, recovered.stderr).toBe(0); expect(JSON.parse(recovered.stdout).ok).toBe(true);
   });
 }
 it('approval and group readers preserve live legacy starts and stay stable across a timezone change', async () => {
@@ -144,4 +146,50 @@ it('prints owner override details without agent instructions and points refusal 
   const warning = confirmed.stderr.split('\n').find(line => line.includes('overriding unverifiable lock'));
   expect(warning).toContain("unlock paused before unlinking can remove a new holder's lock");
   expect(warning).not.toContain('stop and ask the owner'); expect(warning).not.toContain('see ');
+});
+
+it.each(['record', 'inode'])('preserves a replacement %s published during the final process inspection', (change) => {
+  const b = box(); writeFileSync(b.path, '{"pid":42,"platform":"foreign"}');
+  const real = createIdentitySource();
+  let warned = false;
+  let replacement = '';
+  const identitySource = { ...real, record: () => {
+    if (warned && !replacement) {
+      replacement = change === 'inode' ? readFileSync(b.path, 'utf8') : JSON.stringify({ ...real.record(), token: 'successor' });
+      rmSync(b.path); writeFileSync(b.path, replacement);
+    }
+    return real.record();
+  } };
+  const result = lockFile(b.path, { identitySource, confirmUnverifiable: true, onOverride: () => { warned = true; } });
+  try {
+    expect(result.ok).toBe(false);
+    expect(readFileSync(b.path, 'utf8')).toBe(replacement);
+  } finally { if (result.ok) result.release(); }
+});
+
+it('approval and group readers prefer numeric UTC seconds over the legacy start field', async () => {
+  const r = spawn(process.execPath, ['--import', preload, '--input-type=module', '-e', `
+    import { processStartFields, sameProcess, groupAlive } from ${JSON.stringify(join(root, 'budget/procs.mjs'))};
+    import { alive, groupAlive as approvalGroup, processesAlive } from ${JSON.stringify(join(root, 'budget/approvals.mjs'))};
+    process.env.TZ = 'Asia/Kathmandu';
+    const starts = processStartFields(process.pid);
+    process.env.TZ = 'America/Los_Angeles';
+    const wrong = 'darwin:Tue Oct  6 00:01:00 2000';
+    const pid = process.pid, utc = starts.pidStartUtc;
+    console.log(JSON.stringify([
+      typeof utc,
+      sameProcess(pid, wrong, utc), alive(pid, wrong, utc),
+      groupAlive(pid, wrong, utc), approvalGroup(pid, wrong, utc),
+      sameProcess(pid, starts.pidStart, utc + 1), alive(pid, starts.pidStart, utc + 1),
+      groupAlive(pid, starts.pidStart, utc + 1), approvalGroup(pid, starts.pidStart, utc + 1),
+      processesAlive({ railPgid: pid, railPgidStart: wrong, railPgidStartUtc: utc }),
+      processesAlive({ railPgid: pid, railPgidStart: starts.pidStart, railPgidStartUtc: utc + 1 }),
+    ]));
+  `], { env: { ...process.env, SUPERSTABLES_HOME: box().home }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const exited = once(r, 'exit');
+  try {
+    const [data] = await once(r.stdout, 'data');
+    expect(JSON.parse(String(data))).toEqual(['number', true, true, true, true, false, false, false, false, true, false]);
+    const [status] = await exited; expect(status).toBe(0);
+  } finally { if (r.exitCode === null) { r.kill('SIGKILL'); await exited; } }
 });

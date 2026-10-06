@@ -9,7 +9,7 @@ if (process.env.PROBE_SKEW) { const now = Date.now; Date.now = () => now() + Num
 syncBuiltinESMExports();
 const { lockFile } = await import(join(root, 'budget/op-lock.mjs'));
 const lock = lockFile(path);
-const hostPid = process.env.HOST_PROC ? Number(fs.readFileSync(join(process.env.HOST_PROC, 'self/status'), 'utf8').match(/^Pid:\s+(\d+)/m)[1]) : process.pid;
+const hostPid = process.platform === 'linux' && process.env.HOST_PROC ? Number(fs.readFileSync(join(process.env.HOST_PROC, 'self/status'), 'utf8').match(/^Pid:\s+(\d+)/m)[1]) : process.pid;
 console.log(JSON.stringify({ ok: lock.ok, pid: hostPid }));
 if (action === 'hold' && lock.ok) {
   process.stdin.setEncoding('utf8');

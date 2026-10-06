@@ -6,12 +6,18 @@ import fs from 'node:fs';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 Object.defineProperty(process, 'platform', { value: 'darwin' });
-const read = fs.readFileSync;
-fs.readFileSync = function (path, ...args) {
-  // The fault runner's stale fixture predates platform-aware boot records.
-  if (String(path) === '/proc/sys/kernel/random/boot_id') return 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a';
-  return read.call(this, path, ...args);
-};
+// Fail even when production code catches a denied read, so the portable fixture check cannot hide one.
+if (process.env.BUDGET_TEST_DENY_PROC === '1') {
+  let attempts = 0;
+  for (const name of ['readFileSync', 'readlinkSync']) {
+    const real = fs[name];
+    fs[name] = function (path, ...args) {
+      if (String(path).startsWith('/proc/')) { attempts++; throw new Error(`unexpected macOS proc read: ${path}`); }
+      return real.call(this, path, ...args);
+    };
+  }
+  process.on('exit', () => { if (attempts) { console.error(`unexpected macOS proc reads: ${attempts}`); process.exitCode = 1; } });
+}
 const run = childProcess.execFileSync;
 childProcess.execFileSync = function (command, ...args) {
   if (command === 'sysctl') return 'B0AAAEAB-5578-4A8D-BB24-2FA546301F7A';

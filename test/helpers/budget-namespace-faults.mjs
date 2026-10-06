@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
+if (process.platform !== 'linux') { console.log('skipped: real PID namespace faults require Linux and bwrap'); process.exit(0); }
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const script = fileURLToPath(import.meta.url);
 if (process.argv[2] === 'worker') {

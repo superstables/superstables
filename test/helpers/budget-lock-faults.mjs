@@ -1,9 +1,9 @@
 // Real-process lock fault matrix. Run: node test/helpers/budget-lock-faults.mjs [single|pairs]
-// Pair ranges can be bounded with --start=N --end=N, numbered from 1 through 576.
+// Pair ranges can be bounded with --start=N --end=N, numbered from 1 through 784.
 import fs from 'node:fs';
 import { fork } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { tmpdir, hostname } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
@@ -47,10 +47,12 @@ if (process.argv[2] === 'worker') {
     else process.exit(0);
   } catch (err) { process.send({ event: 'error', message: err.stack }); process.exit(1); }
 } else {
+  const { createIdentitySource } = await import(join(root, 'budget/lock-identity.mjs'));
+  const identitySource = createIdentitySource();
   const children = new Set();
   const first = Number(process.argv.find(arg => arg.startsWith('--start='))?.split('=')[1] ?? 1);
-  const last = Number(process.argv.find(arg => arg.startsWith('--end='))?.split('=')[1] ?? 576);
-  assert.ok(Number.isInteger(first) && Number.isInteger(last) && first >= 1 && last <= 576 && first <= last, 'invalid pair range');
+  const last = Number(process.argv.find(arg => arg.startsWith('--end='))?.split('=')[1] ?? 784);
+  assert.ok(Number.isInteger(first) && Number.isInteger(last) && first >= 1 && last <= 784 && first <= last, 'invalid pair range');
   const stopChildren = () => { for (const child of children) child.kill('SIGKILL'); };
   process.once('SIGTERM', () => { stopChildren(); process.exit(143); });
   process.once('SIGINT', () => { stopChildren(); process.exit(130); });
@@ -102,9 +104,9 @@ if (process.argv[2] === 'worker') {
         // The recorded dispatcher is dead but its verifiable rail child remains alive.
         const file = join(home, 'op.lock');
         const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
-        fs.writeFileSync(file, JSON.stringify({ ...rec, pid: 2147483646, pidStart: null, railPid: holder.p.pid, railPidStart: rec.pidStart }));
+        fs.writeFileSync(file, JSON.stringify({ ...rec, pid: 2147483646, pidStart: null, pidStartUtc: null, railPid: holder.p.pid, railPidStart: rec.pidStart, railPidStartUtc: rec.pidStartUtc }));
       }
-    } else if (scenario === 'stale') fs.writeFileSync(join(home, 'op.lock'), JSON.stringify({pid:2147483646, platform:process.platform, hostname:hostname(), bootId:fs.readFileSync('/proc/sys/kernel/random/boot_id','utf8').trim(), namespace:fs.readlinkSync('/proc/self/ns/pid')}));
+    } else if (scenario === 'stale') fs.writeFileSync(join(home, 'op.lock'), JSON.stringify({ ...identitySource.record(), pid: 2147483646, ...identitySource.starts(2147483646) }));
     return { home, states };
   }
   async function contenders(b) {
@@ -147,10 +149,12 @@ if (process.argv[2] === 'worker') {
         }
       }
     } else {
-      // These 12 calls cover publication, all holder reads, and stale unlink.
+      // The final record/inode recheck moves stale unlink to call 14.
+      // Keep the original 576 ordinals stable, then add pairs involving calls 13 or 14.
       // Breaker cleanup, fsync, and descriptor calls are covered by the single-fault matrix.
       let ordinal = 0;
-      for (let i = 1; i <= 12; i++) for (let j = 1; j <= 12; j++) for (const order of [0, 1]) for (const crash of [false, true]) {
+      for (const extent of [12, 14]) for (let i = 1; i <= extent; i++) for (let j = 1; j <= extent; j++) for (const order of [0, 1]) for (const crash of [false, true]) {
+        if (extent === 14 && i <= 12 && j <= 12) continue;
         if (++ordinal < first || ordinal > last) continue;
         const b = await box('stale');
         const a = await worker(b.home, 'hold', i, 'before'); b.states.push(a); await a.wait();

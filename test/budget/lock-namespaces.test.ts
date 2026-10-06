@@ -59,7 +59,7 @@ describe.runIf(process.platform === 'linux')('real PID namespace ownership', () 
   it('refreshes its inode despite a dead breaker in the host namespace', async () => {
     const b = box(); mkdirSync(b.path + '.break');
     // The host publishes a real generation, then dies. The foreign holder cannot verify that death.
-    const host = spawnSync(process.execPath, ['-e', `const fs=require('fs'); const os=require('os'); fs.writeFileSync(process.argv[1], JSON.stringify({pid:process.pid,namespace:fs.readlinkSync('/proc/self/ns/pid'),platform:process.platform,hostname:os.hostname(),bootId:fs.readFileSync('/proc/sys/kernel/random/boot_id','utf8').trim()}))`, join(b.path + '.break', '0a1b2c3d-0000-4000-8000-000000000000.owner')]);
+    const host = spawnSync(process.execPath, ['--input-type=module', '-e', `import fs from 'node:fs'; import { createIdentitySource } from ${JSON.stringify(join(root, 'budget/lock-identity.mjs'))}; fs.writeFileSync(process.argv[1], JSON.stringify(createIdentitySource().record()))`, join(b.path + '.break', '0a1b2c3d-0000-4000-8000-000000000000.owner')]);
     expect(host.status).toBe(0);
     const holder = await hold(b); const before = statSync(b.path).mtimeMs; await sleep(350);
     expect(statSync(b.path).mtimeMs).toBeGreaterThan(before);

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { readlinkSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { hostname, tmpdir } from 'node:os';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -11,7 +11,9 @@ const helper = fileURLToPath(new URL('../helpers/budget-interleaving.mjs', impor
 const children: ChildProcess[] = [];
 const dirs: string[] = [];
 const op = 'same-order';
-const dead = { pid: 2147483647, pidStart: null, platform: process.platform, hostname: hostname(), bootId: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), namespace: readlinkSync('/proc/self/ns/pid') };
+const { createIdentitySource } = await import(join(root, 'budget/lock-identity.mjs'));
+const identitySource = createIdentitySource();
+const dead = { ...identitySource.record(), pid: 2147483647, ...identitySource.starts(2147483647) };
 function sandbox(rail: string) {
   const home = mkdtempSync(join(tmpdir(), 'budget-race-'));
   dirs.push(home);
@@ -45,8 +47,8 @@ async function untilFile(path: string, running?: ReturnType<typeof child>) {
   const stopped = () => {
     if (!running) return true;
     try {
-      const stat = readFileSync(`/proc/${running.p.pid}/stat`, 'utf8');
-      return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] === 'T';
+      const stat = execFileSync('ps', ['-o', 'stat=', '-p', String(running.p.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+      return stat.trim().startsWith('T');
     } catch { return false; }
   };
   // The marker precedes SIGSTOP. Resume only after the kernel reports it stopped.
@@ -63,7 +65,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe.runIf(process.platform === 'linux')('operation ownership under forced process stalls', () => {
+describe.runIf(['linux', 'darwin'].includes(process.platform))('operation ownership under forced process stalls', () => {
   it('dispatcher: recovers an empty breaker left by an interrupted release', async () => {
     const box = sandbox('dispatcher');
     const path = join(box.dir, `${op}.buy.lock`);
@@ -106,7 +108,7 @@ describe.runIf(process.platform === 'linux')('operation ownership under forced p
   }
 });
 
-describe.runIf(process.platform === 'linux')('operation writers share serialization', () => {
+describe.runIf(['linux', 'darwin'].includes(process.platform))('operation writers share serialization', () => {
   for (const rail of ['solana', 'tempo', 'evm']) {
     for (const state of ['submitted', 'settled']) {
       it(`${rail}: a stalled unsigned reconcile cannot overwrite newer ${state} evidence`, async () => {

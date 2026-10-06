@@ -40,7 +40,7 @@ describe('macOS identity on any test host', () => {
   it('publishes hostname, sysctl boot-session UUID, PID and ps start time without a namespace', () => {
     const b = box(); const identitySource = mac(); const lock = lockFile(b.path, { identitySource });
     expect(lock.ok).toBe(true);
-    expect(JSON.parse(readFileSync(b.path, 'utf8'))).toMatchObject({ platform: 'darwin', hostname: 'test-mac', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', namespace: null, pid: process.pid, pidStart: 'darwin:utc:1791244860' });
+    expect(JSON.parse(readFileSync(b.path, 'utf8'))).toMatchObject({ platform: 'darwin', hostname: 'test-mac', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', namespace: null, pid: process.pid, pidStart: 'darwin:Tue Oct  6 00:01:00 2026', pidStartUtc: 1791244860 });
     if (lock.ok) lock.release();
   });
   it('protects a running same-Mac holder even during confirmed recovery', () => {
@@ -56,9 +56,17 @@ describe('macOS identity on any test host', () => {
     if (lock.ok) lock.release();
   });
   it('automatically recovers a reused macOS PID from ps start identity', () => {
-    const b = box(); const identitySource = mac(); record(b.path, identitySource, { pidStart: 'darwin:utc:1791244859' });
+    const b = box(); const identitySource = mac(); record(b.path, identitySource, { pidStart: 'darwin:Tue Oct  6 00:00:59 2026', pidStartUtc: 1791244859 });
     const lock = lockFile(b.path, { identitySource }); expect(lock.ok).toBe(true);
     if (lock.ok) lock.release();
+  });
+  it('prefers UTC fields when a legacy string disagrees, including for a live rail child', () => {
+    const b = box(); const identitySource = mac();
+    const text = record(b.path, identitySource, { pidStart: 'darwin:Tue Oct  6 00:01:00 2000', pidStartUtc: 1791244860 });
+    expect(lockFile(b.path, { identitySource, confirmUnverifiable: true }).ok).toBe(false);
+    expect(readFileSync(b.path, 'utf8')).toBe(text);
+    record(b.path, identitySource, { pidStartUtc: 1791244859, railPid: 43, railPidStart: 'darwin:Tue Oct  6 00:01:00 2000', railPidStartUtc: 1791244860 });
+    expect(lockFile(b.path, { identitySource, confirmUnverifiable: true }).ok).toBe(false);
   });
   it('retains a dead dispatcher while its macOS rail child is alive', () => {
     const b = box(); const identitySource = mac({ dead: true });

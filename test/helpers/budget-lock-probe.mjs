@@ -6,15 +6,10 @@ const { PROBE_ROOT: root, PROBE_PATH: path, PROBE_ACTION: action } = process.env
 const { lockFile } = await import(join(root, 'budget/op-lock.mjs'));
 const lock = lockFile(path);
 if (!lock.ok) throw new Error('probe did not acquire');
-if (action === 'hidden-proc') {
-  const read = fs.readFileSync;
-  fs.readFileSync = function (path, ...args) {
-    if (String(path) === `/proc/${process.pid}/stat`) throw Object.assign(new Error('proc entry hidden'), { code: 'ENOENT' });
-    return read.call(this, path, ...args);
-  };
-  syncBuiltinESMExports();
-  const blocked = lockFile(path);
-  fs.readFileSync = read; syncBuiltinESMExports();
+if (action === 'hidden-start') {
+  const { createIdentitySource } = await import(join(root, 'budget/lock-identity.mjs'));
+  const identitySource = createIdentitySource();
+  const blocked = lockFile(path, { identitySource: { ...identitySource, start: () => null } });
   console.log(JSON.stringify({ protected: !blocked.ok }));
   if (blocked.ok) blocked.release();
   lock.release();
