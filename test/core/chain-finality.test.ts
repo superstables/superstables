@@ -28,14 +28,62 @@ const PAYER = "0x1111111111111111111111111111111111111111";
 const TO = "0x2222222222222222222222222222222222222222";
 const NONCE: Hex = `0x${"44".repeat(32)}`;
 const run = promisify(execFile);
-async function cliStatus(home: string, rpc: string) {
-  const args = ["--import", "tsx", new URL("../../src/cli/main.ts", import.meta.url).pathname, "status", "a", "--json"];
+async function cliStatus(home: string, rpc: string, id = "a") {
+  const args = ["--import", "tsx", new URL("../../src/cli/main.ts", import.meta.url).pathname, "status", id, "--json"];
   const env = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_RPC_URL: rpc };
   const stdout = await run(process.execPath, args, { env }).then(r => r.stdout, (e: { stdout?: string }) => { if (!e.stdout) throw e; return e.stdout; });
   return JSON.parse(stdout);
 }
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()?.(); });
+
+async function deliveredNonFinalPayment() {
+  const chain = await startFakeBaseSepolia(); cleanup.push(() => chain.close());
+  chain.finalizedLag = 2;
+  const facilitator = await startFacilitator(); cleanup.push(() => facilitator.close());
+  const seller = await startPaidEndpoint(facilitator.url); cleanup.push(() => seller.close());
+  const wallet = await startWallet(); cleanup.push(() => wallet.close());
+  const home = mkdtempSync(join(tmpdir(), "delivered-not-final-")); cleanup.push(() => rmSync(home, { recursive: true, force: true }));
+  const records = new Records(join(home, "records"));
+  const engine = new PaymentEngine({ records, policy: DEFAULT_POLICY, rpcUrl: chain.url, signer: new WalletSigner({ url: wallet.url, agentToken: wallet.token, pollMs: 5, timeoutMs: 3000 }), fetchImpl: async (input, init) => {
+    const response = await fetch(input, init);
+    if (!new Headers(init?.headers).has("payment-signature")) return response;
+    const authorization = facilitator.lastAuthorization;
+    if (!authorization) throw new Error("test payment did not reach the facilitator");
+    const transaction = chain.settle(authorization);
+    const headers = new Headers(response.headers);
+    headers.set("payment-response", encodePaymentResponseHeader({ success: true, transaction, network: "eip155:84532" }));
+    return new Response(await response.text(), { status: response.status, headers });
+  } });
+  const q = await quote({ url: seller.url }, { records, policy: DEFAULT_POLICY });
+  const attempt = await engine.waitForAttempt(engine.startPayment(q.id).id, 5000);
+  expect(attempt).toMatchObject({ state: "settled", chain: "unchecked", paymentIncluded: true });
+  expect(records.getReceipt(attempt.receiptId!)?.serviceOutcome).toBe("ok");
+  return { chain, records, home, attempt };
+}
+
+it("reports a delivered non-final payment with final false and the saved service response", async () => {
+  const { chain, records, home, attempt } = await deliveredNonFinalPayment();
+  const result = await cliStatus(home, chain.url, attempt.id);
+  expect(result).toMatchObject({ state: "settled", chain: "unchecked", final: false, exit_code: 0, service_response: { asset: "BTC", price: 64000 } });
+  expect(result.message).toMatch(/paid/i);
+  expect(result.next).toMatch(/payment landed.*not final on chain yet/i);
+  expect(records.spentToday("USDC")).toBe(0.01);
+  chain.advance(10);
+  expect(await cliStatus(home, chain.url, attempt.id)).toMatchObject({ state: "settled", chain: "verified", final: true, exit_code: 0 });
+});
+
+it("reports removed non-final delivered inclusion as uncertain, never a terminal service failure", async () => {
+  const { chain, records, home, attempt } = await deliveredNonFinalPayment();
+  chain.receipts.delete(attempt.transaction!);
+  chain.used.delete(attempt.authorizationNonce!);
+  const result = await cliStatus(home, chain.url, attempt.id);
+  expect(result).toMatchObject({ state: "uncertain", chain: "unchecked", final: false, exit_code: 5 });
+  expect(result.next).toMatch(/do not pay again/i);
+  expect(result.chain_reason).toMatch(/earlier payment inclusion/i);
+  expect(records.getReceipt(attempt.receiptId!)?.chainReason).toMatch(/do not pay again/i);
+  expect(records.spentToday("USDC")).toBe(0.01);
+});
 it.each(["unchecked", "mismatch"] as const)("status rechecks provisional payment after a reorg removes its receipt, initially %s", async (initialChain) => {
   const chain = await startFakeBaseSepolia(); cleanup.push(() => chain.close());
   const dir = mkdtempSync(join(tmpdir(), "pay-finality-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));

@@ -62,6 +62,45 @@ describe("hosted purchase payment identity", () => {
       expect(await settleOnce(record)).toMatchObject({ code: 0, result: { state: "settled", paid: true } });
     });
     if (rail.rail !== "tempo") {
+      for (const state of ["submitting", "uncertain", "failed"]) it(`${rail.rail}: reports included payment paid while the site still says ${state}`, async () => {
+        site.finalizedBlock = 10;
+        site.finalizedSlot = 10;
+        const { p, record } = await purchase(rail);
+        site.settle(p, "ok", { transaction: rail.tx, payer: rail.payer });
+        p.state = state;
+        p.final = false;
+        p.payment.status = "unconfirmed";
+        expect(await settleOnce(record)).toMatchObject({ code: 0, result: { state: "settled", paid: true, delivered: true, final: false } });
+        expect(approvals.readApproval(record.id).final).toBeUndefined();
+      });
+      it(`${rail.rail}: delivers a non-final payment response with final false`, async () => {
+        site.finalizedBlock = 10;
+        site.finalizedSlot = 10;
+        const { p, record } = await purchase(rail);
+        site.settle(p, { asset: "BTC", price: 64000 }, { transaction: rail.tx, payer: rail.payer });
+        const included = await settleOnce(record);
+        expect(included).toMatchObject({ code: 0, result: { state: "settled", paid: true, delivered: true, final: false } });
+        const response = z.object({ responseFile: z.string() }).parse(included.result);
+        expect(JSON.parse(readFileSync(response.responseFile, "utf8"))).toEqual({ asset: "BTC", price: 64000 });
+        expect(await settleOnce(approvals.readApproval(record.id))).toMatchObject({ code: 0, result: { paid: true, delivered: true, final: false } });
+        expect(approvals.readApproval(record.id).final).toBeUndefined();
+      });
+      it(`${rail.rail}: keeps a removed non-final payment unknown instead of a terminal failure`, async () => {
+        site.finalizedBlock = 10;
+        site.finalizedSlot = 10;
+        const { p, record } = await purchase(rail);
+        site.settle(p, "ok", { transaction: rail.tx, payer: rail.payer });
+        expect(await settleOnce(record)).toMatchObject({ code: 0, result: { paid: true, final: false } });
+        site.removePayment(rail.tx);
+        const removed = await settleOnce(approvals.readApproval(record.id));
+        expect(removed).toMatchObject({ code: 5, result: { state: "unknown", paid: null, final: false } });
+        expect(approvals.readApproval(record.id).final).toBeUndefined();
+        site.pay(p, { transaction: rail.tx, payer: rail.payer, chain: { failed: true } });
+        expect(await settleOnce(approvals.readApproval(record.id))).toMatchObject({ final: false, code: 5, result: { state: "unknown", paid: null, final: false } });
+        expect(approvals.readApproval(record.id).final).toBeUndefined();
+        expect(removed.result?.next).toMatch(/do not pay again/i);
+        expect(removed.result?.reason).toMatch(/earlier payment inclusion/i);
+      });
       it(`${rail.rail}: claims a provisional payment and finalizes only its original purchase`, async () => {
         site.finalizedBlock = 10;
         site.finalizedSlot = 10;

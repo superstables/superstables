@@ -86,6 +86,8 @@ export interface FakePurchaseSite extends TestServer {
   settle(p: FakePurchase, result?: unknown, paid?: Paid): void;
   /** Put a purchase's payment on the fake chain (as settle does). */
   pay(p: FakePurchase, paid?: Paid): void;
+  /** Remove a landed transaction to simulate a reorg, retaining the site's report. */
+  removePayment(transaction: string): void;
   /** The fake chain's JSON-RPC URL: B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC point at it. */
   chainUrl: string;
   /** Defaults below all payments to exercise delivery before finality. */
@@ -188,6 +190,7 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
   });
   // the fake chain: payments by transaction id
   const landed = new Map<string, { evm: boolean; payer: string; payTo: string; asset: string; amount: bigint; failed: boolean; at: number; block: number; nonce: string; receiptHash: string; tempo: boolean; raw?: string; missingMeta: boolean }>();
+  site.removePayment = (transaction) => { landed.delete(transaction); };
   site.pay = (p, paid = { transaction: TX, payer: PAYER }) => {
     const c = paid.chain === false ? {} : paid.chain ?? {};
     p.nonce ??= `0x${createHash("sha256").update(p.id).digest("hex")}`;

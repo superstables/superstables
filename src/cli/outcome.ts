@@ -92,6 +92,8 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
     case "settled":
       return attempt.chain === "verified"
         ? "Nothing to do: the service's answer is above, and `superstables receipts` lists the payment."
+        : attempt.paymentIncluded
+        ? `The payment landed and the service's answer is above. It is not final on chain yet; \`superstables status ${attempt.id}\` checks again.`
         : `Nothing to do: the service's answer is above. The seller reported the payment and the chain has not confirmed it yet; \`superstables status ${attempt.id}\` checks again.`;
     case "paid_service_failed":
       return `Do not pay again. \`superstables status ${attempt.id}\` shows the service's answer; report it to the seller.`;

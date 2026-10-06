@@ -839,11 +839,12 @@ function openUnknown(record, view) {
   const net = networkOfChain(record.chain);
   const site = siteName(record.hosted?.site ?? "");
   const h = (net ? evidenceOf(view, net).hashes[0] : undefined) ?? record.seen?.hashes?.[0];
+  const lostInclusion = record.included?.result?.paid === true;
   return {
     ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, purchase: record.hosted?.requestId, service: record.service?.id,
     state: "unknown", final: false, paid: null, delivered: null, amount: null, tx: h ? { settle: h } : {}, ...(h && net ? { txUrl: net.tx(h) } : {}),
-    next: `do not buy again. Check again later with superstables budget wait --id ${record.id} --shown. Tell the owner the payment outcome is not known yet`,
-    reason: reasonWithHash(openWords({ ...view, seen: record.seen, hash: h }, site), h),
+    next: `${lostInclusion ? "Do not pay again" : "do not buy again"}. Check again later with superstables budget wait --id ${record.id} --shown. Tell the owner the payment outcome is not known yet`,
+    reason: lostInclusion ? `the earlier payment inclusion could not be verified; outcome unknown. Do not pay again.${view.unreadable ? ` ${scrub(view.unreadable)}` : ""}` : reasonWithHash(openWords({ ...view, seen: record.seen, hash: h }, site), h),
   };
 }
 
@@ -872,10 +873,12 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
   // the owner's step is over, or an answer carried payment evidence, and the outcome is not established: unknown, not
   // stored, never "waiting for the owner"
   const reportedPaid = evidenceOf(r.view, networkOfChain(record.chain)).paid;
-  if (r.view.final !== true && !reportedPaid && (ownerStepOver(r.view) || !mayBeUnpaid(record.seen))) return { final: false, code: 5, result: openUnknown(record, r.view), record, view: r.view };
-  if (r.view.final !== true && !reportedPaid) return { final: false, record, view: r.view, words: record.cancelUnconfirmed ? `the cancel was not confirmed and ${siteName(h.site)} still has the purchase open (${siteWord("state", r.view.state)}); its approval link was never shown` : wordsOf(r.view, siteName(h.site)) };
+  const canReadPayment = reportedPaid || record.seen?.hashes?.length > 0;
+  if (r.view.final !== true && !canReadPayment && (ownerStepOver(r.view) || !mayBeUnpaid(record.seen))) return { final: false, code: 5, result: openUnknown(record, r.view), record, view: r.view };
+  if (r.view.final !== true && !canReadPayment) return { final: false, record, view: r.view, words: record.cancelUnconfirmed ? `the cancel was not confirmed and ${siteName(h.site)} still has the purchase open (${siteWord("state", r.view.state)}); its approval link was never shown` : wordsOf(r.view, siteName(h.site)) };
   const { code, result, keep } = await finalOf(record, r.view, { deadline });
-  if (r.view.final !== true && result.paid !== true) return { final: false, code: 5, result: openUnknown(record, r.view), record, view: r.view };
+  if (record.included?.result?.paid === true && result.paid !== true) return { final: false, code: 5, result: openUnknown(record, { ...r.view, unreadable: result.reason }), record, view: r.view };
+  if (r.view.final !== true && result.paid !== true && !reportedPaid) return { final: false, code: 5, result: openUnknown(record, r.view), record, view: r.view };
   // second layer: nothing shaped like a token is printed or stored
   result.reason = scrub(result.reason);
   result.next = scrub(result.next);
