@@ -502,6 +502,9 @@ Owner recovery after stopping all work on the operation. Plain --confirm require
 
 A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.
 
+--buy-once: Recover the buy-once start lock. Preserves the purchase record and payment evidence.
+  superstables budget unlock --buy-once --confirm [--unverified]
+
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
