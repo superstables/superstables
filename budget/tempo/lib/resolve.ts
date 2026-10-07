@@ -34,7 +34,7 @@ export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lo
     const receipt = await getReceipt(h, head?.number).catch(() => { unreadable = true; return null })
     if (!receipt) {
       // A seller's unverified hash is only a hint. An indexed payment without a receipt is unreadable.
-      if (memoHits.includes(h as Hex)) unreadable = true
+      if (memoHits.some(hit => hit === h)) unreadable = true
       continue
     }
     const signer = await getTxSigner(h).catch(() => null)
