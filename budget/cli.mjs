@@ -973,7 +973,8 @@ function run(spec) {
     };
     p.stderr.on("data", (d) => passErr(errScrub.push(String(d))));
     for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => { interrupted = true; try { if (own) process.kill(-p.pid, s); else p.kill(s); } catch {} });
-    p.on("error", (e) => { log(`superstables budget: could not start ${spec.cmd}: ${e.message}`); resolve({ code: 2, stdout }); });
+    // A spawn failure is bad input (2). A started child that failed before its script ran is a rail failure (1).
+    p.on("error", (e) => { log(`superstables budget: could not start ${spec.cmd}: ${e.message}`); resolve({ code: p.pid === undefined ? 2 : 1, stdout }); });
     p.on("close", (code, sig) => {
       if (partial) forward(partial);
       passErr(errScrub.end());

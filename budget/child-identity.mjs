@@ -38,8 +38,11 @@ export function spawnIdentified(command, args, options, platform = process.platf
     try { child.emit('identity', value.selfStartedAt); }
     catch (err) {
       starts.delete(child);
+      // Without the acknowledgement the gated child exits before running its script.
       pipe.destroy();
-      child.emit('error', err);
+      // Report after that exit, so callers release locks only once the child is gone.
+      if (child.exitCode !== null || child.signalCode !== null) child.emit('error', err);
+      else child.once('exit', () => child.emit('error', err));
       return;
     }
     pipe.end('1');

@@ -48,13 +48,13 @@ it('the CLI prints its existing error and RESULT when identity publication throw
   const r = spawnSync(process.execPath, ['--import', preload, '--import', injection, join(root, 'budget/cli.mjs'), 'preflight', '--rail', 'solana', '--url', 'https://example.com'], {
     env: { ...process.env, SUPERSTABLES_HOME: dir }, encoding: 'utf8', timeout: 30_000,
   });
-  expect(r.status, r.stdout + r.stderr).toBe(2);
+  expect(r.status, r.stdout + r.stderr).toBe(1);
   expect(r.stderr).toContain('could not start');
   expect(r.stderr).toContain('the lock .../oa-x.json.lock is held by process 123');
   expect(r.stderr).not.toContain('rail script ran');
   expect(r.stdout.trim().split('\n')).toHaveLength(1);
   expect(r.stdout).toContain('RESULT ');
-  expect(JSON.parse(r.stdout.slice(7))).toMatchObject({ command: 'preflight', state: 'failed', reason: 'the preflight script exited 2 without a RESULT line' });
+  expect(JSON.parse(r.stdout.slice(7))).toMatchObject({ command: 'preflight', state: 'failed', reason: 'the preflight script exited 1 without a RESULT line' });
 });
 it('replacement cannot signal a sandbox worker or change its approval after its fixture page cancels', () => {
   const dir = home();
@@ -63,6 +63,6 @@ it('replacement cannot signal a sandbox worker or change its approval after its 
 });
 it('failed rail lock publication reaches the child error handler before the script can run', () => {
   const dir = home(), path = join(dir, 'child.lock');
-  const r = run(dir, `import assert from'node:assert/strict';import fs from'node:fs';import{syncBuiltinESMExports}from'node:module';const {spawnIdentified}=await import(${JSON.stringify(join(root, 'budget/child-identity.mjs'))});const {lockFile}=await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});const lock=lockFile(${JSON.stringify(path)});assert.equal(lock.ok,true);const rename=fs.renameSync;fs.renameSync=(from,to)=>{if(to===${JSON.stringify(path)}&&JSON.parse(fs.readFileSync(from,'utf8')).railSelfStartedAt)throw Error('publication failed');return rename(from,to);};syncBuiltinESMExports();const child=spawnIdentified(process.execPath,['-e','console.log("rail script ran")'],{env:process.env,stdio:['ignore','pipe','pipe']});let errors=0,output='';child.on('error',e=>{assert.equal(e.message,'publication failed');errors++;});child.stdout.on('data',d=>output+=d);lock.holdAlso(child);await new Promise(resolve=>child.once('close',resolve));assert.equal(errors,1);assert.equal(output,'');assert.notEqual(child.exitCode,0);lock.release();`);
+  const r = run(dir, `import assert from'node:assert/strict';import fs from'node:fs';import{syncBuiltinESMExports}from'node:module';const {spawnIdentified}=await import(${JSON.stringify(join(root, 'budget/child-identity.mjs'))});const {lockFile}=await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});const lock=lockFile(${JSON.stringify(path)});assert.equal(lock.ok,true);const rename=fs.renameSync;fs.renameSync=(from,to)=>{if(to===${JSON.stringify(path)}&&JSON.parse(fs.readFileSync(from,'utf8')).railSelfStartedAt)throw Error('publication failed');return rename(from,to);};syncBuiltinESMExports();const child=spawnIdentified(process.execPath,['-e','console.log("rail script ran")'],{env:process.env,stdio:['ignore','pipe','pipe']});let errors=0,output='',exitedFirst=false;child.on('error',e=>{assert.equal(e.message,'publication failed');exitedFirst=child.exitCode!==null||child.signalCode!==null;errors++;});child.stdout.on('data',d=>output+=d);lock.holdAlso(child);await new Promise(resolve=>child.once('close',resolve));assert.equal(errors,1);assert.equal(exitedFirst,true);assert.equal(output,'');assert.notEqual(child.exitCode,0);lock.release();assert.equal(fs.existsSync(${JSON.stringify(path)}),false);`);
   expect(r.status, r.stdout + r.stderr).toBe(0);
 });
