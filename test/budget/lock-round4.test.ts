@@ -61,7 +61,7 @@ it('matching legacy Linux start with complete proc view is verified alive', () =
   const owner = { pid: 77, pidStart: `linux:${boot}:200`, owner: 'legacy' };
   expect(inspectLegacyCap(owner, source())).toEqual({ state: 'alive' });
 });
-it('equal boot IDs and PID namespaces prove the same kernel without a machine ID', () => {
+it('matching readable boot IDs and PID namespaces permit recovery without a machine ID under the shared-folder assumption', () => {
   const src = source({ machineId: '' });
   expect(inspectProcess({ ...src.record(), pid: 77 }, src)).toEqual({ state: 'dead' });
 });

@@ -13,6 +13,8 @@ const codex = process.env.CODEX_BIN ?? 'codex';
 const srt = process.env.SRT_BIN ?? 'srt';
 let sandboxKind = 'codex';
 const scratch = mkdtempSync(join(tmpdir(), 'superstables-native-macos-'));
+const srtSettings = join(scratch, 'srt-settings.json');
+writeFileSync(srtSettings, JSON.stringify({ network: { allowedDomains: [], deniedDomains: [] }, filesystem: { denyRead: [], allowWrite: [scratch], denyWrite: [] } }));
 const tsx = join(root, 'node_modules/tsx/dist/loader.mjs');
 const terminal = join(root, 'test/helpers/budget-owner-terminal.mjs');
 const blocked = join(root, 'test/helpers/budget-blocked-identity.mjs');
@@ -20,7 +22,7 @@ const outside = join(homedir(), `sbx-probe-${scratch.split('/').at(-1)}`);
 const children = new Map();
 const imports = `const fs=await import('node:fs');const {lockFile}=await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});const {withFileLock}=await import(${JSON.stringify(join(root, 'src/core/lock.ts'))});const a=await import(${JSON.stringify(join(root, 'budget/approvals.mjs'))});`;
 const sandboxBin = () => sandboxKind === 'srt' ? srt : codex;
-const sandboxArgs = (home, args) => [...(sandboxKind === 'srt' ? [] : ['sandbox', '-c', 'sandbox_mode="workspace-write"', '--']), 'env', `SUPERSTABLES_HOME=${home}`, process.execPath, ...args];
+const sandboxArgs = (home, args) => [...(sandboxKind === 'srt' ? ['--settings', srtSettings, '--'] : ['sandbox', '-c', 'sandbox_mode="workspace-write"', '--']), 'env', `SUPERSTABLES_HOME=${home}`, process.execPath, ...args];
 function run(home, args, sandbox = false, input) {
   return spawnSync(sandbox ? sandboxBin() : process.execPath, sandbox ? sandboxArgs(home, args) : args, { cwd: scratch, env: { ...process.env, SUPERSTABLES_HOME: home }, encoding: 'utf8', input, timeout: 30_000 });
 }

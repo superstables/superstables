@@ -178,9 +178,9 @@ function acquireSync(path, me, deadline, breakDead) {
       }
       if (Date.now() >= deadline) {
         throw new Error(holder
-          ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}${inspectProcess(holder).possiblyAlive ? "; " + paymentBusy : ", which is still running"}`
+          ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}${inspectProcess(holder).possiblyAlive ? ". " + paymentBusy : ", which is still running"}`
           : text === null ? `the lock ${path} could not be taken in time`
-            : `the lock ${path} cannot be read; ${paymentBusy}`);
+            : `the lock ${path} cannot be read. ${paymentBusy}`);
       }
       pauseSync(LOCK_RETRY_MS);
     }
@@ -396,7 +396,7 @@ function lockHeld(lock) {
 
 /** What a refusal can say about the holder: its record, or what the lock alone knows while it starts. */
 const holderOf = (lock, rail, chain) => lock.unreadable
-  ? { id: "unknown", rail, chain, command: `an unreadable lock (${lock.unreadable}); ${paymentBusy}` }
+  ? { id: "unknown", rail, chain, command: `an unreadable lock (${lock.unreadable}). ${paymentBusy}` }
   : readApproval(lock.id) ?? { id: lock.id, rail, chain, command: "an owner command (starting)" };
 
 /** The approval that holds this rail and chain, or null. */
@@ -873,14 +873,20 @@ export async function replacePending(record, byId) {
 }
 
 /** Owner recovery preserves approvals and submitted-payment evidence. Never fabricates a final RESULT. */
+export function approvalRecoveryTargetExists(rail, chain, id) {
+  if (!id) return true;
+  const selected = readApproval(id);
+  return selected ? selected.rail === rail && selected.chain === chain
+    : existsSync(recordLockFile(id)) || existsSync(recordLockFile(id) + '.break');
+}
+
 export function recoverApprovalLocks(rail, chain, options, id) {
-  const selected = id ? readApproval(id) : null;
-  if (id && ((!selected && !existsSync(recordLockFile(id)) && !existsSync(recordLockFile(id) + '.break')) || (selected && (selected.rail !== rail || selected.chain !== chain)))) return { outcome: 'not_found' };
+  if (!approvalRecoveryTargetExists(rail, chain, id)) return { outcome: 'not_found' };
   return recoveryResult(options, options => {
     if (!existsSync(approvalsDir())) return true;
     const records = readdirSync(approvalsDir()).filter(name => /^oa-.*\.json$/.test(name)).map(name => readApproval(name.slice(0, -5))).filter(record => record?.rail === rail && record.chain === chain);
     const recordChecks = record => {
-      if (!record || record.final) return [];
+      if (!record || record.final || (record.command === "buy-once" && record.pid === null)) return [];
       const checks = [inspectProcess(record), inspectProcess(record, undefined, true)];
       if (record.railPgid) checks.push(inspectProcess({ ...record, pid: record.railPgid, pidStart: record.railPgidStart, pidStartUtc: record.railPgidStartUtc, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs }, undefined, true));
       return checks;

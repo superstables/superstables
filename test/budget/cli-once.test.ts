@@ -803,7 +803,9 @@ describe("buy-once: the owner approves, the agent polls", () => {
     write(join(approvals(), "active-once-purchase"), JSON.stringify({ id: "oa-20260930120000-1a2b3c4d", pid: process.pid, pidStart: processStart(process.pid) ?? null, createdAt: Date.now() }));
     const r = await once();
     expect(r.code).toBe(3);
-    expect(r.result.reason).toMatch(/another buy-once is being started on this machine right now: one at a time/);
+    expect(r.result.reason).toBe("The start lock for a single purchase is held.");
+    expect(r.result.next).toContain("Stop and ask the owner to check it in their own terminal, outside the agent's sandbox.");
+    expect(r.result.next).toContain("If the original command returns an approval link, write it to the owner and end your turn.");
     // nothing was created on the site at all
     expect(site.purchases).toHaveLength(0);
   }, 60_000);
@@ -845,7 +847,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const [a, b] = await Promise.all([once(), once()]);
     expect([a.code, b.code].sort()).toEqual([0, 3]);
     const refused = a.code === 3 ? a : b;
-    expect(refused.result.reason).toMatch(/one at a time/);
+    expect(refused.result.reason).toBe("The start lock for a single purchase is held.");
     expect(site.purchases).toHaveLength(1);
   }, 30_000);
 
