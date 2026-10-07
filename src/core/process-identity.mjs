@@ -183,14 +183,16 @@ export function completeProcView(source = systemIdentity) {
   } catch { return false; }
 }
 
-/** Only short-lived legacy cap locks may use this initial-namespace upgrade proof. */
-export function inspectLegacyCap(owner, source = systemIdentity) {
+/**
+ * Legacy starts identify a live initial-namespace process only with a complete, unambiguous proc view.
+ * @returns {ProcessInspection}
+ */
+function inspectLegacyProcess(owner, source) {
   const possible = { state: 'alive', possiblyAlive: true, why: 'unverifiable legacy payment lock' };
-  if (Object.keys(owner).some(key => !['pid', 'pidStart', 'owner'].includes(key)) || typeof owner.owner !== 'string') return possible;
   const local = source.record();
-  if (local.platform !== 'linux' || source.nested() || !completeProcView(source) || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return possible;
+  if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) return possible;
   const bootId = typeof owner.pidStart === 'string' ? owner.pidStart.match(/^linux:([^:]+):\d+$/)?.[1] : undefined;
-  if (!sameBoot({ bootId }, local)) return possible;
+  if (!sameBoot({ bootId }, local) || local.platform !== 'linux' || local.namespace !== 'pid:[4026531836]' || source.nested() || !completeProcView(source)) return possible;
   let entries;
   try { entries = source.readdir('/proc'); } catch { return possible; }
   for (const entry of entries) {
@@ -204,6 +206,17 @@ export function inspectLegacyCap(owner, source = systemIdentity) {
   if (current === null || (typeof current === 'string' && typeof owner.pidStart === 'string' && compareProcessStarts(owner.pidStart, current) === false)) return { state: 'dead' };
   if (typeof current === 'string' && compareProcessStarts(owner.pidStart, current) === true) return { state: 'alive' };
   return possible;
+}
+
+/**
+ * Only short-lived legacy cap locks may use the legacy death proof.
+ * @returns {ProcessInspection}
+ */
+export function inspectLegacyCap(owner, source = systemIdentity) {
+  const check = inspectLegacyProcess(owner, source);
+  if (check.state === 'alive' && !check.possiblyAlive) return check;
+  if (Object.keys(owner).some(key => !['pid', 'pidStart', 'owner'].includes(key)) || typeof owner.owner !== 'string') return { state: 'alive', possiblyAlive: true, why: 'unverifiable legacy payment lock' };
+  return check;
 }
 
 /** Map an inner PID (or group) only from a readable initial namespace. */
@@ -279,6 +292,10 @@ export function inspectProcess(owner, source = systemIdentity, group = false) {
   /** @type {(why: string) => ProcessInspection} */
   const possible = why => ({ state: 'alive', possiblyAlive: true, pid: owner.pid, why });
   if (owner.platform && owner.platform !== local.platform) return possible('another OS');
+  if (!owner.bootId) {
+    const legacy = inspectLegacyProcess(owner, source);
+    if (legacy.state === 'alive' && !legacy.possiblyAlive) return legacy;
+  }
   if (!uuid(owner.bootId) || !uuid(local.bootId)) return possible('unreadable boot identity');
   if (!sameBoot(owner, local)) return possible('another boot');
   // Equal boot UUIDs prove a common kernel without a machine-id. Foreign namespace scans still require host evidence.

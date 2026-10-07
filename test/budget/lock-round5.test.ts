@@ -98,11 +98,14 @@ it.runIf(process.platform === 'linux')('an unavailable boot clock never proves a
   const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
   try {
     await once(child, 'spawn');
-    const working = createIdentitySource(), denied = createIdentitySource({ bootElapsed: deniedUptime });
+    const real = createIdentitySource();
+    const bootElapsed = () => 300_000;
+    const start = (pid: number) => pid === child.pid ? `linux:${real.record().bootId}:18000` : real.start(pid);
+    const readFile = (path: string, encoding: BufferEncoding) => path === '/proc/stat' ? `btime ${Math.floor(Date.now() / 1000) - 300}\n` : readFileSync(path, encoding);
+    const run = () => '100';
+    const working = createIdentitySource({ bootElapsed, start, readFile, run }), denied = createIdentitySource({ bootElapsed: deniedUptime, start, readFile, run });
     expect(denied.record().bootElapsedMs).toBeUndefined();
-    const ticks = Number(String(working.start(child.pid)).split(':').at(-1)), hz = Number(spawnSync('getconf', ['CLK_TCK'], { encoding: 'utf8' }).stdout);
-    const childStartedMs = ticks / hz * 1000, bootElapsedMs = childStartedMs - 120_000;
-    if (!(bootElapsedMs > 0)) return; // The host booted less than two minutes before the test.
+    const bootElapsedMs = 60_000;
     // The holder wrote before the child existed, so a readable boot clock proves the PID was reused.
     const owner = { ...working.record(), pid: child.pid, pidStart: null, pidStartUtc: null, hostPid: null, bootElapsedMs, writtenAt: Date.now() - (working.bootElapsed() - bootElapsedMs) };
     const attempt = (record: object, identitySource: object) => {

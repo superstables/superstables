@@ -340,10 +340,10 @@ with the holder, lock path and owner recovery guidance in next. Never buy again 
     }),
   },
   unlock: {
-    flags: { op: "v", cap: "b", approvals: "b", approval: "v", attempt: "v", confirm: "b", unverified: "b" }, required: [],
+    flags: { op: "v", cap: "b", "buy-once": "b", approvals: "b", approval: "v", attempt: "v", confirm: "b", unverified: "b" }, required: [],
     help: helpText({
       usage: "superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --attempt ID) --confirm [--unverified]",
-      about: "Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.\n\n--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.\n\n--cap: Recover the core payment lock. --approvals: Recover approval locks on this rail and chain. --approval ID: Also recover the record lock for this approval. --attempt ID: Release an attempt runner for read-only reconciliation. Stop all payment work across processes, containers and hosts first. Payment-lock recovery uses the exact confirmation payment-lock, or payment-lock unverified with --unverified. Preserves payment evidence. Run status for the original attempt or wait for the original approval next.\n\nA holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.",
+      about: "Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.\n\n--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.\n\n--cap: Recover the core payment lock. --approvals: Recover approval locks on this rail and chain. --approval ID: Also recover the record lock for this approval. --attempt ID: Release an attempt runner for read-only reconciliation. Stop all payment work across processes, containers and hosts first. Payment-lock recovery uses the exact confirmation payment-lock, or payment-lock unverified with --unverified. Preserves payment evidence. Run status for the original attempt or wait for the original approval next.\n\nA holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.\n\n--buy-once: Recover the buy-once start lock. Preserves the purchase record and payment evidence.\n  superstables budget unlock --buy-once --confirm [--unverified]",
       money: "no. It never signs or sends.", who: "the owner or operator, after stopping the processes.",
       example: "superstables budget unlock --rail solana --op order-001 --confirm",
       prints: "one RESULT with state, reason and next, plus the operation or attempt ID when selected. Without --confirm, a terminal or matching typed confirmation: exit 3. Missing operation, attempt or approval: exit 3. Busy: exit 5. Cleared or no lock: exit 0.",
@@ -670,9 +670,13 @@ function parse(argv) {
     else f[name] = v;
   }
   if (cmd === "unlock") {
-    if ([f.op !== undefined, Boolean(f.cap), Boolean(f.approvals), f.approval !== undefined, f.attempt !== undefined].filter(Boolean).length !== 1) return badInput({ command: cmd }, "choose exactly one unlock target: --op, --cap, --approvals, --approval or --attempt");
+    if ([f.op !== undefined, Boolean(f.cap), Boolean(f["buy-once"]), Boolean(f.approvals), f.approval !== undefined, f.attempt !== undefined].filter(Boolean).length !== 1) return badInput({ command: cmd }, "choose exactly one unlock target: --op, --cap, --approvals, --approval or --attempt");
     if (f.approval !== undefined && !isApprovalId(f.approval)) return badInput({ command: cmd }, "--approval must be an approval ID");
     if (f.attempt !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(f.attempt)) return badInput({ command: cmd }, "--attempt must be a record ID");
+    if (f["buy-once"]) {
+      if (f.rail || f.chain) return badInput({ command: cmd }, "--buy-once does not take --rail or --chain");
+      return { cmd, f, ctx: { command: cmd } };
+    }
     if (f.cap || f.attempt) {
       if (f.rail || f.chain) return badInput({ command: cmd }, "--cap and --attempt do not take --rail or --chain");
       return { cmd, f, ctx: { command: cmd } };
@@ -1384,7 +1388,7 @@ async function unlockPayment({ f, ctx }) {
   const options = { unverified: Boolean(f.unverified), onOverride: () => {
     if (!noticed) { noticed = true; log('Clearing the payment lock without proof that its process has stopped. You confirmed that all payment work has stopped.'); }
   } };
-  const recovery = f.cap ? recoverCap(HOME, options) : f.attempt ? recoverAttempt(HOME, f.attempt, options) : recoverApprovalLocks(f.rail, f.chain, options, f.approval);
+  const recovery = f.cap ? recoverCap(HOME, options) : f.attempt ? recoverAttempt(HOME, f.attempt, options) : f["buy-once"] ? recoverApprovalLocks("once", "purchase", options) : recoverApprovalLocks(f.rail, f.chain, options, f.approval);
   if (recovery.outcome === 'not_found') return emit(3, { ...fields, state: 'refused_precheck', reason: f.attempt ? 'attempt_not_found' : 'approval_not_found', next: f.attempt ? 'check the original attempt ID and record directory' : 'check the original rail, chain and approval ID' });
   if (['busy', 'unverifiable'].includes(recovery.outcome)) {
     if (recovery.outcome === 'unverifiable' && !f.unverified) log("Cannot clear the payment lock because Superstables cannot confirm that its process has stopped. Run the command in your own terminal, outside any agent's sandbox. If the check still fails, stop every process working under the payment lock across all containers and hosts, then rerun the same command with --confirm --unverified.");
