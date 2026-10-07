@@ -209,9 +209,7 @@ export function lockFile(path, options = {}) {
         const child = { pid, ...(source(options).fields?.(pid) ?? source(options).starts?.(pid) ?? { pidStart: source(options).start(pid) ?? null }), writtenAt: Date.now() };
         if (child.platform === 'darwin' && typeof processOrPid === 'object') {
           child.selfStartedAt = startedAt ?? childStartedAt(processOrPid) ?? child.selfStartedAt;
-          if (startedAt === undefined) processOrPid.once('identity', value => {
-            try { holdAlso(processOrPid, value); } catch { processOrPid.kill(); }
-          });
+          if (startedAt === undefined) processOrPid.once('identity', value => holdAlso(processOrPid, value));
         }
         // Retain the lock even if publication fails after the child was spawned.
         railOwner = child;

@@ -1837,7 +1837,7 @@ if (WORKER_ID) {
   setTimeout(async () => {
     const pgid = currentChild?.pid;
     const worker = readApproval(WORKER_ID);
-    if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc, location: worker ? { ...worker, namespace: 'railNamespace' in worker ? worker.railNamespace : worker.namespace, writtenAt: worker.railWrittenAt, bootElapsedMs: worker.railBootElapsedMs, createdAt: undefined } : {} }))) {
+    if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc, location: worker ? { ...worker, selfStartedAt: worker.railSelfStartedAt, namespace: 'railNamespace' in worker ? worker.railNamespace : worker.namespace, writtenAt: worker.railWrittenAt, bootElapsedMs: worker.railBootElapsedMs, createdAt: undefined } : {} }))) {
       // no result while its page may still run: the chain stays held, and wait keeps trying to stop the group
       log(`superstables budget: the approval ran past its deadline and process group ${pgid} would not stop; no result is recorded`);
       process.exit(5);

@@ -35,7 +35,13 @@ export function spawnIdentified(command, args, options, platform = process.platf
     try { value = JSON.parse(text); } catch { pipe.destroy(); return; }
     if (value?.pid !== child.pid || typeof value.selfStartedAt !== 'number' || !Number.isFinite(value.selfStartedAt) || value.selfStartedAt <= 0) { pipe.destroy(); return; }
     starts.set(child, value.selfStartedAt);
-    child.emit('identity', value.selfStartedAt);
+    try { child.emit('identity', value.selfStartedAt); }
+    catch (err) {
+      starts.delete(child);
+      pipe.destroy();
+      child.emit('error', err);
+      return;
+    }
     pipe.end('1');
   };
   pipe.on('data', receive);

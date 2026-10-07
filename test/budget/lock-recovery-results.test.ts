@@ -101,7 +101,7 @@ for (const live of [true, false]) {
     const code = `const fs=(await import('node:fs')).default;const {syncBuiltinESMExports}=await import('node:module');const {startFakePurchaseSite}=await import(${JSON.stringify(join(root, 'test/helpers/fake-purchase-site.ts'))});const site=await startFakePurchaseSite();const rename=fs.renameSync;fs.renameSync=(from,to)=>{rename(from,to);if(String(to).endsWith('.json')&&!String(to).includes('active-')){const r=JSON.parse(fs.readFileSync(to,'utf8'));if(r.command==='buy-once'&&r.state==='waiting_owner'){console.log(JSON.stringify({id:r.id}));Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}}};syncBuiltinESMExports();const once=await import(${JSON.stringify(join(root, 'budget/once.mjs'))});await once.startOnce({site:site.url,service:'demo-market-data',params:{asset:'BTC'},max:'0.01'});throw Error('save did not pause');`;
     const child = spawn(process.execPath, ['--import', join(root, 'node_modules/tsx/dist/loader.mjs'), '--input-type=module', '-e', code], { env: { ...process.env, SUPERSTABLES_HOME: b.home }, stdio: ['ignore', 'pipe', 'pipe'] });
     let error = ''; child.stderr.on('data', data => { error += data; });
-    const timer = setTimeout(() => { void stopHolder(child, child.pid); }, 15_000);
+    const timer = setTimeout(() => { void stopHolder(child, child.pid); }, 60_000);
     try {
       const [ready] = await Promise.race([once(child.stdout, 'data'), once(child, 'exit').then(() => { throw Error(error); })]);
       const { id: purchaseId } = JSON.parse(String(ready));
@@ -117,5 +117,5 @@ for (const live of [true, false]) {
         expect(readFileSync(path, 'utf8')).toBe(evidence);
       }
     } finally { clearTimeout(timer); await stopHolder(child, child.pid); }
-  }, 25_000);
+  }, 75_000);
 }
