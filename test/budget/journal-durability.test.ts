@@ -112,7 +112,7 @@ describe('Tempo memo recovery and push expiry', () => {
   it('a legacy quote-only journal resolves to the quote answer after complete absence', () => {
     expect(reconcile({ reason: 'quote_only' }, 'absent').result.state).toBe('quoted');
   });
-  it.each(['recent', 'unreadable', 'missing-block', 'short-block', 'short-transactions', 'short-range', 'lagging-head'])('legacy quoted with %s history is unknown for now', scenario => {
+  it.each(['recent', 'unreadable', 'range-fails', 'short-range', 'lagging-head', 'invalid-head'])('legacy quoted with %s history is unknown for now', scenario => {
     expect(reconcile({}, scenario).result.state).toBe('unknown');
   });
   it.each(['recent', 'unreadable'])('legacy quote-only with %s history retains its recovery identity', scenario => {
@@ -135,8 +135,48 @@ describe('Tempo memo recovery and push expiry', () => {
     expect(second.status, second.stderr + second.stdout).toBe(reason === 'quote_only' ? 0 : 1);
     expect(JSON.parse(readFileSync(journal, 'utf8')).state).toBe(reason === 'quote_only' ? 'quoted' : 'not_found');
   });
-  it('an already not_found operation stays not_found on another reconcile', () => {
-    expect(reconcile({ state: 'not_found', reason: 'never signed: interrupted before the payment was created' }, 'unreadable').result.state).toBe('not_found');
+  it.each([undefined, 1])('not_found with marker %s is searched again and settles a payment', journalVersion => {
+    const r = reconcile({ journalVersion, state: 'not_found', reason: 'never signed: interrupted before the payment was created' }, 'found');
+    expect(r.result).toMatchObject({ state: 'settled', debit: '0.001' });
+    expect(r.calls).toContain('eth_getLogs');
+  });
+  it('complete absence preserves a stored not_found answer', () => {
+    const r = reconcile({ state: 'not_found', reason: 'never signed: interrupted before the payment was created' }, 'absent');
+    expect(r.result).toMatchObject({ state: 'not_found', debit: '0', reason: 'never signed: interrupted before the payment was created' });
+    expect(r.calls).toContain('eth_getLogs');
+  });
+  it('unreadable not_found is unknown for this run and remains searchable on disk', () => {
+    const dir = home(); const ops = join(dir, 'budget/ops/tempo-moderato'); mkdirSync(ops, { recursive: true });
+    const journal = join(ops, 'durability-test.json');
+    const record = { ...op(), state: 'not_found', reason: 'never signed: interrupted before the payment was created' };
+    writeFileSync(journal, JSON.stringify(record));
+    const failed = run('budget-tempo-reconcile-rpc.mjs', dir, [], { TEMPO_SCENARIO: 'unreadable' });
+    expect(failed.status, failed.stderr + failed.stdout).toBe(5);
+    expect(failed.stdout).toContain('UNKNOWN: transaction inclusion unreadable');
+    expect(failed.stdout).not.toContain('Run reconcile again after its validBefore');
+    expect(JSON.parse(readFileSync(journal, 'utf8'))).toEqual(record);
+    const recovered = run('budget-tempo-reconcile-rpc.mjs', dir, [], { TEMPO_SCENARIO: 'found' });
+    expect(recovered.status, recovered.stderr + recovered.stdout).toBe(0);
+    expect(JSON.parse(readFileSync(journal, 'utf8')).state).toBe('settled');
+  });
+  it.each([null, '1', 0, 2])('marker %s takes the legacy path and finds a payment', journalVersion => {
+    const r = reconcile({ journalVersion }, 'found');
+    expect(r.result.state).toBe('settled');
+    expect(r.calls).toContain('eth_getLogs');
+  });
+  it('an old never-signed result after the recovery-bound write still finds the payment', () => {
+    const r = reconcile({ state: 'not_found', legacyQuotedBefore: 1000, reason: 'never signed: interrupted before the payment was created' }, 'found');
+    expect(r.result).toMatchObject({ state: 'settled', debit: '0.001' });
+  });
+  it.each(['push', 'pull'])('%s: a seller hash without a receipt does not block expired absence', mode => {
+    const r = reconcile({ state: 'submitted', tx: `0x${'de'.repeat(32)}`, validBefore: 1100, intent: { ...op().intent, mode } }, 'absent');
+    expect(r.result.state).toBe('not_found');
+  });
+  it('a seller hash without a receipt before expiry stays unknown', () => {
+    expect(reconcile({ state: 'submitted', tx: `0x${'de'.repeat(32)}`, validBefore: 1250 }, 'absent').result.state).toBe('unknown');
+  });
+  it('a memo hit with no receipt cannot prove absence', () => {
+    expect(reconcile({ state: 'submitted', validBefore: 1100 }, 'missing-receipt').result.state).toBe('unknown');
   });
   it('submitted: absent memo and expired bound proves unpaid', () => {
     const r = reconcile({ state: 'submitted', validBefore: 1100 }, 'absent');
@@ -145,14 +185,18 @@ describe('Tempo memo recovery and push expiry', () => {
   it('submitted: absent memo and live bound remains unknown', () => {
     expect(reconcile({ state: 'submitted', validBefore: 1250 }, 'absent').result).toMatchObject({ state: 'unknown', debit: null });
   });
-  it.each(['unreadable', 'range-fails', 'missing-block', 'short-block', 'short-transactions', 'short-range', 'lagging-head'])('an expired bound with %s history remains unknown', scenario => {
+  it.each(['unreadable', 'range-fails', 'short-range', 'lagging-head', 'invalid-head'])('an expired bound with %s history remains unknown', scenario => {
     expect(reconcile({ state: 'submitted', validBefore: 1100 }, scenario).result.state).toBe('unknown');
   });
   it.each(['push', 'pull'])('%s: alternating heads cannot turn a payment beyond the lagging head into not_found', mode => {
     expect(reconcile({ state: 'submitted', validBefore: 1100, intent: { ...op().intent, mode } }, 'alternating-heads').result.state).toBe('unknown');
   });
-  it('a payment missing from a short log range is still found in the complete blocks', () => {
-    expect(reconcile({ state: 'submitted', validBefore: 1100 }, 'omitted-index').result.state).toBe('settled');
+  it('a multi-range complete search has a small bounded call count and no block scans', () => {
+    const r = reconcile({ state: 'submitted', validBefore: 1100 }, 'multi-range');
+    expect(r.result.state).toBe('not_found');
+    expect(r.calls.filter((x: string) => x === 'eth_getLogs')).toHaveLength(2);
+    expect(r.calls.length).toBeLessThanOrEqual(10);
+    expect(r.calls).not.toContain('eth_getBlockTransactionCountByHash');
   });
   it('an included push hash cannot expire when later receipt reads are missing', () => {
     expect(reconcile({ state: 'submitted', validBefore: 1100, expectedTx: `0x${'ab'.repeat(32)}` }, 'absent').result.state).toBe('unknown');

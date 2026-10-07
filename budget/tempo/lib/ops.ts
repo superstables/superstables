@@ -24,7 +24,7 @@ export type Op = {
   rail: 'tempo'
   kind: 'buy' | 'pay'
   journalVersion?: 1 // durable quoted/submitted ordering for this attempt; never added to a legacy journal
-  legacyQuotedBefore?: number // first locked reconcile time: the legacy buyer had exited before this
+  legacyQuotedBefore?: number // first dispatcher-locked reconcile time, relying on death or owner confirmation
   chain_final?: boolean | null
   state: OpState
   createdAt: string

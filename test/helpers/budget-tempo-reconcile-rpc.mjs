@@ -28,7 +28,8 @@ globalThis.fetch = async (_url, init) => {
       const latest = q.params[0] === 'latest';
       if (latest) headReads++;
       if (!latest && scenario === 'missing-block' && q.params[0] === '0x15') { result = null; break; }
-      result = { number: latest ? (scenario === 'range-fails' ? '0x30d40' : scenario === 'lagging-head' && headReads > 1 ? '0x12' : '0x20') : q.params[0], timestamp: scenario === 'recent' ? '0x3fc' : '0x4b0', hash: blockHash, transactions: found && q.params[0] === '0x10' ? [hash] : [] };
+      result = { number: latest ? (['range-fails', 'multi-range'].includes(scenario) ? '0x30d40' : scenario === 'lagging-head' && headReads > 1 ? '0x12' : '0x20') : q.params[0], timestamp: scenario === 'recent' ? '0x3fc' : '0x4b0', hash: blockHash, transactions: found && q.params[0] === '0x10' ? [hash] : [] };
+      if (latest && scenario === 'invalid-head') result.timestamp = 'not-a-time';
       if (latest && scenario === 'alternating-heads') {
         result.number = headReads % 2 ? '0xc' : '0x20';
         result.timestamp = '0x' + ((record.validBefore ?? 1100) + (headReads % 2 ? -30 : 60)).toString(16);
@@ -40,7 +41,7 @@ globalThis.fetch = async (_url, init) => {
     case 'eth_getBlockTransactionCountByHash': result = scenario === 'short-transactions' ? '0x1' : '0x' + lastBlock.transactions.length.toString(16); break;
     case 'eth_getLogs':
       if (scenario === 'unreadable' || (scenario === 'range-fails' && calls.filter(x => x === 'eth_getLogs').length >= 2)) return new Response(JSON.stringify({ id: q.id, jsonrpc: '2.0', error: { code: -32000, message: 'history unavailable' } }));
-      result = scenario === 'short-range' ? null : scenario === 'found' || (scenario === 'alternating-heads' && BigInt(q.params[0].toBlock) >= 16n) ? [logs[1]] : []; break;
+      result = scenario === 'short-range' ? null : ['found', 'missing-receipt'].includes(scenario) || (scenario === 'alternating-heads' && BigInt(q.params[0].toBlock) >= 16n) ? [logs[1]] : []; break;
     case 'eth_getTransactionReceipt': result = found ? { transactionHash: hash, blockHash, blockNumber: '0x10', status: '0x1', logs } : null; break;
     case 'eth_getTransactionByHash': result = found ? { from: record.intent.owner, signature: { keyId: record.intent.agent } } : null; break;
     default: result = '0x' + '00'.repeat(256);
