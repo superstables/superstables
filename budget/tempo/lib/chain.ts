@@ -43,6 +43,7 @@ export async function rpcRead(method: string, params: unknown[]): Promise<any> {
 export type ChainReceipt = {
   status: 'success' | 'reverted'
   blockNumber: bigint
+  blockHash: Hex
   transactionHash: Hex
   feePayer?: Address
   from?: Address
@@ -52,7 +53,7 @@ export type ChainReceipt = {
 }
 
 /** Tempo has instant BFT finality. A receipt still needs canonical committed inclusion. */
-export async function getReceipt(hash: string): Promise<ChainReceipt | null> {
+export async function getReceipt(hash: string, minimumHead?: bigint): Promise<ChainReceipt | null> {
   const r = await rpcRead('eth_getTransactionReceipt', [hash])
   if (!r) return null
   const quantity = (v: unknown): v is string => typeof v === 'string' && /^0x[0-9a-fA-F]+$/.test(v)
@@ -60,11 +61,13 @@ export async function getReceipt(hash: string): Promise<ChainReceipt | null> {
   if (!blockHash(r.transactionHash) || r.transactionHash.toLowerCase() !== hash.toLowerCase() || !quantity(r.blockNumber) || !blockHash(r.blockHash) || !Array.isArray(r.logs) || r.logs.some((l: { removed?: boolean }) => l?.removed) || !['0x0', '0x1'].includes(r.status)) throw new Error('transaction inclusion unreadable')
   const head = await rpcRead('eth_getBlockByNumber', [finalityFor('tempo', 'moderato') === 'instant' ? 'latest' : 'finalized', false])
   if (!quantity(head?.number) || BigInt(r.blockNumber) > BigInt(head.number)) throw new Error('transaction is not in a committed block')
+  if (minimumHead !== undefined && BigInt(head.number) < minimumHead) throw new Error('transaction inclusion unreadable')
   const block = await rpcRead('eth_getBlockByNumber', [r.blockNumber, false])
   if (!quantity(block?.number) || BigInt(block.number) !== BigInt(r.blockNumber) || !blockHash(block?.hash) || block.hash.toLowerCase() !== r.blockHash.toLowerCase()) throw new Error('transaction canonical inclusion unreadable')
   return {
     status: r.status === '0x1' ? 'success' : 'reverted',
     blockNumber: BigInt(r.blockNumber),
+    blockHash: r.blockHash,
     transactionHash: r.transactionHash,
     feePayer: r.feePayer,
     from: r.from,
@@ -96,6 +99,7 @@ export async function getTxSigner(hash: string): Promise<{ from?: Address; keyId
 
 export async function chainHead(): Promise<{ number: bigint; timestamp: number }> {
   const b = await rpcRead('eth_getBlockByNumber', [finalityFor('tempo', 'moderato') === 'instant' ? 'latest' : 'finalized', false])
+  if (!/^0x[0-9a-f]+$/i.test(b?.number) || !/^0x[0-9a-f]+$/i.test(b?.timestamp)) throw new Error('transaction inclusion unreadable')
   return { number: BigInt(b.number), timestamp: parseInt(b.timestamp, 16) }
 }
 
@@ -191,18 +195,43 @@ export function mppMemo(challengeId: string, realm: string): Hex {
   return ('0x' + Buffer.from(buf).toString('hex')) as Hex
 }
 
-/** Transactions with a pathUSD TransferWithMemo owner -> recipient carrying `memo`, from `fromBlock` to head (indexed, cheap). */
-export async function findByMemo(owner: Address, recipient: Address, memo: Hex, fromBlock: bigint): Promise<Hex[]> {
-  const head = (await chainHead()).number
+/** Indexed discovery to the caller's pinned head. An empty log result alone is not negative proof. */
+export async function findByMemo(owner: Address, recipient: Address, memo: Hex, fromBlock: bigint, head: bigint): Promise<Hex[]> {
   const hashes: Hex[] = []
   const RANGE = 100_000n
   for (let from = fromBlock; from <= head; from += RANGE) {
     const to = from + RANGE - 1n > head ? head : from + RANGE - 1n
-    const logs = (await rpcRead('eth_getLogs', [
+    const logs = await rpcRead('eth_getLogs', [
       { address: TOKEN_ADDRESS, fromBlock: '0x' + from.toString(16), toBlock: '0x' + to.toString(16), topics: [TRANSFER_WITH_MEMO_TOPIC, topicOf(owner), topicOf(recipient), memo] },
-    ])) as { transactionHash: Hex }[]
-    for (const l of logs) if (!hashes.includes(l.transactionHash)) hashes.push(l.transactionHash)
+    ])
+    if (!Array.isArray(logs)) throw new Error('transaction inclusion unreadable')
+    for (const l of logs) {
+      if (!l || typeof l.transactionHash !== 'string' || !/^0x[0-9a-f]{64}$/i.test(l.transactionHash) || !/^0x[0-9a-f]+$/i.test(l.blockNumber) || BigInt(l.blockNumber) < from || BigInt(l.blockNumber) > to || l.removed) throw new Error('transaction inclusion unreadable')
+      if (!hashes.includes(l.transactionHash)) hashes.push(l.transactionHash)
+    }
   }
+  return hashes
+}
+
+/** Check every block and receipt in the pinned window, including payments omitted by the log index. */
+export async function completeMemoSearch(owner: Address, recipient: Address, memo: Hex, fromBlock: bigint, head: bigint): Promise<Hex[]> {
+  if (fromBlock > head) throw new Error('transaction inclusion unreadable')
+  const hashes: Hex[] = []
+  for (let number = fromBlock; number <= head; number++) {
+    const block = await rpcRead('eth_getBlockByNumber', ['0x' + number.toString(16), false])
+    if (!block || !/^0x[0-9a-f]+$/i.test(block.number) || BigInt(block.number) !== number || !/^0x[0-9a-f]{64}$/i.test(block.hash) || !Array.isArray(block.transactions)) throw new Error('transaction canonical inclusion unreadable')
+    const count = await rpcRead('eth_getBlockTransactionCountByHash', [block.hash])
+    if (typeof count !== 'string' || !/^0x[0-9a-f]+$/i.test(count) || BigInt(count) !== BigInt(block.transactions.length) || new Set(block.transactions).size !== block.transactions.length) throw new Error('transaction inclusion unreadable')
+    for (const hash of block.transactions) {
+      if (typeof hash !== 'string' || !/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error('transaction inclusion unreadable')
+      const receipt = await getReceipt(hash, head)
+      if (!receipt || receipt.blockNumber !== number || receipt.blockHash.toLowerCase() !== block.hash.toLowerCase()) throw new Error('transaction inclusion unreadable')
+      const hit = receipt.memos.some(m => m.token.toLowerCase() === TOKEN_ADDRESS.toLowerCase() && m.from.toLowerCase() === owner.toLowerCase() && m.to.toLowerCase() === recipient.toLowerCase() && m.memo.toLowerCase() === memo.toLowerCase())
+      if (hit && !hashes.includes(receipt.transactionHash)) hashes.push(receipt.transactionHash)
+    }
+  }
+  // A replica answering subsequent reads must have reached the same committed head.
+  if ((await chainHead()).number < head) throw new Error('transaction inclusion unreadable')
   return hashes
 }
 

@@ -23,6 +23,8 @@ export type Op = {
   op: string
   rail: 'tempo'
   kind: 'buy' | 'pay'
+  journalVersion?: 1 // durable quoted/submitted ordering for this attempt; never added to a legacy journal
+  legacyQuotedBefore?: number // first locked reconcile time: the legacy buyer had exited before this
   chain_final?: boolean | null
   state: OpState
   createdAt: string
@@ -71,6 +73,7 @@ export function readOp(id: string): Op | undefined {
 
 export function writeOp(op: Op, note?: string): Op {
   const p = pathFor(op.op)
+  if (!existsSync(p)) op.journalVersion = 1
   const now = new Date().toISOString()
   const last = op.history[op.history.length - 1]
   if (!last || last.state !== op.state || note) op.history.push({ at: now, state: op.state, ...(note ? { note } : {}) })

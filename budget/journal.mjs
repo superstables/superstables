@@ -27,11 +27,6 @@ export function writeJournalFile(path, text) {
     try { writeFileSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(tmp, path);
     syncDirectory(directory);
-    // A lock or setup command may have just created these directories without syncing their parents.
-    for (let parent = dirname(directory); ; parent = dirname(parent)) {
-      syncDirectory(parent);
-      if (parent === dirname(parent)) break;
-    }
   } finally {
     try { unlinkSync(tmp); } catch (err) { if (err.code !== 'ENOENT') throw err; }
   }

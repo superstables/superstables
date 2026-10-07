@@ -38,7 +38,7 @@ describe('mppx local push validity', () => {
     const challenge = Challenge.from({ id: 'validity-test', realm: 'seller.example', method: 'tempo' as const, intent: 'charge' as const, ...(expires ? { expires } : {}), request: { amount: '1000', decimals: 6, currency: '0x20C0000000000000000000000000000000000000', recipient: '0x3333333333333333333333333333333333333333', methodDetails: { chainId: 42431, supportedModes: ['push'] } } });
     // mppx computes its lifetime after resolving the client/account. A stalled process must not extend it.
     vi.spyOn(Date, 'now').mockReturnValue(1_040_000);
-    const credential = await method.createCredential({ challenge: { ...challenge, method: 'tempo', intent: 'charge' } });
+    const credential = await method.createCredential({ context: {}, challenge: { ...challenge, method: 'tempo', intent: 'charge', request: { ...challenge.request, methodDetails: { chainId: 42431, supportedModes: ['push'] } } } });
     expect(Credential.deserialize(credential).payload).toEqual({ type: 'hash', hash });
     expect(broadcast).toHaveBeenCalledOnce();
     expect(Transaction.deserialize(signed!)).toMatchObject({ validBefore: limit, nonceKey: 2n ** 256n - 1n });

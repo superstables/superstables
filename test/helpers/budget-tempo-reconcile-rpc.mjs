@@ -14,16 +14,33 @@ const transferTopic = keccak256(toBytes('Transfer(address,address,uint256)'));
 const base = { address: record.intent.token, transactionHash: hash, blockHash, blockNumber: '0x10', removed: false, data: '0x' + BigInt(record.intent.amount).toString(16).padStart(64, '0') };
 const logs = [{ ...base, topics: [transferTopic, topic(record.intent.owner), topic(record.intent.recipient)] }, { ...base, topics: [memoTopic, topic(record.intent.owner), topic(record.intent.recipient), record.memo] }];
 const calls = [];
+Date.now = () => 1_000_000;
+const scenario = process.env.TEMPO_SCENARIO;
+let headReads = 0;
+let lastBlock;
 globalThis.fetch = async (_url, init) => {
   const q = JSON.parse(init.body); calls.push(q.method); writeFileSync(join(dir, 'calls.json'), JSON.stringify(calls));
-  const found = process.env.TEMPO_SCENARIO === 'found';
+  const found = ['found', 'omitted-index'].includes(scenario);
   let result;
   switch (q.method) {
     case 'eth_chainId': result = '0xa5bf'; break;
-    case 'eth_getBlockByNumber': result = { number: q.params[0] === 'latest' ? '0x20' : q.params[0], timestamp: '0x4b0', hash: blockHash }; break;
+    case 'eth_getBlockByNumber': {
+      const latest = q.params[0] === 'latest';
+      if (latest) headReads++;
+      if (!latest && scenario === 'missing-block' && q.params[0] === '0x15') { result = null; break; }
+      result = { number: latest ? (scenario === 'range-fails' ? '0x30d40' : scenario === 'lagging-head' && headReads > 1 ? '0x12' : '0x20') : q.params[0], timestamp: scenario === 'recent' ? '0x3fc' : '0x4b0', hash: blockHash, transactions: found && q.params[0] === '0x10' ? [hash] : [] };
+      if (latest && scenario === 'alternating-heads') {
+        result.number = headReads % 2 ? '0xc' : '0x20';
+        result.timestamp = '0x' + ((record.validBefore ?? 1100) + (headReads % 2 ? -30 : 60)).toString(16);
+      }
+      if (!latest && scenario === 'short-block' && q.params[0] === '0x15') result.number = '0x14';
+      lastBlock = result;
+      break;
+    }
+    case 'eth_getBlockTransactionCountByHash': result = scenario === 'short-transactions' ? '0x1' : '0x' + lastBlock.transactions.length.toString(16); break;
     case 'eth_getLogs':
-      if (process.env.TEMPO_SCENARIO === 'unreadable' || (process.env.TEMPO_SCENARIO === 'last-search-fails' && calls.filter(x => x === 'eth_getLogs').length >= 2)) return new Response(JSON.stringify({ id: q.id, jsonrpc: '2.0', error: { code: -32000, message: 'history unavailable' } }));
-      result = found ? [logs[1]] : []; break;
+      if (scenario === 'unreadable' || (scenario === 'range-fails' && calls.filter(x => x === 'eth_getLogs').length >= 2)) return new Response(JSON.stringify({ id: q.id, jsonrpc: '2.0', error: { code: -32000, message: 'history unavailable' } }));
+      result = scenario === 'short-range' ? null : scenario === 'found' || (scenario === 'alternating-heads' && BigInt(q.params[0].toBlock) >= 16n) ? [logs[1]] : []; break;
     case 'eth_getTransactionReceipt': result = found ? { transactionHash: hash, blockHash, blockNumber: '0x10', status: '0x1', logs } : null; break;
     case 'eth_getTransactionByHash': result = found ? { from: record.intent.owner, signature: { keyId: record.intent.agent } } : null; break;
     default: result = '0x' + '00'.repeat(256);
