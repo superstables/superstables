@@ -417,8 +417,9 @@ explain(
     .argument("[url]", "a paid URL to quote directly, query string included")
     .option("--service <id>", "quote a service found by `superstables find`")
     .option("--param <key=value>", "a request parameter for the service (repeatable)", collect, [] as string[])
+    .option("--chain <chain>", "when the seller offers several chains, take its offer on this one (e.g. robinhood-testnet)")
     .option("--json", "print the quote record, with policy.checks and next")
-    .action(async (url: string | undefined, options: { service?: string; param: string[]; json?: boolean }) => {
+    .action(async (url: string | undefined, options: { service?: string; param: string[]; chain?: string; json?: boolean }) => {
       if ((url && options.service) || (!url && !options.service)) {
         throw badInput(
           "Give either a URL or --service <id>, not both and not neither: " +
@@ -455,9 +456,9 @@ explain(
               : `${untrustedText(messageOf(err), 500)}${shape}`,
           );
         }
-        taken = await takeQuote({ service, params }, { records, policy });
+        taken = await takeQuote({ service, params }, { records, policy, chain: options.chain });
       } else {
-        taken = await takeQuote({ url: url as string }, { records, policy });
+        taken = await takeQuote({ url: url as string }, { records, policy, chain: options.chain });
       }
       const next = taken.policy.allowed
         ? `superstables pay ${taken.id}`
