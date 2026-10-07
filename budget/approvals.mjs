@@ -343,7 +343,8 @@ export const isLive = (record) => Boolean(record && !record.final && processesAl
 export async function stopGroup(pgid, { start, startUtc, location = {}, graceMs = 3000 } = {}) {
   const left = () => groupAlive(pgid, start, startUtc, location);
   if (!left()) return true;
-  const checked = inspectProcess({ ...location, pid: pgid, pidStart: start, pidStartUtc: startUtc }, undefined, true);
+  // The startup window may refuse recovery, but cannot authorize signalling a group.
+  const checked = inspectProcess({ ...location, selfStartedAt: undefined, pid: pgid, pidStart: start, pidStartUtc: startUtc }, undefined, true);
   if (checked.possiblyAlive) return false;
   const target = visiblePid({ ...location, pid: pgid }, undefined, true);
   if (!target) return false;
