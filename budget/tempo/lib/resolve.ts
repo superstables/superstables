@@ -1,6 +1,6 @@
 // Reads the chain to decide what happened to a journaled purchase. Never sends anything.
 import type { Address, Hex } from 'viem'
-import { chainHead, completeMemoSearch, findByMemo, getReceipt, getTxSigner, settlementOf, sleep, type ChainReceipt } from './chain.ts'
+import { chainHead, findByMemo, getReceipt, getTxSigner, settlementOf, sleep, type ChainReceipt } from './chain.ts'
 import type { Op } from './ops.ts'
 
 export type Lookup =
@@ -8,6 +8,7 @@ export type Lookup =
   | { kind: 'expired' } // the signed payment can no longer land and none is on chain
   | { kind: 'absent' } // legacy quoted attempt: complete search beyond its last possible signing time
   | { kind: 'pending' } // nothing on chain yet and it may still land
+  | { kind: 'unreadable' } // this run could not establish the chain outcome
 
 /** Slack after validBefore before a missing payment is called expired (block time and clock skew). */
 export const EXPIRY_SLACK_S = 10
@@ -22,15 +23,20 @@ export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lo
   let unreadable = false
   const head = await chainHead().catch(() => null)
   const hashes = new Set<string>([...extraHashes, op.tx, op.expectedTx].filter(Boolean) as string[])
-  if (op.memo && head) {
-    const memoHits = await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock ?? 0), head.number).catch(() => { unreadable = true; return [] })
-    for (const h of memoHits) hashes.add(h)
-  }
+  const memoHits = op.memo && head
+    ? await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock ?? 0), head.number).catch(() => { unreadable = true; return [] })
+    : []
+  for (const h of memoHits) hashes.add(h)
+  // Keep the base candidate ordering: a successful bound payment, any bound one, then anything found.
   let firstBound: Lookup | undefined
   let firstFound: Lookup | undefined
-  const inspect = async (h: string): Promise<Lookup | undefined> => {
+  for (const h of hashes) {
     const receipt = await getReceipt(h, head?.number).catch(() => { unreadable = true; return null })
-    if (!receipt) { unreadable = true; return }
+    if (!receipt) {
+      // A seller's unverified hash is only a hint. An indexed payment without a receipt is unreadable.
+      if (memoHits.includes(h as Hex)) unreadable = true
+      continue
+    }
     const signer = await getTxSigner(h).catch(() => null)
     const found = { kind: 'found' as const, hash: h as Hex, receipt, keyId: signer?.keyId, from: signer?.from }
     const bound = bindingProblems(op, found).length === 0
@@ -38,27 +44,16 @@ export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lo
     if (bound) firstBound ??= found
     firstFound ??= found
   }
-  for (const h of hashes) {
-    const found = await inspect(h)
-    if (found) return found
-  }
   if (firstBound) return firstBound
   if (firstFound) return firstFound
-  if (unreadable || !head) return { kind: 'pending' }
-  const legacyQuoted = op.journalVersion === undefined && op.legacyQuotedBefore !== undefined
-  const bound = op.journalVersion === undefined && op.legacyQuotedBefore !== undefined ? op.legacyQuotedBefore + 25 : op.validBefore
+  if (unreadable || !head || !Number.isFinite(head.timestamp)) return { kind: 'unreadable' }
+  // Re-search stored absence as the base does, without turning an unchanged result into uncertainty.
+  if (op.state === 'not_found' && op.memo) return { kind: 'absent' }
+  const legacyQuoted = op.journalVersion !== 1 && op.legacyQuotedBefore !== undefined
+  const bound = op.journalVersion !== 1 && op.legacyQuotedBefore !== undefined ? op.legacyQuotedBefore + 25 : op.validBefore
   // A successful synchronous push already returned a mined hash. Missing later reads cannot undo it.
   if (op.intent.mode === 'push' && op.expectedTx) return { kind: 'pending' }
   if (op.kind === 'buy' && op.memo && op.startBlock !== undefined && bound !== undefined && head.timestamp > bound + EXPIRY_SLACK_S) {
-    const complete = await completeMemoSearch(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock), head.number).catch(() => null)
-    if (complete === null) return { kind: 'pending' }
-    for (const h of complete) {
-      const found = await inspect(h)
-      if (found) return found
-    }
-    if (firstBound) return firstBound
-    if (firstFound) return firstFound
-    if (unreadable) return { kind: 'pending' }
     return { kind: legacyQuoted ? 'absent' : 'expired' }
   }
   return { kind: 'pending' }

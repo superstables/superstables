@@ -7,7 +7,7 @@ function syncDirectory(path) {
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
-function durableDirectory(path) {
+export function durableDirectory(path) {
   if (existsSync(path)) return;
   const parent = dirname(path);
   durableDirectory(parent);

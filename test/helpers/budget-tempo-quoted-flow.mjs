@@ -1,6 +1,7 @@
 // Run the real rail entry points with an isolated key, local seller, and deterministic chain.
 import fs from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 import { Challenge } from 'mppx';
@@ -8,7 +9,7 @@ import { keccak256, toBytes } from 'viem';
 const root = process.env.BUDGET_DURABILITY_ROOT;
 const home = process.env.SUPERSTABLES_HOME;
 const step = process.env.TEMPO_STEP;
-if (!home?.startsWith('/tmp/')) throw new Error('isolated home required');
+if (!home?.startsWith(tmpdir() + '/')) throw new Error('isolated home required');
 const entry = step === 'reconcile' ? 'reconcile' : 'buy';
 const compiled = join(home, `${entry}.mjs`);
 await build({ entryPoints: [join(root, `budget/tempo/${entry}.ts`)], outfile: compiled, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'silent',
