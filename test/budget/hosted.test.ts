@@ -277,7 +277,7 @@ describe("hosted approvals", () => {
       site.reply = answer(OWNER, await signLinkProof(facts()));
       const err = await connect().catch((e) => e);
       expect(err).toBeInstanceOf(HostedRefusal);
-      expect(err.message).toMatch(/already belongs to the account .*but this computer has no record of the add-agent request that added it.*nothing was recorded or sent\. The owner removes it on their .* account page and adds it again/);
+      expect(err.message).toMatch(/already belongs to the account .*but this machine has no record of the add-agent request that added it.*nothing was recorded or sent\. The owner removes it on their .* account page and adds it again/);
       expect(err.next).toMatch(/remove this agent from their account.*the owner adds the agent again and signs a new owner proof/);
       expect(err.next).toContain(`superstables budget setup --rail evm --hosted --site ${site.url} again`);
     });
@@ -293,7 +293,7 @@ describe("hosted approvals", () => {
       site.reply = answer(OTHER, await signLinkProof({ ...facts(), owner: OTHER }));
       const err = await connect({ prior: { owner: OWNER, linkId: LINK, linkCode: CODE } }).catch((e) => e);
       expect(err).toBeInstanceOf(HostedRefusal);
-      expect(err.message).toMatch(new RegExp(`this computer records the owner ${OWNER}`));
+      expect(err.message).toMatch(new RegExp(`this machine records the owner ${OWNER}`));
     });
 
     it("refused without a proof, with a proof for another link or code, or signed by someone else", async () => {
@@ -538,7 +538,7 @@ describe("hosted approvals", () => {
     site.owner = OTHER;
     const err = await grant(client()).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
-    expect(err.message).toMatch(new RegExp(`owner recorded on this computer is ${OWNER}`));
+    expect(err.message).toMatch(new RegExp(`owner recorded on this machine is ${OWNER}`));
     expect(err.message).toMatch(/nothing was sent/);
     expect(site.requests[0]).toMatchObject({ state: "cancelled", cancels: 1 });
     expect(records).toEqual([]);
@@ -552,7 +552,7 @@ describe("hosted approvals", () => {
     const h = await grant(client());
     const o = await h.settled;
     expect(o).toMatchObject({ status: "rejected", sending: false });
-    expect(o.status === "rejected" && o.reason).toMatch(/not the owner recorded on this computer/);
+    expect(o.status === "rejected" && o.reason).toMatch(/not the owner recorded on this machine/);
     expect(site.requests[0].state).toBe("cancelled");
   });
 
@@ -560,7 +560,7 @@ describe("hosted approvals", () => {
     site.owner = null;
     const err = await grant(client()).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
-    expect(err.message).toMatch(new RegExp(`did not say which account would approve this, so the command cannot check it is the owner recorded on this computer \\(${OWNER}\\)\\. The request was cancelled on the site before the wallet was asked; nothing was sent`));
+    expect(err.message).toMatch(new RegExp(`did not say which account would approve this, so the command cannot check it is the owner recorded on this machine \\(${OWNER}\\)\\. The request was cancelled on the site before the wallet was asked; nothing was sent`));
     expect(site.requests[0]).toMatchObject({ state: "cancelled", cancels: 1 });
     expect(records).toEqual([]);
   });
@@ -575,7 +575,7 @@ describe("hosted approvals", () => {
       const h = await grant(client());
       const o = await h.settled;
       expect(o).toMatchObject({ status: "rejected", sending: false });
-      expect(o.status === "rejected" && o.reason).toMatch(/no longer names the account this approval is for, not the owner recorded on this computer.*the request was cancelled/);
+      expect(o.status === "rejected" && o.reason).toMatch(/no longer names the account this approval is for, not the owner recorded on this machine.*the request was cancelled/);
       expect(site.requests.at(-1)!.state).toBe("cancelled");
     }
   });
@@ -636,9 +636,9 @@ describe("hosted approvals", () => {
     site.expiresInMs = 1_500;
     const started = Date.now();
     const h = await grant(client(), 60_000);
-    // the link's expiry is the site's, not the command's 60 seconds
-    expect(h.expiresAt).toBeLessThanOrEqual(started + 1_500 + 50);
-    expect(await h.settled).toMatchObject({ status: "expired", sending: false });
+    // the link's expiry is the one the site advertised, not the command's 60 seconds
+    expect(h.expiresAt).toBe(site.requests[0].expiresAt);
+    expect(await h.settled).toEqual({ status: "expired", reason: `the approval link expired on ${site.url.replace(/^http:\/\//, "")} without a completed approval`, sending: false });
     expect(Date.now() - started).toBeLessThan(15_000);
     expect(site.requests[0].state).toBe("expired");
   });
@@ -1009,7 +1009,7 @@ describe("hosted approvals on tempo and solana", () => {
     site.owner = SOL_OTHER;
     const err = await intent(solana(), "grant", "1").catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
-    expect(err.message).toMatch(new RegExp(`would ask ${SOL_OTHER} to approve this, but the owner recorded on this computer is ${SOL_OWNER}.*nothing was sent`));
+    expect(err.message).toMatch(new RegExp(`would ask ${SOL_OTHER} to approve this, but the owner recorded on this machine is ${SOL_OWNER}.*nothing was sent`));
     expect(err.next).toContain(`superstables budget setup --rail solana --hosted --site ${site.url} --new-owner`);
     expect(site.requests[0].state).toBe("cancelled");
     // the same letters in another case are another Solana address

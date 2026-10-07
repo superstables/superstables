@@ -5,7 +5,7 @@ and what it does not.
 
 These payment flows have different boundaries:
 
-| | Approve each payment (`pay`, the MCP tools) | Hosted buy once (`superstables budget buy-once`) | Budget (`superstables budget`) |
+| | Single purchase on your machine (`pay`) | Single purchase on superstables.com (`superstables budget buy-once`) | Budget (`superstables budget`) |
 | --- | --- | --- | --- |
 | Who approves | The owner, in their own wallet, for every payment | The owner, in their own wallet on the site, for one purchase | The owner, in their own wallet, once, for the whole budget |
 | Keys the client holds | None with a browser wallet; `--wallet local` stores a signing key | None | The agent key, which signs purchases. The owner's key stays in their wallet |
@@ -17,12 +17,12 @@ The sections below cover `pay`: the approval page on `127.0.0.1` and the owner's
 wallet. Budgets have their own section: [Budgets](#budgets). `superstables budget buy-once` and a
 budget set up with `--hosted` are approved on a website instead, superstables.com by default; what
 that site can and cannot do is in
-[Hosted approvals and buy-once](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do).
+[Budget approvals and Single purchase on superstables.com](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do).
 
 ## Where the key is
 
 In the default `pay` flow, the owner's signing key stays in their browser wallet. The client
-does not generate, read or store it. That does not mean the computer holds no keys: the browser
+does not generate, read or store it. That does not mean the machine holds no keys: the browser
 wallet keeps its own, and the local wallet mode and budgets store separate keys.
 
 Before the owner signs, the client builds an authorization and serves a page that shows its terms.
@@ -40,8 +40,8 @@ payment core uses, and shown as fact:
 | Fact | Where it comes from |
 | --- | --- |
 | Amount (0.01 USDC, and the atomic `10000`) | `amount` in the requirement, divided by the asset's decimals |
-| Asset | the requirement's `asset` address, which must be the network's USDC contract |
-| Network | the requirement's `network`, which must be a supported one (`eip155:84532`) |
+| Asset | the requirement's `asset` address, which must be the chain's USDC contract |
+| Chain | the requirement's `network`, which must be a supported one (`eip155:84532`) |
 | Recipient | the requirement's `payTo`, which must be a well-formed address |
 | Scheme | the requirement's `scheme`, which must be `exact` |
 | Payer | the account the page reports as connected; that the account controls it is checked when its signature arrives |
@@ -63,7 +63,7 @@ verified requirement, field by field: `to` is the requirement's `payTo`, `value`
 There is one place where reported context has an effect: the policy takes the hostname for its
 `allow`/`deny` rules from `reported.target`, because the requirement does not carry the URL that
 was called. A dishonest agent could therefore misreport the host and slip past a host rule. It
-cannot misreport the amount, the asset, the network or the recipient, so `caps.per_call`,
+cannot misreport the amount, the asset, the chain or the recipient, so `caps.per_call`,
 `caps.per_day`, `stablecoins` and `kill_switch` are all judged on verified facts. Treat host
 rules as a convenience, not as a boundary.
 
@@ -72,7 +72,7 @@ rules as a convenience, not as a boundary.
 This section, and the three after it, describe the page `superstables pay` serves on `127.0.0.1`.
 `budget buy-once` and a budget set up with `--hosted` have no such page: their approval links are
 on the site, and the owner acts there signed in to their account with their wallet. See
-[Hosted approvals and buy-once](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do).
+[Budget approvals and Single purchase on superstables.com](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do).
 
 There is no password on the approval page. The authority is the id in the URL: 128 bits of
 randomness, generated when the payment is created, and handed to the agent as part of its tool
@@ -122,10 +122,10 @@ It **cannot**:
 
 
 
-## What a compromised MCP process could do
+## What a compromised client process could do
 
-The MCP process serves the approval page. A hostile build of this software, or code injected into
-it, **could**:
+The `superstables pay` process serves the approval page. A hostile build of this software, or code
+injected into it, **could**:
 
 - show you a page that describes the payment dishonestly — a smaller amount, a different
   recipient, a service you recognise;
@@ -133,7 +133,7 @@ it, **could**:
 - ask for payments repeatedly, hoping for a distracted yes.
 
 A browser wallet that is not compromised shows its signing prompt apart from the client's page.
-Check the network, the token contract, the recipient and the amount in that prompt; for USDC, a
+Check the chain, the token contract, the recipient and the amount in that prompt; for USDC, a
 `value` of `10000` is 0.01 USDC. Reject the request if the wallet's terms differ from the page's,
 or if you cannot check them.
 
@@ -197,48 +197,126 @@ those records and the count starts again.
 
 ## Testnet only
 
-`pay` supports one network (`eip155:84532`, Base Sepolia), one asset (test USDC at
-`0x036CbD53842c5426634e7929541eC2318f3dCF7e`), one scheme (x402 `exact`). A requirement naming
-anything else is refused before anyone is asked. There is no configuration that turns on
-mainnet.
+`pay` supports eight testnets, each with one token pinned in the client: x402 `exact` with test
+USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum
+Sepolia and Solana devnet, and MPP `tempo.charge` with test pathUSD on Tempo Moderato. On the EVM
+chains the token's EIP-712 signing domain is pinned too, so a seller cannot make the wallet show a
+signing name of its choosing. A requirement naming anything else, every mainnet included, is
+refused before anyone is asked. There is no configuration that turns on mainnet.
 
-Payments are settled by public facilitators, which submit the transfer and pay the gas. A
-facilitator sees the signed authorization, so it learns who paid whom and how much; it cannot
+On Tempo the owner's wallet sends the payment itself, so the order is different. MPP sellers that
+split a price between recipients, set a memo of their own, accept only payments they submit
+themselves, want the credential in a header of their choosing, or whose request expires in less
+than a minute or more than an hour are refused before anyone is asked, and so is a challenge an
+earlier payment already used: its memo would be the same. Before the page asks the wallet to send,
+it switches the wallet to Tempo Moderato and checks the chain it is on, and the client records that
+money may move, under the daily cap check, with the chain's latest block. The page checks the
+wallet's chain again right before it asks, the call it sends names Tempo Moderato's chain id, and
+it asks the wallet once per approval. The client then reads the owner's transaction and calls the
+seller only when the chain shows exactly this transfer with this payment's memo, mined after the
+wallet was asked. A wallet that was asked and did not answer, or whose rejection the page reports,
+leaves the attempt `uncertain`: a page's report is not proof that nothing was sent, since anything
+holding the approval link can post it. `superstables status` then searches the chain for the memo,
+in blocks after the one recorded, and never takes a transfer already recorded as another payment.
+
+For x402 payments, public facilitators submit the transfer and pay the gas. A facilitator sees
+the signed authorization or transaction, so it learns who paid whom and how much; it cannot
 alter the amount or the recipient, because those are inside what was signed. The client's facilitator helper tries the next facilitator when one cannot be
 reached, and stops when one refuses. Other sellers choose their own facilitators.
 
-With `pay`, the seller reports the settlement and names a transaction. The client then reads
-that transaction's receipt from Base Sepolia (`SUPERSTABLES_RPC_URL`, https or this computer only)
-and records `chain`:
+On Tempo Moderato, the owner's wallet sends the pathUSD transfer and pays its network fee.
 
-- `verified`: the transaction succeeded, and the USDC contract logged both the use of the nonce
-  the owner signed and a transfer of exactly the signed amount from the payer to the checked
-  recipient.
-- `unchecked`: the chain could not say (no hash, not mined yet, the RPC did not answer). The
-  payment rests on the seller's report; `superstables status` and `payment_status` check again.
-- `mismatch`: the transaction is something else. The attempt becomes `uncertain`: it is not
-  confirmed and not refuted, and it is never retried.
+With `pay` over x402, the seller reports the settlement and names a transaction. The client checks
+that transaction on the payment's chain and records `chain`. What `verified` requires depends on
+the chain:
 
-`verified` means the RPC the client read returned a receipt with those logs. The client does not
-run a node: a dishonest or compromised RPC can answer with a receipt that never happened. HTTPS
-authenticates the connection to that RPC, not the chain behind it. Use an RPC you trust
-(`SUPERSTABLES_RPC_URL`) when that matters. The budget rails read the chain too.
+- On the EVM chains: a successful receipt in which the chain's USDC contract logged both the use of
+  the nonce the owner signed (`AuthorizationUsed`) and a transfer of exactly the signed amount from
+  the payer to the checked recipient.
+- On Solana devnet: a successful transaction that carries the owner's signature over the
+  transaction the client built, and whose one token instruction moves exactly the signed amount of
+  devnet USDC from the owner's token account to the recipient's.
+- On Tempo Moderato (MPP, above): a successful transaction from the owner in which pathUSD logged
+  `TransferWithMemo` of exactly this amount to this recipient with this payment's memo, mined after
+  the wallet was asked.
 
-The per-day cap (`caps.per_day`): a payment counts on the day it ended, and on every day while it
-is still open (signed and in flight until its authorization expires, or waiting for the owner
-within its approval window). `pay`
-reserves the amount under a lock shared by the processes on this computer before the owner is
+`unchecked` means the chain could not say (no transaction named, not mined yet, the RPC did not
+answer): the payment rests on the seller's report, said as such, and `superstables status` checks
+again. `mismatch` means the transaction is something else: the attempt
+becomes `uncertain`, neither confirmed nor refuted, and is never retried. On Tempo and Solana, the
+client does not use a transaction already recorded as another attempt's verified payment. On EVM
+chains, one transaction may settle several payments; each must match its own signed authorization
+nonce and exact transfer.
+
+Once the credential has left this machine, a seller's "not paid" (an HTTP 402, a failed
+settlement) leaves the attempt `uncertain`, not `failed`: the facilitator may have settled it
+anyway, before or after the answer. `superstables status` then looks for the payment by what ties
+it to this attempt alone: on the EVM chains the token's record of the nonce (`authorizationState`
+and its `AuthorizationUsed` log), on Solana devnet a transaction carrying the owner's signature.
+When the chain shows the payment can no longer happen, the attempt becomes `failed` with
+`chain: "unpaid"`. That takes final evidence, and anything less decides nothing:
+
+- On the EVM chains: a final block dated at or past the authorization's `validBefore`, at which the
+  token shows the authorization unused; or the authorization's cancellation (`AuthorizationCanceled`)
+  in the chain's final history. For a cancellation, the client reads the final block first, then the
+  cancellation's log; the log must be in a block at or below the final block, and that height's
+  block, read again, must have the log's block hash. A used nonce alone does not show a
+  cancellation: after a reorganisation, the payment may have used it instead. A final block is the
+  one the RPC returns for the `finalized` tag; on SKALE Base Sepolia, whose blocks are final once
+  they are in the chain and whose RPC does not answer that tag, it is the latest block. If the RPC
+  does not return a final block, the attempt stays `uncertain`.
+- On Solana devnet: on an RPC whose genesis hash is devnet's, the finalized block height is past the
+  blockhash's last valid height, and every one of the 151 finalized blocks the transaction could have
+  landed in was read whole, at consecutive heights, with no transaction in them that is this payment:
+  each one that carries the owner's signature is read, and one that failed on chain is not this
+  payment. A block or a transaction that cannot be read, or a missing block, decides nothing. One
+  status reads these blocks for up to 45 seconds and records on the attempt the slot up to which they
+  hold no payment (`searchedToSlot`); the next status reads on from the block after it. Finalized
+  blocks do not change, so what an earlier status read still holds. The list of the owner's token
+  account's transactions is used to find a payment, never to show one is missing: an RPC writes that
+  list after the blocks, so it can lag them.
+- On Tempo Moderato: never. A transfer the wallet was asked to send has no expiry, so only finding it
+  resolves the attempt.
+
+The same search decides a payment the seller reported without a transaction the chain confirms.
+
+These checks trust the RPC's answer. The client does not run a node: a dishonest or compromised RPC
+can answer with a receipt that never happened, or hide one that did. HTTPS authenticates the
+connection to that RPC, not the chain behind it. Base Sepolia uses `SUPERSTABLES_RPC_URL` when it is
+set, Tempo Moderato `SUPERSTABLES_TEMPO_RPC` and Solana devnet `SUPERSTABLES_SOLANA_RPC` (each
+HTTPS, or HTTP on this machine, without credentials); otherwise the client uses the chain's
+configured public RPC. Use an RPC you trust when that matters. The budget rails read the chain too.
+
+On chains that require finalized evidence, a custom RPC without the `finalized` block tag can
+show a matching paid transaction but cannot make its verification permanent. The payment is
+reported paid and its delivered response is saved; `status` or budget `reconcile` keeps checking
+it. Use an RPC that serves finalized history to finish verification. Read errors preserve the
+last observed payment state. Removed inclusion leaves the outcome unknown, with "Do not pay again".
+
+Ethereum Sepolia's public RPC may prune logs after about 10,000 blocks, roughly 33 hours. Budget
+recovery searches recent logs first and resumes a block scan for older replacements. Unavailable
+history preserves the unknown outcome. Use an RPC with the required history to finish recovery.
+
+Matching included payments count once on their paid day, including legacy `verified` records and custom RPCs that cannot read finality. A pruned receipt or block does not prove removal. Positively removed inclusions stay uncertain and hold the amount across days.
+
+The per-day cap (`caps.per_day`): an unresolved payment counts on the day it ended, and on every day while it
+can still move money: waiting for the owner within its approval window, or signed or sent and not
+resolved (an EVM authorization until its `validBefore` and two minutes; a Tempo transfer, which has
+no expiry, or a Solana transaction until `superstables status` resolves it on chain). That includes
+a payment with a receipt the chain has not confirmed (the seller's report) or has contradicted: it
+counts on the receipt's day and, once a day, on later days on the same terms. USDC and pathUSD count together, one for one, as dollars; the
+default `stablecoins` list is `[USDC, pathUSD]`, and a policy that lists USDC only refuses pathUSD.
+`pay`
+reserves the amount under a lock shared by the processes on this machine before the owner is
 asked.
 
-Text from sellers and listings reaches the agent as data. The MCP server names those fields in
-`untrusted_data` in each result, and the text form of the result carries them in separate blocks
-marked "Untrusted data". The CLI prints them on one line, without control or invisible
-characters.
+Text from sellers and listings reaches the agent as data. The CLI prints it on one line, without
+control or invisible characters.
 
 **Where the signed payment goes.** `pay` sends the signed authorization only to the URL it quoted:
 it refuses a redirect, and the attempt then ends `uncertain`, because the client cannot tell whether
 the seller acted on it. A listing from the index or the catalogue is payable only when its endpoint
-is `https`, or `http` on this computer. Reading a seller's 402 challenge has a deadline and a size
+is `https`, or `http` on this machine. Reading a seller's 402 challenge has a deadline and a size
 limit and follows no redirect.
 
 ## The local wallet mode
@@ -297,7 +375,7 @@ code running as your user can. Run that mode with a key that holds testnet funds
 on the machine can read it, they refuse (exit 3) and say which `chmod` fixes it. An initial
 refusal happens before anything is signed. On `tempo` and `solana`, setup checks again before
 writing the owner's address into the agent key file. A refusal at this later check does not
-undo an owner signature or a transaction already sent through hosted setup. `doctor` fails if that file holds an owner key.
+undo an owner signature or a transaction already sent through setup on superstables.com. `doctor` fails if that file holds an owner key.
 - **The chain enforces the budget.** On `evm`, the total allowance. On `solana`, the delegated
   amount. On `tempo`, the access key's total or per-period limit, its expiry, and its seller list
   when one was granted. No rail enforces a per-payment maximum on chain.
@@ -309,7 +387,7 @@ undo an owner signature or a transaction already sent through hosted setup. `doc
   owner runs it, and checks the owner address that setup prints and every owner page shows. Under
   `--hosted` there is no local page and no origin check: the owner adds the agent on the site, and
   the client records an owner only with that owner's signature over the add-agent request (see
-  [Hosted approvals and buy-once](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
+  [Budget approvals and Single purchase on superstables.com](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
 - **The checks depend on the rail.** The command builds the page's terms and the transaction
   from the same plan: the command's arguments and the chain's state, not the agent's description.
   On `evm` and `tempo`, the wallet signs and submits, and the command then checks the transaction
@@ -321,10 +399,10 @@ undo an owner signature or a transaction already sent through hosted setup. `doc
   the request plus the requested amount. A wallet that pays the
   fee for the owner (MetaMask's sponsored transactions, sent by a relayer through MetaMask's
   DelegationManager) is accepted only on a chain where that contract's code is pinned in the client
-  (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy), with the manager's own
+  (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, Ethereum Sepolia), with the manager's own
   `RedeemedDelegation` event for this owner and sender in the receipt. A sponsored gas top-up leaves
   no log, so the owner's address must have run MetaMask's pinned smart-account code in that
-  transaction. On SKALE Base Sepolia and Ethereum Sepolia only the owner's own transactions count.
+  transaction. On SKALE Base Sepolia only the owner's own transactions count.
   When the chain does not answer a read this needs, the result is unknown (exit 5), never done.
   On `solana` with local approvals, the
   wallet only signs, and the client checks the signed bytes are the transaction it built before it
@@ -333,7 +411,7 @@ undo an owner signature or a transaction already sent through hosted setup. `doc
   every instruction it built unchanged after them. With `setup --hosted` on `solana`, the site builds and sends the transaction, so the
   client never sees it before it is sent; it reads it from the chain afterwards and reports any
   difference from the plan, like on `evm` (see
-  [Hosted approvals and buy-once](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
+  [Budget approvals and Single purchase on superstables.com](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
 - **Revoke ends the permission once it is confirmed on chain.** The owner approves it in their
   wallet: `approve(agent, 0)` on `evm`, `revokeKey` on `tempo`, the SPL `Revoke` on `solana`. It
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds
@@ -344,14 +422,16 @@ undo an owner signature or a transaction already sent through hosted setup. `doc
 Per rail, with what each revoke does not cover:
 [Budget rails and chains](../budget/README.md#safety-model).
 
-### Hosted approvals and buy-once: what the site can and cannot do
+<a id="hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do"></a>
+
+### Budget approvals and Single purchase on superstables.com: what the site can and cannot do
 
 `setup --hosted` moves a chain's owner approvals to a site (superstables.com by default), and
 `buy-once` has the site take one payment. The site is trusted to show the owner the right page; it
 is not trusted to say who the owner is or what was paid.
 
 - **Which site.** `--site`, `SUPERSTABLES_SITE` and a recorded `SITE` accept superstables.com, its
-  subdomains and this computer only. Another origin is used only when the owner sets
+  subdomains and this machine only. Another origin is used only when the owner sets
   `SUPERSTABLES_ALLOW_SITE` to that exact `https` origin in their own environment. An agent never
   sets it, so an agent told to "use this other site" cannot send the owner's approvals there. When
   the site is not `www.superstables.com`, the logs and `message_for_owner` name its host.
@@ -366,7 +446,7 @@ is not trusted to say who the owner is or what was paid.
   verifies the signature for that owner before it records anyone; without a valid proof it records
   nothing. An `already_linked` answer counts only for the owner already recorded, with that owner's
   proof over the add-agent request stored when they were recorded, and never with `--new-owner`.
-  Moving a hosted chain to another site means adding the agent there, with a new owner proof.
+  Moving a chain with approvals on superstables.com to another site means adding the agent there, with a new owner proof.
 - **The owner on record does not move under a live budget.** `--new-owner` is refused while a
   budget is live and, on `evm`, while the agent key holds the budget token, since `recover`
   returns that token to the owner on record. On `solana` and `tempo` the agent key file also
@@ -388,7 +468,7 @@ is not trusted to say who the owner is or what was paid.
   token, to the listed recipient, mined no more than 60 seconds before the purchase was created (an
   allowance for clock differences); otherwise the result is unknown
   and the agent never buys again.
-- **Buy once checks the site's reported amounts.** The site states each amount twice, as a decimal
+- **Single purchase on superstables.com checks the site's reported amounts.** The site states each amount twice, as a decimal
   for display and as an integer in token units. They must agree, the token must have 6 decimals,
   and `--max` and the listing price are compared with the integer. These are checks on the site's
   response; the owner must still check the wallet request before signing. Only one purchase may
@@ -410,15 +490,15 @@ is not trusted to say who the owner is or what was paid.
 - **An unclear outcome is unknown.** Once the site reports that the owner's wallet was asked, or
   reports a transaction, an unfinished request ends as `unknown` (exit 5), never as "nothing was
   sent". Read the chain before trying again.
-- **`recover` stays local.** On a hosted chain, `grant`, `revoke` and `fund-agent` go through the
-  site; the owner's part of `recover` still uses the page on this computer.
-- **A hosted revoke needs the agent key.** The agent key signs every request to the site. On
-  `solana` and `tempo`, if a hosted `revoke` needs approval but the agent key file is missing,
+- **`recover` stays local.** On a chain with approvals on superstables.com, `grant`, `revoke` and `fund-agent` go through the
+  site; the owner's part of `recover` still uses the page on this machine.
+- **A revoke on superstables.com needs the agent key.** The agent key signs every request to the site. On
+  `solana` and `tempo`, if a `revoke` on superstables.com needs approval but the agent key file is missing,
   readable by others, not a regular file or holds no usable key, it refuses (exit 3, nothing
   requested) and names the other ways to revoke: Revoke on the owner's account page on the site,
   or a revoke transaction the owner signs in their own wallet.
 - **RPC replacements.** `B4_RPC`, `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC` must be
-  `https`, or `http` on this computer; every check above reads the chain through them. A
+  `https`, or `http` on this machine; every check above reads the chain through them. A
   replacement in use is named in the `RESULT` (`rpc`).
 
 What a compatible site must serve, with both proofs spelled out:
@@ -426,11 +506,12 @@ What a compatible site must serve, with both proofs spelled out:
 
 ## What you install
 
-The 0.3.0 GitHub Release attaches the agent skill zip, built from the released commit;
+For 0.3.0, use the agent skill zip built from that released commit, once it is available on
+[GitHub Releases](https://github.com/superstables/superstables-client/releases);
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with
-a full commit hash builds the client on your computer and runs the repository's build scripts
+a full commit hash builds the client on your machine and runs the repository's build scripts
 there; without a hash, npm installs whatever the default branch holds.
 
 ## Replacing a key
@@ -440,7 +521,7 @@ says "not supported", there is no command for it yet; do not move key files by h
 
 - **Budget agent key, `tempo`.** Supported. `superstables budget setup --rail tempo --agent LABEL`,
   with a LABEL not used before (a used one reuses the key it already names), adds a new access
-  key next to the old one; on a hosted chain it also adds the new key there. The owner grants it
+  key next to the old one; on a chain with approvals on superstables.com it also adds the new key there. The owner grants it
   with `superstables budget grant --rail tempo --agent LABEL --amount A`, then revokes the old key
   with `superstables budget revoke --rail tempo` (add `--agent OLD` if the old key had a label).
   A key revoked on an owner's account can never be granted again on that account. After this,

@@ -70,13 +70,15 @@ export const EXIT_CODE_TABLE = `Exit codes (the same numbers as \`superstables b
 
 export const MAIN_HELP = `
 What this is:
-  A client for paying per request with test USDC: find a paid service, quote it, and pay it.
-  Testnets only; no real money moves. The agent can ask for a payment but cannot approve one.
+  A client for paying per request with test USDC (pathUSD on Tempo): find a paid service, quote
+  it, and pay it.
+  The agent can ask for a payment but cannot approve one.
 
 Two ways to pay:
   pay      The owner approves each payment in their own wallet: a browser wallet such as MetaMask
-           on a page \`pay\` serves on 127.0.0.1 (the default), or the local wallet process
-           (--wallet local). x402, USDC on Base Sepolia. Use it when the owner is there to approve.
+           (Phantom on Solana) on a page \`pay\` serves on 127.0.0.1 (the default), or the local
+           wallet process (--wallet local, EVM chains only). x402 on the EVM chains below and
+           Solana devnet, MPP on Tempo Moderato. Use it when the owner is there to approve.
   budget   The owner grants an on-chain budget once, from their wallet; the agent then buys on its
            own until the budget is spent, expires or is revoked. The chain enforces the limit.
            Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
@@ -110,7 +112,7 @@ Start here, budget: superstables budget setup --rail evm
 
 Who runs what:
   owner   setup, wallet init, wallet serve, policy init, and every approval
-  agent   find, quote, pay, status, receipts, attempts, doctor; \`mcp\` is started by the agent's host
+  agent   find, quote, pay, status, receipts, attempts, doctor
   Either may run the read-only commands.
 
 Where state lives:
@@ -120,7 +122,7 @@ Where state lives:
 
 Discovery:
   find reads a built-in catalogue and the public index at ${DEFAULT_INDEX_URL}.
-  SUPERSTABLES_INDEX_URL points it at another index with the same API (a self-hosted one), or
+  SUPERSTABLES_INDEX_URL points it at another index with the same API (one you run), or
   switches it off with \`off\`. Index listings show their payment protocols (rails) and chains, and
   whether pay or a budget rail could pay them. Only testnets are ever payable.
 
@@ -129,15 +131,16 @@ Environment:
   SUPERSTABLES_WALLET            browser (default) or local: who signs pay's payments
   SUPERSTABLES_POLICY            the spend policy file (default $SUPERSTABLES_HOME/policy.yaml)
   SUPERSTABLES_INDEX_URL         the index find reads; \`off\` to skip it
-  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the hosted catalogue
+  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the catalogue on superstables.com
                                  (most are simulated; the market data service returns live prices)
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; \`off\` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
-  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances, the network MetaMask adds, and the chain
-                                 check on a settlement (https, or http on this computer)
+  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances, the chain MetaMask adds, and the chain
+                                 check on a settlement (https, or http on this machine)
+  SUPERSTABLES_TEMPO_RPC         the Tempo Moderato RPC for pay's chain checks (https, or http on this machine)
+  SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine)
   SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, ${DEFAULT_APPROVE_PORT} or a free one when busy
   SUPERSTABLES_WALLET_URL        where the local wallet listens (default http://127.0.0.1:${DEFAULT_WALLET_PORT})
-  SUPERSTABLES_MCP_WAIT_MS       how long the MCP pay and payment_status tools wait (default 20000)
   SUPERSTABLES_DOCTOR_OFFLINE    1: doctor skips the network checks
   SUPERSTABLES_DEMO_PAY_TO       where demo-service's earnings go
 

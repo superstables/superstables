@@ -1,0 +1,61 @@
+{
+  "source": "PaymentEngine at 46469a5 (v0.3.0), fake seller reports a wrong-amount transaction; no receipt is written",
+  "attempt": {
+    "id": "197a0bed-9bb0-4d6e-ab4b-fbe0a0587664",
+    "quoteId": "016feebd-4291-4c90-b208-088634b2f3a7",
+    "createdAt": "2026-10-06T13:44:19.471Z",
+    "updatedAt": "2026-10-06T13:44:19.517Z",
+    "state": "uncertain",
+    "url": "http://127.0.0.1:43653",
+    "terms": {
+      "amountDecimal": 0.01,
+      "amountAtomic": "10000",
+      "asset": "USDC",
+      "assetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "network": "eip155:84532",
+      "networkLabel": "Base Sepolia (testnet)",
+      "recipient": "0x3479129a75C20f7c407142835982f33C86719c8B",
+      "scheme": "exact",
+      "x402Version": 2
+    },
+    "runner": {
+      "pid": 3627923,
+      "start": "linux:dc37926b-f8a3-4aae-8bf5-87dd862612e8:191571928"
+    },
+    "history": [
+      {
+        "at": "2026-10-06T13:44:19.471Z",
+        "state": "awaiting_approval"
+      },
+      {
+        "at": "2026-10-06T13:44:19.493Z",
+        "state": "awaiting_approval",
+        "note": "waiting for the owner to approve in the wallet"
+      },
+      {
+        "at": "2026-10-06T13:44:19.502Z",
+        "state": "approved"
+      },
+      {
+        "at": "2026-10-06T13:44:19.502Z",
+        "state": "submitting"
+      },
+      {
+        "at": "2026-10-06T13:44:19.517Z",
+        "state": "uncertain"
+      }
+    ],
+    "reservedAt": "2026-10-06T13:44:19.478Z",
+    "reservedUntil": "2026-10-06T13:45:22.478Z",
+    "walletRequestId": "req-1",
+    "payer": "0xB9355134B255D07b845E01546019816f2f298fb5",
+    "authorizationNonce": "0xc701475d29cab3ac6190b891214425849139c1c2d1092e36fde52447590ea797",
+    "authorizationValidBefore": "2026-10-06T13:49:19.000Z",
+    "transaction": "0x28d5f0d65f2eefc59835f7d1805d717c07583f48d22563cb4c754cfbaafbf08e",
+    "serviceStatus": 200,
+    "serviceBody": "{\"asset\":\"BTC\",\"price\":64000,\"at\":\"2026-10-06T13:44:19.511Z\"}",
+    "chain": "mismatch",
+    "chainReason": "the transaction did not transfer the signed amount to the checked recipient",
+    "reason": "the service reported the payment settled, but the chain does not confirm it (the transaction did not transfer the signed amount to the checked recipient), so whether it was paid is unknown"
+  }
+}

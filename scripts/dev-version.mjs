@@ -4,8 +4,7 @@
 // A development copy of the skill zip that says it is the release it came from looks exactly
 // like that release once it is installed, and nothing on screen says which is running. A
 // version that changes with every commit removes the ambiguity: whatever the client reports
-// (`superstables --version`, `wallet_status`, the MCP server's first stderr line) names the
-// exact build.
+// (`superstables --version`, `superstables doctor`) names the exact build.
 //
 // The stamp is `<version>-dev.<commits>+g<sha>`: a SemVer prerelease that sorts below the
 // release it is derived from, plus the commit it was built at. Without git — a tarball, a

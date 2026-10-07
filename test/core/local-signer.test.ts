@@ -54,9 +54,10 @@ describe("LocalKeySigner", () => {
 
   it("refuses a network outside this client's table rather than sign over a domain it does not know", async () => {
     const signer = new LocalKeySigner(privateKeyToAccount(generatePrivateKey()));
-    const requirements = { ...usdcRequirement(0.01, `0x${"22".repeat(20)}`), network: "eip155:421614", extra: {} };
+    // A chain this client does not know (a local devnet's id); the six EVM testnets are in the table.
+    const requirements = { ...usdcRequirement(0.01, `0x${"22".repeat(20)}`), network: "eip155:31337", extra: {} };
     await expect(
       signer.sign({ kind: "eip3009", x402Version: 2, requirements } as Parameters<LocalKeySigner["sign"]>[0]),
-    ).rejects.toThrow(/does not sign on eip155:421614/);
+    ).rejects.toThrow(/does not sign on eip155:31337/);
   });
 });

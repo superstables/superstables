@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The `superstables` command. One binary for the three people in this story: the owner who
 // sets the machine up and approves payments, the developer who wants to see a payment happen
-// from a terminal, and the agent that runs `superstables mcp` and talks JSON-RPC over stdio.
+// from a terminal, and the agent that runs the same commands and reads what they print.
 //
 // Every command prints facts, one per line, and refuses in one sentence that names the next
 // command to run. No command ever signs anything: `pay` asks the owner's wallet and reports
@@ -10,7 +10,7 @@
 
 import { spawn } from "node:child_process";
 import { constants as osConstants } from "node:os";
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command, CommanderError, InvalidArgumentError, Option } from "commander";
@@ -27,7 +27,7 @@ import {
   recordsDir,
   walletDir,
 } from "../core/home.js";
-import { PaymentEngine, QuoteUsedError, SERVICE_BODY_LIMIT, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
+import { PaymentEngine, QuoteUsedError, SERVICE_BODY_LIMIT, paymentOutput, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
 import { POLICY_EXAMPLE, loadPolicy, type Policy } from "../core/policy.js";
 import { QUOTE_TTL_MS, getQuote, quote as takeQuote } from "../core/quote.js";
 import { Records } from "../core/records.js";
@@ -38,8 +38,6 @@ import { walletStatus } from "../core/signer/wallet.js";
 import type { Attempt, Quote, Receipt, ServiceListing, WalletStatus } from "../core/types.js";
 import { clientVersion } from "../core/version.js";
 import { startDemoService } from "../demo-service/server.js";
-import { runStdioServer, signerFor, walletModeFromEnvironment, type WalletMode } from "../mcp/main.js";
-import { attemptView, messageFor } from "../mcp/server.js";
 import { policySummary, startWallet } from "../wallet/daemon.js";
 import { initKey, keyExists, keyPath, loadAccount, readSecretFile } from "../wallet/keystore.js";
 import { SellerTextError, UNTRUSTED_LABEL, untrustedText } from "../core/text.js";
@@ -52,15 +50,23 @@ import {
   EXIT,
   badInput,
   exitCodeFor,
+  humanNextFor,
+  inclusionRemoved,
   isFinalAttempt,
   nextFor,
   requoteCommand,
-  shellWord,
   usedQuoteMessage,
 } from "./outcome.js";
+import { signerFor, walletModeFromEnvironment, type WalletMode } from "./signer.js";
+import { attemptView, messageFor } from "./views.js";
 
-const NO_GAS_LINE = "no ETH is needed, facilitators pay the gas.";
-const FAUCET_LINE = `Fund it with test USDC on Base Sepolia at https://faucet.circle.com; ${NO_GAS_LINE}`;
+/**
+ * Where test USDC comes from: Circle's faucet on every chain `pay` pays USDC on but SKALE Base Sepolia, whose USDC is
+ * Base Sepolia's, bridged over the SKALE bridge. `others` names the rest: "EVM chains" for the local wallet.
+ */
+const usdcSources = (others: string) =>
+  `on SKALE Base Sepolia, Base Sepolia test USDC bridged over the SKALE bridge; on the other ${others}, https://faucet.circle.com (select the payment's chain). No gas is needed: facilitators pay it.`;
+const FAUCET_LINE = `Fund it with test USDC on the EVM chain you pay on: ${usdcSources("EVM chains")}`;
 
 /** How long the browser approval page gives the owner (BrowserWalletSigner's default). */
 const BROWSER_WINDOW_S = 300;
@@ -83,7 +89,7 @@ program
   .version(clientVersion(), "-V, --version", "print the version of this client and exit")
   .description(
     "Find services that charge per request, quote them, and pay them with test USDC from a wallet " +
-      "the owner controls. Testnets only: no real money moves.",
+      "the owner controls. Testnet only. No real money moves.",
   )
   .option("--home <dir>", "where this client keeps its state (default: SUPERSTABLES_HOME or ~/.superstables)")
   .addOption(
@@ -134,10 +140,12 @@ explain(
         console.log("There is nothing else to start. When an agent asks to pay, it prints an approval link:");
         console.log("  1. Install MetaMask in your browser: https://metamask.io/download");
         console.log("  2. Open the approval link the agent gives you and press Connect wallet.");
-        console.log("  3. Add or switch to the Base Sepolia network when MetaMask asks.");
+        console.log("  3. Add or switch to the payment's chain when MetaMask asks.");
         console.log("  4. Check the amount and the recipient on the page, then approve in MetaMask.");
+        console.log("For a payment on Solana devnet, use a Solana wallet such as Phantom instead.");
         console.log("");
-        console.log(`Fund that MetaMask account with test USDC on Base Sepolia at https://faucet.circle.com; ${NO_GAS_LINE}`);
+        console.log(`Fund that account with test USDC on the chain you pay on: ${usdcSources("USDC chains")}`);
+        console.log("On Tempo Moderato it pays in test pathUSD, and the wallet pays the network fee itself.");
         console.log("");
         console.log("To use the local wallet process instead, run any command with `--wallet local`.");
       } else {
@@ -153,12 +161,6 @@ explain(
         console.log("  superstables wallet serve");
       }
       console.log("");
-      console.log("Set up your agent app over MCP (Claude Code shown; other MCP hosts take the same command):");
-      console.log(`  claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- ${mcpCommand()}`);
-      console.log("  The switch adds Superstables' testnet services from the hosted catalogue. Most return");
-      console.log("  prepared sample output and are marked simulated; the market data service returns live prices.");
-      console.log("  Leave it out to list no simulated services.");
-      console.log("");
       console.log("Next: `superstables doctor` checks the machine; `superstables find` lists what can be bought.");
       console.log("On-chain budgets are set up separately: `superstables budget setup --rail evm`.");
     }),
@@ -171,7 +173,7 @@ explain(
     money: "no.",
     who: "the owner, once per machine.",
     examples: ["superstables setup", "superstables --wallet local setup"],
-    prints: "the paths it wrote, how the owner approves payments, and the command that connects an MCP host to this build.",
+    prints: "the paths it wrote, how the owner approves payments, and what to run next.",
     exits: "0 ready, 1 the home directory could not be written",
   },
 );
@@ -302,29 +304,6 @@ explain(
   },
 );
 
-// ── mcp ──────────────────────────────────────────────────────────────────────────────────
-
-explain(
-  program
-    .command("mcp")
-    .description("run the MCP server on stdio, for Claude Code or another MCP host")
-    .action(async () => {
-      await runStdioServer();
-    }),
-  {
-    notes: [
-      "Tools: find_services, quote, pay, payment_status, wallet_status, list_receipts. Its pay tool asks " +
-        "the owner exactly as `superstables pay` does, and returns the approval link at once; the " +
-        "approval page lives as long as this server does. stdout carries the protocol; logs go to stderr.",
-    ],
-    money: "only through its pay tool, and only after the owner approves in their wallet.",
-    who: "the agent's MCP host (Claude Code, for example), not a person at a terminal.",
-    examples: ["claude mcp add superstables -- superstables mcp"],
-    prints: "MCP messages on stdout until the host disconnects.",
-    exits: "0 the host disconnected, 1 could not start",
-  },
-);
-
 // ── find ─────────────────────────────────────────────────────────────────────────────────
 
 explain(
@@ -335,7 +314,7 @@ explain(
     .option("--limit <n>", "how many services to ask for", toInteger, 20)
     .option("--budget", "show the listings a `superstables budget` rail could pay, instead of the ones pay can")
     .option("--all", "show every listing, including those this client cannot pay, and why")
-    .option("--demo", "also list Superstables' testnet services from the hosted catalogue: most return prepared sample output and are marked simulated; the market data service returns live prices (SUPERSTABLES_DEMO_SERVICES=on does the same)")
+    .option("--demo", "also list Superstables' testnet services from the catalogue on superstables.com: most return prepared sample output and are marked simulated; the market data service returns live prices (SUPERSTABLES_DEMO_SERVICES=on does the same)")
     .option("--json", "print {services, warnings} as JSON")
     .action(
       async (
@@ -402,7 +381,7 @@ explain(
   {
     notes: [
       "Reads a built-in catalogue and the public index (SUPERSTABLES_INDEX_URL; `off` skips it). " +
-        "Columns: pay is whether `superstables pay` can call the listing as listed (x402 on Base Sepolia, " +
+        "Columns: pay is whether `superstables pay` can call the listing as listed (on a chain it pays on, " +
         "with the request parameters known); budget names the `superstables budget` rail and chain that " +
         "could pay it; simulated is yes when the listing marks the output as prepared sample output, no when " +
         "it marks it as not sample output (Superstables' market data service, which returns live prices; no " +
@@ -458,7 +437,7 @@ explain(
           throw badInput(
             "This service cannot be paid by `superstables pay`." +
               (budget ? ` With a budget: ${budget.run.map((c) => `\`${c}\``).join(", then ")}.` : "") +
-              ` ${UNTRUSTED_LABEL} ${untrustedText(`${service.name}: ${service.notActionableReason ?? "it is not on Base Sepolia"}`, 500)}`,
+              ` ${UNTRUSTED_LABEL} ${untrustedText(`${service.name}: ${service.notActionableReason ?? "the payment is not supported by this client"}`, 500)}`,
           );
         }
         const params = parseParams(options.param);
@@ -661,6 +640,13 @@ explain(
         `the port the approval link names: ssh -L ${DEFAULT_APPROVE_PORT}:127.0.0.1:${DEFAULT_APPROVE_PORT}). With --wallet local the ` +
         "request goes to the wallet process, whose page outlives this command; approving there after " +
         "pay has stopped pays nothing, because nothing is left to submit it.",
+      "Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base " +
+        "Sepolia, Ethereum Sepolia and Solana devnet; MPP with test pathUSD on Tempo Moderato. The wallet signs on " +
+        "the EVM chains and Solana, and pay submits what it signed. On Tempo the owner's wallet sends the payment " +
+        "itself: pay records that before the wallet is asked, reads the owner's transaction on chain, and only then " +
+        "calls the seller. Once the wallet has been asked to send, an attempt that ends without a transaction report " +
+        "is uncertain, a rejection the page reports from the wallet included, and `superstables status` searches the " +
+        "chain for it. --wallet local signs on the EVM chains only.",
       `How long it waits: with no --wait, until the attempt ends: the browser page gives the owner ` +
         `${BROWSER_WINDOW_S / 60} minutes; with --wallet local, pay gives the wallet ${LOCAL_WINDOW_S} s ` +
         "(the wallet's own window is 120 s by default). After the owner approves, settlement takes up " +
@@ -674,21 +660,23 @@ explain(
         "a fixed port that is busy fails at once, the owner is not asked and the quote can still be paid.",
       "For agents: the approval link is printed as soon as it exists, but pay keeps running until the owner " +
         "decides. If your tool shows output only when a command ends, run pay in the background with its " +
-        "output going to a file and show the owner the approval link from that file, or use the MCP server " +
-        "(`superstables mcp`), whose pay tool returns it at once.",
+        "output going to a file and show the owner the approval link from that file.",
       "Where the answer is: the service's response is printed after the receipt (up to " +
         `${SERVICE_BODY_LIMIT.toLocaleString("en")} characters are kept); with --json it is service_response. ` +
         "`superstables status <attempt-id>` shows it again later.",
       "Retrying: a quote starts at most one attempt. After denied, expired, abandoned or failed, take a " +
         "new quote and pay that, unless the Next line (next, with --json) says the same quote can still be paid (the " +
-        "owner was never asked). After uncertain or paid_service_failed, do not pay again.",
+        "owner was never asked). After paid_service_failed, do not pay again. After uncertain, do not pay again or " +
+        "quote the same request again: `superstables status` looks for the payment on chain, and only when it ends " +
+        "the attempt failed with chain unpaid was nothing paid.",
       "States: awaiting_approval, approved, submitting (not final); settled, paid_service_failed " +
         "(paid; chain says verified, when the client read the transaction on chain and it is this payment, or " +
         "unchecked, when it rests on the seller's report until `superstables status` checks again); denied (the owner rejected it), expired (nobody approved in the window), " +
         "abandoned (the wait ended before anyone decided; abandoned_by says whether this process was " +
-        "stopped, --wait ran out or the page closed), failed (nothing was paid); uncertain (the " +
-        "payment may or may not have settled, including when the chain shows the seller's transaction is not this " +
-        "payment: chain mismatch).",
+        "stopped, --wait ran out or the page closed), failed (nothing was paid: the payment never left this machine, " +
+        "or chain unpaid, when the chain shows it was never made and can no longer be); uncertain (the payment may " +
+        "or may not have settled, including after the seller said it did not, and when the chain shows the seller's " +
+        "transaction is not this payment: chain mismatch).",
     ],
     money:
       "yes, once, and only after the owner approves it in their own wallet. Calling pay only asks; " +
@@ -698,9 +686,9 @@ explain(
     prints:
       "each state as it happens, the approval link once, the outcome in one sentence, the receipt, the " +
       "service's response and the next command. With --json, one object: attempt_id, quote_id, state, " +
-      "final, message, next, reason, refusal, receipt (or transaction, for a payment without one), service_response, history.",
+      "final, chain_final, message, next, reason, refusal, receipt (or transaction, for a payment without one), service_response, history.",
     exits:
-      "0 paid and delivered, 1 failed, expired or abandoned; nothing was paid only when no transaction is reported, 2 bad input (unknown, used " +
+      "0 paid and delivered, 1 failed, expired or abandoned; nothing was paid when no transaction is reported, or chain is unpaid, 2 bad input (unknown, used " +
       "or expired quote), 3 refused (the owner rejected it, or a spend policy refused it), 4 paid but the " +
       "service failed, 5 unknown",
   },
@@ -738,7 +726,7 @@ explain(
       if (!isFinalAttempt(attempt)) {
         console.log("");
         console.log(
-          "This record moves only while the `superstables pay` command (or MCP server) that started it is " +
+          "This record moves only while the `superstables pay` command that started it is " +
             "running. If that process has stopped, it will not change: nothing was signed if it is " +
             "awaiting_approval, and whether it settled is unknown if it is approved or submitting.",
         );
@@ -746,8 +734,8 @@ explain(
     }),
   {
     money:
-      "no. It reads this machine's records, and the chain again for a paid attempt whose chain is unchecked; it " +
-      "never starts or repeats a payment.",
+      "no. It reads this machine's records, and the chain again for an uncertain attempt, one a stopped process left " +
+      "approved or submitting, and a paid one whose chain is unchecked; it never starts or repeats a payment.",
     who: "the agent or the owner.",
     examples: ["superstables status <attempt-id>", "superstables status <attempt-id> --json"],
     prints:
@@ -783,7 +771,7 @@ explain(
             money(receipt.terms.amountDecimal, receipt.terms.asset),
             receipt.serviceName ?? receipt.url,
             receipt.serviceOutcome,
-            receipt.chain ?? "unchecked",
+            paymentOutput(receipt).chain ?? "unchecked",
             receipt.attemptId,
             shownTransaction(receipt.transaction, receipt.terms.network).url ?? "(no hash)",
           ]),
@@ -792,10 +780,12 @@ explain(
     }),
   {
     notes: [
-      "One receipt for each payment the seller reported settled. The chain column says verified when the client read " +
-        "the transaction on chain and it is this payment, unchecked when it has not yet (`superstables status` checks " +
-        "again). A later check can mark the receipt mismatch and the attempt uncertain. Do not pay again. A receipt " +
-        "records the payment and the service's answer separately.",
+      "One receipt for each payment the seller reported settled, or the chain showed. The chain column says verified " +
+        "when the client read the transaction on chain and it is this payment. JSON chain_final reports permanent finality separately. Unchecked means a matching payment has not been established " +
+        "(`superstables status` checks again). A later check can mark the receipt mismatch and the attempt uncertain, " +
+        "or unpaid when the chain shows the payment was never made and can no longer be (the attempt is then failed, " +
+        "and the receipt no longer counts against the daily cap). Do not pay again. A receipt records the payment and " +
+        "the service's answer separately.",
     ],
     money: "no.",
     who: "the agent or the owner.",
@@ -1045,15 +1035,16 @@ function context(): {
   return { records, policy: parsed, engine: new PaymentEngine({ records, policy: parsed, signer }), signer };
 }
 
-/** What `pay --json` and `status --json` print: the MCP view of the attempt, in CLI words. */
+/** What `pay --json` and `status --json` print: the attempt's view, with what the CLI adds to it. */
 function attemptJson(records: Records, attempt: Attempt): Record<string, unknown> {
-  const view = attemptView({ records }, attempt, "cli");
+  const view = attemptView({ records }, attempt);
   // A link to an attempt that has ended opens nothing useful; only a live one is worth showing.
   const { history, approval_url, ...rest } = view;
   if (!isFinalAttempt(attempt) && approval_url) rest.approval_url = approval_url;
   return {
     ...rest,
     final: isFinalAttempt(attempt),
+    chain_final: paymentOutput(attempt).chain_final,
     exit_code: exitCodeFor(attempt),
     next: nextFor(attempt, getQuote(attempt.quoteId, records)),
     url: attempt.url,
@@ -1072,14 +1063,15 @@ function attemptJson(records: Records, attempt: Attempt): Record<string, unknown
 function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt): void {
   const receipt = known ?? (attempt.receiptId ? records.getReceipt(attempt.receiptId) : undefined);
   console.log("");
-  console.log(messageFor(attempt, receipt, "cli"));
+  console.log(inclusionRemoved(attempt) ? "Payment outcome unknown. Do not pay again." : messageFor(attempt, receipt));
   if (receipt) {
     console.log("");
     console.log(field("receipt", receipt.id));
-    console.log(field("paid", money(receipt.terms.amountDecimal, receipt.terms.asset)));
+    // Paid only when the chain says so; otherwise the amount the seller reported paid.
+    console.log(field(receipt.chain === "verified" || receipt.paymentIncluded ? "paid" : "amount", money(receipt.terms.amountDecimal, receipt.terms.asset)));
     console.log(field("transaction", shownTransaction(receipt.transaction, receipt.terms.network).url ?? "no transaction hash was given"));
-    console.log(field("payer", shownPayer(receipt.payer) ?? "unknown"));
-    console.log(field("chain", receipt.chain === "verified" ? "verified: the transaction is this payment" : `${receipt.chain === "mismatch" ? "mismatch" : "unchecked"}: ${receipt.chainReason ?? "it was not read"}`));
+    console.log(field("payer", shownPayer(receipt.payer, receipt.terms.network) ?? "unknown"));
+    console.log(field("chain", receiptChain(receipt)));
     console.log(field("recipient", receipt.terms.recipient));
     console.log(field("service", `HTTP ${receipt.serviceStatus ?? "unknown"} (${receipt.serviceOutcome})`));
   }
@@ -1096,30 +1088,30 @@ function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt
     console.log(untrustedText(attempt.serviceBody, SERVICE_BODY_LIMIT));
   }
   console.log("");
-  console.log(`Next: ${nextFor(attempt, getQuote(attempt.quoteId, records))}`);
+  console.log(`Next: ${humanNextFor(attempt, getQuote(attempt.quoteId, records))}`);
+}
+
+/** What the chain says about a receipt; matching inclusion is paid while finality is pending. */
+function receiptChain(receipt: Receipt): string {
+  switch (receipt.chain) {
+    case "verified":
+      return receipt.chainFinal === false ? "verified: paid; the payment landed, but is not final on chain yet" : "verified: the transaction is this payment";
+    case "mismatch":
+      return `mismatch: ${receipt.chainReason ?? "the transaction is not this payment"}`;
+    case "unpaid":
+      return `unpaid: the seller reported it paid, but ${receipt.chainReason ?? "the chain shows it was never made"}`;
+    default:
+      if (receipt.paymentIncluded) return "verified: paid; the payment landed, but is not final on chain yet";
+      if (receipt.chainReason === "The earlier payment inclusion was removed; outcome unknown. Do not pay again.") return "unchecked: the earlier matching payment was removed from the chain.";
+      if (receipt.chainReason?.startsWith("The earlier payment inclusion")) return `unchecked: ${receipt.chainReason}`;
+      return `unchecked: the seller reported it paid, and the chain has not confirmed it yet (${receipt.chainReason ?? "it was not read"})`;
+  }
 }
 
 /** A signer that binds a port has to give it back before the command exits. */
 async function closeSigner(signer: Signer): Promise<void> {
   const closable = signer as Signer & { close?: () => Promise<void> };
   if (typeof closable.close === "function") await closable.close().catch(() => undefined);
-}
-
-/**
- * The command that starts this same build's MCP server: the Node that is running now, its own
- * flags (a TypeScript loader, when run from source) and the entry point that was started, plus
- * `mcp`. Absolute, so it works from any directory and however the CLI was installed: from a
- * checkout, a package or a single bundled file.
- */
-function mcpCommand(): string {
-  const started = process.argv[1];
-  let entry = started;
-  try {
-    if (started) entry = realpathSync(started);
-  } catch {
-    // A path that cannot be resolved is still the one that was started.
-  }
-  return [process.execPath, ...process.execArgv, entry ?? "superstables", "mcp"].map(shellWord).join(" ");
 }
 
 function payable(service: ServiceListing): string {

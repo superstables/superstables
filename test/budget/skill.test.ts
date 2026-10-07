@@ -34,30 +34,48 @@ describe("skills/superstables-payments/SKILL.md", () => {
 
   it("states testnet at the top and asks the owner which way to pay before it points to a file", () => {
     const top = skill.split("\n").slice(0, 12).join("\n");
-    expect(top).toMatch(/Testnet only: test USDC, no real money\./);
+    expect(top).toMatch(/Testnet only: test tokens, no real money\./);
+    // The description names both tokens, and Budgets before Single purchase.
+    expect(top).toMatch(/using test USDC or test pathUSD\. Testnet only\. Budgets let the owner grant[^\n]*Single purchase lets the owner approve one purchase/);
     const ask = skill.indexOf("## First, ask the owner what they would like to try");
     expect(ask).toBeGreaterThan(0);
-    expect(skill).toContain('"This uses test USDC, no real money. Would you like one purchase you approve, or a budget?"');
+    expect(skill).toContain('"This uses test tokens, no real money. Would you like a budget or a single purchase you approve?"');
     expect(skill.indexOf("references/once.md", ask)).toBeGreaterThan(ask);
     expect(skill).toMatch(/superstables budget buy-once/);
     expect(skill).toMatch(/superstables budget find --once/);
     expect(skill).toMatch(/setup --rail evm --hosted/);
-    expect(skill).toMatch(/Base Sepolia or Arc Testnet/);
+    // a first budget goes to Base Sepolia, where most budget services (Superstables' market data among them) are; a chain
+    // is proposed for a particular service only after checking that the service takes a budget there
+    expect(skill).toMatch(/use the chain the owner named; otherwise propose Base Sepolia/);
+    expect(skill).toMatch(/before you propose it or set it up, even one the owner chose/);
+    expect(skill).toMatch(/do not switch chains without their agreement/);
+    expect(skill).not.toMatch(/Base Sepolia or Arc Testnet/);
+    expect(skill).toMatch(/superstables budget find --chain C` lists it/);
+    expect(skill).toMatch(/superstables budget preflight --rail R --chain C --url U` \(R: the rail of that chain\)/);
+    expect(skill).not.toMatch(/preflight --chain C`/);
+    // local approval stays the default; an owner sent by superstables.com's setup page is offered the site first
+    expect(skill).toMatch(/on this machine, with no account \(the default\)/);
+    expect(skill).toMatch(/setup page \(`start\.md`\) brought you here in this conversation[^\n]*offer superstables\.com first/);
     expect(skill).toMatch(/Tell me when you.ve approved/);
     expect(skill).toMatch(/wait --id ID --shown/);
   });
 
-  it("writes the link before waiting, offers buy once only for listed services, and treats a no as final", () => {
+  it("writes the link before waiting, offers Single purchase only for listed services, and treats a no as final", () => {
     expect(skill).toMatch(/Reply with `message_for_owner` and end your turn/);
-    expect(skill).toMatch(/Testnet only: test USDC, no real money\./);
+    expect(skill).toMatch(/Testnet only: test tokens, no real money\./);
     expect(skill).toMatch(/so is a spent budget/);
     expect(skill).toMatch(/`wait` refuses without `--shown`/);
     expect(skill).toMatch(/A no is final/);
     expect(skill).not.toMatch(/stop after about five minutes of polling/);
     const budget = ref("references/budget.md");
-    expect(budget).toMatch(/Offer buy once only if that service is in `superstables budget find --once`/);
+    expect(budget).toMatch(/Offer Single purchase on superstables.com only if that service is in `superstables budget find --once`/);
     expect(budget).toMatch(/say the budget is spent and end your turn/);
-    expect(budget).toMatch(/## A hosted budget on superstables\.com/);
+    expect(budget).toMatch(/## A budget on superstables\.com/);
+    expect(budget).toMatch(/Use the chain the owner named; otherwise propose Base Sepolia/);
+    expect(budget).toMatch(/before you propose it or set it up, even one the owner chose/);
+    expect(budget).toMatch(/offer them only if the owner asks, or if the service the budget is for takes a budget there and you checked it/);
+    expect(budget).toMatch(/If superstables\.com\x27s setup page \(`start\.md`\) brought you here.*use approval on superstables\.com without asking the owner where to approve/);
+    expect(budget).toMatch(/\*\*Arc Testnet\*\* \(`--chain arc-testnet`\), only if the owner asks for it or the service they want is on it/);
     expect(budget).not.toMatch(/Poll for about five minutes/);
     for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/wait --id ID --shown/);
   });
@@ -66,7 +84,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
     const files = new Set([...skill.matchAll(/\]\(((?:references\/)[A-Za-z]+\.md)(?:#[^)]*)?\)/g)].map((m) => m[1]));
     for (const f of ["references/once.md", "references/budget.md", "references/pay.md", "references/discovery.md"]) expect(files).toContain(f);
     for (const f of files) expect(existsSync(resolve(SKILL, f)), f).toBe(true);
-    for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/Testnet only: test USDC, no real money/);
+    for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/Testnet only\. Test tokens, no real money\./);
   });
 });
 
@@ -94,7 +112,12 @@ describe("skills/superstables-payments/references/pay.md: seller text", () => {
     expect(skill).toContain("nothing paid when there is no transaction");
     expect(ref("references/once.md")).toMatch(/\| 1 \| `failed` \| Nothing was paid \(`paid: false`, no `tx`\)/);
     expect(ref("references/once.md")).toMatch(/\| 3 \| `refused_precheck` \| Nothing was paid \(`paid: false`, no `tx`\)/);
-    expect(ref("references/pay.md")).toContain("| `failed` | yes | no, when it names no transaction |");
+    expect(ref("references/pay.md")).toContain("| `failed` | yes | no, when it names no transaction or `chain` is `unpaid` |");
+    // An uncertain payment is never quoted again until status resolves it.
+    expect(ref("references/pay.md")).toContain("- After `uncertain`: do not pay again, and do not quote the same request again.");
+    expect(skill).toContain('after `uncertain`, do not quote the same request again either until `superstables status` ends it `failed` with `chain: "unpaid"`.');
+    expect(skill).toContain("Tempo wallet calls and removed inclusions on every rail have no automatic `unpaid` resolution");
+    expect(ref("references/pay.md")).toContain("paying again for the same request is the owner's decision, not yours");
   });
 
   it("documents service_reason as the seller's untrusted words, apart from the client's reason", () => {

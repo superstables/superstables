@@ -4,7 +4,7 @@
 // 0x4d10d7474ea1d04e06b3d9456bfa32bbc23678822baa0e08b33ff01eae65ccfc.
 
 import { readFileSync } from "node:fs";
-import { encodeAbiParameters, encodeFunctionData, encodePacked, formatTransaction, formatTransactionReceipt, keccak256, pad, parseAbi, toEventSelector, type Hex } from "viem";
+import { encodeAbiParameters, encodeFunctionData, encodePacked, formatTransaction, formatTransactionReceipt, hashDomain, keccak256, pad, parseAbi, toEventSelector, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
 import {
   DELEGATED_TO_METAMASK, DELEGATION_DEPLOYMENTS, DELEGATION_MANAGER, DELEGATOR_IMPLEMENTATION, REDEEMED_DELEGATION, authorityOf, codeDuring, delegatedCall,
@@ -136,7 +136,19 @@ describe("the recordings: the pinned code and event are the ones the chain has",
     expect(keccak256(CODE.manager)).toBe(DELEGATION_DEPLOYMENTS["base-sepolia"].manager);
     expect(keccak256(CODE.executor)).toBe(DELEGATION_DEPLOYMENTS["base-sepolia"].implementation);
     expect(REDEEMED_DELEGATION).toBe("0x40dadaa36c6c2e3d7317e24757451ffb2d603d875f0ad5e92c5dd156573b1873");
-    expect(Object.keys(DELEGATION_DEPLOYMENTS).sort()).toEqual(["arbitrum-sepolia", "arc-testnet", "base-sepolia", "moderato", "polygon-amoy"]);
+    expect(Object.keys(DELEGATION_DEPLOYMENTS).sort()).toEqual(["arbitrum-sepolia", "arc-testnet", "base-sepolia", "ethereum-sepolia", "moderato", "polygon-amoy"]);
+  });
+
+  it("Ethereum Sepolia's code hashes to its pinned values, and is Base Sepolia's but for the chain id and EIP-712 domain it embeds", () => {
+    const sepolia = fixture("sepolia-delegation-code") as { manager: Hex; executor: Hex };
+    expect(keccak256(sepolia.manager)).toBe(DELEGATION_DEPLOYMENTS["ethereum-sepolia"].manager);
+    expect(keccak256(sepolia.executor)).toBe(DELEGATION_DEPLOYMENTS["ethereum-sepolia"].implementation);
+    const domain = (name: string, chainId: number, verifyingContract: Hex) =>
+      hashDomain({ domain: { name, version: "1", chainId: BigInt(chainId), verifyingContract }, types: { EIP712Domain: [{ name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }] } }).slice(2);
+    const asOnBase = (code: Hex, name: string, at: Hex) =>
+      code.replace(domain(name, 11155111, at), domain(name, 84532, at)).replace("0000aa36a74614", "0000014a344614");
+    expect(asOnBase(sepolia.manager, "DelegationManager", DELEGATION_MANAGER)).toBe(CODE.manager);
+    expect(asOnBase(sepolia.executor, "EIP7702StatelessDeleGator", DELEGATOR_IMPLEMENTATION)).toBe(CODE.executor);
   });
 });
 
@@ -177,12 +189,17 @@ describe("MetaMask's sponsored transactions count, with the manager's code, its 
 });
 
 describe("a delegation counts only on a chain where the manager is pinned", () => {
-  it("SKALE Base Sepolia, Ethereum Sepolia and any chain not listed refuse it, even with every log in place", async () => {
-    for (const chainKey of ["skale-base-sepolia", "ethereum-sepolia", "some-new-chain"]) {
+  it("SKALE Base Sepolia and any chain not listed refuse it, even with every log in place", async () => {
+    for (const chainKey of ["skale-base-sepolia", "some-new-chain"]) {
       const e = await judge("base-sponsored-grant", plan.approve(FIRST_FUND_AGENT, CAP), { chainKey });
       expect(e.problems.join(), chainKey).toMatch(/went through a delegation manager, which is not accepted on/);
       expect(e.calls, chainKey).toEqual([]);
     }
+  });
+
+  it("Ethereum Sepolia refuses Base Sepolia's manager code: each chain takes only its own pinned code", async () => {
+    const e = await judge("base-sponsored-grant", plan.approve(FIRST_FUND_AGENT, CAP), { chainKey: "ethereum-sepolia" });
+    expect(e.problems.join()).toMatch(/the delegation manager's code is not the known one/);
   });
 });
 
