@@ -11,7 +11,8 @@
 //              and the chain clock is past its validBefore). No funds moved.
 //   unknown    nothing on chain yet but it still could land, or the chain shows something unexpected.
 //              Run again later.
-// An operation that never got past `quoted` was never signed: it becomes not_found.
+// A quoted journal with a memo still needs a chain search: an older submitted write may have been lost.
+// Only a quoted journal without a memo retains the old never-signed meaning.
 //
 // Usage: superstables budget reconcile --rail tempo --op <id> [--tx <hash>] [--wait <seconds>]
 // Exit codes: 0 settled or already final without loss, 1 failed / not_found, 2 bad usage, 5 unknown.
@@ -76,11 +77,11 @@ async function main() {
 
   if (op.state === 'settled') return done('settled', { tx: op.tx, debit: op.debit == null ? BigInt(op.intent.amount) : toBaseUnits(op.debit), next: op.delivered === false ? 'paid but not delivered; never pay again, contact the seller with the tx hash' : 'none', exit: 0 })
 
-  if (op.state === 'refused_precheck' || op.state === 'refused_chain' || (op.state === 'quoted' && op.reason === 'quote_only')) {
+  if (op.state === 'refused_precheck' || op.state === 'refused_chain' || (op.state === 'quoted' && op.reason === 'quote_only' && !op.memo)) {
     console.log('Nothing was signed for this operation. Nothing to reconcile.')
     return done(op.state, { reason: op.reason, exit: op.state === 'quoted' ? 0 : 3 })
   }
-  if (op.state === 'quoted') {
+  if (op.state === 'quoted' && !op.memo) {
     console.log('The operation never got past the quote: nothing was signed or sent.')
     return done('not_found', { debit: 0n, reason: 'never signed: interrupted before the payment was created', next: 'no funds moved; safe to retry with a new op id', exit: 1 })
   }

@@ -42,15 +42,13 @@ export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lo
   if (firstBound) return firstBound
   if (firstFound) return firstFound
   if (unreadable) return { kind: 'pending' }
-  if (op.validBefore) {
+  if (op.kind === 'buy' && op.memo && op.startBlock !== undefined && op.validBefore) {
     const head = await chainHead().catch(() => null)
     if (head && head.timestamp > op.validBefore + EXPIRY_SLACK_S) {
       // last read: a payment mined in the final blocks must not be called expired
-      if (op.memo) {
-        const again = await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock ?? 0)).catch(() => null)
-        if (again === null) return { kind: 'pending' } // could not read: never claim "expired" on a failed read
-        if (again.length) return { kind: 'pending' } // inclusion remains unreadable; the next reconciliation checks again
-      }
+      const again = await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock)).catch(() => null)
+      if (again === null) return { kind: 'pending' } // could not read: never claim "expired" on a failed read
+      if (again.length) return { kind: 'pending' } // inclusion remains unreadable; the next reconciliation checks again
       return { kind: 'expired' }
     }
   }
