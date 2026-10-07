@@ -370,6 +370,8 @@ Options:
   --service <id>       quote a service found by `superstables find`
   --param <key=value>  a request parameter for the service (repeatable)
                        (default: [])
+  --chain <chain>      when the seller offers several chains, take its offer on
+                       this one (e.g. robinhood-testnet)
   --json               print the quote record, with policy.checks and next
   -h, --help           display help for command
 
