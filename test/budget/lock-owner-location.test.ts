@@ -15,7 +15,7 @@ const homes: string[] = [];
 const children = new Set<ChildProcess>();
 const innerPids = new Map<ChildProcess, number>();
 function box() {
-  const home = mkdtempSync(join(tmpdir(), 'budget-round4-')); homes.push(home);
+  const home = mkdtempSync(join(tmpdir(), 'budget-owner-location-')); homes.push(home);
   const dir = join(home, 'budget/ops/solana-devnet'); mkdirSync(dir, { recursive: true });
   mkdirSync(join(home, 'records')); mkdirSync(join(home, 'budget/approvals'));
   return { home, dir, op: join(dir, 'paid-op.buy.lock'), cap: join(home, 'records/cap.lock') };

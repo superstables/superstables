@@ -11,7 +11,7 @@ const { createIdentitySource } = await import(join(root, 'src/core/process-ident
 const homes: string[] = [];
 const id = 'oa-20261007010000-01234567';
 function box() {
-  const home = mkdtempSync(join(tmpdir(), 'budget-round7-')); homes.push(home);
+  const home = mkdtempSync(join(tmpdir(), 'budget-recovery-results-')); homes.push(home);
   const approvals = join(home, 'budget/approvals'), records = join(home, 'records'), ops = join(home, 'budget/ops/solana-devnet');
   for (const dir of [approvals, records, ops]) mkdirSync(dir, { recursive: true });
   return { home, approvals, records, ops };
