@@ -78,12 +78,14 @@ function compareIdentities(hostIdentity, sandboxIdentity) {
 }
 async function recover(holder, native = false) {
   const journal = readFileSync(join(holder.dir, 'paid-op.json'), 'utf8'), approval = readFileSync(holder.approval, 'utf8');
-  const bootReadable = JSON.parse(readFileSync(holder.cap, 'utf8')).bootId !== null;
+  const record = JSON.parse(readFileSync(holder.cap, 'utf8')), hostIdentity = identity(holder.home, false);
+  const bootReadable = Boolean(record.bootId);
+  const locationVerified = Boolean(record.bootId && record.hostId && record.bootId === hostIdentity.boot && record.hostId === hostIdentity.platform);
   await stop(holder);
   for (const target of targets) {
     let result = unlock(holder, target, false);
-    console.log('plain dead sandbox recovery:', sandboxKind, { native, bootReadable, target, status: result.status }, result.stdout, result.stderr);
-    if (native && bootReadable) assert.equal(result.status, 0, 'readable native holder must permit plain recovery: ' + result.stdout + result.stderr);
+    console.log('plain dead sandbox recovery:', sandboxKind, { native, bootReadable, locationVerified, target, status: result.status }, result.stdout, result.stderr);
+    if (native && locationVerified) assert.equal(result.status, 0, 'readable native holder must permit plain recovery: ' + result.stdout + result.stderr);
     if (result.status === 5) {
       result = unlock(holder, target, false, true);
       console.log('explicit owner recovery:', result.status, result.stdout, result.stderr);
@@ -104,7 +106,7 @@ try {
     const hostIdentity = identity(host.home, false), sandboxIdentity = identity(host.home, true);
     const readableIdentitiesMatch = compareIdentities(hostIdentity, sandboxIdentity);
     console.log(JSON.stringify({ sandbox: sandboxKind, hostIdentity, sandboxIdentity, readableIdentitiesMatch, bootSessionUUIDReadable: Boolean(sandboxIdentity.boot) }));
-    const bootClock = evalNode(host.home, `${imports}const os=await import('node:os');let bootClockReadable=true;try{os.uptime();}catch{bootClockReadable=false;}const path=${JSON.stringify(join(scratch, 'clock.buy.lock'))};const l=lockFile(path);if(!l.ok)throw Error('boot-clock lockFile refused');const record=JSON.parse(fs.readFileSync(path,'utf8'));l.release();if(fs.existsSync(path))throw Error('boot-clock lockFile release failed');console.log(JSON.stringify({sandbox:${JSON.stringify(sandboxKind)},bootClockReadable,bootElapsedMs:record.bootElapsedMs??null,lockFile:true,released:true}));`, true);
+    const bootClock = evalNode(host.home, `${imports}const os=await import('node:os');let bootClockReadable=true;try{os.uptime();}catch{bootClockReadable=false;}const path=${JSON.stringify(join(scratch, 'clock.buy.lock'))};const l=lockFile(path);if(!l.ok)throw Error('boot-clock lockFile refused');const record=JSON.parse(fs.readFileSync(path,'utf8'));if(!bootClockReadable&&Number.isFinite(record.bootElapsedMs))throw Error('denied boot clock was recorded as readable');l.release();if(fs.existsSync(path))throw Error('boot-clock lockFile release failed');console.log(JSON.stringify({sandbox:${JSON.stringify(sandboxKind)},bootClockReadable,bootElapsedMs:record.bootElapsedMs??null,lockFile:true,released:true}));`, true);
     console.log('native sandbox boot clock:', bootClock.stdout);
     const primitives = evalNode(host.home, `const fs=await import('node:fs');let denied=false;try{fs.writeFileSync(${JSON.stringify(outside)},'probe',{flag:'wx'});}catch(e){if(!['EACCES','EPERM'].includes(e.code))throw e;denied=true;console.log('outside workspace write:',e.code);}if(!denied)throw Error('sandbox write restriction inactive');const{execFileSync}=await import('node:child_process');try{console.log('ps',execFileSync('ps',['-o','lstart=','-p','${host.pid}'],{encoding:'utf8'}));}catch(e){console.log('ps unreadable',e.status??e.code);}for(const pid of [${host.pid},-${host.pid}]){try{process.kill(pid,0);console.log(pid,'ok');}catch(e){if(e.code!=='EPERM')throw e;console.log(pid,e.code);}}`, true);
     console.log(primitives.stdout);
