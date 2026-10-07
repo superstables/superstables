@@ -1,11 +1,14 @@
 import { afterEach, expect, it } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const root = resolve(process.env.BUDGET_RACE_ROOT ?? join(import.meta.dirname, '../..'));
 const { createIdentitySource } = await import(join(root, 'src/core/process-identity.mjs'));
+const { lockFile } = await import(join(root, 'budget/op-lock.mjs'));
 const homes: string[] = [];
 function box() {
   const home = mkdtempSync(join(tmpdir(), 'budget-round5-')); homes.push(home);
@@ -76,4 +79,41 @@ for (const mismatch of ['rail', 'chain', 'missing']) it(`approval ${mismatch}: n
 for (const target of [['--cap'], ['--rail', 'solana', '--approvals']]) it(`${target.join(' ')} without locks reports no_lock`, () => {
   const b = box(), r = unlock(b.home, target);
   expect(r.status).toBe(0); expect(r.result.reason).toBe('no_lock');
+});
+
+// macOS agent sandboxes deny the sysctl behind os.uptime(); libuv then throws ERR_SYSTEM_ERROR uv_uptime.
+const deniedUptime = () => { throw Object.assign(new Error('uv_uptime returned EPERM'), { code: 'ERR_SYSTEM_ERROR' }); };
+it('takes and releases an operation lock when the boot clock is denied', () => {
+  const b = box(), path = join(b.ops, 'paid-op.buy.lock');
+  const script = `import os from 'node:os'; import { syncBuiltinESMExports } from 'node:module'; import { readFileSync, existsSync } from 'node:fs';
+os.uptime = ${deniedUptime.toString()}; syncBuiltinESMExports();
+const { lockFile } = await import(${JSON.stringify(pathToFileURL(join(root, 'budget/op-lock.mjs')).href)});
+const lock = lockFile(${JSON.stringify(path)}); const record = JSON.parse(readFileSync(${JSON.stringify(path)}, 'utf8'));
+lock.release(); console.log(JSON.stringify({ ok: lock.ok, bootElapsedMs: record.bootElapsedMs ?? null, released: !existsSync(${JSON.stringify(path)}) }));`;
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 20_000 });
+  expect(run.status, run.stderr).toBe(0);
+  expect(JSON.parse(run.stdout.trim())).toEqual({ ok: true, bootElapsedMs: null, released: true });
+});
+it.runIf(process.platform === 'linux')('an unavailable boot clock never proves a reused PID dead', async () => {
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
+  try {
+    await once(child, 'spawn');
+    const working = createIdentitySource(), denied = createIdentitySource({ bootElapsed: deniedUptime });
+    expect(denied.record().bootElapsedMs).toBeUndefined();
+    const ticks = Number(String(working.start(child.pid)).split(':').at(-1)), hz = Number(spawnSync('getconf', ['CLK_TCK'], { encoding: 'utf8' }).stdout);
+    const childStartedMs = ticks / hz * 1000, bootElapsedMs = childStartedMs - 120_000;
+    if (!(bootElapsedMs > 0)) return; // The host booted less than two minutes before the test.
+    // The holder wrote before the child existed, so a readable boot clock proves the PID was reused.
+    const owner = { ...working.record(), pid: child.pid, pidStart: null, pidStartUtc: null, hostPid: null, bootElapsedMs, writtenAt: Date.now() - (working.bootElapsed() - bootElapsedMs) };
+    const attempt = (record: object, identitySource: object) => {
+      const b = box(), path = join(b.ops, 'paid-op.buy.lock'), bytes = JSON.stringify(record);
+      writeFileSync(path, bytes);
+      const lock = lockFile(path, { identitySource });
+      try { return { ok: lock.ok, kept: lock.ok || readFileSync(path, 'utf8') === bytes }; } finally { if (lock.ok) lock.release(); }
+    };
+    expect(attempt(owner, working)).toEqual({ ok: true, kept: true });
+    expect(attempt(owner, denied)).toEqual({ ok: false, kept: true });
+    const { bootElapsedMs: _, ...unclocked } = owner;
+    expect(attempt(unclocked, working)).toEqual({ ok: false, kept: true });
+  } finally { child.kill('SIGKILL'); await once(child, 'exit').catch(() => {}); }
 });

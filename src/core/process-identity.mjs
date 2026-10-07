@@ -90,14 +90,20 @@ export function pidAlive(pid) {
   }
 }
 
+function optional(read) {
+  try { return read(); } catch { return undefined; }
+}
+
 // Inject the OS reads together so tests can exercise the macOS path on Linux.
-export function createIdentitySource({ platform = process.platform, host = hostname(), readFile = (path, encoding) => readFileSync(path, encoding).toString(), readlink = path => readlinkSync(path, 'utf8'), readdir = path => readdirSync(path), run = (command, args, options) => execFileSync(command, args, options), start = pid => {
+export function createIdentitySource({ platform = process.platform, host = optional(hostname) ?? null, readFile = (path, encoding) => readFileSync(path, encoding).toString(), readlink = path => readlinkSync(path, 'utf8'), readdir = path => readdirSync(path), run = (command, args, options) => execFileSync(command, args, options), start = pid => {
     let procPid = pid;
     if (platform === 'linux' && pid === process.pid) {
       try { procPid = Number(readFile('/proc/self/status', 'utf8').match(/^NSpid:\s+(\d+)/m)?.[1]) || pid; } catch {}
     }
     return processStart(procPid, platform, run, true, readFile);
-  }, probe = pid => process.kill(pid, 0), bootElapsed = () => uptime() * 1000 } = {}) {
+  }, probe = pid => process.kill(pid, 0), bootElapsed: readBootElapsed = () => uptime() * 1000 } = {}) {
+  // macOS agent sandboxes deny the sysctl behind uptime(). An unknown boot clock only removes the boot-relative proof.
+  const bootElapsed = () => { const ms = optional(readBootElapsed); return Number.isFinite(ms) ? ms : undefined; };
   let bootId = null, namespace = null, hostId = null;
   if (platform === 'linux') {
     for (const path of ['/etc/machine-id', '/var/lib/dbus/machine-id']) {
