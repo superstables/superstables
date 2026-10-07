@@ -277,7 +277,7 @@ describe("help", () => {
       "Start here, the owner",
       "Start here, the agent",
       "base-sepolia (Base Sepolia, default)",
-      "Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia are evm",
+      "Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia and Robinhood Chain Testnet are evm",
       "Tempo Moderato is tempo; Solana devnet is solana",
       "evm     setup, fund-agent, doctor, grant.",
       "ssh -L PORT:127.0.0.1:PORT",
