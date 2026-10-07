@@ -36,6 +36,11 @@ if (process.argv[2] === 'holder') {
   for (const file of ['procs.mjs', 'buy-guard.mjs', 'approvals.mjs', 'paths.mjs', 'site.mjs']) {
     writeFileSync(join(old, 'budget', file), execFileSync('git', ['show', `46469a5:budget/${file}`], { cwd: project }));
   }
+  const reviewed = join(scratch, 'reviewed');
+  for (const file of ['budget/procs.mjs', 'budget/buy-guard.mjs', 'budget/approvals.mjs', 'budget/paths.mjs', 'budget/site.mjs', 'budget/op-lock.mjs', 'budget/lock-identity.mjs', 'src/core/process-identity.mjs', 'src/core/owner-recovery.mjs']) {
+    mkdirSync(dirname(join(reviewed, file)), { recursive: true });
+    writeFileSync(join(reviewed, file), execFileSync('git', ['show', `fb7774f:${file}`], { cwd: project }));
+  }
   const children = new Set();
   const read = (candidate, home, tz, expression) => {
     const result = spawnSync(process.execPath, ['--import', preload, '--input-type=module', '-e', `
@@ -63,17 +68,27 @@ if (process.argv[2] === 'holder') {
         const owner = JSON.parse(readFileSync(${JSON.stringify(join(home, 'ops/upgrade.buy.lock'))}, 'utf8'));
         assert.equal(owner.pidStart, p.processStart(${pid}));
         assert.equal(owner.railPidStart, p.processStart(${pid}));
+        assert.equal(typeof owner.selfStartedAt, 'number');
+        assert.equal(owner.railSelfStartedAt, owner.selfStartedAt);
         assert.equal(typeof owner.pidStartUtc, 'number');
         assert.equal(typeof owner.railPidStartUtc, 'number');
         assert.equal(a.findPending('solana', 'devnet')?.id, ${JSON.stringify(id)});
         const record = a.readApproval(${JSON.stringify(id)});
         assert.equal(record.pidStart, p.processStart(${pid}));
         assert.equal(record.railPgidStart, p.processStart(${pid}));
+        assert.equal(typeof record.selfStartedAt, 'number');
+        assert.equal(record.railSelfStartedAt, record.selfStartedAt);
         assert.equal(typeof record.pidStartUtc, 'number');
         assert.equal(typeof record.railPgidStartUtc, 'number');
         assert.equal(a.alive(record.pid, record.pidStart), true);
         assert.equal(a.groupAlive(record.railPgid, record.railPgidStart), true);
         assert.equal((await a.waitFor(record.id, 0)).orphaned, false);
+      `);
+      cases++;
+      read(reviewed, home, tz === 'UTC' ? 'Asia/Tokyo' : 'UTC', `
+        assert.equal(lockOp(${JSON.stringify(join(home, 'ops'))}, 'upgrade').ok, false);
+        assert.equal(a.findPending('solana', 'devnet')?.id, ${JSON.stringify(id)});
+        assert.equal((await a.waitFor(${JSON.stringify(id)}, 0)).orphaned, false);
       `);
       cases++;
       const path = join(home, 'ops/upgrade.buy.lock');
@@ -99,7 +114,7 @@ if (process.argv[2] === 'holder') {
       `);
       cases++;
     }
-    console.log(JSON.stringify({ cases, result: 'pass', released: '46469a5', nativeMacOS: false }));
+    console.log(JSON.stringify({ cases, result: 'pass', released: '46469a5', reviewedReader: 'fb7774f', nativeMacOS: false }));
   } finally {
     await Promise.all([...children].map(child => stopHolder(child)));
     rmSync(scratch, { recursive: true, force: true });

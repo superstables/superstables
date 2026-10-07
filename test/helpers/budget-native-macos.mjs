@@ -20,7 +20,7 @@ const terminal = join(root, 'test/helpers/budget-owner-terminal.mjs');
 const blocked = join(root, 'test/helpers/budget-blocked-identity.mjs');
 const outside = join(homedir(), `sbx-probe-${scratch.split('/').at(-1)}`);
 const children = new Map();
-const imports = `const fs=await import('node:fs');const {lockFile}=await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});const {withFileLock}=await import(${JSON.stringify(join(root, 'src/core/lock.ts'))});const a=await import(${JSON.stringify(join(root, 'budget/approvals.mjs'))});`;
+const imports = `const fs=await import('node:fs');const {lockFile}=await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});const {withFileLock,thisProcess}=await import(${JSON.stringify(join(root, 'src/core/lock.ts'))});const a=await import(${JSON.stringify(join(root, 'budget/approvals.mjs'))});`;
 const sandboxBin = () => sandboxKind === 'srt' ? srt : codex;
 const sandboxArgs = (home, args) => [...(sandboxKind === 'srt' ? ['--settings', srtSettings, '--'] : ['sandbox', '-c', 'sandbox_mode="workspace-write"', '--']), 'env', `SUPERSTABLES_HOME=${home}`, process.execPath, ...args];
 function run(home, args, sandbox = false, input) {
@@ -40,7 +40,8 @@ async function hold(sandbox, partial = false) {
   const code = `const output=await import('node:fs');output.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));${imports}
     setInterval(()=>{},1000);for(const suffix of ['buy.lock','json.lock']){const l=lockFile(${JSON.stringify(dir)}+'/paid-op.'+suffix);if(!l.ok)throw Error('busy');}
     const id=a.newApprovalId();const claim=a.claim('solana','devnet',id);if(!claim.ok)throw Error('approval busy');a.startForeground({id,command:'grant',rail:'solana',chain:'devnet'});a.updateApproval(id,()=>({deadline:Date.now()-1000}));
-    await withFileLock(${JSON.stringify(cap)},()=>{const ready=JSON.stringify({pid:process.pid,id});output.writeFileSync(${JSON.stringify(readyFile)}+'.tmp',ready);output.renameSync(${JSON.stringify(readyFile)}+'.tmp',${JSON.stringify(readyFile)});return new Promise(()=>{});});`;
+    const onceId=a.newApprovalId();if(!a.claim('once','purchase',onceId).ok)throw Error('once busy');a.saveApproval({id:onceId,command:'buy-once',rail:'evm',chain:'base-sepolia',state:'waiting_owner',pid:null,createdAt:new Date().toISOString()});const recordLock=lockFile(${JSON.stringify(home)}+'/budget/approvals/'+id+'.json.lock');if(!recordLock.ok)throw Error('record busy');const attemptLock=lockFile(${JSON.stringify(home)}+'/records/reconcile.lock');if(!attemptLock.ok)throw Error('attempt busy');output.writeFileSync(${JSON.stringify(home)}+'/records/attempts.jsonl',JSON.stringify({id:'att-native',state:'submitting',transaction:'retained-evidence',runner:thisProcess()})+'\\n');
+    await withFileLock(${JSON.stringify(cap)},()=>{const ready=JSON.stringify({pid:process.pid,id,onceId});output.writeFileSync(${JSON.stringify(readyFile)}+'.tmp',ready);output.renameSync(${JSON.stringify(readyFile)}+'.tmp',${JSON.stringify(readyFile)});return new Promise(()=>{});});`;
   const args = [...(partial ? ['--import', blocked] : []), '--import', tsx, '--input-type=module', '-e', code];
   const child = spawn(sandbox ? sandboxBin() : process.execPath, sandbox ? sandboxArgs(home, args) : args, { cwd: scratch, env: { ...process.env, SUPERSTABLES_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   children.set(child, pidFile);
@@ -61,9 +62,9 @@ function unlock(holder, target, sandbox, unverified = false) {
   const token = target.includes('--op') ? 'paid-op' : 'payment-lock';
   return run(holder.home, ['--import', terminal, join(root, 'budget/cli.mjs'), 'unlock', ...target, '--confirm', ...(unverified ? ['--unverified'] : [])], sandbox, `${token}${unverified ? ' unverified' : ''}\n`);
 }
-const targets = [['--rail', 'solana', '--op', 'paid-op'], ['--cap'], ['--rail', 'solana', '--approvals']];
+const targets = holder => [['--rail', 'solana', '--op', 'paid-op'], ['--cap'], ['--rail', 'solana', '--approvals'], ['--rail', 'solana', '--approval', holder.id], ['--attempt', 'att-native'], ['--buy-once']];
 function bytes(holder) {
-  return ['paid-op.buy.lock', 'paid-op.json.lock', 'paid-op.json'].map(file => join(holder.dir, file)).concat(holder.cap, holder.approval, join(holder.home, 'budget/approvals/active-solana-devnet')).map(path => readFileSync(path, 'utf8'));
+  return ['paid-op.buy.lock', 'paid-op.json.lock', 'paid-op.json'].map(file => join(holder.dir, file)).concat(holder.cap, holder.approval, join(holder.home, 'budget/approvals/active-solana-devnet'), join(holder.home, `budget/approvals/${holder.id}.json.lock`), join(holder.home, `budget/approvals/${holder.onceId}.json`), join(holder.home, 'budget/approvals/active-once-purchase'), join(holder.home, 'records/reconcile.lock'), join(holder.home, 'records/attempts.jsonl')).map(path => readFileSync(path, 'utf8'));
 }
 function identity(home, sandbox) {
   return JSON.parse(evalNode(home, `const{execFileSync}=await import('node:child_process');const read=(c,a)=>{try{return execFileSync(c,a,{encoding:'utf8'}).trim();}catch{return null;}};const platform=read('ioreg',['-rd1','-c','IOPlatformExpertDevice'])?.match(/"IOPlatformUUID"\\s*=\\s*"([^"]+)"/)?.[1]?.toLowerCase()??null;console.log(JSON.stringify({platform,boot:read('sysctl',['-n','kern.bootsessionuuid'])?.toLowerCase()??null}));`, sandbox).stdout);
@@ -80,12 +81,12 @@ function compareIdentities(hostIdentity, sandboxIdentity) {
   return { compared, match: compared.length ? true : 'unreadable' };
 }
 async function recover(holder, native = false) {
-  const journal = readFileSync(join(holder.dir, 'paid-op.json'), 'utf8'), approval = readFileSync(holder.approval, 'utf8');
+  const journal = readFileSync(join(holder.dir, 'paid-op.json'), 'utf8'), approval = readFileSync(holder.approval, 'utf8'), purchase = readFileSync(join(holder.home, `budget/approvals/${holder.onceId}.json`), 'utf8');
   const record = JSON.parse(readFileSync(holder.cap, 'utf8')), hostIdentity = identity(holder.home, false);
   const bootReadable = Boolean(record.bootId);
   const locationVerified = Boolean(record.bootId && record.hostId && record.bootId === hostIdentity.boot && record.hostId === hostIdentity.platform);
   await stop(holder);
-  for (const target of targets) {
+  for (const target of targets(holder)) {
     let result = unlock(holder, target, false);
     console.log('plain dead sandbox recovery:', sandboxKind, { native, bootReadable, locationVerified, target, status: result.status }, result.stdout, result.stderr);
     if (native && locationVerified) assert.equal(result.status, 0, 'readable native holder must permit plain recovery: ' + result.stdout + result.stderr);
@@ -97,8 +98,8 @@ async function recover(holder, native = false) {
     }
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
-  for (const path of [holder.cap, join(holder.dir, 'paid-op.buy.lock'), join(holder.dir, 'paid-op.json.lock'), join(holder.home, 'budget/approvals/active-solana-devnet')]) assert.equal(existsSync(path), false);
-  assert.equal(readFileSync(join(holder.dir, 'paid-op.json'), 'utf8'), journal); assert.equal(readFileSync(holder.approval, 'utf8'), approval);
+  for (const path of [holder.cap, join(holder.dir, 'paid-op.buy.lock'), join(holder.dir, 'paid-op.json.lock'), join(holder.home, 'budget/approvals/active-solana-devnet'), join(holder.home, 'budget/approvals/active-once-purchase'), join(holder.home, `budget/approvals/${holder.id}.json.lock`), join(holder.home, 'records/reconcile.lock')]) assert.equal(existsSync(path), false);
+  assert.equal(readFileSync(join(holder.dir, 'paid-op.json'), 'utf8'), journal); assert.equal(readFileSync(holder.approval, 'utf8'), approval); assert.equal(readFileSync(join(holder.home, `budget/approvals/${holder.onceId}.json`), 'utf8'), purchase);const rows=readFileSync(join(holder.home,'records/attempts.jsonl'),'utf8').trim().split('\n').map(JSON.parse);assert.equal(rows.at(-1).transaction,'retained-evidence');assert.equal(rows.at(-1).runner,undefined);
 }
 let deadRecovery;
 const sandboxes = ['codex'];
@@ -118,7 +119,7 @@ try {
     const primitives = evalNode(host.home, `const fs=await import('node:fs');let denied=false;try{fs.writeFileSync(${JSON.stringify(outside)},'probe',{flag:'wx'});}catch(e){if(!['EACCES','EPERM'].includes(e.code))throw e;denied=true;console.log('outside workspace write:',e.code);}if(!denied)throw Error('sandbox write restriction inactive');const{execFileSync}=await import('node:child_process');try{console.log('ps',execFileSync('ps',['-o','lstart=','-p','${host.pid}'],{encoding:'utf8'}));}catch(e){console.log('ps unreadable',e.status??e.code);}for(const pid of [${host.pid},-${host.pid}]){try{process.kill(pid,0);console.log(pid,'ok');}catch(e){if(e.code!=='EPERM')throw e;console.log(pid,e.code);}}`, true);
     console.log(primitives.stdout);
     const before = bytes(host);
-    for (const target of targets) {
+    for (const target of targets(host)) {
       const refused = unlock(host, target, true);
       console.log('sandbox unlock vs live host:', target, refused.status, refused.stdout, refused.stderr); assert.equal(refused.status, 5);
     }
@@ -130,10 +131,15 @@ try {
 
     const native = await hold(true), nativeBefore = bytes(native);
     console.log('native sandbox own record:', sandboxKind, JSON.parse(readFileSync(native.cap, 'utf8')));
-    for (const target of targets) {
-      const refused = unlock(native, target, false);
-      console.log('host unlock vs live native sandbox holder:', target, refused.status, refused.stdout, refused.stderr);
-      assert.equal(refused.status, 5);
+    const psStart = evalNode(native.home, `const{execFileSync}=await import('node:child_process');console.log(execFileSync('ps',['-o','lstart=','-p','${native.pid}'],{encoding:'utf8',env:{...process.env,LC_ALL:'C',TZ:'UTC0'}}).trim());`).stdout.trim();
+    console.log(JSON.stringify({sandbox:sandboxKind,pid:native.pid,selfStartedAt:JSON.parse(readFileSync(native.cap,'utf8')).selfStartedAt,hostPsStart:psStart}));
+    for (const target of targets(native)) {
+      for (const unverified of [false, true]) {
+        const refused = unlock(native, target, false, unverified);
+        console.log('host unlock vs live native sandbox holder:', {target,unverified}, refused.status, refused.stdout, refused.stderr);
+        assert.equal(refused.status, 5);
+        assert.deepEqual(bytes(native), nativeBefore);
+      }
     }
     evalNode(native.home, `${imports}const l=lockFile(${JSON.stringify(join(native.dir, 'paid-op.buy.lock'))});if(l.ok){l.release();throw Error('host stole native sandbox operation');}try{await withFileLock(${JSON.stringify(native.cap)},()=>{throw Error('host stole native sandbox cap');},5000);throw Error('unexpected acquisition');}catch(e){if(!e.message.includes('held by process'))throw e;}`);
     assert.deepEqual(bytes(native), nativeBefore); process.kill(native.pid, 0);
@@ -141,9 +147,9 @@ try {
 
     // Deny identity reads inside the real sandbox to prove the partial-record direction as well.
     const nested = await hold(true, true), nestedBefore = bytes(nested);
-    for (const target of targets) {
-      const refused = unlock(nested, target, false);
-      console.log('host unlock vs live partial sandbox holder:', target, refused.status, refused.stdout, refused.stderr); assert.equal(refused.status, 5);
+    for (const target of targets(nested)) {
+      for (const unverified of [false,true]) {const refused = unlock(nested, target, false, unverified);
+      console.log('host unlock vs live partial sandbox holder:', {target,unverified}, refused.status, refused.stdout, refused.stderr); assert.equal(refused.status, 5);assert.deepEqual(bytes(nested),nestedBefore);}
     }
     evalNode(nested.home, `${imports}const l=lockFile(${JSON.stringify(join(nested.dir, 'paid-op.buy.lock'))});if(l.ok){l.release();throw Error('host stole live sandbox operation');}try{await withFileLock(${JSON.stringify(nested.cap)},()=>{throw Error('host stole live sandbox cap');},5000);throw Error('unexpected acquisition');}catch(e){if(!e.message.includes('held by process'))throw e;}`);
     assert.deepEqual(bytes(nested), nestedBefore); process.kill(nested.pid, 0);

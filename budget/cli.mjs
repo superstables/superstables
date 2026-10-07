@@ -28,6 +28,7 @@ import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
+import { spawnIdentified } from './child-identity.mjs';
 import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
@@ -943,9 +944,12 @@ function run(spec) {
     const own = Boolean(APPROVAL_ID);
     // the rail script adds a hosted request (site, request id, access token) to this approval's record: HOLDER_ENV names it
     const env = own ? { ...process.env, [HOLDER_ENV]: APPROVAL_ID } : process.env;
-    const p = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env, detached: own });
+    const p = spawnIdentified(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env, detached: own });
     currentChild = p;
-    if (own && p.pid) setRailGroup(APPROVAL_ID, p.pid);
+    if (own && p.pid) {
+      setRailGroup(APPROVAL_ID, p.pid);
+      p.once('identity', selfStartedAt => setRailGroup(APPROVAL_ID, p.pid, selfStartedAt));
+    }
     let stdout = "";
     let partial = "";
     let stderrTail = "";
