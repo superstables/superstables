@@ -17,7 +17,7 @@ There are two ways:
 
 - **Single purchase on your machine** (`pay`): the owner approves on a page on this
   machine, with no account, on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE
-  Base Sepolia, Ethereum Sepolia, Tempo Moderato or Solana devnet. See
+  Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet, Tempo Moderato or Solana devnet. See
   [Single purchase on your machine](#approve-each-payment-on-this-computer-pay).
 - **Single purchase on superstables.com** (`superstables budget buy-once`): the owner approves on superstables.com,
   on Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet. Choose this when the owner's
@@ -93,6 +93,7 @@ Single purchase requests made on superstables.com appear in the [site account](h
 | Chains | Protocol and token | What the owner's wallet does |
 | --- | --- | --- |
 | Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia | x402 `exact`, test USDC | Signs one EIP-3009 authorization over that chain's USDC. The seller's facilitator submits it and pays the gas |
+| Robinhood Chain Testnet | x402 `exact`, test USDG | Signs one EIP-3009 authorization over USDG (`Global Dollar`, version 1). The seller, or its facilitator, submits it and pays the gas |
 | Tempo Moderato | MPP `tempo.charge`, test pathUSD | Sends one pathUSD transfer, with a memo tied to the seller's request, and pays its network fee |
 | Solana devnet | x402 `exact`, test USDC | Signs one token transfer whose fee the seller's facilitator pays; the facilitator sends it |
 

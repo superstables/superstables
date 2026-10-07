@@ -70,8 +70,8 @@ export const EXIT_CODE_TABLE = `Exit codes (the same numbers as \`superstables b
 
 export const MAIN_HELP = `
 What this is:
-  A client for paying per request with test USDC (pathUSD on Tempo): find a paid service, quote
-  it, and pay it.
+  A client for paying per request with test USDC (pathUSD on Tempo, USDG on Robinhood Chain
+  Testnet): find a paid service, quote it, and pay it.
   The agent can ask for a payment but cannot approve one.
 
 Two ways to pay:
@@ -82,8 +82,8 @@ Two ways to pay:
   budget   The owner grants an on-chain budget once, from their wallet; the agent then buys on its
            own until the budget is spent, expires or is revoked. The chain enforces the limit.
            Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
-           Sepolia, Ethereum Sepolia), tempo (Tempo Moderato), solana (Solana devnet). Use it when
-           the agent should buy without asking each time.
+           Sepolia, Ethereum Sepolia, Robinhood Chain Testnet), tempo (Tempo Moderato), solana
+           (Solana devnet). Use it when the agent should buy without asking each time.
 
 Start here, pay:
   superstables setup                                   owner, once: home directory and policy (pay only)

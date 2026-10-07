@@ -6,7 +6,7 @@ One command for the budget rails. `superstables budget` is a thin dispatcher ove
 
 | `--rail` | Path | Chains (`--chain`) | Implementation |
 | --- | --- | --- | --- |
-| `evm` | plain approve, pull then pay | `base-sepolia` (default), `arc-testnet`, `arbitrum-sepolia`, `polygon-amoy`, `skale-base-sepolia`, `ethereum-sepolia` | `evm/` |
+| `evm` | plain approve, pull then pay | `base-sepolia` (default), `arc-testnet`, `arbitrum-sepolia`, `polygon-amoy`, `skale-base-sepolia`, `ethereum-sepolia`, `robinhood-testnet` | `evm/` |
 | `tempo` | access key, MPP charge | `moderato` (default, the only one) | `tempo/` |
 | `solana` | SPL delegate, x402 | `devnet` (default, the only one) | `solana/` |
 

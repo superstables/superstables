@@ -9,7 +9,8 @@ or the owner revokes it. The chain enforces the allowance; no Superstables serve
 **Testnet only.** Mainnet chains are refused. This page uses the `evm` rail, where the budget is a
 USDC allowance, on Arc Testnet. Leave out `--chain arc-testnet` to use Base Sepolia, the default; buying there
 needs a seller that takes payment on Base Sepolia.
-The same rail also runs on Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia.
+The same rail also runs on Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia and Robinhood Chain Testnet
+(test USDG; approval on your machine only).
 The `tempo` rail runs on Tempo Moderato and the `solana` rail on Solana devnet. See [Budget rails and chains](../budget/README.md).
 
 ## What the chain enforces

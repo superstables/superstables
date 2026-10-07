@@ -95,6 +95,22 @@ export const EVM_CHAINS = {
     gas: { symbol: "ETH", decimals: 18, isToken: false, limits: FIAT_TOKEN_GAS, minAgent: "0.0005", topUp: "0.001" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.0005", minAgentGas: "0.001", fundAgent: "0.002", tokenFaucet: "faucet.circle.com, Ethereum Sepolia", gasFaucet: "a Sepolia ETH faucet" },
   },
+  // Robinhood Chain's testnet, an Arbitrum Orbit chain on Ethereum Sepolia with ETH for gas. The budget token is Paxos's test
+  // USDG (Global Dollar, version 1, EIP-3009), not USDC: test USDG comes from faucet.paxos.com (network Robinhood Chain).
+  // USDG has no version() (it reverts); preflight checks the version through DOMAIN_SEPARATOR(). Like Arbitrum Sepolia, gasUsed
+  // includes the L1 part. Gas costs about 0.01 gwei. Blocks come about every 0.13 s; the public RPC answered eth_getLogs over
+  // 2,000,000 blocks on 7 Oct 2026.
+  // Gas, 7 Oct 2026 (eth_estimateGas, L1 part included): approve 58,777, approve 0 38,406, transfer 66,196,
+  // transferWithAuthorization 105,467 (a facilitator's used 102,939: 0x7fbc5546), cancelAuthorization 68,968. The limits are
+  // Arbitrum Sepolia's (FiatToken's plus 30,000 for the L1 part), with pull and cancel raised to cover the estimates.
+  "robinhood-testnet": {
+    label: "Robinhood Chain Testnet", chainId: 46630, viem: "robinhoodTestnet",
+    rpc: "https://rpc.testnet.chain.robinhood.com", explorer: "https://explorer.testnet.chain.robinhood.com",
+    token: { address: "0x7E955252E15c84f5768B83c41a71F9eba181802F", symbol: "USDG", decimals: 6, domain: { name: "Global Dollar", version: "1" } },
+    legacy: [], logRange: 500000,
+    gas: { symbol: "ETH", decimals: 18, isToken: false, limits: { pull: 130000, cancel: 115000, return: 95000, selfRevoke: 85000, approve: 100000, revoke: 75000 }, minAgent: "0.000005", topUp: "0.00003" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.paxos.com, USDG on Robinhood Chain", gasFaucet: "faucet.testnet.chain.robinhood.com" },
+  },
 };
 
 export const EVM_CHAIN_KEYS = Object.keys(EVM_CHAINS);

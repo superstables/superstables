@@ -61,12 +61,13 @@ import { signerFor, walletModeFromEnvironment, type WalletMode } from "./signer.
 import { attemptView, messageFor } from "./views.js";
 
 /**
- * Where test USDC comes from: Circle's faucet on every chain `pay` pays USDC on but SKALE Base Sepolia, whose USDC is
- * Base Sepolia's, bridged over the SKALE bridge. `others` names the rest: "EVM chains" for the local wallet.
+ * Where the test token comes from: Circle's faucet on every chain `pay` pays USDC on but SKALE Base Sepolia, whose USDC is
+ * Base Sepolia's, bridged over the SKALE bridge; Paxos's faucet for USDG on Robinhood Chain Testnet. `others` names the
+ * rest: "EVM chains" for the local wallet.
  */
 const usdcSources = (others: string) =>
-  `on SKALE Base Sepolia, Base Sepolia test USDC bridged over the SKALE bridge; on the other ${others}, https://faucet.circle.com (select the payment's chain). No gas is needed: facilitators pay it.`;
-const FAUCET_LINE = `Fund it with test USDC on the EVM chain you pay on: ${usdcSources("EVM chains")}`;
+  `on SKALE Base Sepolia, Base Sepolia test USDC bridged over the SKALE bridge; on Robinhood Chain Testnet, test USDG from https://faucet.paxos.com; on the other ${others}, https://faucet.circle.com (select the payment's chain). No gas is needed: the seller or its facilitator pays it.`;
+const FAUCET_LINE = `Fund it with test USDC (USDG on Robinhood Chain Testnet) on the EVM chain you pay on: ${usdcSources("EVM chains")}`;
 
 /** How long the browser approval page gives the owner (BrowserWalletSigner's default). */
 const BROWSER_WINDOW_S = 300;
@@ -144,7 +145,7 @@ explain(
         console.log("  4. Check the amount and the recipient on the page, then approve in MetaMask.");
         console.log("For a payment on Solana devnet, use a Solana wallet such as Phantom instead.");
         console.log("");
-        console.log(`Fund that account with test USDC on the chain you pay on: ${usdcSources("USDC chains")}`);
+        console.log(`Fund that account with test USDC (USDG on Robinhood Chain Testnet) on the chain you pay on: ${usdcSources("USDC chains")}`);
         console.log("On Tempo Moderato it pays in test pathUSD, and the wallet pays the network fee itself.");
         console.log("");
         console.log("To use the local wallet process instead, run any command with `--wallet local`.");
@@ -641,7 +642,8 @@ explain(
         "request goes to the wallet process, whose page outlives this command; approving there after " +
         "pay has stopped pays nothing, because nothing is left to submit it.",
       "Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base " +
-        "Sepolia, Ethereum Sepolia and Solana devnet; MPP with test pathUSD on Tempo Moderato. The wallet signs on " +
+        "Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet; MPP with test " +
+        "pathUSD on Tempo Moderato. The wallet signs on " +
         "the EVM chains and Solana, and pay submits what it signed. On Tempo the owner's wallet sends the payment " +
         "itself: pay records that before the wallet is asked, reads the owner's transaction on chain, and only then " +
         "calls the seller. Once the wallet has been asked to send, an attempt that ends without a transaction report " +

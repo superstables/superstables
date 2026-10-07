@@ -197,9 +197,10 @@ those records and the count starts again.
 
 ## Testnet only
 
-`pay` supports eight testnets, each with one token pinned in the client: x402 `exact` with test
+`pay` supports nine testnets, each with one token pinned in the client: x402 `exact` with test
 USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum
-Sepolia and Solana devnet, and MPP `tempo.charge` with test pathUSD on Tempo Moderato. On the EVM
+Sepolia and Solana devnet, x402 `exact` with test USDG on Robinhood Chain Testnet, and MPP
+`tempo.charge` with test pathUSD on Tempo Moderato. On the EVM
 chains the token's EIP-712 signing domain is pinned too, so a seller cannot make the wallet show a
 signing name of its choosing. A requirement naming anything else, every mainnet included, is
 refused before anyone is asked. There is no configuration that turns on mainnet.
@@ -304,8 +305,8 @@ can still move money: waiting for the owner within its approval window, or signe
 resolved (an EVM authorization until its `validBefore` and two minutes; a Tempo transfer, which has
 no expiry, or a Solana transaction until `superstables status` resolves it on chain). That includes
 a payment with a receipt the chain has not confirmed (the seller's report) or has contradicted: it
-counts on the receipt's day and, once a day, on later days on the same terms. USDC and pathUSD count together, one for one, as dollars; the
-default `stablecoins` list is `[USDC, pathUSD]`, and a policy that lists USDC only refuses pathUSD.
+counts on the receipt's day and, once a day, on later days on the same terms. USDC, pathUSD and USDG count together, one for one, as dollars; the
+default `stablecoins` list is `[USDC, pathUSD, USDG]`, and a policy that lists USDC only refuses the others.
 `pay`
 reserves the amount under a lock shared by the processes on this machine before the owner is
 asked.
@@ -402,7 +403,7 @@ undo an owner signature or a transaction already sent through setup on superstab
   (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, Ethereum Sepolia), with the manager's own
   `RedeemedDelegation` event for this owner and sender in the receipt. A sponsored gas top-up leaves
   no log, so the owner's address must have run MetaMask's pinned smart-account code in that
-  transaction. On SKALE Base Sepolia only the owner's own transactions count.
+  transaction. On SKALE Base Sepolia and Robinhood Chain Testnet only the owner's own transactions count.
   When the chain does not answer a read this needs, the result is unknown (exit 5), never done.
   On `solana` with local approvals, the
   wallet only signs, and the client checks the signed bytes are the transaction it built before it

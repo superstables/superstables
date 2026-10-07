@@ -47,7 +47,7 @@ Without `--hosted` the owner approves on a page on your machine instead, with no
 
 | `--rail` | `--chain` | Token | Sellers | Budget on chain |
 | --- | --- | --- | --- | --- |
-| `evm` | `base-sepolia` (default), `arc-testnet`, `arbitrum-sepolia`, `polygon-amoy`, `skale-base-sepolia`, `ethereum-sepolia` | USDC | x402 | An ERC-20 allowance (`approve`) from the owner to the agent key |
+| `evm` | `base-sepolia` (default), `arc-testnet`, `arbitrum-sepolia`, `polygon-amoy`, `skale-base-sepolia`, `ethereum-sepolia`, `robinhood-testnet` | USDC (USDG on `robinhood-testnet`) | x402 | An ERC-20 allowance (`approve`) from the owner to the agent key |
 | `tempo` | `moderato` | pathUSD | MPP (`tempo` charge) | A keychain access key with a limit |
 | `solana` | `devnet` | USDC | x402 | An SPL token delegate on the owner's USDC account |
 

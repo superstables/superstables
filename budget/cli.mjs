@@ -103,23 +103,24 @@ function wrapList(items, width, indent) {
 }
 const CHAINS_HELP = `Rails and chains (--chain; the default is marked):
   evm     ${wrapList(EVM_CHAIN_KEYS.map((k) => `${k} (${EVM_CHAINS[k].label}${k === EVM_DEFAULT_CHAIN ? ", default" : ""})`), 100, "          ")}
-          The budget is USDC. Sellers: x402.
+          The budget is USDC (USDG on robinhood-testnet). Sellers: x402.
   tempo   moderato (Tempo Moderato, default; the only chain). The budget is pathUSD. Sellers: MPP (tempo.charge).
   solana  devnet (Solana devnet, default; the only chain). The budget is USDC. Sellers: x402.
   Chain to rail: ${Object.values(EVM_CHAINS).map((c) => c.label).slice(0, -1).join(", ")} and ${Object.values(EVM_CHAINS).at(-1).label} are evm;
   Tempo Moderato is tempo; Solana devnet is solana. superstables find --budget names the rail and chain for a listing,
   and prints the commands to buy it.`;
 const MAX_HELP = `--max M is the most this one purchase may cost, in the budget token's own units: --max 0.02 means 0.02 USDC (0.02
-  pathUSD on tempo). It is your ceiling, not the price: when the seller asks more, buy refuses (exit 3) and signs nothing.
+  pathUSD on tempo, 0.02 USDG on robinhood-testnet). It is your ceiling, not the price: when the seller asks more, buy refuses (exit 3) and signs nothing.
   Only what is actually paid comes off the budget. Required, with no default.`;
 const FLOW_HELP = `The owner's steps, in order, once per rail and chain:
   evm     setup, fund-agent, doctor, grant.
           setup: the owner connects their wallet and signs a free message; this machine gets an agent key.
           fund-agent: the owner sends the agent key a little of the chain's gas token (ETH on Base Sepolia, Arbitrum
-          Sepolia and Ethereum Sepolia, USDC on Arc Testnet, POL on Polygon Amoy, CREDIT on SKALE Base Sepolia) so it can
-          pay for its own transactions. On Arc, that gas transfer is USDC, separate from the budget allowance.
-          grant: an allowance (USDC approve) from the owner's wallet to the agent key. The USDC stays in the owner's wallet
-          until a purchase: each buy pulls exactly its price, then pays the seller.
+          Sepolia, Ethereum Sepolia and Robinhood Chain Testnet, USDC on Arc Testnet, POL on Polygon Amoy, CREDIT on
+          SKALE Base Sepolia) so it can pay for its own transactions. On Arc, that gas transfer is USDC, separate from the
+          budget allowance.
+          grant: an allowance (USDC approve; USDG on Robinhood Chain Testnet) from the owner's wallet to the agent key.
+          The token stays in the owner's wallet until a purchase: each buy pulls exactly its price, then pays the seller.
   tempo   setup, grant. grant authorizes the agent's access key to spend the owner's pathUSD up to a limit, until an
           expiry (default 24 hours). The agent needs no gas: fees come from the owner.
   solana  setup, fund-agent, doctor, grant. fund-agent sends the agent SOL for fees (default 0.01). grant makes the agent
@@ -210,8 +211,8 @@ ${FLOW_HELP}`,
       usage: "superstables budget fund-agent --rail evm|solana [--chain C] [--amount A] [--timeout S] [--no-open] [--detach|--wait]",
       about: `One plain transfer from the owner's wallet to the agent key, so the agent can pay for its own transactions. Run it
 after setup and before grant. It transfers funds for network fees; it does not grant a budget.
-  evm     the chain's gas token (ETH on Base Sepolia, Arbitrum Sepolia and Ethereum Sepolia, USDC on Arc Testnet, POL on
-          Polygon Amoy, CREDIT on SKALE Base Sepolia). --amount in that token; the default is enough for a few purchases.
+  evm     the chain's gas token (ETH on Base Sepolia, Arbitrum Sepolia, Ethereum Sepolia and Robinhood Chain Testnet, USDC on
+          Arc Testnet, POL on Polygon Amoy, CREDIT on SKALE Base Sepolia). --amount in that token; the default is enough for a few purchases.
           On Arc it is native USDC (a plain transfer, 18 decimals), on this machine and on superstables.com alike.
   solana  SOL for transaction fees. --amount in SOL, default 0.01.
   tempo   has none: the agent needs no gas, fees come from the owner.
