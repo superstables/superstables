@@ -11,13 +11,15 @@
 //              and the chain clock is past its validBefore). No funds moved.
 //   unknown    nothing on chain yet but it still could land, or the chain shows something unexpected.
 //              Run again later.
-// A quoted journal with a memo still needs a chain search: an older submitted write may have been lost.
-// Only a quoted journal without a memo retains the old never-signed meaning.
+// Durable quoted journals were never sent. Legacy quoted journals need a complete memo search;
+// the first locked reconcile records an upper bound on when their old buyer could have signed.
 //
 // Usage: superstables budget reconcile --rail tempo --op <id> [--tx <hash>] [--wait <seconds>]
 // Exit codes: 0 settled or already final without loss, 1 failed / not_found, 2 bad usage, 5 unknown.
 
 import type { Address } from 'viem'
+import { statSync } from 'node:fs'
+import { join } from 'node:path'
 import { requireRecordLock } from '../op-lock.mjs'
 import { hashCheck, intCheck, opIdCheck, parseCli } from './lib/args.mjs'
 import { explorerTx, fromBaseUnits, toBaseUnits, oneLine } from './lib/common.ts'
@@ -77,13 +79,28 @@ async function main() {
 
   if (op.state === 'settled') return done('settled', { tx: op.tx, debit: op.debit == null ? BigInt(op.intent.amount) : toBaseUnits(op.debit), next: op.delivered === false ? 'paid but not delivered; never pay again, contact the seller with the tx hash' : 'none', exit: 0 })
 
-  if (op.state === 'refused_precheck' || op.state === 'refused_chain' || (op.state === 'quoted' && op.reason === 'quote_only' && !op.memo)) {
-    console.log('Nothing was signed for this operation. Nothing to reconcile.')
-    return done(op.state, { reason: op.reason, exit: op.state === 'quoted' ? 0 : 3 })
-  }
-  if (op.state === 'quoted' && !op.memo) {
+  if (op.state === 'not_found') return done('not_found', { debit: 0n, reason: op.reason, next: 'no funds moved; safe to retry with a new op id', exit: 1 })
+
+  const legacyQuoted = op.journalVersion === undefined && !!op.memo && (op.state === 'quoted' || op.legacyQuotedBefore !== undefined)
+  const unsigned = () => {
+    if (op.reason === 'quote_only') {
+      console.log('Nothing was signed for this operation. Nothing to reconcile.')
+      return done('quoted', { reason: 'quote_only', exit: 0 })
+    }
     console.log('The operation never got past the quote: nothing was signed or sent.')
     return done('not_found', { debit: 0n, reason: 'never signed: interrupted before the payment was created', next: 'no funds moved; safe to retry with a new op id', exit: 1 })
+  }
+  if (op.state === 'refused_precheck' || op.state === 'refused_chain') {
+    console.log('Nothing was signed for this operation. Nothing to reconcile.')
+    return done(op.state, { reason: op.reason, exit: 3 })
+  }
+  if (op.state === 'quoted' && !legacyQuoted) return unsigned()
+  if (legacyQuoted && op.legacyQuotedBefore === undefined) {
+    // mtime precedes signing and cannot upper-bound it: a buyer may stall after its quoted write.
+    // The budget dispatcher also holds the operation lock shared with old clients and their rail children.
+    // That proves the old buyer is gone. Preserve this time across runs.
+    op.legacyQuotedBefore = Math.ceil(Math.max(Date.now(), statSync(join(OPS_DIR, `${opId}.json`)).mtimeMs) / 1000)
+    writeOp(op)
   }
 
   const extra = typeof args.tx === 'string' ? [args.tx as string] : []
@@ -111,8 +128,10 @@ async function main() {
     console.log('NOT FOUND: no transaction with this purchase memo is on chain and the signed payment has expired, so it can never land. No funds moved.')
     return done('not_found', { debit: 0n, reason: 'signed payment expired unsent; nothing on chain for its memo', next: 'no funds moved; safe to retry with a new op id', exit: 1 })
   }
-  console.log('UNKNOWN: nothing on chain yet, and the signed payment may still land. Run reconcile again after its validBefore has passed.')
-  return done('unknown', { reason: 'not on chain yet', next: `superstables budget reconcile --rail tempo --op ${opId}`, exit: 5 })
+  if (outcome.kind === 'absent') return unsigned()
+  console.log(op.validBefore ? 'UNKNOWN: nothing on chain yet, and the signed payment may still land. Run reconcile again after its validBefore has passed.' : 'UNKNOWN: the chain does not show the payment yet and it may still land.')
+  // Preserve quote_only and the recovery bound so a later complete search restores the quoted answer.
+  return done('unknown', { reason: legacyQuoted && op.reason === 'quote_only' ? op.reason : 'not on chain yet', next: `superstables budget reconcile --rail tempo --op ${opId}`, exit: 5 })
 }
 
 main().catch((err) => {

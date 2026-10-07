@@ -385,6 +385,7 @@ function baseOp(
     op: opId,
     rail: 'tempo',
     kind: 'buy',
+    journalVersion: 1,
     state: 'quoted',
     createdAt: previous?.createdAt ?? nowIso(),
     updatedAt: nowIso(),

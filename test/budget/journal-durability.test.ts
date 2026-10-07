@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +46,18 @@ describe('rail journal power loss', () => {
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(statSync(join(dir, 'new/budget/ops')).mode & 0o777).toBe(0o700);
   });
+  it('does not open an existing traversable but unreadable ancestor', () => {
+    const dir = home();
+    const ancestor = join(dir, 'locked');
+    const journal = join(ancestor, 'home/budget/ops/test.json');
+    mkdirSync(join(ancestor, 'home/budget/ops'), { recursive: true });
+    chmodSync(ancestor, 0o311);
+    try {
+      const result = run('budget-journal-permissions.mjs', dir);
+      expect(result.status, result.stderr + result.stdout).toBe(0);
+      expect(JSON.parse(readFileSync(journal, 'utf8'))).toEqual({ state: 'submitted' });
+    } finally { chmodSync(ancestor, 0o700); }
+  });
 });
 
 const owner = '0x1111111111111111111111111111111111111111';
@@ -57,6 +69,7 @@ const op = () => ({ op: 'durability-test', rail: 'tempo', kind: 'buy', state: 'q
 const reconcile = (patch: object, scenario: string) => {
   const dir = home(); const ops = join(dir, 'budget/ops/tempo-moderato'); mkdirSync(ops, { recursive: true });
   writeFileSync(join(ops, 'durability-test.json'), JSON.stringify({ ...op(), ...patch }));
+  utimesSync(join(ops, 'durability-test.json'), 1000, 1000);
   const result = run('budget-tempo-reconcile-rpc.mjs', dir, [], { TEMPO_SCENARIO: scenario });
   const line = result.stdout.split('\n').find(x => x.startsWith('RESULT '));
   expect(line, result.stderr + result.stdout).toBeTruthy();
@@ -85,19 +98,64 @@ describe('Tempo memo recovery and push expiry', () => {
     expect(r.result).toMatchObject({ state: 'settled', tx: `0x${'ab'.repeat(32)}`, debit: '0.001', delivered: null });
     expect(r.calls).toContain('eth_getLogs');
   });
-  it('keeps a quoted memo without a validity bound unknown', () => {
-    expect(reconcile({}, 'absent').result).toMatchObject({ state: 'unknown', debit: null });
+  it('returns never signed for a durable quoted journal without an invented validity bound', () => {
+    const r = reconcile({ journalVersion: 1 }, 'absent');
+    expect(r.result).toMatchObject({ state: 'not_found', debit: '0', reason: 'never signed: interrupted before the payment was created' });
+    expect(r.calls).not.toContain('eth_getLogs');
   });
-  it.each(['quoted', 'submitted'])("%s: absent memo and expired bound proves unpaid", state => {
-    const r = reconcile({ state, validBefore: 1100 }, 'absent');
+  it('a durable quote-only journal still says nothing to reconcile even when RPC fails', () => {
+    expect(reconcile({ journalVersion: 1, reason: 'quote_only' }, 'unreadable').result.state).toBe('quoted');
+  });
+  it('a legacy quoted journal resolves after a complete search past the locked recovery bound', () => {
+    expect(reconcile({}, 'absent').result).toMatchObject({ state: 'not_found', debit: '0' });
+  });
+  it('a legacy quote-only journal resolves to the quote answer after complete absence', () => {
+    expect(reconcile({ reason: 'quote_only' }, 'absent').result.state).toBe('quoted');
+  });
+  it.each(['recent', 'unreadable', 'missing-block', 'short-block', 'short-transactions', 'short-range', 'lagging-head'])('legacy quoted with %s history is unknown for now', scenario => {
+    expect(reconcile({}, scenario).result.state).toBe('unknown');
+  });
+  it.each(['recent', 'unreadable'])('legacy quote-only with %s history retains its recovery identity', scenario => {
+    expect(reconcile({ reason: 'quote_only' }, scenario).result).toMatchObject({ state: 'unknown', reason: 'quote_only' });
+  });
+  it('an already uncertain legacy quote resolves on a later complete search', () => {
+    expect(reconcile({ state: 'unknown', legacyQuotedBefore: 1100 }, 'absent').result.state).toBe('not_found');
+  });
+  it('an already uncertain legacy quote-only resolves back to quoted', () => {
+    expect(reconcile({ state: 'unknown', reason: 'quote_only', legacyQuotedBefore: 1100 }, 'absent').result.state).toBe('quoted');
+  });
+  it.each([undefined, 'quote_only'])('legacy uncertainty resolves on another run with reason %s', reason => {
+    const dir = home(); const ops = join(dir, 'budget/ops/tempo-moderato'); mkdirSync(ops, { recursive: true });
+    const journal = join(ops, 'durability-test.json');
+    writeFileSync(journal, JSON.stringify({ ...op(), reason })); utimesSync(journal, 1000, 1000);
+    const first = run('budget-tempo-reconcile-rpc.mjs', dir, [], { TEMPO_SCENARIO: 'recent' });
+    expect(first.status, first.stderr + first.stdout).toBe(5);
+    expect(JSON.parse(readFileSync(journal, 'utf8'))).toMatchObject({ state: 'unknown', legacyQuotedBefore: 1000 });
+    const second = run('budget-tempo-reconcile-rpc.mjs', dir, [], { TEMPO_SCENARIO: 'absent' });
+    expect(second.status, second.stderr + second.stdout).toBe(reason === 'quote_only' ? 0 : 1);
+    expect(JSON.parse(readFileSync(journal, 'utf8')).state).toBe(reason === 'quote_only' ? 'quoted' : 'not_found');
+  });
+  it('an already not_found operation stays not_found on another reconcile', () => {
+    expect(reconcile({ state: 'not_found', reason: 'never signed: interrupted before the payment was created' }, 'unreadable').result.state).toBe('not_found');
+  });
+  it('submitted: absent memo and expired bound proves unpaid', () => {
+    const r = reconcile({ state: 'submitted', validBefore: 1100 }, 'absent');
     expect(r.result).toMatchObject({ state: 'not_found', debit: '0', reason: 'signed payment expired unsent; nothing on chain for its memo' });
-    expect(r.calls.filter((x: string) => x === 'eth_getLogs')).toHaveLength(2);
   });
-  it.each(['quoted', 'submitted'])("%s: absent memo and live bound remains unknown", state => {
-    expect(reconcile({ state, validBefore: 1250 }, 'absent').result).toMatchObject({ state: 'unknown', debit: null });
+  it('submitted: absent memo and live bound remains unknown', () => {
+    expect(reconcile({ state: 'submitted', validBefore: 1250 }, 'absent').result).toMatchObject({ state: 'unknown', debit: null });
   });
-  it.each(['unreadable', 'last-search-fails'])("an expired bound with %s history remains unknown", scenario => {
-    expect(reconcile({ validBefore: 1100 }, scenario).result.state).toBe('unknown');
+  it.each(['unreadable', 'range-fails', 'missing-block', 'short-block', 'short-transactions', 'short-range', 'lagging-head'])('an expired bound with %s history remains unknown', scenario => {
+    expect(reconcile({ state: 'submitted', validBefore: 1100 }, scenario).result.state).toBe('unknown');
+  });
+  it.each(['push', 'pull'])('%s: alternating heads cannot turn a payment beyond the lagging head into not_found', mode => {
+    expect(reconcile({ state: 'submitted', validBefore: 1100, intent: { ...op().intent, mode } }, 'alternating-heads').result.state).toBe('unknown');
+  });
+  it('a payment missing from a short log range is still found in the complete blocks', () => {
+    expect(reconcile({ state: 'submitted', validBefore: 1100 }, 'omitted-index').result.state).toBe('settled');
+  });
+  it('an included push hash cannot expire when later receipt reads are missing', () => {
+    expect(reconcile({ state: 'submitted', validBefore: 1100, expectedTx: `0x${'ab'.repeat(32)}` }, 'absent').result.state).toBe('unknown');
   });
   it('does not expire a wallet-initiated pay even if an old record carries a bound', () => {
     expect(reconcile({ kind: 'pay', state: 'submitted', validBefore: 1100 }, 'absent').result.state).toBe('unknown');
@@ -115,5 +173,23 @@ describe('Tempo memo recovery and push expiry', () => {
   });
   it('an old pull transaction still resolves by memo', () => {
     expect(reconcile({ state: 'submitted', intent: { ...op().intent, mode: 'pull' }, signedHash: `0x${'12'.repeat(32)}`, validBefore: 1250 }, 'found').result.state).toBe('settled');
+  });
+});
+
+describe('quoted Tempo operation can be bought after reconciliation', () => {
+  it.each(['interrupt', 'quote'])('%s, reconcile, then real buy under the same op', step => {
+    const dir = home();
+    const first = run('budget-tempo-quoted-flow.mjs', dir, [], { TEMPO_STEP: step });
+    if (step === 'interrupt') expect(first.signal, first.stderr + first.stdout).toBe('SIGKILL');
+    else expect(first.status, first.stderr + first.stdout).toBe(0);
+    const journal = join(dir, 'budget/ops/tempo-moderato/durability-test.json');
+    expect(JSON.parse(readFileSync(journal, 'utf8'))).toMatchObject({ state: 'quoted' });
+    const recovered = run('budget-tempo-quoted-flow.mjs', dir, [], { TEMPO_STEP: 'reconcile' });
+    expect(recovered.status, recovered.stderr + recovered.stdout).toBe(step === 'quote' ? 0 : 1);
+    expect(JSON.parse(readFileSync(journal, 'utf8')).state).toBe(step === 'quote' ? 'quoted' : 'not_found');
+    const buy = run('budget-tempo-quoted-flow.mjs', dir, [], { TEMPO_STEP: 'buy' });
+    expect(buy.status, buy.stderr + buy.stdout).toBe(0);
+    expect(JSON.parse(readFileSync(journal, 'utf8'))).toMatchObject({ state: 'settled', delivered: true });
+    expect(JSON.parse(readFileSync(join(dir, 'paid-request.json'), 'utf8')).journal).toMatchObject({ state: 'submitted', journalVersion: 1 });
   });
 });
