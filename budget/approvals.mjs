@@ -29,11 +29,11 @@
 // a new process that reused the number: it is treated as gone, and never signalled.
 // Nothing here kills a process group it did not start. `--replace` first asks the running page to cancel
 // (POST /cancel): only a page that confirms the wallet was never asked is stopped.
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
+import { spawnIdentified } from './child-identity.mjs';
 import { createIdentitySource, inspectProcess, visiblePid } from '../src/core/process-identity.mjs';
 import { clearFileLock, inspectLockText, recoveryResult, paymentBusy } from '../src/core/owner-recovery.mjs';
 import { groupAlive as groupOf, sameProcess } from "./procs.mjs";
@@ -329,7 +329,7 @@ export const groupAlive = (pgid, start, startUtc, location) => groupOf(pgid, sta
  * (its rail script and the page's process), and a blocking command's rail group.
  */
 export const processesAlive = (record) =>
-  Boolean(record && (alive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined }) || groupAlive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined }) || groupAlive(record.railPgid, record.railPgidStart, record.railPgidStartUtc, { ...record, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs, createdAt: undefined })));
+  Boolean(record && (alive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined }) || groupAlive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined }) || groupAlive(record.railPgid, record.railPgidStart, record.railPgidStartUtc, { ...record, selfStartedAt: record.railSelfStartedAt, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs, createdAt: undefined })));
 
 /** A record without a final result whose processes may still run: it holds its chain. */
 export const isLive = (record) => Boolean(record && !record.final && processesAlive(record));
@@ -357,7 +357,7 @@ export async function stopGroup(pgid, { start, startUtc, location = {}, graceMs 
 /** Stop everything an approval started: its worker's group and a blocking command's rail group. */
 async function stopRecord(record) {
   await stopGroup(record.pid, { start: record.pidStart, startUtc: record.pidStartUtc, location: { ...record, createdAt: record.foreground ? record.createdAt : undefined } });
-  if (record.railPgid) await stopGroup(record.railPgid, { start: record.railPgidStart, startUtc: record.railPgidStartUtc, location: { ...record, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs, createdAt: undefined } });
+  if (record.railPgid) await stopGroup(record.railPgid, { start: record.railPgidStart, startUtc: record.railPgidStartUtc, location: { ...record, selfStartedAt: record.railSelfStartedAt, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs, createdAt: undefined } });
 }
 
 // ── one approval at a time per rail and chain ──────────────────────────────────────────────────────────
@@ -478,15 +478,16 @@ export function startForeground({ id, command, rail, chain }) {
 }
 
 /** The process group of a blocking command's rail script (its page and chain reads run there). */
-export function setRailGroup(id, pgid) {
+export function setRailGroup(id, pgid, selfStartedAt) {
   const starts = startOf(pgid);
-  return update(id, { railPgid: pgid, railPgidStart: starts.pidStart, railWrittenAt: starts.writtenAt, railBootElapsedMs: starts.bootElapsedMs, railNamespace: starts.namespace, ...(starts.pidStartUtc !== undefined ? { railPgidStartUtc: starts.pidStartUtc } : {}) });
+  if (process.platform === 'darwin' && selfStartedAt !== undefined) starts.selfStartedAt = selfStartedAt;
+  return update(id, { railPgid: pgid, railPgidStart: starts.pidStart, ...(starts.selfStartedAt !== undefined ? { railSelfStartedAt: starts.selfStartedAt } : {}), railWrittenAt: starts.writtenAt, railBootElapsedMs: starts.bootElapsedMs, railNamespace: starts.namespace, ...(starts.pidStartUtc !== undefined ? { railPgidStartUtc: starts.pidStartUtc } : {}) });
 }
 
 /** The worker records its own pid at start, so its process group is known even if the caller died before writing it. */
 export function adoptWorker(id) {
   const record = readApproval(id);
-  if (record && !record.final && !record.pid) update(id, { pid: process.pid, ...startOf(process.pid) });
+  if (record && !record.final && (!record.pid || (process.platform === 'darwin' && record.pid === process.pid))) update(id, { pid: process.pid, ...startOf(process.pid) });
 }
 
 // ── the worker's side ──────────────────────────────────────────────────────────────────────────────────
@@ -634,7 +635,7 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
   const fd = openSync(logFile(id), "a", 0o600);
   let child;
   try {
-    child = spawn(cmd, args, { cwd, env: { ...env, [WORKER_ENV]: id }, detached: true, stdio: ["ignore", fd, fd] });
+    child = spawnIdentified(cmd, args, { cwd, env: { ...env, [WORKER_ENV]: id }, detached: true, stdio: ["ignore", fd, fd] });
   } finally {
     closeSync(fd);
   }
@@ -643,7 +644,10 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
   child.on("exit", () => (exited = true));
   child.on("error", (err) => { exited = true; spawnError = err; });
   const childStart = startOf(child.pid);
-  if (child.pid) update(id, { pid: child.pid, ...childStart });
+  if (child.pid) {
+    updateApproval(id, record => ({ pid: child.pid, ...childStart, ...(process.platform === 'darwin' && record.pid === child.pid && Number.isFinite(record.selfStartedAt) ? { selfStartedAt: record.selfStartedAt } : {}) }));
+    child.once('identity', selfStartedAt => updateApproval(id, record => record.pid === child.pid && !record.final ? { selfStartedAt } : {}));
+  }
   const until = Date.now() + linkWaitMs;
   const at = { offset: 0, ino: undefined, text: "" };
   for (;;) {
@@ -888,7 +892,7 @@ export function recoverApprovalLocks(rail, chain, options, id) {
     const recordChecks = record => {
       if (!record || record.final || (record.command === "buy-once" && record.pid === null)) return [];
       const checks = [inspectProcess(record), inspectProcess(record, undefined, true)];
-      if (record.railPgid) checks.push(inspectProcess({ ...record, pid: record.railPgid, pidStart: record.railPgidStart, pidStartUtc: record.railPgidStartUtc, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs }, undefined, true));
+      if (record.railPgid) checks.push(inspectProcess({ ...record, pid: record.railPgid, pidStart: record.railPgidStart, pidStartUtc: record.railPgidStartUtc, selfStartedAt: record.railSelfStartedAt, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs }, undefined, true));
       return checks;
     };
     // A verified live worker or rail child protects even an unverifiable lock in its approval.
