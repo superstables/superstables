@@ -977,7 +977,7 @@ export async function startOnce(args) {
   // started together cannot both create a purchase
   const id = newApprovalId();
   const lock = claim("once", "purchase", id);
-  if (!lock.ok) return { ok: false, code: 3, state: "refused_precheck", reason: "another buy-once is being started on this machine right now: one at a time", next: "wait for it to return its approval link, then write it to the owner; do not start another" };
+  if (!lock.ok) return { ok: false, code: 3, state: "refused_precheck", reason: "The start lock for a single purchase is held.", next: "The payment lock is held. Its process may still be running. Stop and ask the owner to check it in their own terminal, outside the agent's sandbox. Agents must not clear payment locks. Do not start another single purchase. If the original command returns an approval link, write it to the owner and end your turn." };
   try {
     return await startOnceLocked(id, args);
   } finally {

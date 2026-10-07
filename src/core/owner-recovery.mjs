@@ -84,18 +84,21 @@ export function recoverCap(home, options) {
   const path = join(home, 'records/cap.lock');
   return recoveryResult(options, recovery => clearFileLock(path, recovery, text => inspectLockText(text, true)));
 }
+export function readRecoveryAttempt(home, id) {
+  const ledger = join(home, 'records/attempts.jsonl');
+  if (!existsSync(ledger)) return null;
+  let found = null;
+  for (const line of readFileSync(ledger, 'utf8').split('\n').filter(Boolean)) {
+    let row;
+    try { row = JSON.parse(line); } catch { continue; }
+    if (row?.id === id) found = row;
+  }
+  return found;
+}
+
 export function recoverAttempt(home, id, options) {
   const dir = join(home, 'records'), ledger = join(dir, 'attempts.jsonl');
-  if (!existsSync(ledger)) return { outcome: 'not_found' };
-  const latest = () => {
-    let found;
-    for (const line of readFileSync(ledger, 'utf8').split('\n').filter(Boolean)) {
-      let row;
-      try { row = JSON.parse(line); } catch { continue; }
-      if (row?.id === id) found = row;
-    }
-    return found;
-  };
+  const latest = () => readRecoveryAttempt(home, id);
   if (!latest()) return { outcome: 'not_found' };
   return recoveryResult(options, options => {
     if (!clearFileLock(join(dir, 'reconcile.lock'), options)) return false;

@@ -309,7 +309,7 @@ describe("the record's lock: breaking a dead holder's lock, and its deadline", (
     utimesSync(approvals.recordLockFile(id), old, old);
     const r = await finisher(id, 800).done;
     expect(r.code).toBe(2);
-    expect(r.out).toMatch(/ERR the lock .* cannot be read; The payment lock is held\. Its process may still be running\. Stop and ask the owner/);
+    expect(r.out).toMatch(/ERR the lock .* cannot be read\. The payment lock is held\. Its process may still be running\. Stop and ask the owner/);
     expect(readFileSync(approvals.recordLockFile(id), "utf8")).toBe("not a lock");
     unlinkSync(approvals.recordLockFile(id));
   }, 30_000);
@@ -322,7 +322,7 @@ describe("the record's lock: breaking a dead holder's lock, and its deadline", (
     utimesSync(path, old, old);
     const r = approvals.claim("evm", "base-sepolia", id);
     expect(r.ok).toBe(false);
-    expect((r as any).pending.command).toMatch(/an unreadable lock \(.*active-evm-base-sepolia\); The payment lock is held\. Its process may still be running\. Stop and ask the owner/);
+    expect((r as any).pending.command).toMatch(/an unreadable lock \(.*active-evm-base-sepolia\)\. The payment lock is held\. Its process may still be running\. Stop and ask the owner/);
     expect(readFileSync(path, "utf8")).toBe("{ not json");
     unlinkSync(path);
   });

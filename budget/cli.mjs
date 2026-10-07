@@ -28,9 +28,9 @@ import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
-import { HOLDER_ENV, WORKER_ENV, adoptWorker, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
-import { paymentBusy, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
+import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
@@ -342,8 +342,8 @@ with the holder, lock path and owner recovery guidance in next. Never buy again 
   unlock: {
     flags: { op: "v", cap: "b", "buy-once": "b", approvals: "b", approval: "v", attempt: "v", confirm: "b", unverified: "b" }, required: [],
     help: helpText({
-      usage: "superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --attempt ID) --confirm [--unverified]",
-      about: "Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.\n\n--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.\n\n--cap: Recover the core payment lock. --approvals: Recover approval locks on this rail and chain. --approval ID: Also recover the record lock for this approval. --attempt ID: Release an attempt runner for read-only reconciliation. Stop all payment work across processes, containers and hosts first. Payment-lock recovery uses the exact confirmation payment-lock, or payment-lock unverified with --unverified. Preserves payment evidence. Run status for the original attempt or wait for the original approval next.\n\nA holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.\n\n--buy-once: Recover the buy-once start lock. Preserves the purchase record and payment evidence.\n  superstables budget unlock --buy-once --confirm [--unverified]",
+      usage: "superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --attempt ID | --buy-once) --confirm [--unverified]",
+      about: "Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.\n\n--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.\n\n--cap: Recover the core payment lock. --approvals: Recover approval locks on this rail and chain. --approval ID: Also recover the record lock for this approval. --attempt ID: Release an attempt runner for read-only reconciliation. Stop all payment work across processes, containers and hosts first. Payment-lock recovery uses the exact confirmation payment-lock, or payment-lock unverified with --unverified. Preserves payment evidence. Run status for the original attempt or wait for the original approval next.\n\nA holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.\n\n--buy-once: Recover the start lock for a single purchase. Preserves the purchase record and payment evidence.\n  superstables budget unlock --buy-once --confirm [--unverified]",
       money: "no. It never signs or sends.", who: "the owner or operator, after stopping the processes.",
       example: "superstables budget unlock --rail solana --op order-001 --confirm",
       prints: "one RESULT with state, reason and next, plus the operation or attempt ID when selected. Without --confirm, a terminal or matching typed confirmation: exit 3. Missing operation, attempt or approval: exit 3. Busy: exit 5. Cleared or no lock: exit 0.",
@@ -670,7 +670,7 @@ function parse(argv) {
     else f[name] = v;
   }
   if (cmd === "unlock") {
-    if ([f.op !== undefined, Boolean(f.cap), Boolean(f["buy-once"]), Boolean(f.approvals), f.approval !== undefined, f.attempt !== undefined].filter(Boolean).length !== 1) return badInput({ command: cmd }, "choose exactly one unlock target: --op, --cap, --approvals, --approval or --attempt");
+    if ([f.op !== undefined, Boolean(f.cap), Boolean(f["buy-once"]), Boolean(f.approvals), f.approval !== undefined, f.attempt !== undefined].filter(Boolean).length !== 1) return badInput({ command: cmd }, "choose exactly one unlock target: --op, --cap, --approvals, --approval, --attempt or --buy-once");
     if (f.approval !== undefined && !isApprovalId(f.approval)) return badInput({ command: cmd }, "--approval must be an approval ID");
     if (f.attempt !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(f.attempt)) return badInput({ command: cmd }, "--attempt must be a record ID");
     if (f["buy-once"]) {
@@ -1323,6 +1323,10 @@ async function unlock({ f, ctx }) {
   const refuse = reason => emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason, next: ownerNext });
   if (!f.confirm) return refuse("confirmation_required");
   if (!process.stdin.isTTY) return refuse("owner_terminal_required");
+  const dir = opsDir(f.rail, f.chain);
+  const hasLocks = () => ['buy.lock', 'json.lock'].some(suffix => existsSync(join(dir, `${f.op}.${suffix}`)) || existsSync(join(dir, `${f.op}.${suffix}.break`)));
+  const notFound = () => emit(3, { ...ctx, op: f.op, state: 'refused_precheck', reason: 'op_not_found', next: 'check the original rail, chain and op; no journal or operation locks exist' });
+  if (!existsSync(journal(f)) && !hasLocks()) return notFound();
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
   const mismatch = () => { log("Confirmation did not match. No locks were cleared."); return refuse("owner_confirmation_mismatch"); };
   try {
@@ -1338,11 +1342,8 @@ async function unlock({ f, ctx }) {
     if (answer.done || answer.value !== (f.unverified ? `${f.op} unverified` : f.op)) return mismatch();
   } catch { return mismatch(); }
   finally { terminal.close(); }
-  const dir = opsDir(f.rail, f.chain);
-  const hadLocks = ["buy.lock", "json.lock"].some(suffix => existsSync(join(dir, `${f.op}.${suffix}`)) || existsSync(join(dir, `${f.op}.${suffix}.break`)));
-  if (!existsSync(journal(f)) && !hadLocks) {
-    return emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason: "op_not_found", next: "check the original rail, chain and op; no journal or operation locks exist" });
-  }
+  const hadLocks = hasLocks();
+  if (!existsSync(journal(f)) && !hadLocks) return notFound();
   let noticed = false;
   const options = { confirmUnverifiable: Boolean(f.unverified), confirmPossiblyAlive: Boolean(f.unverified), onOverride: () => { if (!noticed) { noticed = true; log(`Clearing the lock for operation ${f.op} without proof that its process has stopped. You confirmed that all work on this operation has stopped.`); } } };
   const blocked = lock => {
@@ -1371,6 +1372,10 @@ async function unlockPayment({ f, ctx }) {
   const refused = reason => emit(3, { ...fields, state: 'refused_precheck', reason, next: paymentBusy });
   if (!f.confirm) return refused('confirmation_required');
   if (!process.stdin.isTTY) return refused('owner_terminal_required');
+  const targetExists = () => f.attempt ? Boolean(readRecoveryAttempt(HOME, f.attempt))
+    : f.approval ? approvalRecoveryTargetExists(f.rail, f.chain, f.approval) : true;
+  const notFound = () => emit(3, { ...fields, state: 'refused_precheck', reason: f.attempt ? 'attempt_not_found' : 'approval_not_found', next: f.attempt ? 'check the original attempt ID and record directory' : 'check the original rail, chain and approval ID' });
+  if (!targetExists()) return notFound();
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
   const mismatch = () => { log('Confirmation did not match. No locks were cleared.'); return refused('owner_confirmation_mismatch'); };
   try {
@@ -1389,12 +1394,14 @@ async function unlockPayment({ f, ctx }) {
     if (!noticed) { noticed = true; log('Clearing the payment lock without proof that its process has stopped. You confirmed that all payment work has stopped.'); }
   } };
   const recovery = f.cap ? recoverCap(HOME, options) : f.attempt ? recoverAttempt(HOME, f.attempt, options) : f["buy-once"] ? recoverApprovalLocks("once", "purchase", options) : recoverApprovalLocks(f.rail, f.chain, options, f.approval);
-  if (recovery.outcome === 'not_found') return emit(3, { ...fields, state: 'refused_precheck', reason: f.attempt ? 'attempt_not_found' : 'approval_not_found', next: f.attempt ? 'check the original attempt ID and record directory' : 'check the original rail, chain and approval ID' });
+  if (recovery.outcome === 'not_found') return notFound();
   if (['busy', 'unverifiable'].includes(recovery.outcome)) {
     if (recovery.outcome === 'unverifiable' && !f.unverified) log("Cannot clear the payment lock because Superstables cannot confirm that its process has stopped. Run the command in your own terminal, outside any agent's sandbox. If the check still fails, stop every process working under the payment lock across all containers and hosts, then rerun the same command with --confirm --unverified.");
     return emit(5, { ...fields, state: 'unknown', reason: 'op_in_progress', next: paymentBusy });
   }
-  log('Payment lock recovery finished; payment evidence preserved. Check the original attempt or approval before doing anything else.');
+  log(recovery.outcome === 'locks_cleared'
+    ? 'Payment lock recovery is complete. Payment evidence has been preserved. Check the original attempt or approval before doing anything else.'
+    : 'No payment locks needed recovery. Payment evidence is unchanged. Check the original attempt or approval before doing anything else.');
   return emit(0, { ...fields, state: 'ok', reason: recovery.outcome, next: f.attempt ? `superstables status ${f.attempt}` : 'check the original attempt with status or the original approval with budget wait; do not pay again while its outcome is unknown' });
 }
 

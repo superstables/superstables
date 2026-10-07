@@ -24,7 +24,7 @@ const id = 'oa-20261007010000-01234567';
 it('buy-once start lock after reboot requires exact owner recovery and preserves purchase evidence', () => {
   const b = box(), path = join(b.approvals, 'active-once-purchase');
   const bytes = JSON.stringify({ ...createIdentitySource().record(), id, bootId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' });
-  const evidence = '{"id":"' + id + '","rail":"once","chain":"purchase","seen":{"paid":true,"hashes":["retained-evidence"]}}';
+  const evidence = '{"id":"' + id + '","command":"buy-once","rail":"evm","chain":"base-sepolia","pid":null,"seen":{"paid":true,"hashes":["retained-evidence"]}}';
   writeFileSync(path, bytes); writeFileSync(join(b.approvals, `${id}.json`), evidence);
   for (const [tty, confirm, answer] of [[false, true, 'payment-lock unverified'], [true, false, 'payment-lock unverified'], [true, true, 'payment-lock']] satisfies [boolean, boolean, string][]) {
     const refused = unlock(b.home, ['--buy-once'], true, answer, tty, confirm);
