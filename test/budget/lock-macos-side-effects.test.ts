@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -60,6 +60,19 @@ it('replacement cannot signal a sandbox worker or change its approval after its 
   const dir = home();
   const r = run(dir, `${workerSetup}const {createServer}=await import('node:http');const timers=await import('node:timers/promises');const originalSleep=timers.default.setTimeout;timers.default.setTimeout=(ms,...args)=>originalSleep(ms===100?0:ms,...args);syncBuiltinESMExports();const server=createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({cancelled:true}));});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));try{const id='oa-20261007010000-01234567',approvals=join(process.env.SUPERSTABLES_HOME,'budget/approvals');mkdirSync(approvals,{recursive:true});const path=join(approvals,id+'.json'),active=join(approvals,'active-solana-devnet');const saved={...record,id,command:'grant',rail:'solana',chain:'devnet',url:'http://127.0.0.1:'+server.address().port+'/fixture'};writeFileSync(path,JSON.stringify(saved));writeFileSync(active,JSON.stringify(saved));const before=readFileSync(path,'utf8'),chain=readFileSync(active,'utf8');const result=await a.replacePending(saved,'oa-20261007010000-99999999');assert.equal(result.ok,false);assert.equal(readFileSync(path,'utf8'),before);assert.equal(readFileSync(active,'utf8'),chain);assert.equal(worker.signalCode,null);process.kill(worker.pid,0);}finally{server.close();try{process.kill(-worker.pid,'SIGKILL')}catch(e){if(e.code!=='ESRCH')throw e;}await stopped;}`);
   expect(r.status, r.stdout + r.stderr).toBe(0);
+});
+it('reconcile releases its operation lock when publishing the rail start time fails', () => {
+  const dir = home(), ops = join(dir, 'budget/ops/solana-devnet'), injection = join(dir, 'publication.mjs');
+  mkdirSync(ops, { recursive: true });
+  writeFileSync(join(ops, 'paid-op.json'), '{"state":"submitted","transaction":"retained"}');
+  writeFileSync(injection, `import cp from'node:child_process';import fs from'node:fs';import{syncBuiltinESMExports}from'node:module';const spawn=cp.spawn;cp.spawn=(command,args,options)=>spawn(process.execPath,['-e','console.log("rail script ran");setTimeout(()=>{},300)'],options);const rename=fs.renameSync;fs.renameSync=(from,to)=>{if(String(to).endsWith('.lock')&&typeof JSON.parse(fs.readFileSync(from,'utf8')).railSelfStartedAt==='number')throw Object.assign(Error('publication failed'),{code:'EIO'});return rename(from,to);};syncBuiltinESMExports();`);
+  const r = spawnSync(process.execPath, ['--import', preload, '--import', injection, join(root, 'budget/cli.mjs'), 'reconcile', '--rail', 'solana', '--chain', 'devnet', '--op', 'paid-op'], {
+    env: { ...process.env, SUPERSTABLES_HOME: dir }, encoding: 'utf8', timeout: 30_000,
+  });
+  expect(r.status, r.stdout + r.stderr).toBe(5);
+  expect(r.stderr).not.toContain('rail script ran');
+  expect(JSON.parse(r.stdout.trim().split('\n').at(-1)!.slice(7))).toMatchObject({ command: 'reconcile', state: 'unknown' });
+  expect(readdirSync(ops).filter(name => name.includes('.lock'))).toEqual([]);
 });
 it('failed rail lock publication reaches the child error handler before the script can run', () => {
   const dir = home(), path = join(dir, 'child.lock');
