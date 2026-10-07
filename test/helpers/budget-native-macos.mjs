@@ -69,14 +69,15 @@ function identity(home, sandbox) {
   return JSON.parse(evalNode(home, `const{execFileSync}=await import('node:child_process');const read=(c,a)=>{try{return execFileSync(c,a,{encoding:'utf8'}).trim();}catch{return null;}};const platform=read('ioreg',['-rd1','-c','IOPlatformExpertDevice'])?.match(/"IOPlatformUUID"\\s*=\\s*"([^"]+)"/)?.[1]?.toLowerCase()??null;console.log(JSON.stringify({platform,boot:read('sysctl',['-n','kern.bootsessionuuid'])?.toLowerCase()??null}));`, sandbox).stdout);
 }
 function compareIdentities(hostIdentity, sandboxIdentity) {
-  let compared = 0;
+  // Report which identities were readable on both sides, so a match never implies an unread boot session.
+  const compared = [];
   for (const key of ['platform', 'boot']) {
     if (hostIdentity[key] && sandboxIdentity[key]) {
       assert.equal(sandboxIdentity[key], hostIdentity[key], `${key} identity differs inside ${sandboxKind}`);
-      compared++;
+      compared.push(key);
     }
   }
-  return compared ? true : 'unreadable';
+  return { compared, match: compared.length ? true : 'unreadable' };
 }
 async function recover(holder, native = false) {
   const journal = readFileSync(join(holder.dir, 'paid-op.json'), 'utf8'), approval = readFileSync(holder.approval, 'utf8');
@@ -88,7 +89,9 @@ async function recover(holder, native = false) {
     let result = unlock(holder, target, false);
     console.log('plain dead sandbox recovery:', sandboxKind, { native, bootReadable, locationVerified, target, status: result.status }, result.stdout, result.stderr);
     if (native && locationVerified) assert.equal(result.status, 0, 'readable native holder must permit plain recovery: ' + result.stdout + result.stderr);
+    if (result.status === 0) deadRecovery.byPlainUnlock++;
     if (result.status === 5) {
+      deadRecovery.byOwnerOverride++;
       result = unlock(holder, target, false, true);
       console.log('explicit owner recovery:', result.status, result.stdout, result.stderr);
     }
@@ -97,6 +100,7 @@ async function recover(holder, native = false) {
   for (const path of [holder.cap, join(holder.dir, 'paid-op.buy.lock'), join(holder.dir, 'paid-op.json.lock'), join(holder.home, 'budget/approvals/active-solana-devnet')]) assert.equal(existsSync(path), false);
   assert.equal(readFileSync(join(holder.dir, 'paid-op.json'), 'utf8'), journal); assert.equal(readFileSync(holder.approval, 'utf8'), approval);
 }
+let deadRecovery;
 const sandboxes = ['codex'];
 const srtProbe = spawnSync(srt, ['--help'], { cwd: scratch, env: { ...process.env, SUPERSTABLES_HOME: scratch }, encoding: 'utf8', timeout: 5000 });
 if (srtProbe.error?.code === 'ENOENT') console.log('SKIP srt: executable is missing; native srt verification was not run.');
@@ -104,10 +108,11 @@ else sandboxes.push('srt');
 try {
   for (const kind of sandboxes) {
     sandboxKind = kind;
+    deadRecovery = { byPlainUnlock: 0, byOwnerOverride: 0 };
     const host = await hold(false);
     const hostIdentity = identity(host.home, false), sandboxIdentity = identity(host.home, true);
-    const readableIdentitiesMatch = compareIdentities(hostIdentity, sandboxIdentity);
-    console.log(JSON.stringify({ sandbox: sandboxKind, hostIdentity, sandboxIdentity, readableIdentitiesMatch, bootSessionUUIDReadable: Boolean(sandboxIdentity.boot) }));
+    const identityComparison = compareIdentities(hostIdentity, sandboxIdentity);
+    console.log(JSON.stringify({ sandbox: sandboxKind, hostIdentity, sandboxIdentity, identityComparison, bootSessionUUIDReadable: Boolean(sandboxIdentity.boot) }));
     const bootClock = evalNode(host.home, `${imports}const os=await import('node:os');let bootClockReadable=true;try{os.uptime();}catch{bootClockReadable=false;}const path=${JSON.stringify(join(scratch, 'clock.buy.lock'))};const l=lockFile(path);if(!l.ok)throw Error('boot-clock lockFile refused');const record=JSON.parse(fs.readFileSync(path,'utf8'));if(!bootClockReadable&&Number.isFinite(record.bootElapsedMs))throw Error('denied boot clock was recorded as readable');l.release();if(fs.existsSync(path))throw Error('boot-clock lockFile release failed');console.log(JSON.stringify({sandbox:${JSON.stringify(sandboxKind)},bootClockReadable,bootElapsedMs:record.bootElapsedMs??null,lockFile:true,released:true}));`, true);
     console.log('native sandbox boot clock:', bootClock.stdout);
     const primitives = evalNode(host.home, `const fs=await import('node:fs');let denied=false;try{fs.writeFileSync(${JSON.stringify(outside)},'probe',{flag:'wx'});}catch(e){if(!['EACCES','EPERM'].includes(e.code))throw e;denied=true;console.log('outside workspace write:',e.code);}if(!denied)throw Error('sandbox write restriction inactive');const{execFileSync}=await import('node:child_process');try{console.log('ps',execFileSync('ps',['-o','lstart=','-p','${host.pid}'],{encoding:'utf8'}));}catch(e){console.log('ps unreadable',e.status??e.code);}for(const pid of [${host.pid},-${host.pid}]){try{process.kill(pid,0);console.log(pid,'ok');}catch(e){if(e.code!=='EPERM')throw e;console.log(pid,e.code);}}`, true);
@@ -144,7 +149,7 @@ try {
     assert.deepEqual(bytes(nested), nestedBefore); process.kill(nested.pid, 0);
     await recover(nested);
     await stop(host);
-    console.log(JSON.stringify({ result: 'pass', sandbox: sandboxKind, nativeMacOS: true, sandboxWriteDenied: true, readableIdentitiesMatch, bootSessionUUIDReadable: Boolean(sandboxIdentity.boot), liveNativeSandboxProtected: true, nativeRecordRecoveryChecked: true, liveHostProtected: true, livePartialSandboxProtected: true, liveApprovalWaitPreserved: true, deadSandboxOperationCapApprovalsRecovered: true, holderTeardown: true, payments: 0 }));
+    console.log(JSON.stringify({ result: 'pass', sandbox: sandboxKind, nativeMacOS: true, sandboxWriteDenied: true, identityComparison, bootSessionUUIDReadable: Boolean(sandboxIdentity.boot), liveNativeSandboxProtected: true, nativeRecordRecoveryChecked: true, liveHostProtected: true, livePartialSandboxProtected: true, liveApprovalWaitPreserved: true, deadSandboxOperationCapApprovalsRecovered: deadRecovery, holderTeardown: true, payments: 0 }));
   }
 } finally {
   for (const [child, pidFile] of children) {
