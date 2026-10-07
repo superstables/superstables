@@ -11,7 +11,6 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | [`superstables wallet serve`](#superstables-wallet-serve) | run the wallet: it asks the owner to approve every payment, in a browser page |
 | [`superstables wallet status`](#superstables-wallet-status) | ask the running local wallet what it is doing |
 | [`superstables wallet address`](#superstables-wallet-address) | the address that pays, from this machine's wallet key |
-| [`superstables mcp`](#superstables-mcp) | run the MCP server on stdio, for Claude Code or another MCP host |
 | [`superstables find`](#superstables-find) | search for services that charge per request, and say how each could be paid |
 | [`superstables quote`](#superstables-quote) | ask a paid endpoint what one call costs, and check it against the spend policy; nothing is paid or signed |
 | [`superstables pay`](#superstables-pay) | ask the owner to approve a quote in their wallet, and pay it if they do |
@@ -29,7 +28,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 Usage: superstables [options] [command]
 
 Find services that charge per request, quote them, and pay them with test USDC
-from a wallet the owner controls. Testnets only: no real money moves.
+from a wallet the owner controls. Testnet only. No real money moves.
 
 Options:
   -V, --version                  print the version of this client and exit
@@ -49,8 +48,6 @@ Commands:
                                  policy file, then say what to do next
   wallet                         the local wallet process, for --wallet local
                                  only
-  mcp                            run the MCP server on stdio, for Claude Code or
-                                 another MCP host
   find [options] [query]         search for services that charge per request,
                                  and say how each could be paid
   quote [options] [url]          ask a paid endpoint what one call costs, and
@@ -76,13 +73,15 @@ Commands:
   help [command]                 display help for command
 
 What this is:
-  A client for paying per request with test USDC: find a paid service, quote it, and pay it.
-  Testnets only; no real money moves. The agent can ask for a payment but cannot approve one.
+  A client for paying per request with test USDC (pathUSD on Tempo): find a paid service, quote
+  it, and pay it.
+  The agent can ask for a payment but cannot approve one.
 
 Two ways to pay:
   pay      The owner approves each payment in their own wallet: a browser wallet such as MetaMask
-           on a page `pay` serves on 127.0.0.1 (the default), or the local wallet process
-           (--wallet local). x402, USDC on Base Sepolia. Use it when the owner is there to approve.
+           (Phantom on Solana) on a page `pay` serves on 127.0.0.1 (the default), or the local
+           wallet process (--wallet local, EVM chains only). x402 on the EVM chains below and
+           Solana devnet, MPP on Tempo Moderato. Use it when the owner is there to approve.
   budget   The owner grants an on-chain budget once, from their wallet; the agent then buys on its
            own until the budget is spent, expires or is revoked. The chain enforces the limit.
            Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
@@ -116,7 +115,7 @@ Start here, budget: superstables budget setup --rail evm
 
 Who runs what:
   owner   setup, wallet init, wallet serve, policy init, and every approval
-  agent   find, quote, pay, status, receipts, attempts, doctor; `mcp` is started by the agent's host
+  agent   find, quote, pay, status, receipts, attempts, doctor
   Either may run the read-only commands.
 
 Where state lives:
@@ -126,7 +125,7 @@ Where state lives:
 
 Discovery:
   find reads a built-in catalogue and the public index at https://www.superstables.com/api/v1/services.
-  SUPERSTABLES_INDEX_URL points it at another index with the same API (a self-hosted one), or
+  SUPERSTABLES_INDEX_URL points it at another index with the same API (one you run), or
   switches it off with `off`. Index listings show their payment protocols (rails) and chains, and
   whether pay or a budget rail could pay them. Only testnets are ever payable.
 
@@ -135,15 +134,16 @@ Environment:
   SUPERSTABLES_WALLET            browser (default) or local: who signs pay's payments
   SUPERSTABLES_POLICY            the spend policy file (default $SUPERSTABLES_HOME/policy.yaml)
   SUPERSTABLES_INDEX_URL         the index find reads; `off` to skip it
-  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the hosted catalogue
+  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the catalogue on superstables.com
                                  (most are simulated; the market data service returns live prices)
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; `off` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
-  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances, the network MetaMask adds, and the chain
-                                 check on a settlement (https, or http on this computer)
+  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances, the chain MetaMask adds, and the chain
+                                 check on a settlement (https, or http on this machine)
+  SUPERSTABLES_TEMPO_RPC         the Tempo Moderato RPC for pay's chain checks (https, or http on this machine)
+  SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine)
   SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, 4412 or a free one when busy
   SUPERSTABLES_WALLET_URL        where the local wallet listens (default http://127.0.0.1:4411)
-  SUPERSTABLES_MCP_WAIT_MS       how long the MCP pay and payment_status tools wait (default 20000)
   SUPERSTABLES_DOCTOR_OFFLINE    1: doctor skips the network checks
   SUPERSTABLES_DEMO_PAY_TO       where demo-service's earnings go
 
@@ -184,8 +184,7 @@ Run by: the owner, once per machine.
 Example:
   $ superstables setup
   $ superstables --wallet local setup
-Prints: the paths it wrote, how the owner approves payments, and the command that connects an MCP
-  host to this build.
+Prints: the paths it wrote, how the owner approves payments, and what to run next.
 Exit codes: 0 ready, 1 the home directory could not be written (the full table: superstables --help)
 ```
 
@@ -304,28 +303,6 @@ Exit codes: 0 printed, 1 no key yet (run `superstables wallet init`) (the full t
   --help)
 ```
 
-## superstables mcp
-
-```text
-Usage: superstables mcp [options]
-
-run the MCP server on stdio, for Claude Code or another MCP host
-
-Options:
-  -h, --help  display help for command
-
-Tools: find_services, quote, pay, payment_status, wallet_status, list_receipts. Its pay tool asks
-the owner exactly as `superstables pay` does, and returns the approval link at once; the approval
-page lives as long as this server does. stdout carries the protocol; logs go to stderr.
-
-Moves money: only through its pay tool, and only after the owner approves in their wallet.
-Run by: the agent's MCP host (Claude Code, for example), not a person at a terminal.
-Example:
-  $ claude mcp add superstables -- superstables mcp
-Prints: MCP messages on stdout until the host disconnects.
-Exit codes: 0 the host disconnected, 1 could not start (the full table: superstables --help)
-```
-
 ## superstables find
 
 ```text
@@ -342,15 +319,15 @@ Options:
                of the ones pay can
   --all        show every listing, including those this client cannot pay, and
                why
-  --demo       also list Superstables' testnet services from the hosted
-               catalogue: most return prepared sample output and are marked
-               simulated; the market data service returns live prices
+  --demo       also list Superstables' testnet services from the catalogue on
+               superstables.com: most return prepared sample output and are
+               marked simulated; the market data service returns live prices
                (SUPERSTABLES_DEMO_SERVICES=on does the same)
   --json       print {services, warnings} as JSON
   -h, --help   display help for command
 
 Reads a built-in catalogue and the public index (SUPERSTABLES_INDEX_URL; `off` skips it). Columns:
-pay is whether `superstables pay` can call the listing as listed (x402 on Base Sepolia, with the
+pay is whether `superstables pay` can call the listing as listed (on a chain it pays on, with the
 request parameters known); budget names the `superstables budget` rail and chain that could pay it;
 simulated is yes when the listing marks the output as prepared sample output, no when it marks it as
 not sample output (Superstables' market data service, which returns live prices; no does not verify
@@ -436,6 +413,15 @@ port the approval link names: ssh -L 4412:127.0.0.1:4412). With --wallet local t
 the wallet process, whose page outlives this command; approving there after pay has stopped pays
 nothing, because nothing is left to submit it.
 
+Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
+Sepolia, Ethereum Sepolia and Solana devnet; MPP with test pathUSD on Tempo Moderato. The wallet
+signs on the EVM chains and Solana, and pay submits what it signed. On Tempo the owner's wallet
+sends the payment itself: pay records that before the wallet is asked, reads the owner's transaction
+on chain, and only then calls the seller. Once the wallet has been asked to send, an attempt that
+ends without a transaction report is uncertain, a rejection the page reports from the wallet
+included, and `superstables status` searches the chain for it. --wallet local signs on the EVM
+chains only.
+
 How long it waits: with no --wait, until the attempt ends: the browser page gives the owner 5
 minutes; with --wallet local, pay gives the wallet 130 s (the wallet's own window is 120 s by
 default). After the owner approves, settlement takes up to 2 more minutes. --wait N stops waiting
@@ -450,23 +436,26 @@ busy fails at once, the owner is not asked and the quote can still be paid.
 
 For agents: the approval link is printed as soon as it exists, but pay keeps running until the owner
 decides. If your tool shows output only when a command ends, run pay in the background with its
-output going to a file and show the owner the approval link from that file, or use the MCP server
-(`superstables mcp`), whose pay tool returns it at once.
+output going to a file and show the owner the approval link from that file.
 
 Where the answer is: the service's response is printed after the receipt (up to 4,000 characters are
 kept); with --json it is service_response. `superstables status <attempt-id>` shows it again later.
 
 Retrying: a quote starts at most one attempt. After denied, expired, abandoned or failed, take a new
 quote and pay that, unless the Next line (next, with --json) says the same quote can still be paid
-(the owner was never asked). After uncertain or paid_service_failed, do not pay again.
+(the owner was never asked). After paid_service_failed, do not pay again. After uncertain, do not
+pay again or quote the same request again: `superstables status` looks for the payment on chain, and
+only when it ends the attempt failed with chain unpaid was nothing paid.
 
 States: awaiting_approval, approved, submitting (not final); settled, paid_service_failed (paid;
 chain says verified, when the client read the transaction on chain and it is this payment, or
 unchecked, when it rests on the seller's report until `superstables status` checks again); denied
 (the owner rejected it), expired (nobody approved in the window), abandoned (the wait ended before
 anyone decided; abandoned_by says whether this process was stopped, --wait ran out or the page
-closed), failed (nothing was paid); uncertain (the payment may or may not have settled, including
-when the chain shows the seller's transaction is not this payment: chain mismatch).
+closed), failed (nothing was paid: the payment never left this machine, or chain unpaid, when the
+chain shows it was never made and can no longer be); uncertain (the payment may or may not have
+settled, including after the seller said it did not, and when the chain shows the seller's
+transaction is not this payment: chain mismatch).
 
 Moves money: yes, once, and only after the owner approves it in their own wallet. Calling pay only
   asks; the agent cannot approve.
@@ -476,12 +465,12 @@ Example:
   $ superstables pay <quote-id> --json > pay.json 2> pay.log &
 Prints: each state as it happens, the approval link once, the outcome in one sentence, the receipt,
   the service's response and the next command. With --json, one object: attempt_id, quote_id, state,
-  final, message, next, reason, refusal, receipt (or transaction, for a payment without one),
-  service_response, history.
-Exit codes: 0 paid and delivered, 1 failed, expired or abandoned; nothing was paid only when no
-  transaction is reported, 2 bad input (unknown, used or expired quote), 3 refused (the owner
-  rejected it, or a spend policy refused it), 4 paid but the service failed, 5 unknown (the full
-  table: superstables --help)
+  final, chain_final, message, next, reason, refusal, receipt (or transaction, for a payment without
+  one), service_response, history.
+Exit codes: 0 paid and delivered, 1 failed, expired or abandoned; nothing was paid when no
+  transaction is reported, or chain is unpaid, 2 bad input (unknown, used or expired quote), 3
+  refused (the owner rejected it, or a spend policy refused it), 4 paid but the service failed, 5
+  unknown (the full table: superstables --help)
 ```
 
 ## superstables status
@@ -499,8 +488,9 @@ Options:
   --json      print the same object as `pay --json`
   -h, --help  display help for command
 
-Moves money: no. It reads this machine's records, and the chain again for a paid attempt whose chain
-  is unchecked; it never starts or repeats a payment.
+Moves money: no. It reads this machine's records, and the chain again for an uncertain attempt, one
+  a stopped process left approved or submitting, and a paid one whose chain is unchecked; it never
+  starts or repeats a payment.
 Run by: the agent or the owner.
 Example:
   $ superstables status <attempt-id>
@@ -524,10 +514,13 @@ Options:
   --json       print the receipt records as a JSON array
   -h, --help   display help for command
 
-One receipt for each payment the seller reported settled. The chain column says verified when the
-client read the transaction on chain and it is this payment, unchecked when it has not yet
+One receipt for each payment the seller reported settled, or the chain showed. The chain column says
+verified when the client read the transaction on chain and it is this payment. JSON chain_final
+reports permanent finality separately. Unchecked means a matching payment has not been established
 (`superstables status` checks again). A later check can mark the receipt mismatch and the attempt
-uncertain. Do not pay again. A receipt records the payment and the service's answer separately.
+uncertain, or unpaid when the chain shows the payment was never made and can no longer be (the
+attempt is then failed, and the receipt no longer counts against the daily cap). Do not pay again. A
+receipt records the payment and the service's answer separately.
 
 Moves money: no.
 Run by: the agent or the owner.

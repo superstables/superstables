@@ -45,7 +45,7 @@ export function emit(command: string, exit: number, o: Record<string, unknown>):
  */
 export const oneLine = (s: unknown, max = 300): string => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim().slice(0, max);
 /** A command line for a next step, with this chain selected. */
-export const cmd = (script: string, rest = "") => `npx tsx budget/evm/${script}${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}${rest ? ` ${rest}` : ""}`;
+export const cmd = (script: string, rest = "") => `superstables budget ${script.replace(/\.ts$/, "")} --rail evm --chain ${CFG.key}${rest ? ` ${rest}` : ""}`;
 
 // Key files (contract rule 1), shared by every EVM chain; paths come from ../paths.mjs.
 //   agent file: B4_AGENT_KEY, public addresses. The only key on the agent's machine.
@@ -361,7 +361,7 @@ export async function sendNative(w: Wallet, to: Address, value: bigint, label: s
   const hash = await w.client.sendTransaction({ to, value, chain, account: w.account });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
-  if (r.status !== "success") throw new Error(`${label} reverted on chain: ${hash}`);
+  if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber });
   return { hash, feeWei: feeOf(r) };
 }
 /** `agent`: an agent transaction (selfRevoke, sweep): its gas is checked first (agentGasFor), and it is signed with that gas and fee. */

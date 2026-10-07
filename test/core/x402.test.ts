@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { DeadlineError, detect, parseChallenge, sameTerms, termsFor, type RawAccept } from "../../src/core/x402.js";
+import { DeadlineError, UnsupportedX402Version, detect, parseChallenge, readSellerChallenge, sameTerms, termsFor, type RawAccept } from "../../src/core/x402.js";
 import { encodePaymentRequiredHeader } from "@x402/core/http";
 import { usdcRequirement } from "../../src/core/chain.js";
 
@@ -68,7 +68,12 @@ describe("termsFor", () => {
     expect(judged.supported).toBe(false);
     if (judged.supported) return;
     expect(judged.reason).toContain("Base (mainnet)");
-    expect(judged.reason).toContain("Base Sepolia (testnet)");
+    expect(judged.reason).toContain("it is a mainnet, and this client pays on testnets only (Base Sepolia");
+  });
+
+  it("refuses x402 on Tempo Moderato as the protocol it is, not as a chain this client does not pay on", () => {
+    const tempo = termsFor({ ...v2, network: "eip155:42431" }, 2);
+    expect(tempo).toEqual({ supported: false, reason: "x402 payments on Tempo Moderato are not supported: this client pays MPP tempo.charge sellers there" });
   });
 
   it("refuses an asset that is not that network's USDC", () => {
@@ -98,8 +103,8 @@ describe("termsFor", () => {
     expect(termsFor({ ...v2, extra: {} }, 2).supported).toBe(true);
   });
 
-  it("refuses the budget rails' other networks before anything is signed: pay is Base Sepolia only", () => {
-    // Each with its own USDC and no domain in `extra`: still refused at quoting, so no signer ever sees one.
+  it("accepts the budget rails' other EVM networks, each in its own USDC (evm-chains.test.ts pins their domains)", () => {
+    // Each with its own USDC and no domain in `extra`: signed with that USDC's own domain.
     const others = [
       ["eip155:5042002", "0x3600000000000000000000000000000000000000"],
       ["eip155:421614", "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d"],
@@ -109,10 +114,12 @@ describe("termsFor", () => {
     ];
     for (const [network, asset] of others) {
       const judged = termsFor({ ...v2, network, asset, extra: {} }, 2);
-      expect(judged.supported, network).toBe(false);
-      if (judged.supported) continue;
-      expect(judged.reason, network).toContain("is not supported (only Base Sepolia (testnet))");
+      expect(judged.supported, network).toBe(true);
     }
+    // A chain no rail names is still refused before anything is signed.
+    const unknown = termsFor({ ...v2, network: "eip155:31337", extra: {} }, 2);
+    expect(unknown.supported).toBe(false);
+    if (!unknown.supported) expect(unknown.reason).toMatch(/chain eip155:31337 is not supported \(only Base Sepolia, Arc Testnet, /);
   });
 
   it("quotes the seller's own words in a refusal as one bounded line", () => {
@@ -121,6 +128,13 @@ describe("termsFor", () => {
     if (judged.supported) return;
     expect(judged.reason).not.toMatch(/[\u0000-\u001f]/);
     expect(judged.reason.length).toBeLessThan(120);
+  });
+
+  it("refuses an authorization window longer than an hour, or not a whole number of seconds, as superstables.com does", () => {
+    expect(termsFor({ ...v2, maxTimeoutSeconds: 3_600 }, 2).supported).toBe(true);
+    for (const window of [3_601, 86_400 * 365, 0, -1, 1.5, "300"]) {
+      expect(termsFor({ ...v2, maxTimeoutSeconds: window as number }, 2), String(window)).toMatchObject({ supported: false, reason: expect.stringMatching(/payment window is outside what is signed \(at most 3600 seconds\)/) });
+    }
   });
 
   it("refuses a malformed amount or recipient", () => {
@@ -150,6 +164,19 @@ describe("parseChallenge", () => {
 
   it("refuses to invent a challenge that is not there", () => {
     expect(() => parseChallenge({ body: "<html>402</html>" })).toThrow(/No x402 challenge/);
+  });
+
+  it("reads versions 1 and 2 only, and says which version it would not read", () => {
+    for (const named of [3, 0, -1, 2.5, "2", "1", null, true, {}]) {
+      const body = JSON.stringify({ x402Version: named, resource: "http://x/y", accepts: [v1] });
+      expect(() => parseChallenge({ body }), JSON.stringify(named)).toThrow(UnsupportedX402Version);
+    }
+    expect(() => parseChallenge({ body: JSON.stringify({ resource: "http://x/y", accepts: [v1] }) })).toThrow(/names no version/);
+    expect(() => parseChallenge({ body: JSON.stringify({ x402Version: "\u001b[2Jx".repeat(20), accepts: [v1] }) })).toThrow(/^(?!.*\u001b)/);
+    // The 402 as a whole: a refusal names the version, before any offer is judged.
+    expect(() => readSellerChallenge({ body: JSON.stringify({ x402Version: 3, accepts: [v1] }) })).toThrow(
+      "The 402 response offers no payment this client reads: the x402 challenge is version 3, and this client reads versions 1 and 2 only",
+    );
   });
 });
 

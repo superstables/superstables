@@ -18,10 +18,11 @@ export const EXPIRY_SLACK_S = 10
  * past its validBefore.
  */
 export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lookup> {
+  let unreadable = false
   const hashes = new Set<string>([...extraHashes, op.tx, op.expectedTx].filter(Boolean) as string[])
   // our own signed hash (push mode) is bound by itself; anything else must carry the memo
   if (op.memo) {
-    const memoHits = await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock ?? 0)).catch(() => [])
+    const memoHits = await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock ?? 0)).catch(() => { unreadable = true; return [] })
     for (const h of memoHits) hashes.add(h)
   }
   // Prefer, in order: a successful payment bound to this operation, any bound one, then anything found (judge calls an
@@ -29,7 +30,7 @@ export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lo
   let firstBound: Lookup | undefined
   let firstFound: Lookup | undefined
   for (const h of hashes) {
-    const receipt = await getReceipt(h).catch(() => null)
+    const receipt = await getReceipt(h).catch(() => { unreadable = true; return null })
     if (!receipt) continue
     const signer = await getTxSigner(h).catch(() => null)
     const found = { kind: 'found' as const, hash: h as Hex, receipt, keyId: signer?.keyId, from: signer?.from }
@@ -40,6 +41,7 @@ export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lo
   }
   if (firstBound) return firstBound
   if (firstFound) return firstFound
+  if (unreadable) return { kind: 'pending' }
   if (op.validBefore) {
     const head = await chainHead().catch(() => null)
     if (head && head.timestamp > op.validBefore + EXPIRY_SLACK_S) {
@@ -47,7 +49,7 @@ export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lo
       if (op.memo) {
         const again = await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock ?? 0)).catch(() => null)
         if (again === null) return { kind: 'pending' } // could not read: never claim "expired" on a failed read
-        if (again.length) return lookupOnce(op, extraHashes)
+        if (again.length) return { kind: 'pending' } // inclusion remains unreadable; the next reconciliation checks again
       }
       return { kind: 'expired' }
     }

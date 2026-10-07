@@ -123,17 +123,17 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
     rows: [
       { label: 'New agent key', value: address, mono: true },
       { label: 'Chain', value: 'Tempo Testnet (Moderato)' },
-      { label: 'Agent key', value: `on this computer only, in ${AGENT_ENV_PATH}` },
+      { label: 'Agent key', value: `on the agent's machine only, in ${AGENT_ENV_PATH}` },
     ],
     enforced: [],
     notEnforced: [],
-    notes: [`You pick the match code your agent shows you before the key is added. The agent key stays on this computer; ${host} does not receive it.`],
+    notes: [`You pick the match code your agent shows you before the key is added. The agent key stays on the agent's machine; ${host} does not receive it.`],
   }, '', undefined, undefined, { prior })
   if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent: address, linked: false })
   if (outcome.status !== 'connected') throw new Error(`unexpected approval outcome ${outcome.status}`)
   if (!same(outcome.address, owner)) {
     await closeOwnerPage(0)
-    const reason = `${host} added the key ${address} to the account ${outcome.address}, but this computer records the owner ${owner}`
+    const reason = `${host} added the key ${address} to the account ${outcome.address}, but this machine records the owner ${owner}`
     console.log(`REFUSED: ${reason}.`)
     process.exit(result(3, { state: 'refused_precheck', reason, owner, agent: address, next: `remove this key from that account on ${host}; grant only from the account ${owner}` }))
   }
@@ -145,7 +145,7 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
 }
 
 function refuseAgentFile(reason: string): never {
-  console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`)
+  console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)
   process.exit(result(3, { state: 'refused_precheck', reason, next: `make ${AGENT_ENV_PATH} a regular file only you can read (chmod 600), then run setup again` }))
 }
 /** The agent file's text ("" when there is none), or a refusal (exit 3) when other users can read it or it is not a regular file. */
@@ -227,7 +227,7 @@ async function main() {
     const boundTo = parseEnvFile(agentFileTextOrRefuse()).OWNER_ADDRESS
     if (boundTo && !same(boundTo, pub.OWNER_ADDRESS)) {
       const reason = `the owner files disagree: ${PUBLIC_ENV_PATH} records the owner ${pub.OWNER_ADDRESS}, and ${AGENT_ENV_PATH} is bound to ${boundTo}`
-      console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`)
+      console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)
       const site = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE).origin : undefined
       process.exit(result(3, { state: 'refused_precheck', reason, owner: pub.OWNER_ADDRESS, next: `${newOwnerCmd(site)} records one owner again (refused while a budget is live on either), then superstables budget setup --rail tempo --agent ${label}` }))
     }
@@ -239,7 +239,7 @@ async function main() {
     const heldKey = parseEnvFile(agentFileTextOrRefuse())[`AGENT${label}_ADDRESS`]
     if (recordedKey && !(heldKey && same(heldKey, recordedKey))) {
       const reason = `${PUBLIC_ENV_PATH} already records the access key ${recordedKey} under the label ${label}, and ${heldKey ? `${AGENT_ENV_PATH} holds another key (${heldKey}) under it` : `${AGENT_ENV_PATH} holds no key for it`}; setup --agent never replaces a recorded key`
-      console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`)
+      console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)
       process.exit(result(3, { state: 'refused_precheck', reason, owner: pub.OWNER_ADDRESS, agent: recordedKey, next: `pick another label (superstables budget setup --rail tempo --agent OTHER). If ${recordedKey} may still hold a budget, revoke it: superstables budget revoke --rail tempo --agent ${label}, approved by ${pub.OWNER_ADDRESS}` }))
     }
     if (!boundTo) refuseAgentFileErrors(() => setAgentPublic({ OWNER_ADDRESS: pub.OWNER_ADDRESS! }))
@@ -289,7 +289,7 @@ async function main() {
   const recordedSite = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE).origin : undefined
   if (agentOwner && publicOwner && !same(agentOwner, publicOwner) && !newOwner) {
     const reason = `the owner files disagree: ${PUBLIC_ENV_PATH} records the owner ${publicOwner}, and ${AGENT_ENV_PATH} is bound to ${agentOwner}`
-    console.log(`REFUSED: ${reason}. Nothing was changed on this computer.`)
+    console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)
     process.exit(result(3, { state: 'refused_precheck', reason, owner: publicOwner, next: `${newOwnerCmd(recordedSite)} records one owner again (refused while a budget is live on either)` }))
   }
   if (newOwner && recorded) {
@@ -365,17 +365,17 @@ async function main() {
       title: plan ? `Add this agent and approve a budget of ${amt}` : `Add this agent to your ${HOST} account`,
       ...(plan ? { amount: fromBaseUnits(LIMIT!), unit: TOKEN_LABEL } : {}),
       summary: plan
-        ? `1. Add this agent to your ${HOST} account: your account's address is recorded as the budget owner on this computer. 2. Allow the agent key to spend up to ${amt} from your account in total until ${iso(plan.expiry)}. Your wallet asks you to approve the transaction.`
-        : `Sign in to ${HOST} with your wallet and add this agent to your account. Your account's address is recorded as the budget owner on this computer. This does not grant a budget or send a transaction.`,
+        ? `1. Add this agent to your ${HOST} account: your account's address is recorded as the budget owner on the agent's machine. 2. Allow the agent key to spend up to ${amt} from your account in total until ${iso(plan.expiry)}. Your wallet asks you to approve the transaction.`
+        : `Sign in to ${HOST} with your wallet and add this agent to your account. Your account's address is recorded as the budget owner on the agent's machine. This does not grant a budget or send a transaction.`,
       rows: [
         { label: 'Your agent', value: agent, mono: true },
         { label: 'Chain', value: 'Tempo Testnet (Moderato)' },
-        ...(plan ? [{ label: 'Transaction', value: `AccountKeychain.authorizeKey(${agent}, ...) at ${KEYCHAIN}`, mono: true }] : [{ label: 'Agent key', value: `on this computer only, in ${AGENT_ENV_PATH}` }]),
+        ...(plan ? [{ label: 'Transaction', value: `AccountKeychain.authorizeKey(${agent}, ...) at ${KEYCHAIN}`, mono: true }] : [{ label: 'Agent key', value: `on the agent's machine only, in ${AGENT_ENV_PATH}` }]),
       ],
       enforced: plan ? [`A total limit of ${amt}.`, `The expiry. After ${iso(plan.expiry)} every payment the key signs is refused.`] : [],
       notEnforced: plan ? ['No call or seller restriction. Whoever holds the key can make other calls as your account, subject to the keychain limits.', 'No per-payment limit. The CLI checks --max, but anyone using the key outside the CLI can skip it.'] : [],
       notes: [
-        `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on this computer; ${HOST} does not receive it.`,
+        `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on the agent's machine; ${HOST} does not receive it.`,
         ...(plan ? ['You pay the network fee in your wallet. To end the budget at any time: superstables budget revoke --rail tempo.'] : [`Grants and revokes for this agent are then approved on ${HOST}, in your wallet.`]),
       ],
     }, '', newOwner ? recorded : undefined, then, { prior, newOwner })
@@ -389,17 +389,17 @@ async function main() {
     if (recorded && !same(recorded, owner) && !newOwner) {
       await closeOwnerPage(0)
       const sent = bundle?.steps.filter((s) => s.hash).map((s) => `${s.kind} ${s.hash}`) ?? []
-      const reason = `${HOST} added this agent to the account ${owner}, but this computer records the owner ${recorded}. Nothing was changed on this computer${sent.length ? `; that account's wallet reported ${sent.join(', ')}` : ''}`
+      const reason = `${HOST} added this agent to the account ${owner}, but this machine records the owner ${recorded}. Nothing was changed on this machine${sent.length ? `; that account's wallet reported ${sent.join(', ')}` : ''}`
       console.log(`REFUSED: ${reason}.`)
       process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: `if ${owner} is the right owner: ${newOwnerCmd(SITE)} (refused while a budget is live). If not, remove this agent from that account on ${HOST}${sent.length ? ", and check that account's wallet activity" : ''}` }))
     }
   } else {
     const { handle, outcome } = await askConnect('setup', {
       title: 'Connect your wallet',
-      summary: "Connect your wallet and sign a message to record its address as the budget owner on this computer. This does not grant a budget or send a transaction.",
+      summary: "Connect your wallet and sign a message to record its address as the budget owner on this machine. This does not grant a budget or send a transaction.",
       rows: [
         { label: 'Your agent', value: agent, mono: true },
-        { label: 'Agent key', value: `on this computer only, in ${AGENT_ENV_PATH}` },
+        { label: 'Agent key', value: `on this machine only, in ${AGENT_ENV_PATH}` },
       ],
       enforced: [],
       notEnforced: [],
@@ -422,9 +422,9 @@ async function main() {
   // every way an owner arrives (the key file, the page, the site): another owner than the one on record needs --new-owner
   if (recorded && !same(recorded, owner) && !newOwner) {
     const reason = `another owner (${recorded}) is recorded for this agent`
-    finish?.({ ok: false, message: `This computer records another owner for this agent (${recorded}). Nothing was changed.` })
+    finish?.({ ok: false, message: `This machine records another owner for this agent (${recorded}). Nothing was changed.` })
     await closeOwnerPage()
-    console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this computer.`)
+    console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this machine.`)
     process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }))
   }
   const replaced = recorded && !same(recorded, owner) ? recorded : undefined

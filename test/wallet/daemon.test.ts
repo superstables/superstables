@@ -13,7 +13,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BASE_SEPOLIA, usdcRequirement } from "../../src/core/chain.js";
+import { ARBITRUM_SEPOLIA, BASE_SEPOLIA, usdcRequirement } from "../../src/core/chain.js";
 import type { Policy } from "../../src/core/policy.js";
 import type { WalletRequestView, WalletStatus } from "../../src/core/types.js";
 import { defaultLauncherDir, startWallet, writeOwnerLauncher, type StartWalletOptions, type WalletHandle } from "../../src/wallet/daemon.js";
@@ -464,7 +464,7 @@ describe("requests the wallet rejects before the owner sees them", () => {
         amount: "10000",
         payTo: PAYEE,
       },
-      reason: /network .* is not supported/i,
+      reason: /chain .* is not supported/i,
     },
     {
       name: "another asset",
@@ -532,6 +532,31 @@ describe("requests the wallet rejects before the owner sees them", () => {
     const rejected = (await res.json()) as WalletRequestView;
     expect(rejected.status).toBe("rejected");
     expect(rejected.reason).toContain("eip3009");
+  });
+
+  it("sends a Tempo or Solana payment to the approval page in a browser wallet, and signs nothing", async () => {
+    const { wallet } = await startTestWallet();
+    for (const sign of [
+      { kind: "tempo-transfer", challenge: { id: "c", realm: "r", method: "tempo", intent: "charge", request: {} } },
+      { kind: "solana-transaction", requirements: { ...usdcRequirement(0.01, PAYEE), network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1" }, x402Version: 2 },
+    ]) {
+      const res = await call(wallet, "/requests", wallet.agentToken, "POST", { sign });
+      const rejected = (await res.json()) as WalletRequestView;
+      expect(rejected.status, sign.kind).toBe("rejected");
+      expect(rejected.reason, sign.kind).toBe("the local wallet signs x402 payments on EVM chains only; to pay on Tempo Moderato or Solana devnet, take a new quote and pay it in a browser wallet on your machine: `superstables --wallet browser pay <new-quote-id>`");
+    }
+  });
+});
+
+describe("the EVM chains the local wallet signs on", () => {
+  it("takes a payment on Arbitrum Sepolia in its own USDC, and refuses one on Arbitrum One", async () => {
+    const { wallet } = await startTestWallet();
+    const pending = await ask(wallet, usdcRequirement(0.01, PAYEE, ARBITRUM_SEPOLIA) as unknown as Record<string, unknown>, { target: "https://service.example/thing" });
+    expect(pending.status).toBe("pending");
+    expect(pending.verified).toMatchObject({ network: "eip155:421614", networkLabel: "Arbitrum Sepolia (testnet)", assetAddress: ARBITRUM_SEPOLIA.usdc.address });
+    const mainnet = await ask(wallet, { ...usdcRequirement(0.01, PAYEE, ARBITRUM_SEPOLIA), network: "eip155:42161" } as unknown as Record<string, unknown>);
+    expect(mainnet.status).toBe("rejected");
+    expect(mainnet.reason).toContain("it is a mainnet");
   });
 });
 

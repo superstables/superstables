@@ -1,22 +1,36 @@
 # Install the client
 
-The Superstables client is a command, `superstables`, with an MCP server (`superstables mcp`) and a
-TypeScript SDK built from the same code. It pays for services in two ways:
-[one purchase at a time](buy-once.md), where the owner approves each purchase (hosted buy once on
-superstables.com, or `pay` on a page on this computer), and [budget](budget.md), where the owner
-grants an on-chain budget once. Testnet only: test USDC, or pathUSD for Tempo budgets. No real money.
+The Superstables client is a command, `superstables`, and the `superstables-payments` agent skill
+that guides an agent through it. Start with a [budget](budget.md), where the owner
+grants an on-chain budget once, or [Single purchase](buy-once.md), where the owner approves
+each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet only. Test USDC, or pathUSD on Tempo Moderato. No real money.
 
 ## What you need
 
 - Node 20 or newer.
 - Linux or macOS. On Windows, use WSL: `superstables budget` refuses to run on native Windows.
-- For the owner, a browser wallet on the computer that runs the client: MetaMask or another EVM
-  browser wallet, or a Solana wallet for a Solana budget. The approval pages are served on
-  `127.0.0.1`, so the wallet is a browser extension on that computer. Over SSH, the owner forwards
-  the page's port first (`ssh -L PORT:127.0.0.1:PORT user@host`, with the port from the approval link and your SSH destination).
+- Network access to sellers and testnet RPCs, and to the approval site when using approvals on superstables.com.
+- For **local approvals**, an owner browser wallet that can reach the client's `127.0.0.1` page:
+  an EVM wallet for EVM/Tempo, or a Solana wallet for a Solana budget. On the same machine, use
+  a browser extension wallet. Over SSH, forward the approval link's port first:
+  `ssh -L PORT:127.0.0.1:PORT user@host`. No superstables.com account is needed.
+- For **approvals on superstables.com**, the owner can use a wallet on another device. They need a
+  superstables.com account, created by signing in with an Ethereum or Solana wallet. For now, a
+  Solana account supports only Solana agents and Solana single purchases. With an Ethereum
+  account, Solana also needs a Solana wallet for the budget or payment. An ordinary remote browser without a compatible
+  wallet cannot sign. Choose [budget approvals on superstables.com](budget.md#approve-on-superstablescom-instead)
+  or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 
-The client runs on your computer and contacts sellers, the facilitators that settle x402 payments,
-testnet RPCs, the Superstables index and, when switched on, the hosted demo catalogue.
+These instructions describe **client 0.3.1** and require that release build. Install it from npm
+as `@superstables/client`, or use the released commit and skill from
+[GitHub Releases](https://github.com/superstables/superstables-client/releases).
+The CLI/skill runs on your own machine or server,
+even with approvals on superstables.com. EVM `recover` still needs a reachable local approval page and the
+agent key on that runtime. Test-token and gas requirements belong to the chosen
+[budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
+
+The client runs on your machine and contacts sellers, the facilitators that settle x402 payments,
+testnet RPCs, the Superstables index and, when switched on, the demo catalogue on superstables.com.
 
 ## Install
 
@@ -27,21 +41,34 @@ has the agent download the skill zip, check its SHA-256 checksum and install it.
 the whole CLI; [The agent skill](#the-agent-skill-with-the-whole-cli-bundled) below installs it by
 hand.
 
-The examples on these pages write the command as `superstables`. A checkout with `npm link` puts
-that command on your PATH. For a git install pinned to a commit, use `npx --no superstables …` in
-the installation folder, as shown below.
+The examples on these pages write the command as `superstables`. Installing from npm with `-g`, or
+a checkout with `npm link`, puts that command on your PATH. For a git install pinned to a commit,
+use `npx --no superstables …` in the installation folder, as shown below.
 
 Don't type `npx superstables` to run the client. Where npx doesn't find this client's command, it
 downloads whatever package the npm registry has under the name `superstables`, which is not this
-client.
+client. The client's package is `@superstables/client`.
+
+### From npm
+
+```bash
+npm install -g @superstables/client@0.3.1
+superstables --version
+```
+
+This installs the `superstables` command, `superstables budget` included. The npm package holds
+the command, not the agent skill: to connect an agent, also install the skill, as described in
+[Set up your agent app](#set-up-your-agent-app).
 
 ### From a checkout
 
-To run the client from its sources, for example to work on it:
+To run the client from its sources, for example to work on it, replace `<commit>` with the full
+commit hash of the 0.3.1 release:
 
 ```bash
 git clone https://github.com/superstables/superstables-client.git
 cd superstables-client
+git checkout --detach <commit>
 npm ci
 npm run build
 npm link
@@ -56,8 +83,8 @@ checkout's command, it downloads whatever package the npm registry has under tha
 
 ### With npm, from git
 
-In any folder, with `<commit>` replaced by the full commit hash of the version you want (a
-release's page on GitHub names its commit):
+In any folder, with `<commit>` replaced by the full commit hash of the 0.3.1 release (its
+page on GitHub names the commit):
 
 ```bash
 npm install github:superstables/superstables-client#<commit>
@@ -65,7 +92,7 @@ npx --no superstables --version
 ```
 
 npm clones the repository at that commit, installs its development packages, builds the client
-on your computer with them and installs the result, `superstables budget` included. That build
+on your machine with them and installs the result, `superstables budget` included. That build
 runs the repository's build scripts and the TypeScript compiler on your machine. Name a commit hash: without one, npm installs whatever the default branch holds
 at that moment, and a branch or tag name can later point somewhere else.
 Run it as `npx --no superstables …` in that folder, or as `node_modules/.bin/superstables …`.
@@ -73,7 +100,7 @@ Run it as `npx --no superstables …` in that folder, or as `node_modules/.bin/s
 ### The agent skill, with the whole CLI bundled
 
 `npm run skill` in a checkout builds `build/superstables-payments-skill-<version>.zip`, and
-releases attach the same zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
+the 0.3.1 release uses that versioned zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
 Claude Code or `~/.agents/skills/` for Codex. It unpacks to `superstables-payments/`, and needs
 only Node:
 
@@ -88,9 +115,9 @@ the bundled packages and their licences.
 
 ## Set up
 
-For `pay`, the owner runs `setup` once; hosted buy once and budgets don't need it. It creates `~/.superstables`, writes a starting spend
-policy (`policy.yaml`, at most 0.05 USDC per payment and 1 USDC per day) and prints the command
-that sets up your agent app. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
+For `pay`, the owner runs `setup` once; Single purchase on superstables.com and budgets don't need it. It creates `~/.superstables`, writes a starting spend
+policy (`policy.yaml`, at most 0.05 USDC per payment and 1 USDC per day) and prints how the owner
+approves payments. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
 again keeps the existing policy.
 
 ```bash
@@ -103,7 +130,7 @@ which account last connected, that the approval port is free, and that the demo 
 index and the facilitators answer:
 
 ```
-  client version           0.3.0
+  client version           0.3.1
   home                     /home/you/.superstables
 
 ✓ home directory           /home/you/.superstables (writable)
@@ -122,103 +149,23 @@ Everything this machine needs is in place.
 Not having connected an account yet is fine and is not a failure. A budget has its own setup:
 see [Budget](budget.md).
 
-In browser mode there is no approval process to start. When a payment needs approval, the process that asked for it (the
-MCP server, or `superstables pay`) serves the approval page on `127.0.0.1:4412` and hands the agent
-an approval link of the form `http://127.0.0.1:4412/approve/<id>`. If another payment is already waiting on
+In browser mode there is no approval process to start. When a payment needs approval,
+`superstables pay` serves the approval page on `127.0.0.1:4412` and prints an approval link of the
+form `http://127.0.0.1:4412/approve/<id>`. If another payment is already waiting on
 4412, the page takes a free port instead, and the approval link names that port.
 
 ## Set up your agent app
 
-An agent can use the client in two ways: through the skill and a shell, or through MCP.
-
-**The skill.** `superstables-payments` guides an agent through finding a service, pricing it and
-both ways to pay, with their safety rules. Use the skill zip installed above, or link the
-`skills/superstables-payments/` folder from a checkout into your agent's skills folder. Keep
-`SKILL.md`, `references/` and `agents/openai.yaml` together. The agent needs a shell. Budgets need
-the CLI: the MCP server has no budget tools.
-
-**MCP.** The server has six tools for approving each payment (`pay`): `find_services`, `quote`, `pay`,
-`payment_status`, `wallet_status` and `list_receipts`.
-
-### Claude Code
-
-```bash
-claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- superstables mcp
-```
-
-`superstables setup` prints the same line with the absolute paths of Node and the client filled
-in, which also works when Claude Code starts with a different PATH. From a checkout, at the
-repository root:
-
-```bash
-claude mcp add superstables -e SUPERSTABLES_DEMO_SERVICES=on -- node "$(pwd)/dist/mcp/main.js"
-```
-
-Then, in Claude Code, run `/mcp`: `superstables` should be listed as connected, with six tools.
-If it is not, `claude mcp list` shows the configured command, and the server logs to stderr —
-start it by hand with `superstables mcp` to see what it says.
-
-To keep the server's state somewhere else, pass `SUPERSTABLES_HOME` through:
-
-```bash
-claude mcp add superstables --env SUPERSTABLES_HOME=/path/to/home -- superstables mcp
-```
-
-Claude Code has been tested end to end with the MetaMask flow: find, quote, approve, pay,
-receipt, and a rejected payment that signs nothing.
-
-### Any other MCP client
-
-The MCP server is part of the CLI: `superstables mcp` runs it on stdio. Any MCP client that can
-start a local stdio server can use it. Most take a JSON entry like this one; where the file lives
-and what the top-level key is called depend on the client, so check its documentation.
-
-With `superstables` on your PATH (after `npm link` in a checkout):
-
-```json
-{
-  "mcpServers": {
-    "superstables": {
-      "command": "superstables",
-      "args": ["mcp"],
-      "env": { "SUPERSTABLES_DEMO_SERVICES": "on" }
-    }
-  }
-}
-```
-
-Straight from a checkout, with the absolute path to it:
-
-```json
-{
-  "mcpServers": {
-    "superstables": {
-      "command": "node",
-      "args": ["/absolute/path/to/superstables-client/dist/cli/main.js", "mcp"],
-      "env": { "SUPERSTABLES_DEMO_SERVICES": "on" }
-    }
-  }
-}
-```
-
-Leave out `SUPERSTABLES_DEMO_SERVICES` to leave out the hosted catalogue, and add `SUPERSTABLES_HOME` or
-`SUPERSTABLES_WALLET` to `env` to change where state lives or which signer is used (see
-[Environment](#environment-variables)).
-
-The server logs to stderr only, because stdout is the protocol. Its first line says which build
-is running, where its state lives and which signer it is using:
-
-```
-superstables client 0.3.0 · home /Users/you/.superstables · wallet browser
-```
+An agent uses the client through the `superstables-payments` skill and a shell. The skill guides
+it through finding a service, pricing it and both ways to pay, with their safety rules. Use the
+skill zip installed above, or link the `skills/superstables-payments/` folder from a checkout into
+your agent's skills folder. Keep `SKILL.md`, `references/` and `agents/openai.yaml` together.
 
 ### Which build is running
 
-After an update, restart the Superstables MCP server from your MCP client: a server process that
-keeps running keeps answering with the old build. Then ask the agent for the wallet
-status. The answer carries `client_version` and `home`: the first must be the version you just
-built or installed, the second the directory you expect (`~/.superstables` unless you changed it).
-`superstables --version` and `superstables doctor` answer the same question from a terminal.
+After an update, `superstables --version` names the build that is running, and `superstables doctor`
+prints it with the home directory it uses (`~/.superstables` unless you changed it). In the skill,
+`scripts/VERSION.json` names the version and commit.
 
 Releases are tagged `v<version>` on GitHub, with the release notes taken from
 [../CHANGELOG.md](../CHANGELOG.md).
@@ -279,8 +226,11 @@ secret to yourself: it approves payments.
 | `--no-open` | Do not open a browser; print where the page and the launcher are |
 
 Every other command needs `--wallet local` too, or `SUPERSTABLES_WALLET=local` in the
-environment — including the one that starts the MCP server, which is how an agent gets it.
-Fund the address it prints with test USDC on Base Sepolia from <https://faucet.circle.com>. Stopping the wallet is the off switch: with no
+environment the agent's commands run in.
+Fund the address it prints with test USDC on the EVM chain you pay on: on SKALE Base Sepolia, Base
+Sepolia test USDC bridged over the SKALE bridge; on the other EVM chains, test USDC from
+<https://faucet.circle.com> with the payment's chain selected. The local wallet signs on the EVM
+chains only (Tempo and Solana payments are approved in a browser wallet on the approval page). Stopping the wallet is the off switch: with no
 wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 
 ## Environment variables
@@ -296,14 +246,15 @@ wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 | `SUPERSTABLES_DEMO_SERVICE_URL` | `https://www.superstables.com/api/demo/market` | Where the built-in catalogue says the paid service is |
 | `SUPERSTABLES_DEMO_PAY_TO` | none | Default recipient for `demo-service` |
 | `SUPERSTABLES_DEMO_HOST` | `127.0.0.1` | Which interface `demo-service` binds |
-| `SUPERSTABLES_MCP_WAIT_MS` | `20000` | How long the MCP tools wait for a payment before answering "still waiting" |
-| `SUPERSTABLES_RPC_URL` | `https://sepolia.base.org` | Base Sepolia RPC, used to read the USDC balance and to check a settlement on chain (https, or http on this computer) |
+| `SUPERSTABLES_RPC_URL` | `https://sepolia.base.org` | Base Sepolia RPC, used to read the USDC balance and to check a settlement on chain (https, or http on this machine) |
+| `SUPERSTABLES_TEMPO_RPC` | `https://rpc.moderato.tempo.xyz` | Tempo Moderato RPC, used to check a `pay` on chain and to search for one whose transaction the page did not report (https, or http on this machine). The budget's tempo rail reads it too |
+| `SUPERSTABLES_SOLANA_RPC` | `https://api.devnet.solana.com` | Solana devnet RPC, used to check a `pay` on chain (https, or http on this machine). The budget's solana rail reads it too |
 | `SUPERSTABLES_INDEX_URL` | `https://www.superstables.com/api/v1/services` | The service index `find` reads. Point it at another index that answers the same API, or set it to `off` to list the built-in catalogue only |
-| `SUPERSTABLES_DEMO_SERVICES` | unset (off) | `on` includes Superstables' testnet services from the hosted catalogue in discovery. Most return prepared sample output, carry `mock: true` and come after the listings not marked simulated; the market data service returns live prices. The demo setup snippets set it; leave it off to list no simulated services |
+| `SUPERSTABLES_DEMO_SERVICES` | unset (off) | `on` includes Superstables' testnet services from the catalogue on superstables.com in discovery. Most return prepared sample output, carry `mock: true` and come after the listings not marked simulated; the market data service returns live prices. `find --demo` does the same for one search; leave it off to list no simulated services |
 | `SUPERSTABLES_CATALOGUE_URL` | `https://www.superstables.com/api/demo/catalogue` | Where those services are published, read only when `SUPERSTABLES_DEMO_SERVICES` is on. Point it at another deployment, or set it to `off` |
-| `SUPERSTABLES_SITE` | `https://www.superstables.com` | The site `setup --hosted` uses when `--site` is not given; `budget find` and `buy-once` use it before the site a hosted setup recorded. `setup --hosted` records its site as `SITE=` in the chain's public file, and later owner commands on that chain use that one and refuse a different `--site`. The owner's approvals happen on this site. Only superstables.com, its subdomains and this computer are accepted, unless `SUPERSTABLES_ALLOW_SITE` names the origin |
+| `SUPERSTABLES_SITE` | `https://www.superstables.com` | The site `setup --hosted` uses when `--site` is not given; `budget find` and `buy-once` use it before the site a setup on superstables.com recorded. `setup --hosted` records its site as `SITE=` in the chain's public file, and later owner commands on that chain use that one and refuse a different `--site`. The owner's approvals happen on this site. Only superstables.com, its subdomains and this machine are accepted, unless `SUPERSTABLES_ALLOW_SITE` names the origin |
 | `SUPERSTABLES_ALLOW_SITE` | unset | The owner's opt-in for a site outside superstables.com: the exact `https` origin, or a comma-separated list. Set it yourself, in your own environment, only for a site you have checked; an agent never sets it |
-| `SUPERSTABLES_DOCTOR_OFFLINE` | unset | `1` makes `doctor` skip every check that needs a network |
+| `SUPERSTABLES_DOCTOR_OFFLINE` | unset | `1` makes `doctor` skip every check that needs network access |
 
 `SUPERSTABLES_HOME` is read when state is first touched, so set it before starting a process
 rather than during one. The CLI's `--home <dir>` sets it for you, and `--wallet <mode>` sets
@@ -315,7 +266,7 @@ rather than during one. The CLI's `--home <dir>` sets it for you, and `--wallet 
 | --- | --- | --- | --- |
 | 4412, or a free port when it is busy | the approval page, inside the agent's own process | browser mode, from the first payment | `127.0.0.1` |
 | 4411 | the local wallet | `--wallet local` only | `127.0.0.1` |
-| 4402 | the demo service | only if you run the seller yourself; the hosted one needs no port | `127.0.0.1` |
+| 4402 | the demo service | only if you run the seller yourself; the one on superstables.com needs no port | `127.0.0.1` |
 
 With these defaults, none is reachable from another machine; `SUPERSTABLES_DEMO_HOST` can bind
 the demo service to another interface. If a port is busy, move it with the matching
@@ -333,10 +284,16 @@ For each chain you set up with `setup --hosted`, also remove the agent on your a
 site: that is what removes it from your account, and no command does it. Revoking on chain stops the
 spending but leaves the agent on your account.
 
-Then remove the MCP server (`claude mcp remove superstables`, or delete its entry from your MCP
-client's configuration), delete the skill folder if you installed it, and delete `~/.superstables`
-(or your `SUPERSTABLES_HOME`). If you linked a checkout with `npm link`, remove the
-command with `npm uninstall -g @superstables/client`.
+Before deleting files, resolve uncertain outcomes using [Records](records.md#check-an-unresolved-outcome).
+Keep the journals and keys needed for those checks. For stranded EVM USDC, see
+[recovery](budget.md#recovery-and-ending-use); revoke alone does not return it.
+
+Then delete the skill folder if you installed it, and delete `~/.superstables`
+(or your `SUPERSTABLES_HOME`). If you installed from npm, run
+`npm uninstall -g @superstables/client`. If you linked a checkout with `npm link`, remove the
+global link with `npm unlink --global @superstables/client`; this removes the linked command,
+without downloading a package. If you installed from git in a separate installation folder, remove
+that installation after preserving any records you still need.
 
 With `pay` in the default browser mode, that directory holds no key, and your funds in your wallet are
 not affected. It can hold keys in two cases, and deleting it makes any funds those keys hold

@@ -1,0 +1,183 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
+
+const root = resolve(process.env.BUDGET_RACE_ROOT ?? fileURLToPath(new URL('../..', import.meta.url)));
+const helper = fileURLToPath(new URL('../helpers/budget-interleaving.mjs', import.meta.url));
+const children: ChildProcess[] = [];
+const dirs: string[] = [];
+const op = 'same-order';
+const { createIdentitySource } = await import(join(root, 'budget/lock-identity.mjs'));
+const identitySource = createIdentitySource();
+const dead = { ...identitySource.record(), pid: 2147483647, ...identitySource.starts(2147483647) };
+function sandbox(rail: string) {
+  const home = mkdtempSync(join(tmpdir(), 'budget-race-'));
+  dirs.push(home);
+  const dir = join(home, 'budget/ops', rail === 'solana' ? 'solana-devnet' : rail === 'evm' ? 'evm-base-sepolia' : 'tempo-moderato');
+  mkdirSync(dir, { recursive: true });
+  return { home, dir };
+}
+function child(rail: string, action: string, box: ReturnType<typeof sandbox>, marker: string, state?: string) {
+  const p = spawn(process.execPath, ['--import', 'tsx', helper], {
+    cwd: root, env: { ...process.env, SUPERSTABLES_HOME: box.home, RACE_ROOT: root, RACE_DIR: box.dir,
+      RACE_OP: op, RACE_ACTION: action, RACE_RAIL: rail, RACE_MARKER: marker, RACE_PAUSE_GAP_MS: '50', ...(state ? { RACE_STATE: state } : {}) },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  children.push(p);
+  let stdout = '', stderr = '';
+  p.stdout?.on('data', b => { stdout += b; });
+  p.stderr?.on('data', b => { stderr += b; });
+  const done = new Promise<{ stdout: string; stderr: string; code: number | null }>((res, rej) => {
+    p.once('error', rej);
+    p.once('close', code => res({ stdout, stderr, code }));
+  });
+  return { p, done };
+}
+async function untilFile(path: string, running?: ReturnType<typeof child>) {
+  const end = Date.now() + 30_000;
+  let ended: string | undefined;
+  if (running) void running.done.then(
+    result => { ended = `exited ${result.code}: ${result.stderr} ${result.stdout}`; },
+    (error: unknown) => { ended = `could not start: ${String(error)}`; },
+  );
+  const stopped = () => {
+    if (!running) return true;
+    try {
+      const stat = execFileSync('ps', ['-o', 'stat=', '-p', String(running.p.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+      return stat.trim().startsWith('T');
+    } catch { return false; }
+  };
+  // The marker precedes SIGSTOP. Resume only after the kernel reports it stopped.
+  while (!existsSync(path) || !stopped()) {
+    if (ended) throw new Error(`child ${ended} before ${path}`);
+    if (Date.now() > end) throw new Error(`child ${running?.p.pid ?? 'unknown'} did not reach ${path}`);
+    await sleep(10);
+  }
+}
+afterEach(async () => {
+  for (const p of children.splice(0)) { p.kill('SIGCONT'); p.kill('SIGKILL'); }
+  // Wait for child exit before deleting its directory.
+  await sleep(50);
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe.runIf(['linux', 'darwin'].includes(process.platform))('operation ownership under forced process stalls', () => {
+  it('dispatcher: recovers an empty breaker left by an interrupted release', async () => {
+    const box = sandbox('dispatcher');
+    const path = join(box.dir, `${op}.buy.lock`);
+    writeFileSync(path, JSON.stringify(dead));
+    mkdirSync(`${path}.break`);
+    const marker = join(box.home, 'empty-breaker');
+    child('dispatcher', 'hold', box, marker);
+    await untilFile(marker + '.result');
+    expect(JSON.parse(readFileSync(marker + '.result', 'utf8')).ok).toBe(true);
+  }, 90_000);
+  for (const rail of ['dispatcher', 'solana']) {
+    it(`${rail}: an old release cannot delete the next generation in the same clock tick`, async () => {
+      const box = sandbox(rail);
+      const r = await child(rail, 'generation', box, join(box.home, 'generation')).done;
+      expect(r.stderr).not.toContain('Error');
+      expect(JSON.parse(r.stdout)).toEqual({ first: true, second: true, third: false });
+    }, 90_000);
+    it(`${rail}: a paused stale-lock breaker cannot displace a live successor`, async () => {
+      const box = sandbox(rail);
+      const path = join(box.dir, rail === 'solana' ? `${op}.json.lock` : `${op}.buy.lock`);
+      writeFileSync(path, JSON.stringify(dead));
+      const marker = join(box.home, 'first');
+      const first = child(rail, 'break', box, marker);
+      await untilFile(marker, first);
+      // The dispatcher's old breaker was stolen after ten seconds, even while SIGSTOP kept its owner alive.
+      if (rail === 'dispatcher') await sleep(10_100);
+      const secondMarker = join(box.home, 'second');
+      child(rail, 'hold', box, secondMarker);
+      await untilFile(secondMarker + '.result');
+      const second = JSON.parse(readFileSync(secondMarker + '.result', 'utf8'));
+      first.p.kill('SIGCONT');
+      await untilFile(marker + '.result');
+      const acquired = JSON.parse(readFileSync(marker + '.result', 'utf8'));
+      expect({ first: acquired.ok, second: second.ok }).toEqual({ first: true, second: false });
+      const thirdMarker = join(box.home, 'third');
+      child(rail, 'hold', box, thirdMarker);
+      await untilFile(thirdMarker + '.result');
+      expect(JSON.parse(readFileSync(thirdMarker + '.result', 'utf8')).ok).toBe(false);
+    }, 90_000);
+  }
+});
+
+describe.runIf(['linux', 'darwin'].includes(process.platform))('operation writers share serialization', () => {
+  for (const rail of ['solana', 'tempo', 'evm']) {
+    for (const state of ['submitted', 'settled']) {
+      it(`${rail}: a stalled unsigned reconcile cannot overwrite newer ${state} evidence`, async () => {
+        const box = sandbox(rail);
+        const path = join(box.dir, `${op}.json`);
+        writeFileSync(path, JSON.stringify({ op, rail, kind: 'buy', state: 'quoted', history: [],
+          createdAt: new Date().toISOString(), path: 'approve', notes: [], signed: false,
+          owner: `0x${'22'.repeat(20)}`, agent: `0x${'33'.repeat(20)}`, delivered: null,
+          intent: { amount: '1000', amountDecimal: '0.001',
+            recipient: `0x${'11'.repeat(20)}`, owner: `0x${'22'.repeat(20)}`, agent: `0x${'33'.repeat(20)}` } }));
+        const first = child(rail, 'reconcile', box, join(box.home, 'read'));
+        await untilFile(join(box.home, 'read'), first);
+        const writer = await child(rail, 'write', box, join(box.home, 'write'), state).done;
+        first.p.kill('SIGCONT');
+        const reconciled = await first.done;
+        expect(reconciled.stdout).toContain('RESULT ');
+        // On the base this writer succeeds and the stale reconcile changes its new evidence to not_found.
+        expect(JSON.parse(writer.stdout).ok, `stale reconcile saved ${readFileSync(path, 'utf8')}`).toBe(false);
+        const after = await child(rail, 'write', box, join(box.home, 'after'), state).done;
+        expect(JSON.parse(after.stdout).ok).toBe(true);
+        expect(JSON.parse(readFileSync(path, 'utf8')).state).toBe(state);
+      }, 90_000);
+    }
+    if (rail !== 'tempo') it(`${rail}: provisional settled evidence is rechecked without becoming unpaid`, async () => {
+      const box = sandbox(rail);
+      const path = join(box.dir, `${op}.json`);
+      const tx = `0x${'ab'.repeat(32)}`;
+      writeFileSync(path, JSON.stringify({ op, rail, kind: 'buy', state: 'settled', final: false,
+        inclusionObserved: true, history: [], notes: [], path: 'approve', tx, settleTx: tx,
+        pullTx: tx, pullNonce: 0, pullBlock: "90", agentSig: 'recorded-agent-signature', signed: true,
+        owner: `0x${'22'.repeat(20)}`, agent: rail === 'solana' ? '11111111111111111111111111111111' : `0x${'33'.repeat(20)}`,
+        lastValidBlockHeight: 1, delivered: true,
+        createdAt: '2026-10-04T23:59:00Z' }));
+      const marker = join(box.home, 'provisional-read');
+      const reconcile = child(rail, 'reconcile', box, marker);
+      await untilFile(marker, reconcile);
+      reconcile.p.kill('SIGCONT');
+      const r = await reconcile.done;
+      const line = r.stdout.trim().split('\n').reverse().find(l => l.startsWith('RESULT '));
+      if (!line) throw new Error(`reconcile omitted its RESULT: ${r.stderr}`);
+      expect(JSON.parse(line.slice(7))).toMatchObject({ state: 'unknown' });
+      expect(JSON.parse(line.slice(7)).next).toMatch(/do not pay again/i);
+      expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ state: 'unknown', inclusionObserved: true, delivered: true });
+    });
+    for (const legacy of rail === 'tempo' ? [false, true] : [false]) it(`${rail}: a later negative RPC result preserves settled evidence and delivery${legacy ? ' for a legacy journal without debit' : ''}`, async () => {
+      const box = sandbox(rail);
+      const path = join(box.dir, `${op}.json`);
+      const tx = `0x${'ab'.repeat(32)}`;
+      const rec = { op, rail, kind: 'buy', state: 'settled', history: [], notes: [], path: 'approve',
+        tx, settleTx: tx, settleStatus: 'success', delivered: false, ...(legacy ? {} : { debit: '0.001' }), signed: true,
+        agentSig: 'recorded-agent-signature', lastValidBlockHeight: 1, pullTx: tx, pullNonce: 0,
+        memo: `0x${'aa'.repeat(32)}`, startBlock: '1', validBefore: 1,
+        createdAt: '2026-10-04T23:59:00Z', owner: `0x${'22'.repeat(20)}`, agent: `0x${'33'.repeat(20)}`,
+        intent: { amount: '1000', amountDecimal: '0.001', recipient: `0x${'11'.repeat(20)}`,
+          owner: `0x${'22'.repeat(20)}`, agent: `0x${'33'.repeat(20)}` } };
+      writeFileSync(path, JSON.stringify(rec));
+      const marker = join(box.home, 'paid-read');
+      const reconcile = child(rail, 'reconcile', box, marker);
+      await untilFile(marker, reconcile);
+      reconcile.p.kill('SIGCONT');
+      const r = await reconcile.done;
+      expect(r.stdout).toContain('RESULT ');
+      const line = r.stdout.trim().split('\n').reverse().find(l => l.startsWith('RESULT '));
+      if (!line) throw new Error(`reconcile omitted its RESULT: ${r.stderr}`);
+      expect(JSON.parse(line.slice(7))).toMatchObject({ state: 'settled', delivered: false });
+      if (rail === 'tempo') expect(JSON.parse(line.slice(7)).debit).toBe('0.001');
+      if (legacy) expect(readFileSync(path, 'utf8')).toBe(JSON.stringify(rec));
+      expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ state: 'settled', tx, settleTx: tx,
+        delivered: false, ...(legacy ? {} : { debit: '0.001' }), createdAt: rec.createdAt });
+    }, 90_000);
+  }
+});

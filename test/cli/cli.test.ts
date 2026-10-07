@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Records } from "../../src/core/records.js";
 import { sendJson, startFacilitator, startPaidEndpoint, startServer, type TestServer } from "../helpers/servers.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -43,6 +44,7 @@ function run(args: string[], env: Record<string, string> = {}): Promise<Run> {
         ...process.env,
         SUPERSTABLES_HOME: home,
         SUPERSTABLES_DOCTOR_OFFLINE: "1",
+        SUPERSTABLES_APPROVE_PORT: "0",
         // Nothing listens here, so "is the wallet running?" has one deterministic answer.
         SUPERSTABLES_WALLET_URL: "http://127.0.0.1:1",
         ...env,
@@ -70,11 +72,11 @@ describe("the superstables CLI", () => {
   it("prints its own help", async () => {
     const result = await run(["--help"]);
     expect(result.code).toBe(0);
-    for (const command of ["setup", "wallet", "mcp", "find", "quote", "pay", "doctor", "policy"]) {
+    for (const command of ["setup", "wallet", "find", "quote", "pay", "doctor", "policy"]) {
       expect(result.stdout).toContain(command);
     }
     // The one sentence a reader must not miss.
-    expect(result.stdout).toContain("no real money moves");
+    expect(result.stdout).toContain("Testnet only. No real money moves.");
     // The hosted catalogue is not simulated as a whole: its market data service returns live prices.
     expect(result.stdout).not.toMatch(/simulated demo services/);
     expect(result.stdout).toMatch(/most are simulated; the market data service returns live prices/);
@@ -190,7 +192,7 @@ describe("the superstables CLI", () => {
     expect(setUp.stdout).not.toContain("superstables wallet serve");
 
     const result = await run(["doctor", "--json"]);
-    expect(result.code).toBe(0);
+    expect(result.code, result.stdout + result.stderr).toBe(0);
     const report = JSON.parse(result.stdout) as {
       ok: boolean;
       mode: string;
@@ -206,6 +208,36 @@ describe("the superstables CLI", () => {
     expect(by("wallet key")).toBeUndefined();
     expect(by("browser wallet")?.detail).toContain("MetaMask connects when the first approval link opens");
     expect(by("approval page")?.ok).toBe(true);
+    expect(by("approval page")?.detail).toMatch(/^http:\/\/127\.0\.0\.1:[1-9]\d* is free;/);
+  });
+
+  it("reports an explicitly occupied approval port as unhealthy", async () => {
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("expected a TCP address");
+      const result = await run(["--wallet", "browser", "doctor", "--json"], {
+        SUPERSTABLES_APPROVE_PORT: String(address.port),
+      });
+      expect(result.code, result.stdout + result.stderr).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        checks: expect.arrayContaining([
+          expect.objectContaining({
+            name: "approval page",
+            ok: false,
+            essential: true,
+            detail: expect.stringContaining(`port ${address.port} (SUPERSTABLES_APPROVE_PORT) is taken (listen EADDRINUSE:`),
+          }),
+        ]),
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("refuses a quote that names both a URL and a service, as bad input", async () => {
@@ -245,7 +277,6 @@ const COMMANDS = [
   ["wallet", "serve"],
   ["wallet", "status"],
   ["wallet", "address"],
-  ["mcp"],
   ["find"],
   ["quote"],
   ["pay"],
@@ -280,7 +311,7 @@ describe("the help", () => {
   it("explains the two ways to pay, where to start each, the environment and the exit codes", async () => {
     const { stdout, code } = await run(["--help"]);
     expect(code).toBe(0);
-    expect(stdout).toContain("no real money moves");
+    expect(stdout).toContain("Testnet only. No real money moves.");
     expect(stdout).toContain("Two ways to pay");
     expect(stdout).toContain("superstables budget setup --rail evm");
     expect(stdout).toContain("`superstables setup` is for pay only");
@@ -311,6 +342,15 @@ describe("the help", () => {
     expect(stdout).toContain("take a new quote");
     expect(stdout).toContain("abandoned");
     expect(stdout).not.toMatch(/\.mcpb|Claude Desktop/);
+  }, 90_000);
+
+  it("has no MCP server: no `mcp` command, and no MCP in the help or the setup", async () => {
+    const mcp = await run(["mcp"]);
+    expect(mcp.code).toBe(2);
+    expect(mcp.stderr).toContain("unknown command 'mcp'");
+    for (const args of [["--help"], ["pay", "--help"], ["setup", "--help"], ["setup"], ["--wallet", "local", "setup"]]) {
+      expect((await run(args)).stdout, args.join(" ")).not.toMatch(/mcp/i);
+    }
   }, 90_000);
 });
 
@@ -431,7 +471,9 @@ describe("quote, pay and status against a local seller", () => {
 
   it("records a pay stopped by a signal as stopped by its process, not by the owner", async () => {
     const quote = JSON.parse((await run(["quote", url, "--json"], env)).stdout) as { id: string };
-    const child = spawn(process.execPath, [TSX, CLI, "pay", quote.id, "--json"], {
+    // One process, as the installed command is. tsx's own CLI would run pay in a child behind a wrapper that passes a
+    // signal on, and kills the child (exit 143) when it has not said within 30 ms that it took it.
+    const child = spawn(process.execPath, ["--import", "tsx", CLI, "pay", quote.id, "--json"], {
       cwd: ROOT,
       env: {
         ...process.env,
@@ -466,7 +508,14 @@ describe("quote, pay and status against a local seller", () => {
     expect(second.stderr + second.stdout).toContain(`Follow that one: \`superstables status ${String(attemptId)}\`.`);
     expect(second.stderr + second.stdout).not.toContain("superstables quote");
 
+    // The signal reaches the process running the payment, and one slow to take it (as on a loaded machine) still
+    // records why it stopped.
+    const runner = new Records(join(home, "records")).getAttempt(String(attemptId))?.runner;
+    expect(runner?.pid).toBe(child.pid);
+    child.kill("SIGSTOP");
     child.kill("SIGTERM");
+    await new Promise((resume) => setTimeout(resume, 200));
+    child.kill("SIGCONT");
     expect(await closed).toBe(1);
 
     const outcome = JSON.parse(stdout) as Record<string, unknown>;
@@ -525,13 +574,15 @@ describe("find against a local index", () => {
     const section = (id: string) => stdout.split(`\n  ${id}\n`)[1]?.split(/\n(?: {2})?\S/)[0] ?? "";
 
     const sats = section("sats.example");
-    expect(sats.indexOf("with pay")).toBeGreaterThanOrEqual(0);
-    expect(sats.indexOf("with pay")).toBeLessThan(sats.indexOf("with a budget, evm on base-sepolia"));
+    expect(sats.indexOf("Single purchase on your machine")).toBeGreaterThanOrEqual(0);
+    expect(sats.indexOf("Single purchase on your machine")).toBeLessThan(sats.indexOf("with a budget, evm on base-sepolia"));
     expect(sats).toContain("superstables quote 'https://sats.example/api?<parameters>'");
     expect(sats).toContain("superstables budget preflight --rail evm --chain base-sepolia --url 'https://sats.example/api?<parameters>'");
 
+    // pay pays on Arc Testnet too: its quote comes first
     const arc = section("arc.example");
-    expect(arc).not.toContain("quote");
+    expect(arc.indexOf("Single purchase on your machine")).toBeLessThan(arc.indexOf("with a budget, evm on arc-testnet"));
+    expect(arc).toContain("superstables quote 'https://arc.example/weather?<parameters>'");
     expect(arc).toContain("superstables budget preflight --rail evm --chain arc-testnet");
     expect(arc).toContain("--max <ceiling> --pay-to <payTo> --op <new id>");
 
@@ -577,6 +628,7 @@ describe("find against a local index", () => {
     expect(by("sats.example")?.commands.map((c) => c.way)).toEqual(["pay", "budget"]);
     expect(by("sats.example")?.next).toBe("superstables quote 'https://sats.example/api?<parameters>'");
     expect(by("arc.example")?.commands).toEqual([
+      expect.objectContaining({ way: "pay" }),
       expect.objectContaining({
         way: "budget",
         rail: "evm",
@@ -584,8 +636,9 @@ describe("find against a local index", () => {
         run: [expect.stringContaining("budget preflight"), expect.stringContaining("budget buy")],
       }),
     ]);
-    expect(by("arc.example")?.next).toMatch(/^superstables budget preflight --rail evm --chain arc-testnet /);
-    expect(by("tempo.example")?.next).toMatch(/^superstables budget preflight --rail tempo --chain moderato /);
+    expect(by("arc.example")?.next).toBe("superstables quote 'https://arc.example/weather?<parameters>'");
+    // pay pays MPP on Tempo Moderato: its quote comes first
+    expect(by("tempo.example")?.next).toBe("superstables quote 'https://tempo.example/news?<parameters>'");
     expect(by("main.example")?.commands).toEqual([]);
     expect(by("main.example")?.next).toBeNull();
   });

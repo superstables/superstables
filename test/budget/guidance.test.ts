@@ -15,7 +15,8 @@ const CLI = join(REPO, "budget", "cli.mjs");
 let home: string;
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "superstables-budget-guidance-"));
+  // A path can contain the internal prefix without the guidance exposing internal variable names.
+  home = mkdtempSync(join(tmpdir(), "superstables-budget-guidance-B4-"));
 });
 
 afterEach(() => {
@@ -100,9 +101,31 @@ describe("status with no budget set up here", () => {
     const r = await budget(["status", "--rail", "evm"]);
     expect(r.code).toBe(1);
     expect(r.stderr.split("\n")[0]).toContain("no budget has been set up here for evm on base-sepolia");
-    expect(r.result.reason).toBe("no budget has been set up here for evm on base-sepolia: no agent key on this computer; no owner has connected a wallet");
+    expect(r.result.reason).toBe("no budget has been set up here for evm on base-sepolia: no agent key on this machine; no owner has connected a wallet");
     expect(r.result.next).toContain("superstables budget setup --rail evm, superstables budget fund-agent --rail evm, superstables budget doctor --rail evm, superstables budget grant --rail evm --amount A");
-    expect(`${r.stderr}${r.stdout}`).not.toMatch(/B4/);
+    expect(`${r.stderr}${r.stdout}`.replaceAll(home, "<home>")).not.toMatch(/B4/);
+  });
+
+  const hosted = {
+    evm: "superstables budget setup --rail evm --chain arc-testnet --hosted --grant A --fund",
+    tempo: "superstables budget setup --rail tempo --hosted --grant A",
+    solana: "superstables budget setup --rail solana --hosted --grant A --fund",
+  } as const;
+  for (const rail of ["evm", "tempo", "solana"] as const) {
+    it(`offers the one-link set-up on superstables.com on ${rail} when no owner is on record`, async () => {
+      const r = await budget(["status", "--rail", rail, ...(rail === "evm" ? ["--chain", "arc-testnet"] : [])]);
+      expect(r.result.next).toContain(`; or, with one approval link on superstables.com (the owner needs an account there): ${hosted[rail]}.`);
+      expect(r.stderr).toContain(hosted[rail]);
+    });
+  }
+
+  it("names only the steps on this machine once an owner is on record", async () => {
+    mkdirSync(join(home, "budget", "public"), { recursive: true });
+    writeFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=0x${"22".repeat(20)}\n`);
+    const r = await budget(["status", "--rail", "evm"]);
+    expect(r.result.reason).toBe("no budget has been set up here for evm on base-sepolia: no agent key on this machine");
+    expect(r.result.next).toContain("superstables budget setup --rail evm, superstables budget fund-agent --rail evm");
+    expect(r.result.next).not.toContain("--hosted");
   });
 
   it("names the home it checked, and says to ask the user for the path when the budget is elsewhere", async () => {
@@ -270,7 +293,7 @@ describe("help", () => {
     expect(r.stdout).toContain("superstables budget status --rail R");
   });
 
-  it("wait --help documents final", async () => {
+  it("wait --help documents command completion", async () => {
     const r = await budget(["wait", "--help"]);
     expect(r.stdout).toContain("final false");
     expect(r.stdout).toContain("Scripts test final, not the exit code");
