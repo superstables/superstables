@@ -37,10 +37,12 @@ import { createHash } from 'node:crypto'
 import { requireRecordLock } from '../op-lock.mjs'
 import { Mppx, tempo } from 'mppx/client'
 import { Credential, Receipt } from 'mppx'
-import { keccak256, type Address, type Hex } from 'viem'
+import { createClient, http, keccak256, type Address, type Hex } from 'viem'
+import { tempoModerato } from 'viem/tempo/chains'
 import { addressCheck, decimalCheck, labelCheck, opIdCheck, parseCli, urlCheck } from './lib/args.mjs'
 import {
   CHAIN_ID,
+  RPC_URL,
   TOKEN_ADDRESS,
   TOKEN_LABEL,
   agentAccessKeyAccount,
@@ -155,7 +157,7 @@ async function main() {
 
   // tempo.charge only: a seller that offers a session (a deposit of its choosing) is never selected.
   const mppx = Mppx.create({
-    methods: [tempo.charge({ account: agent, getClient: () => makeClient(), expectedChainId: CHAIN_ID, ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
+    methods: [tempo.charge({ account: agent, getClient: () => createClient({ chain: tempoModerato, transport: http(RPC_URL) }), expectedChainId: CHAIN_ID, ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
     polyfill: false,
   })
   // no redirects on either request to the seller (lib/seller.ts says why)
