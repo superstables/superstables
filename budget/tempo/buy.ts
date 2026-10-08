@@ -58,7 +58,6 @@ import { BLOCKING, OPS_DIR, newOpId, printResult, readOp, writeOp, type Op, type
 import { readCapped, saveResponse } from '../response.mjs'
 import { budgetShortfall, precheckCharge, recipientsOutsideScope } from './lib/precheck.ts'
 import { CHALLENGE_OPTIONS, sellerInit } from './lib/seller.ts'
-import { boundedSignTransaction, pushValidityBound } from './lib/validity.ts'
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
 
@@ -154,12 +153,8 @@ async function main() {
   console.log(`Agent access key ${agentKey} buying from ${url} (owner ${ownerAddress} funds it, chain ${CHAIN_ID}, max ${args.max} ${TOKEN_LABEL})`)
 
   // tempo.charge only: a seller that offers a session (a deposit of its choosing) is never selected.
-  const signingAgent = {
-    ...agent,
-    signTransaction: boundedSignTransaction(agent.signTransaction, () => op?.intent.mode === 'push' ? op.validBefore : undefined),
-  }
   const mppx = Mppx.create({
-    methods: [tempo.charge({ account: signingAgent, expectedChainId: CHAIN_ID, ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
+    methods: [tempo.charge({ account: agent, expectedChainId: CHAIN_ID, ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
     polyfill: false,
   })
   // no redirects on either request to the seller (lib/seller.ts says why)
@@ -287,7 +282,6 @@ async function main() {
 
   // 5. Sign. Push mode broadcasts inside createCredential, so the intent is already `submitted`.
   if (mode === 'push') {
-    op.validBefore = pushValidityBound(challenge.expires)
     op.state = 'submitted'
     writeOp(op, 'push mode: createCredential broadcasts')
   }
@@ -385,7 +379,6 @@ function baseOp(
     op: opId,
     rail: 'tempo',
     kind: 'buy',
-    journalVersion: 1,
     state: 'quoted',
     createdAt: previous?.createdAt ?? nowIso(),
     updatedAt: nowIso(),

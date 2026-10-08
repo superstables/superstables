@@ -23,8 +23,6 @@ export type Op = {
   op: string
   rail: 'tempo'
   kind: 'buy' | 'pay'
-  journalVersion?: 1 // durable quoted/submitted ordering for this attempt; never added to a legacy journal
-  legacyQuotedBefore?: number // first dispatcher-locked reconcile time, relying on death or owner confirmation
   chain_final?: boolean | null
   state: OpState
   createdAt: string
@@ -50,7 +48,7 @@ export type Op = {
   memo?: string // the payment memo, known before signing; indexed on chain, finds this purchase without its tx hash
   expectedTx?: string // hash of the signed transaction, when known
   signedHash?: string // buy.ts: hash of the seller-bound signed payload (informational; a sponsored tx's final hash differs)
-  validBefore?: number // unix seconds after which the signed budget payment can no longer land
+  validBefore?: number // unix seconds after which the signed payment can no longer land (pull mode)
   tx?: string
   debit?: string
   delivered?: boolean
@@ -73,7 +71,6 @@ export function readOp(id: string): Op | undefined {
 
 export function writeOp(op: Op, note?: string): Op {
   const p = pathFor(op.op)
-  if (!existsSync(p)) op.journalVersion = 1
   const now = new Date().toISOString()
   const last = op.history[op.history.length - 1]
   if (!last || last.state !== op.state || note) op.history.push({ at: now, state: op.state, ...(note ? { note } : {}) })
