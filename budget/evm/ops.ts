@@ -13,7 +13,8 @@
 //   settlement:  read back from the chain (USDC AuthorizationUsed + Transfer), never from the seller
 // A purchase has two transactions that matter: the pull (agent) and the settlement (the seller's facilitator).
 import { finalityFor } from "../../src/core/finality-policy.js";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { writeJournalFile } from "../journal.mjs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, BlockNotFoundError, TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
@@ -107,11 +108,9 @@ export function readJournal(op: string): Journal | null {
   return j as Journal;
 }
 export function writeJournal(j: Journal) {
-  mkdirSync(OPS_DIR, { recursive: true, mode: 0o700 });
   j.updatedAt = new Date().toISOString();
   const p = journalPath(j.op);
-  writeFileSync(p + ".tmp", JSON.stringify(j, null, 2), { mode: 0o600 });
-  renameSync(p + ".tmp", p);
+  writeJournalFile(p, JSON.stringify(j, null, 2));
 }
 /** Another operation that already recorded this exact transaction hash (two processes that signed the same nonce and bytes). */
 export function otherOpWithTx(field: "pullTx" | "cancelTx" | "returnTx", hash: string, op: string): string | null {
