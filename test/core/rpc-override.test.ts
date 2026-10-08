@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { startFakeBaseSepolia } from "../helpers/fake-base-sepolia.js";
-import { EVM_NETWORKS } from "../../src/core/chain.js";
+import { EVM_NETWORKS, KNOWN_NETWORKS, TEMPO_MODERATO } from "../../src/core/chain.js";
 import { guardedNode } from "../helpers/guarded-process.js";
 import { readBody, sendJson, startServer } from "../helpers/servers.js";
 
@@ -61,7 +61,7 @@ describe("client RPC overrides", () => {
     } finally { await chain.close(); rmSync(home, { recursive: true, force: true }); }
   });
 
-  it("offers the configured RPC in every rail's wallet facts and uses it for chain reads", async () => {
+  it("uses the configured RPC for chain reads but offers wallets only the public RPC", async () => {
     const rpc = "http://127.0.0.1:8545";
     const child = await guardedNode(["--import=tsx", "--input-type=module", "-e", `
       import { KNOWN_NETWORKS } from "./src/core/chain.ts";
@@ -78,7 +78,9 @@ describe("client RPC overrides", () => {
       console.log(JSON.stringify(urls));
     `], { B4_RPC: rpc, SUPERSTABLES_RPC_URL: "http://127.0.0.1:9", SUPERSTABLES_TEMPO_RPC: rpc, SUPERSTABLES_SOLANA_RPC: rpc });
     expect(child.code, child.output).toBe(0);
-    expect(JSON.parse(child.output)).toEqual(Array.from({ length: 8 }, () => [rpc, rpc]));
+    // The approval page hands rpcUrls to the browser wallet, which stores them: a private or local RPC must never reach it.
+    const publicRpcs = [...NETWORKS, "solana-devnet"].map((key) => KNOWN_NETWORKS.find((network) => network.key === key)!.rpc);
+    expect(JSON.parse(child.output)).toEqual(publicRpcs.map((url) => [url, rpc]));
   });
 
   it("retains the Base Sepolia legacy override when B4_RPC is unset", async () => {
@@ -91,14 +93,13 @@ describe("client RPC overrides", () => {
     expect(child).toEqual({ code: 0, output: JSON.stringify({ url: rpc }) + "\n" });
   });
 
-  it("refuses invalid Tempo RPCs before balance reads or wallet facts, using the existing error", async () => {
+  it("refuses invalid Tempo RPCs before balance reads, using the existing error, and leaves wallet facts public", async () => {
     const child = await guardedNode(["--import=tsx", "--input-type=module", "-e", `
       import { TEMPO_MODERATO, usdcBalance } from "./src/core/chain.ts";
       import { tempoStep } from "./src/core/signer/steps/tempo.ts";
-      for (const run of [() => usdcBalance("0x1111111111111111111111111111111111111111", TEMPO_MODERATO), () => tempoStep.pageFacts({})]) {
-        try { await run(); console.log("accepted"); } catch (error) { console.log(error.message); }
-      }
+      try { await usdcBalance("0x1111111111111111111111111111111111111111", TEMPO_MODERATO); console.log("accepted"); } catch (error) { console.log(error.message); }
+      console.log(tempoStep.pageFacts({}).rpcUrl);
     `], { SUPERSTABLES_TEMPO_RPC: "http://rpc.example.com" });
-    expect(child).toEqual({ code: 0, output: "SUPERSTABLES_TEMPO_RPC must use HTTPS, or HTTP on this machine\n".repeat(2) });
+    expect(child).toEqual({ code: 0, output: "SUPERSTABLES_TEMPO_RPC must use HTTPS, or HTTP on this machine\n" + TEMPO_MODERATO.rpc + "\n" });
   });
 });
