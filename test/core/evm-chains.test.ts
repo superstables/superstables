@@ -5,7 +5,7 @@
 
 import { verifyTypedData } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { EVM_CHAINS, EVM_CHAIN_KEYS } from "../../budget/evm/chains.mjs";
 import { EVM_NETWORKS, shortLabel, txUrl, usdcRequirement, type EvmNetwork } from "../../src/core/chain.js";
 import { SUPPORTED_NETWORKS } from "../../src/core/rails/index.js";
@@ -156,20 +156,16 @@ describe("what the owner's wallet signs on each EVM chain", () => {
   });
 
   it("offers the wallet each chain with its own currency: ETH, Arc's 18-decimal USDC, POL, SKALE's CREDIT", () => {
-    vi.stubEnv("SUPERSTABLES_RPC_URL", "");
-    vi.stubEnv("B4_RPC", "");
-    try {
-      for (const network of EVM_NETWORKS) {
-        const facts = eip3009Step.pageFacts(record(network));
-        expect(facts, network.key).toEqual({
-          chainIdHex: `0x${VECTORS[network.key].chainId.toString(16)}`,
-          chainName: budget[network.key].label,
-          rpcUrl: network.rpc,
-          explorer: budget[network.key].explorer,
-          nativeCurrency: { name: network.wallet.nativeCurrency.name, ...VECTORS[network.key].native },
-        });
-      }
-    } finally { vi.unstubAllEnvs(); }
+    for (const network of EVM_NETWORKS) {
+      const facts = eip3009Step.pageFacts(record(network));
+      expect(facts, network.key).toEqual({
+        chainIdHex: `0x${VECTORS[network.key].chainId.toString(16)}`,
+        chainName: budget[network.key].label,
+        rpcUrl: network.rpc,
+        explorer: budget[network.key].explorer,
+        nativeCurrency: { name: network.wallet.nativeCurrency.name, ...VECTORS[network.key].native },
+      });
+    }
   });
 
   it("links each chain's transactions to its own explorer", () => {

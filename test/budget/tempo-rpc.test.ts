@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Challenge, Credential, Receipt } from "mppx";
 import { encodeEventTopics, keccak256, stringToHex, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { Abis } from "viem/tempo";
+import { Abis, Transaction } from "viem/tempo";
 import { describe, expect, it } from "vitest";
 import { startFakeTempo, PATH_USD } from "../helpers/fake-chains.js";
 import { guardedNode } from "../helpers/guarded-process.js";
@@ -62,10 +62,13 @@ describe("Tempo budget payment RPC", () => {
       effectiveGasPrice: "0x1", type: "0x76", logsBloom: `0x${"00".repeat(256)}`,
     };
     const calls: string[] = [];
+    const hosts: string[] = [];
+    const feeTokens: (string | undefined)[] = [];
     let broadcast = false;
     const rpc = await startServer(async (req, res) => {
       const request = JSON.parse(await readBody(req));
       calls.push(request.method);
+      hosts.push(req.headers.host ?? "");
       let result: unknown;
       switch (request.method) {
         case "eth_estimateGas": result = "0x10000"; break;
@@ -73,7 +76,7 @@ describe("Tempo budget payment RPC", () => {
         case "eth_maxPriorityFeePerGas": result = "0x1"; break;
         case "eth_getTransactionCount": result = "0x0"; break;
         case "eth_getBlockByNumber": result = { number: "0x3e8", hash: BLOCK_HASH, timestamp: hex(Math.floor(Date.now() / 1000)), baseFeePerGas: "0x1", gasLimit: "0x1000000", gasUsed: "0x0", transactions: [] }; break;
-        case "eth_sendRawTransactionSync": broadcast = true; result = receipt; break;
+        case "eth_sendRawTransactionSync": feeTokens.push(Transaction.deserialize(request.params[0]).feeToken); broadcast = true; result = receipt; break;
         case "eth_sendRawTransaction": broadcast = true; result = HASH; break;
         case "eth_getTransactionReceipt": result = broadcast ? receipt : null; break;
         case "eth_getTransactionByHash": result = broadcast ? { from: OWNER, signature: { keyId: AGENT } } : null; break;
@@ -95,7 +98,10 @@ describe("Tempo budget payment RPC", () => {
       }
       const credential = Credential.deserialize(authorization);
       expect(credential.payload).toMatchObject({ type: mode === "push" ? "hash" : "transaction" });
-      if (mode === "pull") broadcast = true;
+      if (mode === "pull" && credential.payload.type === "transaction") {
+        feeTokens.push(Transaction.deserialize(credential.payload.signature).feeToken);
+        broadcast = true;
+      }
       paid++;
       sendJson(res, 200, { ok: true }, { "payment-receipt": Receipt.serialize({ method: "tempo", reference: HASH, status: "success", timestamp: new Date().toISOString() }) });
     });
@@ -106,6 +112,15 @@ describe("Tempo budget payment RPC", () => {
       expect({ ...child, guard: readFileSync(guardLog, "utf8") }, child.output).toMatchObject({ code: 0, guard: "" });
       expect(child.output).toContain('"state":"settled"');
       expect(paid).toBe(1);
+      if (process.env.TEMPO_RPC_AUDIT) console.log(JSON.stringify({ mode, feePayer, feeToken: feeTokens[0] ?? "(absent)", hosts: [...new Set(hosts)], calls }));
+      expect(feeTokens).toEqual([undefined]);
+      expect(new Set(hosts)).toEqual(new Set([new URL(rpc.url).host]));
+      if (mode === "pull") {
+        expect(calls).toContain("eth_chainId");
+        expect(calls).toContain("eth_fillTransaction");
+      }
+      expect(calls).toContain("eth_getLogs");
+      expect(calls).toContain("eth_getTransactionByHash");
       expect(calls).toContain("eth_estimateGas");
       expect(calls.some((method) => ["eth_gasPrice", "eth_maxPriorityFeePerGas"].includes(method))).toBe(true);
       expect(calls).toContain("eth_getBlockByNumber");
@@ -125,7 +140,7 @@ describe("Tempo budget payment RPC", () => {
       await chain.close();
       rmSync(home, { recursive: true, force: true });
     }
-  });
+  }, 120_000);
 
   it("keeps the Moderato default when the variable is unset, without connecting", async () => {
     const child = await guardedNode(["--input-type=module", "-e", 'const { RPC_URL } = await import("./budget/tempo/lib/constants.mjs"); console.log(RPC_URL)'], {

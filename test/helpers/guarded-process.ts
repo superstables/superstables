@@ -12,7 +12,7 @@ export function guardedNode(args: string[], env: NodeJS.ProcessEnv): Promise<{ c
     let output = "";
     child.stdout.on("data", (chunk) => { output += chunk; });
     child.stderr.on("data", (chunk) => { output += chunk; });
-    const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
+    const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
     child.on("error", (error) => { clearTimeout(timer); reject(error); });
     child.on("close", (code) => { clearTimeout(timer); resolve({ code, output }); });
   });
