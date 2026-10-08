@@ -68,7 +68,7 @@ On `evm` and `solana` a stolen agent key can pay any address up to the remaining
 
 | Rail | Protocol | How a purchase pays | Fees |
 | --- | --- | --- | --- |
-| `evm` | x402 `exact`, EIP-3009 | Pull then pay: the agent pulls exactly the price from the owner (`transferFrom`), then signs a standard EIP-3009 payment for the seller's facilitator. A failed purchase returns the price | The agent pays gas for the pull (the chain's gas token; USDC on Arc): about 0.0000004 ETH on Base Sepolia, about 0.00009 ETH on Ethereum Sepolia at 1.3 gwei. The facilitator pays for settlement |
+| `evm` | x402 `exact`, EIP-3009 | Pull then pay: the agent pulls exactly the price from the owner (`transferFrom`), then signs a standard EIP-3009 payment for the seller's facilitator. A failed purchase returns the price | The agent pays gas for the pull (the chain's gas token; USDC on Arc): about 0.0000004 ETH on Base Sepolia, about 0.0000007 ETH on Robinhood Chain Testnet, about 0.00009 ETH on Ethereum Sepolia at 1.3 gwei. The facilitator (or the seller) pays for settlement |
 | `tempo` | MPP `tempo` charge | Direct: the access key signs a `transferWithMemo` from the owner's account | Paid by the seller's fee payer with the sellers tested: then only the price comes off the limit. How fees affect the limit when the seller doesn't pay them is not yet verified |
 | `solana` | x402 `exact` | Direct: the agent signs `TransferChecked` as delegate; each purchase carries a memo `rb:<op>` | Paid by the seller's facilitator; `fund-agent` covers sellers that do not |
 
@@ -80,7 +80,7 @@ Once per rail and chain. Each owner step prints an approval link that only the o
 
 | Rail | Steps | What each does |
 | --- | --- | --- |
-| `evm` | `setup`, `fund-agent`, `doctor`, `grant` | `setup`: the owner connects a wallet and signs a free message; your machine gets an agent key. `fund-agent`: a little of the chain's gas token to the agent (ETH on Base Sepolia, Arbitrum Sepolia and Ethereum Sepolia, USDC on Arc Testnet, POL on Polygon Amoy, CREDIT on SKALE Base Sepolia); no USDC. `grant --amount A`: the allowance; the USDC stays in the owner's wallet |
+| `evm` | `setup`, `fund-agent`, `doctor`, `grant` | `setup`: the owner connects a wallet and signs a free message; your machine gets an agent key. `fund-agent`: a little of the chain's gas token to the agent (ETH on Base Sepolia, Arbitrum Sepolia, Ethereum Sepolia and Robinhood Chain Testnet, USDC on Arc Testnet, POL on Polygon Amoy, CREDIT on SKALE Base Sepolia); no USDC. `grant --amount A`: the allowance; the USDC stays in the owner's wallet |
 | `tempo` | `setup`, `grant` | `setup` also tops the owner up from the Moderato faucet below 1 pathUSD. `grant --amount A [--expiry ISO] [--period S] [--sellers a,b]`. The agent needs no gas |
 | `solana` | `setup`, `fund-agent`, `doctor`, `grant` | The wallet must be on devnet first (in Phantom: Settings, Developer Settings, Testnet Mode, Solana Devnet). `fund-agent` sends SOL for fees (default 0.01). `grant` makes the agent the delegate |
 

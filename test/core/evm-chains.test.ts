@@ -1,4 +1,4 @@
-// The six EVM testnets `pay` signs on. Their facts are written twice, once here (src/core/chain.ts) and once for the
+// The seven EVM testnets `pay` signs on. Their facts are written twice, once here (src/core/chain.ts) and once for the
 // budget (budget/evm/chains.mjs), so the first test holds the two tables together field by field. The rest pin what the
 // owner's wallet signs on each chain: the token's own EIP-712 domain (Arbitrum's is "USD Coin", SKALE's "Bridged USDC
 // (SKALE Bridge)"), a seller that names any other is refused, and the chain a wallet is offered carries its own currency.
@@ -19,7 +19,7 @@ import { paymentReceipt, startFakeBaseSepolia, type FakeBaseSepolia } from "../h
 const PAY_TO = `0x${"22".repeat(20)}`;
 const budget = EVM_CHAINS as Record<string, any>;
 
-/** What the six chains must be, written out once more: the vectors a reviewer checks against the chains themselves. */
+/** What the seven chains must be, written out once more: the vectors a reviewer checks against the chains themselves. */
 const VECTORS: Record<string, { chainId: number; usdc: string; domain: { name: string; version: string }; native: { symbol: string; decimals: number } }> = {
   "base-sepolia": { chainId: 84532, usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", domain: { name: "USDC", version: "2" }, native: { symbol: "ETH", decimals: 18 } },
   "arc-testnet": { chainId: 5042002, usdc: "0x3600000000000000000000000000000000000000", domain: { name: "USDC", version: "2" }, native: { symbol: "USDC", decimals: 18 } },
