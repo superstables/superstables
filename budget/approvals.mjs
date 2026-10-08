@@ -35,7 +35,7 @@ import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFi
 import { join } from "node:path";
 import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
 import { groupAlive as groupOf, processStartFields, sameProcess } from "./procs.mjs";
-import { cancelSiteRequest, readSiteRequest, siteWord } from "./site.mjs";
+import { accountWaitingWords, cancelSiteRequest, readSiteRequest, siteWord } from "./site.mjs";
 
 /** A lock younger than this is never taken over, whatever its processes look like (startup: the record is being written). */
 export const STARTUP_GRACE_MS = 30_000;
@@ -692,7 +692,9 @@ export async function pageStateOf(record) {
     // a link with wallet steps: once linked, the request's state is its current step's
     const linked = Array.isArray(r.view?.steps) && typeof r.view.owner === "string";
     const stepAsked = linked && r.view.steps.some((s) => s?.wallet_asked === true || typeof s?.tx_hash === "string");
-    return r.ok ? { status: `hosted:${siteWord("state", r.view.state)}`, linked, walletAsked: r.view.wallet_asked === true || typeof r.view.tx_hash === "string" || stepAsked } : { status: "hosted:unreachable" };
+    // the reason an open request is still waiting, as a documented word only
+    const reasonCode = typeof r.view?.reason_code === "string" ? siteWord("code", r.view.reason_code) : null;
+    return r.ok ? { status: `hosted:${siteWord("state", r.view.state)}`, linked, walletAsked: r.view.wallet_asked === true || typeof r.view.tx_hash === "string" || stepAsked, reasonCode } : { status: "hosted:unreachable" };
   }
   return pageState(record?.url);
 }
@@ -717,7 +719,8 @@ export function pageWords(page, rail) {
     case "sent": return "a transaction id is available; the command is checking it on chain";
     case "connected": return "the owner connected and signed; the command is finishing";
     case "hosted:awaiting_owner": if (page.linked) return "the owner added this agent to their account; waiting for them to approve the next transaction in their wallet, on the same page";
-      return page.walletAsked ? "the owner's wallet was asked to send; no transaction is reported yet" : "waiting for the owner to open the approval link on superstables.com, signed in with their wallet, and pick the match code";
+      if (page.walletAsked) return "the owner's wallet was asked to send; no transaction is reported yet";
+      return accountWaitingWords(page.reasonCode) ?? "waiting for the owner to open the approval link on superstables.com, signed in with their wallet, and pick the match code";
     case "hosted:sending": return "the owner's wallet was asked to send; no transaction is reported yet";
     case "hosted:unknown": return "superstables.com cannot tell whether the wallet sent it; the command is finishing and the chain must be checked";
     case "hosted:linked": return "the owner added this agent to their account; the command is finishing";

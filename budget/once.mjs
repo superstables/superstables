@@ -28,7 +28,7 @@ import { approvalsDir, onceDir } from "./paths.mjs";
 import { claim, isApprovalId, newApprovalId, readApproval, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { CHAIN_ID as TEMPO_CHAIN_ID, TOKEN_ADDRESS as PATH_USD, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
-import { accountRefusalNext, call, isOtherSite, siteName, siteText } from "./site.mjs";
+import { accountRefusalNext, accountWaitingWords, call, isOtherSite, siteName, siteText } from "./site.mjs";
 import { readSettlement } from "./settlement.mjs";
 
 /** The chain buy-once used before listings named others; the default in words when nothing else is known. */
@@ -791,6 +791,8 @@ async function chainCheck(record, net, hash, payer, deadline) {
 
 /** What a caller waiting for the owner is told while the purchase is not final. */
 function wordsOf(view, site = "superstables.com") {
+  const waiting = accountWaitingWords(view.reason_code);
+  if (waiting) return waiting;
   const next = accountRefusalNext(view.reason_code);
   if (next) return next;
   if (view.reason_code === "owner_policy") return `the owner tried to approve and their own limits on ${site} refused it; they can change the limits and approve before the approval link expires`;
