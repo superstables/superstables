@@ -1,3 +1,4 @@
+import { durableDirectory } from './journal.mjs';
 import { randomUUID } from 'node:crypto';
 import { closeSync, fstatSync, fsyncSync, futimesSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createIdentitySource } from './lock-identity.mjs';
@@ -242,7 +243,7 @@ export function lockFile(path, options = {}) {
 
 /** Rail commands hold the journal lock before reading, through their last write. */
 export function lockRecord(dir, op, options = {}) {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  durableDirectory(dir);
   return lockFile(join(dir, `${op}.json.lock`), options);
 }
 export function lockNext(lock, op, rail, chain) {
