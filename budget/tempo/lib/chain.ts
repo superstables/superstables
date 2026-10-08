@@ -52,7 +52,7 @@ export type ChainReceipt = {
 }
 
 /** Tempo has instant BFT finality. A receipt still needs canonical committed inclusion. */
-export async function getReceipt(hash: string, minimumHead?: bigint): Promise<ChainReceipt | null> {
+export async function getReceipt(hash: string): Promise<ChainReceipt | null> {
   const r = await rpcRead('eth_getTransactionReceipt', [hash])
   if (!r) return null
   const quantity = (v: unknown): v is string => typeof v === 'string' && /^0x[0-9a-fA-F]+$/.test(v)
@@ -60,7 +60,6 @@ export async function getReceipt(hash: string, minimumHead?: bigint): Promise<Ch
   if (!blockHash(r.transactionHash) || r.transactionHash.toLowerCase() !== hash.toLowerCase() || !quantity(r.blockNumber) || !blockHash(r.blockHash) || !Array.isArray(r.logs) || r.logs.some((l: { removed?: boolean }) => l?.removed) || !['0x0', '0x1'].includes(r.status)) throw new Error('transaction inclusion unreadable')
   const head = await rpcRead('eth_getBlockByNumber', [finalityFor('tempo', 'moderato') === 'instant' ? 'latest' : 'finalized', false])
   if (!quantity(head?.number) || BigInt(r.blockNumber) > BigInt(head.number)) throw new Error('transaction is not in a committed block')
-  if (minimumHead !== undefined && BigInt(head.number) < minimumHead) throw new Error('transaction inclusion unreadable')
   const block = await rpcRead('eth_getBlockByNumber', [r.blockNumber, false])
   if (!quantity(block?.number) || BigInt(block.number) !== BigInt(r.blockNumber) || !blockHash(block?.hash) || block.hash.toLowerCase() !== r.blockHash.toLowerCase()) throw new Error('transaction canonical inclusion unreadable')
   return {
@@ -192,23 +191,18 @@ export function mppMemo(challengeId: string, realm: string): Hex {
   return ('0x' + Buffer.from(buf).toString('hex')) as Hex
 }
 
-/** Indexed memo search through one pinned committed head. Every range must be readable. */
-export async function findByMemo(owner: Address, recipient: Address, memo: Hex, fromBlock: bigint, head: bigint): Promise<Hex[]> {
-  if (fromBlock > head || (await chainHead()).number < head) throw new Error('transaction inclusion unreadable')
+/** Transactions with a pathUSD TransferWithMemo owner -> recipient carrying `memo`, from `fromBlock` to head (indexed, cheap). */
+export async function findByMemo(owner: Address, recipient: Address, memo: Hex, fromBlock: bigint): Promise<Hex[]> {
+  const head = (await chainHead()).number
   const hashes: Hex[] = []
   const RANGE = 100_000n
   for (let from = fromBlock; from <= head; from += RANGE) {
     const to = from + RANGE - 1n > head ? head : from + RANGE - 1n
-    const logs = await rpcRead('eth_getLogs', [
+    const logs = (await rpcRead('eth_getLogs', [
       { address: TOKEN_ADDRESS, fromBlock: '0x' + from.toString(16), toBlock: '0x' + to.toString(16), topics: [TRANSFER_WITH_MEMO_TOPIC, topicOf(owner), topicOf(recipient), memo] },
-    ])
-    if (!Array.isArray(logs)) throw new Error('transaction inclusion unreadable')
-    for (const l of logs) {
-      if (!l || typeof l.transactionHash !== 'string' || !/^0x[0-9a-f]{64}$/i.test(l.transactionHash) || !/^0x[0-9a-f]+$/i.test(l.blockNumber) || BigInt(l.blockNumber) < from || BigInt(l.blockNumber) > to || l.removed) throw new Error('transaction inclusion unreadable')
-      if (!hashes.includes(l.transactionHash)) hashes.push(l.transactionHash)
-    }
+    ])) as { transactionHash: Hex }[]
+    for (const l of logs) if (!hashes.includes(l.transactionHash)) hashes.push(l.transactionHash)
   }
-  if ((await chainHead()).number < head) throw new Error('transaction inclusion unreadable')
   return hashes
 }
 

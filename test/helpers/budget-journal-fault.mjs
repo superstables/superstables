@@ -4,7 +4,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 const root = process.env.BUDGET_DURABILITY_ROOT;
-const [rail, checkpoint, stopAt = 'returned'] = process.argv.slice(2);
+const [rail, checkpoint, stopAt = 'returned', failAt] = process.argv.slice(2);
 const home = process.env.SUPERSTABLES_HOME;
 const op = 'durability-test';
 const dir = join(home, 'budget/ops', rail === 'evm' ? 'evm-base-sepolia' : rail === 'tempo' ? 'tempo-moderato' : 'solana-devnet');
@@ -38,8 +38,11 @@ fs.writeFileSync = function (p, ...args) {
   return result;
 };
 fs.fsyncSync = function (fd) {
-  originals.fsyncSync(fd);
   const name = descriptors.get(fd);
+  if ((failAt === 'file-fsync' && name && journalFile(name)) || (failAt === 'directory-fsync' && name === dir && renamed)) {
+    throw Object.assign(new Error('injected fsync failure'), { code: 'EIO' });
+  }
+  originals.fsyncSync(fd);
   if (name && journalFile(name)) { synced.add(name); event('file-fsync'); }
   else if (name === dir && renamed) {
     if (synced.has(path)) durable = originals.readFileSync(path, 'utf8');
@@ -65,10 +68,15 @@ const module = await import(pathToFileURL(join(root, rail === 'evm' ? 'budget/ev
 const record = { ...previous, checkpoint, state: checkpoint === 'quote' ? 'quoted' : checkpoint === 'intent' ? 'intent' : 'submitted',
   ...(checkpoint === 'pull-hash' ? { pullTx: `0x${'ab'.repeat(32)}`, pullNonce: 7 } : {}),
   ...(checkpoint === 'authorization' ? { signed: true, auth: { nonce: `0x${'cd'.repeat(32)}`, validBefore: 1500 } } : {}),
-  ...(checkpoint === 'push-intent' ? { memo: `0x${'ef'.repeat(32)}`, startBlock: '10', validBefore: 1500 } : {}),
+  ...(checkpoint === 'push-intent' ? { memo: `0x${'ef'.repeat(32)}`, startBlock: '10' } : {}),
+  ...(checkpoint === 'cancel-hash' ? { cancelTx: `0x${'de'.repeat(32)}`, cancelNonce: 8 } : {}),
+  ...(checkpoint === 'return-hash' ? { returnTx: `0x${'fa'.repeat(32)}`, returnNonce: 9 } : {}),
+  ...(checkpoint === 'pull-submitted' ? { signedHash: `0x${'12'.repeat(32)}`, validBefore: 1500 } : {}),
+  ...(checkpoint === 'push-submitted' ? { expectedTx: `0x${'34'.repeat(32)}` } : {}),
   ...(checkpoint === 'signature' ? { agentSig: 'test-signature', lastValidBlockHeight: 1500 } : {}),
 };
 let mayPay = false;
+let error;
 try {
   if (rail === 'evm') module.writeJournal(record);
   else if (rail === 'tempo') module.writeOp(record);
@@ -76,8 +84,8 @@ try {
   event('returned');
   // The caller may sign or broadcast only after the production writer returned.
   mayPay = true;
-} catch (err) { if (!killed) throw err; }
+} catch (err) { if (!killed && !failAt) throw err; error = err.code ?? err.message; }
 // A power cut keeps only the file data and rename committed by directory fsync.
 for (const p of files) if (p !== path) { try { originals.unlinkSync(p); } catch {} }
 originals.writeFileSync(path, durable);
-console.log(JSON.stringify({ rail, checkpoint, stopAt, killed, mayPay, events, recovered: JSON.parse(originals.readFileSync(path, 'utf8')) }));
+console.log(JSON.stringify({ rail, checkpoint, stopAt, killed, mayPay, error, events, recovered: JSON.parse(originals.readFileSync(path, 'utf8')) }));
