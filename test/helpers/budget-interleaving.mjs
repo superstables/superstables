@@ -76,7 +76,8 @@ if (action === 'reconcile') {
     }
     process.stdout.write(JSON.stringify({ ok: lock.ok }));
   } else {
-    fs.writeFileSync(marker + '.result', JSON.stringify({ ok: lock.ok }));
+    fs.writeFileSync(marker + '.result.tmp', JSON.stringify({ ok: lock.ok }));
+    fs.renameSync(marker + '.result.tmp', marker + '.result');
     setInterval(() => {}, 1000);
   }
 }

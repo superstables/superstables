@@ -1,3 +1,4 @@
+import { stopHolder } from '../helpers/budget-holder-cleanup.mjs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
@@ -15,16 +16,17 @@ function box() {
   const hostProc = join(home, 'host-proc'); mkdirSync(hostProc);
   return { home, dir, hostProc, path: join(dir, 'paid-op.json.lock') };
 }
-async function hold(b: ReturnType<typeof box>) {
-  const p = spawn('bwrap', ['--unshare-pid', '--die-with-parent', '--dev-bind', '/', '/', '--ro-bind', '/proc', b.hostProc, '--proc', '/proc', process.execPath, helper], {
+async function hold(b: ReturnType<typeof box>, ancestorProc = false) {
+  const p = spawn('bwrap', ['--unshare-pid', '--die-with-parent', '--new-session', '--dev-bind', '/', '/', '--ro-bind', '/proc', b.hostProc, ...(ancestorProc ? [] : ['--proc', '/proc']), process.execPath, helper], {
     env: { ...process.env, PROBE_ROOT: root, PROBE_HOME: b.home, PROBE_ACTION: 'hold', HOST_PROC: b.hostProc },
   });
+  const tracked = { p, pid: p.pid ?? 0 }; children.push(tracked);
   let error = ''; p.stderr.on('data', c => { error += c; });
   const ready = await new Promise<{ ok: boolean; pid: number }>((resolveReady, reject) => {
     p.stdout.once('data', c => resolveReady(JSON.parse(String(c)))); p.once('error', reject);
     p.once('exit', code => reject(new Error(`bwrap exited ${code}: ${error}`)));
   });
-  children.push({ p, pid: ready.pid }); expect(ready.ok).toBe(true);
+  tracked.pid = ready.pid; expect(ready.ok).toBe(true);
   return { p, pid: ready.pid };
 }
 function tryLock(b: ReturnType<typeof box>, skew = 0) {
@@ -40,12 +42,21 @@ async function waitFor(fn: () => boolean) {
 }
 afterEach(async () => {
   for (const { p, pid } of children.splice(0)) {
-    try { process.kill(pid, 'SIGCONT'); process.kill(pid, 'SIGKILL'); } catch {}
-    if (p.exitCode === null) { const done = new Promise<void>(resolveDone => p.once('close', () => resolveDone())); p.kill('SIGKILL'); await done; }
+    await stopHolder(p, pid);
   }
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 describe.runIf(process.platform === 'linux')('real PID namespace ownership', () => {
+  it('records its host PID with an ancestor proc mount and stays recoverable on the host', async () => {
+    const b = box(), holder = await hold(b, true);
+    const record = JSON.parse(readFileSync(b.path, 'utf8'));
+    expect(record.hostPid).toBe(holder.pid);
+    expect(record.pidStart).toBe((await import('../../budget/procs.mjs')).processStart(holder.pid));
+    expect(tryLock(b)).toBe(false); expect(unlock(b).status).toBe(5);
+    process.kill(holder.pid, 'SIGKILL');
+    await waitFor(() => { try { return readFileSync(`/proc/${holder.pid}/stat`, 'utf8').includes(') Z '); } catch { return true; } });
+    expect(unlock(b).status).toBe(0); expect(existsSync(b.path)).toBe(false);
+  });
   it('never takes a running foreign holder after a forward or backward clock jump', async () => {
     const b = box(); await hold(b);
     for (const skew of [0, 330000, 86400000, -86400000]) expect(tryLock(b, skew)).toBe(false);
@@ -68,18 +79,22 @@ describe.runIf(process.platform === 'linux')('real PID namespace ownership', () 
     await waitFor(() => !existsSync(b.path));
     expect(tryLock(b)).toBe(true);
   });
-  it('requires confirmed owner override for a foreign holder and preserves its successor on release', async () => {
+  it('resolves and protects a live foreign holder despite a local PID collision', async () => {
     const b = box(); const old = await hold(b);
     writeFileSync(join(b.dir, 'paid-op.json'), '{"state":"settled"}');
-    const r = unlock(b); expect(r.status, r.stderr).toBe(0); expect(r.stderr).toContain('overriding unverifiable lock');
-    const successor = locks.lockFile(b.path); expect(successor.ok).toBe(true);
     const text = readFileSync(b.path, 'utf8');
-    old.p.stdin?.write('release\n'); await sleep(200);
+    const r = unlock(b); expect(r.status, r.stderr).toBe(5); expect(r.stdout).toContain('op_in_progress');
+    expect(r.stdout).toContain('held by process'); expect(r.stderr).not.toContain('overriding unverifiable lock');
     expect(readFileSync(b.path, 'utf8')).toBe(text); expect(tryLock(b)).toBe(false);
+    old.p.stdin?.write('release\n'); await sleep(200);
+    expect(existsSync(b.path)).toBe(false);
+    const successor = locks.lockFile(b.path); expect(successor.ok).toBe(true);
     if (successor.ok) successor.release();
   });
-  it('does not infer foreign death after the namespace holder exits', async () => {
+  it('recovers a foreign holder after its namespace exits', async () => {
     const b = box(); const holder = await hold(b); process.kill(holder.pid, 'SIGKILL'); await sleep(100);
-    expect(tryLock(b, 86400000)).toBe(false); expect(unlock(b).status).toBe(0); expect(existsSync(b.path)).toBe(false);
+    const text = readFileSync(b.path, 'utf8');
+    expect(unlock(b).status).toBe(0); expect(existsSync(b.path)).toBe(false);
+    writeFileSync(b.path, text); expect(tryLock(b, 86400000)).toBe(true);
   });
 });

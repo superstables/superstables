@@ -492,9 +492,18 @@ Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 
 ## superstables budget unlock
 
 ```text
-superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm
+superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --attempt ID | --buy-once) --confirm [--unverified]
 
-Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects verifiably live local holders on Linux and macOS. Requires --confirm and the op ID typed in a terminal. Overrides unverifiable holders regardless of timestamps; a holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.
+Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.
+
+--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.
+
+--cap: Recover the core payment lock. --approvals: Recover approval locks on this rail and chain. --approval ID: Also recover the record lock for this approval. --attempt ID: Release an attempt runner for read-only reconciliation. Stop all payment work across processes, containers and hosts first. Payment-lock recovery uses the exact confirmation payment-lock, or payment-lock unverified with --unverified. Preserves payment evidence. Run status for the original attempt or wait for the original approval next.
+
+A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.
+
+--buy-once: Recover the start lock for a single purchase. Preserves the purchase record and payment evidence.
+  superstables budget unlock --buy-once --confirm [--unverified]
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
@@ -503,7 +512,7 @@ Moves money: no. It never signs or sends.
 Run by: the owner or operator, after stopping the processes.
 Example:
   $ superstables budget unlock --rail solana --op order-001 --confirm
-Prints: one RESULT with op, state, reason and next. Without --confirm, a terminal or the matching typed op ID: exit 3. Busy: exit 5. Cleared or no lock: exit 0.
+Prints: one RESULT with state, reason and next, plus the operation or attempt ID when selected. Without --confirm, a terminal or matching typed confirmation: exit 3. Missing operation, attempt or approval: exit 3. Busy: exit 5. Cleared or no lock: exit 0.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 5 unknown (the full table: superstables budget --help)
 ```
