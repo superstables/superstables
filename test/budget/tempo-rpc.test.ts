@@ -2,10 +2,12 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Challenge, Credential, Receipt } from "mppx";
-import { encodeEventTopics, keccak256, stringToHex, type Hex } from "viem";
+import { encodeEventTopics, isHex, keccak256, stringToHex, type Hex } from "viem";
+import { Methods } from "mppx/tempo";
 import { privateKeyToAccount } from "viem/accounts";
 import { Abis, Transaction } from "viem/tempo";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { startFakeTempo, PATH_USD } from "../helpers/fake-chains.js";
 import { guardedNode } from "../helpers/guarded-process.js";
 import { readBody, sendJson, startServer } from "../helpers/servers.js";
@@ -17,6 +19,12 @@ const AGENT = privateKeyToAccount(KEY).address;
 const HASH = `0x${"cd".repeat(32)}`;
 const BLOCK_HASH = `0x${"ab".repeat(32)}`;
 const hex = (n: bigint | number) => `0x${BigInt(n).toString(16)}`;
+
+const signedTempoTransaction = z.templateLiteral([z.enum(["0x76", "0x78"]), z.string()]).refine((value) => isHex(value));
+
+function signedFeeToken(signature: string): string | undefined {
+  return Transaction.deserialize(signedTempoTransaction.parse(signature)).feeToken?.toString();
+}
 
 // Real mppx and viem sign an ephemeral access key. Only the seller and the chain are stand-ins.
 describe("Tempo budget payment RPC", () => {
@@ -76,7 +84,7 @@ describe("Tempo budget payment RPC", () => {
         case "eth_maxPriorityFeePerGas": result = "0x1"; break;
         case "eth_getTransactionCount": result = "0x0"; break;
         case "eth_getBlockByNumber": result = { number: "0x3e8", hash: BLOCK_HASH, timestamp: hex(Math.floor(Date.now() / 1000)), baseFeePerGas: "0x1", gasLimit: "0x1000000", gasUsed: "0x0", transactions: [] }; break;
-        case "eth_sendRawTransactionSync": feeTokens.push(Transaction.deserialize(request.params[0]).feeToken); broadcast = true; result = receipt; break;
+        case "eth_sendRawTransactionSync": feeTokens.push(signedFeeToken(request.params[0])); broadcast = true; result = receipt; break;
         case "eth_sendRawTransaction": broadcast = true; result = HASH; break;
         case "eth_getTransactionReceipt": result = broadcast ? receipt : null; break;
         case "eth_getTransactionByHash": result = broadcast ? { from: OWNER, signature: { keyId: AGENT } } : null; break;
@@ -96,10 +104,10 @@ describe("Tempo budget payment RPC", () => {
         sendJson(res, 402, {}, { "www-authenticate": Challenge.serialize(challenge) });
         return;
       }
-      const credential = Credential.deserialize(authorization);
-      expect(credential.payload).toMatchObject({ type: mode === "push" ? "hash" : "transaction" });
-      if (mode === "pull" && credential.payload.type === "transaction") {
-        feeTokens.push(Transaction.deserialize(credential.payload.signature).feeToken);
+      const payload = Methods.charge.schema.credential.payload.parse(Credential.deserialize(authorization).payload);
+      expect(payload).toMatchObject({ type: mode === "push" ? "hash" : "transaction" });
+      if (mode === "pull" && payload.type === "transaction") {
+        feeTokens.push(signedFeeToken(payload.signature));
         broadcast = true;
       }
       paid++;
