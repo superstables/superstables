@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { encodePaymentRequiredHeader } from "@x402/core/http";
-import { usdcRequirement } from "../../src/core/chain.js";
+import { ROBINHOOD_TESTNET, usdcRequirement } from "../../src/core/chain.js";
 import { demoService } from "../../src/core/discovery.js";
 import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
 import { Records } from "../../src/core/records.js";
@@ -171,6 +171,18 @@ describe("quote", () => {
     const q = await quote({ url: seller.url }, { records: records(), policy: policy({ perCall: undefined }) });
     expect(q.terms.amountDecimal).toBe(0.02);
     expect(q.terms.network).toBe("eip155:84532");
+  });
+
+  it("takes the offer on the chain asked for, by key or CAIP-2 id, and refuses when that chain is not offered", async () => {
+    const seller = await offering([usdcRequirement(0.02, `0x${"33".repeat(20)}`), usdcRequirement(0.01, `0x${"44".repeat(20)}`, ROBINHOOD_TESTNET)]);
+    for (const chain of ["robinhood-testnet", "eip155:46630"]) {
+      const q = await quote({ url: seller.url }, { records: records(), policy: policy(), chain });
+      expect(q.terms).toMatchObject({ network: "eip155:46630", asset: "USDG", amountDecimal: 0.01, recipient: `0x${"44".repeat(20)}` });
+    }
+    await expect(quote({ url: seller.url }, { records: records(), policy: policy(), chain: "arbitrum-sepolia" })).rejects.toThrow(
+      /offers no payment this client can make.*not on Arbitrum Sepolia \(testnet\), the chain asked for/s,
+    );
+    await expect(quote({ url: seller.url }, { records: records(), policy: policy(), chain: "robinhood" })).rejects.toThrow("--chain robinhood is not a chain this client pays on");
   });
 
   it("explains every offer it had to refuse when none can be paid", async () => {

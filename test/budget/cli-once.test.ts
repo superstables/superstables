@@ -179,7 +179,7 @@ describe("find --once", () => {
     expect(none.stdout).toMatch(/No services can be bought once on devnet on /);
     const bad = await budget(["find", "--once", "--chain", "solana-devnet", "--site", site.url]);
     expect(bad.code).toBe(2);
-    expect(bad.result.reason).toMatch(/must be one of: .*ethereum-sepolia \(evm\); moderato \(tempo\); devnet \(solana\)$/);
+    expect(bad.result.reason).toMatch(/must be one of: .*ethereum-sepolia, robinhood-testnet \(evm\); moderato \(tempo\); devnet \(solana\)$/);
   }, 60_000);
 
   it("says not said when the listing has no simulated flag", async () => {
