@@ -36,9 +36,9 @@ interface NetworkCommon {
   explorer: string;
   /** Added after a transaction or address in an explorer link, e.g. "?cluster=devnet". */
   explorerQuery?: string;
-  /** The RPC offered to a browser wallet. */
+  /** The RPC an EVM chain's balances are read through. Browser wallets are offered `defaultRpc` instead. */
   rpc: string;
-  /** The public RPC a settlement is read through when `rpcEnv` names no other (see chainRpc in src/core/rpc.ts). */
+  /** The public RPC offered to a browser wallet, and the one a settlement is read through when `rpcEnv` names no other (see chainRpc in src/core/rpc.ts). */
   defaultRpc: string;
   /** The environment variable that replaces this chain's RPC for chain reads, when it has one. */
   rpcEnv?: string;
