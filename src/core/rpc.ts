@@ -4,6 +4,7 @@
 // machine, without credentials:
 //
 //   SUPERSTABLES_RPC_URL      Base Sepolia
+//   B4_RPC                    EVM chains, takes precedence over SUPERSTABLES_RPC_URL
 //   SUPERSTABLES_TEMPO_RPC    Tempo Moderato (the budget's tempo rail reads it too)
 //   SUPERSTABLES_SOLANA_RPC   Solana devnet (the budget's solana rail reads it too)
 
@@ -13,9 +14,11 @@ import { readCapped } from "./http.js";
 const CHECK_TIMEOUT_MS = 10_000;
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
+type RpcNetwork = Pick<NetworkInfo, "defaultRpc" | "rpcEnv"> & Partial<Pick<NetworkInfo, "rail">>;
+
 /** The RPC a chain is read through, or the reason the configured one is refused. */
-export function chainRpc(network: Pick<NetworkInfo, "defaultRpc" | "rpcEnv">, env: NodeJS.ProcessEnv = process.env): { url: string } | { error: string } {
-  const name = network.rpcEnv;
+export function chainRpc(network: RpcNetwork, env: NodeJS.ProcessEnv = process.env): { url: string } | { error: string } {
+  const name = network.rail === "evm" && env.B4_RPC?.trim() ? "B4_RPC" : network.rpcEnv;
   const value = name ? env[name]?.trim() : undefined;
   if (!name || !value) return { url: network.defaultRpc };
   let url: URL;
@@ -27,6 +30,13 @@ export function chainRpc(network: Pick<NetworkInfo, "defaultRpc" | "rpcEnv">, en
   if (url.username || url.password) return { error: `${name} carries a user name or password` };
   if (url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK.has(url.hostname))) return { url: value };
   return { error: `${name} must use HTTPS, or HTTP on this machine` };
+}
+
+/** The validated RPC for a balance read or the chain details offered to a wallet. */
+export function requireChainRpc(network: RpcNetwork): string {
+  const rpc = chainRpc(network);
+  if ("error" in rpc) throw new Error(rpc.error);
+  return rpc.url;
 }
 
 export interface RpcOptions {
