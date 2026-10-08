@@ -81,6 +81,17 @@ describe("buy-once: account refusals and read failures", () => {
     expect(site.purchases[0]).toMatchObject({ state: "awaiting_approval", final: false });
   });
 
+  it("an open purchase a Solana account tried to approve says so, with the recovery step, and stays open", async () => {
+    const first = await once();
+    Object.assign(site.purchases[0], { reason_code: "ethereum_account_required", reason: "untrusted sspt_secret123456" });
+    const r = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+    expect(r.code).toBe(0);
+    expect(r.result).toMatchObject({ state: "waiting_owner", final: false });
+    expect(r.result.reason).toBe("an owner signed in with a Solana account tried to approve, and this chain needs an Ethereum account; the request is still open: ask the owner to sign out, then sign in with an Ethereum wallet and retry");
+    expect(r.stdout + r.stderr).not.toMatch(/untrusted|sspt_/);
+    expect(recordOf(first.result.id).final).toBeUndefined();
+  });
+
   for (const state of ["denied", "failed"]) {
     it.each(ACCOUNT_REFUSALS)(`${state}: confirmed not-paid with reason %i %s is a refusal`, async (_status, code, guidance) => {
       const first = await once();

@@ -191,7 +191,7 @@ export async function startFakeSite(): Promise<FakeSite> {
     if (r.steps) {
       const { state, final } = bundleState(r);
       const hashes = r.steps.map((s) => s.tx_hash).filter(Boolean);
-      return { id: r.id, kind: r.kind, state, final, owner: r.owner, ...(await proofOf(r)), tx_hash: null, reason: r.reason ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) } };
+      return { id: r.id, kind: r.kind, state, final, owner: r.owner, ...(await proofOf(r)), tx_hash: null, reason: r.reason ?? null, reason_code: r.reason_code ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) } };
     }
     return { id: r.id, kind: r.kind, state: r.state, final: r.final ?? FINAL.has(r.state), owner: r.owner, ...(r.state === "linked" ? await proofOf(r) : {}), tx_hash: r.tx_hash, reason: r.reason ?? null, reason_code: r.reason_code ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" } };
   };

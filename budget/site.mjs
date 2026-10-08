@@ -129,6 +129,12 @@ const ACCOUNT_REFUSALS = new Map([
 ]);
 /** Recovery for an account refusal, or null for other errors. */
 export const accountRefusalNext = (code) => ACCOUNT_REFUSALS.get(code) ?? null;
+/** What an open request's reason code says while it still waits for the owner: the site refused an account, not the request. */
+const ACCOUNT_WAITING = new Map([
+  ["ethereum_account_required", "an owner signed in with a Solana account tried to approve, and this chain needs an Ethereum account; the request is still open"],
+]);
+/** The words for an open request the site refused an account on, with the recovery step, or null. */
+export const accountWaitingWords = (code) => (ACCOUNT_WAITING.has(code) ? `${ACCOUNT_WAITING.get(code)}: ${ACCOUNT_REFUSALS.get(code)}` : null);
 /** Anything shaped like an access token (ssbt_, ssba_, sspt_, sspa_) taken out of a text this client prints or stores. */
 export const scrub = (text) => String(text ?? "").replace(/ss[bp][ta]_[A-Za-z0-9_-]*/g, "[token]");
 /**
