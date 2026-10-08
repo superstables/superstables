@@ -6,6 +6,7 @@ import { encodeFunctionData, parseEventLogs, parseUnits, type Address, type Hex 
 import { privateKeyToAccount } from "viem/accounts";
 import { DEFAULT_SITE, mismatchPage, mismatchReason } from "../site.mjs";
 import { EVM_CHAINS } from "./chains.mjs";
+import { CHAINS } from "./chains.ts";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { ownerEvidence, type EvidenceReads } from "./delegation.ts";
@@ -15,7 +16,7 @@ export { closeOwnerPage };
 export const OWNER_CHAIN: OwnerChain = {
   chainId: CFG.chainId,
   chainName: CFG.label,
-  rpcUrl: CFG.rpc,
+  rpcUrl: CHAINS[CFG.key].rpc,
   explorer: CFG.explorer,
   nativeCurrency: { name: GAS.symbol, symbol: GAS.symbol, decimals: GAS.decimals },
   testnet: true,
