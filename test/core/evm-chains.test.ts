@@ -161,7 +161,7 @@ describe("what the owner's wallet signs on each EVM chain", () => {
       expect(facts, network.key).toEqual({
         chainIdHex: `0x${VECTORS[network.key].chainId.toString(16)}`,
         chainName: budget[network.key].label,
-        rpcUrl: network.rpc,
+        rpcUrl: budget[network.key].rpc,
         explorer: budget[network.key].explorer,
         nativeCurrency: { name: network.wallet.nativeCurrency.name, ...VECTORS[network.key].native },
       });
