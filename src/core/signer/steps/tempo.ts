@@ -19,6 +19,7 @@
 import type { Hex } from "viem";
 import { getAddress } from "viem";
 import { TEMPO_MODERATO, isAddress } from "../../chain.js";
+import { requireChainRpc } from "../../rpc.js";
 import type { MppChallenge } from "../../mpp.js";
 import { TEMPO_SEND_MARGIN_MS, mppMemo, transferCall } from "../../rails/tempo.js";
 import type { StepAnswer, StepContext, StepRecord, WalletStep } from "./types.js";
@@ -183,7 +184,7 @@ export const tempoStep: WalletStep = {
     return {
       chainIdHex: `0x${TEMPO_MODERATO.chainId.toString(16)}`,
       chainName: TEMPO_MODERATO.wallet.chainName,
-      rpcUrl: TEMPO_MODERATO.rpc,
+      rpcUrl: requireChainRpc(TEMPO_MODERATO),
       explorer: TEMPO_MODERATO.explorer,
       nativeCurrency: TEMPO_MODERATO.wallet.nativeCurrency,
     };

@@ -49,6 +49,7 @@ import {
   fromBaseUnits,
   isChainRefusal,
   loadAgentEnv,
+  makeClient,
   oneLine,
   toBaseUnits,
 } from './lib/common.ts'
@@ -154,7 +155,7 @@ async function main() {
 
   // tempo.charge only: a seller that offers a session (a deposit of its choosing) is never selected.
   const mppx = Mppx.create({
-    methods: [tempo.charge({ account: agent, expectedChainId: CHAIN_ID, ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
+    methods: [tempo.charge({ account: agent, getClient: () => makeClient(), expectedChainId: CHAIN_ID, ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
     polyfill: false,
   })
   // no redirects on either request to the seller (lib/seller.ts says why)

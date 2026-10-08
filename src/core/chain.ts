@@ -8,6 +8,7 @@
 
 import { finalityFor, SOLANA_DEVNET_GENESIS } from "./finality-policy.js";
 import { createPublicClient, http } from "viem";
+import { requireChainRpc } from "./rpc.js";
 import type { PaymentRequirements } from "@x402/core/types";
 
 export type Rail = "evm" | "tempo" | "solana";
@@ -35,7 +36,7 @@ interface NetworkCommon {
   explorer: string;
   /** Added after a transaction or address in an explorer link, e.g. "?cluster=devnet". */
   explorerQuery?: string;
-  /** The RPC a browser wallet is offered and balances are read through. */
+  /** The default RPC offered to a browser wallet, before chainRpc applies the environment override. */
   rpc: string;
   /** The public RPC a settlement is read through when `rpcEnv` names no other (see chainRpc in src/core/rpc.ts). */
   defaultRpc: string;
@@ -120,7 +121,7 @@ export const BASE_SEPOLIA: EvmNetwork = evm({
   chainId: 84532,
   label: "Base Sepolia (testnet)",
   v1Name: "base-sepolia",
-  rpc: process.env.SUPERSTABLES_RPC_URL ?? "https://sepolia.base.org",
+  rpc: "https://sepolia.base.org",
   defaultRpc: "https://sepolia.base.org",
   rpcEnv: "SUPERSTABLES_RPC_URL",
   explorer: "https://sepolia.basescan.org",
@@ -368,7 +369,7 @@ const ERC20_BALANCE_OF = [
  */
 export async function usdcBalance(address: string, network: NetworkInfo = DEFAULT_NETWORK): Promise<number> {
   if (network.rail === "solana") throw new Error("balances on Solana are not read by this function");
-  const client = createPublicClient({ transport: http(network.rpc) });
+  const client = createPublicClient({ transport: http(requireChainRpc(network)) });
   const raw = await client.readContract({
     address: network.token.address as `0x${string}`,
     abi: ERC20_BALANCE_OF,

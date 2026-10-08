@@ -7,6 +7,7 @@ import type { PaymentRequirements } from "@x402/core/types";
 import { authorizationTypes } from "@x402/evm";
 import { getAddress, toHex, verifyTypedData } from "viem";
 import { isAddress, shortLabel } from "../../chain.js";
+import { requireChainRpc } from "../../rpc.js";
 import type { StepAnswer, StepRecord, WalletStep } from "./types.js";
 
 /** The EIP-712 payload, in the JSON-safe shape a browser wallet's signTypedData_v4 expects. */
@@ -134,7 +135,7 @@ export const eip3009Step: WalletStep = {
     return {
       chainIdHex: `0x${network.chainId.toString(16)}`,
       chainName: network.wallet.chainName || shortLabel(network),
-      rpcUrl: network.rpc,
+      rpcUrl: requireChainRpc(network),
       explorer: network.explorer,
       nativeCurrency: network.wallet.nativeCurrency,
     };

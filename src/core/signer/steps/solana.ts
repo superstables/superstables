@@ -12,6 +12,7 @@ import { SOLANA_DEVNET, shortLabel } from "../../chain.js";
 import { NotDevnetError, devnetBlockHeight, devnetBlockhash } from "../../rails/solana.js";
 import { buildPayment, checkSigned, type BuiltPayment } from "../../rails/solana-transaction.js";
 import { isSolanaAddress } from "../owner-approval-server.js";
+import { requireChainRpc } from "../../rpc.js";
 import type { StepAnswer, StepRecord, WalletStep } from "./types.js";
 
 /** A signed transaction whose blockhash has fewer blocks left than this is not passed on: it might not land in time. */
@@ -326,7 +327,7 @@ export const solanaStep: WalletStep = {
     return {
       chainIdHex: "",
       chainName: network.wallet.chainName || shortLabel(network),
-      rpcUrl: network.rpc,
+      rpcUrl: requireChainRpc(network),
       explorer: network.explorer,
       nativeCurrency: network.wallet.nativeCurrency,
       walletChain: network.wallet.walletChain ?? SOLANA_DEVNET.wallet.walletChain,
