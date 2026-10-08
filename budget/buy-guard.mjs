@@ -1,5 +1,5 @@
 // The dispatcher holds an operation lock through its rail child's exit.
-import { mkdirSync } from 'node:fs';
+import { durableDirectory } from './journal.mjs';
 import { join } from 'node:path';
 import { lockFile } from './op-lock.mjs';
 export { lockRecord } from './op-lock.mjs';
@@ -7,7 +7,7 @@ export { lockRecord } from './op-lock.mjs';
 export const opLockFile = (dir, op) => join(dir, `${op}.buy.lock`);
 
 export function lockOp(dir, op, options = {}) {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  durableDirectory(dir);
   return lockFile(opLockFile(dir, op), options);
 }
 
