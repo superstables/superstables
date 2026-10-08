@@ -97,18 +97,18 @@ export const EVM_CHAINS = {
   },
   // Robinhood Chain's testnet, an Arbitrum Orbit chain on Ethereum Sepolia with ETH for gas. The budget token is Paxos's test
   // USDG (Global Dollar, version 1, EIP-3009), not USDC: test USDG comes from faucet.paxos.com (network Robinhood Chain).
-  // USDG has no version() (it reverts); preflight checks the version through DOMAIN_SEPARATOR(). Like Arbitrum Sepolia, gasUsed
-  // includes the L1 part. Gas costs about 0.01 gwei. Blocks come about every 0.13 s; the public RPC answered eth_getLogs over
-  // 2,000,000 blocks on 7 Oct 2026.
-  // Gas, 7 Oct 2026 (eth_estimateGas, L1 part included): approve 58,777, approve 0 38,406, transfer 66,196,
-  // transferWithAuthorization 105,467 (a facilitator's used 102,939: 0x7fbc5546), cancelAuthorization 68,968. The limits are
-  // Arbitrum Sepolia's (FiatToken's plus 30,000 for the L1 part), with pull and cancel raised to cover the estimates.
+  // USDG has no version() (it reverts); preflight checks the version through DOMAIN_SEPARATOR(). Gas costs 0.01 gwei, and on
+  // 8 Oct 2026 receipts showed no L1 part (gasUsedForL1 0). Blocks come about every 0.13 s; the public RPC answered eth_getLogs
+  // over 2,000,000 blocks on 7 Oct 2026.
+  // Gas from receipts, 8 Oct 2026: pull 71,744 (0x51828dff), approve 57,964 (0x1be0ab09), revoke 36,040 (0x963196ca);
+  // transferWithAuthorization 80,991 to 102,879 (0x551439e0, 0x61203353). Not sent here yet, from eth_estimateGas:
+  // cancelAuthorization 68,968, a transfer to a new holder 66,196. The limits are those plus about 20%.
   "robinhood-testnet": {
     label: "Robinhood Chain Testnet", chainId: 46630, viem: "robinhoodTestnet",
     rpc: "https://rpc.testnet.chain.robinhood.com", explorer: "https://explorer.testnet.chain.robinhood.com",
     token: { address: "0x7E955252E15c84f5768B83c41a71F9eba181802F", symbol: "USDG", decimals: 6, domain: { name: "Global Dollar", version: "1" } },
     legacy: [], logRange: 500000,
-    gas: { symbol: "ETH", decimals: 18, isToken: false, limits: { pull: 130000, cancel: 115000, return: 95000, selfRevoke: 85000, approve: 100000, revoke: 75000 }, minAgent: "0.000005", topUp: "0.00003" },
+    gas: { symbol: "ETH", decimals: 18, isToken: false, limits: { pull: 90000, cancel: 85000, return: 80000, selfRevoke: 55000, approve: 70000, revoke: 45000 }, minAgent: "0.000005", topUp: "0.00003" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.paxos.com, USDG on Robinhood Chain", gasFaucet: "faucet.testnet.chain.robinhood.com" },
   },
 };

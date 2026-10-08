@@ -102,7 +102,7 @@ Each chain below passed grant, buy (settled and delivered), reconcile, revoke an
 | `polygon-amoy` | USDC (`USDC`/2) | POL | PayAI Echo, PayAI facilitator |
 | `skale-base-sepolia` | bridged USDC (`Bridged USDC (SKALE Bridge)`/2) | CREDIT | PayAI Echo, PayAI facilitator |
 | `ethereum-sepolia` | USDC (`USDC`/2) | ETH | Brickken sandbox, api.sandbox.brickken.com/get-agents |
-| `robinhood-testnet` | USDG (`Global Dollar`/1) | ETH | a local test seller that settles its own payments (no public facilitator serves this chain yet) |
+| `robinhood-testnet` | USDG (`Global Dollar`/1) | ETH | Strike risk report, strike-options.vercel.app (settles its own payments); a local test seller settled by Ultravioleta's facilitator |
 
 Brickken's `/get-agents` asks for `ownerWalletAddress`, and it must be the payer, which is the agent key. With the owner's address it answered HTTP 400 after the payment was signed, and `buy` cancelled the authorization on chain and returned the price to the owner.
 
