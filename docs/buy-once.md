@@ -41,13 +41,14 @@ own wallet, from a device where they are signed in and have a compatible wallet.
 `setup` command, budget or agent key. It pays on the chain the service's listing names, for the
 services the site lists: Base Sepolia (test USDC), Arc Testnet (test USDC), Robinhood Chain Testnet
 (test USDG), Tempo Moderato (test pathUSD) or Solana devnet (test USDC). It needs a superstables.com account, which you create by
-signing in with an Ethereum wallet, or a compatible deployment the owner names with `--site` or
+signing in with an Ethereum or Solana wallet, or a compatible deployment the owner names with `--site` or
 `SUPERSTABLES_SITE`; an origin outside superstables.com and its subdomains also needs the owner to set
 `SUPERSTABLES_ALLOW_SITE` to it (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
 The installed CLI runs on your own machine, but the site coordinates this single purchase after
-the owner approves. This differs from a budget, whose client pays sellers directly. Solana purchases additionally need a Solana
-wallet on the owner's device to sign the payment transaction. Solana sign-in is not supported
-in 0.3.0. Signing in does not approve a purchase. The
+the owner approves. This differs from a budget, whose client pays sellers directly. A Solana account supports only Solana
+purchases. The owner pays from the Solana wallet they signed in with. Purchases on EVM chains or Tempo
+require signing in with an Ethereum wallet. With an Ethereum account, a Solana
+purchase also needs a Solana wallet on the owner's device to sign the payment transaction. Signing in does not approve a purchase. The
 [owner guide](https://www.superstables.com/docs/owner) covers the link/code handoff, sign-in
 and account checkpoints.
 
@@ -63,7 +64,7 @@ superstables budget buy-once --service superstables-demo-market-data --param ass
 created. The command prints an `APPROVE` line with the approval link and a match code. Run by an agent (stdout is not
 a terminal), or with `--detach`, it then returns with `state: "waiting_owner"` and an approval `id`; in
 a terminal it waits for the purchase to end. Send the `RESULT`'s `message_for_owner` (the approval link, the
-code and the price) as a reply the owner can read, and end your turn there. The owner opens it, signs in with an Ethereum wallet the
+code and the price) as a reply the owner can read, and end your turn there. The owner opens it, signs in with an Ethereum or Solana wallet the
 first time (a message, no fee), picks the same code on the page and approves the payment in their
 wallet. When they say they have, run:
 

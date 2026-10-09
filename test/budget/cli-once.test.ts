@@ -6,22 +6,30 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, w
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readPurchase, settleOnce } from "../../budget/once.mjs";
 import { ARC_MARKET, ARC_SELLER, MARKET, ROBINHOOD_MARKET, ROBINHOOD_SELLER, PAYER, SOLANA_PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite, type Paid } from "../helpers/fake-purchase-site.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
+const ACCOUNT_REFUSALS = [
+  [403, "ethereum_account_required", /sign in with an Ethereum wallet/],
+  [400, "owner_proof_owner_mismatch", /sign the owner-proof message with the Solana wallet they signed in with/],
+  [403, "wrong_account", /sign in with the paying Solana wallet/],
+] as const;
 
 let home: string;
 let site: FakePurchaseSite;
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "ss-buy-once-"));
+  vi.stubEnv("SUPERSTABLES_HOME", home);
   site = await startFakePurchaseSite();
 });
 afterEach(async () => {
   await site.close();
   rmSync(home, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 
 type Run = { code: number; stdout: string; stderr: string; result: any; approve: any };
@@ -48,6 +56,174 @@ function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<
 const once = (extra: string[] = [], base = ["--service", "demo-market-data", "--param", "asset=BTC", "--max", "0.01"]) => budget(["buy-once", "--site", site.url, ...base, ...extra]);
 const approvals = () => join(home, "budget", "approvals");
 const recordOf = (id: string) => JSON.parse(readFileSync(join(approvals(), `${id}.json`), "utf8"));
+
+describe("buy-once: account refusals and read failures", () => {
+  it.each(ACCOUNT_REFUSALS)("creation (%i %s) needs account recovery, not a command or network fix", async (status, code, guidance) => {
+    site.refuseCreate = { status, error: { code, message: "untrusted sspt_secret123456" } };
+    const r = await once();
+    expect(r.code).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", paid: false, amount: "0" });
+    expect(r.result.reason).toContain(`HTTP ${status} ${code}`);
+    expect(r.result.next).toMatch(guidance);
+    expect(r.stdout + r.stderr).not.toMatch(/untrusted|sspt_/);
+    expect(site.purchases).toEqual([]);
+  });
+
+  it.each(ACCOUNT_REFUSALS)("an open purchase with reason %i %s gives recovery and stays open", async (_status, code, guidance) => {
+    const first = await once();
+    Object.assign(site.purchases[0], { reason_code: code, reason: "untrusted sspt_secret123456" });
+    const r = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+    expect(r.code).toBe(0);
+    expect(r.result).toMatchObject({ state: "waiting_owner", final: false });
+    expect(r.result.reason).toMatch(guidance);
+    expect(r.stdout + r.stderr).not.toMatch(/untrusted|sspt_/);
+    expect(recordOf(first.result.id).final).toBeUndefined();
+    expect(site.purchases[0]).toMatchObject({ state: "awaiting_approval", final: false });
+  });
+
+  it("an open purchase a Solana account tried to approve says so, with the recovery step, and stays open", async () => {
+    const first = await once();
+    Object.assign(site.purchases[0], { reason_code: "ethereum_account_required", reason: "untrusted sspt_secret123456" });
+    const r = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+    expect(r.code).toBe(0);
+    expect(r.result).toMatchObject({ state: "waiting_owner", final: false });
+    expect(r.result.reason).toBe("an owner signed in with a Solana account tried to approve, and this chain needs an Ethereum account; the request is still open: ask the owner to sign out, then sign in with an Ethereum wallet and retry");
+    expect(r.stdout + r.stderr).not.toMatch(/untrusted|sspt_/);
+    expect(recordOf(first.result.id).final).toBeUndefined();
+  });
+
+  for (const state of ["denied", "failed"]) {
+    it.each(ACCOUNT_REFUSALS)(`${state}: confirmed not-paid with reason %i %s is a refusal`, async (_status, code, guidance) => {
+      const first = await once();
+      Object.assign(site.purchases[0], { state, final: true, reason_code: code, reason: "untrusted", payment: { status: "not_paid" }, delivery: { status: "not_called" } });
+      const r = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]);
+      expect(r.code).toBe(3);
+      expect(r.result).toMatchObject({ state: "refused_precheck", paid: false, amount: "0" });
+      expect(r.result.reason).toBe(`the site's reason: ${code}`);
+      expect(r.result.next).toMatch(guidance);
+    });
+  }
+
+  it.each(ACCOUNT_REFUSALS)("a read refusal (%i %s) stops polling, keeps the token and leaves payment unknown", async (status, code, guidance) => {
+    const first = await once();
+    const token = recordOf(first.result.id).hosted.token;
+    let reads = 0;
+    site.readAnswer = () => {
+      reads++;
+      return { status, body: { error: { code, message: `untrusted ${token}` } } };
+    };
+    const r = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30"]);
+    expect(r.code).toBe(5);
+    expect(r.result).toMatchObject({ state: "unknown", final: false, paid: null, delivered: null, amount: null });
+    expect(r.result.reason).toContain(`HTTP ${status} ${code}`);
+    expect(r.result.next).toMatch(guidance);
+    expect(r.result.next).toContain(`wait --id ${first.result.id} --shown again`);
+    expect(r.result.next).toMatch(/The payment outcome is unknown; do not start another purchase for this request/);
+    expect(r.stdout + r.stderr).not.toMatch(/untrusted|sspt_|nothing was paid/);
+    expect(reads).toBe(1);
+    expect(recordOf(first.result.id).hosted.token).toBe(token);
+    expect(recordOf(first.result.id).final).toBeUndefined();
+    const blocked = await once();
+    expect(blocked.result).toMatchObject({ state: "refused_pending", paid: null });
+    expect(blocked.result.next).toMatch(guidance);
+    expect(site.purchases).toHaveLength(1);
+    site.readAnswer = undefined;
+    Object.assign(site.purchases[0], { state: "denied", final: true, reason_code: "owner_rejected", payment: { status: "not_paid" } });
+    const recovered = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]);
+    expect(recovered.result).toMatchObject({ state: "refused_precheck", paid: false });
+    expect(recordOf(first.result.id).hosted.token).toBeUndefined();
+  });
+
+  it.each([401, 403, 404, 410, 422])("a permanent HTTP %i read stops without treating it as unreachable or finalizing payment", async (status) => {
+    const first = await once();
+    let reads = 0;
+    site.readAnswer = () => { reads++; return { status, body: { error: { code: "untrusted sspt_secret123456", message: "untrusted" } } }; };
+    const r = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30"]);
+    expect(r.code).toBe(5);
+    expect(r.result).toMatchObject({ state: "unknown", final: false, paid: null });
+    expect(r.result.reason).toContain(`HTTP ${status} unexpected`);
+    expect(r.stdout + r.stderr).not.toMatch(/untrusted|sspt_|nothing was paid|waiting for the owner/);
+    expect(reads).toBe(1);
+    expect(recordOf(first.result.id).final).toBeUndefined();
+  });
+
+  for (const source of ["earlier read", "refused read"]) {
+    it.each(ACCOUNT_REFUSALS)(`${source}: payment evidence wins over an account refusal (%i %s)`, async (status, code, guidance) => {
+      const first = await once();
+      const purchase = site.purchases[0];
+      const evidence = { payment: { status: "unconfirmed", transaction: TX, payer: PAYER, money_moved: true } };
+      if (source === "earlier read") {
+        Object.assign(purchase, { ...evidence, state: "submitting", final: false });
+        await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+      }
+      let reads = 0;
+      site.readAnswer = () => {
+        reads++;
+        return { status, body: { error: { code, message: "untrusted" }, ...(source === "refused read" ? evidence : {}) } };
+      };
+      const refused = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30"]);
+      expect(reads).toBe(1);
+      expect(refused.code, refused.stderr).toBe(5);
+      expect(refused.result).toMatchObject({ state: "unknown", final: false, paid: null, delivered: null, amount: null, tx: { settle: TX } });
+      expect(refused.result.reason).toContain(`HTTP ${status} ${code}`);
+      expect(refused.result.reason).toContain("a payment may have left");
+      expect(refused.result.next).toMatch(guidance);
+      expect(refused.stdout + refused.stderr).not.toMatch(/untrusted|nothing was paid/i);
+      expect(recordOf(first.result.id)).toMatchObject({ seen: { hashes: [TX], moved: true }, hosted: { token: expect.any(String) } });
+      expect(recordOf(first.result.id).final).toBeUndefined();
+      site.readAnswer = undefined;
+      Object.assign(purchase, { state: "denied", final: true, payment: { status: "not_paid" }, money_moved: false });
+      const later = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+      expect(later.result).toMatchObject({ state: "unknown", paid: null, tx: { settle: TX } });
+      expect(later.stdout + later.stderr).not.toMatch(/nothing was paid/i);
+    });
+  }
+
+  it.each(ACCOUNT_REFUSALS)("money_moved in a refusal (%i %s) without a transaction still means unknown", async (status, code, guidance) => {
+    const first = await once();
+    site.readAnswer = () => ({ status, body: { error: { code, money_moved: true } } });
+    const r = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30"]);
+    expect(r.code).toBe(5);
+    expect(r.result).toMatchObject({ state: "unknown", final: false, paid: null, amount: null, tx: {} });
+    expect(r.result.reason).toContain("a payment may have left");
+    expect(r.result.next).toMatch(guidance);
+    expect(recordOf(first.result.id).seen.moved).toBe(true);
+  });
+
+  it.each([408, 429, 500])("a transient HTTP %i read still retries", async (status) => {
+    const first = await once();
+    let reads = 0;
+    site.readAnswer = () => {
+      if (++reads === 1) return { status, body: { error: { code: "rate_limited" } } };
+      Object.assign(site.purchases[0], { state: "denied", final: true, reason_code: "owner_rejected", payment: { status: "not_paid" } });
+    };
+    const r = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]);
+    expect(reads).toBe(2);
+    expect(r.code).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", paid: false });
+  });
+
+  it.each(ACCOUNT_REFUSALS)("readPurchase and settleOnce preserve HTTP %i and code %s", async (status, code) => {
+    const first = await once();
+    const record = recordOf(first.result.id);
+    for (const body of [{ error: { code, message: "untrusted" } }, { code }, { reason_code: code }]) {
+      const fetchImpl = async () => new Response(JSON.stringify(body), { status });
+      expect(await readPurchase({ site: site.url, id: record.hosted.requestId, token: record.hosted.token, timeoutMs: 5_000, fetchImpl })).toMatchObject({ ok: false, status, code, reason: `HTTP ${status} ${code}` });
+      expect(await settleOnce(record, { fetchImpl })).toMatchObject({ final: true, code: 5, result: { state: "unknown", final: false, paid: null, status, reasonCode: code } });
+    }
+  });
+
+  it("transient read failures keep status and code, including a missing network answer", async () => {
+    const first = await once();
+    const record = recordOf(first.result.id);
+    for (const status of [408, 429, 500]) {
+      const fetchImpl = async () => new Response(JSON.stringify({ error: { code: "rate_limited" } }), { status });
+      expect(await settleOnce(record, { fetchImpl })).toMatchObject({ final: false, status, errorCode: "rate_limited", unreachable: `HTTP ${status} rate_limited` });
+    }
+    const fetchImpl = async () => { throw new Error("connection refused"); };
+    expect(await settleOnce(record, { fetchImpl })).toMatchObject({ final: false, status: 0, errorCode: "unexpected", unreachable: expect.stringContaining("connection refused") });
+  });
+});
 
 describe("buy-once: refusals before anything is asked", () => {
   it("wants --service and --max", async () => {
@@ -246,7 +422,8 @@ describe("buy-once on Tempo Moderato and Solana devnet", () => {
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ rail: "solana", chain: "devnet", state: "waiting_owner", service: "demo-market-data-solana" });
     expect(first.approve.terms.summary).toMatch(new RegExp(`One payment of 0\\.01 test USDC on Solana devnet to ${SOLANA_SELLER}`));
-    expect(first.approve.terms.notEnforced[0]).toMatch(/connect a Solana wallet/);
+    expect(first.approve.terms.notEnforced[0]).toMatch(/Phantom or an Ethereum wallet such as MetaMask/);
+    expect(first.approve.terms.notEnforced[0]).toMatch(/With a Solana account, pay from the Solana wallet you signed in with. With an Ethereum account, connect a separate Solana wallet/);
     expect(first.result.message_for_owner).toMatch(/0\.01 test USDC on Solana devnet\./);
     const sig = "5".repeat(87);
     const payer = SOLANA_PAYER;

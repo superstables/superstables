@@ -15,8 +15,9 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
   a browser extension wallet. Over SSH, forward the approval link's port first:
   `ssh -L PORT:127.0.0.1:PORT user@host`. No superstables.com account is needed.
 - For **approvals on superstables.com**, the owner can use a wallet on another device. They need a
-  superstables.com account, created by signing in with an Ethereum wallet; Solana also needs a
-  Solana wallet for the budget or payment. An ordinary remote browser without a compatible
+  superstables.com account, created by signing in with an Ethereum or Solana wallet. For now, a
+  Solana account supports only Solana agents, Solana budgets and Solana single purchases. With an Ethereum
+  account, Solana also needs a Solana wallet for the budget or payment. An ordinary remote browser without a compatible
   wallet cannot sign. Choose [budget approvals on superstables.com](budget.md#approve-on-superstablescom-instead)
   or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 

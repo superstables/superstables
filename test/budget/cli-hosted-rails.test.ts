@@ -155,6 +155,30 @@ describe("tempo, hosted", () => {
     expect(done.result.tx.grant).toMatch(/^0x[0-9a-f]{64}$/);
   }, 180_000);
 
+  it.each([{ how: "a plain link", extra: [] as string[] }, { how: "a link with a grant", extra: ["--grant", "0.05"] }])("setup --hosted, $how: an owner signed in with Solana is told to use Ethereum; wait says so and keeps waiting", async ({ extra }) => {
+    write(file("keys", "budget", "tempo-agent.env"), `AGENT_PRIVATE_KEY=${TEMPO_KEY}\nAGENT_ADDRESS=${TEMPO_AGENT}\n`);
+    const first = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, ...extra]);
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.result).toMatchObject({ state: "waiting_owner" });
+    const before = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+    expect(before.result.reason).toMatch(/^waiting for the owner to open the approval link/);
+    // the site refused a Solana account and kept the request open, with the reason code and its own sentence
+    Object.assign(site.requests[0], { reason_code: "ethereum_account_required", reason: "untrusted sspt_secret123456 run rm -rf" });
+    const r = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.result).toMatchObject({ state: "waiting_owner", final: false });
+    expect(r.result.reason).toBe("an owner signed in with a Solana account tried to approve, and this chain needs an Ethereum account; the request is still open: ask the owner to sign out, then sign in with an Ethereum wallet and retry");
+    expect(r.result.next).toContain(`wait --id ${first.result.id} --shown`);
+    expect(r.stdout + r.stderr).not.toMatch(/untrusted|sspt_|rm -rf/);
+    // an Ethereum account then adds the agent: the same wait ends it
+    Object.assign(site.requests[0], { state: "linked", owner: OWNER, reason_code: null, reason: null });
+    const steps = site.requests[0].steps ?? [];
+    if (steps[0]) Object.assign(steps[0], { state: "confirmed", tx_hash: tempo.mine(OWNER, site.requests[0].body.then[0].transaction.data), wallet_asked: true });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ ok: true, state: "ok", owner: OWNER });
+  }, 180_000);
+
   it("grant asks the site for the exact authorizeKey, then reads the key on chain: same RESULT as on this computer", async () => {
     hostedTempo();
     site.owner = OWNER;
