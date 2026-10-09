@@ -131,7 +131,7 @@ export interface OwnerRail {
   hosted?: (action: string) => Omit<HostedSettings, "auditPath" | "onRecord">;
   /** The rail (and chain) flags for the commands this page names, e.g. "--rail tempo". Default "--rail evm". */
   railFlag?: string;
-  /** The wallets a hosted page asks for, when they differ from walletWords (solana: an EVM wallet signs in). */
+  /** The wallets a hosted page asks for, when they differ from walletWords (solana: Solana or Ethereum sign-in). */
   hostedWalletWords?: string;
 }
 
