@@ -28,6 +28,7 @@ import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
+import { spawnIdentified } from './child-identity.mjs';
 import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
@@ -943,9 +944,12 @@ function run(spec) {
     const own = Boolean(APPROVAL_ID);
     // the rail script adds a hosted request (site, request id, access token) to this approval's record: HOLDER_ENV names it
     const env = own ? { ...process.env, [HOLDER_ENV]: APPROVAL_ID } : process.env;
-    const p = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env, detached: own });
+    const p = spawnIdentified(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env, detached: own });
     currentChild = p;
-    if (own && p.pid) setRailGroup(APPROVAL_ID, p.pid);
+    if (own && p.pid) {
+      setRailGroup(APPROVAL_ID, p.pid);
+      p.once('identity', selfStartedAt => setRailGroup(APPROVAL_ID, p.pid, selfStartedAt));
+    }
     let stdout = "";
     let partial = "";
     let stderrTail = "";
@@ -969,7 +973,8 @@ function run(spec) {
     };
     p.stderr.on("data", (d) => passErr(errScrub.push(String(d))));
     for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => { interrupted = true; try { if (own) process.kill(-p.pid, s); else p.kill(s); } catch {} });
-    p.on("error", (e) => { log(`superstables budget: could not start ${spec.cmd}: ${e.message}`); resolve({ code: 2, stdout }); });
+    // A spawn failure is bad input (2). A started child that failed before its script ran is a rail failure (1).
+    p.on("error", (e) => { log(`superstables budget: could not start ${spec.cmd}: ${e.message}`); resolve({ code: p.pid === undefined ? 2 : 1, stdout }); });
     p.on("close", (code, sig) => {
       if (partial) forward(partial);
       passErr(errScrub.end());
@@ -1833,7 +1838,7 @@ if (WORKER_ID) {
   setTimeout(async () => {
     const pgid = currentChild?.pid;
     const worker = readApproval(WORKER_ID);
-    if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc, location: worker ? { ...worker, namespace: 'railNamespace' in worker ? worker.railNamespace : worker.namespace, writtenAt: worker.railWrittenAt, bootElapsedMs: worker.railBootElapsedMs, createdAt: undefined } : {} }))) {
+    if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc, location: worker ? { ...worker, selfStartedAt: worker.railSelfStartedAt, namespace: 'railNamespace' in worker ? worker.railNamespace : worker.namespace, writtenAt: worker.railWrittenAt, bootElapsedMs: worker.railBootElapsedMs, createdAt: undefined } : {} }))) {
       // no result while its page may still run: the chain stays held, and wait keeps trying to stop the group
       log(`superstables budget: the approval ran past its deadline and process group ${pgid} would not stop; no result is recorded`);
       process.exit(5);

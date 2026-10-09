@@ -9,7 +9,7 @@ const { createIdentitySource, inspectProcess } = await import(join(root, 'src/co
 const { inspectLockText } = await import(join(root, 'src/core/owner-recovery.mjs'));
 const homes: string[] = [];
 function box() {
-  const home = mkdtempSync(join(tmpdir(), 'budget-round6-')); homes.push(home);
+  const home = mkdtempSync(join(tmpdir(), 'budget-legacy-live-')); homes.push(home);
   const approvals = join(home, 'budget/approvals'), records = join(home, 'records'), ops = join(home, 'budget/ops/solana-devnet');
   for (const dir of [approvals, records, ops]) mkdirSync(dir, { recursive: true });
   return { home, approvals, records, ops };

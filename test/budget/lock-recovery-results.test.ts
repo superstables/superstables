@@ -11,7 +11,7 @@ const { createIdentitySource } = await import(join(root, 'src/core/process-ident
 const homes: string[] = [];
 const id = 'oa-20261007010000-01234567';
 function box() {
-  const home = mkdtempSync(join(tmpdir(), 'budget-round7-')); homes.push(home);
+  const home = mkdtempSync(join(tmpdir(), 'budget-recovery-results-')); homes.push(home);
   const approvals = join(home, 'budget/approvals'), records = join(home, 'records'), ops = join(home, 'budget/ops/solana-devnet');
   for (const dir of [approvals, records, ops]) mkdirSync(dir, { recursive: true });
   return { home, approvals, records, ops };
@@ -95,19 +95,27 @@ for (const target of ['operation', 'attempt', 'approval']) {
     } finally { clearTimeout(timer); await stopHolder(child, child.pid); }
   });
 }
-it.runIf(process.platform === 'linux')('same-boot crash after saveApproval permits plain buy-once recovery and preserves the purchase', async () => {
-  const b = box();
-  const code = `const a=await import(${JSON.stringify(join(root, 'budget/approvals.mjs'))});const id=${JSON.stringify(id)};const c=a.claim('once','purchase',id);if(!c.ok)throw Error('busy');a.saveApproval({id,command:'buy-once',rail:'evm',chain:'base-sepolia',state:'waiting_owner',createdAt:new Date().toISOString(),pid:null,seen:{paid:true,hashes:['retained-evidence']}});console.log('ready');setInterval(()=>{},1000);`;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, SUPERSTABLES_HOME: b.home }, stdio: ['ignore', 'pipe', 'pipe'] });
-  const timer = setTimeout(() => { void stopHolder(child, child.pid); }, 10_000);
-  try {
-    const [ready] = await once(child.stdout, 'data'); expect(String(ready).trim()).toBe('ready');
-    const path = join(b.approvals, `${id}.json`), evidence = readFileSync(path, 'utf8');
-    await stopHolder(child, child.pid);
-    const result = unlock(b.home, ['--buy-once']);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain('"reason":"locks_cleared"');
-    expect(existsSync(join(b.approvals, 'active-once-purchase'))).toBe(false);
-    expect(readFileSync(path, 'utf8')).toBe(evidence);
-  } finally { clearTimeout(timer); await stopHolder(child, child.pid); }
-});
+for (const live of [true, false]) {
+  it.runIf(process.platform === 'linux')(`buy-once saved by startOnce ${live ? 'refuses live recovery' : 'allows same-boot crash recovery'} and preserves the purchase`, async () => {
+    const b = box();
+    const code = `const fs=(await import('node:fs')).default;const {syncBuiltinESMExports}=await import('node:module');const {startFakePurchaseSite}=await import(${JSON.stringify(join(root, 'test/helpers/fake-purchase-site.ts'))});const site=await startFakePurchaseSite();const rename=fs.renameSync;fs.renameSync=(from,to)=>{rename(from,to);if(String(to).endsWith('.json')&&!String(to).includes('active-')){const r=JSON.parse(fs.readFileSync(to,'utf8'));if(r.command==='buy-once'&&r.state==='waiting_owner'){console.log(JSON.stringify({id:r.id}));Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}}};syncBuiltinESMExports();const once=await import(${JSON.stringify(join(root, 'budget/once.mjs'))});await once.startOnce({site:site.url,service:'demo-market-data',params:{asset:'BTC'},max:'0.01'});throw Error('save did not pause');`;
+    const child = spawn(process.execPath, ['--import', join(root, 'node_modules/tsx/dist/loader.mjs'), '--input-type=module', '-e', code], { env: { ...process.env, SUPERSTABLES_HOME: b.home }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let error = ''; child.stderr.on('data', data => { error += data; });
+    const timer = setTimeout(() => { void stopHolder(child, child.pid); }, 60_000);
+    try {
+      const [ready] = await Promise.race([once(child.stdout, 'data'), once(child, 'exit').then(() => { throw Error(error); })]);
+      const { id: purchaseId } = JSON.parse(String(ready));
+      const path = join(b.approvals, `${purchaseId}.json`), evidence = readFileSync(path, 'utf8'), purchase = JSON.parse(evidence);
+      expect(Object.keys(purchase).sort()).toEqual(['id','command','rail','chain','state','attributionVersion','createdAt','action','url','expires','matchCode','terms','service','max','pid','hosted'].sort());
+      expect(purchase.pid).toBeNull(); expect(purchase.hosted.requestId).toBeTruthy();
+      if (!live) await stopHolder(child, child.pid);
+      for (const unverified of live ? [false, true] : [false]) {
+        const result = unlock(b.home, ['--buy-once', ...(unverified ? ['--unverified'] : [])], `payment-lock${unverified ? ' unverified' : ''}`);
+        expect(result.status, result.stdout + result.stderr).toBe(live ? 5 : 0);
+        expect(result.stdout).toContain(`"reason":"${live ? 'op_in_progress' : 'locks_cleared'}"`);
+        expect(existsSync(join(b.approvals, 'active-once-purchase'))).toBe(live);
+        expect(readFileSync(path, 'utf8')).toBe(evidence);
+      }
+    } finally { clearTimeout(timer); await stopHolder(child, child.pid); }
+  }, 75_000);
+}
