@@ -7,10 +7,10 @@ import { parseDarwinStart } from '../../src/core/process-identity.mjs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { assertHolderStopped, stopHolder } from './budget-holder-cleanup.mjs';
+import { nativeExecutable, assertNoMatchingProcesses, stopMatchingProcesses } from './budget-native-cleanup.mjs';
 assert.equal(process.platform, 'darwin', 'run this check on native macOS');
 const root = resolve(import.meta.dirname, '../..');
-const codex = process.env.CODEX_BIN ?? 'codex';
+const codex = nativeExecutable(process.env.CODEX_BIN ?? 'codex');
 const srt = process.env.SRT_BIN ?? 'srt';
 let sandboxKind = 'codex';
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'superstables-native-macos-')));
@@ -20,8 +20,6 @@ const tsx = join(root, 'node_modules/tsx/dist/loader.mjs');
 const terminal = join(root, 'test/helpers/budget-owner-terminal.mjs');
 const blocked = join(root, 'test/helpers/budget-blocked-identity.mjs');
 const outside = join(homedir(), `sbx-probe-${scratch.split('/').at(-1)}`);
-const children = new Map();
-const railPidFiles = new Set();
 const imports = `const fs=await import('node:fs');const {lockFile}=await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});const {withFileLock,thisProcess}=await import(${JSON.stringify(join(root, 'src/core/lock.ts'))});const a=await import(${JSON.stringify(join(root, 'budget/approvals.mjs'))});`;
 const sandboxBin = () => sandboxKind === 'srt' ? srt : codex;
 const sandboxArgs = (home, args) => [...(sandboxKind === 'srt' ? ['--settings', srtSettings, '--'] : ['sandbox', '-c', 'sandbox_mode="workspace-write"', '--']), 'env', `SUPERSTABLES_HOME=${home}`, process.execPath, ...args];
@@ -39,11 +37,10 @@ async function hold(sandbox, partial = false, mode = 'own') {
   mkdirSync(dir, { recursive: true }); mkdirSync(join(home, 'records'));
   writeFileSync(join(dir, 'paid-op.json'), '{"state":"submitted","transaction":"retained-evidence"}');
   const pidFile = join(home, 'pid'), readyFile = join(home, 'ready.json'), railPidFile = join(home, 'rail-pid');
-  railPidFiles.add(railPidFile);
   const railCode = mode === 'rail' ? `
     const {spawnIdentified}=await import(${JSON.stringify(join(root, 'budget/child-identity.mjs'))});
     const {once}=await import('node:events');
-    const rail=spawnIdentified(process.execPath,['-e','console.log("ready");setInterval(()=>{},1000)'],{env:process.env,stdio:['ignore','pipe','pipe'],detached:true});
+    const rail=spawnIdentified(process.execPath,['-e','console.log("ready");setInterval(()=>{},1000)',${JSON.stringify(home)}],{env:process.env,stdio:['ignore','pipe','pipe'],detached:true});
     output.writeFileSync(${JSON.stringify(railPidFile)},String(rail.pid));
     for(const lock of locks)lock.holdAlso(rail);
     a.setRailGroup(id,rail.pid);a.setRailGroup(onceId,rail.pid);
@@ -62,7 +59,6 @@ async function hold(sandbox, partial = false, mode = 'own') {
   const detachedCode = `${imports}const r=await a.startDetached({id:a.newApprovalId(),command:'grant',rail:'solana',chain:'devnet',cmd:process.execPath,args:${JSON.stringify(holderArgs)},cwd:process.cwd(),linkWaitMs:15000});if(r.kind!=='waiting')throw Error(r.reason);setInterval(()=>{},1000);`;
   const args = mode === 'detached' ? ['--import',tsx,'--input-type=module','-e',detachedCode] : holderArgs;
   const child = spawn(sandbox ? sandboxBin() : process.execPath, sandbox ? sandboxArgs(home, args) : args, { cwd: scratch, env: { ...process.env, SUPERSTABLES_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
-  children.set(child, pidFile);
   let error = ''; child.stderr.on('data', data => { error += data; }); child.stdout.resume();
   const until = Date.now() + 30_000;
   while (!existsSync(readyFile)) {
@@ -74,14 +70,7 @@ async function hold(sandbox, partial = false, mode = 'own') {
   return { child, ...ready, mode, home, dir, cap, railPidFile, approval: join(home, `budget/approvals/${ready.id}.json`) };
 }
 async function stop(holder) {
-  if (holder.railPid) {
-    try { process.kill(-holder.railPid, 'SIGKILL'); } catch (err) { if (err.code !== 'ESRCH') throw err; }
-    await assertHolderStopped(holder.railPid); railPidFiles.delete(holder.railPidFile);
-  }
-  if (holder.mode === 'detached') {
-    try { process.kill(-holder.pid, 'SIGKILL'); } catch (err) { if (err.code !== 'ESRCH') throw err; }
-  }
-  await stopHolder(holder.child, holder.pid); children.delete(holder.child);
+  await stopMatchingProcesses(holder.home);
 }
 function unlock(holder, target, sandbox, unverified = false) {
   const token = target.includes('--op') ? 'paid-op' : 'payment-lock';
@@ -239,20 +228,11 @@ try {
       await recover(piped, true);
     }
     await stop(host);
+    assertNoMatchingProcesses(scratch);
     console.log(JSON.stringify({ result: 'pass', sandbox: sandboxKind, nativeMacOS: true, sandboxWriteDenied: true, identityComparison, bootSessionUUIDReadable: Boolean(sandboxIdentity.boot), liveNativeSandboxProtected: true, nativeRecordRecoveryChecked: true, liveHostProtected: true, livePartialSandboxProtected: true, liveApprovalWaitPreserved: true, hostWaitPreserved: true, railPipeProtected: true, detachedWorkerPipeProtected: true, startupWindowsAsserted: true, deadSandboxOperationCapApprovalsRecovered: deadRecovery, holderTeardown: true, payments: 0 }));
   }
 } finally {
-  for (const path of railPidFiles) {
-    if (!existsSync(path)) continue;
-    const pid = Number(readFileSync(path, 'utf8'));
-    try { process.kill(-pid, 'SIGKILL'); } catch (err) { if (err.code !== 'ESRCH') throw err; }
-    await assertHolderStopped(pid);
-  }
-  for (const [child, pidFile] of children) {
-    const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, 'utf8')) : child.pid;
-    try { process.kill(-pid, 'SIGKILL'); } catch (err) { if (err.code !== 'ESRCH') throw err; }
-    try { process.kill(-child.pid, 'SIGKILL'); } catch (err) { if (err.code !== 'ESRCH') throw err; }
-    await stopHolder(child, pid);
-  }
+  await stopMatchingProcesses(scratch);
+  assertNoMatchingProcesses(scratch);
   rmSync(outside, { force: true }); rmSync(scratch, { recursive: true, force: true });
 }
