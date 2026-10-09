@@ -28,6 +28,8 @@ const EVM_BUDGET_CHAINS: Record<string, string[]> = {
   "skale-base-sepolia": ["skale-base-sepolia", "eip155:324705682"],
   // "sepolia" is x402 v1's name for it; plain "ethereum" is mainnet and never matches.
   "ethereum-sepolia": ["ethereum-sepolia", "sepolia", "eip155:11155111"],
+  // Plain "robinhood" is mainnet and never matches.
+  "robinhood-testnet": ["robinhood-testnet", "eip155:46630"],
 };
 
 /** budget --rail tempo pays MPP sellers on Tempo Moderato. */
@@ -81,7 +83,7 @@ export function routesFor(rails: string[] | undefined, chains: string[]): PayRou
 /** Mainnet names a listing may use, so a refusal can say which mainnet it is on. */
 const MAINNET_NAMES = new Set([
   "base", "ethereum", "solana", "polygon", "arbitrum", "optimism", "avalanche", "bsc", "sei", "iotex", "peaq",
-  "xlayer", "abstract", "skale", "tempo", "stellar", "near", "sui", "aptos",
+  "xlayer", "abstract", "skale", "tempo", "stellar", "near", "sui", "aptos", "robinhood",
 ]);
 
 const KNOWN_CHAIN_NAMES = new Set([

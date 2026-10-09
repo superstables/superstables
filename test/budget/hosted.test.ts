@@ -631,9 +631,9 @@ describe("hosted approvals", () => {
     site.expiresInMs = 1_500;
     const started = Date.now();
     const h = await grant(client(), 60_000);
-    // the link's expiry is the site's, not the command's 60 seconds
-    expect(h.expiresAt).toBeLessThanOrEqual(started + 1_500 + 50);
-    expect(await h.settled).toMatchObject({ status: "expired", sending: false });
+    // the link's expiry is the one the site advertised, not the command's 60 seconds
+    expect(h.expiresAt).toBe(site.requests[0].expiresAt);
+    expect(await h.settled).toEqual({ status: "expired", reason: `the approval link expired on ${site.url.replace(/^http:\/\//, "")} without a completed approval`, sending: false });
     expect(Date.now() - started).toBeLessThan(15_000);
     expect(site.requests[0].state).toBe("expired");
   });

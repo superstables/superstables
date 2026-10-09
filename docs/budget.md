@@ -9,7 +9,8 @@ or the owner revokes it. The chain enforces the allowance; no Superstables serve
 **Testnet only.** Mainnet chains are refused. This page uses the `evm` rail, where the budget is a
 USDC allowance, on Arc Testnet. Leave out `--chain arc-testnet` to use Base Sepolia, the default; buying there
 needs a seller that takes payment on Base Sepolia.
-The same rail also runs on Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia.
+The same rail also runs on Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia and Robinhood Chain Testnet
+(test USDG; approval on your machine only).
 The `tempo` rail runs on Tempo Moderato and the `solana` rail on Solana devnet. See [Budget rails and chains](../budget/README.md).
 
 ## What the chain enforces
@@ -34,7 +35,7 @@ expiry, a period and a seller list on chain; see the [security model](security.m
 - Linux or macOS (on Windows, WSL). For this local EVM walkthrough, an owner browser wallet
   such as MetaMask, Rabby or Coinbase Wallet that can reach the local approval page. On the same
   machine, use a browser extension; over SSH, forward the port in the approval link. No website
-  account is needed. Hosted approvals use a wallet on the owner's device instead.
+  account is needed. Approvals on superstables.com use a wallet on the owner's device instead.
 - Test funds in the owner's wallet, from <https://faucet.circle.com>:
   - Arc Testnet: USDC only, since USDC also pays gas. About 0.4 USDC covers this page: 0.1 for the
     agent's gas, the 0.06 budget and fees; `doctor` wants at least 0.2 left after funding the agent.
@@ -48,7 +49,7 @@ expiry, a period and a seller list on chain; see the [security model](security.m
 
 Start with **local approvals**, the default used below: the client serves the approval page on
 `127.0.0.1`, and the owner signs in their browser wallet with no website account. For a runtime on
-a server, **hosted approvals** let the owner approve from another device without forwarding each
+a server, **approvals on superstables.com** let the owner approve from another device without forwarding each
 approval port. Choose `setup --hosted` at the setup step and follow
 [Approve on superstables.com instead](#approve-on-superstablescom-instead).
 
@@ -207,7 +208,7 @@ Report the refusal and stop. A fresh grant starts only when the owner explicitly
 `superstables budget recover --rail evm --chain arc-testnet` first brings the allowance to 0,
 then returns the USDC it can from the agent key to the owner. On Arc Testnet it leaves up to 2 USDC
 there as gas. Recovery is EVM only, needs the agent key on this runtime, and any owner approvals
-use its local page even after hosted setup. Forward the page's port when connecting over SSH.
+use its local page even after setup on superstables.com. Forward the page's port when connecting over SSH.
 Revoke does not return funds already transferred to the agent.
 
 For an unknown purchase, [reconcile the original operation](records.md#check-an-unresolved-outcome)
@@ -217,7 +218,7 @@ file deletion. [Security](security.md#hosted-approvals-and-buy-once-what-the-sit
 
 ## Approve on superstables.com instead
 
-Use hosted approval when the owner wants to approve from a device other than the machine running
+Use approval on superstables.com when the owner wants to approve from a device other than the machine running
 the agent. superstables.com supports Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy,
 SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
 The owner needs a compatible wallet on that device and an account created by signing in with an
@@ -225,7 +226,7 @@ Ethereum wallet. Solana additionally requires a Solana wallet. Signing in and ad
 not grant a budget; funding and grant are separate wallet transactions.
 
 The [owner guide](https://www.superstables.com/docs/owner) covers the approval handoff, sign-in
-and account checkpoints. At step 1, choose hosted setup instead of local setup:
+and account checkpoints. At step 1, choose setup on superstables.com instead of local setup:
 
 ```bash
 superstables budget setup --rail evm --chain arc-testnet --hosted
@@ -240,19 +241,19 @@ with its own approval link and code, and the owner approves the transaction in t
 still uses the page on this machine. The CLI, agent key and purchase journals stay on your own runtime; the owner's key stays in their wallet. Purchases need no approval from
 the site: the client pays the seller directly. On Solana the owner also connects a Solana wallet on
 the site's page; that address is the owner on record, and it signs each transaction the site builds.
-Solana sign-in is not supported in 0.3.0.
+Solana sign-in is not supported in 0.3.1.
 
 The [site account](https://www.superstables.com/account) lets the owner inspect linked agents and
 revoke budgets. It shows Single purchase requests made on superstables.com, not a complete history of budget purchases;
 read [local budget records](records.md#budget-records) for those. After requesting a revoke, check
 `budget status` and wallet activity: the permission ends only when the transaction confirms.
 
-This is optional. Approvals on this machine remain the default and need no account. Hosted
-approvals need a superstables.com account, or a compatible deployment the owner names with `--site`
+This is optional. Approvals on this machine remain the default and need no account. Approvals on superstables.com
+need a superstables.com account, or a compatible deployment the owner names with `--site`
 or `SUPERSTABLES_SITE`. An origin outside superstables.com and its subdomains also needs the owner to
 set `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own environment; an agent never sets it.
 After picking the match code, the owner signs the owner-proof message in their wallet, and the command checks that
-signature before it records anyone as the owner. Hosted approval does not host your agent runtime.
+signature before it records anyone as the owner. Approval on superstables.com does not host your agent runtime.
 Choosing a compatible site is an advanced API option; `--hosted` does not deploy a site. The contract is in
 [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).
 
@@ -268,7 +269,7 @@ RESULT {"ok":true,"command":"grant",...,"state":"waiting_owner","final":false,"c
 ```
 
 `waiting_owner` is not an approval. The agent sends the `RESULT`'s `message_for_owner` (the approval link,
-the match code for a hosted approval, the amount and network) as its reply to the owner, and ends
+the match code for an approval on superstables.com, the amount and chain) as its reply to the owner, and ends
 its turn there: some agent hosts show the owner
 nothing of a turn until it ends. When the owner says they have approved, it checks:
 

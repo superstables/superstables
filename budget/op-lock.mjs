@@ -2,6 +2,7 @@ import { durableDirectory } from './journal.mjs';
 import { randomUUID } from 'node:crypto';
 import { closeSync, fstatSync, fsyncSync, futimesSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createIdentitySource } from './lock-identity.mjs';
+import { childStartedAt } from './child-identity.mjs';
 import { inspectProcess } from '../src/core/process-identity.mjs';
 import { basename, dirname, join } from 'node:path';
 
@@ -19,7 +20,7 @@ function durableRecord(path, text) {
 }
 function liveness(owner, options = {}) {
   const results = [inspectProcess(owner, source(options))];
-  if (owner.railPid !== undefined) results.push(inspectProcess({ ...owner, pid: owner.railPid, pidStart: owner.railPidStart, pidStartUtc: owner.railPidStartUtc, namespace: 'railNamespace' in owner ? owner.railNamespace : owner.namespace, hostPid: owner.railHostPid, writtenAt: owner.railWrittenAt, bootElapsedMs: owner.railBootElapsedMs, createdAt: undefined }, source(options)));
+  if (owner.railPid !== undefined) results.push(inspectProcess({ ...owner, pid: owner.railPid, pidStart: owner.railPidStart, pidStartUtc: owner.railPidStartUtc, selfStartedAt: owner.railSelfStartedAt, namespace: 'railNamespace' in owner ? owner.railNamespace : owner.namespace, hostPid: owner.railHostPid, writtenAt: owner.railWrittenAt, bootElapsedMs: owner.railBootElapsedMs, createdAt: undefined }, source(options)));
   return results.find(result => result.state === 'alive' && !result.possiblyAlive) ?? results.find(result => result.state === 'alive') ?? results.find(result => result.state === 'unverifiable') ?? { state: 'dead' };
 }
 
@@ -203,10 +204,14 @@ export function lockFile(path, options = {}) {
         clearInterval(timer); closeSync(fd); closed = true;
         process.removeListener('exit', release);
       };
-      const holdAlso = (processOrPid) => {
+      const holdAlso = (processOrPid, startedAt) => {
         const pid = typeof processOrPid === 'number' ? processOrPid : processOrPid?.pid;
         if (!pid || holder(path, options)?.text !== text) return;
         const child = { pid, ...(source(options).fields?.(pid) ?? source(options).starts?.(pid) ?? { pidStart: source(options).start(pid) ?? null }), writtenAt: Date.now() };
+        if (child.platform === 'darwin' && typeof processOrPid === 'object') {
+          child.selfStartedAt = startedAt ?? childStartedAt(processOrPid) ?? child.selfStartedAt;
+          if (startedAt === undefined) processOrPid.once('identity', value => holdAlso(processOrPid, value));
+        }
         // Retain the lock even if publication fails after the child was spawned.
         railOwner = child;
         if (typeof processOrPid === 'object') {
@@ -214,7 +219,7 @@ export function lockFile(path, options = {}) {
           if (processOrPid.exitCode !== null || processOrPid.signalCode !== null) exited();
           else processOrPid.once('exit', exited);
         }
-        const next = JSON.stringify({ ...owner, railPid: child.pid, railPidStart: child.pidStart, railWrittenAt: child.writtenAt, railBootElapsedMs: child.bootElapsedMs, railNamespace: child.namespace, railHostPid: child.hostPid ?? null, ...(child.pidStartUtc !== undefined ? { railPidStartUtc: child.pidStartUtc } : {}) });
+        const next = JSON.stringify({ ...owner, railPid: child.pid, railPidStart: child.pidStart, ...(child.selfStartedAt !== undefined ? { railSelfStartedAt: child.selfStartedAt } : {}), railWrittenAt: child.writtenAt, railBootElapsedMs: child.bootElapsedMs, railNamespace: child.namespace, railHostPid: child.hostPid ?? null, ...(child.pidStartUtc !== undefined ? { railPidStartUtc: child.pidStartUtc } : {}) });
         const update = `${path}.${randomUUID()}.tmp`;
         try {
           durableRecord(update, next);

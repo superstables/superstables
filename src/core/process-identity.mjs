@@ -3,6 +3,8 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, readlinkSync, readdirSync } from "node:fs";
 
+import { performance } from "node:perf_hooks";
+
 import { hostname, uptime } from 'node:os';
 
 let bootId;
@@ -138,7 +140,7 @@ export function createIdentitySource({ platform = process.platform, host = optio
     let ns = namespace;
     if (platform === 'linux') { try { ns = readlink(`/proc/${target}/ns/pid`); } catch { ns = null; } }
     const ids = platform === 'linux' ? pids(target) : [];
-    return { platform, hostname: host, hostId, bootId, namespace: ns, hostPid: ns === 'pid:[4026531836]' || ids.length > 1 ? ids[0] ?? null : null, ...starts(pid), writtenAt: Date.now(), bootElapsedMs: bootElapsed() };
+    return { platform, hostname: host, hostId, bootId, namespace: ns, hostPid: ns === 'pid:[4026531836]' || ids.length > 1 ? ids[0] ?? null : null, ...starts(pid), ...(platform === 'darwin' ? { selfStartedAt: pid === process.pid ? performance.timeOrigin : null } : {}), writtenAt: Date.now(), bootElapsedMs: bootElapsed() };
   };
   let ownFields;
   return { record: () => ({ pid: process.pid, ...(ownFields ??= fields(process.pid)), writtenAt: Date.now(), bootElapsedMs: bootElapsed() }), starts, fields, start, probe, nested, readFile, readlink, readdir, pids, run, bootElapsed };
@@ -149,6 +151,7 @@ export function createIdentitySource({ platform = process.platform, host = optio
  * @property {number} [pid]
  * @property {string|null} [pidStart]
  * @property {number|null} [pidStartUtc]
+ * @property {number|null} [selfStartedAt]
  * @property {string|null} [namespace]
  * @property {string|null} [bootId]
  * @property {string} [hostname]
@@ -213,6 +216,7 @@ function inspectLegacyProcess(owner, source) {
  * @returns {ProcessInspection}
  */
 export function inspectLegacyCap(owner, source = systemIdentity) {
+  if (darwinVerifiedLive(owner, source.record(), source)) return { state: 'alive' };
   const check = inspectLegacyProcess(owner, source);
   if (check.state === 'alive' && !check.possiblyAlive) return check;
   if (Object.keys(owner).some(key => !['pid', 'pidStart', 'owner'].includes(key)) || typeof owner.owner !== 'string') return { state: 'alive', possiblyAlive: true, why: 'unverifiable legacy payment lock' };
@@ -275,6 +279,16 @@ function startAfterWrite(current, owner, source) {
   } catch { return false; }
 }
 
+function darwinVerifiedLive(owner, local, source) {
+  if (owner.platform !== 'darwin' || local.platform !== 'darwin' || !sameHost(owner, local)) return false;
+  if (uuid(owner.bootId) && uuid(local.bootId) && !sameBoot(owner, local)) return false;
+  if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0 || typeof owner.selfStartedAt !== 'number' || !Number.isFinite(owner.selfStartedAt) || owner.selfStartedAt <= 0) return false;
+  const current = processStart(owner.pid, 'darwin', source.run);
+  if (typeof current !== 'string' || !/^darwin:utc:\d+$/.test(current)) return false;
+  const psStart = Number(current.slice(11)) * 1000;
+  return owner.selfStartedAt >= psStart && owner.selfStartedAt < psStart + 3000;
+}
+
 /**
  * @typedef {object} ProcessInspection
  * @property {'alive'|'dead'} state
@@ -290,7 +304,7 @@ function startAfterWrite(current, owner, source) {
 export function inspectProcess(owner, source = systemIdentity, group = false) {
   const local = source.record();
   /** @type {(why: string) => ProcessInspection} */
-  const possible = why => ({ state: 'alive', possiblyAlive: true, pid: owner.pid, why });
+  const possible = why => darwinVerifiedLive(owner, local, source) ? { state: 'alive' } : ({ state: 'alive', possiblyAlive: true, pid: owner.pid, why });
   if (owner.platform && owner.platform !== local.platform) return possible('another OS');
   if (!owner.bootId) {
     const legacy = inspectLegacyProcess(owner, source);
