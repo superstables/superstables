@@ -13,7 +13,8 @@ fs.mkdirSync = (path, options) => {
 };
 fs.openSync = (path, ...args) => {
   const fd = original.openSync(path, ...args); descriptors.set(fd, path);
-  if (!String(path).startsWith(home)) openedAncestors.push(path);
+  // Directories only: the module loader may open the client's own source files through this same function.
+  if (!String(path).startsWith(home) && original.statSync(path).isDirectory()) openedAncestors.push(path);
   return fd;
 };
 fs.closeSync = fd => { descriptors.delete(fd); return original.closeSync(fd); };
