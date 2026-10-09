@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { processStart } from "../../budget/procs.mjs";
 
+import { createIdentitySource } from "../../budget/lock-identity.mjs";
+const hostIdentity = createIdentitySource().record();
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const TOKEN = "ssbt_test_ba_test0001secret";
 // a site on this computer that is not there: a cancel gets no answer
@@ -144,7 +146,7 @@ describe("the record's lock", () => {
     return { done, exited: () => exited };
   };
   const hold = (id: string, holder: { pid: number; pidStart: string | null }) => {
-    writeFileSync(approvals.recordLockFile(id), JSON.stringify({ ...holder, owner: "test" }), { mode: 0o600 });
+    writeFileSync(approvals.recordLockFile(id), JSON.stringify({ ...hostIdentity, ...holder, owner: "test" }), { mode: 0o600 });
   };
 
   it("is kept by a live holder however long it is paused, never taken over by age", async () => {
@@ -230,11 +232,11 @@ describe("the record's lock: breaking a dead holder's lock, and its deadline", (
   const deadLock = async (id: string) => {
     const dead = spawn(process.execPath, ["-e", "0"]);
     await new Promise((r) => dead.once("exit", r));
-    const text = JSON.stringify({ pid: dead.pid, pidStart: null, owner: "dead" });
+    const text = JSON.stringify({ ...hostIdentity, pid: dead.pid, pidStart: null, owner: "dead" });
     writeFileSync(approvals.recordLockFile(id), text, { mode: 0o600 });
     return text;
   };
-  const liveText = JSON.stringify({ pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: "test" });
+  const liveText = JSON.stringify({ ...hostIdentity, pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: "test" });
 
   it("a breaker paused (SIGSTOP) while it holds the break mutex is not robbed of it", async () => {
     const id = fresh();
@@ -307,7 +309,7 @@ describe("the record's lock: breaking a dead holder's lock, and its deadline", (
     utimesSync(approvals.recordLockFile(id), old, old);
     const r = await finisher(id, 800).done;
     expect(r.code).toBe(2);
-    expect(r.out).toMatch(/ERR the lock .* cannot be read; if no superstables budget command is running, remove it/);
+    expect(r.out).toMatch(/ERR the lock .* cannot be read\. The payment lock is held\. Its process may still be running\. Stop and ask the owner/);
     expect(readFileSync(approvals.recordLockFile(id), "utf8")).toBe("not a lock");
     unlinkSync(approvals.recordLockFile(id));
   }, 30_000);
@@ -320,7 +322,7 @@ describe("the record's lock: breaking a dead holder's lock, and its deadline", (
     utimesSync(path, old, old);
     const r = approvals.claim("evm", "base-sepolia", id);
     expect(r.ok).toBe(false);
-    expect((r as any).pending.command).toMatch(/an unreadable lock \(.*active-evm-base-sepolia\); if no superstables budget command is running, remove that file/);
+    expect((r as any).pending.command).toMatch(/an unreadable lock \(.*active-evm-base-sepolia\)\. The payment lock is held\. Its process may still be running\. Stop and ask the owner/);
     expect(readFileSync(path, "utf8")).toBe("{ not json");
     unlinkSync(path);
   });

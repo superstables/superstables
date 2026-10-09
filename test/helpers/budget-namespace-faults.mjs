@@ -1,5 +1,6 @@
 // Fault each filesystem boundary of heartbeat and release in a real PID namespace.
 // Run: node test/helpers/budget-namespace-faults.mjs [--long-pause]
+import { assertHolderStopped } from './budget-holder-cleanup.mjs';
 import fs from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
@@ -67,7 +68,7 @@ if (process.argv[2] === 'worker') {
     return { home, path: join(home, 'budget/ops/solana-devnet/paid-op.json.lock') };
   }
   async function worker(b, action, step, phase) {
-    const p = spawn('/usr/bin/bwrap', ['--unshare-pid', '--die-with-parent', '--dev-bind', '/', '/', '--ro-bind', '/proc', join(b.home, 'host-proc'), '--proc', '/proc', process.execPath, script, 'worker', b.home, action, String(step), phase]);
+    const p = spawn('/usr/bin/bwrap', ['--unshare-pid', '--die-with-parent', '--new-session', '--dev-bind', '/', '/', '--ro-bind', '/proc', join(b.home, 'host-proc'), '--proc', '/proc', process.execPath, script, 'worker', b.home, action, String(step), phase]);
     const state = { p, events: [], hostPid: null, exited: false, error: '' }; children.add(state);
     p.stderr.on('data', c => { state.error += c; });
     let stdout = '';
@@ -94,6 +95,17 @@ if (process.argv[2] === 'worker') {
       const done = new Promise(r => state.p.once('exit', r));
       try { process.kill(state.hostPid, 'SIGKILL'); } catch {} state.p.kill('SIGKILL'); await done;
     }
+    // bwrap can exit before the kernel finishes killing the namespace's process.
+    const deadline = Date.now() + 25000;
+    for (;;) {
+      try {
+        const stat = fs.readFileSync(`/proc/${state.hostPid}/stat`, 'utf8');
+        if (['Z', 'X'].includes(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0])) break;
+      } catch (err) { if (['ENOENT', 'ESRCH'].includes(err.code)) break; throw err; }
+      if (Date.now() > deadline) throw new Error('namespace holder did not finish exiting');
+      await sleep(3);
+    }
+    await assertHolderStopped(state.hostPid);
     children.delete(state);
   }
   function confirmed(b) {
@@ -125,7 +137,7 @@ if (process.argv[2] === 'worker') {
         successor.release();
       }
       await kill(state);
-      if (fs.existsSync(b.path)) tryBusy(b);
+      if (fs.existsSync(b.path)) { const recovered = lockFile(b.path); assert.equal(recovered.ok, true, JSON.stringify(recovered)); recovered.release(); }
       if (fs.existsSync(b.path) || fs.existsSync(b.path + '.break')) confirmed(b);
       const next = lockFile(b.path); assert.equal(next.ok, true, 'blocked after confirmed recovery'); if (next.ok) next.release();
       cases++; if (cases % 20 === 0) console.log(JSON.stringify({ cases, fired }));
@@ -192,7 +204,7 @@ if (process.argv[2] === 'worker') {
       for (let step = 1; step <= calls; step++) for (const phase of ['before', 'after']) for (const crash of [false, true]) await run('release', step, phase, crash);
       // Fire the real heartbeat callback through a shortened test interval.
       for (let step = 1; step <= 2; step++) for (const phase of ['before', 'after']) for (const crash of [false, true]) await run('heartbeat', step, phase, crash);
-      console.log(JSON.stringify({ result: 'pass', cases, fired, doubleHolders: 0, lostSuccessors: 0, automaticForeignTakeovers: 0 }));
+      console.log(JSON.stringify({ result: 'pass', cases, fired, doubleHolders: 0, lostSuccessors: 0, unsafeForeignTakeovers: 0 }));
     }
-  } finally { stop(); for (const home of homes) fs.rmSync(home, { recursive: true, force: true }); }
+  } finally { for (const state of [...children]) await kill(state); for (const home of homes) fs.rmSync(home, { recursive: true, force: true }); }
 }

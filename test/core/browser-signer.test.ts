@@ -1520,9 +1520,11 @@ function budget(args: string[]): Promise<{ code: number; stdout: string; result:
   });
 }
 
+const testHostIdentity = (await import("../../budget/lock-identity.mjs")).createIdentitySource().record();
 async function gone(pid: number): Promise<boolean> {
-  for (let i = 0; i < 50 && approvals.alive(pid); i++) await new Promise((r) => setTimeout(r, 100));
-  return !approvals.alive(pid);
+  const location = (await import("../../budget/lock-identity.mjs")).createIdentitySource().record();
+  for (let i = 0; i < 50 && approvals.alive(pid, undefined, undefined, location); i++) await new Promise((r) => setTimeout(r, 100));
+  return !approvals.alive(pid, undefined, undefined, location);
 }
 
 async function unreachable(url: string): Promise<boolean> {
@@ -1753,9 +1755,9 @@ describe("a detached owner approval", () => {
     // a lock whose claimer is gone: still held during the startup grace, taken over after it
     const dead = spawnSync(process.execPath, ["-e", ""]).pid;
     const lockPath = join(budgetHome, "budget", "approvals", "active-evm-polygon-amoy");
-    writeFileSync(lockPath, JSON.stringify({ id: a, pid: dead, createdAt: Date.now() }));
+    writeFileSync(lockPath, JSON.stringify({ ...testHostIdentity, id: a, pid: dead, createdAt: Date.now() }));
     expect(approvals.claim("evm", "polygon-amoy", b).ok).toBe(false);
-    writeFileSync(lockPath, JSON.stringify({ id: a, pid: dead, createdAt: Date.now() - approvals.STARTUP_GRACE_MS - 1000 }));
+    writeFileSync(lockPath, JSON.stringify({ ...testHostIdentity, id: a, pid: dead, createdAt: Date.now() - approvals.STARTUP_GRACE_MS - 1000 }));
     expect(approvals.claim("evm", "polygon-amoy", b).ok).toBe(true);
     approvals.release("evm", "polygon-amoy", b);
     expect(existsSync(lockPath)).toBe(false);

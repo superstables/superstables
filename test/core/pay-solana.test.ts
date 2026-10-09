@@ -26,7 +26,7 @@ import bs58 from "bs58";
 import { randomBytes } from "node:crypto";
 
 /** A pid no process has: a runner that is gone. */
-const GONE = { pid: 2 ** 30 + 7, start: "linux:gone:1" };
+const GONE = { ...(await import("../../src/core/lock.js")).thisProcess(), pid: 2 ** 30 + 7, start: "linux:gone:1" };
 
 const RPC_ENV = "SUPERSTABLES_SOLANA_RPC";
 const savedRpc = process.env[RPC_ENV];
