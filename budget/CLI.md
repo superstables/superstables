@@ -176,7 +176,7 @@ Operation locks record a stable host ID, platform, boot ID, PID namespace, PID, 
 
 ### Operation lock recovery
 
-Agents must stop and ask the owner when a lock blocks reconciliation. Agents never run unlock. Stop every process working on the operation across all containers and hosts. Run unlock in your own terminal, outside any agent's sandbox. Plain `--confirm` refuses when Superstables cannot prove that the lock's processes have stopped. If verification remains unavailable after you have stopped all work, add `--unverified`. Read the second-payment warning, then type the operation ID followed by a space and `unverified`. Keep all work stopped until unlock finishes, then reconcile the original operation.
+Agents must stop and ask the owner when a lock blocks reconciliation. Agents never run `unlock`. As the owner, stop every process working on the operation across all containers and hosts. Run `unlock` in your own terminal, outside any agent's sandbox. Plain `--confirm` refuses when Superstables cannot prove that the lock's processes have stopped. If verification remains unavailable after you have stopped all work, add `--unverified`. Read the second-payment warning, then type the operation ID followed by a space and `unverified`. Keep all work stopped until `unlock` finishes, then reconcile the original operation.
 
 ```sh
 superstables budget unlock --rail solana --chain devnet --op ID --confirm
