@@ -9,6 +9,8 @@ const root = resolve(process.env.BUDGET_RACE_ROOT ?? join(import.meta.dirname, '
 const procs = await import(join(root, 'budget/procs.mjs'));
 const { createIdentitySource } = await import(join(root, 'budget/lock-identity.mjs'));
 const { lockFile } = await import(join(root, 'budget/op-lock.mjs'));
+const psReadable = typeof procs.processStart(process.pid, 'darwin') === 'string';
+if (!psReadable && process.env.BUDGET_TEST_SANDBOX !== '1') throw new Error('ps start identity is unavailable outside the sandbox simulation; install procps or check ps permissions');
 const helper = join(import.meta.dirname, '../helpers/budget-identity-worker.mjs');
 const preload = join(root, 'test/helpers/budget-macos-identity.mjs');
 const homes: string[] = [];
@@ -41,6 +43,7 @@ it('keeps unzoned legacy macOS starts incomparable, including when the strings h
 });
 it('uses the macOS boot-session UUID without reading clock-based boottime', () => {
   const identity = createIdentitySource({ platform: 'darwin', run: (command: string, args: string[]) => {
+    if (command === 'ioreg') return '"IOPlatformUUID" = "11111111-2222-3333-4444-555555555555"';
     expect(command).toBe('sysctl'); expect(args).toEqual(['-n', 'kern.bootsessionuuid']);
     return ' B0AAAEAB-5578-4A8D-BB24-2FA546301F7A\n';
   }, start: () => 'darwin:utc:1791244860' }).record();
@@ -51,15 +54,15 @@ for (const platform of ['linux', 'darwin']) {
     const b = box();
     const local = createIdentitySource().record();
     const record = { ...local, platform, hostname: 'machine.lan', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', pidStart: platform === 'darwin' ? 'darwin:utc:1791244860' : local.pidStart, pidStartUtc: platform === 'darwin' ? 1791244860 : null, namespace: platform === 'linux' ? 'pid:[test]' : null };
-    const identitySource = { record: () => ({ ...record, hostname: 'machine.local' }), start: () => record.pidStart, probe: () => true };
+    const identitySource = { pids: () => [process.pid], record: () => ({ ...record, hostname: 'machine.local' }), start: () => record.pidStart, probe: () => true };
     writeFileSync(b.path, JSON.stringify(record));
     expect(lockFile(b.path, { identitySource, confirmUnverifiable: true }).ok).toBe(false);
     expect(readFileSync(b.path, 'utf8')).toBe(JSON.stringify(record));
   });
-  it(`recovers a dead ${platform} holder after a hostname change on the same boot`, () => {
+  it(`recovers a dead ${platform} holder after a hostname change with matching boot identity`, () => {
     const b = box();
     const record = { ...createIdentitySource().record(), platform, hostname: 'machine.lan', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', pid: 42, pidStart: null, pidStartUtc: null, namespace: platform === 'linux' ? 'pid:[test]' : null };
-    const identitySource = { record: () => ({ ...record, hostname: 'machine.local', pid: process.pid }), start: () => null, probe: (pid: number) => {
+    const identitySource = { pids: () => [process.pid], record: () => ({ ...record, hostname: 'machine.local', pid: process.pid }), start: () => null, probe: (pid: number) => {
       if (pid === 42) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
       return true;
     } };
@@ -81,28 +84,31 @@ it('never automatically clears a legacy macOS start mismatch even with a matchin
   const b = box();
   const record = { platform: 'darwin', hostname: 'mac', bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', namespace: null, pid: 42, pidStart: 'darwin:Mon Oct  5 17:01:00 2026' };
   writeFileSync(b.path, JSON.stringify(record));
-  const identitySource = { record: () => record, start: () => 'darwin:utc:1791244860', probe: () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); } };
+  const identitySource = { pids: () => [process.pid], record: () => record, start: () => 'darwin:utc:1791244860', probe: () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); } };
   expect(lockFile(b.path, { identitySource }).ok).toBe(false);
   expect(readFileSync(b.path, 'utf8')).toBe(JSON.stringify(record));
 });
 it('rechecks the lock after the override warning so a normally released holder and its successor survive', () => {
   const b = box();
-  const old = lockFile(b.path); expect(old.ok).toBe(true);
-  const real = createIdentitySource();
-  const foreign = { ...real, record: () => ({ ...real.record(), bootId: 'another-boot' }) };
+  const system = createIdentitySource();
+  const real = { ...system, record: () => ({ ...system.record(), bootId: 'b0aaaeab-5578-4a8d-bb24-2fa546301f7a', namespace: 'pid:[test]' }) };
+  const old = lockFile(b.path, { identitySource: real }); expect(old.ok).toBe(true);
+  const foreign = { ...real, record: () => ({ ...real.record(), namespace: null, hostId: 'another-host' }) };
   let successor: ReturnType<typeof lockFile> | undefined;
-  const result = lockFile(b.path, { identitySource: foreign, confirmUnverifiable: true, onOverride: () => {
+  const result = lockFile(b.path, { identitySource: foreign, confirmUnverifiable: true, confirmPossiblyAlive: true, onOverride: () => {
     if (old.ok) old.release();
-    successor = lockFile(b.path); expect(successor.ok).toBe(true);
+    successor = lockFile(b.path, { identitySource: real }); expect(successor.ok).toBe(true);
   } });
   try {
     expect(result.ok).toBe(false);
+    expect(successor?.ok).toBe(true);
     expect(JSON.parse(readFileSync(b.path, 'utf8')).bootId).toBe(real.record().bootId);
-    expect(lockFile(b.path).ok).toBe(false);
+    expect(lockFile(b.path, { identitySource: real }).ok).toBe(false);
   } finally { if (result.ok) result.release(); if (successor?.ok) successor.release(); if (old.ok) old.release(); }
 });
 for (const [holderTZ, contenderTZ] of [['UTC', 'America/Los_Angeles'], ['Asia/Tokyo', 'UTC'], ['America/Los_Angeles', 'Asia/Tokyo']]) {
-  it(`protects the real-ps macOS holder in ${holderTZ} from takeover and unlock in ${contenderTZ}`, async () => {
+  it(`protects the real-ps macOS holder in ${holderTZ} from takeover and unlock in ${contenderTZ}`, async (context) => {
+    if (!psReadable && process.env.BUDGET_TEST_SANDBOX === '1') context.skip('mixed-time-zone identity requires ps; blocked-identity safety still runs in lock-sandbox.test.ts');
     const b = box();
     const holder = spawn(process.execPath, ['--import', preload, helper, root, b.path, 'hold'], { env: { ...process.env, TZ: holderTZ }, stdio: ['ignore', 'pipe', 'pipe'] });
     try {
@@ -135,16 +141,16 @@ it('approval and group readers preserve live legacy starts and stay stable acros
     const [status] = await exited; expect(status).toBe(0);
   } finally { if (r.exitCode === null) { r.kill('SIGKILL'); await exited; } }
 });
-it('prints owner override details without agent instructions and points refusal guidance to installed help', () => {
+it('prints the owner override notice and keeps refusal output free of recovery instructions', () => {
   const b = box(); writeFileSync(b.path, '{');
-  const args = [join(root, 'budget/cli.mjs'), 'unlock', '--rail', 'solana', '--op', 'tz-op', '--confirm'];
+  const args = [join(root, 'budget/cli.mjs'), 'unlock', '--rail', 'solana', '--op', 'tz-op', '--confirm', '--unverified'];
   const env = { ...process.env, SUPERSTABLES_HOME: b.home };
   const refused = spawnSync(process.execPath, args, { env, encoding: 'utf8', input: 'tz-op\n' });
-  expect(refused.status).toBe(3); expect(refused.stdout).toContain('the owner-only unlock --help section of the installed CLI');
-  const confirmed = spawnSync(process.execPath, ['--import', join(import.meta.dirname, '../helpers/budget-owner-terminal.mjs'), ...args], { env, encoding: 'utf8', input: 'tz-op\n' });
+  expect(refused.status).toBe(3); expect(refused.stdout).toContain("outside the agent's sandbox");
+  const confirmed = spawnSync(process.execPath, ['--import', join(import.meta.dirname, '../helpers/budget-owner-terminal.mjs'), ...args], { env, encoding: 'utf8', input: 'tz-op unverified\n' });
   expect(confirmed.status, confirmed.stderr).toBe(0);
-  const warning = confirmed.stderr.split('\n').find(line => line.includes('overriding unverifiable lock'));
-  expect(warning).toContain("unlock paused before unlinking can remove a new holder's lock");
+  const warning = confirmed.stderr.split('\n').find(line => line.includes('Clearing the lock for operation'));
+  expect(confirmed.stderr).toContain("unlock paused before unlinking can remove a new holder's lock");
   expect(warning).not.toContain('stop and ask the owner'); expect(warning).not.toContain('see ');
 });
 
@@ -160,17 +166,20 @@ it.each(['record', 'inode'])('preserves a replacement %s published during the fi
     }
     return real.record();
   } };
-  const result = lockFile(b.path, { identitySource, confirmUnverifiable: true, onOverride: () => { warned = true; } });
+  const result = lockFile(b.path, { identitySource, confirmUnverifiable: true, confirmPossiblyAlive: true, onOverride: () => { warned = true; } });
   try {
     expect(result.ok).toBe(false);
     expect(readFileSync(b.path, 'utf8')).toBe(replacement);
   } finally { if (result.ok) result.release(); }
 });
 
-it('approval and group readers prefer numeric UTC seconds over the legacy start field', async () => {
+it('approval and group readers prefer numeric UTC seconds over the legacy start field', async (context) => {
+  if (!psReadable && process.env.BUDGET_TEST_SANDBOX === '1') context.skip('numeric UTC start identity requires ps; blocked-identity readers still run in lock-sandbox.test.ts');
   const r = spawn(process.execPath, ['--import', preload, '--input-type=module', '-e', `
     import { processStartFields, sameProcess, groupAlive } from ${JSON.stringify(join(root, 'budget/procs.mjs'))};
     import { alive, groupAlive as approvalGroup, processesAlive } from ${JSON.stringify(join(root, 'budget/approvals.mjs'))};
+    const { createIdentitySource } = await import(${JSON.stringify(join(root, 'budget/lock-identity.mjs'))});
+    const location = createIdentitySource().record();
     process.env.TZ = 'Asia/Kathmandu';
     const starts = processStartFields(process.pid);
     process.env.TZ = 'America/Los_Angeles';
@@ -178,12 +187,12 @@ it('approval and group readers prefer numeric UTC seconds over the legacy start 
     const pid = process.pid, utc = starts.pidStartUtc;
     console.log(JSON.stringify([
       typeof utc,
-      sameProcess(pid, wrong, utc), alive(pid, wrong, utc),
-      groupAlive(pid, wrong, utc), approvalGroup(pid, wrong, utc),
-      sameProcess(pid, starts.pidStart, utc + 1), alive(pid, starts.pidStart, utc + 1),
-      groupAlive(pid, starts.pidStart, utc + 1), approvalGroup(pid, starts.pidStart, utc + 1),
-      processesAlive({ railPgid: pid, railPgidStart: wrong, railPgidStartUtc: utc }),
-      processesAlive({ railPgid: pid, railPgidStart: starts.pidStart, railPgidStartUtc: utc + 1 }),
+      sameProcess(pid, wrong, utc, location), alive(pid, wrong, utc, location),
+      groupAlive(pid, wrong, utc, location), approvalGroup(pid, wrong, utc, location),
+      sameProcess(pid, starts.pidStart, utc + 1, location), alive(pid, starts.pidStart, utc + 1, location),
+      groupAlive(pid, starts.pidStart, utc + 1, location), approvalGroup(pid, starts.pidStart, utc + 1, location),
+      processesAlive({ ...location, pid: null, railPgid: pid, railPgidStart: wrong, railPgidStartUtc: utc }),
+      processesAlive({ ...location, pid: null, railPgid: pid, railPgidStart: starts.pidStart, railPgidStartUtc: utc + 1 }),
     ]));
   `], { env: { ...process.env, SUPERSTABLES_HOME: box().home }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const exited = once(r, 'exit');

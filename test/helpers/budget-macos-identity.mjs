@@ -20,6 +20,7 @@ if (process.env.BUDGET_TEST_DENY_PROC === '1') {
 }
 const run = childProcess.execFileSync;
 childProcess.execFileSync = function (command, ...args) {
+  if (command === 'ioreg') return '"IOPlatformUUID" = "11111111-2222-3333-4444-555555555555"';
   if (command === 'sysctl') return 'B0AAAEAB-5578-4A8D-BB24-2FA546301F7A';
   return run.call(this, command, ...args);
 };

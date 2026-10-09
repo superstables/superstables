@@ -797,7 +797,7 @@ describe("find", () => {
     }, 30_000);
 
     it("refuses an unknown chain and names every key the budget commands take", async () => {
-      const keys = "base-sepolia, arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia (evm); moderato (tempo); devnet (solana)";
+      const keys = "base-sepolia, arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet (evm); moderato (tempo); devnet (solana)";
       const bad = await budget(["find", "--chain", "sepolia", "--site", site.url]);
       expect(bad.code).toBe(2);
       expect(bad.result.reason).toBe(`--chain for find must be one of: ${keys}`);

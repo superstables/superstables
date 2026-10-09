@@ -25,7 +25,7 @@ import type { PaymentRequirements } from "@x402/core/types";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { DEFAULT_NETWORK, evmNetworkFor, fromAtomic, usdcBalance } from "../core/chain.js";
 import { DEFAULT_WALLET_PORT, ensureDir, policyPath, walletDir } from "../core/home.js";
-import { evaluatePolicy, formatMoney, loadPolicy, type Policy } from "../core/policy.js";
+import { capUnit, evaluatePolicy, formatMoney, loadPolicy, type Policy } from "../core/policy.js";
 import { LocalKeySigner } from "../core/signer/local.js";
 import { LOCAL_WALLET_EVM_ONLY, type Eip3009SignRequest, type Eip3009SignResult } from "../core/signer/types.js";
 import type {
@@ -209,13 +209,14 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
         const entry = JSON.parse(line) as { at?: string; status?: string; verified?: VerifiedTerms };
         if (entry.status !== "signed" || !entry.verified) continue;
         if (!entry.at || entry.at.slice(0, 10) !== today) continue;
-        if (entry.verified.asset.toUpperCase() !== asset.toUpperCase()) continue;
+        // The caps count the dollar stablecoins together (USDC and USDG here), any other asset on its own.
+        if (capUnit(entry.verified.asset) !== capUnit(asset)) continue;
         total += BigInt(entry.verified.amountAtomic);
       } catch {
         // A truncated or hand-edited line is skipped rather than failing the payment path.
       }
     }
-    // This wallet signs USDC only, which has six decimals on every chain it signs on.
+    // This wallet signs USDC and USDG only, which have six decimals on every chain it signs on.
     return fromAtomic(total.toString(), DEFAULT_NETWORK.usdc.decimals);
   }
 

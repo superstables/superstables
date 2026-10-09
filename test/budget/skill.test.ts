@@ -36,7 +36,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
     const top = skill.split("\n").slice(0, 12).join("\n");
     expect(top).toMatch(/Testnet only: test tokens, no real money\./);
     // The description names both tokens, and Budgets before Single purchase.
-    expect(top).toMatch(/using test USDC or test pathUSD\. Testnet only\. Budgets let the owner grant[^\n]*Single purchase lets the owner approve one purchase/);
+    expect(top).toMatch(/using test USDC, test USDG or test pathUSD\. Testnet only\. Budgets let the owner grant[^\n]*Single purchase lets the owner approve one purchase/);
     const ask = skill.indexOf("## First, ask the owner what they would like to try");
     expect(ask).toBeGreaterThan(0);
     expect(skill).toContain('"This uses test tokens, no real money. Would you like a budget or a single purchase you approve?"');

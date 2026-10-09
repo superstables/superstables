@@ -1,4 +1,4 @@
-// The six EVM testnets `pay` signs on. Their facts are written twice, once here (src/core/chain.ts) and once for the
+// The seven EVM testnets `pay` signs on. Their facts are written twice, once here (src/core/chain.ts) and once for the
 // budget (budget/evm/chains.mjs), so the first test holds the two tables together field by field. The rest pin what the
 // owner's wallet signs on each chain: the token's own EIP-712 domain (Arbitrum's is "USD Coin", SKALE's "Bridged USDC
 // (SKALE Bridge)"), a seller that names any other is refused, and the chain a wallet is offered carries its own currency.
@@ -19,7 +19,7 @@ import { paymentReceipt, startFakeBaseSepolia, type FakeBaseSepolia } from "../h
 const PAY_TO = `0x${"22".repeat(20)}`;
 const budget = EVM_CHAINS as Record<string, any>;
 
-/** What the six chains must be, written out once more: the vectors a reviewer checks against the chains themselves. */
+/** What the seven chains must be, written out once more: the vectors a reviewer checks against the chains themselves. */
 const VECTORS: Record<string, { chainId: number; usdc: string; domain: { name: string; version: string }; native: { symbol: string; decimals: number } }> = {
   "base-sepolia": { chainId: 84532, usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", domain: { name: "USDC", version: "2" }, native: { symbol: "ETH", decimals: 18 } },
   "arc-testnet": { chainId: 5042002, usdc: "0x3600000000000000000000000000000000000000", domain: { name: "USDC", version: "2" }, native: { symbol: "USDC", decimals: 18 } },
@@ -27,7 +27,10 @@ const VECTORS: Record<string, { chainId: number; usdc: string; domain: { name: s
   "polygon-amoy": { chainId: 80002, usdc: "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582", domain: { name: "USDC", version: "2" }, native: { symbol: "POL", decimals: 18 } },
   "skale-base-sepolia": { chainId: 324705682, usdc: "0x2e08028E3C4c2356572E096d8EF835cD5C6030bD", domain: { name: "Bridged USDC (SKALE Bridge)", version: "2" }, native: { symbol: "CREDIT", decimals: 18 } },
   "ethereum-sepolia": { chainId: 11155111, usdc: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", domain: { name: "USDC", version: "2" }, native: { symbol: "ETH", decimals: 18 } },
+  // Paxos's test USDG, not USDC: its own name and version 1.
+  "robinhood-testnet": { chainId: 46630, usdc: "0x7E955252E15c84f5768B83c41a71F9eba181802F", domain: { name: "Global Dollar", version: "1" }, native: { symbol: "ETH", decimals: 18 } },
 };
+const SYMBOLS: Record<string, string> = { "robinhood-testnet": "USDG" };
 
 function record(network: EvmNetwork, version: 1 | 2 = 2): StepRecord {
   const requirement = usdcRequirement(0.01, PAY_TO, network);
@@ -55,11 +58,12 @@ describe("the EVM chain table", () => {
     }
   });
 
-  it("holds the pinned vectors for every chain, and pay signs on all six", () => {
+  it("holds the pinned vectors for every chain, and pay signs on all seven", () => {
     expect(Object.keys(VECTORS)).toEqual(EVM_NETWORKS.map((n) => n.key));
     for (const network of EVM_NETWORKS) {
       const v = VECTORS[network.key];
       expect({ chainId: network.chainId, usdc: network.usdc.address, domain: network.usdc.eip712, native: { symbol: network.wallet.nativeCurrency.symbol, decimals: network.wallet.nativeCurrency.decimals } }, network.key).toEqual(v);
+      expect(network.token.symbol, network.key).toBe(SYMBOLS[network.key] ?? "USDC");
       expect(SUPPORTED_NETWORKS.map((n) => n.caip2)).toContain(network.caip2);
     }
   });
@@ -72,7 +76,7 @@ describe("judging an x402 offer on each EVM chain", () => {
       const judged = termsFor(offer, 2);
       expect(judged.supported, network.key).toBe(true);
       if (!judged.supported) continue;
-      expect(judged.terms).toMatchObject({ asset: "USDC", assetAddress: network.usdc.address, network: network.caip2, networkLabel: network.label, amountAtomic: "10000" });
+      expect(judged.terms).toMatchObject({ asset: SYMBOLS[network.key] ?? "USDC", assetAddress: network.usdc.address, network: network.caip2, networkLabel: network.label, amountAtomic: "10000" });
       expect(termsFor({ ...offer, extra: {} }, 2).supported, network.key).toBe(true);
       if (network.v1Name) expect(termsFor({ ...offer, network: network.v1Name, maxAmountRequired: "10000" }, 1).supported, network.key).toBe(true);
     }
@@ -82,8 +86,8 @@ describe("judging an x402 offer on each EVM chain", () => {
     for (const network of EVM_NETWORKS) {
       const offer = usdcRequirement(0.01, PAY_TO, network);
       const others = [
-        { name: network.usdc.eip712.name === "USDC" ? "USD Coin" : "USDC", version: "2" },
-        { name: network.usdc.eip712.name, version: "1" },
+        { name: network.usdc.eip712.name === "USDC" ? "USD Coin" : "USDC", version: network.usdc.eip712.version },
+        { name: network.usdc.eip712.name, version: network.usdc.eip712.version === "1" ? "2" : "1" },
         { name: "Superstables Official Refund", version: "2" },
       ];
       for (const extra of others) {
@@ -110,6 +114,8 @@ describe("judging an x402 offer on each EVM chain", () => {
       ["eip155:5042", "Arc (mainnet)"],
       ["eip155:1187947933", "SKALE Base (mainnet)"],
       ["eip155:4217", "Tempo (mainnet)"],
+      ["eip155:4663", "Robinhood Chain (mainnet)"],
+      ["robinhood", "Robinhood Chain (mainnet)"],
       ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "Solana (mainnet)"],
       ["solana", "Solana (mainnet)"],
     ]) {
@@ -126,7 +132,7 @@ describe("what the owner's wallet signs on each EVM chain", () => {
     const owner = privateKeyToAccount(generatePrivateKey());
     for (const network of EVM_NETWORKS) {
       const typed = buildTypedData(record(network), owner.address);
-      expect(typed.domain, network.key).toEqual({ name: VECTORS[network.key].domain.name, version: "2", chainId: VECTORS[network.key].chainId, verifyingContract: VECTORS[network.key].usdc });
+      expect(typed.domain, network.key).toEqual({ name: VECTORS[network.key].domain.name, version: VECTORS[network.key].domain.version, chainId: VECTORS[network.key].chainId, verifyingContract: VECTORS[network.key].usdc });
       const signature = await owner.signTypedData(typed as never);
       expect(await verifyTypedData({ address: owner.address, signature, ...typed } as never), network.key).toBe(true);
     }
