@@ -73,8 +73,8 @@ Commands:
   help [command]                 display help for command
 
 What this is:
-  A client for paying per request with test USDC (pathUSD on Tempo): find a paid service, quote
-  it, and pay it.
+  A client for paying per request with test USDC (pathUSD on Tempo, USDG on Robinhood Chain
+  Testnet): find a paid service, quote it, and pay it.
   The agent can ask for a payment but cannot approve one.
 
 Two ways to pay:
@@ -85,8 +85,8 @@ Two ways to pay:
   budget   The owner grants an on-chain budget once, from their wallet; the agent then buys on its
            own until the budget is spent, expires or is revoked. The chain enforces the limit.
            Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
-           Sepolia, Ethereum Sepolia), tempo (Tempo Moderato), solana (Solana devnet). Use it when
-           the agent should buy without asking each time.
+           Sepolia, Ethereum Sepolia, Robinhood Chain Testnet), tempo (Tempo Moderato), solana
+           (Solana devnet). Use it when the agent should buy without asking each time.
 
 Start here, pay:
   superstables setup                                   owner, once: home directory and policy (pay only)
@@ -125,7 +125,7 @@ Where state lives:
 
 Discovery:
   find reads a built-in catalogue and the public index at https://www.superstables.com/api/v1/services.
-  SUPERSTABLES_INDEX_URL points it at another index with the same API (a self-hosted one), or
+  SUPERSTABLES_INDEX_URL points it at another index with the same API (one you run), or
   switches it off with `off`. Index listings show their payment protocols (rails) and chains, and
   whether pay or a budget rail could pay them. Only testnets are ever payable.
 
@@ -134,11 +134,11 @@ Environment:
   SUPERSTABLES_WALLET            browser (default) or local: who signs pay's payments
   SUPERSTABLES_POLICY            the spend policy file (default $SUPERSTABLES_HOME/policy.yaml)
   SUPERSTABLES_INDEX_URL         the index find reads; `off` to skip it
-  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the hosted catalogue
+  SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the catalogue on superstables.com
                                  (most are simulated; the market data service returns live prices)
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; `off` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
-  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances, the network MetaMask adds, and the chain
+  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances, the chain MetaMask adds, and the chain
                                  check on a settlement (https, or http on this machine)
   SUPERSTABLES_TEMPO_RPC         the Tempo Moderato RPC for pay's chain checks (https, or http on this machine)
   SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine)
@@ -319,9 +319,9 @@ Options:
                of the ones pay can
   --all        show every listing, including those this client cannot pay, and
                why
-  --demo       also list Superstables' testnet services from the hosted
-               catalogue: most return prepared sample output and are marked
-               simulated; the market data service returns live prices
+  --demo       also list Superstables' testnet services from the catalogue on
+               superstables.com: most return prepared sample output and are
+               marked simulated; the market data service returns live prices
                (SUPERSTABLES_DEMO_SERVICES=on does the same)
   --json       print {services, warnings} as JSON
   -h, --help   display help for command
@@ -370,6 +370,8 @@ Options:
   --service <id>       quote a service found by `superstables find`
   --param <key=value>  a request parameter for the service (repeatable)
                        (default: [])
+  --chain <chain>      when the seller offers several chains, take its offer on
+                       this one (e.g. robinhood-testnet)
   --json               print the quote record, with policy.checks and next
   -h, --help           display help for command
 
@@ -414,13 +416,13 @@ the wallet process, whose page outlives this command; approving there after pay 
 nothing, because nothing is left to submit it.
 
 Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
-Sepolia, Ethereum Sepolia and Solana devnet; MPP with test pathUSD on Tempo Moderato. The wallet
-signs on the EVM chains and Solana, and pay submits what it signed. On Tempo the owner's wallet
-sends the payment itself: pay records that before the wallet is asked, reads the owner's transaction
-on chain, and only then calls the seller. Once the wallet has been asked to send, an attempt that
-ends without a transaction report is uncertain, a rejection the page reports from the wallet
-included, and `superstables status` searches the chain for it. --wallet local signs on the EVM
-chains only.
+Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet; MPP with
+test pathUSD on Tempo Moderato. The wallet signs on the EVM chains and Solana, and pay submits what
+it signed. On Tempo the owner's wallet sends the payment itself: pay records that before the wallet
+is asked, reads the owner's transaction on chain, and only then calls the seller. Once the wallet
+has been asked to send, an attempt that ends without a transaction report is uncertain, a rejection
+the page reports from the wallet included, and `superstables status` searches the chain for it.
+--wallet local signs on the EVM chains only.
 
 How long it waits: with no --wait, until the attempt ends: the browser page gives the owner 5
 minutes; with --wallet local, pay gives the wallet 130 s (the wallet's own window is 120 s by

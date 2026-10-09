@@ -5,6 +5,7 @@
 // comes from the service's listing:
 //   Base Sepolia (eip155:84532)   x402: the owner's wallet signs a USDC transfer authorization; the site relays it.
 //   Arc Testnet (eip155:5042002)  x402: the same, in Arc's USDC; Circle's facilitator settles it and pays the gas.
+//   Robinhood Chain Testnet (eip155:46630) x402: the same, in Paxos's test USDG; the seller settles it and pays the gas.
 //   Tempo Moderato (eip155:42431) MPP: the owner's wallet sends the pathUSD transfer the seller's challenge asks for.
 //   Solana devnet (solana:EtWT...) x402: the owner's Solana wallet signs the USDC transfer; the facilitator pays the fee.
 //
@@ -35,6 +36,7 @@ import { readSettlement } from "./settlement.mjs";
 export const ONCE_CHAIN = "base-sepolia";
 const BASE = EVM_CHAINS[ONCE_CHAIN];
 const ARC = EVM_CHAINS["arc-testnet"];
+const ROBINHOOD = EVM_CHAINS["robinhood-testnet"];
 /**
  * The networks buy-once pays on, by the CAIP-2 id a listing names: the rail and chain (as the budget commands spell them),
  * the token the purchase must use and its decimals, how ids are spelled there, and where a transaction is shown. Every
@@ -45,6 +47,8 @@ const ARC = EVM_CHAINS["arc-testnet"];
 export const ONCE_NETWORKS = {
   [`eip155:${BASE.chainId}`]: { rail: "evm", chain: ONCE_CHAIN, label: BASE.label, asset: BASE.token.address, decimals: BASE.token.decimals, unit: "USDC", evm: true, tx: (h) => `${BASE.explorer}/tx/${h}` },
   [`eip155:${ARC.chainId}`]: { rail: "evm", chain: "arc-testnet", label: ARC.label, asset: ARC.token.address, decimals: ARC.token.decimals, unit: "USDC", evm: true, tx: (h) => `${ARC.explorer}/tx/${h}` },
+  // No public facilitator settles this chain: the seller submits the authorization itself and pays the gas.
+  [`eip155:${ROBINHOOD.chainId}`]: { rail: "evm", chain: "robinhood-testnet", label: ROBINHOOD.label, asset: ROBINHOOD.token.address, decimals: ROBINHOOD.token.decimals, unit: ROBINHOOD.token.symbol, evm: true, gasPaidBy: "the seller", tx: (h) => `${ROBINHOOD.explorer}/tx/${h}` },
   [`eip155:${TEMPO_CHAIN_ID}`]: { rail: "tempo", chain: "moderato", label: "Tempo Moderato", asset: PATH_USD, decimals: PATH_USD_DECIMALS, unit: "pathUSD", evm: true, tx: (h) => `https://explore.testnet.tempo.xyz/tx/${h}` },
   "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1": { rail: "solana", chain: "devnet", label: "Solana devnet", asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", decimals: 6, unit: "USDC", evm: false, tx: (h) => `https://explorer.solana.com/tx/${h}?cluster=devnet` },
 };
@@ -269,7 +273,7 @@ function checkedFinal(record) {
   const hash = canonTx(result?.tx?.settle);
   const payerConflict = Object.hasOwn(payers, hash) && payers[hash] !== canonAddr(result.payer);
   if (result?.paid === true && record.attributionVersion === undefined && !record.final.attribution && !payerConflict) {
-    const attribution = "not verified (recorded by an older version)";
+    const attribution = "verification not recorded (older version)";
     const kept = { ...result, attribution };
     updateApproval(record.id, (now) => now.final?.result?.paid === true && now.attributionVersion === undefined && !now.final.attribution
       ? { final: { ...now.final, result: { ...now.final.result, attribution } } } : null);
@@ -299,7 +303,7 @@ function overruled(record, result) {
     reason: result?.paid === true
       ? !verdictHolds(record.seen, result)
         ? `transaction ${h} was read on chain as paid by ${result.payer}, but another answer for this purchase named a different payer for it, so whether it was this owner's payment is unknown`
-        : `transaction ${h} has no verified attribution to this purchase's payment identity, so whether it was paid is unknown`
+        : `transaction ${h} could not be verified as payment for this single purchase. Whether this purchase was paid is unknown. Do not pay again.`
       : "the site's last answer said not paid, but another answer for this purchase named a transaction, a payment or money that may have moved, so whether it was paid is unknown",
   };
 }
@@ -472,7 +476,7 @@ function termsOf(service, created, net) {
     ? { enforced: `Your wallet sends one transfer of exactly ${amount} ${net.unit} to ${to}.`, note: "The first approval link you open asks you to sign in with your wallet (a message, no fee). Your wallet may first ask to add Tempo Moderato; you pay the network fee there." }
     : net.rail === "solana"
       ? { enforced: `Your Solana wallet signs one transfer of exactly ${amount} USDC to ${to}.`, note: "The first approval link you open asks you to sign in with your wallet (a message, no fee), then to connect a Solana wallet. No SOL is needed: the seller's facilitator pays the fee." }
-      : { enforced: `Your wallet signs one authorization for exactly ${amount} USDC to ${to}, usable once.`, note: `The first approval link you open asks you to sign in with your wallet (a message, no fee).${net.chain === ONCE_CHAIN ? "" : ` Your wallet may first ask to add ${net.label}.`} No gas is needed: the seller's facilitator pays it.` };
+      : { enforced: `Your wallet signs one authorization for exactly ${amount} ${net.unit} to ${to}, usable once.`, note: `The first approval link you open asks you to sign in with your wallet (a message, no fee).${net.chain === ONCE_CHAIN ? "" : ` Your wallet may first ask to add ${net.label}.`} No gas is needed: ${net.gasPaidBy ?? "the seller's facilitator"} pays it.` };
   return {
     title: `Buy once: ${service.id}`,
     amount,
@@ -782,8 +786,8 @@ async function chainCheck(record, net, hash, payer, deadline) {
   if (!hash) return { state: "unread", reason: "the site names no transaction for it" };
   if (!isDecimal(h.amount) || !isAddress(h.payTo, net)) return { state: "mismatch", reason: "this purchase's record has no amount or recipient to check the payment against" };
   const attribution = attributionStatus(record, hash);
-  if (attribution === "unread") return { state: "unread", reason: `transaction ${hash} cannot be attributed because its attribution claim could not be read` };
-  if (attribution === "elsewhere") return { state: "mismatch", reason: `transaction ${hash} is already attributed to another hosted purchase` };
+  if (attribution === "unread") return { state: "unread", reason: `the saved record linking transaction ${hash} to a single purchase could not be read. Whether this purchase was paid is unknown. Do not pay again.` };
+  if (attribution === "elsewhere") return { state: "mismatch", reason: `transaction ${hash} is already recorded as payment for another single purchase on superstables.com. Whether this purchase was paid is unknown. Do not pay again.` };
   const notBefore = Math.floor(Date.parse(record.createdAt) / 1000);
   return readSettlement({ rail: net.rail, chain: net.chain, tx: hash, payer, payTo: h.payTo, asset: net.asset, amount: micro(h.amount), notBefore: Number.isFinite(notBefore) ? notBefore : 0, nonce: record.seen?.nonce, deadline });
 }

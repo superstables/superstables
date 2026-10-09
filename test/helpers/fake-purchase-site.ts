@@ -144,6 +144,19 @@ export const ARC_MARKET: Service = {
   protocol: "x402",
   params: [{ name: "asset", required: true, enum: ["BTC", "ETH"] }],
 };
+export const ROBINHOOD_SELLER = "0xa325828fcfB9a4c1Ec9FB95663643Fe67E348EDB";
+/** The same demo on Robinhood Chain Testnet, sold over x402 in Paxos's test USDG. */
+export const ROBINHOOD_MARKET: Service = {
+  id: "demo-market-data-robinhood",
+  name: "Demo market data (Robinhood Chain)",
+  amount: "0.01",
+  asset: "0x7E955252E15c84f5768B83c41a71F9eba181802F",
+  network: "eip155:46630",
+  payTo: ROBINHOOD_SELLER,
+  protocol: "x402",
+  symbol: "USDG",
+  params: [{ name: "asset", required: true, enum: ["BTC", "ETH"] }],
+};
 /** The same demo on Solana devnet, sold over x402 in USDC. */
 export const SOLANA_MARKET: Service = {
   id: "demo-market-data-solana",

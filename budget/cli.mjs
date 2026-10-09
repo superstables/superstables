@@ -105,23 +105,24 @@ function wrapList(items, width, indent) {
 }
 const CHAINS_HELP = `Rails and chains (--chain; the default is marked):
   evm     ${wrapList(EVM_CHAIN_KEYS.map((k) => `${k} (${EVM_CHAINS[k].label}${k === EVM_DEFAULT_CHAIN ? ", default" : ""})`), 100, "          ")}
-          The budget is USDC. Sellers: x402.
+          The budget is USDC (USDG on robinhood-testnet). Sellers: x402.
   tempo   moderato (Tempo Moderato, default; the only chain). The budget is pathUSD. Sellers: MPP (tempo.charge).
   solana  devnet (Solana devnet, default; the only chain). The budget is USDC. Sellers: x402.
   Chain to rail: ${Object.values(EVM_CHAINS).map((c) => c.label).slice(0, -1).join(", ")} and ${Object.values(EVM_CHAINS).at(-1).label} are evm;
   Tempo Moderato is tempo; Solana devnet is solana. superstables find --budget names the rail and chain for a listing,
   and prints the commands to buy it.`;
 const MAX_HELP = `--max M is the most this one purchase may cost, in the budget token's own units: --max 0.02 means 0.02 USDC (0.02
-  pathUSD on tempo). It is your ceiling, not the price: when the seller asks more, buy refuses (exit 3) and signs nothing.
+  pathUSD on tempo, 0.02 USDG on robinhood-testnet). It is your ceiling, not the price: when the seller asks more, buy refuses (exit 3) and signs nothing.
   Only what is actually paid comes off the budget. Required, with no default.`;
 const FLOW_HELP = `The owner's steps, in order, once per rail and chain:
   evm     setup, fund-agent, doctor, grant.
           setup: the owner connects their wallet and signs a free message; this machine gets an agent key.
           fund-agent: the owner sends the agent key a little of the chain's gas token (ETH on Base Sepolia, Arbitrum
-          Sepolia and Ethereum Sepolia, USDC on Arc Testnet, POL on Polygon Amoy, CREDIT on SKALE Base Sepolia) so it can
-          pay for its own transactions. On Arc, that gas transfer is USDC, separate from the budget allowance.
-          grant: an allowance (USDC approve) from the owner's wallet to the agent key. The USDC stays in the owner's wallet
-          until a purchase: each buy pulls exactly its price, then pays the seller.
+          Sepolia, Ethereum Sepolia and Robinhood Chain Testnet, USDC on Arc Testnet, POL on Polygon Amoy, CREDIT on
+          SKALE Base Sepolia) so it can pay for its own transactions. On Arc, that gas transfer is USDC, separate from the
+          budget allowance.
+          grant: an allowance (USDC approve; USDG on Robinhood Chain Testnet) from the owner's wallet to the agent key.
+          The token stays in the owner's wallet until a purchase: each buy pulls exactly its price, then pays the seller.
   tempo   setup, grant. grant authorizes the agent's access key to spend the owner's pathUSD up to a limit, until an
           expiry (default 24 hours). The agent needs no gas: fees come from the owner.
   solana  setup, fund-agent, doctor, grant. fund-agent sends the agent SOL for fees (default 0.01). grant makes the agent
@@ -163,7 +164,7 @@ owner is signed in with their wallet, and the APPROVE line carries a matchCode t
 this machine).`,
   "Recovery always uses this machine's local approval page, including on a chain set up with --hosted.",
 ).replace(" (and the\nmatch code)", "");
-const OWNER_PRINTS = "the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final\n  false, id, url, matchCode (hosted), expires and next; or, when it waited, the final RESULT: state settled (or ok), tx, next.";
+const OWNER_PRINTS = "the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final\n  false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), tx, next.";
 const COMMANDS = {
   setup: {
     flags: { agent: "v", "new-owner": "b", hosted: "b", grant: "v", fund: "o", "fund-only": "b", ...OWNER_FLAGS }, required: [],
@@ -184,7 +185,7 @@ owner. Needs a superstables.com account. --site URL picks another site (default 
 a superstables.com subdomain, or another origin only when the owner set SUPERSTABLES_ALLOW_SITE to it. Without --hosted:
 the page on 127.0.0.1, no account. An agent already added to an account is taken only for the owner recorded here, with
 that owner's signed proof; otherwise the owner removes the agent on the site's account page and adds it again.
-setup --new-owner without --hosted moves a hosted chain back to the page on this machine.
+setup --new-owner without --hosted moves a chain with approvals on superstables.com back to the page on this machine.
 --grant A and --fund [AMOUNT] (with --hosted): one approval link for the whole set-up. After the owner adds this agent,
 the same page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain; not on
 tempo) and then the grant of A (tempo: for 24 hours), in that order. The command reads each transaction from the chain
@@ -193,8 +194,7 @@ grant, say), the agent is still added and recorded, and state is that step's. Th
 agent is added. An agent already added on the chain is refused (exit 3): ask for gas and a budget
 with fund-agent and grant. Without --hosted, --grant and --fund are refused: run fund-agent and grant after setup.
 tempo: also tops up the owner from the Moderato faucet when it holds less than 1 pathUSD. --agent LABEL adds a new agent
-key for the next budget (a revoked or expired key can never be granted again); it needs no page, except on a hosted
-chain, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
+key for the next budget (a revoked or expired key can never be granted again); it needs no page, except on a chain with approvals on superstables.com, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
 nothing else; it needs no page either.
 
 ${OWNER_HELP}
@@ -203,7 +203,7 @@ ${FLOW_HELP}`,
       money: "no. The owner signs a message, not a transaction. With --fund and --grant: the gas to the agent, and an\n  allowance of A from the owner's wallet, once the owner approves each in their wallet.",
       who: "the owner. An agent may start it and hand the owner the approval link.",
       example: "superstables budget setup --rail evm --hosted --chain base-sepolia --grant 5 --fund",
-      prints: OWNER_PRINTS.replace("tx, next", "owner, agent, approvals (local or hosted), site, next;\n  with --grant or --fund also linked (true once the agent is added), steps (kind, state, tx, amount, reason\n  for each), tx, amount, remaining"),
+      prints: OWNER_PRINTS.replace("tx, next", "owner, agent, approvals (`local` or `hosted`), site, next;\n  with --grant or --fund also linked (true once the agent is added), steps (kind, state, tx, amount, reason\n  for each), tx, amount, remaining"),
       exits: EXITS_OWNER,
     }),
   },
@@ -213,8 +213,8 @@ ${FLOW_HELP}`,
       usage: "superstables budget fund-agent --rail evm|solana [--chain C] [--amount A] [--timeout S] [--no-open] [--detach|--wait]",
       about: `One plain transfer from the owner's wallet to the agent key, so the agent can pay for its own transactions. Run it
 after setup and before grant. It transfers funds for network fees; it does not grant a budget.
-  evm     the chain's gas token (ETH on Base Sepolia, Arbitrum Sepolia and Ethereum Sepolia, USDC on Arc Testnet, POL on
-          Polygon Amoy, CREDIT on SKALE Base Sepolia). --amount in that token; the default is enough for a few purchases.
+  evm     the chain's gas token (ETH on Base Sepolia, Arbitrum Sepolia, Ethereum Sepolia and Robinhood Chain Testnet, USDC on
+          Arc Testnet, POL on Polygon Amoy, CREDIT on SKALE Base Sepolia). --amount in that token; the default is enough for a few purchases.
           On Arc it is native USDC (a plain transfer, 18 decimals), on this machine and on superstables.com alike.
   solana  SOL for transaction fees. --amount in SOL, default 0.01.
   tempo   has none: the agent needs no gas, fees come from the owner.
@@ -363,7 +363,7 @@ ${RECOVER_OWNER_HELP}`,
       money: "yes: stranded USDC back to the owner, and possibly gas from the owner to the agent, which the owner approves.",
       who: "the owner, with the agent key on this machine. An agent may start it and hand the owner the approval link.",
       example: "superstables budget recover --rail evm",
-      prints: OWNER_PRINTS.replace("matchCode (hosted), ", "").replace("tx, next", "amount (returned), tx, next"),
+      prints: OWNER_PRINTS.replace("matchCode (on superstables.com), ", "").replace("tx, next", "amount (returned), tx, next"),
       exits: EXITS_OWNER,
     }),
   },
@@ -389,7 +389,7 @@ payment stays unknown; buy-once can start a new purchase. An agent never runs it
       money: "no. It never approves, signs or sends anything.",
       who: "anyone, usually the agent that started the owner command, after the owner says they've approved.",
       example: "superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60",
-      prints: "one RESULT line: state, final, chain_final, id, url, matchCode (hosted), expires, terms, next; reason describes the page's state while\n  waiting.",
+      prints: "one RESULT line: state, final, chain_final, id, url, matchCode (on superstables.com), expires, terms, next; reason describes the page's state while\n  waiting.",
       exits: "Exit codes: 0 waiting (final false) or done, 1 failed, 2 bad input, unknown id or no --shown, 3 refused (rejected,\n  expired), 4 paid but not delivered (buy-once), 5 unknown (the wallet may have sent it)",
     }),
   },
@@ -407,7 +407,7 @@ The command asks the site for the purchase and prints the owner's approval link 
 same as the owner commands. Write the approval link, the code and the terms in your reply to the owner, a visible
 message, not only in your reasoning or a tool call, and end your turn there. The first approval link the owner opens
 asks them to sign in with an Ethereum wallet (a message, no fee). For Solana devnet, they also
-connect a Solana wallet to sign the payment transaction; Solana sign-in is not supported in 0.3.0.
+connect a Solana wallet to sign the payment transaction; Solana sign-in is not supported in 0.3.1.
 Not in a terminal (an agent), or with --detach: returns at
 once with state waiting_owner and an approval id; when the owner says they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: blocks until the purchase ends. One buy-once
@@ -525,7 +525,7 @@ The owner opens it in the browser that has their wallet. The page is on this mac
 first (ssh -L PORT:127.0.0.1:PORT user@this-host, PORT from the approval link). On a chain set up with --hosted (and for
 buy-once), the approval link is on superstables.com instead: it opens on any device where the owner is signed in with
 an Ethereum wallet. Solana actions additionally use a Solana wallet to sign transactions; Solana sign-in is not
-supported in 0.3.0. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
+supported in 0.3.1. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
 command returns at once with state waiting_owner and final false. Write the approval link, the match code and the terms
 in your reply to the owner and end your turn; when they say they've approved, run
 superstables budget wait --id ID --shown. The approval link expires after --timeout seconds (default 600): if the wallet
@@ -550,7 +550,7 @@ and null when no current matching payment inclusion is established. A paid provi
 chain_final false; reconcile or wait checks finality again. Command completion never proves payment finality.
 next is the command to run next, or none.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
-approval link, the match code (hosted), the amount and network, the testnet line. The agent sends it and ends its turn.
+approval link, the match code (on superstables.com), the amount and chain, the testnet line. The agent sends it and ends its turn.
 budget_spent: true when buy was refused because the budget cannot cover the purchase (spent, revoked, never granted).
 --json (every command): stdout is only that object, as JSON without the RESULT prefix, like the rest of superstables;
 the APPROVE line goes to stderr with the logs. The fields and exit codes are the same.
@@ -569,7 +569,7 @@ Exit codes (the same numbers as superstables):
 
 Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
   keys/budget/<rail>-agent.env               the agent key (mode 600). No owner key is ever stored here
-  budget/public/<rail>-<chain>.env           the owner's and agent's addresses, no secret (hosted: APPROVALS, SITE, LINK_ID
+  budget/public/<rail>-<chain>.env           the owner's and agent's addresses, no secret (on superstables.com: APPROVALS, SITE, LINK_ID
                                              and LINK_CODE)
   budget/ops/<rail>-<chain>/<op>.json        one journal per purchase, and <op>.response, the seller's answer when saved
   budget/approvals/                          owner approvals started in the background, and buy-once purchases
@@ -731,7 +731,7 @@ function parse(argv) {
     f.site = site.origin;
     const recorded = hostedSite(f);
     const recordedOrigin = recorded ? siteOrigin(recorded).origin : null;
-    if (recordedOrigin && recordedOrigin !== f.site) badInput(ctx, `--site ${f.site} is not the site this chain's approvals are hosted on (${recordedOrigin}): use --site ${recordedOrigin}, or leave --site out`);
+    if (recordedOrigin && recordedOrigin !== f.site) badInput(ctx, `--site ${f.site} is not the site this chain's approvals happen on (${recordedOrigin}): use --site ${recordedOrigin}, or leave --site out`);
   }
 
   const amount = (name) => {
@@ -797,7 +797,7 @@ function parse(argv) {
     if (typeof f.fund === "string" && f.rail === "evm" && !(/^\d+(\.\d{1,18})?$/.test(f.fund) && Number(f.fund) > 0 && Number(f.fund) <= 5)) badInput(ctx, `--fund takes an amount of the chain's gas token above 0 and at most 5, or nothing for fund-agent's default (got "${f.fund}")`);
   }
   if (f.hosted) {
-    if (f.agent !== undefined) badInput(ctx, "setup --agent on a hosted chain adds the new key there by itself: drop --hosted");
+    if (f.agent !== undefined) badInput(ctx, "setup --agent on a chain with approvals on superstables.com adds the new key there by itself: drop --hosted");
     if (f["owner-key-file"] !== undefined) badInput(ctx, "--hosted asks the owner on superstables.com; with --owner-key-file there is no owner to ask");
     const site = chosenSite(f.site);
     if (site.error) badInput(ctx, `--site: ${site.error}`);
@@ -814,7 +814,7 @@ function parse(argv) {
  */
 function parseBuyOnce(cmd, f) {
   const ctx = { command: cmd };
-  const where = "Base Sepolia (--rail evm --chain base-sepolia), Arc Testnet (--rail evm --chain arc-testnet), Tempo Moderato (--rail tempo) or Solana devnet (--rail solana)";
+  const where = "Base Sepolia (--rail evm --chain base-sepolia), Arc Testnet (--rail evm --chain arc-testnet), Robinhood Chain Testnet (--rail evm --chain robinhood-testnet), Tempo Moderato (--rail tempo) or Solana devnet (--rail solana)";
   if (f.chain !== undefined && !ONCE_CHAINS[f.chain]) {
     if (/mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet: superstables budget is testnet only`);
     return badInput(ctx, `buy-once pays on ${where}, not ${f.chain}. The network comes from the service's listing`);
@@ -1229,8 +1229,8 @@ async function status({ f, ctx }) {
     log(`  Checked the home ${HOME} (${process.env.SUPERSTABLES_HOME?.trim() ? "SUPERSTABLES_HOME" : "SUPERSTABLES_HOME is not set: the default ~/.superstables"}), chain ${f.chain}.`);
     log(`  Looked for: ${gaps.agentKey} and ${gaps.publicFile}.`);
     log(`  ${elsewhere}.`);
-    log(`  The owner sets one up, in this order: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain)}.`);
-    return emit(1, { ...ctx, state: "failed", remaining: null, home: HOME, next: `no budget yet in ${HOME}: the owner runs ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain)}. An agent may start each one and hand the owner the approval link. ${elsewhere}`, reason });
+    log(`  The owner sets one up, in this order: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain, gaps.owner)}.`);
+    return emit(1, { ...ctx, state: "failed", remaining: null, home: HOME, next: `no budget yet in ${HOME}: the owner runs ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain, gaps.owner)}. An agent may start each one and hand the owner the approval link. ${elsewhere}`, reason });
   }
   const owner = recordedOwner(f);
   log(ownerLine(owner));
@@ -1274,7 +1274,7 @@ async function buy({ f, ctx }) {
     const reason = `${noBudgetWords(f, gaps)}. Nothing was signed or paid`;
     log(`superstables budget: refused: ${reason}.`);
     log(`  Looked for: ${gaps.agentKey} and ${gaps.publicFile}.`);
-    return emit(3, { ...ctx, op: f.op, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: `ask the owner to set up a budget: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain)} (an agent may start each one and hand the owner the approval link). Then check with superstables budget status --rail ${f.rail}${chainFlag(f)}`, reason });
+    return emit(3, { ...ctx, op: f.op, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: `ask the owner to set up a budget: ${ownerSteps(f.rail, f.chain, RAILS[f.rail].chain, gaps.owner)} (an agent may start each one and hand the owner the approval link). Then check with superstables budget status --rail ${f.rail}${chainFlag(f)}`, reason });
   }
   f.op ??= newOp();
   ctx.op = f.op;

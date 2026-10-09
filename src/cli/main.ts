@@ -50,6 +50,8 @@ import {
   EXIT,
   badInput,
   exitCodeFor,
+  humanNextFor,
+  inclusionRemoved,
   isFinalAttempt,
   nextFor,
   requoteCommand,
@@ -59,12 +61,13 @@ import { signerFor, walletModeFromEnvironment, type WalletMode } from "./signer.
 import { attemptView, messageFor } from "./views.js";
 
 /**
- * Where test USDC comes from: Circle's faucet on every chain `pay` pays USDC on but SKALE Base Sepolia, whose USDC is
- * Base Sepolia's, bridged over the SKALE bridge. `others` names the rest: "EVM chains" for the local wallet.
+ * Where the test token comes from: Circle's faucet on every chain `pay` pays USDC on but SKALE Base Sepolia, whose USDC is
+ * Base Sepolia's, bridged over the SKALE bridge; Paxos's faucet for USDG on Robinhood Chain Testnet. `others` names the
+ * rest: "EVM chains" for the local wallet.
  */
 const usdcSources = (others: string) =>
-  `on SKALE Base Sepolia, Base Sepolia test USDC bridged over the SKALE bridge; on the other ${others}, https://faucet.circle.com (select the payment's chain). No gas is needed: facilitators pay it.`;
-const FAUCET_LINE = `Fund it with test USDC on the EVM chain you pay on: ${usdcSources("EVM chains")}`;
+  `on SKALE Base Sepolia, Base Sepolia test USDC bridged over the SKALE bridge; on Robinhood Chain Testnet, test USDG from https://faucet.paxos.com; on the other ${others}, https://faucet.circle.com (select the payment's chain). No gas is needed: the seller or its facilitator pays it.`;
+const FAUCET_LINE = `Fund it with test USDC (USDG on Robinhood Chain Testnet) on the EVM chain you pay on: ${usdcSources("EVM chains")}`;
 
 /** How long the browser approval page gives the owner (BrowserWalletSigner's default). */
 const BROWSER_WINDOW_S = 300;
@@ -142,7 +145,7 @@ explain(
         console.log("  4. Check the amount and the recipient on the page, then approve in MetaMask.");
         console.log("For a payment on Solana devnet, use a Solana wallet such as Phantom instead.");
         console.log("");
-        console.log(`Fund that account with test USDC on the chain you pay on: ${usdcSources("USDC chains")}`);
+        console.log(`Fund that account with test USDC (USDG on Robinhood Chain Testnet) on the chain you pay on: ${usdcSources("USDC chains")}`);
         console.log("On Tempo Moderato it pays in test pathUSD, and the wallet pays the network fee itself.");
         console.log("");
         console.log("To use the local wallet process instead, run any command with `--wallet local`.");
@@ -312,7 +315,7 @@ explain(
     .option("--limit <n>", "how many services to ask for", toInteger, 20)
     .option("--budget", "show the listings a `superstables budget` rail could pay, instead of the ones pay can")
     .option("--all", "show every listing, including those this client cannot pay, and why")
-    .option("--demo", "also list Superstables' testnet services from the hosted catalogue: most return prepared sample output and are marked simulated; the market data service returns live prices (SUPERSTABLES_DEMO_SERVICES=on does the same)")
+    .option("--demo", "also list Superstables' testnet services from the catalogue on superstables.com: most return prepared sample output and are marked simulated; the market data service returns live prices (SUPERSTABLES_DEMO_SERVICES=on does the same)")
     .option("--json", "print {services, warnings} as JSON")
     .action(
       async (
@@ -414,8 +417,9 @@ explain(
     .argument("[url]", "a paid URL to quote directly, query string included")
     .option("--service <id>", "quote a service found by `superstables find`")
     .option("--param <key=value>", "a request parameter for the service (repeatable)", collect, [] as string[])
+    .option("--chain <chain>", "when the seller offers several chains, take its offer on this one (e.g. robinhood-testnet)")
     .option("--json", "print the quote record, with policy.checks and next")
-    .action(async (url: string | undefined, options: { service?: string; param: string[]; json?: boolean }) => {
+    .action(async (url: string | undefined, options: { service?: string; param: string[]; chain?: string; json?: boolean }) => {
       if ((url && options.service) || (!url && !options.service)) {
         throw badInput(
           "Give either a URL or --service <id>, not both and not neither: " +
@@ -452,9 +456,9 @@ explain(
               : `${untrustedText(messageOf(err), 500)}${shape}`,
           );
         }
-        taken = await takeQuote({ service, params }, { records, policy });
+        taken = await takeQuote({ service, params }, { records, policy, chain: options.chain });
       } else {
-        taken = await takeQuote({ url: url as string }, { records, policy });
+        taken = await takeQuote({ url: url as string }, { records, policy, chain: options.chain });
       }
       const next = taken.policy.allowed
         ? `superstables pay ${taken.id}`
@@ -639,7 +643,8 @@ explain(
         "request goes to the wallet process, whose page outlives this command; approving there after " +
         "pay has stopped pays nothing, because nothing is left to submit it.",
       "Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base " +
-        "Sepolia, Ethereum Sepolia and Solana devnet; MPP with test pathUSD on Tempo Moderato. The wallet signs on " +
+        "Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet; MPP with test " +
+        "pathUSD on Tempo Moderato. The wallet signs on " +
         "the EVM chains and Solana, and pay submits what it signed. On Tempo the owner's wallet sends the payment " +
         "itself: pay records that before the wallet is asked, reads the owner's transaction on chain, and only then " +
         "calls the seller. Once the wallet has been asked to send, an attempt that ends without a transaction report " +
@@ -1061,7 +1066,7 @@ function attemptJson(records: Records, attempt: Attempt): Record<string, unknown
 function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt): void {
   const receipt = known ?? (attempt.receiptId ? records.getReceipt(attempt.receiptId) : undefined);
   console.log("");
-  console.log(messageFor(attempt, receipt));
+  console.log(inclusionRemoved(attempt) ? "Payment outcome unknown. Do not pay again." : messageFor(attempt, receipt));
   if (receipt) {
     console.log("");
     console.log(field("receipt", receipt.id));
@@ -1086,7 +1091,7 @@ function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt
     console.log(untrustedText(attempt.serviceBody, SERVICE_BODY_LIMIT));
   }
   console.log("");
-  console.log(`Next: ${nextFor(attempt, getQuote(attempt.quoteId, records))}`);
+  console.log(`Next: ${humanNextFor(attempt, getQuote(attempt.quoteId, records))}`);
 }
 
 /** What the chain says about a receipt; matching inclusion is paid while finality is pending. */
@@ -1100,6 +1105,7 @@ function receiptChain(receipt: Receipt): string {
       return `unpaid: the seller reported it paid, but ${receipt.chainReason ?? "the chain shows it was never made"}`;
     default:
       if (receipt.paymentIncluded) return "verified: paid; the payment landed, but is not final on chain yet";
+      if (receipt.chainReason === "The earlier payment inclusion was removed; outcome unknown. Do not pay again.") return "unchecked: the earlier matching payment was removed from the chain.";
       if (receipt.chainReason?.startsWith("The earlier payment inclusion")) return `unchecked: ${receipt.chainReason}`;
       return `unchecked: the seller reported it paid, and the chain has not confirmed it yet (${receipt.chainReason ?? "it was not read"})`;
   }

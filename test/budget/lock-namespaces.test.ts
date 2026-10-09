@@ -46,7 +46,11 @@ afterEach(async () => {
   }
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
-describe.runIf(process.platform === 'linux')('real PID namespace ownership', () => {
+// CI runners can forbid unprivileged PID namespaces or mounting /proc inside them; those runs skip.
+const canUnsharePid = process.platform === 'linux'
+  && spawnSync('bwrap', ['--unshare-pid', '--die-with-parent', '--dev-bind', '/', '/', '--proc', '/proc', 'true']).status === 0;
+
+describe.runIf(canUnsharePid)('real PID namespace ownership', () => {
   it('records its host PID with an ancestor proc mount and stays recoverable on the host', async () => {
     const b = box(), holder = await hold(b, true);
     const record = JSON.parse(readFileSync(b.path, 'utf8'));
