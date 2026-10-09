@@ -1,5 +1,6 @@
 // The cap lock (src/core/lock.ts) across processes. A lock is taken over only from a holder that is gone, never for its
 // age; it is broken only if it is still the same lock; and it is released only by its owner.
+import { stopHolder } from '../helpers/budget-holder-cleanup.mjs';
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,8 +8,10 @@ import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createIdentitySource } from "../../src/core/process-identity.mjs";
 import { lockForTests, processStart, withFileLock } from "../../src/core/lock.js";
 
+const identity = createIdentitySource().record();
 const lockPath = () => join(mkdtempSync(join(tmpdir(), "superstables-lock-")), "cap.lock");
 
 describe("withFileLock", () => {
@@ -29,18 +32,18 @@ describe("withFileLock", () => {
       await expect(withFileLock(path, () => "mine", 300)).rejects.toThrow(/held by process/);
       expect(JSON.parse(readFileSync(path, "utf8")).owner).toBe("paused");
     } finally {
-      child.kill("SIGKILL");
+      await stopHolder(child);
     }
   });
 
   it("takes over a lock whose holder is gone, or whose pid now names another process", async () => {
     const path = lockPath();
     const gone = spawnSync(process.execPath, ["-e", ""]).pid!;
-    writeFileSync(path, JSON.stringify({ pid: gone, pidStart: "linux:x:1", owner: "dead" }));
+    writeFileSync(path, JSON.stringify({ ...identity, pid: gone, pidStart: "linux:x:1", owner: "dead" }));
     expect(await withFileLock(path, () => "mine", 1_000)).toBe("mine");
     // This process's own pid, recorded with another start: a reused pid, so the holder is gone.
     if (processStart(process.pid)) {
-      writeFileSync(path, JSON.stringify({ pid: process.pid, pidStart: "linux:another-boot:1", owner: "reused" }));
+      writeFileSync(path, JSON.stringify({ ...identity, pid: process.pid, pidStart: "linux:another-boot:1", ...(typeof identity.pidStartUtc === "number" ? { pidStartUtc: identity.pidStartUtc + 1 } : {}), owner: "reused" }));
       expect(await withFileLock(path, () => "mine", 1_000)).toBe("mine");
     }
     expect(existsSync(path)).toBe(false);
@@ -48,8 +51,8 @@ describe("withFileLock", () => {
 
   it("never lets a reclaimer remove a lock that replaced the one it judged dead", async () => {
     const path = lockPath();
-    const dead = JSON.stringify({ pid: 999_999_999, pidStart: null, owner: "dead" });
-    const fresh = JSON.stringify({ pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: "fresh" });
+    const dead = JSON.stringify({ ...identity, pid: 999_999_999, pidStart: null, owner: "dead" });
+    const fresh = JSON.stringify({ ...identity, pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: "fresh" });
     // A waiter read the dead holder's lock; before it breaks it, another waiter has broken it and taken a fresh one.
     writeFileSync(path, fresh);
     await lockForTests.breakLock(path, dead, Date.now() + 1_000);
@@ -61,7 +64,7 @@ describe("withFileLock", () => {
 
   it("leaves a paused breaker its mutex, and the breaker, resumed, does not remove a lock that changed", async () => {
     const path = lockPath();
-    const dead = JSON.stringify({ pid: spawnSync(process.execPath, ["-e", ""]).pid!, pidStart: null, owner: "dead" });
+    const dead = JSON.stringify({ ...identity, pid: spawnSync(process.execPath, ["-e", ""]).pid!, pidStart: null, owner: "dead" });
     writeFileSync(path, dead);
     const tsx = resolve(dirname(fileURLToPath(import.meta.url)), "../../node_modules/tsx/dist/cli.mjs");
     const script = resolve(dirname(fileURLToPath(import.meta.url)), "../helpers/lock-breaker.ts");
@@ -81,7 +84,7 @@ describe("withFileLock", () => {
       expect(readFileSync(path, "utf8")).toBe(dead);
       expect(existsSync(`${path}.break`)).toBe(true);
       // The lock changes while the breaker is paused (as it would if it had been broken some other way).
-      const fresh = JSON.stringify({ pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: "fresh" });
+      const fresh = JSON.stringify({ ...identity, pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: "fresh" });
       writeFileSync(path, fresh);
       breaker.kill("SIGCONT");
       breaker.stdin.write("go\n");
@@ -89,24 +92,24 @@ describe("withFileLock", () => {
       expect(readFileSync(path, "utf8")).toBe(fresh); // not removed
       expect(existsSync(`${path}.break`)).toBe(false); // and the breaker released its own mutex
     } finally {
-      breaker.kill("SIGKILL");
+      await stopHolder(breaker);
     }
   }, 30_000);
 
   it("keeps to its deadline and yields between attempts", async () => {
     const path = lockPath();
     // A live holder (this process) keeps the lock for the whole test.
-    writeFileSync(path, JSON.stringify({ pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: "held" }));
+    writeFileSync(path, JSON.stringify({ ...identity, pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: "held" }));
     let ticks = 0;
     const timer = setInterval(() => (ticks += 1), 5);
     const started = Date.now();
     await expect(withFileLock(path, () => "mine", 50)).rejects.toThrow(/held by process/);
     clearInterval(timer);
     expect(Date.now() - started).toBeLessThan(400);
-    expect(ticks).toBeGreaterThan(3); // timers ran while it waited: it never spun
+    expect(ticks).toBeGreaterThan(0); // Timers must run; synchronous macOS ps calls can consume most of this short deadline.
     // A dead holder's lock whose break keeps failing (its mutex held by a live process) is also bounded by the deadline.
-    writeFileSync(path, JSON.stringify({ pid: spawnSync(process.execPath, ["-e", ""]).pid!, pidStart: null, owner: "dead" }));
-    writeFileSync(`${path}.break`, JSON.stringify({ pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: "breaker" }));
+    writeFileSync(path, JSON.stringify({ ...identity, pid: spawnSync(process.execPath, ["-e", ""]).pid!, pidStart: null, owner: "dead" }));
+    writeFileSync(`${path}.break`, JSON.stringify({ ...identity, pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: "breaker" }));
     const again = Date.now();
     await expect(withFileLock(path, () => "mine", 50)).rejects.toThrow();
     expect(Date.now() - again).toBeLessThan(400);

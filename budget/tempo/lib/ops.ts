@@ -1,7 +1,8 @@
 // Operation journal (contract rule 5). One JSON file per operation under
 // $SUPERSTABLES_HOME/budget/ops/tempo-moderato/<id>.json (../../paths.mjs), outside the code folder. It is written
 // BEFORE anything is signed or submitted (intent) and updated after (tx, state). It holds no key.
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { writeJournalFile } from '../../journal.mjs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { opsDir } from '../../paths.mjs'
@@ -70,15 +71,11 @@ export function readOp(id: string): Op | undefined {
 
 export function writeOp(op: Op, note?: string): Op {
   const p = pathFor(op.op)
-  mkdirSync(OPS_DIR, { recursive: true, mode: 0o700 })
   const now = new Date().toISOString()
   const last = op.history[op.history.length - 1]
   if (!last || last.state !== op.state || note) op.history.push({ at: now, state: op.state, ...(note ? { note } : {}) })
   op.updatedAt = now
-  const tmp = `${p}.${process.pid}.tmp`
-  writeFileSync(tmp, JSON.stringify(op, null, 2) + '\n', { mode: 0o600 })
-  chmodSync(tmp, 0o600)
-  renameSync(tmp, p) // atomic: a crash leaves either the old or the new file, never half of one
+  writeJournalFile(p, JSON.stringify(op, null, 2) + '\n')
   return op
 }
 

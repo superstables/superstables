@@ -57,6 +57,8 @@ function checkoutWithoutDevPackages(): string {
   cpSync(resolve(ROOT, "budget"), join(repo, "budget"), { recursive: true });
   mkdirSync(join(repo, "src", "core"), { recursive: true });
   cpSync(resolve(ROOT, "src/core/finality-policy.js"), join(repo, "src/core/finality-policy.js"));
+  cpSync(resolve(ROOT, "src/core/process-identity.mjs"), join(repo, "src/core/process-identity.mjs"));
+  cpSync(resolve(ROOT, "src/core/owner-recovery.mjs"), join(repo, "src/core/owner-recovery.mjs"));
   writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "checkout", version: "9.9.9" }));
   return repo;
 }
