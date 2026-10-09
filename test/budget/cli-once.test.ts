@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ARC_MARKET, ARC_SELLER, MARKET, PAYER, SOLANA_PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite, type Paid } from "../helpers/fake-purchase-site.js";
+import { ARC_MARKET, ARC_SELLER, MARKET, ROBINHOOD_MARKET, ROBINHOOD_SELLER, PAYER, SOLANA_PAYER, SELLER, SOLANA_MARKET, SOLANA_SELLER, TEMPO_MARKET, TEMPO_SELLER, TX, startFakePurchaseSite, type FakePurchaseSite, type Paid } from "../helpers/fake-purchase-site.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
@@ -70,7 +70,7 @@ describe("buy-once: refusals before anything is asked", () => {
     expect(arc.result.reason).toMatch(/demo-market-data is on Base Sepolia \(--rail evm --chain base-sepolia\), not arc-testnet: the network comes from the listing/);
     const other = await once(["--chain", "arbitrum-sepolia"]);
     expect(other.code).toBe(2);
-    expect(other.result.reason).toMatch(/buy-once pays on Base Sepolia .*Arc Testnet \(--rail evm --chain arc-testnet\).*Tempo Moderato .*Solana devnet .*not arbitrum-sepolia/);
+    expect(other.result.reason).toMatch(/buy-once pays on Base Sepolia .*Arc Testnet \(--rail evm --chain arc-testnet\).*Robinhood Chain Testnet \(--rail evm --chain robinhood-testnet\).*Tempo Moderato .*Solana devnet .*not arbitrum-sepolia/);
     expect((await once(["--rail", "solana", "--chain", "moderato"])).result.reason).toMatch(/--chain moderato is not on --rail solana/);
     const main = await once(["--chain", "base"]);
     expect(main.code).toBe(3);
@@ -274,7 +274,7 @@ describe("buy-once on Tempo Moderato and Solana devnet", () => {
     site.services.push({ ...structuredClone(TEMPO_MARKET), id: "elsewhere", network: "eip155:1" });
     const r = await once([], ["--service", "elsewhere", "--param", "asset=BTC", "--max", "1"]);
     expect(r.code).toBe(3);
-    expect(r.result.reason).toMatch(/elsewhere is on a network buy-once does not pay on: buy-once pays on Base Sepolia, Arc Testnet, Tempo Moderato, Solana devnet only/);
+    expect(r.result.reason).toMatch(/elsewhere is on a network buy-once does not pay on: buy-once pays on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato, Solana devnet only/);
     expect(site.purchases).toEqual([]);
   }, 30_000);
 });
@@ -1150,6 +1150,34 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
     const first = await once();
     expect(first.result.rpc).toBe(site.chainUrl);
   }, 30_000);
+});
+
+describe("buy-once on Robinhood Chain Testnet", () => {
+  beforeEach(() => {
+    site.services.push(structuredClone(ROBINHOOD_MARKET));
+  });
+
+  it("find --once --chain robinhood-testnet lists its services only, priced in USDG", async () => {
+    const r = await budget(["find", "--once", "--chain", "robinhood-testnet", "--site", site.url]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.result.services.map((x: any) => [x.id, x.network, x.rail, x.chain, x.unit])).toEqual([["demo-market-data-robinhood", "eip155:46630", "evm", "robinhood-testnet", "USDG"]]);
+  }, 30_000);
+
+  it("asks the owner for one authorization in USDG, says the seller pays the gas, and says paid only once the chain shows the transfer", async () => {
+    const first = await once([], ["--service", "demo-market-data-robinhood", "--param", "asset=BTC", "--max", "0.01", "--chain", "robinhood-testnet"]);
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.result).toMatchObject({ ok: true, command: "buy-once", rail: "evm", chain: "robinhood-testnet", service: "demo-market-data-robinhood", state: "waiting_owner" });
+    expect(first.approve.terms).toMatchObject({ amount: "0.01", unit: "USDG" });
+    expect(first.approve.terms.summary).toMatch(new RegExp(`One payment of 0\\.01 test USDG on Robinhood Chain Testnet to ${ROBINHOOD_SELLER}`));
+    expect(first.approve.terms.enforced[0]).toBe(`Your wallet signs one authorization for exactly 0.01 USDG to ${ROBINHOOD_SELLER}, usable once.`);
+    expect(first.approve.terms.notEnforced[0]).toBe("The first approval link you open asks you to sign in with your wallet (a message, no fee). Your wallet may first ask to add Robinhood Chain Testnet. No gas is needed: the seller pays it.");
+    const hash = `0x${"b8".repeat(32)}`;
+    site.settle(site.purchases[0], { asset: "BTC", price_usd: 65000 }, { transaction: hash, payer: PAYER });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ ok: true, rail: "evm", chain: "robinhood-testnet", state: "settled", paid: true, delivered: true, amount: "0.01", tx: { settle: hash }, txUrl: `https://explorer.testnet.chain.robinhood.com/tx/${hash}` });
+    expect(done.result.next).toMatch(/Paid 0\.01 test USDG on Robinhood Chain Testnet/);
+  }, 60_000);
 });
 
 describe("buy-once on Arc Testnet", () => {
