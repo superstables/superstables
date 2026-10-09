@@ -113,6 +113,14 @@ describe("the commands find prints for a listing", () => {
     }
   });
 
+  it("routes Robinhood Chain Testnet's names to its evm chain key, and never its mainnet's", () => {
+    for (const name of ["robinhood-testnet", "eip155:46630"]) {
+      const commands = listingCommands(indexListing("robinhood.example", ["x402"], [name]));
+      expect(commands.map((c) => `${c.way} ${c.rail ?? ""} ${c.chain ?? ""}`.trim())).toEqual(["pay", "budget evm robinhood-testnet"]);
+    }
+    for (const name of ["robinhood", "eip155:4663"]) expect(routesFor(["x402"], [name])).toEqual({ pay: false, budget: [] });
+  });
+
   it("never suggests a command for a mainnet listing", () => {
     for (const chains of [["base"], ["solana"], ["base", "solana"], ["eip155:8453"], ["ethereum"], ["eip155:1"]]) {
       const service = indexListing("main.example", ["x402"], chains, { testnet: false, notActionableReason: "mainnet only" });
@@ -136,7 +144,7 @@ describe("the commands find prints for a listing", () => {
 
   it("prints each way under a heading, its commands one per line", () => {
     const lines = formatListingCommands(indexListing("arc.example", ["x402"], ["arc-testnet"]));
-    expect(lines[0]).toMatch(/^with pay \(the index does not list the request parameters/);
+    expect(lines[0]).toMatch(/^Single purchase on your machine \(the index does not list the request parameters/);
     expect(lines[1]).toBe("  superstables quote 'https://arc.example/api?<parameters>'");
     expect(lines[2]).toBe("  superstables pay <quote-id>");
     expect(lines[3]).toMatch(/^with a budget, evm on arc-testnet \(preflight signs nothing/);

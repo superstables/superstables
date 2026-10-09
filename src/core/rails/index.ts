@@ -100,9 +100,9 @@ export function judgeOffers(challenge: SellerChallenge, now: number = Date.now()
   return out;
 }
 
-/** The first offer in a 402 this client can pay, or undefined. */
-export function firstPayable(challenge: SellerChallenge, now: number = Date.now()): Offer | undefined {
-  for (const { judged } of judgeOffers(challenge, now)) if (judged.supported) return judged.offer;
+/** The first offer in a 402 this client can pay, on `network` (CAIP-2) when one is named, or undefined. */
+export function firstPayable(challenge: SellerChallenge, network?: string, now: number = Date.now()): Offer | undefined {
+  for (const { judged } of judgeOffers(challenge, now)) if (judged.supported && (network === undefined || judged.offer.terms.network === network)) return judged.offer;
   return undefined;
 }
 

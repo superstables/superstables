@@ -34,13 +34,13 @@ export const evmRail: X402Rail = {
     }
     const scheme = accept.scheme ?? "exact";
     if (!accept.asset || !isSameAddress(accept.asset, network.usdc.address)) {
-      return { supported: false, reason: `asset ${untrustedText(accept.extra?.name ?? accept.asset ?? "unknown", 60)} is not USDC on ${network.label}` };
+      return { supported: false, reason: `asset ${untrustedText(accept.extra?.name ?? accept.asset ?? "unknown", 60)} is not ${network.token.symbol} on ${network.label}` };
     }
-    // The signing domain is USDC's own. An offer that names another one is either wrong or asks the owner's wallet to show
+    // The signing domain is the token's own. An offer that names another one is either wrong or asks the owner's wallet to show
     // a name the seller chose as the signing application; either way the signature would not verify on chain.
     const domain = network.usdc.eip712;
     if ((accept.extra?.name !== undefined && accept.extra.name !== domain.name) || (accept.extra?.version !== undefined && accept.extra.version !== domain.version)) {
-      return { supported: false, reason: `the offer's signing domain is not USDC's on ${network.label} (expected name "${domain.name}", version "${domain.version}"), so the signature would not verify` };
+      return { supported: false, reason: `the offer's signing domain is not ${network.token.symbol}'s on ${network.label} (expected name "${domain.name}", version "${domain.version}"), so the signature would not verify` };
     }
     const atomic = accept.amount ?? accept.maxAmountRequired;
     if (!atomic || !/^\d+$/.test(String(atomic))) return { supported: false, reason: "the offered amount is missing or malformed" };
@@ -53,7 +53,7 @@ export const evmRail: X402Rail = {
     const terms: PaymentTerms = {
       amountDecimal: fromAtomic(amountAtomic, network.usdc.decimals),
       amountAtomic,
-      asset: "USDC",
+      asset: network.token.symbol,
       assetAddress: network.usdc.address,
       network: network.caip2,
       networkLabel: network.label,
