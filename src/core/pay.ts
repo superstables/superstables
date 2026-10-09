@@ -305,7 +305,8 @@ export class PaymentEngine {
       return;
     }
 
-    const offer = firstPayable(challenge);
+    // The quote's chain: a seller that offers several is held to the one the quote took (quote --chain).
+    const offer = firstPayable(challenge, quote.terms.network);
     const rail = offer ? railFor(offer.terms.network) : undefined;
     if (!offer || !rail || !sameTerms(quote.terms, offer.terms)) {
       this.markQuote(quote.id, "stale");
