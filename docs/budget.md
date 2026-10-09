@@ -222,7 +222,7 @@ Use approval on superstables.com when the owner wants to approve from a device o
 the agent. superstables.com supports Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy,
 SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
 The owner needs a compatible wallet on that device and an account created by signing in with an
-Ethereum or Solana wallet. For now, a Solana account supports only Solana agents and Solana single
+Ethereum or Solana wallet. For now, a Solana account supports only Solana agents, Solana budgets and Solana single
 purchases. With an Ethereum account, Solana also requires a Solana wallet. Signing in and adding an agent do
 not grant a budget; funding and grant are separate wallet transactions.
 

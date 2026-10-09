@@ -41,7 +41,7 @@ The owner approves in one of two places. Local approvals are the default and nee
 | | Local (default) | On superstables.com (`setup --rail R --hosted`) |
 | --- | --- | --- |
 | Where the owner approves | A page on `127.0.0.1`, in the browser with their wallet on the machine that runs the command | superstables.com, on any device where they are signed in with their wallet |
-| Account | None | A superstables.com account, created by signing in with an Ethereum or Solana wallet; for now, a Solana account supports only Solana agents and Solana single purchases |
+| Account | None | A superstables.com account, created by signing in with an Ethereum or Solana wallet; for now, a Solana account supports only Solana agents, Solana budgets and Solana single purchases |
 | Rails | `evm`, `tempo`, `solana` | `evm`, `tempo`, `solana` |
 | Owner on record | The wallet that signs the setup message | The wallet that signs the owner-proof message on superstables.com (on `solana`, the Solana wallet the owner connects there); the command checks that signature before it records anyone |
 | What the agent shows the owner | The approval link and the terms | The approval link, the terms and a match code, which the owner picks on the page |
@@ -51,7 +51,7 @@ In both modes the agent key stays on this machine, the owner's key stays in thei
 Budget approvals on superstables.com support Base Sepolia, Arc Testnet, Arbitrum Sepolia,
 Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet. Approval on superstables.com keeps the CLI, agent key and journals on your own runtime; it lets the
 owner use a wallet on another device. The owner signs in with an Ethereum or Solana wallet. For
-now, a Solana account supports only Solana agents and Solana single purchases. With an Ethereum
+now, a Solana account supports only Solana agents, Solana budgets and Solana single purchases. With an Ethereum
 account, Solana actions also need a Solana wallet to sign transactions.
 Linking an agent does not grant a budget.
 

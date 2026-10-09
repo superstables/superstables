@@ -45,8 +45,9 @@ signing in with an Ethereum or Solana wallet, or a compatible deployment the own
 `SUPERSTABLES_SITE`; an origin outside superstables.com and its subdomains also needs the owner to set
 `SUPERSTABLES_ALLOW_SITE` to it (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
 The installed CLI runs on your own machine, but the site coordinates this single purchase after
-the owner approves. This differs from a budget, whose client pays sellers directly. With a Solana account, the owner
-pays a Solana purchase from the Solana wallet they signed in with. With an Ethereum account, a Solana
+the owner approves. This differs from a budget, whose client pays sellers directly. A Solana account supports only Solana
+purchases. The owner pays from the Solana wallet they signed in with. Purchases on EVM chains or Tempo
+require signing in with an Ethereum wallet. With an Ethereum account, a Solana
 purchase also needs a Solana wallet on the owner's device to sign the payment transaction. Signing in does not approve a purchase. The
 [owner guide](https://www.superstables.com/docs/owner) covers the link/code handoff, sign-in
 and account checkpoints.
