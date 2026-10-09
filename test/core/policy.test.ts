@@ -61,17 +61,20 @@ describe("evaluatePolicy", () => {
 describe("the assets pay pays in", () => {
   const payment = { domain: "api.example.com", amountDecimal: 0.01, spentTodayDecimal: 0 };
 
-  it("allows USDC and pathUSD by default, and refuses any other asset", () => {
-    expect(DEFAULT_POLICY.stablecoins).toEqual(["USDC", "pathUSD"]);
+  it("allows USDC, pathUSD and USDG by default, and refuses any other asset", () => {
+    expect(DEFAULT_POLICY.stablecoins).toEqual(["USDC", "pathUSD", "USDG"]);
     expect(evaluatePolicy(DEFAULT_POLICY, { ...payment, asset: "USDC" })).toEqual({ allowed: true });
     expect(evaluatePolicy(DEFAULT_POLICY, { ...payment, asset: "pathUSD" })).toEqual({ allowed: true });
-    expect(evaluatePolicy(DEFAULT_POLICY, { ...payment, asset: "DAI" })).toEqual({ allowed: false, reason: "DAI is not in the policy's stablecoin list [USDC, pathUSD]" });
+    expect(evaluatePolicy(DEFAULT_POLICY, { ...payment, asset: "USDG" })).toEqual({ allowed: true });
+    expect(evaluatePolicy(DEFAULT_POLICY, { ...payment, asset: "DAI" })).toEqual({ allowed: false, reason: "DAI is not in the policy's stablecoin list [USDC, pathUSD, USDG]" });
   });
 
-  it("holds pathUSD to the same caps as USDC, as dollars", () => {
+  it("holds pathUSD and USDG to the same caps as USDC, as dollars", () => {
     const capped = { ...DEFAULT_POLICY, perCall: { amount: 0.05, asset: "USDC" }, perDay: { amount: 1, asset: "USDC" } };
     expect(evaluatePolicy(capped, { ...payment, asset: "pathUSD", amountDecimal: 0.06 }).reason).toBe("0.06 pathUSD exceeds caps.per_call (0.05 USDC)");
     expect(evaluatePolicy(capped, { ...payment, asset: "pathUSD", spentTodayDecimal: 0.995 }).reason).toContain("caps.per_day");
+    expect(evaluatePolicy(capped, { ...payment, asset: "USDG", amountDecimal: 0.06 }).reason).toBe("0.06 USDG exceeds caps.per_call (0.05 USDC)");
+    expect(evaluatePolicy(capped, { ...payment, asset: "USDG", spentTodayDecimal: 0.995 }).reason).toContain("caps.per_day");
   });
 
   it("refuses pathUSD when the owner's file lists USDC only, and reads the list in any letter case", () => {
@@ -81,7 +84,7 @@ describe("the assets pay pays in", () => {
     expect(parsePolicy("stablecoins: [USDC, PATHUSD, eurc]\n").stablecoins).toEqual(["USDC", "pathUSD", "EURC"]);
     expect(evaluatePolicy(parsePolicy("stablecoins: [usdc, pathusd]\n"), { ...payment, asset: "pathUSD" }).allowed).toBe(true);
     // A file that names no list gets the default.
-    expect(parsePolicy("caps:\n  per_call: 0.02 USDC\n").stablecoins).toEqual(["USDC", "pathUSD"]);
+    expect(parsePolicy("caps:\n  per_call: 0.02 USDC\n").stablecoins).toEqual(["USDC", "pathUSD", "USDG"]);
   });
 });
 

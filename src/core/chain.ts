@@ -3,9 +3,10 @@
 // tempo.charge on Tempo Moderato, x402 exact on Solana devnet. A chain this table does not name is refused before
 // anything is signed, and so is every mainnet: this client pays on testnets only.
 //
-// The six EVM chains are the budget's (budget/evm/chains.mjs, its own program with its own build); a test checks that
+// The seven EVM chains are the budget's (budget/evm/chains.mjs, its own program with its own build); a test checks that
 // this table agrees with that one field by field.
 
+import { chainRpc } from "./rpc.js";
 import { finalityFor, SOLANA_DEVNET_GENESIS } from "./finality-policy.js";
 import { createPublicClient, http } from "viem";
 import type { PaymentRequirements } from "@x402/core/types";
@@ -35,7 +36,7 @@ interface NetworkCommon {
   explorer: string;
   /** Added after a transaction or address in an explorer link, e.g. "?cluster=devnet". */
   explorerQuery?: string;
-  /** The RPC a browser wallet is offered and balances are read through. */
+  /** The RPC offered to a browser wallet. */
   rpc: string;
   /** The public RPC a settlement is read through when `rpcEnv` names no other (see chainRpc in src/core/rpc.ts). */
   defaultRpc: string;
@@ -88,6 +89,8 @@ function evm(input: {
   rpcEnv?: string;
   explorer: string;
   usdc: `0x${string}`;
+  /** The token's symbol, when it is not USDC. */
+  symbol?: string;
   eip712: { name: string; version: string };
   chainName: string;
   nativeCurrency: { name: string; symbol: string; decimals: number };
@@ -106,7 +109,7 @@ function evm(input: {
     rpc: input.rpc,
     defaultRpc: input.defaultRpc ?? input.rpc,
     ...(input.rpcEnv ? { rpcEnv: input.rpcEnv } : {}),
-    token: { symbol: "USDC", address: input.usdc, decimals: 6 },
+    token: { symbol: input.symbol ?? "USDC", address: input.usdc, decimals: 6 },
     usdc: { address: input.usdc, decimals: 6, eip712: input.eip712 },
     wallet: { chainName: input.chainName, nativeCurrency: input.nativeCurrency },
     blockSeconds: input.blockSeconds,
@@ -205,8 +208,24 @@ export const ETHEREUM_SEPOLIA: EvmNetwork = evm({
   logRange: 50_000,
 });
 
-/** The six x402 EVM chains, in the budget's order. */
-export const EVM_NETWORKS: readonly EvmNetwork[] = [BASE_SEPOLIA, ARC_TESTNET, ARBITRUM_SEPOLIA, POLYGON_AMOY, SKALE_BASE_SEPOLIA, ETHEREUM_SEPOLIA];
+/** Robinhood Chain's testnet (Arbitrum Orbit, ETH for gas). It pays in Paxos's test USDG, not USDC. */
+export const ROBINHOOD_TESTNET: EvmNetwork = evm({
+  key: "robinhood-testnet",
+  chainId: 46630,
+  label: "Robinhood Chain Testnet",
+  rpc: "https://rpc.testnet.chain.robinhood.com",
+  explorer: "https://explorer.testnet.chain.robinhood.com",
+  usdc: "0x7E955252E15c84f5768B83c41a71F9eba181802F",
+  symbol: "USDG",
+  eip712: { name: "Global Dollar", version: "1" },
+  chainName: "Robinhood Chain Testnet",
+  nativeCurrency: ETHER,
+  blockSeconds: 0.15,
+  logRange: 500_000,
+});
+
+/** The seven x402 EVM chains, in the budget's order. */
+export const EVM_NETWORKS: readonly EvmNetwork[] = [BASE_SEPOLIA, ARC_TESTNET, ARBITRUM_SEPOLIA, POLYGON_AMOY, SKALE_BASE_SEPOLIA, ETHEREUM_SEPOLIA, ROBINHOOD_TESTNET];
 
 /**
  * Tempo Moderato. pathUSD is Tempo's reference USD stablecoin, a TIP-20 token at a fixed address with 6 decimals; the
@@ -274,6 +293,8 @@ const MAINNETS: Record<string, string> = {
   "eip155:1187947933": "SKALE Base (mainnet)",
   "skale-base": "SKALE Base (mainnet)",
   "eip155:4217": "Tempo (mainnet)",
+  "eip155:4663": "Robinhood Chain (mainnet)",
+  robinhood: "Robinhood Chain (mainnet)",
   tempo: "Tempo (mainnet)",
   "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "Solana (mainnet)",
   solana: "Solana (mainnet)",
@@ -368,7 +389,9 @@ const ERC20_BALANCE_OF = [
  */
 export async function usdcBalance(address: string, network: NetworkInfo = DEFAULT_NETWORK): Promise<number> {
   if (network.rail === "solana") throw new Error("balances on Solana are not read by this function");
-  const client = createPublicClient({ transport: http(network.rpc) });
+  const rpc = network.rail === "tempo" ? chainRpc(network) : { url: network.rpc };
+  if ("error" in rpc) throw new Error(rpc.error);
+  const client = createPublicClient({ transport: http(rpc.url) });
   const raw = await client.readContract({
     address: network.token.address as `0x${string}`,
     abi: ERC20_BALANCE_OF,

@@ -15,7 +15,8 @@
 //   not_found         the blockhash expired and no transaction was ever found (safe to retry)
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { writeJournalFile } from "../journal.mjs";
 import { join } from "node:path";
 import { PublicKey } from "@solana/web3.js";
 import { OPS_DIR, retryRead, sleep, formatUnits } from "./lib.mjs";
@@ -44,10 +45,7 @@ export function readOp(op) {
 }
 
 export function writeOp(op, record) {
-  mkdirSync(OPS_DIR, { recursive: true, mode: 0o700 });
-  const tmp = `${opPath(op)}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(record, null, 2) + "\n", { mode: 0o600 });
-  renameSync(tmp, opPath(op));
+  writeJournalFile(opPath(op), JSON.stringify(record, null, 2) + "\n");
 }
 
 export function updateOp(op, patch, event) {

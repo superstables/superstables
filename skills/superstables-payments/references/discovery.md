@@ -93,6 +93,7 @@ Only testnet names count. In the index, `base`, `ethereum` and `solana` are main
 | `polygon-amoy` (`eip155:80002`) | no | `evm`, `polygon-amoy` |
 | `skale-base-sepolia` (`eip155:324705682`) | no | `evm`, `skale-base-sepolia` |
 | `ethereum-sepolia`, `sepolia` (`eip155:11155111`) | no | `evm`, `ethereum-sepolia` |
+| `robinhood-testnet` (`eip155:46630`) | yes (x402, USDG) | `evm`, `robinhood-testnet` |
 | `solana-devnet` | no | `solana`, `devnet` (x402) |
 | `tempo-moderato`, `moderato` (`eip155:42431`) | no | `tempo`, `moderato` (MPP only) |
 

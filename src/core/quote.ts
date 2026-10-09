@@ -9,6 +9,7 @@ import { detectPayment, type SellerChallenge } from "./x402.js";
 import { judgeOffers } from "./rails/index.js";
 import type { Offer } from "./rails/types.js";
 import { SellerTextError } from "./text.js";
+import { payNetworkFor } from "./routes.js";
 import { evaluatePolicy, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
 import { Records } from "./records.js";
@@ -24,6 +25,8 @@ export interface QuoteDeps {
   records: Records;
   /** The agent-side copy of the owner's policy: an early, advisory verdict. */
   policy: Policy;
+  /** Take only an offer on this chain (its key, CAIP-2 id or x402 v1 name), when a seller offers several. */
+  chain?: string;
 }
 
 /**
@@ -36,7 +39,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
   const { url, request, service } = resolveTarget(input);
 
   const challenge: SellerChallenge = await detectPayment(url);
-  const chosen = firstSupported(challenge, url);
+  const chosen = firstSupported(challenge, url, deps.chain);
 
   const asset = chosen.terms.asset;
   const payment = {
@@ -89,15 +92,21 @@ function resolveTarget(input: QuoteInput): { url: string; request?: ResolvedRequ
 }
 
 /**
- * Sellers may offer several ways to pay. Take the first one this client can actually pay;
+ * Sellers may offer several ways to pay. Take the first one this client can actually pay, on `chain` when one is named;
  * when none of them work, say what was offered and why each was refused, because "payment
  * failed" is useless and "it wants mainnet USDC" is actionable.
  */
-function firstSupported(challenge: SellerChallenge, url: string): Offer {
+function firstSupported(challenge: SellerChallenge, url: string, chain?: string): Offer {
+  const wanted = chain === undefined ? undefined : payNetworkFor(chain);
+  if (chain !== undefined && !wanted) throw new Error(`--chain ${chain} is not a chain this client pays on`);
   const refusals: string[] = [];
   // The seller's own words in each description are quoted as one bounded line: this sentence reaches an agent as the
   // client's refusal (rails/index.ts, describeAccept).
   for (const { offered, judged } of judgeOffers(challenge)) {
+    if (judged.supported && wanted && judged.offer.terms.network !== wanted.caip2) {
+      refusals.push(`${offered}: not on ${wanted.label}, the chain asked for`);
+      continue;
+    }
     if (judged.supported) return judged.offer;
     refusals.push(`${offered}: ${judged.reason}`);
   }

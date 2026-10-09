@@ -17,13 +17,13 @@ There are two ways:
 
 - **Single purchase on your machine** (`pay`): the owner approves on a page on this
   machine, with no account, on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE
-  Base Sepolia, Ethereum Sepolia, Tempo Moderato or Solana devnet. See
+  Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet, Tempo Moderato or Solana devnet. See
   [Single purchase on your machine](#approve-each-payment-on-this-computer-pay).
 - **Single purchase on superstables.com** (`superstables budget buy-once`): the owner approves on superstables.com,
-  on Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet. Choose this when the owner's
+  on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet. Choose this when the owner's
   wallet is on another device. See [Single purchase on superstables.com](#hosted-buy-once-superstables-budget-buy-once).
 
-**Testnet only.** Test tokens: USDC, or pathUSD on Tempo Moderato. No real money
+**Testnet only.** Test tokens: USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo Moderato. No real money
 moves. Use the [0.3.0 client install instructions](install.md). A command-capable agent initiates
 purchases using the skill or CLI, then shows the owner the exact approval link and terms. For
 requests on superstables.com, the owner approves and checks activity on the site; linked budget agents are
@@ -39,8 +39,8 @@ secondary route; browsing alone cannot create a purchase.
 With `superstables budget buy-once`, the owner approves one purchase on superstables.com, in their
 own wallet, from a device where they are signed in and have a compatible wallet. It needs no
 `setup` command, budget or agent key. It pays on the chain the service's listing names, for the
-services the site lists: Base Sepolia (test USDC), Arc Testnet (test USDC), Tempo Moderato (test
-pathUSD) or Solana devnet (test USDC). It needs a superstables.com account, which you create by
+services the site lists: Base Sepolia (test USDC), Arc Testnet (test USDC), Robinhood Chain Testnet
+(test USDG), Tempo Moderato (test pathUSD) or Solana devnet (test USDC). It needs a superstables.com account, which you create by
 signing in with an Ethereum or Solana wallet, or a compatible deployment the owner names with `--site` or
 `SUPERSTABLES_SITE`; an origin outside superstables.com and its subdomains also needs the owner to set
 `SUPERSTABLES_ALLOW_SITE` to it (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
@@ -93,6 +93,7 @@ Single purchase requests made on superstables.com appear in the [site account](h
 | Chains | Protocol and token | What the owner's wallet does |
 | --- | --- | --- |
 | Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia | x402 `exact`, test USDC | Signs one EIP-3009 authorization over that chain's USDC. The seller's facilitator submits it and pays the gas |
+| Robinhood Chain Testnet | x402 `exact`, test USDG | Signs one EIP-3009 authorization over USDG (`Global Dollar`, version 1). The seller, or its facilitator, submits it and pays the gas |
 | Tempo Moderato | MPP `tempo.charge`, test pathUSD | Sends one pathUSD transfer, with a memo tied to the seller's request, and pays its network fee |
 | Solana devnet | x402 `exact`, test USDC | Signs one token transfer whose fee the seller's facilitator pays; the facilitator sends it |
 

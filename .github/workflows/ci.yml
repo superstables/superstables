@@ -29,7 +29,8 @@ jobs:
     if: github.event.repository.private && github.ref == 'refs/heads/main'
     name: Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
-    timeout-minutes: 15
+    # Node 20 took 14 minutes on 9 Oct 2026 and was once cancelled at the old 15-minute limit.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:

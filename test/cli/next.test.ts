@@ -113,6 +113,14 @@ describe("the commands find prints for a listing", () => {
     }
   });
 
+  it("routes Robinhood Chain Testnet's names to its evm chain key, and never its mainnet's", () => {
+    for (const name of ["robinhood-testnet", "eip155:46630"]) {
+      const commands = listingCommands(indexListing("robinhood.example", ["x402"], [name]));
+      expect(commands.map((c) => `${c.way} ${c.rail ?? ""} ${c.chain ?? ""}`.trim())).toEqual(["pay", "budget evm robinhood-testnet"]);
+    }
+    for (const name of ["robinhood", "eip155:4663"]) expect(routesFor(["x402"], [name])).toEqual({ pay: false, budget: [] });
+  });
+
   it("never suggests a command for a mainnet listing", () => {
     for (const chains of [["base"], ["solana"], ["base", "solana"], ["eip155:8453"], ["ethereum"], ["eip155:1"]]) {
       const service = indexListing("main.example", ["x402"], chains, { testnet: false, notActionableReason: "mainnet only" });

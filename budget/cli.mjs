@@ -28,8 +28,10 @@ import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
-import { HOLDER_ENV, WORKER_ENV, adoptWorker, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
-import { abandonedBreaker, lockRecord, lockNext } from "./op-lock.mjs";
+import { spawnIdentified } from './child-identity.mjs';
+import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { abandonedBreaker, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
+import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
@@ -103,23 +105,24 @@ function wrapList(items, width, indent) {
 }
 const CHAINS_HELP = `Rails and chains (--chain; the default is marked):
   evm     ${wrapList(EVM_CHAIN_KEYS.map((k) => `${k} (${EVM_CHAINS[k].label}${k === EVM_DEFAULT_CHAIN ? ", default" : ""})`), 100, "          ")}
-          The budget is USDC. Sellers: x402.
+          The budget is USDC (USDG on robinhood-testnet). Sellers: x402.
   tempo   moderato (Tempo Moderato, default; the only chain). The budget is pathUSD. Sellers: MPP (tempo.charge).
   solana  devnet (Solana devnet, default; the only chain). The budget is USDC. Sellers: x402.
   Chain to rail: ${Object.values(EVM_CHAINS).map((c) => c.label).slice(0, -1).join(", ")} and ${Object.values(EVM_CHAINS).at(-1).label} are evm;
   Tempo Moderato is tempo; Solana devnet is solana. superstables find --budget names the rail and chain for a listing,
   and prints the commands to buy it.`;
 const MAX_HELP = `--max M is the most this one purchase may cost, in the budget token's own units: --max 0.02 means 0.02 USDC (0.02
-  pathUSD on tempo). It is your ceiling, not the price: when the seller asks more, buy refuses (exit 3) and signs nothing.
+  pathUSD on tempo, 0.02 USDG on robinhood-testnet). It is your ceiling, not the price: when the seller asks more, buy refuses (exit 3) and signs nothing.
   Only what is actually paid comes off the budget. Required, with no default.`;
 const FLOW_HELP = `The owner's steps, in order, once per rail and chain:
   evm     setup, fund-agent, doctor, grant.
           setup: the owner connects their wallet and signs a free message; this machine gets an agent key.
           fund-agent: the owner sends the agent key a little of the chain's gas token (ETH on Base Sepolia, Arbitrum
-          Sepolia and Ethereum Sepolia, USDC on Arc Testnet, POL on Polygon Amoy, CREDIT on SKALE Base Sepolia) so it can
-          pay for its own transactions. On Arc, that gas transfer is USDC, separate from the budget allowance.
-          grant: an allowance (USDC approve) from the owner's wallet to the agent key. The USDC stays in the owner's wallet
-          until a purchase: each buy pulls exactly its price, then pays the seller.
+          Sepolia, Ethereum Sepolia and Robinhood Chain Testnet, USDC on Arc Testnet, POL on Polygon Amoy, CREDIT on
+          SKALE Base Sepolia) so it can pay for its own transactions. On Arc, that gas transfer is USDC, separate from the
+          budget allowance.
+          grant: an allowance (USDC approve; USDG on Robinhood Chain Testnet) from the owner's wallet to the agent key.
+          The token stays in the owner's wallet until a purchase: each buy pulls exactly its price, then pays the seller.
   tempo   setup, grant. grant authorizes the agent's access key to spend the owner's pathUSD up to a limit, until an
           expiry (default 24 hours). The agent needs no gas: fees come from the owner.
   solana  setup, fund-agent, doctor, grant. fund-agent sends the agent SOL for fees (default 0.01). grant makes the agent
@@ -210,8 +213,8 @@ ${FLOW_HELP}`,
       usage: "superstables budget fund-agent --rail evm|solana [--chain C] [--amount A] [--timeout S] [--no-open] [--detach|--wait]",
       about: `One plain transfer from the owner's wallet to the agent key, so the agent can pay for its own transactions. Run it
 after setup and before grant. It transfers funds for network fees; it does not grant a budget.
-  evm     the chain's gas token (ETH on Base Sepolia, Arbitrum Sepolia and Ethereum Sepolia, USDC on Arc Testnet, POL on
-          Polygon Amoy, CREDIT on SKALE Base Sepolia). --amount in that token; the default is enough for a few purchases.
+  evm     the chain's gas token (ETH on Base Sepolia, Arbitrum Sepolia, Ethereum Sepolia and Robinhood Chain Testnet, USDC on
+          Arc Testnet, POL on Polygon Amoy, CREDIT on SKALE Base Sepolia). --amount in that token; the default is enough for a few purchases.
           On Arc it is native USDC (a plain transfer, 18 decimals), on this machine and on superstables.com alike.
   solana  SOL for transaction fees. --amount in SOL, default 0.01.
   tempo   has none: the agent needs no gas, fees come from the owner.
@@ -338,13 +341,13 @@ with the holder, lock path and owner recovery guidance in next. Never buy again 
     }),
   },
   unlock: {
-    flags: { op: "v", confirm: "b" }, required: ["op"],
+    flags: { op: "v", cap: "b", "buy-once": "b", approvals: "b", approval: "v", attempt: "v", confirm: "b", unverified: "b" }, required: [],
     help: helpText({
-      usage: "superstables budget unlock --rail evm|tempo|solana --op ID [--chain C] --confirm",
-      about: "Owner recovery after checking and stopping all work on this op across processes, containers and hosts. Protects verifiably live local holders on Linux and macOS. Requires --confirm and the op ID typed in a terminal. Overrides unverifiable holders regardless of timestamps; a holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments. Preserves the journal; reconcile next, never buy again while unknown.",
+      usage: "superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --attempt ID | --buy-once) --confirm [--unverified]",
+      about: "Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.\n\n--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.\n\n--cap: Recover the core payment lock. --approvals: Recover approval locks on this rail and chain. --approval ID: Also recover the record lock for this approval. --attempt ID: Release an attempt runner for read-only reconciliation. Stop all payment work across processes, containers and hosts first. Payment-lock recovery uses the exact confirmation payment-lock, or payment-lock unverified with --unverified. Preserves payment evidence. Run status for the original attempt or wait for the original approval next.\n\nA holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.\n\n--buy-once: Recover the start lock for a single purchase. Preserves the purchase record and payment evidence.\n  superstables budget unlock --buy-once --confirm [--unverified]",
       money: "no. It never signs or sends.", who: "the owner or operator, after stopping the processes.",
       example: "superstables budget unlock --rail solana --op order-001 --confirm",
-      prints: "one RESULT with op, state, reason and next. Without --confirm, a terminal or the matching typed op ID: exit 3. Busy: exit 5. Cleared or no lock: exit 0.",
+      prints: "one RESULT with state, reason and next, plus the operation or attempt ID when selected. Without --confirm, a terminal or matching typed confirmation: exit 3. Missing operation, attempt or approval: exit 3. Busy: exit 5. Cleared or no lock: exit 0.",
     }),
   },
   recover: {
@@ -667,6 +670,19 @@ function parse(argv) {
     if (allowed[name] === "m") (f[name] ??= []).push(v); // a flag that may repeat
     else f[name] = v;
   }
+  if (cmd === "unlock") {
+    if ([f.op !== undefined, Boolean(f.cap), Boolean(f["buy-once"]), Boolean(f.approvals), f.approval !== undefined, f.attempt !== undefined].filter(Boolean).length !== 1) return badInput({ command: cmd }, "choose exactly one unlock target: --op, --cap, --approvals, --approval, --attempt or --buy-once");
+    if (f.approval !== undefined && !isApprovalId(f.approval)) return badInput({ command: cmd }, "--approval must be an approval ID");
+    if (f.attempt !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(f.attempt)) return badInput({ command: cmd }, "--attempt must be a record ID");
+    if (f["buy-once"]) {
+      if (f.rail || f.chain) return badInput({ command: cmd }, "--buy-once does not take --rail or --chain");
+      return { cmd, f, ctx: { command: cmd } };
+    }
+    if (f.cap || f.attempt) {
+      if (f.rail || f.chain) return badInput({ command: cmd }, "--cap and --attempt do not take --rail or --chain");
+      return { cmd, f, ctx: { command: cmd } };
+    }
+  }
   if (cmd === "buy-once") return parseBuyOnce(cmd, f);
   if (cmd === "find") {
     // --rail and --chain narrow the list to that rail or chain (and pick that chain's recorded site); every rail and chain
@@ -798,7 +814,7 @@ function parse(argv) {
  */
 function parseBuyOnce(cmd, f) {
   const ctx = { command: cmd };
-  const where = "Base Sepolia (--rail evm --chain base-sepolia), Arc Testnet (--rail evm --chain arc-testnet), Tempo Moderato (--rail tempo) or Solana devnet (--rail solana)";
+  const where = "Base Sepolia (--rail evm --chain base-sepolia), Arc Testnet (--rail evm --chain arc-testnet), Robinhood Chain Testnet (--rail evm --chain robinhood-testnet), Tempo Moderato (--rail tempo) or Solana devnet (--rail solana)";
   if (f.chain !== undefined && !ONCE_CHAINS[f.chain]) {
     if (/mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet: superstables budget is testnet only`);
     return badInput(ctx, `buy-once pays on ${where}, not ${f.chain}. The network comes from the service's listing`);
@@ -928,9 +944,12 @@ function run(spec) {
     const own = Boolean(APPROVAL_ID);
     // the rail script adds a hosted request (site, request id, access token) to this approval's record: HOLDER_ENV names it
     const env = own ? { ...process.env, [HOLDER_ENV]: APPROVAL_ID } : process.env;
-    const p = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env, detached: own });
+    const p = spawnIdentified(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env, detached: own });
     currentChild = p;
-    if (own && p.pid) setRailGroup(APPROVAL_ID, p.pid);
+    if (own && p.pid) {
+      setRailGroup(APPROVAL_ID, p.pid);
+      p.once('identity', selfStartedAt => setRailGroup(APPROVAL_ID, p.pid, selfStartedAt));
+    }
     let stdout = "";
     let partial = "";
     let stderrTail = "";
@@ -954,7 +973,8 @@ function run(spec) {
     };
     p.stderr.on("data", (d) => passErr(errScrub.push(String(d))));
     for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => { interrupted = true; try { if (own) process.kill(-p.pid, s); else p.kill(s); } catch {} });
-    p.on("error", (e) => { log(`superstables budget: could not start ${spec.cmd}: ${e.message}`); resolve({ code: 2, stdout }); });
+    // A spawn failure is bad input (2). A started child that failed before its script ran is a rail failure (1).
+    p.on("error", (e) => { log(`superstables budget: could not start ${spec.cmd}: ${e.message}`); resolve({ code: p.pid === undefined ? 2 : 1, stdout }); });
     p.on("close", (code, sig) => {
       if (partial) forward(partial);
       passErr(errScrub.end());
@@ -1272,7 +1292,7 @@ async function buy({ f, ctx }) {
   }
   const journalBefore = existsSync(journal(f));
   const running = run(railCommand("buy", f));
-  try { lock.holdAlso(currentChild?.pid); }
+  try { lock.holdAlso(currentChild); }
   catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }
   const r = await running;
   // Stopped (by a signal or on its own) before its rail ever wrote this op's journal: every rail writes the journal
@@ -1302,35 +1322,49 @@ async function buy({ f, ctx }) {
 }
 
 async function unlock({ f, ctx }) {
+  if (!f.op) return unlockPayment({ f, ctx });
   const next = `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`;
-  const ownerNext = "Stop and ask the owner to check and stop all work on this op across processes, containers and hosts. Only the owner handles lock recovery; see the owner-only unlock --help section of the installed CLI and the payment skill rule 5. Preserve the journal and reconcile next; never pay again while the outcome is unknown";
+  const ownerNext = operationBusy(f.op);
   const refuse = reason => emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason, next: ownerNext });
   if (!f.confirm) return refuse("confirmation_required");
   if (!process.stdin.isTTY) return refuse("owner_terminal_required");
-  const terminal = createInterface({ input: process.stdin, output: process.stderr });
-  let answer;
-  try {
-    const closed = new Promise(resolve => terminal.once('close', () => resolve(null)));
-    answer = await Promise.race([terminal.question(`superstables budget: owner recovery can remove a new holder's lock and allow duplicate payments if any holder is still working or unlock pauses before unlinking. After stopping all work on this op, type ${f.op} to confirm: `), closed]);
-  } catch { return refuse("owner_confirmation_mismatch"); }
-  finally { terminal.close(); }
-  if (answer !== f.op) return refuse("owner_confirmation_mismatch");
   const dir = opsDir(f.rail, f.chain);
-  const hadLocks = ["buy.lock", "json.lock"].some(suffix => existsSync(join(dir, `${f.op}.${suffix}`)) || existsSync(join(dir, `${f.op}.${suffix}.break`)));
-  if (!existsSync(journal(f)) && !hadLocks) {
-    return emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason: "op_not_found", next: "check the original rail, chain and op; no journal or operation locks exist" });
-  }
-  const options = { confirmUnverifiable: true, onOverride: details => log(`superstables budget: overriding unverifiable lock: ${details}. The owner confirmed all work on this op has stopped. A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.`) };
+  const hasLocks = () => ['buy.lock', 'json.lock'].some(suffix => existsSync(join(dir, `${f.op}.${suffix}`)) || existsSync(join(dir, `${f.op}.${suffix}.break`)));
+  const notFound = () => emit(3, { ...ctx, op: f.op, state: 'refused_precheck', reason: 'op_not_found', next: 'check the original rail, chain and op; no journal or operation locks exist' });
+  if (!existsSync(journal(f)) && !hasLocks()) return notFound();
+  const terminal = createInterface({ input: process.stdin, output: process.stderr });
+  const mismatch = () => { log("Confirmation did not match. No locks were cleared."); return refuse("owner_confirmation_mismatch"); };
+  try {
+    const lines = terminal[Symbol.asyncIterator]();
+    log("A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.");
+    if (f.unverified) {
+      log(`Superstables cannot confirm that every process working on operation ${f.op} has stopped. Clearing its lock while any process can still run may allow a second payment for the same operation. Stop all work on it across processes, containers and hosts, and keep it stopped until unlock finishes.`);
+      log(`To clear the lock without that proof, type ${f.op} unverified exactly:`);
+    } else {
+      log(`After stopping all work on this op, type ${f.op} to confirm:`);
+    }
+    const answer = await lines.next();
+    if (answer.done || answer.value !== (f.unverified ? `${f.op} unverified` : f.op)) return mismatch();
+  } catch { return mismatch(); }
+  finally { terminal.close(); }
+  const hadLocks = hasLocks();
+  if (!existsSync(journal(f)) && !hadLocks) return notFound();
+  let noticed = false;
+  const options = { confirmUnverifiable: Boolean(f.unverified), confirmPossiblyAlive: Boolean(f.unverified), onOverride: () => { if (!noticed) { noticed = true; log(`Clearing the lock for operation ${f.op} without proof that its process has stopped. You confirmed that all work on this operation has stopped.`); } } };
+  const blocked = lock => {
+    if (lock.possiblyAlive && !f.unverified) log(`Cannot clear the lock for operation ${f.op} because Superstables cannot confirm that its process has stopped. Run the command in your own terminal, outside any agent's sandbox. If the check still fails, stop every process working on this operation across all containers and hosts, then rerun the same command with --confirm --unverified.`);
+    return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(lock, f.op, f.rail, f.chain) });
+  };
   const locks = [];
   try {
     for (const take of [lockOp, lockRecord]) {
       const lock = take(dir, f.op, options);
-      if (!lock.ok) { for (const held of locks) held.release(); return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(lock, f.op, f.rail, f.chain) }); }
+      if (!lock.ok) { for (const held of locks) held.release(); return blocked(lock); }
       locks.push(lock);
     }
     for (const suffix of ["buy.lock", "json.lock"]) {
       const blocker = abandonedBreaker(join(dir, `${f.op}.${suffix}`), options);
-      if (blocker) { for (const held of locks) held.release(); return emit(5, { ...ctx, op: f.op, state: "unknown", reason: "op_in_progress", next: lockNext(blocker, f.op, f.rail, f.chain) }); }
+      if (blocker) { for (const held of locks) held.release(); return blocked(blocker); }
     }
     for (const lock of locks) lock.release();
     log(`superstables budget: ${hadLocks ? 'abandoned locks cleared' : 'no lock'} for operation ${f.op}; journal preserved. Reconcile before doing anything else.`);
@@ -1338,12 +1372,50 @@ async function unlock({ f, ctx }) {
   } finally { for (const lock of locks) lock.release(); }
 }
 
+async function unlockPayment({ f, ctx }) {
+  const fields = { ...ctx, ...(f.attempt ? { attempt: f.attempt } : {}) };
+  const refused = reason => emit(3, { ...fields, state: 'refused_precheck', reason, next: paymentBusy });
+  if (!f.confirm) return refused('confirmation_required');
+  if (!process.stdin.isTTY) return refused('owner_terminal_required');
+  const targetExists = () => f.attempt ? Boolean(readRecoveryAttempt(HOME, f.attempt))
+    : f.approval ? approvalRecoveryTargetExists(f.rail, f.chain, f.approval) : true;
+  const notFound = () => emit(3, { ...fields, state: 'refused_precheck', reason: f.attempt ? 'attempt_not_found' : 'approval_not_found', next: f.attempt ? 'check the original attempt ID and record directory' : 'check the original rail, chain and approval ID' });
+  if (!targetExists()) return notFound();
+  const terminal = createInterface({ input: process.stdin, output: process.stderr });
+  const mismatch = () => { log('Confirmation did not match. No locks were cleared.'); return refused('owner_confirmation_mismatch'); };
+  try {
+    const lines = terminal[Symbol.asyncIterator]();
+    log("A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.");
+    if (f.unverified) {
+      log('Superstables cannot confirm that every process working under the payment lock has stopped. Clearing the payment lock while any process can still run may allow a second payment. Stop all payment work across processes, containers and hosts, and keep it stopped until unlock finishes.');
+      log('To clear the payment lock without that proof, type payment-lock unverified exactly:');
+    } else log('After stopping all payment work, type payment-lock to confirm:');
+    const answer = await lines.next();
+    if (answer.done || answer.value !== (f.unverified ? 'payment-lock unverified' : 'payment-lock')) return mismatch();
+  } catch { return mismatch(); }
+  finally { terminal.close(); }
+  let noticed = false;
+  const options = { unverified: Boolean(f.unverified), onOverride: () => {
+    if (!noticed) { noticed = true; log('Clearing the payment lock without proof that its process has stopped. You confirmed that all payment work has stopped.'); }
+  } };
+  const recovery = f.cap ? recoverCap(HOME, options) : f.attempt ? recoverAttempt(HOME, f.attempt, options) : f["buy-once"] ? recoverApprovalLocks("once", "purchase", options) : recoverApprovalLocks(f.rail, f.chain, options, f.approval);
+  if (recovery.outcome === 'not_found') return notFound();
+  if (['busy', 'unverifiable'].includes(recovery.outcome)) {
+    if (recovery.outcome === 'unverifiable' && !f.unverified) log("Cannot clear the payment lock because Superstables cannot confirm that its process has stopped. Run the command in your own terminal, outside any agent's sandbox. If the check still fails, stop every process working under the payment lock across all containers and hosts, then rerun the same command with --confirm --unverified.");
+    return emit(5, { ...fields, state: 'unknown', reason: 'op_in_progress', next: paymentBusy });
+  }
+  log(recovery.outcome === 'locks_cleared'
+    ? 'Payment lock recovery is complete. Payment evidence has been preserved. Check the original attempt or approval before doing anything else.'
+    : 'No payment locks needed recovery. Payment evidence is unchanged. Check the original attempt or approval before doing anything else.');
+  return emit(0, { ...fields, state: 'ok', reason: recovery.outcome, next: f.attempt ? `superstables status ${f.attempt}` : 'check the original attempt with status or the original approval with budget wait; do not pay again while its outcome is unknown' });
+}
+
 async function reconcile({ f, ctx }) {
   const lock = lockOp(opsDir(f.rail, f.chain), f.op);
   if (!lock.ok) return emit(5, { ...ctx, op: f.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f.op, f.rail, f.chain), reason: "op_in_progress" });
   if (!readJournal(f)) return badInput(ctx, `no journal for op ${f.op} under ${opsDir(f.rail, f.chain)}`);
   const running = run(railCommand("reconcile", f)); // none of the rail scripts signs or sends
-  try { lock.holdAlso(currentChild?.pid); }
+  try { lock.holdAlso(currentChild); }
   catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }
   const r = await running;
   const n = normalize("reconcile", f, r.signal || interrupted ? null : railResult(r.stdout, { last: true }), r.code);
@@ -1766,7 +1838,7 @@ if (WORKER_ID) {
   setTimeout(async () => {
     const pgid = currentChild?.pid;
     const worker = readApproval(WORKER_ID);
-    if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc }))) {
+    if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc, location: worker ? { ...worker, selfStartedAt: worker.railSelfStartedAt, namespace: 'railNamespace' in worker ? worker.railNamespace : worker.namespace, writtenAt: worker.railWrittenAt, bootElapsedMs: worker.railBootElapsedMs, createdAt: undefined } : {} }))) {
       // no result while its page may still run: the chain stays held, and wait keeps trying to stop the group
       log(`superstables budget: the approval ran past its deadline and process group ${pgid} would not stop; no result is recorded`);
       process.exit(5);

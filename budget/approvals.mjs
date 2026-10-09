@@ -29,12 +29,14 @@
 // a new process that reused the number: it is treated as gone, and never signalled.
 // Nothing here kills a process group it did not start. `--replace` first asks the running page to cancel
 // (POST /cancel): only a page that confirms the wallet was never asked is stopped.
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
-import { groupAlive as groupOf, processStartFields, sameProcess } from "./procs.mjs";
+import { spawnIdentified } from './child-identity.mjs';
+import { createIdentitySource, inspectProcess, visiblePid } from '../src/core/process-identity.mjs';
+import { clearFileLock, inspectLockText, recoveryResult, paymentBusy } from '../src/core/owner-recovery.mjs';
+import { groupAlive as groupOf, sameProcess } from "./procs.mjs";
 import { accountWaitingWords, cancelSiteRequest, readSiteRequest, siteWord } from "./site.mjs";
 
 /** A lock younger than this is never taken over, whatever its processes look like (startup: the record is being written). */
@@ -170,15 +172,15 @@ function acquireSync(path, me, deadline, breakDead) {
         if (err.code !== "EEXIST") throw err;
       }
       const { text, holder } = lockHolder(path);
-      if (text !== null && holder && !alive(Number(holder.pid), holder.pidStart, holder.pidStartUtc)) {
+      if (text !== null && holder && !alive(Number(holder.pid), holder.pidStart, holder.pidStartUtc, holder)) {
         if (breakDead) breakDead(path, text, deadline);
         else removeIfSame(path, text);
       }
       if (Date.now() >= deadline) {
         throw new Error(holder
-          ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}, which is still running`
+          ? `the lock ${path} is held by process ${holder.pid ?? "unknown"}${inspectProcess(holder).possiblyAlive ? ". " + paymentBusy : ", which is still running"}`
           : text === null ? `the lock ${path} could not be taken in time`
-            : `the lock ${path} cannot be read; if no superstables budget command is running, remove it`);
+            : `the lock ${path} cannot be read. ${paymentBusy}`);
       }
       pauseSync(LOCK_RETRY_MS);
     }
@@ -307,26 +309,27 @@ export function seenGrows(prev, next) {
 }
 
 /** Compatible local start and, on macOS, separate UTC seconds for new readers. */
-const startOf = (pid) => processStartFields(pid);
+const identity = createIdentitySource();
+const startOf = (pid) => identity.fields(pid);
 
 /**
  * Whether the process recorded as `pid`, started at `start`, still runs (EPERM: it exists, under another user). A pid now
  * held by a process with another start time is a reused number: not alive.
  */
-export const alive = (pid, start, startUtc) => sameProcess(pid, start, startUtc);
+export const alive = (pid, start, startUtc, location) => sameProcess(pid, start, startUtc, location);
 
 /**
  * Whether any process is left in the process group `pgid` (a detached worker is its group's leader: pgid = its pid) whose
  * leader was recorded with start identity `start`. A number reused by another process is not that group.
  */
-export const groupAlive = (pgid, start, startUtc) => groupOf(pgid, start, startUtc);
+export const groupAlive = (pgid, start, startUtc, location) => groupOf(pgid, start, startUtc, location);
 
 /**
  * Whether anything this approval started may still run: its worker (or blocking command), the worker's process group
  * (its rail script and the page's process), and a blocking command's rail group.
  */
 export const processesAlive = (record) =>
-  Boolean(record && (alive(record.pid, record.pidStart, record.pidStartUtc) || groupAlive(record.pid, record.pidStart, record.pidStartUtc) || groupAlive(record.railPgid, record.railPgidStart, record.railPgidStartUtc)));
+  Boolean(record && (alive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined }) || groupAlive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined }) || groupAlive(record.railPgid, record.railPgidStart, record.railPgidStartUtc, { ...record, selfStartedAt: record.railSelfStartedAt, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs, createdAt: undefined })));
 
 /** A record without a final result whose processes may still run: it holds its chain. */
 export const isLive = (record) => Boolean(record && !record.final && processesAlive(record));
@@ -335,22 +338,27 @@ export const isLive = (record) => Boolean(record && !record.final && processesAl
  * Stop a process group this command started, whose leader was recorded with start identity `start`: SIGTERM, then SIGKILL.
  * Returns true once no process is left in it. A group whose number now belongs to another process is never signalled.
  * @param {number} pgid
- * @param {{ start?: string | null, startUtc?: number | null, graceMs?: number }} [options]
+ * @param {{ start?: string | null, startUtc?: number | null, location?: import("../src/core/process-identity.mjs").ProcessRecord, graceMs?: number }} [options]
  */
-export async function stopGroup(pgid, { start, startUtc, graceMs = 3000 } = {}) {
-  const left = () => groupAlive(pgid, start, startUtc);
+export async function stopGroup(pgid, { start, startUtc, location = {}, graceMs = 3000 } = {}) {
+  const left = () => groupAlive(pgid, start, startUtc, location);
   if (!left()) return true;
-  try { process.kill(-pgid, "SIGTERM"); } catch {}
+  // The startup window may refuse recovery, but cannot authorize signalling a group.
+  const checked = inspectProcess({ ...location, selfStartedAt: undefined, pid: pgid, pidStart: start, pidStartUtc: startUtc }, undefined, true);
+  if (checked.possiblyAlive) return false;
+  const target = visiblePid({ ...location, pid: pgid }, undefined, true);
+  if (!target) return false;
+  try { process.kill(-target, "SIGTERM"); } catch {}
   for (let t = 0; t < graceMs && left(); t += 100) await sleep(100);
-  if (left()) { try { process.kill(-pgid, "SIGKILL"); } catch {} }
+  if (left()) { try { process.kill(-target, "SIGKILL"); } catch {} }
   for (let t = 0; t < 2000 && left(); t += 100) await sleep(100);
   return !left();
 }
 
 /** Stop everything an approval started: its worker's group and a blocking command's rail group. */
 async function stopRecord(record) {
-  await stopGroup(record.pid, { start: record.pidStart, startUtc: record.pidStartUtc });
-  if (record.railPgid) await stopGroup(record.railPgid, { start: record.railPgidStart, startUtc: record.railPgidStartUtc });
+  await stopGroup(record.pid, { start: record.pidStart, startUtc: record.pidStartUtc, location: { ...record, createdAt: record.foreground ? record.createdAt : undefined } });
+  if (record.railPgid) await stopGroup(record.railPgid, { start: record.railPgidStart, startUtc: record.railPgidStartUtc, location: { ...record, selfStartedAt: record.railSelfStartedAt, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs, createdAt: undefined } });
 }
 
 // ── one approval at a time per rail and chain ──────────────────────────────────────────────────────────
@@ -382,14 +390,14 @@ function lockHeld(lock) {
   if (lock.unreadable) return true;
   const record = readApproval(lock.id);
   if (record?.final) return false;
-  if (alive(lock.pid, lock.pidStart, lock.pidStartUtc)) return true;
+  if (alive(lock.pid, lock.pidStart, lock.pidStartUtc, lock)) return true;
   if (processesAlive(record)) return true;
   return Date.now() - Number(lock.createdAt ?? 0) < STARTUP_GRACE_MS;
 }
 
 /** What a refusal can say about the holder: its record, or what the lock alone knows while it starts. */
 const holderOf = (lock, rail, chain) => lock.unreadable
-  ? { id: "unknown", rail, chain, command: `an unreadable lock (${lock.unreadable}); if no superstables budget command is running, remove that file` }
+  ? { id: "unknown", rail, chain, command: `an unreadable lock (${lock.unreadable}). ${paymentBusy}` }
   : readApproval(lock.id) ?? { id: lock.id, rail, chain, command: "an owner command (starting)" };
 
 /** The approval that holds this rail and chain, or null. */
@@ -471,15 +479,16 @@ export function startForeground({ id, command, rail, chain }) {
 }
 
 /** The process group of a blocking command's rail script (its page and chain reads run there). */
-export function setRailGroup(id, pgid) {
+export function setRailGroup(id, pgid, selfStartedAt) {
   const starts = startOf(pgid);
-  return update(id, { railPgid: pgid, railPgidStart: starts.pidStart, ...(starts.pidStartUtc !== undefined ? { railPgidStartUtc: starts.pidStartUtc } : {}) });
+  if (process.platform === 'darwin' && selfStartedAt !== undefined) starts.selfStartedAt = selfStartedAt;
+  return update(id, { railPgid: pgid, railPgidStart: starts.pidStart, ...(starts.selfStartedAt !== undefined ? { railSelfStartedAt: starts.selfStartedAt } : {}), railWrittenAt: starts.writtenAt, railBootElapsedMs: starts.bootElapsedMs, railNamespace: starts.namespace, ...(starts.pidStartUtc !== undefined ? { railPgidStartUtc: starts.pidStartUtc } : {}) });
 }
 
 /** The worker records its own pid at start, so its process group is known even if the caller died before writing it. */
 export function adoptWorker(id) {
   const record = readApproval(id);
-  if (record && !record.final && !record.pid) update(id, { pid: process.pid, ...startOf(process.pid) });
+  if (record && !record.final && (!record.pid || (process.platform === 'darwin' && record.pid === process.pid))) update(id, { pid: process.pid, ...startOf(process.pid) });
 }
 
 // ── the worker's side ──────────────────────────────────────────────────────────────────────────────────
@@ -627,7 +636,7 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
   const fd = openSync(logFile(id), "a", 0o600);
   let child;
   try {
-    child = spawn(cmd, args, { cwd, env: { ...env, [WORKER_ENV]: id }, detached: true, stdio: ["ignore", fd, fd] });
+    child = spawnIdentified(cmd, args, { cwd, env: { ...env, [WORKER_ENV]: id }, detached: true, stdio: ["ignore", fd, fd] });
   } finally {
     closeSync(fd);
   }
@@ -636,7 +645,10 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
   child.on("exit", () => (exited = true));
   child.on("error", (err) => { exited = true; spawnError = err; });
   const childStart = startOf(child.pid);
-  if (child.pid) update(id, { pid: child.pid, ...childStart });
+  if (child.pid) {
+    updateApproval(id, record => ({ pid: child.pid, ...childStart, ...(process.platform === 'darwin' && record.pid === child.pid && Number.isFinite(record.selfStartedAt) ? { selfStartedAt: record.selfStartedAt } : {}) }));
+    child.once('identity', selfStartedAt => updateApproval(id, record => record.pid === child.pid && !record.final ? { selfStartedAt } : {}));
+  }
   const until = Date.now() + linkWaitMs;
   const at = { offset: 0, ino: undefined, text: "" };
   for (;;) {
@@ -660,7 +672,7 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
       const last = readApproval(id);
       if (last?.final) return { kind: "final", record: last };
       // no link was ever shown, so no wallet was asked: stop anything left in its group before freeing the chain
-      if (!(await stopGroup(child.pid, { start: childStart.pidStart, startUtc: childStart.pidStartUtc }))) return { kind: "failed", record: last, reason: `the background approval stopped before it opened a page, but process group ${child.pid} would not stop; the chain stays held` };
+      if (!(await stopGroup(child.pid, { start: childStart.pidStart, startUtc: childStart.pidStartUtc, location: childStart }))) return { kind: "failed", record: last, reason: `the background approval stopped before it opened a page, but process group ${child.pid} would not stop; the chain stays held` };
       const reason = spawnError ? `the background approval could not start: ${spawnError.message}` : "the background approval stopped before it opened a page";
       // final (recordFinal frees the chain and removes any access token the worker had recorded)
       recordFinal(id, 1, { ok: false, command, rail, chain, state: "failed", id, next: "check wallet activity and budget status before retrying", reason });
@@ -668,7 +680,7 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
       return { kind: "failed", record: readApproval(id), reason };
     }
     if (Date.now() > until) {
-      if (!(await stopGroup(child.pid, { start: childStart.pidStart, startUtc: childStart.pidStartUtc }))) return { kind: "failed", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s, and process group ${child.pid} would not stop; the chain stays held` };
+      if (!(await stopGroup(child.pid, { start: childStart.pidStart, startUtc: childStart.pidStartUtc, location: childStart }))) return { kind: "failed", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s, and process group ${child.pid} would not stop; the chain stays held` };
       recordFinal(id, 1, { ok: false, command, rail, chain, state: "failed", id, next: "check wallet activity and budget status before retrying", reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s` });
       release(rail, chain, id);
       return { kind: "failed", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s; the background approval was stopped` };
@@ -795,7 +807,7 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
       await stopRecord(record);
       if (processesAlive(record)) {
         // it would not stop: still no final result. Never spin: wait a poll, and answer by the caller's timeout
-        const orphaned = !alive(record.pid, record.pidStart, record.pidStartUtc);
+        const orphaned = !alive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined });
         if (Date.now() >= until) return { final: false, record, page: await pageStateOf(record), orphaned };
         await sleep(Math.min(poll, Math.max(0, until - Date.now())));
       }
@@ -813,7 +825,7 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
       recordFinal(id, final.code, final.result);
       return { final: true, ...final, record: readApproval(id) };
     }
-    const orphaned = !alive(record.pid, record.pidStart, record.pidStartUtc);
+    const orphaned = !alive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined });
     if (record.url && record.url !== first.url) return { final: false, record, page: await pageStateOf(record), orphaned };
     if (Date.now() >= until) return { final: false, record, page: await pageStateOf(record), orphaned };
     await sleep(Math.min(poll, Math.max(0, until - Date.now())));
@@ -866,4 +878,44 @@ export async function replacePending(record, byId) {
   }
   release(record.rail, record.chain, record.id);
   return { ok: true };
+}
+
+/** Owner recovery preserves approvals and submitted-payment evidence. Never fabricates a final RESULT. */
+export function approvalRecoveryTargetExists(rail, chain, id) {
+  if (!id) return true;
+  const selected = readApproval(id);
+  return selected ? selected.rail === rail && selected.chain === chain
+    : existsSync(recordLockFile(id)) || existsSync(recordLockFile(id) + '.break');
+}
+
+export function recoverApprovalLocks(rail, chain, options, id) {
+  if (!approvalRecoveryTargetExists(rail, chain, id)) return { outcome: 'not_found' };
+  return recoveryResult(options, options => {
+    if (!existsSync(approvalsDir())) return true;
+    const records = readdirSync(approvalsDir()).filter(name => /^oa-.*\.json$/.test(name)).map(name => readApproval(name.slice(0, -5))).filter(record => record?.rail === rail && record.chain === chain);
+    const recordChecks = record => {
+      if (!record || record.final || (record.command === "buy-once" && record.pid === null)) return [];
+      const checks = [inspectProcess(record), inspectProcess(record, undefined, true)];
+      if (record.railPgid) checks.push(inspectProcess({ ...record, pid: record.railPgid, pidStart: record.railPgidStart, pidStartUtc: record.railPgidStartUtc, selfStartedAt: record.railSelfStartedAt, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs }, undefined, true));
+      return checks;
+    };
+    // A verified live worker or rail child protects even an unverifiable lock in its approval.
+    const live = records.flatMap(recordChecks).find(check => check.state === 'alive' && !check.possiblyAlive);
+    if (live) { options.onBlocked?.(live); return false; }
+    const inspectApproval = text => {
+      let lock;
+      try { lock = JSON.parse(text); } catch { return inspectLockText(text); }
+      const checks = [inspectLockText(text), ...recordChecks(readApproval(lock?.id))];
+      return checks.find(check => check.state === 'alive' && !check.possiblyAlive) ?? checks.find(check => check.state === 'alive') ?? { state: 'dead' };
+    };
+    const inspectRecordLock = id => text => {
+      const checks = [inspectLockText(text), ...recordChecks(readApproval(id))];
+      return checks.find(check => check.state === 'alive' && !check.possiblyAlive) ?? checks.find(check => check.state === 'alive') ?? { state: 'dead' };
+    };
+    if (id && !clearFileLock(recordLockFile(id), options, inspectRecordLock(id))) return false;
+    for (const record of records) {
+      if (!clearFileLock(recordLockFile(record.id), options, inspectRecordLock(record.id))) return false;
+    }
+    return clearFileLock(activeFile(rail, chain), options, inspectApproval);
+  });
 }

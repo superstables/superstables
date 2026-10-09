@@ -103,6 +103,7 @@ Each chain below passed grant, buy (settled and delivered), reconcile, revoke an
 | `polygon-amoy` | USDC (`USDC`/2) | POL | PayAI Echo, PayAI facilitator |
 | `skale-base-sepolia` | bridged USDC (`Bridged USDC (SKALE Bridge)`/2) | CREDIT | PayAI Echo, PayAI facilitator |
 | `ethereum-sepolia` | USDC (`USDC`/2) | ETH | Brickken sandbox, api.sandbox.brickken.com/get-agents |
+| `robinhood-testnet` | USDG (`Global Dollar`/1) | ETH | Strike risk report, strike-options.vercel.app (settles its own payments); if it is down, Superstables market data, www.superstables.com/api/demo/market/robinhood?asset=BTC (settles its own payments) |
 
 Brickken's `/get-agents` asks for `ownerWalletAddress`, and it must be the payer, which is the agent key. With the owner's address it answered HTTP 400 after the payment was signed, and `buy` cancelled the authorization on chain and returned the price to the owner.
 
@@ -158,6 +159,7 @@ In each block, run `doctor` first: it lists what is missing and which address to
 2. Fund your wallet with faucets, then give the agent gas. `fund-agent` opens the approval page for one plain transfer from your wallet. `doctor` checks these minimums:
    - Base Sepolia: your wallet needs at least 0.01 USDC ([faucet.circle.com](https://faucet.circle.com), pick Base Sepolia) and 0.00003 ETH (any Base Sepolia ETH faucet; 0.0003 is a comfortable amount). The agent needs at least 0.00003 ETH: `superstables budget fund-agent --rail evm` sends 0.0001. Chain fees vary; check the wallet estimate.
    - Arc Testnet: gas is USDC, so there is no second token. Your wallet needs at least 0.2 USDC after funding the agent, and the agent at least 0.01 USDC. Get 0.4 USDC from [faucet.circle.com](https://faucet.circle.com) (pick Arc Testnet), then `superstables budget fund-agent --rail evm --chain arc-testnet` sends 0.1. Chain fees vary; check the wallet estimate.
+   - Robinhood Chain Testnet: the budget is test USDG from [faucet.paxos.com](https://faucet.paxos.com) (pick Robinhood Chain), and gas is ETH from [faucet.testnet.chain.robinhood.com](https://faucet.testnet.chain.robinhood.com).
    - Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia and Ethereum Sepolia: `superstables budget doctor --rail evm --chain <key>` prints the minimums and where to get each token. Then `superstables budget fund-agent --rail evm --chain <key>`.
 
    Gas prices move. `doctor` also asks the agent for twice what one purchase plus the cleanup of a failed one (pull, cancel, return) costs at the current fee, and prints that cost. `buy` checks the same thing before it signs. You can also send the agent gas from any wallet: `doctor` prints its address and the amount.

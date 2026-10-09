@@ -1,5 +1,6 @@
 // Real-process lock fault matrix. Run: node test/helpers/budget-lock-faults.mjs [single|pairs]
 // Pair ranges can be bounded with --start=N --end=N, numbered from 1 through 784.
+import { stopHolder } from './budget-holder-cleanup.mjs';
 import fs from 'node:fs';
 import { fork } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
@@ -83,9 +84,7 @@ if (process.argv[2] === 'worker') {
     return state;
   }
   async function kill(state) {
-    if (state.exited) return;
-    state.p.kill('SIGKILL');
-    await new Promise(r => state.p.once('exit', r));
+    await stopHolder(state.p);
   }
   function oneHolder(states) {
     const holders = states.filter(s => s.held);
@@ -174,5 +173,5 @@ if (process.argv[2] === 'worker') {
       }
     }
     console.log(JSON.stringify({ cases, stops, ...(process.argv[2] === 'pairs' ? { first, last } : {}), doubleHolders: 0, permanentBlocks: 0, result: 'pass' }));
-  } finally { stopChildren(); }
+  } finally { for (const child of children) await stopHolder(child); }
 }

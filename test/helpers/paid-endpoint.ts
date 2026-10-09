@@ -28,6 +28,8 @@ export interface PaidEndpointOptions {
   version?: 1 | 2;
   /** Which EVM chain it is paid on, in that chain's USDC. Default Base Sepolia. */
   network?: EvmNetwork;
+  /** v2 offers listed before its own, as a seller on several chains does. They are offered, never accepted. */
+  alsoOffer?: PaymentRequirements[];
   behaviour?: PaidEndpointBehaviour;
 }
 
@@ -92,7 +94,7 @@ export async function startPaidEndpoint(opts: PaidEndpointOptions): Promise<Paid
           x402Version: 2,
           error,
           resource: { url: resource, description: RESOURCE_DESCRIPTION, mimeType: "application/json" },
-          accepts: [requirementV2()],
+          accepts: [...(opts.alsoOffer ?? []), requirementV2()],
         };
 
   const send402 = (res: ServerResponse, resource: string, error: string): void => {
