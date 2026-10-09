@@ -14,10 +14,11 @@ const publicRpcs: Record<string, string> = {
   "polygon-amoy": "https://polygon-amoy-bor-rpc.publicnode.com",
   "skale-base-sepolia": "https://base-sepolia-testnet.skalenodes.com/v1/jubilant-horrible-ancha",
   "ethereum-sepolia": "https://ethereum-sepolia-rpc.publicnode.com",
+  "robinhood-testnet": "https://rpc.testnet.chain.robinhood.com",
   "tempo-moderato": "https://rpc.moderato.tempo.xyz",
   "solana-devnet": "https://api.devnet.solana.com",
 };
-const evmChains = Object.keys(publicRpcs).slice(0, 6);
+const evmChains = Object.keys(publicRpcs).slice(0, 7);
 
 function run(mode: string, value: string, chain = "base-sepolia") {
   const home = mkdtempSync(join(tmpdir(), "wallet-public-rpc-"));
