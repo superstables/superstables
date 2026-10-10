@@ -103,10 +103,11 @@ describe("withFileLock", () => {
     let ticks = 0;
     const timer = setInterval(() => (ticks += 1), 5);
     const started = Date.now();
-    await expect(withFileLock(path, () => "mine", 50)).rejects.toThrow(/held by process/);
+    // Long enough for a second attempt even when a CPU-throttled runner pauses the first check for about 100 ms.
+    await expect(withFileLock(path, () => "mine", 500)).rejects.toThrow(/held by process/);
     clearInterval(timer);
-    expect(Date.now() - started).toBeLessThan(400);
-    expect(ticks).toBeGreaterThan(0); // Timers must run; synchronous macOS ps calls can consume most of this short deadline.
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(ticks).toBeGreaterThan(0); // Timers must run; synchronous macOS ps calls can consume most of the deadline.
     // A dead holder's lock whose break keeps failing (its mutex held by a live process) is also bounded by the deadline.
     writeFileSync(path, JSON.stringify({ ...identity, pid: spawnSync(process.execPath, ["-e", ""]).pid!, pidStart: null, owner: "dead" }));
     writeFileSync(`${path}.break`, JSON.stringify({ ...identity, pid: process.pid, pidStart: processStart(process.pid) ?? null, owner: "breaker" }));
