@@ -141,7 +141,7 @@ console.log(`explorer: ${explorerTx(sig)}`);
 if (problems().length) {
   const reason = `the chain does not show the planned budget: ${problems().join("; ")}`;
   console.log(`REFUSED: ${reason}`);
-  finish?.({ outcome: "failed", message: `The chain shows something other than planned (${problems().join("; ")}). Revoke it: superstables budget revoke --rail solana.`, hash: sig });
+  finish?.({ outcome: "unknown", message: `The chain shows something other than planned (${problems().join("; ")}). Revoke it: superstables budget revoke --rail solana.`, hash: sig });
   await closeOwnerPage();
   process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "revoke (superstables budget revoke --rail solana), then grant again" }));
 }
