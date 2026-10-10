@@ -19,6 +19,8 @@ Once a payment may have moved, the client reports it as unknown, never as unpaid
 - `superstables budget buy-once --replace` whose cancel the site answers with the payment under way reports the open purchase as `pending.state: "unknown"`. It reported `waiting_owner`, from the record read before the cancel.
 - On EVM chains, a purchase whose pull landed and can no longer settle stays `unknown` (exit 5) until the pulled price is back with the owner. It was `failed` with `paid: false`. `superstables budget recover` returns the price.
 
+An owner's sign-in on the approval page, which signs a message and sends nothing, no longer counts as the wallet being asked to send. For a `setup` whose page log recorded the sign-in, `superstables budget wait` answered `unknown` (exit 5) and said the owner's wallet was asked to send.
+
 ## [0.3.1] - Safer payment recovery
 
 This release makes budget payments and single purchases on superstables.com safer to recover. Agents arriving from superstables.com's setup page are directed to approval there.

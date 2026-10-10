@@ -53,7 +53,8 @@ interface Seen {
   text: string;
 }
 type Exception = keyof typeof EXCEPTIONS;
-type Verdict = "unknown" | "paid" | Exception;
+/** `before`: the wallet was never asked to send, so the boundary was not crossed; only the row's literal values are checked. */
+type Verdict = "unknown" | "paid" | "before" | Exception;
 interface Expect {
   verdict: Verdict;
   /** Literal values the output must have: exit, http, the JSON's fields, `text` (all of stdout and stderr). */
@@ -116,6 +117,10 @@ function outcomeOf(seen: Seen): { state?: string; paid?: unknown; amount?: unkno
 
 function assertProperty(seen: Seen, e: Expect): void {
   const at = `${seen.at} (${seen.cmd ?? seen.route ?? seen.surface})`;
+  if (e.verdict === "before") {
+    expect({ exit: seen.exit, http: seen.http, ...(seen.body ?? {}), text: seen.text }, at).toMatchObject(e.match);
+    return;
+  }
   const o = outcomeOf(seen);
   const exception = e.verdict in EXCEPTIONS ? EXCEPTIONS[e.verdict as Exception] : undefined;
   const allowed: readonly RegExp[] = exception?.allows ?? [];
@@ -519,6 +524,28 @@ const ROWS: Row[] = [
       { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, next: expect.stringMatching(/read whether it landed before running this again/) } },
     ],
     timeout: 120_000,
+  },
+  {
+    path: "budget setup on this machine, detached: the page log records the owner's sign-in, which asks the wallet to send nothing",
+    covers: [],
+    run: async () => {
+      const b = await hostedBudget();
+      rmSync(join(b.home, "budget", "public", "evm-base-sepolia.env"));
+      const first = resultOf((await budget(b.home, ["setup", "--rail", "evm", "--no-open", "--timeout", "10"], b.env)).stdout);
+      expect(first).toMatchObject({ command: "setup", state: "waiting_owner" });
+      const page = /\/owner\/([0-9a-f]{32})/.exec(first.url)![1];
+      writeFileSync(join(b.home, "budget", "owner-approvals.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), id: page, kind: "connect", title: "connect", status: "confirmed" })}\n`, { flag: "a" });
+      const plain = seenBudget("wait without --shown", "wait", await budget(b.home, ["wait", "--id", first.id, "--timeout", "0"], b.env));
+      const shown = seenBudget("wait --shown", "wait", await budget(b.home, ["wait", "--shown", "--id", first.id, "--timeout", "0"], b.env));
+      const ended = seenBudget("wait for the end", "wait", await budget(b.home, ["wait", "--shown", "--id", first.id, "--timeout", "40"], b.env));
+      return [plain, shown, ended];
+    },
+    expect: [
+      { verdict: "unknown", match: { exit: 2, command: "wait", state: "show_owner_first" } },
+      { verdict: "before", match: { exit: 0, command: "setup", state: "waiting_owner", final: false } },
+      { verdict: "before", match: { exit: 3, command: "setup", state: "refused_precheck", final: true, reason: expect.stringMatching(/expired/) } },
+    ],
+    timeout: 90_000,
   },
   {
     path: "budget setup on superstables.com with gas and a budget, detached: the gas step's wallet was asked",
