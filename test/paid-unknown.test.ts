@@ -78,7 +78,8 @@ const EXCEPTIONS = {
   "pay-chain-unpaid": { surface: "pay", state: "failed", proof: (b: any) => b.chain === "unpaid" && /never used, and it can no longer be/.test(b.chain_reason), allows: [/payment did not happen/i, /nothing was paid/i] },
   // budget buy, evm: the pull reverted in a final block, or the price came back, or another final transaction took its nonce
   "evm-pull-reverted": { surface: "budget", state: "failed", proof: (b: any) => typeof b.tx?.pull === "string" && /the pull reverted on chain/.test(b.reason), allows: [/no funds moved/i, /nothing moved/i] },
-  "evm-funds-returned": { surface: "budget", state: "failed", proof: (b: any) => typeof b.tx?.return === "string" && b.debit === "0" && /was returned to the owner/.test(b.reason), allows: [] },
+  // the rail prints the owner's net debit as debit; the dispatcher prints it as amount
+  "evm-funds-returned": { surface: "budget", state: "failed", proof: (b: any) => typeof b.tx?.return === "string" && (b.debit ?? b.amount) === "0" && /was returned to the owner/.test(b.reason), allows: [] },
   "evm-nonce-replaced": { surface: "budget", state: "not_found", proof: (b: any) => /a different final transaction 0x[0-9a-f]{64} consumed the pull nonce/.test(b.reason), allows: [/nothing moved/i] },
 } as const satisfies Record<string, { surface: Surface; state: string; proof: (b: any) => boolean; allows: readonly RegExp[] }>;
 
@@ -376,6 +377,44 @@ const purchase = (op: string) => ({
   auth: { from: AGENT, to: SELLER, value: "10000", nonce: NONCE, validBefore: 1000, validAfter: 0 }, delivered: null, notes: [],
 });
 
+/**
+ * The same chain over JSON-RPC, for the dispatcher (`budget reconcile` spawns the evm rail against B4_RPC): finalized block
+ * 90, head 110, time 2000, every authorization unused, the agent holding `held` of Base Sepolia's USDC, and these receipts.
+ */
+const BASE_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+const hex = (n: bigint | number) => `0x${BigInt(n).toString(16)}`;
+const rpcTransfer = (from: string, to: string, value: bigint, hash: Hex, block: bigint) => ({
+  address: BASE_USDC, topics: encodeEventTopics({ abi: erc20, eventName: "Transfer", args: { from: from as Hex, to: to as Hex } }), data: `0x${value.toString(16).padStart(64, "0")}`,
+  blockNumber: hex(block), blockHash: BLOCK_HASH, transactionHash: hash, transactionIndex: "0x0", logIndex: "0x0", removed: false,
+});
+const rpcReceipt = (hash: Hex, block: bigint, logs: unknown[], status = "0x1") => ({
+  transactionHash: hash, blockHash: BLOCK_HASH, blockNumber: hex(block), from: AGENT, to: BASE_USDC, status, logs, gasUsed: "0x5208", cumulativeGasUsed: "0x5208",
+  effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x2",
+});
+function rpcChain(receipts: Record<string, unknown>, held = 10000n) {
+  return (method: string, params: any[]): unknown => {
+    if (method === "eth_blockNumber") return hex(110);
+    if (method === "eth_getBlockByNumber") {
+      const n = params[0] === "finalized" ? 90n : params[0] === "latest" || params[0] === "safe" ? 110n : BigInt(params[0]);
+      return { number: hex(n), hash: BLOCK_HASH, parentHash: BLOCK_HASH, timestamp: hex(2000), transactions: [], gasLimit: "0x1c9c380", gasUsed: "0x0", baseFeePerGas: "0x1", difficulty: "0x0", extraData: "0x", logsBloom: `0x${"0".repeat(512)}`, miner: AGENT, nonce: "0x0000000000000000", receiptsRoot: BLOCK_HASH, sha3Uncles: BLOCK_HASH, size: "0x1", stateRoot: BLOCK_HASH, totalDifficulty: "0x0", transactionsRoot: BLOCK_HASH, uncles: [] };
+    }
+    if (method === "eth_getTransactionReceipt") return receipts[String(params[0]).toLowerCase()] ?? null;
+    if (method === "eth_getTransactionByHash") return null;
+    if (method === "eth_getTransactionCount") return "0x8";
+    if (method === "eth_getLogs") return [];
+    if (method === "eth_call" && String(params[0]?.data).startsWith("0x70a08231")) return `0x${held.toString(16).padStart(64, "0")}`;
+    return undefined;
+  };
+}
+/** `budget reconcile` on one journal, through the dispatcher, as an agent runs it. */
+async function reconcileCli(at: string, receipts: Record<string, unknown>, journal: Record<string, unknown>) {
+  const b = await hostedBudget(rpcChain(receipts));
+  const dir = join(b.home, "budget", "ops", "evm-base-sepolia");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${journal.op}.json`), JSON.stringify({ ...journal, token: BASE_USDC }));
+  return { b, seen: seenBudget(at, "reconcile", await budget(b.home, ["reconcile", "--rail", "evm", "--chain", "base-sepolia", "--op", String(journal.op)], b.env)) };
+}
+
 /** The chain at finalized block 90, time 2000 (past every authorization here), as the evm rail reads it. */
 function evmChain() {
   return {
@@ -402,7 +441,7 @@ async function evmOps(chain: ReturnType<typeof evmChain>, lib: Record<string, un
 async function reconciled(at: string, ops: any, j: unknown): Promise<Seen> {
   const { j: after } = await ops.reconcileJournal(j, { quiet: true });
   const line: string = await ops.resultLine(after, "reconcile");
-  return { at, surface: "budget", cmd: "budget reconcile", exit: ops.exitCodeFor(after.state, after.delivered), body: JSON.parse(line.slice(7)), text: line };
+  return { at, surface: "budget", cmd: "budget/evm/reconcile.ts, in process", exit: ops.exitCodeFor(after.state, after.delivered), body: JSON.parse(line.slice(7)), text: line };
 }
 
 // ---- the table ----------------------------------------------------------------------------------------------------------
@@ -889,19 +928,18 @@ const ROWS: Row[] = [
     ],
   },
   {
-    path: "budget reconcile, evm: the pull landed and can no longer settle; unknown until the price is back with the owner",
+    path: "budget reconcile through the dispatcher, evm: the pull landed and can no longer settle; unknown until the price is back with the owner",
     covers: ["budget reconcile"],
     run: async () => {
-      const chain = evmChain();
-      const ops = await evmOps(chain);
-      const stranded = await reconciled("not returned", ops, purchase("pull-landed"));
-      chain.getTransactionReceipt.mockImplementation(async ({ hash }) => (hash === PULL ? mined(PULL, 80n, [transfer(OWNER, AGENT)]) : hash === RETURN ? mined(RETURN, 85n, [transfer(AGENT, OWNER)]) : null));
-      const back = await reconciled("returned", ops, { ...ops.readJournal("pull-landed"), returnTx: RETURN });
-      return [stranded, back];
+      const pull = rpcReceipt(PULL, 80n, [rpcTransfer(OWNER, AGENT, 10000n, PULL, 80n)]);
+      const stranded = (await reconcileCli("not returned", { [PULL]: pull }, purchase("pull-landed-cli"))).seen;
+      const back = rpcReceipt(RETURN, 85n, [rpcTransfer(AGENT, OWNER, 10000n, RETURN, 85n)]);
+      const returned = (await reconcileCli("returned", { [PULL]: pull, [RETURN]: back }, { ...purchase("pull-returned-cli"), returnTx: RETURN })).seen;
+      return [stranded, returned];
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, state: "unknown", paid: null, tx: { pull: PULL }, reason: expect.stringMatching(/the payment authorization is expired on chain .*; the price 0\.01 USDC pulled from the owner has not been returned$/), next: expect.stringMatching(/superstables budget recover --rail evm/) } },
-      { verdict: "evm-funds-returned", match: { exit: 1, state: "failed", paid: false, debit: "0", returned: "0.01", tx: { pull: PULL, return: RETURN } } },
+      { verdict: "unknown", match: { exit: 5, command: "reconcile", state: "unknown", paid: null, amount: null, tx: { pull: PULL }, reason: expect.stringMatching(/the payment authorization is expired on chain .*; the price 0\.01 USDC pulled from the owner has not been returned$/), next: expect.stringMatching(/superstables budget recover --rail evm/) } },
+      { verdict: "evm-funds-returned", match: { exit: 1, command: "reconcile", state: "failed", paid: false, amount: "0", tx: { pull: PULL, return: RETURN } } },
     ],
   },
   {
@@ -931,19 +969,16 @@ const ROWS: Row[] = [
     ],
   },
   {
-    path: "budget reconcile, evm: the pull reverted; unknown until that block is final",
+    path: "budget reconcile through the dispatcher, evm: the pull reverted; unknown until that block is final",
     covers: [],
     run: async () => {
-      const chain = evmChain();
-      chain.getTransactionReceipt.mockImplementation(async ({ hash }) => (hash === PULL ? mined(PULL, 100n, [], "reverted") : null));
-      const ops = await evmOps(chain);
-      const recent = await reconciled("reverted, not final", ops, purchase("pull-reverted"));
-      chain.getTransactionReceipt.mockImplementation(async ({ hash }) => (hash === PULL ? mined(PULL, 80n, [], "reverted") : null));
-      return [recent, await reconciled("reverted, final", ops, ops.readJournal("pull-reverted"))];
+      const recent = (await reconcileCli("reverted, not final", { [PULL]: rpcReceipt(PULL, 100n, [], "0x0") }, purchase("pull-reverted-cli"))).seen;
+      const final = (await reconcileCli("reverted, final", { [PULL]: rpcReceipt(PULL, 80n, [], "0x0") }, purchase("pull-reverted-final-cli"))).seen;
+      return [recent, final];
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, state: "unknown", paid: null, reason: "the pull landed and failed, but is not final on chain yet" } },
-      { verdict: "evm-pull-reverted", match: { exit: 1, state: "failed", paid: false, tx: { pull: PULL } } },
+      { verdict: "unknown", match: { exit: 5, command: "reconcile", state: "unknown", paid: null, amount: null, reason: "the pull landed and failed, but is not final on chain yet" } },
+      { verdict: "evm-pull-reverted", match: { exit: 1, command: "reconcile", state: "failed", paid: false, tx: { pull: PULL } } },
     ],
   },
   {
