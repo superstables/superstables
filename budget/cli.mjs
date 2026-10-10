@@ -1121,6 +1121,11 @@ const nextFor = (state, delivered, f, cmd) => {
 // evm buy: the seller's answer, saved next to the journal (a path, its content type, its size in bytes, whether it was cut).
 const responseOf = (rail) => (typeof rail.responseFile === "string" ? { responseFile: rail.responseFile, responseType: rail.responseType ?? null, responseBytes: rail.responseBytes ?? null, responseTruncated: rail.responseTruncated === true } : {});
 
+// A rail that says unknown knows the way out (recover a landed pull, check a balance by hand, reconcile later): its next is
+// kept, since reconcile again in its place can loop.
+const ownWayOut = (rail) => typeof rail.next === "string" && rail.next !== "" && rail.next !== "none";
+const neverPayAgain = (next) => (/(never|do not) pay again/i.test(next) ? next : `${next.replace(/\.?$/, ".")} Never pay again for this op.`);
+
 // Turn the rail's RESULT (or its absence) into the CLI's normalized fields.
 function normalize(cmd, f, rail, code) {
   const base = { command: cmd, rail: f.rail, chain: f.chain, op: f.op };
@@ -1142,8 +1147,7 @@ function normalize(cmd, f, rail, code) {
   const amount = state === "unknown" ? null : nothingMoved ? "0" : rail.debit == null ? null : String(rail.debit);
   return {
     code: exitFor(cmd, state, delivered),
-    // an unknown whose way out is recover (a landed pull to return) keeps the rail's words: reconcile again would loop
-    fields: { ...base, state, paid, delivered, chain_final: rail.chain_final ?? null, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : state === "unknown" && /superstables budget recover /.test(rail.next ?? "") ? rail.next : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.chain_final === false && state === "settled" ? `Run superstables budget reconcile --rail ${f.rail}${f.rail === "evm" ? ` --chain ${f.chain}` : ""} --op ${f.op} later to check finality. Do not pay again.${delivered === false ? " Contact the seller." : ""}` : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
+    fields: { ...base, state, paid, delivered, chain_final: rail.chain_final ?? null, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : rail.state === "unknown" && ownWayOut(rail) ? neverPayAgain(rail.next) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.chain_final === false && state === "settled" ? `Run superstables budget reconcile --rail ${f.rail}${f.rail === "evm" ? ` --chain ${f.chain}` : ""} --op ${f.op} later to check finality. Do not pay again.${delivered === false ? " Contact the seller." : ""}` : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
   };
 }
 
