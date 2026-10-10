@@ -132,6 +132,10 @@ export interface Quote {
   terms: PaymentTerms;
   /** The seller's requirement verbatim (an x402 accept, or an MPP challenge): what the wallet will be asked to act on. */
   requirement: RailRequirement;
+  /** The chain the agent asked for with --chain (its key), when it asked. */
+  chain?: string;
+  /** Other chains (keys) the seller offered that this client could also pay on, when no chain was asked for. */
+  otherChains?: string[];
   /** The local (software) policy's verdict. The wallet applies the owner's policy again. */
   policy: { allowed: boolean; reason?: string; checks?: PolicyCheck[] };
   /** Who decides: always the owner's wallet in this release. */

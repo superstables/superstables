@@ -178,11 +178,29 @@ describe("quote", () => {
     for (const chain of ["robinhood-testnet", "eip155:46630"]) {
       const q = await quote({ url: seller.url }, { records: records(), policy: policy(), chain });
       expect(q.terms).toMatchObject({ network: "eip155:46630", asset: "USDG", amountDecimal: 0.01, recipient: `0x${"44".repeat(20)}` });
+      expect(q.chain).toBe("robinhood-testnet");
+      expect(q.otherChains).toBeUndefined();
     }
     await expect(quote({ url: seller.url }, { records: records(), policy: policy(), chain: "arbitrum-sepolia" })).rejects.toThrow(
       /offers no payment this client can make.*not on Arbitrum Sepolia \(testnet\), the chain asked for/s,
     );
     await expect(quote({ url: seller.url }, { records: records(), policy: policy(), chain: "robinhood" })).rejects.toThrow("--chain robinhood is not a chain this client pays on");
+  });
+
+  it("names the other chains a seller offers when no chain was asked for, in the seller's order", async () => {
+    const seller = await offering([
+      usdcRequirement(0.02, `0x${"33".repeat(20)}`),
+      { ...usdcRequirement(0.25, `0x${"22".repeat(20)}`), network: "eip155:8453" },
+      usdcRequirement(0.01, `0x${"44".repeat(20)}`, ROBINHOOD_TESTNET),
+      usdcRequirement(0.03, `0x${"55".repeat(20)}`),
+    ]);
+    const q = await quote({ url: seller.url }, { records: records(), policy: policy() });
+    expect(q.terms.network).toBe("eip155:84532");
+    expect(q.chain).toBeUndefined();
+    // Base mainnet is not payable, and the second Base Sepolia offer is the same chain: neither is named.
+    expect(q.otherChains).toEqual(["robinhood-testnet"]);
+    const single = await offering([usdcRequirement(0.02, `0x${"33".repeat(20)}`)]);
+    expect((await quote({ url: single.url }, { records: records(), policy: policy() })).otherChains).toBeUndefined();
   });
 
   it("explains every offer it had to refuse when none can be paid", async () => {
