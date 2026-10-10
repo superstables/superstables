@@ -110,7 +110,7 @@ if (OWNER_KEY_FILE) {
     const reason = mismatchReason(c.problems, c.siteFailed, sig);
     console.log(`MISMATCH: ${reason}`);
     const now = await retryRead(() => getAccountOrNull(conn, ata)).catch(() => undefined);
-    handle.finish({ outcome: "failed", message: mismatchPage(c.problems, c.siteFailed, sig), hash: sig });
+    handle.finish({ outcome: "unknown", message: mismatchPage(c.problems, c.siteFailed, sig), hash: sig });
     await closeOwnerPage();
     process.exit(result(3, { state: "mismatch", tx: sig, ...(now !== undefined ? { remaining: formatUnits(now?.delegatedAmount ?? 0n) } : {}), reason, next: "check the owner's wallet activity, then superstables budget status --rail solana; revoke again if a delegate still reads" }));
   }

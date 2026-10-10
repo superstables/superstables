@@ -306,7 +306,7 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash);
     console.log(`MISMATCH: ${reason}`);
     const now = await allowanceOf(owner, agent).catch(() => null);
-    handle.finish({ outcome: "failed", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Check the allowance and revoke again: ${REVOKE_HINT}`, hash: sent.hash });
+    handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Check the allowance and revoke again: ${REVOKE_HINT}`, hash: sent.hash });
     await closeOwnerPage();
     process.exit(emit(command, 3, withEarlier(earlier, { state: "mismatch", tx: sent.hash, allowance: now === null ? null : usdc(now), reason, next: `revoke again (superstables budget revoke --rail evm${chainFlag}) and check superstables budget status --rail evm${chainFlag}` })));
   }
@@ -385,7 +385,7 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
   if (c.state !== "settled") {
     // the RESULT's reason, as a sentence for the page: a chain mismatch about the transfer, or the site's verdict as it is
     const prefix = "the transaction was not accepted as the planned step: ";
-    handle.finish({ outcome: "failed", message: c.reason!.startsWith(prefix) ? `The transfer was not confirmed as the planned step: ${c.reason!.slice(prefix.length)}.` : `${c.reason}.`, hash: c.tx });
+    handle.finish({ outcome: c.state === "mismatch" ? "unknown" : "failed", message: c.reason!.startsWith(prefix) ? `The transfer was not confirmed as the planned step: ${c.reason!.slice(prefix.length)}.` : `${c.reason}.`, hash: c.tx });
     await closeOwnerPage();
     process.exit(emit(command, c.state === "mismatch" ? 3 : 1, withEarlier(earlier, { state: c.state, tx: c.tx, reason: c.reason, next: "check wallet activity, then superstables budget doctor --rail evm" })));
   }

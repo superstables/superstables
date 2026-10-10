@@ -167,7 +167,7 @@ async function main() {
     if (sent.problems.length) {
       const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash)
       console.log(`MISMATCH: ${reason}`)
-      handle.finish({ outcome: "failed", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
+      handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
       await closeOwnerPage()
       process.exit(result(3, { state: 'mismatch', tx: hash, reason, next: `revoke it (superstables budget revoke --rail tempo${agentFlag(label)}), then grant a new key` }))
     }
