@@ -320,7 +320,7 @@ const erc20 = parseAbi([
   "event Transfer(address indexed from, address indexed to, uint256 value)",
   "event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)",
 ]);
-const transfer = (from: string, to: string) => ({ address: TOKEN, topics: encodeEventTopics({ abi: erc20, eventName: "Transfer", args: { from: from as Hex, to: to as Hex } }), data: `0x${10000n.toString(16).padStart(64, "0")}`, removed: false });
+const transfer = (from: string, to: string, value = 10000n) => ({ address: TOKEN, topics: encodeEventTopics({ abi: erc20, eventName: "Transfer", args: { from: from as Hex, to: to as Hex } }), data: `0x${value.toString(16).padStart(64, "0")}`, removed: false });
 const mined = (hash: Hex, block: bigint, logs: unknown[], status = "success") => ({ transactionHash: hash, blockNumber: block, blockHash: BLOCK_HASH, status, logs });
 const purchase = (op: string) => ({
   op, rail: "base-sepolia", path: "approve", state: "submitted", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), url: "https://seller.example",
@@ -340,12 +340,12 @@ function evmChain() {
     getTransactionReceipt: vi.fn(async ({ hash }: { hash: Hex }): Promise<unknown> => (hash === PULL ? mined(PULL, 80n, [transfer(OWNER, AGENT)]) : null)),
   };
 }
-async function evmOps(chain: ReturnType<typeof evmChain>) {
+async function evmOps(chain: ReturnType<typeof evmChain>, lib: Record<string, unknown> = {}) {
   const dir = newHome();
   vi.resetModules();
   vi.doMock("../budget/evm/lib.js", async (original) => ({
     ...(await original<object>()), OPS_DIR: dir, publicClient: chain, usdcBalance: async () => 10000n, allowanceOf: async () => 10000n, USDC: TOKEN,
-    sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(),
+    sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), ...lib,
   }));
   opened.push({ close: () => void vi.doUnmock("../budget/evm/lib.js") });
   return import(new URL("../budget/evm/ops.ts", import.meta.url).href);
@@ -748,6 +748,32 @@ const ROWS: Row[] = [
     expect: [
       { verdict: "unknown", match: { exit: 5, state: "unknown", paid: null, tx: { pull: PULL }, reason: expect.stringMatching(/the payment authorization is expired on chain .*; the price 0\.01 USDC pulled from the owner has not been returned$/), next: expect.stringMatching(/superstables budget recover --rail evm/) } },
       { verdict: "evm-funds-returned", match: { exit: 1, state: "failed", paid: false, debit: "0", returned: "0.01", tx: { pull: PULL, return: RETURN } } },
+    ],
+  },
+  {
+    path: "budget recover, evm: an earlier return gave back part of the price; recover returns the rest (budget/evm/ops.ts makeSafe, as recover runs it)",
+    covers: [],
+    run: async () => {
+      const REST: Hex = `0x${"15".repeat(32)}`;
+      const chain = evmChain();
+      let held = 6000n;
+      chain.getTransactionReceipt.mockImplementation(async ({ hash }) =>
+        hash === PULL ? mined(PULL, 80n, [transfer(OWNER, AGENT)]) : hash === RETURN ? mined(RETURN, 85n, [transfer(AGENT, OWNER, 4000n)]) : hash === REST ? mined(REST, 86n, [transfer(AGENT, OWNER, 6000n)]) : null);
+      const sendJournaled = vi.fn(async (_w: unknown, _to: unknown, _data: unknown, _label: string, before: (s: { hash: Hex; nonce: number }) => void) => {
+        before({ hash: REST, nonce: 9 });
+        held = 0n;
+        return { hash: REST, feeWei: 1n };
+      });
+      const ops = await evmOps(chain, { usdcBalance: async () => held, sendJournaled });
+      const partial = await reconciled("part of the price returned", ops, { ...purchase("pull-partly-returned"), returnTx: RETURN });
+      const account = privateKeyToAccount(`0x${"01".repeat(32)}`);
+      await ops.makeSafe(ops.readJournal("pull-partly-returned"), { account, client: {} }, { log: () => {} });
+      expect(sendJournaled).toHaveBeenCalledTimes(1);
+      return [partial, await reconciled("the rest returned by recover", ops, ops.readJournal("pull-partly-returned"))];
+    },
+    expect: [
+      { verdict: "unknown", match: { exit: 5, state: "unknown", paid: null, returned: "0.004", reason: expect.stringMatching(/the price 0\.01 USDC pulled from the owner has not been returned$/), next: expect.stringMatching(/superstables budget recover --rail evm/) } },
+      { verdict: "evm-funds-returned", match: { exit: 1, state: "failed", paid: false, debit: "0", returned: "0.01", tx: { pull: PULL, return: `0x${"15".repeat(32)}` } } },
     ],
   },
   {

@@ -64,8 +64,9 @@ export type Journal = {
   cancelTx?: Hex;
   cancelNonce?: number;
   cancelStatus?: "success" | "reverted";
-  // stranded funds returned to the owner
+  // stranded funds returned to the owner: the latest return, and earlier ones that landed with part of the price
   returnTx?: Hex;
+  earlierReturnTxs?: Hex[];
   returnNonce?: number;
   returnStatus?: "success" | "reverted";
   returned?: string; // decimal USDC that went back to the owner
@@ -338,11 +339,11 @@ async function differentFinalNonceTransaction(j: Journal): Promise<Hex | undefin
 }
 
 /** A return is recorded as completed only after it is final on chain. */
-async function readReturn(j: Journal): Promise<{ found: boolean; status?: "success" | "reverted"; moved: bigint }> {
-  if (!j.returnTx) return { found: false, moved: 0n };
+/** One return transaction on chain: whether it is there, its status, and what it moved from the agent to the owner. */
+async function readOneReturn(j: Journal, hash: Hex): Promise<{ found: boolean; status?: "success" | "reverted"; moved: bigint }> {
   let receipt: Receipt;
-  try { receipt = await publicClient.getTransactionReceipt({ hash: j.returnTx }); } catch { return { found: false, moved: 0n }; }
-  if (!receipt || receipt.transactionHash.toLowerCase() !== j.returnTx.toLowerCase() || !(await canonicalReceipt(receipt))) return { found: false, moved: 0n };
+  try { receipt = await publicClient.getTransactionReceipt({ hash }); } catch { return { found: false, moved: 0n }; }
+  if (!receipt || receipt.transactionHash.toLowerCase() !== hash.toLowerCase() || !(await canonicalReceipt(receipt))) return { found: false, moved: 0n };
   let moved = 0n;
   if (receipt.status === "success") {
     for (const l of parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: "Transfer" })) {
@@ -350,6 +351,24 @@ async function readReturn(j: Journal): Promise<{ found: boolean; status?: "succe
     }
   }
   return { found: true, status: receipt.status, moved };
+}
+
+/**
+ * The returns of this op's price: `found` and `status` are the latest return's, `moved` what all of them moved together.
+ * `earlierUnread`: an earlier return can no longer be read, so the total is not known and nothing more is sent.
+ */
+async function readReturn(j: Journal): Promise<{ found: boolean; status?: "success" | "reverted"; moved: bigint; earlierUnread?: boolean }> {
+  if (!j.returnTx && !j.earlierReturnTxs?.length) return { found: false, moved: 0n };
+  let moved = 0n;
+  let earlierUnread = false;
+  for (const hash of j.earlierReturnTxs ?? []) {
+    const r = await readOneReturn(j, hash);
+    if (r.found && r.status === "success") moved += r.moved;
+    else earlierUnread = true;
+  }
+  // no latest one: the process stopped after it kept the earlier returns and before it sent the next
+  const latest = j.returnTx ? await readOneReturn(j, j.returnTx) : { found: true, status: "success" as const, moved: 0n };
+  return { ...latest, moved: moved + latest.moved, ...(earlierUnread ? { earlierUnread } : {}) };
 }
 
 export type Settlement =
@@ -635,21 +654,32 @@ export async function makeSafe(j: Journal, w: Wallet, o: { log?: (s: string) => 
     writeJournal(j);
     return (await reconcileJournal(j, { quiet: true })).j;
   }
-  if (j.returnTx) {
+  let returnedBefore = 0n;
+  if (j.returnTx || j.earlierReturnTxs?.length) {
     const prior = await readReturn(j);
-    if (!prior.found || prior.status === "success") {
+    // a return not on chain yet may still land, and an unreadable earlier one leaves the total unknown: never send twice
+    if (!prior.found || prior.earlierUnread || (prior.status === "success" && prior.moved >= pulled)) {
       j.notes.push(`makeSafe: an earlier return ${j.returnTx} is ${prior.found ? "on chain" : "not on chain yet"}; not sending another`);
       writeJournal(j);
       return (await reconcileJournal(j, { quiet: true })).j;
     }
+    returnedBefore = prior.moved;
+    if (prior.status === "success" && j.returnTx) {
+      // it landed with part of the price: keep it, and return the rest
+      j.earlierReturnTxs = [...(j.earlierReturnTxs ?? []), j.returnTx];
+      j.returnTx = undefined;
+      j.returnStatus = undefined;
+      writeJournal(j);
+    }
   }
-  log(`returning ${usdc(amount)} ${SYM} from the agent to the owner ${j.owner}`);
-  const data = encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [j.owner, amount] });
+  const rest = amount < pulled - returnedBefore ? amount : pulled - returnedBefore;
+  log(`returning ${usdc(rest)} ${SYM} from the agent to the owner ${j.owner}`);
+  const data = encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [j.owner, rest] });
   try {
     const sent = await sendJournaled(w, USDC, data, "return price to owner (agent)", ({ hash, nonce }) => { j.returnTx = hash; j.returnNonce = nonce; writeJournal(j); }, { op: "return" });
     j.returnStatus = "success";
     addFee(j, sent.feeWei);
-    j.returned = usdc(amount);
+    j.returned = usdc(returnedBefore + rest);
     writeJournal(j);
   } catch (e: any) {
     if (e?.txHash) { j.returnStatus = "reverted"; if (e.feeWei) addFee(j, e.feeWei); }
