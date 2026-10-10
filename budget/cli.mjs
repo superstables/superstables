@@ -39,7 +39,7 @@ import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs"
 import { DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin } from "./site.mjs";
 import { customRpc, refusedRpcEnv } from "./rpc.mjs";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
-import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, waitOnce } from "./once.mjs";
+import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, unshownNext, waitOnce } from "./once.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // The rail scripts run in their own folders: a relative SUPERSTABLES_HOME would point each of them somewhere else.
@@ -378,8 +378,9 @@ exit 5; tell the owner the outcome is unknown and run wait --shown again later. 
 command's (or purchase's) own final RESULT and exit code, the same on every later call.
 Scripts test final, not the exit code.
 --shown means: I have written the approval link (and the match code) and the terms in a reply the owner can read.
-Without it, wait refuses (exit 2, state show_owner_first) and polls nothing; once the approval has ended, or the owner
-already acted on it (the wallet was asked; for buy-once, a read showed payment evidence), it reads it without --shown.
+Without it, wait refuses (exit 2, state show_owner_first) and polls nothing, so that answer says nothing about whether the
+owner approved or paid; once the approval has ended, or this machine already saw the owner act on it (the page log shows
+the wallet was asked; for buy-once, an earlier read showed payment evidence), it reads it without --shown.
 An agent writes the approval link, ends its turn, and runs wait when the owner says they've approved; while still
 waiting_owner it says so in one line and ends its turn again.
 --site is checked against the site the approval was made on, and refused if it differs.
@@ -1713,8 +1714,8 @@ async function wait({ f }) {
   // was asked, or the site showed payment evidence) has no "not approved yet" to say: wait reads them at once
   const acted = once && (once.command === "buy-once" ? !mayBeUnpaid(once.seen) : walletWasAsked(once));
   if (once && !once.final && !f.shown && !once.cancelUnconfirmed && !acted) {
-    log(`superstables budget: wait refused: write the approval link, the code and the terms in your reply to the owner first, then run: superstables budget wait --id ${f.id} --shown`);
-    return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", ...approvalFields(once), next: showFirst(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
+    log(`superstables budget: wait refused without reading the approval: write the approval link, the code and the terms in your reply to the owner first, then run: superstables budget wait --id ${f.id} --shown`);
+    return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", ...approvalFields(once), next: unshownNext(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
   }
   if (once?.command === "buy-once") return waitBuyOnce(once, f);
   const r = await waitFor(f.id, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);

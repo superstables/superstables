@@ -85,7 +85,7 @@ const SAYS: Record<"unknown" | "paid", Record<Surface, (string | undefined)[]>> 
 /** Never after the boundary, outside EXCEPTIONS. */
 const FORBIDDEN_STATES: Record<Surface, string[]> = {
   pay: ["awaiting_approval", "denied", "expired", "abandoned", "failed"],
-  budget: ["failed", "not_found", "refused_precheck", "refused_chain", "waiting_owner", "show_owner_first"],
+  budget: ["failed", "not_found", "refused_precheck", "refused_chain", "waiting_owner"],
   approval: ["denied", "expired", "abandoned", "refused"],
   listing: [],
 };
@@ -93,10 +93,14 @@ const FORBIDDEN_TEXT = [
   /payment did not happen/i, /nothing was paid/i, /nothing was submitted/i, /nothing was sent/i, /nothing was signed or paid/i,
   /nothing moved/i, /no funds moved/i, /not approved or paid yet/i, /has not finished approving/i, /no payment has been made/i, /did not pay/i,
 ];
+/** Budget answers that read nothing and so state no outcome, with the words each must say that in. */
+const NO_OUTCOME: Record<string, RegExp> = {
+  show_owner_first: /^this wait did not read the approval, so it says nothing about whether the owner approved or paid it\./,
+};
 /** The exit code each state stands for: pay (src/cli/outcome.ts), budget (budget/cli.mjs). */
 const EXIT: Record<Surface, Record<string, number>> = {
   pay: { uncertain: 5, approved: 0, submitting: 0, settled: 0, paid_service_failed: 4, failed: 1 },
-  budget: { unknown: 5, settled: 0, failed: 1, not_found: 1 },
+  budget: { unknown: 5, settled: 0, failed: 1, not_found: 1, show_owner_first: 2 },
   approval: {},
   listing: {},
 };
@@ -116,7 +120,10 @@ function assertProperty(seen: Seen, e: Expect): void {
   const exception = e.verdict in EXCEPTIONS ? EXCEPTIONS[e.verdict as Exception] : undefined;
   const allowed: readonly RegExp[] = exception?.allows ?? [];
   for (const f of FORBIDDEN_TEXT) if (!allowed.some((a) => a.source === f.source)) expect(seen.text, `${at}: says ${f}`).not.toMatch(f);
-  if (exception) {
+  if (seen.surface === "budget" && o.state !== undefined && o.state in NO_OUTCOME) {
+    expect(e.verdict, `${at}: ${o.state} states no outcome`).toBe("unknown");
+    expect(seen.body.next, `${at}: ${o.state} says it read nothing`).toMatch(NO_OUTCOME[o.state]);
+  } else if (exception) {
     expect([seen.surface, o.state], `${at}: ${e.verdict}`).toEqual([exception.surface, exception.state]);
     expect(exception.proof(seen.body), `${at}: ${e.verdict} without the chain's proof`).toBe(true);
   } else {
@@ -598,12 +605,15 @@ const ROWS: Row[] = [
       const first = resultOf((await buyOnce()).stdout);
       expect(first).toMatchObject({ state: "waiting_owner" });
       site.readAnswer = (p) => ({ status: 200, body: { id: p.id, state: "submitting", final: false, payment: { status: "submitting" }, delivery: { status: "pending" } } });
+      // nothing on this machine has read the site since the owner signed: this wait cannot know, and must not say
+      const unread = seenBudget("wait without --shown, before any read", "wait", await budget(home, ["wait", "--id", first.id, "--timeout", "0"], env));
       const shown = seenBudget("wait --shown", "wait", await budget(home, ["wait", "--shown", "--id", first.id, "--timeout", "0"], env));
       const plain = seenBudget("wait without --shown", "wait", await budget(home, ["wait", "--id", first.id, "--timeout", "0"], env));
       const next = seenBudget("the next buy-once", "buy-once", await buyOnce());
-      return [shown, plain, next];
+      return [unread, shown, plain, next];
     },
     expect: [
+      { verdict: "unknown", match: { exit: 2, command: "wait", state: "show_owner_first", id: expect.any(String), reason: "wait was run without --shown: nothing was polled" } },
       { verdict: "unknown", match: { exit: 5, command: "buy-once", state: "unknown", final: false, paid: null, amount: null, reason: "the owner signed and the payment is being submitted; payment is not yet confirmed" } },
       { verdict: "unknown", match: { exit: 5, command: "buy-once", state: "unknown", final: false, paid: null, amount: null } },
       { verdict: "unknown", match: { exit: 3, state: "refused_pending", paid: null, pending: { state: "unknown" } } },

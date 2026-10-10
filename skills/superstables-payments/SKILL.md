@@ -251,7 +251,7 @@ Exit codes share one table, but a missing budget shows differently per command:
 | `budget buy` | 3 | Refused before signing: no setup or grant here, over `--max`, wrong payee or token, too little left. `paid: false`, no `tx`; with a `tx`, safety rule 12 applies |
 | owner commands, `budget buy-once`, `budget wait` | 0 | Done, or `waiting_owner` with `final: false`: reply with `message_for_owner` and end your turn; `wait --id ID --shown` when the owner says they've approved |
 | owner commands, `budget buy-once`, `budget wait` | 3 | The owner rejected it, the approval link expired, or an owner transaction differed from the plan (buy-once: also over `--max`). Rejection or expiry before the wallet was asked to send means that step sent nothing; an earlier step of a setup on superstables.com with `--grant` or `--fund`, or of `recover`, may have completed: read `steps`, `tx` and `superstables budget status` |
-| `budget wait` | 2 | `show_owner_first`: you ran it without `--shown`. Reply with `message_for_owner` first and end your turn |
+| `budget wait` | 2 | `show_owner_first`: you ran it without `--shown`, so it read nothing and says nothing about payment. Reply with `message_for_owner` first and end your turn |
 | `quote` | 1 / 3 | Not a paid endpoint or not payable here / the spend policy refuses it |
 | `pay`, `status ATTEMPT_ID` | 0 | Settled; for `status`, also not final yet |
 | `pay`, `status ATTEMPT_ID` | 1 | `failed`, `expired`, `abandoned`: nothing paid when there is no transaction (`receipt.transaction` or `transaction`), or `chain` is `unpaid`; otherwise, with a transaction, safety rule 12 applies |
