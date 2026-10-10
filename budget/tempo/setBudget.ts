@@ -30,7 +30,7 @@ import type { Address, Hex } from 'viem'
 import { addressListCheck, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
 import { TOKEN_ADDRESS, TOKEN_LABEL, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, ownerAccount, toBaseUnits } from './lib/common.ts'
 import { chainHead, readKey, rpcRead, sleep } from './lib/chain.ts'
-import { OWNER_KEY_FILE, OWNER_TIMEOUT_MS, checkOwnerKeyFile } from '../owner-page.ts'
+import { OWNER_KEY_FILE, OWNER_TIMEOUT_MS, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import {
   KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, grantCalldata,
   grantTerms, iso, maxByExpiry, readSent, readUntilMatches, revertedReceiptOf, tokenBalance, useHostedAgent, type GrantPlan,
@@ -204,5 +204,5 @@ async function main() {
 
 main().catch((err) => {
   console.error('setBudget failed:', err?.shortMessage ?? err?.message ?? err)
-  process.exit(1)
+  return exitAfterError()
 })

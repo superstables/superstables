@@ -80,7 +80,8 @@ export type OwnerActionStatus =
 
 /**
  * The caller's verdict after reading the chain. "unknown": the wallet was asked to send and the chain cannot tell yet.
- * `proof`: the chain fact that shows a sent transaction changed nothing (budget/proof.mjs).
+ * `proof`: the chain fact that shows a sent transaction changed nothing (budget/proof.mjs). Once the wallet was asked to
+ * send, a "failed" verdict without one shows as unknown.
  */
 export interface OwnerVerdict {
   outcome: "confirmed" | "failed" | "unknown";
@@ -141,6 +142,8 @@ interface OwnerRecord extends OwnerActionInput {
   reason?: string;
   address?: string;
   hash?: string;
+  /** A failed verdict's proof (OwnerVerdict). */
+  proof?: string;
   sending: boolean;
   /** solana: a signed transaction is being checked or sent; a second one is refused meanwhile. */
   submitting?: boolean;
@@ -283,7 +286,8 @@ export class OwnerApprovalServer {
       settled,
       finish: (verdict) => {
         if (record.status !== "sent" && record.status !== "connected") return;
-        record.status = verdict.outcome;
+        record.status = verdict.outcome === "failed" && record.sending && !verdict.proof ? "unknown" : verdict.outcome;
+        if (record.status === "failed" && verdict.proof) record.proof = verdict.proof;
         record.message = verdict.message;
         if (verdict.hash) record.hash = verdict.hash;
         this.audit(record);
@@ -430,6 +434,7 @@ export class OwnerApprovalServer {
         message: record.message,
         address: record.address,
         hash: record.hash,
+        proof: record.proof,
         sending: record.sending,
         expiresAt: record.expiresAt,
       });
