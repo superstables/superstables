@@ -166,7 +166,7 @@ const RECOVER_OWNER_HELP = OWNER_HELP.replace(
 owner is signed in with their wallet, and the APPROVE line carries a matchCode the owner picks there (recover stays on
 this machine).`,
   "Recovery always uses this machine's local approval page, including on a chain set up with --hosted.",
-).replace(" (and the\nmatch code)", "");
+).replace(/ \(and the\smatch code\)/, "");
 const OWNER_PRINTS = "the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final\n  false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), tx, next.";
 const COMMANDS = {
   setup: {

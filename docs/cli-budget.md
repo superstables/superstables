@@ -612,7 +612,7 @@ Recovery always uses this machine's local approval page, including on a chain se
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
 agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
-yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
+yet, and the owner still has to approve the rest. Either way, write the approval link and the terms
 in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
 link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
