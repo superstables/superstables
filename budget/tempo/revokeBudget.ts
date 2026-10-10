@@ -25,6 +25,7 @@ import { OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
 import { readRegularFile } from '../secret-file.mjs'
 import { KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, readSent, revertedReceiptOf, revokeCalldata, revokeTerms, tokenBalance, useHostedAgent } from './owner.ts'
 import { mismatchPage, mismatchReason } from '../site.mjs'
+import type { OwnerVerdict } from '../../src/core/signer/owner-approval-server.ts'
 
 const { values: args } = parseCli({
   name: 'revokeBudget.ts',
@@ -90,7 +91,7 @@ async function main() {
   const fromBlock = headStart.number > lookback ? headStart.number - lookback : 0n
   const grace = await closeGracePeriod()
   let hash: Hex | null = null
-  let finish: ((v: { ok: boolean; message: string; hash?: string }) => void) | null = null
+  let finish: ((v: OwnerVerdict) => void) | null = null
 
   /**
    * The owner's revoke transaction reverted: it revoked nothing. The key may still read revoked, because another
@@ -101,7 +102,7 @@ async function main() {
     const state = now === null ? 'could not be read' : now.revoked ? 'reads revoked on chain, but not by this transaction' : 'does not read as revoked on chain'
     const reason = `the revoke transaction reverted on chain${problems.length ? ` (${problems.join('; ')})` : ''}; the key ${state}`
     console.log(`FAILED: ${reason}`)
-    finish?.({ ok: false, message: `The transaction reverted, so it revoked nothing. The key ${state}. ${now?.revoked ? 'Check that this is what you expect.' : 'Run the revoke again.'}`, hash: tx })
+    finish?.({ outcome: "failed", message: `The transaction reverted, so it revoked nothing. The key ${state}. ${now?.revoked ? 'Check that this is what you expect.' : 'Run the revoke again.'}`, hash: tx })
     await closeOwnerPage()
     process.exit(emit('revokeBudget', 1, { state: 'failed', tx, revoked: now ? now.revoked : null, reason, next: now?.revoked ? `superstables budget status --rail tempo${agentFlag(agentLabel)}: the key reads revoked, by another transaction` : 'run revoke again' }))
   }
@@ -158,7 +159,7 @@ async function main() {
       if (alt) sent = await readSent(alt, { from: owner, data, afterBlock: headStart.number, siteFailed: outcome.siteFailed })
     }
     if (!sent) {
-      handle.finish({ ok: false, message: "The transaction did not show up on chain. Check your wallet's activity.", hash: outcome.hash })
+      handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain. Check your wallet's activity.", hash: outcome.hash })
       await closeOwnerPage()
       process.exit(emit('revokeBudget', 5, { state: 'unknown', tx: outcome.hash, reason: 'the wallet reported a transaction the chain does not show (replaced, dropped or still pending)', next: `superstables budget status --rail tempo${agentFlag(agentLabel)}` }))
     }
@@ -169,7 +170,7 @@ async function main() {
       const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash)
       console.log(`MISMATCH: ${reason}`)
       const now = await readKey(owner, agentAddress).catch(() => null)
-      handle.finish({ ok: false, message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Check the key and revoke again.`, hash })
+      handle.finish({ outcome: "failed", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Check the key and revoke again.`, hash })
       await closeOwnerPage()
       process.exit(emit('revokeBudget', 3, { state: 'mismatch', tx: hash, revoked: now ? now.revoked : null, reason, next: `revoke again (superstables budget revoke --rail tempo${agentFlag(agentLabel)}) and check superstables budget status --rail tempo${agentFlag(agentLabel)}` }))
     }
@@ -193,11 +194,11 @@ async function main() {
   }
   if (after.revoked && unclosed) console.log('\nThis revoke does not stop those sessions. Close them with the tool that opened them.')
   if (!after.revoked) {
-    finish?.({ ok: false, message: 'The chain still shows the key as live. Run the revoke again.', hash: hash ?? undefined })
+    finish?.({ outcome: "failed", message: 'The chain still shows the key as live. Run the revoke again.', hash: hash ?? undefined })
     await closeOwnerPage()
     process.exit(emit('revokeBudget', 1, { state: 'not_revoked', tx: hash, reason: 'the key still reads as live on chain', next: 'run revoke again' }))
   }
-  finish?.({ ok: true, message: `Done. The chain shows the key as revoked: your agent can spend nothing more with it.${unclosed ? ' The terminal lists payment sessions it left open.' : ''} You can close this page.`, hash: hash ?? undefined })
+  finish?.({ outcome: "confirmed", message: `Done. The chain shows the key as revoked: your agent can spend nothing more with it.${unclosed ? ' The terminal lists payment sessions it left open.' : ''} You can close this page.`, hash: hash ?? undefined })
   await closeOwnerPage()
   process.exit(emit('revokeBudget', scanFailed ? 1 : 0, { state: scanFailed ? 'failed' : 'revoked', tx: hash, remaining: fromBaseUnits(after.remaining), openSessions: unclosed, reason: scanFailed ? 'revoked, but the session scan failed: residual exposure is unknown' : undefined, next: 'none' }))
 }

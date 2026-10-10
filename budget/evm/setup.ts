@@ -37,6 +37,7 @@ import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, 
 import { NEW_OWNER } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
 import { chosenSite, isSiteRequestId, siteOrigin } from "../site.mjs";
+import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const d = (EVM_CHAINS as Record<string, any>)[CFG.key].doctor;
 const same = (x?: string, y?: string) => !!x && !!y && x.toLowerCase() === y.toLowerCase();
@@ -157,7 +158,7 @@ if (BUNDLE) {
 }
 
 let ownerAddr: Address;
-let finish: ((v: { ok: boolean; message: string }) => void) | null = null;
+let finish: ((v: OwnerVerdict) => void) | null = null;
 let bundle: { steps: HostedStepOutcome[] } | undefined;
 if (OWNER_KEY_FILE) {
   ownerAddr = privateKeyToAccount(need(ownerKeyEnv(), "B4_OWNER_KEY", OWNER_KEY_FILE) as Hex).address;
@@ -262,7 +263,7 @@ if (OWNER_KEY_FILE) {
   console.log(`the owner connected ${ownerAddr} and signed the sign-in message`);
 }
 if (same(ownerAddr, agentAddr)) {
-  finish?.({ ok: false, message: "That is the agent's own address. Connect your own wallet instead." });
+  finish?.({ outcome: "failed", message: "That is the agent's own address. Connect your own wallet instead." });
   await closeOwnerPage();
   process.exit(emit("setup", 3, { state: "refused_precheck", reason: "the owner address is the agent's address", next: "connect the owner's own wallet" }));
 }
@@ -297,7 +298,7 @@ const steps = [
 ];
 console.log("\nNext:");
 steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
-finish?.({ ok: true, message: `Done. The owner on record is now ${ownerAddr}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agentAddr}. You can close this page. Next: fund your wallet with test ${SYM}, give the agent gas, then grant a budget (the terminal lists the commands).` });
+finish?.({ outcome: "confirmed", message: `Done. The owner on record is now ${ownerAddr}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agentAddr}. You can close this page. Next: fund your wallet with test ${SYM}, give the agent gas, then grant a budget (the terminal lists the commands).` });
 await closeOwnerPage();
 process.exit(emit("setup", 0, { state: "ok", owner: ownerAddr, ...(replaced ? { replacedOwner: replaced } : {}), agent: agentAddr, publicFile: PUBLIC_ENV, agentKeyFile: AGENT_ENV, steps, next: `superstables budget fund-agent --rail evm${chainFlag} (gas for the agent key), then superstables budget doctor --rail evm${chainFlag} (it says what the owner still needs), then superstables budget grant --rail evm${chainFlag} --amount A` }));
 

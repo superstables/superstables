@@ -36,6 +36,7 @@ import {
   grantTerms, iso, maxByExpiry, readSent, readUntilMatches, revertedReceiptOf, tokenBalance, useHostedAgent, type GrantPlan,
 } from './owner.ts'
 import { mismatchPage, mismatchReason } from '../site.mjs'
+import type { OwnerVerdict } from '../../src/core/signer/owner-approval-server.ts'
 
 const { values: args } = parseCli({
   name: 'setBudget.ts',
@@ -92,7 +93,7 @@ async function main() {
   let hash: Hex
   let plan: GrantPlan
   let authorizedAt: number | undefined // the grant block's timestamp: the first period window starts there
-  let finish: ((v: { ok: boolean; message: string; hash?: string }) => void) | null = null
+  let finish: ((v: OwnerVerdict) => void) | null = null
 
   if (OWNER_KEY_FILE) {
     checkOwnerKeyFile(OWNER_KEY_FILE)
@@ -149,7 +150,7 @@ async function main() {
       }
     }
     if (!sent) {
-      handle.finish({ ok: false, message: "The transaction did not show up on chain. Check your wallet's activity; the command reports it as unknown.", hash: outcome.hash })
+      handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain. Check your wallet's activity; the command reports it as unknown.", hash: outcome.hash })
       await closeOwnerPage()
       process.exit(result(5, { state: 'unknown', tx: outcome.hash, reason: 'the wallet reported a transaction the chain does not show (replaced, dropped or still pending)', next: `superstables budget status --rail tempo${agentFlag(label)}: read the key before granting again` }))
     }
@@ -158,7 +159,7 @@ async function main() {
     console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a (the sender)'}, fee token ${sent.feeToken ?? 'n/a'}`)
     if (sent.feeToken && sent.feeToken.toLowerCase() !== feeToken.toLowerCase()) console.log(`note: the fee was paid in ${sent.feeToken}, not the expected ${feeToken}`)
     if (sent.status !== 'success') {
-      handle.finish({ ok: false, message: 'The transaction reverted. No access key was granted by it, but a network fee may have been charged.', hash })
+      handle.finish({ outcome: "failed", message: 'The transaction reverted. No access key was granted by it, but a network fee may have been charged.', hash })
       await closeOwnerPage()
       process.exit(result(1, { state: 'failed', tx: hash, reason: 'the authorizeKey transaction reverted on chain', next: `superstables budget status --rail tempo${agentFlag(label)}` }))
     }
@@ -166,7 +167,7 @@ async function main() {
     if (sent.problems.length) {
       const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash)
       console.log(`MISMATCH: ${reason}`)
-      handle.finish({ ok: false, message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
+      handle.finish({ outcome: "failed", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
       await closeOwnerPage()
       process.exit(result(3, { state: 'mismatch', tx: hash, reason, next: `revoke it (superstables budget revoke --rail tempo${agentFlag(label)}), then grant a new key` }))
     }
@@ -179,7 +180,7 @@ async function main() {
   if (problems.length) {
     const reason = `the key on chain is not the planned one: ${problems.join('; ')}`
     console.log(`REFUSED: ${reason}`)
-    finish?.({ ok: false, message: `The chain shows a different key than planned (${problems.join('; ')}). Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
+    finish?.({ outcome: "failed", message: `The chain shows a different key than planned (${problems.join('; ')}). Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
     await closeOwnerPage()
     process.exit(result(3, { state: 'mismatch', tx: hash, reason, next: `revoke it (superstables budget revoke --rail tempo${agentFlag(label)}), then grant a new key` }))
   }
@@ -193,7 +194,7 @@ async function main() {
   console.log(`readback maximum by expiry: ${fromBaseUnits(trueMax)} ${TOKEN_LABEL} (${trueWindows} window${trueWindows === 1 ? '' : 's'})`)
   console.log(`explorer: ${explorerTx(hash)}`)
   const expiryIso = iso(key.expiry)
-  finish?.({ ok: true, message: `Done. The chain shows your agent's key with a limit of ${fromBaseUnits(limit)} ${TOKEN_LABEL}${period ? ` per period (planned maximum ${fromBaseUnits(trueMax)} by expiry)` : ''}, until ${expiryIso}${sellers ? ', for the listed sellers only' : ''}. You can close this page.`, hash })
+  finish?.({ outcome: "confirmed", message: `Done. The chain shows your agent's key with a limit of ${fromBaseUnits(limit)} ${TOKEN_LABEL}${period ? ` per period (planned maximum ${fromBaseUnits(trueMax)} by expiry)` : ''}, until ${expiryIso}${sellers ? ', for the listed sellers only' : ''}. You can close this page.`, hash })
   await closeOwnerPage()
   process.exit(result(0, {
     state: 'set', tx: hash, limit: fromBaseUnits(limit), remaining: fromBaseUnits(key.remaining), expiry: expiryIso, periodSeconds: period ?? null,
