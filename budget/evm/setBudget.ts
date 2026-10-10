@@ -117,11 +117,11 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   // Any difference from the plan is a mismatch, whatever the allowance reads now: an edited higher allowance can be spent
   // down to the requested cap before the readback. The wallet already sent it, so the owner has to revoke it.
   if (sent.problems.length) {
-    const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}. The budget was not recorded.`;
+    const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}${sent.status !== "success" ? "; it reverted on chain" : ""}. The budget was not recorded.`;
     console.log(`MISMATCH: ${reason}`);
     const now = await allowanceOf(pub.owner, pub.agent).catch(() => null);
     const steps = grantMismatchSteps(sent.logs, pub.owner, pub.agent, sent.hash);
-    handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} The budget was not recorded. ${steps?.page ?? `Revoke it: ${REVOKE_HINT}`}`, hash: sent.hash });
+    handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash, { ended: sent.status !== "success" ? "reverted on chain" : undefined })} The budget was not recorded. ${steps?.page ?? `Revoke it: ${REVOKE_HINT}`}`, hash: sent.hash });
     await closeOwnerPage();
     process.exit(result(3, { state: "mismatch", tx: sent.hash, reason, requested: usdc(cap), allowance: now === null ? null : usdc(now), next: steps?.next ?? "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" }));
   }
