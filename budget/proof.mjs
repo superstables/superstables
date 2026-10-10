@@ -54,13 +54,21 @@ const STANDS = new Set(["settled", "ok", "unknown"]);
  * The answer an owner command gives once it may have sent. `fields` is its RESULT as built; `check` the read-only command
  * that shows whether it landed. Any end other than done, unknown or a proven failure becomes unknown, exit 5, keeping the
  * reason; its next step is to read the chain, unless the rail already said unknown or refused and named its own way out.
- * A setup step that says failed without a proof becomes unknown too.
+ * A setup step that says failed without a proof becomes unknown too, and a proven failure of the request stands only when
+ * no other step may have moved funds: else it is unknown, reason `partly_done`, and each step keeps its own state.
  */
 export function afterSend(code, fields, check) {
   const steps = Array.isArray(fields.steps) ? fields.steps.map((s) => (s?.state === "failed" && !proven(s) ? { ...s, state: "unknown" } : s)) : fields.steps;
   const keep = { ...fields, ...(steps ? { steps } : {}) };
-  if (STANDS.has(fields.state) || proven(fields)) return { code, fields: keep };
+  // a step that may have moved funds: any but one that sent nothing (a refusal) or that the chain proved changed nothing
+  const moved = (steps ?? []).filter((s) => s && s.state !== "refused_precheck" && !proven(s));
+  if (STANDS.has(fields.state) || (proven(fields) && !moved.length)) return { code, fields: keep };
   const ownWay = fields.state === "refused_precheck" && typeof fields.next === "string" && fields.next !== "" && fields.next !== "none";
   const { proof: _unproven, ...rest } = keep;
+  if (proven(fields)) {
+    // the chain proved a later step failed, after another step may have moved funds: the request as a whole is partly done
+    const named = (list) => list.map((s) => `${s.kind ?? "a step"} ${s.state}${s.proof ? ` (${s.proof})` : ""}`).join(", ");
+    return { code: 5, fields: { ...rest, ok: false, state: "unknown", next: fields.next ?? `${check}: read what landed before running this again`, reason: `partly_done: ${named(moved)} before ${named(steps.filter(proven))}; ${fields.reason ?? ""}` } };
+  }
   return { code: 5, fields: { ...rest, ok: false, state: "unknown", next: ownWay ? fields.next : `${check}: read whether it landed before running this again`, reason: fields.reason ?? `the ${fields.command} script ended without a result the chain proves` } };
 }
