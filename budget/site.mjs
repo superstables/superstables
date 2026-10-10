@@ -42,6 +42,9 @@ export function siteOrigin(value) {
   if (!LOOPBACK.has(u.hostname) && !isSuperstables(u.hostname) && !ownerAllowed(u.origin)) {
     return { error: `${u.origin} is not superstables.com: only https://superstables.com, its subdomains and 127.0.0.1 are used, unless the owner sets ${ALLOW_SITE_ENV}=${u.origin} in their own environment (an agent never sets it)` };
   }
+  // superstables.com serves the same site as www.superstables.com, but it makes its approval links on www: the apex is that
+  // site, so a link on www is not refused as another site's.
+  if (u.origin === "https://superstables.com") return { origin: DEFAULT_SITE };
   return { origin: u.origin };
 }
 
