@@ -432,7 +432,7 @@ export function fundTerms(p: { owner: string; agent: string; lamports: bigint; a
     rows: [
       { label: "To your agent", value: p.agent, mono: true },
       { label: "From your wallet", value: p.owner, mono: true },
-      { label: "Agent balance", value: `${sol(p.agentHas)} SOL` },
+      { label: "Agent balance before this transfer", value: `${sol(p.agentHas)} SOL` },
       { label: "Transaction", value: `a plain transfer of ${sol(p.lamports)} SOL` },
     ],
     enforced: [],

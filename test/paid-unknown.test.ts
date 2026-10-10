@@ -1117,6 +1117,8 @@ const ROWS: Row[] = [
       b.solana!.afterSend = () => b.solana!.balances.set(SOL_AGENT.publicKey.toBase58(), 1_000_000n);
       const first = resultOf((await budget(b.home, ["fund-agent", "--rail", "solana", "--no-open"], b.env)).stdout);
       expect(first).toMatchObject({ command: "fund-agent", state: "waiting_owner" });
+      // the page shows the balance before the transfer, next to "Done. Your agent received ...", as on evm
+      expect(await (await fetch(first.url)).text()).toMatch(/>Agent balance before this transfer</);
       expect((await seenRoute("owner:solana-transaction", "connect", first.url, "/account", { address })).http).toBe(200);
       const prepared = await seenRoute("owner:solana-transaction", "prepare", first.url, "/prepare", { address });
       const tx = Transaction.from(Buffer.from(prepared.body.transaction, "base64"));
