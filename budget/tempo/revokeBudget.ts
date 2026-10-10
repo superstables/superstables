@@ -21,7 +21,7 @@ import { addressCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
 import { AGENT_ENV_PATH, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, ownerAccount, parseEnvFile } from './lib/common.ts'
 import { chainHead, readKey, sleep } from './lib/chain.ts'
 import { closeGracePeriod, findOpenChannels, type OpenChannel } from './lib/channels.ts'
-import { OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
+import { OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { readRegularFile } from '../secret-file.mjs'
 import { KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, readSent, revertedReceiptOf, revokeCalldata, revokeTerms, tokenBalance, useHostedAgent } from './owner.ts'
 import { mismatchPage, mismatchReason } from '../site.mjs'
@@ -205,5 +205,5 @@ async function main() {
 
 main().catch((err) => {
   console.error('revokeBudget failed:', String(err?.shortMessage ?? err?.message ?? err).slice(0, 400))
-  process.exit(1)
+  return exitAfterError()
 })

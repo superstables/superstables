@@ -20,6 +20,7 @@ import { encodePaymentResponseHeader } from "@x402/core/http";
 import { Keypair, SendTransactionError, SystemProgram, Transaction, type Connection } from "@solana/web3.js";
 import { encodeEventTopics, encodeFunctionData, parseAbi, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { PROOFS } from "../budget/proof.mjs";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { PaymentEngine } from "../src/core/pay.js";
 import { DEFAULT_POLICY } from "../src/core/policy.js";
@@ -81,6 +82,10 @@ const EXCEPTIONS = {
   // the rail prints the owner's net debit as debit; the dispatcher prints it as amount
   "evm-funds-returned": { surface: "budget", state: "failed", proof: (b: any) => typeof b.tx?.return === "string" && (b.debit ?? b.amount) === "0" && /was returned to the owner/.test(b.reason), allows: [] },
   "evm-nonce-replaced": { surface: "budget", state: "not_found", proof: (b: any) => /a different final transaction 0x[0-9a-f]{64} consumed the pull nonce/.test(b.reason), allows: [/nothing moved/i] },
+  // an owner command whose transaction the chain shows changed nothing (it reverted, or a Solana blockhash expired): its
+  // RESULT names the proof from budget/proof.mjs and the transaction, and so does its page on this machine
+  "owner-chain-proved": { surface: "budget", state: "failed", proof: (b: any) => Object.hasOwn(PROOFS, b.proof) && Object.values(b.tx ?? {}).some((h) => typeof h === "string"), allows: [] },
+  "owner-page-chain-proved": { surface: "approval", state: "failed", proof: (b: any) => Object.hasOwn(PROOFS, b.proof) && typeof b.hash === "string", allows: [] },
 } as const satisfies Record<string, { surface: Surface; state: string; proof: (b: any) => boolean; allows: readonly RegExp[] }>;
 
 /** What may be said after the boundary, per surface. `undefined`: the answer states no outcome (a refused route). */
@@ -371,7 +376,8 @@ async function ownerAsked(url: string, address = OWNER) {
 
 /** Another spender than the agent, for a grant the wallet changed. */
 const SPENDER = "0x5555555555555555555555555555555555555555";
-type OwnerTx = { to: string; input: Hex; value: bigint; logs: unknown[] };
+/** `status`: the receipt's, "0x1" (success) unless given. */
+type OwnerTx = { to: string; input: Hex; value: bigint; logs: unknown[]; status?: "0x0" | "0x1" };
 /**
  * An owner command on this machine (no superstables.com), whose page's wallet reports these transactions: the RPC shows
  * each one mined in block 101, after the request started at block 100, from the owner, successful, with these logs.
@@ -385,7 +391,7 @@ async function ownerOnThisMachine(txs: Record<string, OwnerTx>, extra?: (method:
     const t = txs[params[0]];
     if (!t) return undefined;
     if (method === "eth_getTransactionByHash") return { hash: params[0], blockHash, blockNumber: "0x65", from: OWNER, to: t.to, input: t.input, value: `0x${t.value.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
-    if (method === "eth_getTransactionReceipt") return { transactionHash: params[0], blockHash, blockNumber: "0x65", from: OWNER, to: t.to, status: "0x1", logs: t.logs, gasUsed: "0x5208", cumulativeGasUsed: "0x5208", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+    if (method === "eth_getTransactionReceipt") return { transactionHash: params[0], blockHash, blockNumber: "0x65", from: OWNER, to: t.to, status: t.status ?? "0x1", logs: t.logs, gasUsed: "0x5208", cumulativeGasUsed: "0x5208", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
     return undefined;
   });
   writeFileSync(join(b.home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${AGENT}\n`);
@@ -866,6 +872,28 @@ const ROWS: Row[] = [
     timeout: 150_000,
   },
   {
+    path: "budget grant on this machine: the owner's approval lands, then reading the allowance back fails and the script stops",
+    covers: [],
+    run: async () => {
+      const GRANT: Hex = `0x${"cb".repeat(32)}`;
+      let mined = false;
+      const input = encodeFunctionData({ abi: erc20, functionName: "approve", args: [AGENT, 10n ** 6n] });
+      const b = await ownerOnThisMachine({ [GRANT]: { to: BASE_USDC, input, value: 0n, logs: [approval(OWNER, AGENT, 10n ** 6n, GRANT)] } }, (method, params) => {
+        if (method === "eth_getTransactionReceipt" && params[0] === GRANT) mined = true;
+        return mined && method === "eth_call" ? new Error("header not found") : undefined;
+      });
+      const first = resultOf((await budget(b.home, ["grant", "--rail", "evm", "--amount", "1", "--no-open"], b.env)).stdout);
+      expect(first).toMatchObject({ command: "grant", state: "waiting_owner" });
+      return ownerPageSent(b, first, GRANT);
+    },
+    expect: [
+      { verdict: "unknown", match: { http: 200, status: "sent" } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"cb".repeat(32)}`, message: "" } },
+      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, reason: "the rail script exited 1", next: "superstables budget status --rail evm: read whether it landed before running this again" } },
+    ],
+    timeout: 150_000,
+  },
+  {
     path: "budget grant with the owner key file (--yes): the approval is broadcast, then the script stops before its RESULT",
     covers: [],
     run: async () => {
@@ -884,6 +912,42 @@ const ROWS: Row[] = [
     },
     expect: [{ verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", reason: "the rail script exited 1", next: "superstables budget status --rail evm: read whether it landed before running this again" } }],
     timeout: 90_000,
+  },
+  {
+    path: "budget grant on this machine: the owner's approval reverted on chain, which proves it granted nothing",
+    covers: [],
+    run: async () => {
+      const GRANT: Hex = `0x${"ce".repeat(32)}`;
+      const input = encodeFunctionData({ abi: erc20, functionName: "approve", args: [AGENT, 10n ** 6n] });
+      const b = await ownerOnThisMachine({ [GRANT]: { to: BASE_USDC, input, value: 0n, logs: [], status: "0x0" } });
+      const first = resultOf((await budget(b.home, ["grant", "--rail", "evm", "--amount", "1", "--no-open"], b.env)).stdout);
+      expect(first).toMatchObject({ command: "grant", state: "waiting_owner" });
+      return ownerPageSent(b, first, GRANT);
+    },
+    expect: [
+      { verdict: "unknown", match: { http: 200, status: "sent" } },
+      { verdict: "owner-page-chain-proved", match: { http: 200, status: "failed", proof: "reverted", message: "The transaction reverted. No allowance was granted by it, but a network fee may have been charged." } },
+      { verdict: "owner-chain-proved", match: { exit: 1, command: "grant", state: "failed", proof: "reverted", final: true, tx: { grant: `0x${"ce".repeat(32)}` }, reason: "the approve reverted on chain" } },
+    ],
+    timeout: 150_000,
+  },
+  {
+    path: "budget revoke on this machine: the owner's revoke lands, and the allowance still reads above 0",
+    covers: [],
+    run: async () => {
+      const REVOKE: Hex = `0x${"cf".repeat(32)}`;
+      const input = encodeFunctionData({ abi: erc20, functionName: "approve", args: [AGENT, 0n] });
+      const b = await ownerOnThisMachine({ [REVOKE]: { to: BASE_USDC, input, value: 0n, logs: [approval(OWNER, AGENT, 0n, REVOKE)] } }, allowance(10n ** 6n));
+      const first = resultOf((await budget(b.home, ["revoke", "--rail", "evm", "--no-open"], b.env)).stdout);
+      expect(first).toMatchObject({ command: "revoke", state: "waiting_owner" });
+      return ownerPageSent(b, first, REVOKE);
+    },
+    expect: [
+      { verdict: "unknown", match: { http: 200, status: "sent" } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"cf".repeat(32)}`, message: "The chain still shows an allowance of 1 USDC. Run the revoke again." } },
+      { verdict: "unknown", match: { exit: 5, command: "revoke", state: "unknown", final: true, reason: "the allowance still reads above 0", next: "superstables budget status --rail evm: read whether it landed before running this again" } },
+    ],
+    timeout: 150_000,
   },
   {
     path: "budget wait on a finished owner approval that an earlier client stored as failed after the wallet was asked",

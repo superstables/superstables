@@ -330,11 +330,16 @@ async function verifyAgent(agent: string, text: string, sig: Hex, raw: string): 
 export async function startFakeRpc(chainId: number, extra?: (method: string, params: any[]) => unknown): Promise<TestServer> {
   return startServer(async (req, res) => {
     const body = JSON.parse(await readBody(req));
-    const answer = (c: { id: number; method: string; params?: any[] }) => ({
-      jsonrpc: "2.0",
-      id: c.id,
-      result: extra?.(c.method, c.params ?? []) ?? (c.method === "eth_chainId" ? `0x${chainId.toString(16)}` : c.method === "eth_call" ? `0x${"0".repeat(64)}` : c.method === "eth_blockNumber" ? "0x1" : c.method === "eth_getBalance" ? "0xde0b6b3a7640000" : "0x0"),
-    });
+    const answer = (c: { id: number; method: string; params?: any[] }) => {
+      const given = extra?.(c.method, c.params ?? []);
+      // `extra` may answer with an Error: the node's JSON-RPC error for that call
+      if (given instanceof Error) return { jsonrpc: "2.0", id: c.id, error: { code: -32000, message: given.message } };
+      return {
+        jsonrpc: "2.0",
+        id: c.id,
+        result: given ?? (c.method === "eth_chainId" ? `0x${chainId.toString(16)}` : c.method === "eth_call" ? `0x${"0".repeat(64)}` : c.method === "eth_blockNumber" ? "0x1" : c.method === "eth_getBalance" ? "0xde0b6b3a7640000" : "0x0"),
+      };
+    };
     json(res, 200, Array.isArray(body) ? body.map(answer) : answer(body));
   });
 }

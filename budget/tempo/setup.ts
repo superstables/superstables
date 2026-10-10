@@ -36,7 +36,7 @@ import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 import { LABEL, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
 import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
-import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
+import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { UNSAFE_SECRET_FILE } from '../secret-file.mjs'
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from '../hosted.ts'
 import { chosenSite, isSiteRequestId, siteOrigin } from '../site.mjs'
@@ -518,5 +518,5 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
 
 main().catch((err) => {
   console.error('setup failed:', err?.message ?? err)
-  process.exit(1)
+  return exitAfterError()
 })
