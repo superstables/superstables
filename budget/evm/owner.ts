@@ -125,6 +125,32 @@ export function approvalsIn(logs: any[], owner: Address, spender: Address): bigi
 }
 
 /**
+ * After a grant whose transaction landed and did not match the plan, when superstables budget revoke cannot end what its
+ * receipt shows the owner approved: revoke sets only the agent's USDC allowance to 0, so an approval of another spender or
+ * another token is named, for the owner to set to 0 from their wallet by hand. Null when revoke ends all of it.
+ */
+export function grantMismatchSteps(logs: any[], owner: Address, agent: Address, hash: Hex): { next: string; page: string } | null {
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const approvals = (parseEventLogs({ abi: erc20Abi, logs, eventName: "Approval" }) as any[]).filter((l) => same(l.args.owner, owner));
+  const others = approvals.filter((l) => !same(l.address, USDC) || !same(l.args.spender, agent));
+  if (approvals.length > 0 && others.length === 0) return null;
+  const revokeOnly = `superstables budget revoke --rail evm${chainFlag} ends only the agent's ${SYM} allowance`;
+  if (approvals.length === 0) {
+    return {
+      next: `transaction ${hash} shows no approval the command can read: the owner checks it in their wallet's activity and sets whatever it approved to 0 by hand. ${revokeOnly}`,
+      page: "It shows no approval this command can read: check it in your wallet's activity and set whatever it approved to 0 from your wallet.",
+    };
+  }
+  const value = (l: any) => (same(l.address, USDC) ? `${usdc(l.args.value)} ${SYM}` : `${l.args.value} in that token's smallest units`);
+  const each = others.map((l) => `approve(${l.args.spender}, 0) on token ${l.address}, which this transaction approved for ${value(l)}`).join("; ");
+  const agentToo = others.length < approvals.length;
+  return {
+    next: `superstables budget revoke --rail evm${chainFlag} cannot end this: it sets only the agent's ${SYM} allowance to 0. The owner sends from their own wallet, by hand: ${each}.${agentToo ? ` Then superstables budget revoke --rail evm${chainFlag} for the agent's allowance.` : ""} Grant again only if the owner asks`,
+    page: `superstables budget revoke cannot end this approval. Send from your wallet: ${each}.${agentToo ? ` Then revoke the agent's allowance: ${REVOKE_HINT}` : ""}`,
+  };
+}
+
+/**
  * A wallet's "speed up" or "cancel" replaces the transaction under a new hash, so the reported hash may never land.
  * Find the latest Approval(owner, spender) since `fromBlock` instead (searched in the RPC's log-range windows).
  */
@@ -167,7 +193,7 @@ export function fundValue(amt: string): bigint {
 }
 
 /** What the chain shows for a transaction the owner's wallet reported, checked against the plan. */
-export type SentCheck = { state: "settled" | "mismatch" | "failed" | "unknown"; tx: string; reason?: string; allowance?: bigint; agentGas?: bigint };
+export type SentCheck = { state: "settled" | "mismatch" | "failed" | "unknown"; tx: string; reason?: string; next?: string; allowance?: bigint; agentGas?: bigint };
 
 /**
  * The gas transfer: the owner's account sent exactly `t` (to, data, value), mined after `afterBlock`, and successful: sent
@@ -223,7 +249,7 @@ export async function checkGrantSent(hash: Hex, o: { owner: Address; agent: Addr
     const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}. The budget was not recorded.`;
     console.log(`MISMATCH: ${reason}`);
     const now = await allowanceOf(o.owner, o.agent).catch(() => undefined);
-    return { state: "mismatch", tx: sent.hash, reason, allowance: now };
+    return { state: "mismatch", tx: sent.hash, reason, next: grantMismatchSteps(sent.logs, o.owner, o.agent, sent.hash)?.next, allowance: now };
   }
   if (sent.unresolved) {
     console.log(`UNKNOWN: ${sent.unresolved}`);

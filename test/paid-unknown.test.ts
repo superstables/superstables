@@ -827,8 +827,8 @@ const ROWS: Row[] = [
     },
     expect: [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
-      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"c8".repeat(32)}`, message: expect.stringMatching(/^The transaction was not accepted as the planned step \(the wallet changed the transaction data/) } },
-      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, tx: { grant: `0x${"c8".repeat(32)}` } } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"c8".repeat(32)}`, message: expect.stringMatching(/^The transaction was not accepted as the planned step \(the wallet changed the transaction data.* superstables budget revoke cannot end this approval\. Send from your wallet: approve\(0x5555555555555555555555555555555555555555, 0\) on token 0x036CbD53842c5426634e7929541eC2318f3dCF7e, which this transaction approved for 1 USDC\.$/) } },
+      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, tx: { grant: `0x${"c8".repeat(32)}` }, next: "superstables budget revoke --rail evm cannot end this: it sets only the agent's USDC allowance to 0. The owner sends from their own wallet, by hand: approve(0x5555555555555555555555555555555555555555, 0) on token 0x036CbD53842c5426634e7929541eC2318f3dCF7e, which this transaction approved for 1 USDC. Grant again only if the owner asks" } },
     ],
     timeout: 150_000,
   },

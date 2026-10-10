@@ -21,7 +21,7 @@ import "./cli-guard.mjs";
 // exactly the cap), 5 the wallet may have sent it but no hash came back, 1 anything else that failed.
 import { encodeFunctionData, type Hex } from "viem";
 import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, erc20Abi, USDC, publicClient, assertRpcChain, tx } from "./lib.ts";
-import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, tokenRow, approveRow, capWords, REVOKE_HINT, grantTx, grantEnforced, GRANT_NOT_ENFORCED } from "./owner.ts";
+import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, grantMismatchSteps, tokenRow, approveRow, capWords, REVOKE_HINT, grantTx, grantEnforced, GRANT_NOT_ENFORCED } from "./owner.ts";
 import { mismatchPage, mismatchReason } from "../site.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
@@ -120,9 +120,10 @@ if (!verifyOnly && OWNER_KEY_FILE) {
     const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}. The budget was not recorded.`;
     console.log(`MISMATCH: ${reason}`);
     const now = await allowanceOf(pub.owner, pub.agent).catch(() => null);
-    handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: sent.hash });
+    const steps = grantMismatchSteps(sent.logs, pub.owner, pub.agent, sent.hash);
+    handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} The budget was not recorded. ${steps?.page ?? `Revoke it: ${REVOKE_HINT}`}`, hash: sent.hash });
     await closeOwnerPage();
-    process.exit(result(3, { state: "mismatch", tx: sent.hash, reason, requested: usdc(cap), allowance: now === null ? null : usdc(now), next: "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" }));
+    process.exit(result(3, { state: "mismatch", tx: sent.hash, reason, requested: usdc(cap), allowance: now === null ? null : usdc(now), next: steps?.next ?? "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" }));
   }
   if (sent.unresolved) {
     const reason = `the transaction is on chain, but whether it set the allowance is not known yet: ${sent.unresolved}. The budget was not recorded.`;
