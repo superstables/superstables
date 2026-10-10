@@ -138,6 +138,11 @@ export interface FakeSolana extends TestServer {
    * any other transaction is refused. Then `afterSend` runs with that signature, before the RPC answers.
    */
   afterSend?: (signature: string) => void;
+  /** sendTransaction takes the transfer but does not land it until `landHeld` (a transaction still on its way). */
+  hold?: boolean;
+  landHeld?: () => string | undefined;
+  /** The slot getSignatureStatuses answers from (default: the current slot): a node lagging behind answers from an earlier one. */
+  statusSlot?: () => number;
 }
 
 /** A compute-budget SetComputeUnitLimit (2) or SetComputeUnitPrice (3) instruction's data. */
@@ -244,14 +249,17 @@ export async function startFakeSolana(): Promise<FakeSolana> {
         return ctx(owner ? tokenAccount(owner) : null);
       }
       case "getTransaction": return txs.get(params[0]) ?? null;
-      case "getSignatureStatuses": return ctx(params[0].map((s: string) => (txs.has(s) ? { slot: txs.get(s).slot, confirmations: null, err: null, confirmationStatus: "confirmed" } : null)));
+      case "getEpochInfo": return { absoluteSlot: chain.slot, blockHeight: chain.slot, epoch: 0, slotIndex: chain.slot, slotsInEpoch: 432000 };
+      case "getSignatureStatuses": return { context: { slot: chain.statusSlot?.() ?? chain.slot }, value: params[0].map((s: string) => (txs.has(s) ? { slot: txs.get(s).slot, confirmations: null, err: null, confirmationStatus: "confirmed" } : null)) };
       case "getLatestBlockhash": return ctx({ blockhash: bs58.encode(Buffer.alloc(32, 9)), lastValidBlockHeight: chain.slot + 150 });
       case "sendTransaction": {
         const tx = Transaction.from(Buffer.from(params[0], "base64"));
         const transfer = tx.instructions.find((ix) => ix.programId.toBase58() === SYSTEM_PROGRAM);
         if (!transfer || tx.instructions.length !== 1) throw new Error("fake solana: sendTransaction lands one SOL transfer only");
         const signature = bs58.encode(tx.signature!);
-        chain.land({ kind: "fund_agent", owner: transfer.keys[0].pubkey.toBase58(), agent: transfer.keys[1].pubkey.toBase58(), amount: transfer.data.readBigUInt64LE(4), signature });
+        const landIt = () => chain.land({ kind: "fund_agent", owner: transfer.keys[0].pubkey.toBase58(), agent: transfer.keys[1].pubkey.toBase58(), amount: transfer.data.readBigUInt64LE(4), signature });
+        if (chain.hold) chain.landHeld = () => { chain.landHeld = undefined; return landIt(); };
+        else landIt();
         chain.afterSend?.(signature);
         return signature;
       }

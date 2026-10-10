@@ -1833,10 +1833,13 @@ describe("settlement binding and failed reads on the chain", () => {
     const { getAccountOrNull } = await import(join(REPO, "budget", "solana", "token.mjs"));
     const down = async () => { throw new Error("fetch failed"); };
     const sent = { signature: "sig", blockhash: "hash", lastValidBlockHeight: 10 };
-    expect(await confirmSent({ getTransaction: down, getBlockHeight: async () => 1000, getSignatureStatus: down }, sent, 100)).toEqual({ status: "unknown" });
-    expect(await confirmSent({ getTransaction: async () => null, getBlockHeight: async () => 1000, getSignatureStatus: down }, sent, 100)).toEqual({ status: "unknown" });
-    // only a successful answer that the chain has no such signature, after its blockhash expired, is "expired"
-    expect(await confirmSent({ getTransaction: async () => null, getBlockHeight: async () => 1000, getSignatureStatus: async () => ({ value: null }) }, sent, 100)).toEqual({ status: "expired" });
+    const height = async () => ({ blockHeight: 1000, absoluteSlot: 1200 });
+    expect(await confirmSent({ getTransaction: down, getEpochInfo: height, getSignatureStatus: down }, sent, 100)).toEqual({ status: "unknown" });
+    expect(await confirmSent({ getTransaction: async () => null, getEpochInfo: height, getSignatureStatus: down }, sent, 100)).toEqual({ status: "unknown" });
+    // only a successful answer that the chain has no such signature, after its blockhash expired, from a node at or past the
+    // slot the height was read at, is "expired"
+    expect(await confirmSent({ getTransaction: async () => null, getEpochInfo: height, getSignatureStatus: async () => ({ context: { slot: 1200 }, value: null }) }, sent, 100)).toEqual({ status: "expired" });
+    expect(await confirmSent({ getTransaction: async () => null, getEpochInfo: height, getSignatureStatus: async () => ({ context: { slot: 1199 }, value: null }) }, sent, 100)).toEqual({ status: "unknown" });
     const { PublicKey } = await import("@solana/web3.js");
     const address = new PublicKey(SOL_OWNER.address);
     expect(await getAccountOrNull({ getAccountInfo: async () => null }, address)).toBeNull();

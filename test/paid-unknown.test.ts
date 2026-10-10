@@ -1142,6 +1142,41 @@ const ROWS: Row[] = [
     expect: [{ verdict: "unknown", match: { exit: 5, command: "fund-agent", state: "unknown", tx: { fundAgent: `0x${"c6".repeat(32)}` }, reason: expect.stringMatching(/0x5555555555555555555555555555555555555555/) } }],
     timeout: 90_000,
   },
+  {
+    path: "budget fund-agent on solana, on this machine: the transfer never lands and its blockhash expires; then a node that lags behind has no status for a transfer that then lands",
+    covers: [],
+    run: async () => {
+      const run = async (lag: boolean) => {
+        const b = await otherRail("solana", { local: true });
+        const chain = b.solana!;
+        chain.hold = true;
+        // the chain moves past the transfer's last valid block height
+        chain.afterSend = () => (chain.slot += 200);
+        let reads = 0;
+        if (lag) chain.statusSlot = () => (++reads === 2 ? (chain.landHeld?.(), chain.slot) : chain.slot - 300);
+        const first = resultOf((await budget(b.home, ["fund-agent", "--rail", "solana", "--no-open"], b.env)).stdout);
+        expect(first).toMatchObject({ command: "fund-agent", state: "waiting_owner" });
+        expect((await seenRoute("owner:solana-transaction", "connect", first.url, "/account", { address: b.owner })).http).toBe(200);
+        const prepared = await seenRoute("owner:solana-transaction", "prepare", first.url, "/prepare", { address: b.owner });
+        const tx = Transaction.from(Buffer.from(prepared.body.transaction, "base64"));
+        tx.sign(SOL_OWNER);
+        await seenRoute("owner:solana-transaction", "the signed transfer is sent", first.url, "/signed", { address: b.owner, signedTransaction: tx.serialize().toString("base64") });
+        const verdict = await until(async () => {
+          const st = await seenRoute("owner:solana-transaction", `the page's state once the command read the chain${lag ? " (a lagging node)" : ""}`, first.url, "/state");
+          return st.body.status !== "sent" && st;
+        }, "the command's verdict on the page", 60_000);
+        return [verdict, seenBudget(`wait for the end${lag ? " (a lagging node)" : ""}`, "wait", await budget(b.home, ["wait", "--shown", "--id", first.id, "--timeout", "90"], b.env))];
+      };
+      return [...(await run(false)), ...(await run(true))];
+    },
+    expect: [
+      { verdict: "owner-page-chain-proved", match: { http: 200, status: "failed", proof: "blockhash_expired" } },
+      { verdict: "owner-chain-proved", match: { exit: 1, command: "fund-agent", rail: "solana", state: "failed", proof: "blockhash_expired", final: true } },
+      { verdict: "paid", match: { http: 200, status: "confirmed", message: "Done. Your agent received 0.01 SOL. You can close this page." } },
+      { verdict: "paid", match: { exit: 0, command: "fund-agent", rail: "solana", state: "settled", final: true, amount: "0.01" } },
+    ],
+    timeout: 150_000,
+  },
   ...(["tempo", "solana"] as const).map((rail): Row => ({
     path: `budget grant, revoke and setup with a budget on ${rail}, approved on superstables.com, waiting: the site cannot tell whether the wallet sent`,
     covers: [`budget grant ${rail}`, `budget revoke ${rail}`, `budget setup ${rail}`],
