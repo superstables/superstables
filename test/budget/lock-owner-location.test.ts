@@ -89,6 +89,9 @@ for (const hidepid of ['1', '2', 'invisible', 'ptraceable']) {
 function node(home: string, code: string, args: string[] = []) {
   return spawnSync(process.execPath, ['--import', join(root, 'node_modules/tsx/dist/loader.mjs'), ...args, '--input-type=module', '-e', code], { env: { ...process.env, SUPERSTABLES_HOME: home }, encoding: 'utf8', timeout: 20_000 });
 }
+// CI runners can forbid unprivileged user and PID namespaces or mounting /proc inside them; those runs skip.
+const canUnshare = process.platform === 'linux'
+  && spawnSync('bwrap', ['--die-with-parent', '--unshare-pid', '--unshare-user', '--dev-bind', '/', '/', '--proc', '/proc', 'true']).status === 0;
 async function holder(home: string, code: string, binds: string[] = []) {
   const hostProc = join(home, 'host-proc'); mkdirSync(hostProc, { recursive: true });
   const pidFile = join(home, 'holder.pid');
@@ -106,21 +109,21 @@ function clonedBoot(home: string) {
   const path = join(home, 'boot'); writeFileSync(path, oldBoot);
   return ['--ro-bind', path, '/proc/sys/kernel/random/boot_id'];
 }
-it.runIf(process.platform === 'linux')('automatic operation acquisition preserves a live cloned-kernel holder', async () => {
+it.runIf(canUnshare)('automatic operation acquisition preserves a live cloned-kernel holder', async () => {
   const b = box();
   const child = await holder(b.home, `const {lockFile}=await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))}); const l=lockFile(${JSON.stringify(b.op)}); if(!l.ok)process.exit(1); console.log('ready'); setInterval(()=>{},1000);`, clonedBoot(b.home));
   const before = readFileSync(b.op, 'utf8');
   const next = lockFile(b.op); try { expect(next.ok).toBe(false); } finally { if (next.ok) next.release(); }
   expect(readFileSync(b.op, 'utf8')).toBe(before); expect(child.exitCode).toBeNull();
 });
-it.runIf(process.platform === 'linux')('core cap waits for a live cloned-kernel holder', async () => {
+it.runIf(canUnshare)('core cap waits for a live cloned-kernel holder', async () => {
   const b = box();
   await holder(b.home, `const {withFileLock}=await import(${JSON.stringify(join(root, 'src/core/lock.ts'))}); setInterval(()=>{},1000);await withFileLock(${JSON.stringify(b.cap)},()=>{console.log('ready');return new Promise(()=>{});});`, clonedBoot(b.home));
   const before = readFileSync(b.cap, 'utf8');
   await expect(withFileLock(b.cap, () => 'acquired', 100)).rejects.toThrow('held by process');
   expect(readFileSync(b.cap, 'utf8')).toBe(before);
 });
-it.runIf(process.platform === 'linux')('wait preserves a live cloned-kernel approval past its deadline', async () => {
+it.runIf(canUnshare)('wait preserves a live cloned-kernel approval past its deadline', async () => {
   const b = box();
   const idFile = join(b.home, 'id');
   await holder(b.home, `const a=await import(${JSON.stringify(join(root, 'budget/approvals.mjs'))});const id=a.newApprovalId();a.startForeground({id,command:'grant',rail:'solana',chain:'devnet'});a.updateApproval(id,()=>({deadline:Date.now()-1000}));(await import('node:fs')).writeFileSync(${JSON.stringify(idFile)},id); console.log('ready');setInterval(()=>{},1000);`, clonedBoot(b.home));
@@ -141,7 +144,7 @@ it.runIf(process.platform === 'linux')('recovers a killed 0.3.0/0.3.1-format cap
   writeFileSync(b.cap, legacy); writeFileSync(b.cap + '.break', legacy);
   expect(unlock(b.home, ['--cap'], { unverified: false, answer: 'payment-lock\n' }).status).toBe(0);
 });
-it.runIf(process.platform === 'linux')('killed holders recover in the same kernel and namespace without machine-id', () => {
+it.runIf(canUnshare)('killed holders recover in the same kernel and namespace without machine-id', () => {
   const b = box(), empty = join(b.home, 'empty'); writeFileSync(empty, '');
   const script = `import {spawn} from 'node:child_process';import{once}from'node:events'; const child=spawn(process.execPath,['--import',${JSON.stringify(join(root, 'node_modules/tsx/dist/loader.mjs'))},'--input-type=module','-e',${JSON.stringify(`const{lockFile}=await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});const{withFileLock}=await import(${JSON.stringify(join(root, 'src/core/lock.ts'))});lockFile(${JSON.stringify(b.op)});await withFileLock(${JSON.stringify(b.cap)},()=>{console.log('ready');return new Promise(()=>{});});`)}]);await once(child.stdout,'data');child.kill('SIGKILL');await once(child,'exit');const{lockFile}=await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))});const{withFileLock}=await import(${JSON.stringify(join(root, 'src/core/lock.ts'))});const l=lockFile(${JSON.stringify(b.op)});if(!l.ok)throw Error('operation blocked');l.release();await withFileLock(${JSON.stringify(b.cap)},()=>console.log('recovered'),100);`;
   const result = spawnSync('bwrap', ['--die-with-parent', '--new-session', '--unshare-pid', '--unshare-user', '--dev-bind', '/', '/', '--proc', '/proc', '--ro-bind', empty, '/etc/machine-id', '--tmpfs', '/var/lib/dbus', process.execPath, '--import', join(root, 'node_modules/tsx/dist/loader.mjs'), '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 20_000 });
