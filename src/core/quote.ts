@@ -9,7 +9,7 @@ import { detectPayment, type SellerChallenge } from "./x402.js";
 import { judgeOffers } from "./rails/index.js";
 import type { Offer } from "./rails/types.js";
 import { SellerTextError } from "./text.js";
-import { payNetworkFor } from "./routes.js";
+import { chainName, payNetworkFor } from "./routes.js";
 import { evaluatePolicy, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
 import { Records } from "./records.js";
@@ -39,7 +39,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
   const { url, request, service } = resolveTarget(input);
 
   const challenge: SellerChallenge = await detectPayment(url);
-  const chosen = firstSupported(challenge, url, deps.chain);
+  const { chosen, others } = firstSupported(challenge, url, deps.chain);
 
   const asset = chosen.terms.asset;
   const payment = {
@@ -64,6 +64,8 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
     request,
     terms: chosen.terms,
     requirement: chosen.requirement,
+    ...(deps.chain !== undefined ? { chain: chainName(chosen.terms.network) } : {}),
+    ...(others.length ? { otherChains: others } : {}),
     policy: { allowed: verdict.allowed, reason: verdict.reason, checks: policyChecks(deps.policy, payment) },
     approval: "wallet",
   };
@@ -94,12 +96,14 @@ function resolveTarget(input: QuoteInput): { url: string; request?: ResolvedRequ
 /**
  * Sellers may offer several ways to pay. Take the first one this client can actually pay, on `chain` when one is named;
  * when none of them work, say what was offered and why each was refused, because "payment
- * failed" is useless and "it wants mainnet USDC" is actionable.
+ * failed" is useless and "it wants mainnet USDC" is actionable. Without `chain`, `others` names the other chains the seller
+ * offers that this client could also pay on: the first offer is the seller's order, not a choice anyone made.
  */
-function firstSupported(challenge: SellerChallenge, url: string, chain?: string): Offer {
+function firstSupported(challenge: SellerChallenge, url: string, chain?: string): { chosen: Offer; others: string[] } {
   const wanted = chain === undefined ? undefined : payNetworkFor(chain);
   if (chain !== undefined && !wanted) throw new Error(`--chain ${chain} is not a chain this client pays on`);
   const refusals: string[] = [];
+  const payable: Offer[] = [];
   // The seller's own words in each description are quoted as one bounded line: this sentence reaches an agent as the
   // client's refusal (rails/index.ts, describeAccept).
   for (const { offered, judged } of judgeOffers(challenge)) {
@@ -107,8 +111,14 @@ function firstSupported(challenge: SellerChallenge, url: string, chain?: string)
       refusals.push(`${offered}: not on ${wanted.label}, the chain asked for`);
       continue;
     }
-    if (judged.supported) return judged.offer;
-    refusals.push(`${offered}: ${judged.reason}`);
+    if (judged.supported) payable.push(judged.offer);
+    else refusals.push(`${offered}: ${judged.reason}`);
+  }
+  const [chosen] = payable;
+  if (chosen) {
+    // Chain keys from this client's own network table, never the seller's words.
+    const others = [...new Set(payable.map((o) => o.terms.network).filter((n) => n !== chosen.terms.network))].map(chainName);
+    return { chosen, others };
   }
   // A challenge can list any number of offers; the first few say enough.
   const shown = refusals.slice(0, 5).join("; ") + (refusals.length > 5 ? `; and ${refusals.length - 5} more` : "");
