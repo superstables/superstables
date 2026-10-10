@@ -8,11 +8,13 @@
 // One table. Each row drives one path past that point with the repo's own fakes and returns what the CLI, the approval
 // page or the budget RESULT showed; assertProperty checks every one of those outputs, and each row pins its literal values.
 // The coverage test reads from the code the routes of every wallet step and of the owner approval page, the attempt
-// states, the pay CLI's commands and the budget dispatcher's handlers, and fails while any of them has neither a row nor
-// a reason in NO_ANSWER_AFTER_BOUNDARY or IN_PROCESS_ONLY. It needs no row to have run.
+// states, the pay CLI's commands, the budget dispatcher's handlers and each owner command on each rail, and fails while
+// any of them has neither a row nor a reason in NO_ANSWER_AFTER_BOUNDARY or IN_PROCESS_ONLY. It needs no row to have run.
+// The rail scan reads every rail script and fails on any place that ends failed or not_revoked without naming a proof
+// from budget/proof.mjs, unless UNPROVEN_FAILED says why that place cannot answer after a send, or what answers instead.
 
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +37,7 @@ import { ATTEMPT_STATES } from "../src/core/types.js";
 import { startFakeBaseSepolia } from "./helpers/fake-base-sepolia.js";
 import { startFakePurchaseSite } from "./helpers/fake-purchase-site.js";
 import { startFakeSolana, startFakeTempo } from "./helpers/fake-chains.js";
-import { evmOwner, evmOwnerKey, startFakeRpc, startFakeSite, type FakeSite } from "./helpers/fake-site.js";
+import { evmOwner, evmOwnerKey, startFakeRpc, startFakeSite, type FakeRequest, type FakeSite } from "./helpers/fake-site.js";
 import { startFakeMppSeller, startFakeTempoPay } from "./helpers/fake-tempo-pay.js";
 import { startFacilitator, startPaidEndpoint, startWallet, type TestServer } from "./helpers/servers.js";
 
@@ -449,6 +451,14 @@ async function otherRail(rail: "tempo" | "solana", opts: { local?: boolean; fres
   const env: Record<string, string> = tempo ? { SUPERSTABLES_TEMPO_RPC: tempo.url } : { SUPERSTABLES_SOLANA_RPC: solana!.url };
   return { home, site, tempo, solana, owner, env };
 }
+/** The site moves every request it polls twice to unknown with the wallet asked; a link it adds first, its steps the same. */
+const siteCannotTell = (owner: string) => (r: FakeRequest) => {
+  if (r.polls < 2 || r.state !== "awaiting_owner") return;
+  if (r.kind === "link") {
+    Object.assign(r, { state: "linked", owner });
+    for (const step of r.steps ?? []) Object.assign(step, { state: "unknown", wallet_asked: true });
+  } else Object.assign(r, { state: "unknown", wallet_asked: true, reason: "the wallet was asked and never answered" });
+};
 
 // ---- budget, in process: the evm rail's reconcile and recover, the chain answered as in their own tests ------------------
 
@@ -730,7 +740,7 @@ const ROWS: Row[] = [
   },
   {
     path: "budget setup on superstables.com with gas and a budget, detached: the gas step's wallet was asked",
-    covers: ["budget setup"],
+    covers: ["budget setup", "budget setup evm"],
     run: async () => {
       const b = await hostedBudget();
       const first = await budget(b.home, ["setup", "--rail", "evm", "--hosted", "--site", b.site.url, "--grant", "0.01", "--fund"], b.env);
@@ -752,7 +762,7 @@ const ROWS: Row[] = [
   },
   {
     path: "budget grant, fund-agent and revoke on superstables.com, waiting: the site cannot tell whether the wallet sent",
-    covers: ["budget grant", "budget fund-agent", "budget revoke"],
+    covers: ["budget grant", "budget fund-agent", "budget revoke", "budget grant evm", "budget fund-agent evm", "budget revoke evm"],
     run: async () => {
       let granted = 0n;
       const b = await hostedBudget((method, params) => allowance(granted)(method, params));
@@ -1006,7 +1016,7 @@ const ROWS: Row[] = [
   },
   {
     path: "budget fund-agent on solana, on this machine: the transfer lands with the planned amount, and the agent's balance then reads lower",
-    covers: [],
+    covers: ["budget fund-agent solana"],
     run: async () => {
       const b = await otherRail("solana", { local: true });
       const address = b.owner;
@@ -1031,6 +1041,42 @@ const ROWS: Row[] = [
       { verdict: "paid", match: { exit: 0, command: "fund-agent", rail: "solana", state: "settled", final: true, amount: "0.01" } },
     ],
     timeout: 150_000,
+  },
+  ...(["tempo", "solana"] as const).map((rail): Row => ({
+    path: `budget grant, revoke and setup with a budget on ${rail}, approved on superstables.com, waiting: the site cannot tell whether the wallet sent`,
+    covers: [`budget grant ${rail}`, `budget revoke ${rail}`, `budget setup ${rail}`],
+    run: async () => {
+      const b = await otherRail(rail);
+      b.site.onPoll = siteCannotTell(b.owner);
+      const grant = seenBudget("grant --wait", "grant", await budget(b.home, ["grant", "--rail", rail, "--amount", "0.05", "--wait", "--no-open"], b.env));
+      // a live budget to revoke: the key on tempo, the delegate on solana
+      if (b.tempo) b.tempo.keys.set(`${b.owner.toLowerCase()}:${TEMPO_AGENT.toLowerCase()}`, { expiry: BigInt(Math.floor(Date.now() / 1000) + 86400), limit: 50_000n, period: 0n, periodEnd: 0n, revoked: false, scoped: false });
+      b.solana?.usdc.set(b.owner, { amount: 5_000_000n, delegate: SOL_AGENT.publicKey.toBase58(), delegated: 50_000n });
+      const revoke = seenBudget("revoke --wait", "revoke", await budget(b.home, ["revoke", "--rail", rail, "--wait", "--no-open"], b.env));
+      const s = await otherRail(rail, { fresh: true });
+      s.site.onPoll = siteCannotTell(s.owner);
+      const setup = seenBudget("setup --hosted --grant --wait", "setup", await budget(s.home, ["setup", "--rail", rail, "--hosted", "--site", s.site.url, "--grant", "0.05", "--wait", "--no-open"], s.env));
+      return [grant, revoke, setup];
+    },
+    expect: [
+      { verdict: "unknown", match: { exit: 5, command: "grant", rail, state: "unknown", next: expect.stringMatching(/read whether it landed before running this again/) } },
+      { verdict: "unknown", match: { exit: 5, command: "revoke", rail, state: "unknown", next: expect.stringMatching(/read whether it landed before running this again/) } },
+      { verdict: "unknown", match: { exit: 5, command: "setup", rail, state: "unknown", linked: true, steps: [{ kind: "grant", state: "unknown" }] } },
+    ],
+    timeout: 180_000,
+  })),
+  {
+    path: "owner commands a rail does not offer: refused as bad input before any rail script runs",
+    covers: ["budget fund-agent tempo", "budget recover tempo", "budget recover solana"],
+    run: async () => {
+      const home = newHome();
+      return Promise.all([["fund-agent", "tempo"], ["recover", "tempo"], ["recover", "solana"]].map(async ([cmd, rail]) => seenBudget(`${cmd} on ${rail}`, cmd, await budget(home, [cmd, "--rail", rail]))));
+    },
+    expect: [
+      { verdict: "before", match: { exit: 2, command: "fund-agent", rail: "tempo", state: "failed", reason: expect.stringMatching(/^tempo's agent needs no gas/) } },
+      { verdict: "before", match: { exit: 2, command: "recover", rail: "tempo", state: "failed", reason: expect.stringMatching(/^recover is EVM only/) } },
+      { verdict: "before", match: { exit: 2, command: "recover", rail: "solana", state: "failed", reason: expect.stringMatching(/^recover is EVM only/) } },
+    ],
   },
   {
     path: "owner approval page, solana transaction: the send answers with an error after the transaction left this machine; then every route again",
@@ -1316,8 +1362,10 @@ const NO_ANSWER_AFTER_BOUNDARY: Record<string, string> = {
  * Commands that do answer after the boundary, but that no row runs through the dispatcher, each with what checks it instead.
  * A gap, written down: listing a command here is not a reason it is safe.
  */
+const RECOVER_IN_PROCESS = "not run through the dispatcher: recover needs the agent key to sign and send its own revoke and the return of the price, then two owner pages, and no fake here answers those sends. Its gas step's answer is checked by running budget/evm/owner.ts fundInWallet in process (row: budget recover: its gas step ...), and its partial return by running budget/evm/ops.ts makeSafe in process. The dispatcher's recover passes the rail's state and next through ownerOutcome, ownerNext and emit's afterSend, which the fund-agent and grant rows drive through the dispatcher, the crash rows included";
 const IN_PROCESS_ONLY: Record<string, string> = {
-  "budget recover": "not run through the dispatcher: recover needs the agent key to sign and send its own revoke and the return of the price, then two owner pages, and no fake here answers those sends. Its gas step's answer is checked by running budget/evm/owner.ts fundInWallet in process (row: budget recover: its gas step ...), and its partial return by running budget/evm/ops.ts makeSafe in process. The dispatcher's recover passes the rail's state and next through ownerOutcome and ownerNext, which the fund-agent and grant rows drive through the dispatcher",
+  "budget recover": RECOVER_IN_PROCESS,
+  "budget recover evm": RECOVER_IN_PROCESS,
 };
 const REASONS: Record<string, string> = { ...NO_ANSWER_AFTER_BOUNDARY, ...IN_PROCESS_ONLY };
 /** The declared keys that no row covers and no reason explains. An empty or missing reason explains nothing. */
@@ -1347,6 +1395,15 @@ function budgetHandlers(): string[] {
   return line.split(", ").map((entry) => entry.split(":")[0].replace(/"/g, "").trim());
 }
 
+/** budget/cli.mjs's owner commands on each of its rails, `budget <command> <rail>`, read from its OWNER_COMMANDS_LIST and RAILS. */
+function ownerCommandsByRail(): string[] {
+  const text = readFileSync(BUDGET, "utf8");
+  const commands = JSON.parse(/^const OWNER_COMMANDS_LIST = (\[.*\]);$/m.exec(text)?.[1] ?? "null") as string[] | null;
+  const rails = [.../^const RAILS = \{\n((?: {2}\w+: .*\n)+)\};$/m.exec(text)?.[1].matchAll(/^ {2}(\w+):/gm) ?? []].map((m) => m[1]);
+  if (!commands?.length || !rails.length) throw new Error("budget/cli.mjs has no one-line OWNER_COMMANDS_LIST or no RAILS table to read");
+  return commands.flatMap((c) => rails.map((r) => `budget ${c} ${r}`));
+}
+
 /** Each row's own runs check it drove what it covers: the route answered, the state was printed, the command ran. */
 function assertCovered(row: Row, seen: Seen[]): void {
   for (const key of row.covers) {
@@ -1355,9 +1412,68 @@ function assertCovered(row: Row, seen: Seen[]): void {
     if (kind === "state") expect(seen.some((s) => s.surface === "pay" && s.body.state === name), key).toBe(true);
     if (kind === "command") expect(seen.some((s) => s.cmd === `superstables ${name}`), key).toBe(true);
     // wait prints the owner command's own RESULT, which names that command; a rail run in process is not the dispatcher
-    if (kind === "budget") expect(seen.some((s) => s.cmd === `budget ${name}` || (s.cmd?.startsWith("budget ") && s.body?.command === name)), key).toBe(true);
+    // `budget <command> <rail>`: that command's own RESULT, on that rail, printed by the dispatcher
+    if (kind === "budget" && route) expect(seen.some((s) => s.cmd?.startsWith("budget ") && s.body?.command === name && s.body?.rail === route), key).toBe(true);
+    else if (kind === "budget") expect(seen.some((s) => s.cmd === `budget ${name}` || (s.cmd?.startsWith("budget ") && s.body?.command === name)), key).toBe(true);
   }
 }
+
+// ---- the rail scan: where a rail script can end failed, and why each place without a proof is safe -----------------------
+
+const RAIL_DIRS = ["evm", "solana", "tempo"];
+/** A place that ends failed or not_revoked: a page verdict, a RESULT's state, or a call that takes the state first. */
+const FAILED_SITE = /\b(?:outcome|state)\s*[:=](?!=)[^,}|;]*?["'](?:failed|not_revoked)["']|\b\w+\(\s*["'](?:failed|not_revoked)["']/;
+/** A proof written out: `proof: "x"`, `proof?: "x"` (a type), or `proof = a ? "x" : "y"`. */
+const PROOF_LITERAL = /\bproof\??\s*[:=]\s*(?:[^;,}]*?\?\s*)?["'](\w+)["'](?:\s*:\s*["'](\w+)["'])?/g;
+function railLines(): { file: string; line: number; text: string }[] {
+  return RAIL_DIRS.flatMap((dir) =>
+    readdirSync(resolve(ROOT, "budget", dir), { recursive: true }).map(String).filter((f) => /\.(ts|mjs)$/.test(f)).sort().flatMap((f) =>
+      readFileSync(resolve(ROOT, "budget", dir, f), "utf8").split("\n").map((text, i) => ({ file: `budget/${dir}/${f}`, line: i + 1, text: text.trim() }))));
+}
+
+const AFTER_SEND_UNPROVEN = "no chain proof: the transaction was sent and the chain reads otherwise than planned, so the page shows unknown (OwnerApprovalServer.finish) and the dispatcher answers unknown, exit 5 (budget/proof.mjs afterSend; rows: the grant whose read-back fails, the key-file grant that stops after its broadcast)";
+const SIGN_IN_ONLY = "setup's sign-in: the owner's wallet signs a message and is never asked to send, so nothing was sent";
+const READ_ONLY = "preflight reads a seller's price: it signs and sends nothing";
+const BEFORE_SIGNING = "a purchase that ends before anything is signed";
+const SOLANA_PURCHASE = "a purchase, not an owner command: the agent's own transaction landed with an error and is final (budget/solana/ops.mjs), so it moved nothing; buy and reconcile answer from the op's journal (normalize in budget/cli.mjs)";
+const TEMPO_PURCHASE = "a purchase, not an owner command: the payment's receipt reverted (budget/tempo/lib/resolve.ts), so it moved nothing; buy and reconcile answer from the op's journal (normalize in budget/cli.mjs)";
+/** Each place in a rail script that ends failed with no proof on its line, found by `has` in that file, and why it is safe. */
+const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
+  { file: "budget/evm/lib.ts", has: "missing ${k} in ${file}", why: "a key or public file lacks a value: the script stops before it reads the chain or sends anything" },
+  { file: "budget/evm/ops.ts", has: "the pull reverted on chain", why: "a purchase, not an owner command: the agreed chain proof evm-pull-reverted (rows: budget reconcile through the dispatcher, the pull reverted)" },
+  { file: "budget/evm/ops.ts", has: "was returned to the owner", why: "a purchase, not an owner command: the agreed chain proof evm-funds-returned (rows: budget reconcile ... until the price is back)" },
+  { file: "budget/evm/owner.ts", has: "The chain still shows an allowance of", why: AFTER_SEND_UNPROVEN },
+  { file: "budget/evm/owner.ts", has: 'state: "not_revoked"', why: AFTER_SEND_UNPROVEN },
+  { file: "budget/evm/preflight.ts", has: 'state: bad ? "failed"', why: READ_ONLY },
+  { file: "budget/evm/recover.ts", has: "the allowance could not be lowered to 0", why: AFTER_SEND_UNPROVEN },
+  { file: "budget/evm/recover.ts", has: 'const state = done ? "ok"', why: AFTER_SEND_UNPROVEN },
+  { file: "budget/evm/revoke.ts", has: '"not_revoked"', why: AFTER_SEND_UNPROVEN },
+  { file: "budget/evm/setup.ts", has: "That is the agent's own address", why: SIGN_IN_ONLY },
+  { file: "budget/solana/buy.mjs", has: '"own transaction failed on chain"', why: SOLANA_PURCHASE },
+  { file: "budget/solana/buy.mjs", has: "{ tx: own.sig, delivered: false, next:", why: SOLANA_PURCHASE },
+  { file: "budget/solana/buy.mjs", has: '"own transaction landed and failed"', why: SOLANA_PURCHASE },
+  { file: "budget/solana/buy.mjs", has: "reason: JSON.stringify(assessment.err)", why: SOLANA_PURCHASE },
+  { file: "budget/solana/reconcile.mjs", has: "reconcile: own transaction failed on chain", why: SOLANA_PURCHASE },
+  { file: "budget/solana/reconcile.mjs", has: 'emit(result("failed"', why: SOLANA_PURCHASE },
+  { file: "budget/solana/revokeBudget.ts", has: "The chain still shows delegate", why: AFTER_SEND_UNPROVEN },
+  { file: "budget/solana/revokeBudget.ts", has: "a delegate still reads on chain", why: AFTER_SEND_UNPROVEN },
+  { file: "budget/solana/setup.ts", has: "That is the agent's own address", why: SIGN_IN_ONLY },
+  { file: "budget/tempo/buy.ts", has: "signing_failed", why: BEFORE_SIGNING },
+  { file: "budget/tempo/buy.ts", has: "reason: j.note", why: TEMPO_PURCHASE },
+  { file: "budget/tempo/buy.ts", has: "error before signing", why: BEFORE_SIGNING },
+  { file: "budget/tempo/preflight.ts", has: "seller unreachable", why: READ_ONLY },
+  { file: "budget/tempo/preflight.ts", has: "the seller did not ask for payment", why: READ_ONLY },
+  { file: "budget/tempo/preflight.ts", has: "no tempo.charge offer", why: READ_ONLY },
+  { file: "budget/tempo/preflight.ts", has: "offer cannot be paid", why: READ_ONLY },
+  { file: "budget/tempo/preflight.ts", has: "main().catch((err) => result('failed'", why: READ_ONLY },
+  { file: "budget/tempo/reconcile.ts", has: "done('failed'", why: TEMPO_PURCHASE },
+  { file: "budget/tempo/revokeBudget.ts", has: "The chain still shows the key as live", why: AFTER_SEND_UNPROVEN },
+  { file: "budget/tempo/revokeBudget.ts", has: "the key still reads as live on chain", why: AFTER_SEND_UNPROVEN },
+  { file: "budget/tempo/revokeBudget.ts", has: "scanFailed ? 'failed'", why: "the chain shows the key revoked, but the scan of its payment sessions failed: with no proof the dispatcher answers unknown (budget/proof.mjs afterSend), which is what the exposure is" },
+  { file: "budget/tempo/setup.ts", has: "That is the agent's own address", why: SIGN_IN_ONLY },
+  { file: "budget/tempo/setup.ts", has: "This machine records another owner for this agent", why: SIGN_IN_ONLY },
+  { file: "budget/tempo/lib/resolve.ts", has: "payment transaction reverted on chain", why: TEMPO_PURCHASE },
+];
 
 describe("once money may have moved, every answer says unknown or uncertain", () => {
   for (const row of ROWS) {
@@ -1393,8 +1509,9 @@ describe("once money may have moved, every answer says unknown or uncertain", ()
       ...ATTEMPT_STATES.map((s) => `state ${s}`),
       ...main.map((c) => `command ${c}`),
       ...budgetCommands.map((c) => `budget ${c}`),
+      ...ownerCommandsByRail(),
     ];
-    expect(declared).toEqual(expect.arrayContaining(["route tempo-transfer /sending", "route owner:evm-transaction /sending"]));
+    expect(declared).toEqual(expect.arrayContaining(["route tempo-transfer /sending", "route owner:evm-transaction /sending", "budget fund-agent solana", "budget grant tempo"]));
     const covered = new Set(ROWS.flatMap((r) => r.covers));
     expect(unexplained(declared, covered, REASONS), "declared, with no row and no reason").toEqual([]);
     expect([...covered, ...Object.keys(REASONS)].filter((k) => !declared.includes(k)), "listed, but not declared").toEqual([]);
@@ -1406,4 +1523,22 @@ describe("once money may have moved, every answer says unknown or uncertain", ()
       else expect(FORBIDDEN_STATES.pay, `${state} is neither said nor forbidden`).toContain(state);
     }
   }, 60_000);
+
+  it("lets no rail script end failed after it may have sent unless it names the chain's proof, or a reason says why that place is safe", () => {
+    // the scan itself: what it counts as a place that ends failed, and as a proof
+    expect(['finish?.({ outcome: "failed", message: "x" })', "{ state: x ? 'not_revoked' : 'revoked' }", 'const state = a ? "ok" : "failed";', 'report("failed", why)'].map((l) => FAILED_SITE.test(l))).toEqual([true, true, true, true]);
+    expect(['if (j.state === "failed") x()', 'type R = { state: "settled" | "failed" }', 'const n = ["failed", "unknown"].length'].map((l) => FAILED_SITE.test(l))).toEqual([false, false, false]);
+    expect([...'{ proof: "reverted" } const proof = c.status === "expired" ? "blockhash_expired" : "reverted";'.matchAll(PROOF_LITERAL)].flatMap((m) => [m[1], m[2]].filter(Boolean))).toEqual(["reverted", "blockhash_expired", "reverted"]);
+    const lines = railLines();
+    const sites = lines.filter((l) => FAILED_SITE.test(l.text));
+    const unproven = sites.filter((l) => !/\bproof\b/.test(l.text));
+    const listed = (l: { file: string; text: string }) => UNPROVEN_FAILED.filter((u) => u.file === l.file && l.text.includes(u.has));
+    expect(sites.length - unproven.length, "places that name a proof").toBeGreaterThanOrEqual(18);
+    expect(unproven.filter((l) => listed(l).length !== 1).map((l) => `${l.file}:${l.line}: ${l.text}`), "ends failed with no proof and no reason (or two reasons)").toEqual([]);
+    expect(UNPROVEN_FAILED.filter((u) => !unproven.some((l) => u.file === l.file && l.text.includes(u.has))).map((u) => `${u.file}: ${u.has}`), "listed, but no such place without a proof").toEqual([]);
+    expect(UNPROVEN_FAILED.filter((u) => u.why.trim() === "").map((u) => u.has), "listed with an empty reason").toEqual([]);
+    const proofs = lines.flatMap((l) => [...l.text.matchAll(PROOF_LITERAL)].flatMap((m) => [m[1], m[2]].filter(Boolean).map((value) => ({ at: `${l.file}:${l.line}`, value }))));
+    expect(new Set(proofs.map((p) => p.value)), "the proofs the rails name").toEqual(new Set(Object.keys(PROOFS)));
+    expect(proofs.filter((p) => !Object.hasOwn(PROOFS, p.value)), "a proof that budget/proof.mjs does not define").toEqual([]);
+  });
 });
