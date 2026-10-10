@@ -306,13 +306,9 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
         await conn.sendRawTransaction(raw, { skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 5 });
         log(`sent ${sig}`);
       } catch (err) {
+        // any error, the RPC's own refusal included, leaves it tracked: once it left this machine only the chain says
+        // whether it landed
         const text = String((err as Error)?.message ?? err);
-        // A JSON-RPC answer to sendTransaction with preflight on is the node's refusal: nothing was forwarded.
-        if ((err as Error)?.name === "SendTransactionError" && !/already been processed/i.test(text)) {
-          last = null;
-          log(`the RPC refused the transaction before sending it: ${text.slice(0, 300)}`);
-          return refused(`The network refused it before sending: ${text.slice(0, 160)}.`);
-        }
         log(`the send answered with an error (${text.slice(0, 160)}); it may have gone out, the command reads the chain`);
       }
       return { status: "sent", hash: sig };
