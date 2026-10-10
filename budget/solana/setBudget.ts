@@ -110,9 +110,10 @@ if (OWNER_KEY_FILE) {
   }
   if (c.status !== "success") {
     const why = c.status === "expired" ? "it was sent but never landed before its blockhash expired; nothing changed" : `it failed on chain (${JSON.stringify(c.err)}); nothing changed`;
-    handle.finish({ outcome: "failed", message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The grant is not confirmed. A failed on-chain transaction may still charge a fee.`, hash: sig });
+    const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
+    handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The grant is not confirmed. A failed on-chain transaction may still charge a fee.`, hash: sig });
     await closeOwnerPage();
-    process.exit(result(1, { state: "failed", tx: sig, reason: why, next: "superstables budget status --rail solana" }));
+    process.exit(result(1, { state: "failed", proof, tx: sig, reason: why, next: "superstables budget status --rail solana" }));
   }
   if (c.problems.length) {
     const reason = mismatchReason(c.problems, c.siteFailed, sig);

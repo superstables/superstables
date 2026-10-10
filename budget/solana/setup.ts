@@ -317,7 +317,7 @@ process.exit(result(0, { state: "ok", owner, ...(replaced ? { replacedOwner: rep
  * state of the first step that is not, with what did happen.
  */
 async function finishBundle(): Promise<never> {
-  type Report = { kind: string; state: "settled" | "mismatch" | "failed" | "unknown" | "refused_precheck"; tx?: string; txUrl?: string; amount?: string; reason?: string; reasonCode?: string };
+  type Report = { kind: string; state: "settled" | "mismatch" | "failed" | "unknown" | "refused_precheck"; proof?: "reverted"; tx?: string; txUrl?: string; amount?: string; reason?: string; reasonCode?: string };
   const reports: Report[] = [];
   let remaining: bigint | undefined;
   for (const s of bundle?.steps ?? []) {
@@ -332,9 +332,9 @@ async function finishBundle(): Promise<never> {
       // a step the site reported as failed is read too, but never settled
       const c = await confirmHosted(conn, s.hash, owner, startSlot, planned, s.state === "failed" ? siteFailedWords(HOST, s.reasonCode) : undefined);
       console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
-      const report = (state: Report["state"], reason?: string) => reports.push({ kind: s.kind, state, tx: s.hash!, txUrl: explorerTx(s.hash!), amount, reason });
+      const report = (state: Report["state"], reason?: string, extra: Pick<Report, "proof"> = {}) => reports.push({ kind: s.kind, state, ...extra, tx: s.hash!, txUrl: explorerTx(s.hash!), amount, reason });
       if (c.status === "unknown") { report("unknown", "the site reported a signature the chain does not show yet"); continue; }
-      if (c.status !== "success") { report("failed", `it failed on chain (${JSON.stringify(c.err)})`); continue; }
+      if (c.status !== "success") { report("failed", `it failed on chain (${JSON.stringify(c.err)})`, { proof: "reverted" }); continue; }
       if (c.problems.length) { report("mismatch", mismatchReason(c.problems, c.siteFailed, s.hash)); continue; }
       if (s.kind === "fund_agent") {
         const i = c.accountKeys?.indexOf(agent) ?? -1;
@@ -385,12 +385,12 @@ async function finishBundle(): Promise<never> {
     console.log(`\nDone with one approval link: the agent was added to the account${funded ? ", has SOL for fees" : ""}${granted ? ` and has a budget of ${formatUnits(CAP!)} USDC` : ""}.`);
     process.exit(result(0, { state: "ok", ...base, next: granted ? "none: the agent can buy under the budget. superstables budget status --rail solana shows what is left" : "superstables budget grant --rail solana --amount A, only when the owner asks for a budget" }));
   }
-  const f = first ?? { kind: "grant", state: "unknown" as const, reason: "superstables.com reported fewer steps than asked for" };
+  const f: Report = first ?? { kind: "grant", state: "unknown", reason: "superstables.com reported fewer steps than asked for" };
   const later = reports.filter((r) => r.state !== "settled").map((r) => (r.kind === "grant" ? "superstables budget grant --rail solana --amount A" : "superstables budget fund-agent --rail solana")).join(" and ");
   const next = f.state === "unknown"
     ? `superstables budget status --rail solana and the owner's wallet activity: read whether ${f.kind === "grant" ? "the grant" : "the SOL"} landed before running anything again. The agent has been added to the account`
     : f.state === "mismatch"
       ? f.kind === "grant" ? "the chain shows another delegation than planned: the owner revokes it (superstables budget revoke --rail solana); grant again only if the owner asks" : "check the owner's wallet activity, then superstables budget doctor --rail solana"
       : `the agent has been added to the account${funded ? " and has SOL for fees" : ""}. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: ${later}`;
-  process.exit(result(f.state === "unknown" ? 5 : f.state === "failed" ? 1 : 3, { state: f.state, ...base, reason: summary, next }));
+  process.exit(result(f.state === "unknown" ? 5 : f.state === "failed" ? 1 : 3, { state: f.state, proof: f.proof, ...base, reason: summary, next }));
 }

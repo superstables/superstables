@@ -476,7 +476,7 @@ async function main() {
  * already recorded. Ends the process with one RESULT: ok when the key is on chain as planned, else the grant's state.
  */
 async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, startBlock: bigint, steps: HostedStepOutcome[]): Promise<never> {
-  type Report = { kind: string; state: SentCheck['state'] | 'refused_precheck'; tx?: string; txUrl?: string; amount?: string; reason?: string; reasonCode?: string }
+  type Report = { kind: string; state: SentCheck['state'] | 'refused_precheck'; proof?: SentCheck['proof']; tx?: string; txUrl?: string; amount?: string; reason?: string; reasonCode?: string }
   const amount = fromBaseUnits(plan.limit)
   const reports: Report[] = []
   let done: SentCheck | undefined
@@ -486,7 +486,7 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
       // a step the site reported as failed is read too, but never settled
       const c = await checkGrantSent(s.hash as Hex, { owner, plan, afterBlock: startBlock, siteFailed: s.state === 'failed' ? siteFailedWords(HOST, s.reasonCode) : undefined })
       if (c.state === 'settled') done = c
-      reports.push({ kind: s.kind, state: c.state, tx: c.tx, txUrl: explorerTx(c.tx), amount, reason: c.reason })
+      reports.push({ kind: s.kind, state: c.state, proof: c.proof, tx: c.tx, txUrl: explorerTx(c.tx), amount, reason: c.reason })
     } else if (s.walletAsked || s.state === 'unknown') {
       reports.push({ kind: s.kind, state: 'unknown', amount, reason: s.reason || 'the wallet was asked to send, but superstables.com reported no transaction' })
     } else {
@@ -500,7 +500,7 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
     }
   }
   await closeOwnerPage()
-  const r = reports[0] ?? { kind: 'grant', state: 'unknown' as const, amount, reason: 'superstables.com reported no grant step' }
+  const r: Report = reports[0] ?? { kind: 'grant', state: 'unknown', amount, reason: 'superstables.com reported no grant step' }
   console.log(`  budget: ${r.state === 'settled' ? `${amount} ${TOKEN_LABEL} authorized until ${iso(plan.expiry)} (tx ${r.tx})` : `${r.state}${r.tx ? ` (tx ${r.tx})` : ''}: ${r.reason}`}`)
   const base = { owner, agent, linked: true, steps: reports, tx: r.tx ? { grant: r.tx } : {}, cap: done ? amount : undefined, allowance: done?.key ? fromBaseUnits(done.key.remaining) : undefined, expiry: done?.key ? iso(done.key.expiry) : undefined, publicFile: PUBLIC_ENV_PATH, agentKeyFile: AGENT_ENV_PATH }
   if (r.state === 'settled') {
@@ -513,7 +513,7 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
     : r.state === 'mismatch'
       ? 'the chain shows another key than planned: the owner revokes it (superstables budget revoke --rail tempo); grant again only with a new key (setup --agent LABEL), and only if the owner asks'
       : 'the agent has been added to the account. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: superstables budget grant --rail tempo --amount A'
-  process.exit(result(r.state === 'unknown' ? 5 : r.state === 'failed' ? 1 : 3, { state: r.state, ...base, reason: summary, next }))
+  process.exit(result(r.state === 'unknown' ? 5 : r.state === 'failed' ? 1 : 3, { state: r.state, proof: r.proof, ...base, reason: summary, next }))
 }
 
 main().catch((err) => {

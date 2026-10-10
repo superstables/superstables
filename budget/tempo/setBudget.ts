@@ -118,7 +118,7 @@ async function main() {
     const receipt = sentOrReverted
     hash = receipt.transactionHash as Hex
     console.log(`\ntx hash: ${hash}\nexplorer: ${explorerTx(hash)}\nstatus: ${receipt.status}`)
-    if (receipt.status !== 'success') process.exit(result(1, { state: 'failed', tx: hash, reason: 'the authorizeKey transaction reverted on chain; it granted nothing', next: `superstables budget status --rail tempo${agentFlag(label)}` }))
+    if (receipt.status !== 'success') process.exit(result(1, { state: 'failed', proof: 'reverted', tx: hash, reason: 'the authorizeKey transaction reverted on chain; it granted nothing', next: `superstables budget status --rail tempo${agentFlag(label)}` }))
     const block = await rpcRead('eth_getBlockByNumber', ['0x' + receipt.blockNumber.toString(16), false]).catch(() => null)
     authorizedAt = block?.timestamp ? parseInt(block.timestamp, 16) : undefined
   } else {
@@ -159,9 +159,9 @@ async function main() {
     console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a (the sender)'}, fee token ${sent.feeToken ?? 'n/a'}`)
     if (sent.feeToken && sent.feeToken.toLowerCase() !== feeToken.toLowerCase()) console.log(`note: the fee was paid in ${sent.feeToken}, not the expected ${feeToken}`)
     if (sent.status !== 'success') {
-      handle.finish({ outcome: "failed", message: 'The transaction reverted. No access key was granted by it, but a network fee may have been charged.', hash })
+      handle.finish({ outcome: "failed", proof: 'reverted', message: 'The transaction reverted. No access key was granted by it, but a network fee may have been charged.', hash })
       await closeOwnerPage()
-      process.exit(result(1, { state: 'failed', tx: hash, reason: 'the authorizeKey transaction reverted on chain', next: `superstables budget status --rail tempo${agentFlag(label)}` }))
+      process.exit(result(1, { state: 'failed', proof: 'reverted', tx: hash, reason: 'the authorizeKey transaction reverted on chain', next: `superstables budget status --rail tempo${agentFlag(label)}` }))
     }
     // Any difference from the plan is a mismatch, whatever the key reads afterwards: the wallet already sent it.
     if (sent.problems.length) {

@@ -309,7 +309,7 @@ process.exit(emit("setup", 0, { state: "ok", owner: ownerAddr, ...(replaced ? { 
  */
 async function finishBundle(): Promise<never> {
   const steps = bundle?.steps ?? [];
-  type Report = { kind: string; state: SentCheck["state"] | "refused_precheck"; tx?: string; txUrl?: string; amount?: string; reason?: string; next?: string; reasonCode?: string };
+  type Report = { kind: string; state: SentCheck["state"] | "refused_precheck"; proof?: SentCheck["proof"]; tx?: string; txUrl?: string; amount?: string; reason?: string; next?: string; reasonCode?: string };
   const reports: Report[] = [];
   let grantDone: SentCheck | undefined;
   for (const s of steps) {
@@ -322,7 +322,7 @@ async function finishBundle(): Promise<never> {
         ? await checkGrantSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, cap: CAP!, afterBlock: startBlock, siteFailed })
         : await checkFundSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, t: fundTx!, value: FUND_VALUE, agentHad, afterBlock: startBlock, siteFailed });
       if (s.kind === "grant" && c.state === "settled") grantDone = c;
-      reports.push({ kind: s.kind, state: c.state, tx: c.tx, txUrl: tx(c.tx), amount, reason: c.reason, next: c.next });
+      reports.push({ kind: s.kind, state: c.state, proof: c.proof, tx: c.tx, txUrl: tx(c.tx), amount, reason: c.reason, next: c.next });
     } else if (s.walletAsked || s.state === "unknown") {
       reports.push({ kind: s.kind, state: "unknown", amount, reason: s.reason || "the wallet was asked to send, but superstables.com reported no transaction" });
     } else {
@@ -362,5 +362,5 @@ async function finishBundle(): Promise<never> {
       ? first.kind === "grant" ? first.next ?? `the chain shows another approval than planned: the owner revokes it (superstables budget revoke --rail evm${chainFlag}); grant again only if the owner asks` : `check the owner's wallet activity, then superstables budget doctor --rail evm${chainFlag}`
       : `the agent has been added to the account${reports.some((r) => r.kind === "fund_agent" && r.state === "settled") ? " and has gas" : ""}. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: ${later}`;
   const exit = first.state === "unknown" ? 5 : first.state === "failed" ? 1 : 3;
-  process.exit(emit("setup", exit, { state: first.state, ...base, reason: summary, next }));
+  process.exit(emit("setup", exit, { state: first.state, proof: first.proof, ...base, reason: summary, next }));
 }

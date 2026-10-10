@@ -78,11 +78,15 @@ export type OwnerActionStatus =
   | "rejected"
   | "expired";
 
-/** The caller's verdict after reading the chain. "unknown": the wallet was asked to send and the chain cannot tell yet. */
+/**
+ * The caller's verdict after reading the chain. "unknown": the wallet was asked to send and the chain cannot tell yet.
+ * `proof`: the chain fact that shows a sent transaction changed nothing (budget/proof.mjs).
+ */
 export interface OwnerVerdict {
   outcome: "confirmed" | "failed" | "unknown";
   message: string;
   hash?: string;
+  proof?: string;
 }
 
 /** The kinds of owner action, and the routes under an approval link (each kind answers some of them; the rest are 404). */
