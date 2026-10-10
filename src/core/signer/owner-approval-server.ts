@@ -28,6 +28,7 @@
 
 import { createPublicKey, randomBytes, verify as verifySignature } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
+import { isProof, type PROOFS } from "../proofs.mjs";
 import { dirname } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { getAddress, isAddress, verifyMessage } from "viem";
@@ -80,14 +81,14 @@ export type OwnerActionStatus =
 
 /**
  * The caller's verdict after reading the chain. "unknown": the wallet was asked to send and the chain cannot tell yet.
- * `proof`: the chain fact that shows a sent transaction changed nothing (budget/proof.mjs). Once the wallet was asked to
- * send, a "failed" verdict without one shows as unknown.
+ * `proof`: the chain fact that shows a sent transaction changed nothing (../proofs.mjs). Once the wallet was asked to
+ * send, a "failed" verdict without one of those shows as unknown.
  */
 export interface OwnerVerdict {
   outcome: "confirmed" | "failed" | "unknown";
   message: string;
   hash?: string;
-  proof?: string;
+  proof?: keyof typeof PROOFS;
 }
 
 /** The kinds of owner action, and the routes under an approval link (each kind answers some of them; the rest are 404). */
@@ -286,8 +287,8 @@ export class OwnerApprovalServer {
       settled,
       finish: (verdict) => {
         if (record.status !== "sent" && record.status !== "connected") return;
-        record.status = verdict.outcome === "failed" && record.sending && !verdict.proof ? "unknown" : verdict.outcome;
-        if (record.status === "failed" && verdict.proof) record.proof = verdict.proof;
+        record.status = verdict.outcome === "failed" && record.sending && !isProof(verdict.proof) ? "unknown" : verdict.outcome;
+        if (record.status === "failed" && isProof(verdict.proof)) record.proof = verdict.proof;
         record.message = verdict.message;
         if (verdict.hash) record.hash = verdict.hash;
         this.audit(record);

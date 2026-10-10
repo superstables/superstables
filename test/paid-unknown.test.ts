@@ -870,6 +870,22 @@ const ROWS: Row[] = [
     ],
   },
   {
+    path: "owner approval page, evm transaction: after the wallet sent, the command's failed verdict names a proof the chain facts do not include",
+    covers: [],
+    run: async () => {
+      const server = await ownerServer();
+      const handle = server.request(ownerTransfer(60_000));
+      await ownerAsked(handle.url);
+      const sent = await seenRoute("owner:evm-transaction", "the page reports the transaction", handle.url, "/sent", { address: OWNER, hash: `0x${"c7".repeat(32)}` });
+      handle.finish({ outcome: "failed", proof: "the_site_said_so" as never, message: "The transfer failed." });
+      return [sent, await seenRoute("owner:evm-transaction", "the page's state after that verdict", handle.url, "/state")];
+    },
+    expect: [
+      { verdict: "unknown", match: { http: 200, status: "sent" } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, message: "The transfer failed." } },
+    ],
+  },
+  {
     path: "budget fund-agent on this machine: the owner's wallet reported a transfer the chain shows, but the agent's balance does not",
     covers: ["route owner:evm-transaction /sent"],
     run: async () => {
