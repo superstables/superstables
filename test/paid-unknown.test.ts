@@ -624,6 +624,22 @@ const ROWS: Row[] = [
     timeout: 90_000,
   },
   {
+    path: "budget buy-once --replace on superstables.com: the site answers the cancel with the payment being submitted",
+    covers: [],
+    run: async () => {
+      const home = newHome();
+      const site = await startFakePurchaseSite();
+      opened.push(site);
+      const env = { B4_RPC: site.chainUrl, SUPERSTABLES_TEMPO_RPC: site.chainUrl, SUPERSTABLES_SOLANA_RPC: site.chainUrl };
+      const buyOnce = (...extra: string[]) => budget(home, ["buy-once", "--site", site.url, "--service", "demo-market-data", "--param", "asset=BTC", "--max", "0.01", ...extra], env);
+      const first = resultOf((await buyOnce()).stdout);
+      expect(first).toMatchObject({ state: "waiting_owner" });
+      site.cancelAnswer = (p) => ({ status: 200, body: { id: p.id, state: "submitting", final: false, payment: { status: "submitting" }, delivery: { status: "pending" } } });
+      return [seenBudget("buy-once --replace", "buy-once", await buyOnce("--replace"))];
+    },
+    expect: [{ verdict: "unknown", match: { exit: 3, state: "refused_pending", paid: null, amount: null, pending: { state: "unknown" } } }],
+  },
+  {
     path: "budget buy with the --op of a purchase whose outcome is unknown",
     covers: ["budget buy"],
     run: async () => {
