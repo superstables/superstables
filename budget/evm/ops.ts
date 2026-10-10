@@ -448,11 +448,12 @@ export async function authDead(j: Journal, s: Settlement): Promise<boolean> {
 /**
  * Decide the state of an operation from the chain alone. Never sends anything.
  *   settled   the pull landed and this operation's own authorization was used by a successful transaction that paid the recipient
- *   failed    the pull reverted; or the pull landed and no settlement can ever happen: the authorization was never signed,
- *             was cancelled on chain, or is expired by the chain's own clock (`authDead`).
- *             `returned` says whether the pulled price is back with the owner; if not, `next` names the safe step
+ *   failed    the pull reverted; or the pull landed, no settlement can ever happen (the authorization was never signed,
+ *             was cancelled on chain, or is expired by the chain's own clock: `authDead`), and the pulled price is back with the
+ *             owner (`returned`)
  *   unknown   the authorization may still be settled by the seller (before validBefore), or the pull is not proven either way:
- *             a signed pull that is not on chain stays unknown until a DIFFERENT transaction used the agent's nonce at that position
+ *             a signed pull that is not on chain stays unknown until a DIFFERENT transaction used the agent's nonce at that position.
+ *             Also a pull that landed and can no longer settle while its price has not been returned: `next` names the safe step
  *   not_found nothing can land for this operation: no pull was ever signed, or the agent's nonce at the pull's position was used
  *             by a different transaction while this pull is not on chain
  */
@@ -553,8 +554,9 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
     const next = held > 0n
       ? `${usdc(held)} ${SYM} is in the agent key (on a gas-in-${SYM} chain that includes its gas reserve). Owner: "superstables budget recover --rail evm --chain ${CFG.key} --op ${j.op}" (stops the allowance first, cancels the authorization if it is still open, then returns the price to the owner). Never pay again for this op.`
       : `the agent key holds 0 ${SYM}; check the owner balance by hand. Never pay again for this op.`;
-    save("failed", why, next, "failed (pull landed, not settled, not returned)");
-    return { j, verdict: "failed" };
+    // the owner's price left their wallet and is not back: not a purchase that moved nothing, so not failed until returned
+    save("unknown", `${why}; the price ${j.pulled} ${SYM} pulled from the owner has not been returned`, next, "unknown (pull landed, not settled, not returned)");
+    return { j, verdict: "unknown" };
   }
   const until = new Date(j.auth!.validBefore * 1000).toISOString();
   save("unknown", `the pull landed and a signed payment may still be settled by the seller until ${until} (chain time)`, `run "${cmd("reconcile.ts", `--op ${j.op}`)}" again after ${until}, or the owner runs "superstables budget recover --rail evm --chain ${CFG.key} --op ${j.op}" to stop the allowance, cancel the authorization and return the price now. Never pay again for this op.`, "unknown (authorization still valid)");
