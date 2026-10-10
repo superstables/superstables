@@ -500,7 +500,9 @@ is not trusted to say who the owner is or what was paid.
   or a revoke transaction the owner signs in their own wallet.
 - **RPC replacements.** `B4_RPC`, `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC` must be
   `https`, or `http` on this machine; every check above reads the chain through them. A
-  replacement in use is named in the `RESULT` (`rpc`).
+  replacement in use is named in the `RESULT` (`rpc`). Approval pages on your machine do not
+  pass replacement RPC URLs to the owner's wallet, including URLs that carry access keys.
+  When asking the wallet to add a chain, they offer the chain's public RPC.
 
 What a compatible site must serve, with both proofs spelled out:
 [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).

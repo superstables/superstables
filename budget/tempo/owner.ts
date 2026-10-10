@@ -20,7 +20,8 @@ import { Abis, Addresses } from 'viem/tempo'
 import type { OwnerChain, OwnerTerms } from '../../src/core/signer/owner-approval-server.ts'
 import { closeOwnerPage, ownerPageFor } from '../owner-page.ts'
 import { DEFAULT_SITE, mismatchReason } from '../site.mjs'
-import { AGENT_ENV_PATH, CHAIN_ID, EXPLORER_BASE, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, fromBaseUnits, loadPublicEnv, makeClient, parseEnvFile, agentFileText } from './lib/common.ts'
+import { DEFAULT_RPC } from '../rpc.mjs'
+import { AGENT_ENV_PATH, CHAIN_ID, EXPLORER_BASE, TOKEN_ADDRESS, TOKEN_LABEL, fromBaseUnits, loadPublicEnv, makeClient, parseEnvFile, agentFileText } from './lib/common.ts'
 import { chainHead, rpcRead, sleep, topicOf } from './lib/chain.ts'
 import { LABEL } from './lib/args.mjs'
 
@@ -33,7 +34,7 @@ export { closeOwnerPage }
 export const TEMPO_OWNER_CHAIN: OwnerChain = {
   chainId: CHAIN_ID,
   chainName: 'Tempo Testnet (Moderato)',
-  rpcUrl: RPC_URL,
+  rpcUrl: DEFAULT_RPC.tempo,
   explorer: EXPLORER_BASE,
   nativeCurrency: { name: 'USD', symbol: 'USD', decimals: 18 },
   testnet: true,

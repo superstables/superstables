@@ -114,8 +114,9 @@ budget status.
 --site URL is accepted by every command. Where a site is recorded (setup --hosted) and it differs, the command refuses
 (exit 2); where it does not matter, it is ignored. A site is superstables.com, one of its subdomains or 127.0.0.1;
 another origin only when the owner sets SUPERSTABLES_ALLOW_SITE to it in their own environment (an agent never does).
-B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC: https, or http on 127.0.0.1 only;
-RESULT names one in use as rpc.
+B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
+http on this machine only; RESULT names one in use as rpc. A wallet adding the chain through an approval page
+on this machine is offered the chain's public RPC.
 
 Output: logs go to stderr. stdout ends with one line
   RESULT {"ok","command","rail","chain","op","state","final","chain_final","paid","delivered","amount","remaining","tx","rpc","id","url",

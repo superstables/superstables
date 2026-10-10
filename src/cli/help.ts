@@ -135,8 +135,8 @@ Environment:
                                  (most are simulated; the market data service returns live prices)
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; \`off\` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
-  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances, the chain MetaMask adds, and the chain
-                                 check on a settlement (https, or http on this machine)
+  SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances and the chain check on a settlement
+                                 (https, or http on this machine); wallets adding the chain get the public RPC
   SUPERSTABLES_TEMPO_RPC         the Tempo Moderato RPC for pay's chain checks (https, or http on this machine)
   SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine)
   SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, ${DEFAULT_APPROVE_PORT} or a free one when busy
