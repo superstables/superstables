@@ -12,7 +12,7 @@
 import { SystemProgram, Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { connection, loadOwner, explorerTx, parseUnits, parseStrict, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
-import { mismatchPage, mismatchReason, siteName } from "../site.mjs";
+import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort } from "./owner.ts";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
@@ -85,7 +85,7 @@ if (OWNER_KEY_FILE) {
     await closeOwnerPage();
     process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget doctor --rail solana: read the agent's SOL" }));
   }
-  if (c.status !== "success") {
+  if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) {
     const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
     handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The transfer is not confirmed. Check the command result and wallet activity before retrying.`, hash: sig });
     await closeOwnerPage();

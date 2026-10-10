@@ -16,7 +16,7 @@ import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { AGENT_KEY_PATH, connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseEnvText, parseStrict, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
-import { mismatchPage, mismatchReason, siteName } from "../site.mjs";
+import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { readRegularFile } from "../secret-file.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort } from "./owner.ts";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
@@ -100,7 +100,7 @@ if (OWNER_KEY_FILE) {
     await closeOwnerPage();
     process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget status --rail solana" }));
   }
-  if (c.status !== "success") {
+  if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) {
     const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
     handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. This transaction did not revoke the budget. Check superstables budget status --rail solana; run revoke again only if a delegate remains.`, hash: sig });
     await closeOwnerPage();

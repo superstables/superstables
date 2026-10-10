@@ -18,7 +18,7 @@ import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
-import { mismatchPage, mismatchReason, siteName } from "../site.mjs";
+import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, grantTerms, sol, transactionPort } from "./owner.ts";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
@@ -108,7 +108,7 @@ if (OWNER_KEY_FILE) {
     await closeOwnerPage();
     process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget status --rail solana: read the delegate before granting again" }));
   }
-  if (c.status !== "success") {
+  if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) {
     const why = c.status === "expired" ? "it was sent but never landed before its blockhash expired; nothing changed" : `it failed on chain (${JSON.stringify(c.err)}); nothing changed`;
     const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
     handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The grant is not confirmed. A failed on-chain transaction may still charge a fee.`, hash: sig });

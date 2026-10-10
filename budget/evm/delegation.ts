@@ -197,6 +197,21 @@ export type EvidenceReads = {
 export type MinedTx = { from: Address; to?: Address | null; input: Hex; value: bigint; authorizationList?: readonly Authorization[] };
 
 /**
+ * How a transaction's call differs from `owner`'s planned call `want`, from the transaction alone (no logs, no reads): the
+ * owner's account's call inside a delegation, else the transaction itself.
+ */
+export function plannedCall(tx: MinedTx, owner: Address, want: Call): { via: "direct" | "delegation"; call: { from: string; to?: string | null; data: Hex; value: bigint }; problems: string[] } {
+  const inner = delegatedCall(tx, owner);
+  const call = inner ? { from: owner as string, ...inner } : { from: tx.from as string, to: tx.to, data: tx.input, value: tx.value };
+  const problems: string[] = [];
+  if (!same(call.from, owner)) problems.push(`it was sent from ${call.from}, not the owner ${owner}`);
+  if (!same(call.to, want.to)) problems.push(`it was sent to ${call.to}, not ${want.to}`);
+  if (!same(call.data, want.data)) problems.push("the wallet changed the transaction data (for example the spending cap)");
+  if (call.value !== want.value) problems.push(`it sent a value of ${call.value}, not ${want.value}`);
+  return { via: inner ? "delegation" : "direct", call, problems };
+}
+
+/**
  * Whether a mined, successful transaction is `owner`'s planned call `want`, with its effect. `call` is the call compared with
  * the plan (the owner's account's call inside a delegation, else the transaction itself); `problems` are definite
  * differences (a mismatch); `unresolved` says which read the chain did not answer, when nothing definite was found.
@@ -206,18 +221,11 @@ export async function ownerEvidence(
   reads: EvidenceReads,
 ): Promise<{ via: "direct" | "delegation"; call: { from: string; to?: string | null; data: Hex; value: bigint }; problems: string[]; unresolved?: string }> {
   const { tx, owner, want } = x;
-  const inner = delegatedCall(tx, owner);
-  const via = inner ? "delegation" : "direct";
-  const call = inner ? { from: owner as string, ...inner } : { from: tx.from as string, to: tx.to, data: tx.input, value: tx.value };
-  const problems: string[] = [];
-  if (!same(call.from, owner)) problems.push(`it was sent from ${call.from}, not the owner ${owner}`);
-  if (!same(call.to, want.to)) problems.push(`it was sent to ${call.to}, not ${want.to}`);
-  if (!same(call.data, want.data)) problems.push("the wallet changed the transaction data (for example the spending cap)");
-  if (call.value !== want.value) problems.push(`it sent a value of ${call.value}, not ${want.value}`);
+  const { via, call, problems } = plannedCall(tx, owner, want);
   if (problems.length) return { via, call, problems };
   const effect = effectProblem(x.logs, x.token, owner, want);
   if (effect && effect !== "native") problems.push(effect);
-  if (!inner) return { via, call, problems };
+  if (via === "direct") return { via, call, problems };
 
   // Through a delegation: only the pinned manager, with its own record of this redemption.
   const pinned = DELEGATION_DEPLOYMENTS[x.chainKey];

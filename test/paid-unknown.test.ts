@@ -1128,6 +1128,20 @@ const ROWS: Row[] = [
     expect: [{ verdict: "unknown", match: { exit: 5, command: "setup", state: "unknown", linked: true, reason: expect.stringMatching(/^partly_done: fund_agent settled before grant failed \(reverted\); agent added: yes/), steps: [{ kind: "fund_agent", state: "settled", tx: `0x${"c4".repeat(32)}` }, { kind: "grant", state: "failed", proof: "reverted", tx: `0x${"c5".repeat(32)}` }] } }],
     timeout: 120_000,
   },
+  {
+    path: "budget fund-agent on superstables.com: the hash the site reports reverted on chain, sent by another account than the owner",
+    covers: [],
+    run: async () => {
+      const FUND: Hex = `0x${"c6".repeat(32)}`;
+      const b = await hostedBudget(minedChain({ [FUND]: { to: AGENT, input: "0x", value: 10n ** 14n, logs: [], status: "0x0", from: SPENDER } }));
+      b.site.onPoll = (r) => {
+        if (r.polls >= 2) Object.assign(r, { state: "sent", tx_hash: FUND, wallet_asked: true });
+      };
+      return [seenBudget("fund-agent --wait", "fund-agent", await budget(b.home, ["fund-agent", "--rail", "evm", "--wait", "--no-open"], b.env))];
+    },
+    expect: [{ verdict: "unknown", match: { exit: 5, command: "fund-agent", state: "unknown", tx: { fundAgent: `0x${"c6".repeat(32)}` }, reason: expect.stringMatching(/0x5555555555555555555555555555555555555555/) } }],
+    timeout: 90_000,
+  },
   ...(["tempo", "solana"] as const).map((rail): Row => ({
     path: `budget grant, revoke and setup with a budget on ${rail}, approved on superstables.com, waiting: the site cannot tell whether the wallet sent`,
     covers: [`budget grant ${rail}`, `budget revoke ${rail}`, `budget setup ${rail}`],

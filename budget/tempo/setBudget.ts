@@ -35,7 +35,7 @@ import {
   KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, grantCalldata,
   grantTerms, iso, maxByExpiry, readSent, readUntilMatches, revertedReceiptOf, tokenBalance, useHostedAgent, type GrantPlan,
 } from './owner.ts'
-import { mismatchPage, mismatchReason } from '../site.mjs'
+import { differsFromRequest, mismatchPage, mismatchReason } from '../site.mjs'
 import type { OwnerVerdict } from '../../src/core/signer/owner-approval-server.ts'
 
 const { values: args } = parseCli({
@@ -158,7 +158,7 @@ async function main() {
     authorizedAt = sent.blockTimestamp
     console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a (the sender)'}, fee token ${sent.feeToken ?? 'n/a'}`)
     if (sent.feeToken && sent.feeToken.toLowerCase() !== feeToken.toLowerCase()) console.log(`note: the fee was paid in ${sent.feeToken}, not the expected ${feeToken}`)
-    if (sent.status !== 'success') {
+    if (sent.status !== 'success' && !differsFromRequest(sent.problems, sent.siteFailed)) {
       handle.finish({ outcome: "failed", proof: 'reverted', message: 'The transaction reverted. No access key was granted by it, but a network fee may have been charged.', hash })
       await closeOwnerPage()
       process.exit(result(1, { state: 'failed', proof: 'reverted', tx: hash, reason: 'the authorizeKey transaction reverted on chain', next: `superstables budget status --rail tempo${agentFlag(label)}` }))

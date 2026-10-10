@@ -24,7 +24,7 @@ import { closeGracePeriod, findOpenChannels, type OpenChannel } from './lib/chan
 import { OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { readRegularFile } from '../secret-file.mjs'
 import { KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, readSent, revertedReceiptOf, revokeCalldata, revokeTerms, tokenBalance, useHostedAgent } from './owner.ts'
-import { mismatchPage, mismatchReason } from '../site.mjs'
+import { differsFromRequest, mismatchPage, mismatchReason } from '../site.mjs'
 import type { OwnerVerdict } from '../../src/core/signer/owner-approval-server.ts'
 
 const { values: args } = parseCli({
@@ -166,7 +166,7 @@ async function main() {
     hash = sent.hash
     console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a (the sender)'}, fee token ${sent.feeToken ?? 'n/a'}`)
     console.log(`explorer: ${explorerTx(hash)}`)
-    if (sent.status === 'success' && sent.problems.length) {
+    if (sent.status === 'success' ? sent.problems.length : differsFromRequest(sent.problems, sent.siteFailed)) {
       const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash)
       console.log(`MISMATCH: ${reason}`)
       const now = await readKey(owner, agentAddress).catch(() => null)

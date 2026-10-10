@@ -224,6 +224,12 @@ export function siteFailedWords(site, reasonCode) {
  * site's verdict (`siteFailed`) among them when there is one. The verdict alone never claims the chain shows something
  * else: it is said in its own words, with the transaction.
  */
+/**
+ * Whether the transaction on chain differs from the request itself (another sender, call, amount, block), beyond the site
+ * reporting it failed. Only a transaction that matches the request proves anything about it, a revert included.
+ */
+export const differsFromRequest = (problems, siteFailed) => problems.some((p) => p !== siteFailed);
+
 export function mismatchReason(problems, siteFailed, hash) {
   const chain = problems.filter((p) => p !== siteFailed);
   if (!chain.length && siteFailed) return `${siteFailed} (transaction ${hash})`;
