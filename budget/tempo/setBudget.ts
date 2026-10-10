@@ -180,7 +180,7 @@ async function main() {
   if (problems.length) {
     const reason = `the key on chain is not the planned one: ${problems.join('; ')}`
     console.log(`REFUSED: ${reason}`)
-    finish?.({ outcome: "failed", message: `The chain shows a different key than planned (${problems.join('; ')}). Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
+    finish?.({ outcome: "unknown", message: `The chain shows a different key than planned (${problems.join('; ')}). Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
     await closeOwnerPage()
     process.exit(result(3, { state: 'mismatch', tx: hash, reason, next: `revoke it (superstables budget revoke --rail tempo${agentFlag(label)}), then grant a new key` }))
   }

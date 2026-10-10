@@ -138,7 +138,7 @@ console.log(`allowance read back: ${usdc(allowance)} ${SYM} (requested ${usdc(ca
 if (allowance !== cap) {
   const reason = `the allowance on chain is ${usdc(allowance)} ${SYM}, not the requested cap ${usdc(cap)}${allowance > cap ? ": the agent can spend MORE than the cap (the spending cap was changed in the wallet, or another amount was approved)" : ""}. The budget was not recorded.`;
   console.log(`REFUSED: ${reason}`);
-  finishPage?.({ outcome: "failed", message: `The chain now shows an allowance of ${usdc(allowance)} ${SYM}, not ${capWords(cap)}. The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: approveTx ?? undefined });
+  finishPage?.({ outcome: "unknown", message: `The chain now shows an allowance of ${usdc(allowance)} ${SYM}, not ${capWords(cap)}. The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: approveTx ?? undefined });
   await closeOwnerPage();
   process.exit(result(3, { state: "mismatch", tx: approveTx, reason, requested: usdc(cap), allowance: usdc(allowance), next: "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" }));
 }

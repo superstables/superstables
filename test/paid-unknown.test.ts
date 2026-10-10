@@ -364,10 +364,12 @@ type OwnerTx = { to: string; input: Hex; value: bigint; logs: unknown[] };
  * An owner command on this machine (no superstables.com), whose page's wallet reports these transactions: the RPC shows
  * each one mined in block 101, after the request started at block 100, from the owner, successful, with these logs.
  */
-async function ownerOnThisMachine(txs: Record<string, OwnerTx>) {
+async function ownerOnThisMachine(txs: Record<string, OwnerTx>, extra?: (method: string, params: any[]) => unknown) {
   const blockHash = `0x${"ef".repeat(32)}`;
   const b = await hostedBudget((method, params) => {
     if (method === "eth_blockNumber") return "0x64";
+    const answer = extra?.(method, params);
+    if (answer !== undefined) return answer;
     const t = txs[params[0]];
     if (!t) return undefined;
     if (method === "eth_getTransactionByHash") return { hash: params[0], blockHash, blockNumber: "0x65", from: OWNER, to: t.to, input: t.input, value: `0x${t.value.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
@@ -827,6 +829,28 @@ const ROWS: Row[] = [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
       { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"c8".repeat(32)}`, message: expect.stringMatching(/^The transaction was not accepted as the planned step \(the wallet changed the transaction data/) } },
       { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, tx: { grant: `0x${"c8".repeat(32)}` } } },
+    ],
+    timeout: 150_000,
+  },
+  {
+    path: "budget grant on this machine: the owner's wallet sent the planned approval, and the allowance then reads another amount",
+    covers: [],
+    run: async () => {
+      const GRANT: Hex = `0x${"ca".repeat(32)}`;
+      let mined = false;
+      const input = encodeFunctionData({ abi: erc20, functionName: "approve", args: [AGENT, 10n ** 6n] });
+      const b = await ownerOnThisMachine({ [GRANT]: { to: BASE_USDC, input, value: 0n, logs: [approval(OWNER, AGENT, 10n ** 6n, GRANT)] } }, (method, params) => {
+        if (method === "eth_getTransactionReceipt" && params[0] === GRANT) mined = true;
+        return mined ? allowance(2n * 10n ** 6n)(method, params) : undefined;
+      });
+      const first = resultOf((await budget(b.home, ["grant", "--rail", "evm", "--amount", "1", "--no-open"], b.env)).stdout);
+      expect(first).toMatchObject({ command: "grant", state: "waiting_owner" });
+      return ownerPageSent(b, first, GRANT);
+    },
+    expect: [
+      { verdict: "unknown", match: { http: 200, status: "sent" } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"ca".repeat(32)}`, message: "The chain now shows an allowance of 2 USDC, not 1 USDC. The budget was not recorded. Revoke it: superstables budget revoke --rail evm. You approve that in your wallet too." } },
+      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, next: "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" } },
     ],
     timeout: 150_000,
   },
