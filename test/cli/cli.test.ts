@@ -351,7 +351,7 @@ describe("the help", () => {
     const mcpHome = join(home, "mcp");
     mkdirSync(mcpHome);
     for (const args of [["--help"], ["pay", "--help"], ["setup", "--help"], ["setup"], ["--wallet", "local", "setup"]]) {
-      expect((await run(args, { SUPERSTABLES_HOME: mcpHome })).stdout, args.join(" ")).not.toMatch(/mcp/i);
+      expect((await run(args, { SUPERSTABLES_HOME: mcpHome })).stdout.replaceAll(mcpHome, "<home>"), args.join(" ")).not.toMatch(/mcp/i);
     }
   }, 90_000);
 });
