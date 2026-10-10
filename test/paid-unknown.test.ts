@@ -1330,6 +1330,35 @@ const ROWS: Row[] = [
     timeout: 120_000,
   },
   {
+    path: "budget recover, detached: the background approval stops before it opens a page, and its process group would not stop",
+    covers: [],
+    run: async () => {
+      const b = await recoverOnThisMachine();
+      const holder = join(b.home, "holder.pid");
+      const preload = join(b.home, "unstoppable-group.mjs");
+      // The worker leaves an exited child in its process group, whose parent moved to a group of its own and never reaps
+      // it: the group outlives its leader, and no signal ends it.
+      const keep = `import os, time\nif os.fork() == 0: os._exit(0)\nos.setpgid(0, 0)\nopen(${JSON.stringify(holder)}, "w").write(str(os.getpid()))\ntime.sleep(120)`;
+      writeFileSync(preload, `import { spawn } from "node:child_process";
+        import { existsSync } from "node:fs";
+        if (process.env.SUPERSTABLES_BUDGET_APPROVAL_ID && !process.env.SUPERSTABLES_BUDGET_HOLDER) {
+          spawn("python3", ["-c", ${JSON.stringify(keep)}], { stdio: "ignore" }).unref();
+          while (!existsSync(${JSON.stringify(holder)})) await new Promise((r) => setTimeout(r, 50));
+          process.exit(0);
+        }`);
+      try {
+        const env = { ...b.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${preload}`.trim() };
+        return [seenBudget("the worker's group would not stop", "recover", await budget(b.home, ["recover", "--rail", "evm", "--no-open"], env))];
+      } finally {
+        if (existsSync(holder)) try { process.kill(Number(readFileSync(holder, "utf8")), "SIGKILL"); } catch {}
+      }
+    },
+    expect: [
+      { verdict: "unknown", match: { exit: 5, command: "recover", rail: "evm", state: "unknown", id: expect.stringMatching(/^oa-/), next: expect.stringMatching(/^the background approval could not be stopped, so it may still send a transaction\. Check wallet activity and superstables budget status --rail evm before retrying, and do not start another owner command on this chain\. The log is /), reason: expect.stringMatching(/^the background approval stopped before it opened a page, but process group \d+ would not stop; the chain stays held$/) } },
+    ],
+    timeout: 90_000,
+  },
+  {
     path: "budget recover, detached: the agent's own revoke lands and lowers part of the allowance, then the owner's page for the rest opens, waits and expires",
     covers: [],
     run: async () => {
@@ -1702,9 +1731,7 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/solana/ops.mjs", has: '{ verdict: "failed", tx: t.sig, err: t.err', why: SOLANA_PURCHASE },
   { file: "budget/solana/owner.ts", has: 'status: tx.meta?.err ? "failed" : "success"', why: "the chain's own status for a transaction it shows with an error (meta.err): the rails name it as the reverted proof only when the transaction is the requested one (budget/site.mjs differsFromRequest)" },
   { file: "budget/approvals.mjs", has: 'state: "failed", id, next: "check wallet activity and budget status before retrying"', why: "the link wait or the worker's exit before any page: decided under the record's lock (recordFinalWith), failed only when the record holds no send (recordMayHaveSent), else unknown (rows: budget recover, detached ...)" },
-  { file: "budget/approvals.mjs", has: '{ kind: "failed", record, reason: failedReason }', why: "startDetached's own result, not an answer: the dispatcher's ownerGate prints it as failed only when the record holds no send, else unknown through afterSend" },
-  { file: "budget/approvals.mjs", has: "the background approval stopped before it opened a page, but process group", why: "startDetached's own result while the worker's group would not stop: the dispatcher's ownerGate answers unknown through afterSend when the record holds a send" },
-  { file: "budget/approvals.mjs", has: "and process group ${child.pid} would not stop; the chain stays held` };", why: "startDetached's own result while the worker's group would not stop: the dispatcher's ownerGate answers unknown through afterSend when the record holds a send" },
+  { file: "budget/approvals.mjs", has: '{ kind: "failed", record, reason: failedReason }', why: "startDetached's own result, not an answer: only after the worker's group stopped, and with no send on the record when it stored that under the record's lock; a group that would not stop is kind unstopped, which the dispatcher's ownerGate answers unknown" },
   { file: "budget/cli.mjs", has: "emit(2, { ...ctx, state: \"failed\", next: `fix the command; see superstables budget ${ctx.command", why: "badInput: through emit, whose afterSend answers unknown for an owner command that may have sent" },
   { file: "budget/cli.mjs", has: "native Windows is not supported; use WSL", why: "refused before any command runs" },
   { file: "budget/cli.mjs", has: "a checkout without dev packages needs its dist/budget build", why: "refused before any command runs" },
@@ -1718,7 +1745,7 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/cli.mjs", has: "const OWNER_STATES = {", why: "the map from a rail's state to the dispatcher's: every owner command's answer then goes through emit's afterSend, which keeps failed only with the chain's proof" },
   { file: "budget/cli.mjs", has: 'const byCode = { 0: "settled", 2: "failed"', why: "ownerOutcome's state for an exit code: every owner command's answer then goes through emit's afterSend, which keeps failed only with the chain's proof" },
   { file: "budget/cli.mjs", has: 'state: rr?.state ?? "failed", owner: rr?.owner', why: "setup --fund-only on tempo: the faucet tops up the owner, and the answer goes through emit's afterSend like every owner command" },
-  { file: "budget/cli.mjs", has: 'const failed = { ...ctx, state: "failed", id, next: `check wallet activity before retrying', why: "the worker's group would not stop: answered through afterSend, so unknown, when the record holds a send" },
+  { file: "budget/cli.mjs", has: 'return emit(1, { ...ctx, state: "failed", id, next: `check wallet activity before retrying', why: "startDetached's failed: the worker's group stopped with no send on its record, stored under the record's lock (budget/approvals.mjs endWithoutLink); a group that would not stop answers unknown (row: its process group would not stop)" },
   { file: "budget/cli.mjs", has: 'emit(2, { ...ctx, service: f.service, state: "failed"', why: "buy-once's bad input, before any purchase exists on the site" },
   { file: "budget/cli.mjs", has: 'this site has no purchase API; a service can still be paid from a budget', why: "find reads a site's service list; it sends nothing" },
   { file: "budget/cli.mjs", has: "no list to show; ${any}", why: "find reads a site's service list; it sends nothing" },

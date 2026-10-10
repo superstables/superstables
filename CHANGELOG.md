@@ -29,6 +29,7 @@ Once a payment may have moved, the client reports it as unknown, never as unpaid
 - `superstables budget setup` on superstables.com with `--grant` and `--fund` whose gas landed and whose grant then reverted answers `unknown` (exit 5), with a reason that starts with `partly_done`. It answered `failed` (exit 1). Each entry in `steps` keeps its own state.
 - An owner command whose transaction reverted on chain, but was not the planned call from the owner (another sender, recipient, call or amount), answers `unknown` (exit 5). It answered `failed` (exit 1) with `proof: "reverted"`.
 - On Solana, a transaction the owner's page sent counts as expired only when the chain reports no status for it from a node that has reached the block height that shows its blockhash expired. A node that lagged behind could make a transaction that later landed read as `failed` (exit 1).
+- An owner command started in the background answers `unknown` (exit 5) when its background process opened no approval page and could not be stopped, because that process may still send a transaction. It answered `failed` (exit 1).
 
 An owner's sign-in on the approval page, which signs a message and sends nothing, no longer counts as the wallet being asked to send. For a `setup` whose page log recorded the sign-in, `superstables budget wait` answered `unknown` (exit 5) and said the owner's wallet was asked to send.
 
