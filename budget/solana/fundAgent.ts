@@ -8,7 +8,7 @@
 //
 // npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 // Exit codes: 0 sent, 1 failed on chain or never landed, 2 bad flags, 3 refused (too little SOL, the owner rejected or the link
-// expired), 5 unknown (read the chain).
+// expired) or a mismatch (the transaction moved another amount), 5 unknown (read the chain).
 import { SystemProgram, Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { connection, loadOwner, explorerTx, parseUnits, parseStrict, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
@@ -108,12 +108,24 @@ for (let i = 0; i < 8 && after < agentHas + amount; i++) {
   after = BigInt(await retryRead(() => conn.getBalance(agent, "confirmed")));
 }
 console.log(`agent ${sol(after)} SOL${delta !== null ? ` (this transaction added ${sol(delta)})` : ""}. explorer: ${explorerTx(sig)}`);
-if ((delta !== null && delta !== amount) || after < agentHas + amount) {
-  const why = delta !== null && delta !== amount ? `the transaction moved ${sol(delta)} SOL to the agent, not ${sol(amount)}` : "the agent's balance did not go up by the amount";
-  finish?.({ outcome: "failed", message: `The transfer was not confirmed as the planned step: ${why}.`, hash: sig });
+// The transaction's own balance change is the chain's answer: the planned amount is a confirmed transfer, whatever the
+// balance reads later (the agent may spend, or the node lag). Only without it does the balance decide, and then a short
+// one leaves the transfer unknown.
+if (delta !== null && delta !== amount) {
+  const why = `the transaction moved ${sol(delta)} SOL to the agent, not ${sol(amount)}`;
+  console.log(`MISMATCH: ${why}`);
+  finish?.({ outcome: "unknown", message: `The transfer was not confirmed as the planned step: ${why}.`, hash: sig });
   await closeOwnerPage();
-  process.exit(result(1, { state: "failed", tx: sig, reason: why, next: "superstables budget doctor --rail solana" }));
+  process.exit(result(3, { state: "mismatch", tx: sig, reason: why, next: "check the owner's wallet activity, then superstables budget doctor --rail solana" }));
 }
+if (delta === null && after < agentHas + amount) {
+  const why = `the transaction landed, but the agent's balance reads ${sol(after)} SOL, not at least ${sol(agentHas + amount)} SOL (the node may lag behind, or the agent spent some meanwhile)`;
+  console.log(`UNKNOWN: ${why}`);
+  finish?.({ outcome: "unknown", message: "The command could not confirm this transfer on chain yet. Check your wallet's activity.", hash: sig });
+  await closeOwnerPage();
+  process.exit(result(5, { state: "unknown", tx: sig, reason: why, next: "superstables budget doctor --rail solana: read the agent's SOL" }));
+}
+if (after < agentHas + amount) console.log(`the agent's balance reads ${sol(after)} SOL now, less than ${sol(agentHas + amount)}: it spent some, or the node lags behind; the transaction itself moved ${sol(amount)} SOL`);
 finish?.({ outcome: "confirmed", message: `Done. Your agent received ${sol(amount)} SOL. You can close this page.`, hash: sig });
 await closeOwnerPage();
 process.exit(result(0, { state: "ok", tx: sig, sent: sol(amount), agentBefore: sol(agentHas), agentAfter: sol(after), next: "none" }));

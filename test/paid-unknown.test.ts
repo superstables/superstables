@@ -20,6 +20,7 @@ import { encodePaymentResponseHeader } from "@x402/core/http";
 import { Keypair, SendTransactionError, SystemProgram, Transaction, type Connection } from "@solana/web3.js";
 import { encodeEventTopics, encodeFunctionData, parseAbi, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import bs58 from "bs58";
 import { PROOFS } from "../budget/proof.mjs";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { PaymentEngine } from "../src/core/pay.js";
@@ -33,6 +34,7 @@ import { WalletSigner } from "../src/core/signer/wallet.js";
 import { ATTEMPT_STATES } from "../src/core/types.js";
 import { startFakeBaseSepolia } from "./helpers/fake-base-sepolia.js";
 import { startFakePurchaseSite } from "./helpers/fake-purchase-site.js";
+import { startFakeSolana, startFakeTempo } from "./helpers/fake-chains.js";
 import { evmOwner, evmOwnerKey, startFakeRpc, startFakeSite, type FakeSite } from "./helpers/fake-site.js";
 import { startFakeMppSeller, startFakeTempoPay } from "./helpers/fake-tempo-pay.js";
 import { startFacilitator, startPaidEndpoint, startWallet, type TestServer } from "./helpers/servers.js";
@@ -91,7 +93,7 @@ const EXCEPTIONS = {
 /** What may be said after the boundary, per surface. `undefined`: the answer states no outcome (a refused route). */
 const SAYS: Record<"unknown" | "paid", Record<Surface, (string | undefined)[]>> = {
   unknown: { pay: ["uncertain", "approved", "submitting"], budget: ["unknown"], approval: ["unknown", "signed", "sending", "sent", undefined], listing: [undefined] },
-  paid: { pay: ["settled", "paid_service_failed"], budget: ["settled"], approval: [], listing: [undefined] },
+  paid: { pay: ["settled", "paid_service_failed"], budget: ["settled"], approval: ["confirmed"], listing: [undefined] },
 };
 /** Never after the boundary, outside EXCEPTIONS. */
 const FORBIDDEN_STATES: Record<Surface, string[]> = {
@@ -181,7 +183,9 @@ function assertProperty(seen: Seen, e: Expect): void {
   }
   assertNoUnpaidFields(at, seen.surface, seen.body, exception !== undefined);
   if (o.own && o.state !== undefined) {
-    const code = seen.surface === "budget" && o.state === "settled" && seen.body?.delivered !== true ? 4 : EXIT[seen.surface][o.state];
+    // a settled purchase that was not delivered exits 4 (budget/cli.mjs exitFor); a settled owner command exits 0
+    const undelivered = seen.surface === "budget" && o.state === "settled" && (seen.body?.delivered === false || (seen.body?.delivered !== true && seen.body?.command === "buy"));
+    const code = undelivered ? 4 : EXIT[seen.surface][o.state];
     expect(seen.exit, `${at}: exit for ${o.state}`).toBe(code);
   }
   expect({ exit: seen.exit, http: seen.http, ...(seen.body ?? {}), text: seen.text }, at).toMatchObject(e.match);
@@ -410,6 +414,40 @@ async function ownerPageSent(b: { home: string; env: Record<string, string> }, f
     return st.body.status !== "sent" && st;
   }, "the command's verdict on the page", 60_000);
   return [sent, verdict, seenBudget("wait for the end", "wait", await budget(b.home, ["wait", "--shown", "--id", first.id, "--timeout", "90"], b.env))];
+}
+
+// ---- budget on tempo and solana: superstables.com (fake site) or the page on this machine, and fake chains -------------
+
+const TEMPO_KEY = `0x${"44".repeat(32)}` as const;
+const TEMPO_AGENT = privateKeyToAccount(TEMPO_KEY).address;
+const SOL_AGENT = Keypair.fromSeed(new Uint8Array(32).fill(3));
+const SOL_OWNER = Keypair.fromSeed(new Uint8Array(32).fill(4));
+/**
+ * A tempo or solana budget on a new home: the agent key and the public file, with approvals on the fake site unless
+ * `local`, and the owner holding SOL and USDC (solana). `fresh`: only an agent key bound to no owner, for setup.
+ */
+async function otherRail(rail: "tempo" | "solana", opts: { local?: boolean; fresh?: boolean } = {}) {
+  const home = newHome();
+  const site = await startFakeSite();
+  const tempo = rail === "tempo" ? await startFakeTempo() : undefined;
+  const solana = rail === "solana" ? await startFakeSolana() : undefined;
+  opened.push(site, (tempo ?? solana)!);
+  const owner = rail === "tempo" ? OWNER : SOL_OWNER.publicKey.toBase58();
+  site.owner = owner;
+  const put = (path: string[], text: string, mode: number) => {
+    mkdirSync(join(home, ...path.slice(0, -1)), { recursive: true });
+    writeFileSync(join(home, ...path), text, { mode });
+  };
+  const bound = opts.fresh ? "" : rail === "tempo" ? `OWNER_ADDRESS=${owner}\n` : `SOLANA_OWNER_ADDRESS=${owner}\n`;
+  if (rail === "tempo") put(["keys", "budget", "tempo-agent.env"], `AGENT_PRIVATE_KEY=${TEMPO_KEY}\nAGENT_ADDRESS=${TEMPO_AGENT}\n${bound}`, 0o600);
+  else put(["keys", "budget", "solana-agent.env"], `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT.publicKey.toBase58()}\n${bound}`, 0o600);
+  const hosted = opts.local ? "" : `APPROVALS=hosted\nSITE=${site.url}\n`;
+  if (!opts.fresh && rail === "tempo") put(["budget", "public", "tempo-moderato.env"], `OWNER_ADDRESS=${owner}\nAGENT_ADDRESS=${TEMPO_AGENT}\n${hosted}`, 0o644);
+  if (!opts.fresh && rail === "solana") put(["budget", "public", "solana-devnet.env"], `SOLANA_OWNER_ADDRESS=${owner}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT.publicKey.toBase58()}\n${hosted}`, 0o644);
+  solana?.usdc.set(owner, { amount: 5_000_000n, delegate: null, delegated: 0n });
+  solana?.balances.set(owner, 10n ** 9n);
+  const env: Record<string, string> = tempo ? { SUPERSTABLES_TEMPO_RPC: tempo.url } : { SUPERSTABLES_SOLANA_RPC: solana!.url };
+  return { home, site, tempo, solana, owner, env };
 }
 
 // ---- budget, in process: the evm rail's reconcile and recover, the chain answered as in their own tests ------------------
@@ -965,6 +1003,34 @@ const ROWS: Row[] = [
       return [seenBudget("wait --shown", "wait", await budget(home, ["wait", "--shown", "--id", id, "--timeout", "0"]))];
     },
     expect: [{ verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, reason: "the rail script exited 1", next: "superstables budget status --rail evm: read whether it landed before running this again" } }],
+  },
+  {
+    path: "budget fund-agent on solana, on this machine: the transfer lands with the planned amount, and the agent's balance then reads lower",
+    covers: [],
+    run: async () => {
+      const b = await otherRail("solana", { local: true });
+      const address = b.owner;
+      // the agent spends right after the transfer lands: the balance never shows it, the transaction does
+      b.solana!.afterSend = () => b.solana!.balances.set(SOL_AGENT.publicKey.toBase58(), 1_000_000n);
+      const first = resultOf((await budget(b.home, ["fund-agent", "--rail", "solana", "--no-open"], b.env)).stdout);
+      expect(first).toMatchObject({ command: "fund-agent", state: "waiting_owner" });
+      expect((await seenRoute("owner:solana-transaction", "connect", first.url, "/account", { address })).http).toBe(200);
+      const prepared = await seenRoute("owner:solana-transaction", "prepare", first.url, "/prepare", { address });
+      const tx = Transaction.from(Buffer.from(prepared.body.transaction, "base64"));
+      tx.sign(SOL_OWNER);
+      const signed = await seenRoute("owner:solana-transaction", "the signed transfer is sent", first.url, "/signed", { address, signedTransaction: tx.serialize().toString("base64") });
+      const verdict = await until(async () => {
+        const st = await seenRoute("owner:solana-transaction", "the page's state once the command read the chain", first.url, "/state");
+        return st.body.status !== "sent" && st;
+      }, "the command's verdict on the page", 60_000);
+      return [signed, verdict, seenBudget("wait for the end", "wait", await budget(b.home, ["wait", "--shown", "--id", first.id, "--timeout", "90"], b.env))];
+    },
+    expect: [
+      { verdict: "unknown", match: { http: 200, status: "sent" } },
+      { verdict: "paid", match: { http: 200, status: "confirmed", message: "Done. Your agent received 0.01 SOL. You can close this page." } },
+      { verdict: "paid", match: { exit: 0, command: "fund-agent", rail: "solana", state: "settled", final: true, amount: "0.01" } },
+    ],
+    timeout: 150_000,
   },
   {
     path: "owner approval page, solana transaction: the send answers with an error after the transaction left this machine; then every route again",
