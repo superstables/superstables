@@ -208,8 +208,9 @@ describe("one buy per operation at a time", () => {
     writeFileSync(join(opsDir(), "same-op.buy.lock"), JSON.stringify({ ...hostIdentity, pid: running.pid, ...identitySource.starts(running.pid!), createdAt: Date.now() }));
     // no seller listens here: a buy that got past the lock would fail on the network, not be refused
     const r = await budget(["buy", "--rail", "evm", "--url", "http://127.0.0.1:9/paid", "--max", "0.01", "--op", "same-op"]);
-    expect(r.code).toBe(3);
-    expect(r.result).toMatchObject({ state: "refused_precheck", reason: "op_in_progress", paid: null, op: "same-op" });
+    // the first buy may be paying right now: unknown, never a refusal that says nothing was paid
+    expect(r.code).toBe(5);
+    expect(r.result).toMatchObject({ state: "unknown", reason: "op_in_progress", paid: null, amount: null, op: "same-op" });
     expect(r.result.next).toContain("wait for its RESULT");
     expect(r.stderr).toContain(`another process (buy or reconcile) is working on operation same-op`);
     expect(existsSync(join(opsDir(), "same-op.json"))).toBe(false);
