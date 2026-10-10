@@ -1293,7 +1293,9 @@ async function buy({ f, ctx }) {
   const j = readJournal(f);
   if (j && ["submitted", "unknown", "settled"].includes(j.state)) {
     log(`superstables budget: operation ${f.op} is already ${j.state}. Not paying again.`);
-    return emit(3, { ...ctx, state: "refused_precheck", paid: j.state === "settled" ? true : null, delivered: j.delivered ?? null, amount: null, remaining: null, tx: (j.tx ?? j.settleTx) ? { settle: j.tx ?? j.settleTx } : {}, next: j.state === "settled" ? "none: already settled; use a new --op for a new purchase" : `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`, reason: `op_already_${j.state}` });
+    // that purchase may have paid: its outcome is unknown until reconcile reads the chain, never a refusal before signing
+    if (j.state !== "settled") return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: (j.tx ?? j.settleTx) ? { settle: j.tx ?? j.settleTx } : {}, next: `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op} (never pay again for this op)`, reason: `op_already_${j.state}` });
+    return emit(3, { ...ctx, state: "refused_precheck", paid: true, delivered: j.delivered ?? null, amount: null, remaining: null, tx: (j.tx ?? j.settleTx) ? { settle: j.tx ?? j.settleTx } : {}, next: "none: already settled; use a new --op for a new purchase", reason: "op_already_settled" });
   }
   const journalBefore = existsSync(journal(f));
   const running = run(railCommand("buy", f));
