@@ -392,7 +392,7 @@ undo an owner signature or a transaction already sent through setup on superstab
 - **The checks depend on the rail.** The command builds the page's terms and the transaction
   from the same plan: the command's arguments and the chain's state, not the agent's description.
   On `evm` and `tempo`, the wallet signs and submits, and the command then checks the transaction
-  on chain: one that differs from the plan is reported (exit 3), naming each difference, even if it
+  on chain: one that differs from the plan is reported as unknown (exit 5), naming each difference, even if it
   already confirmed. That detects it; it cannot undo it. On `evm` the step counts only when the
   owner's account made exactly the planned call. For a grant or revoke, the receipt must show the
   token's `Approval(owner, agent, amount)`; for a token top-up, `Transfer(owner, agent, amount)`.

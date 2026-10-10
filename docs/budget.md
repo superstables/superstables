@@ -297,9 +297,9 @@ command at a time per rail and chain.
 | 0 | Done, or `waiting_owner` with `final: false` | On `waiting_owner`, write the approval link in a reply and end your turn; run `wait --id <id> --shown` when the owner says they have approved |
 | 1 | Failed, including a refusal by the chain | Read `reason` and `next`; do not retry blindly |
 | 2 | Bad input. Nothing was done | Fix the command; read its `--help` |
-| 3 | Refused: no budget, over `--max`, the owner rejected it, the approval link expired. A refused new purchase signs nothing; a repeated `--op` may be a purchase already paid or still unresolved, so check `paid` and `tx`. For an owner command, it can also mean a transaction that confirmed but differs from the plan | Read `reason`, `tx` and `next`; tell the owner. Do not raise `--max` |
+| 3 | Refused: no budget, over `--max`, the owner rejected it, the approval link expired. A refused new purchase signs nothing; a repeated `--op` may be a purchase already paid, so check `paid` and `tx` | Read `reason`, `tx` and `next`; tell the owner. Do not raise `--max` |
 | 4 | Paid, the seller did not deliver | Do not pay again; report the `tx` |
-| 5 | Outcome unknown | For a purchase, `superstables budget reconcile --rail evm --chain C --op ID`; never buy it again under a new id. For an owner command, `status` and the wallet's activity |
+| 5 | Outcome unknown, including an owner transaction that confirmed but differs from the plan, and a `buy` whose `--op` is still unresolved or held by another process | For a purchase, `superstables budget reconcile --rail evm --chain C --op ID`; never buy it again under a new id. For an owner command, `status` and the wallet's activity |
 
 Every command and flag: [Budget CLI reference](cli-budget.md). The rails, every chain and its
 faucets, Tempo and Solana: [Budget rails and chains](../budget/README.md).
