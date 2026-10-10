@@ -326,7 +326,7 @@ export const solanaStep: WalletStep = {
     return {
       chainIdHex: "",
       chainName: network.wallet.chainName || shortLabel(network),
-      rpcUrl: network.rpc,
+      rpcUrl: network.defaultRpc,
       explorer: network.explorer,
       nativeCurrency: network.wallet.nativeCurrency,
       walletChain: network.wallet.walletChain ?? SOLANA_DEVNET.wallet.walletChain,

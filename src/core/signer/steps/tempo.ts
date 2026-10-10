@@ -183,7 +183,7 @@ export const tempoStep: WalletStep = {
     return {
       chainIdHex: `0x${TEMPO_MODERATO.chainId.toString(16)}`,
       chainName: TEMPO_MODERATO.wallet.chainName,
-      rpcUrl: TEMPO_MODERATO.rpc,
+      rpcUrl: TEMPO_MODERATO.defaultRpc,
       explorer: TEMPO_MODERATO.explorer,
       nativeCurrency: TEMPO_MODERATO.wallet.nativeCurrency,
     };

@@ -134,7 +134,7 @@ export const eip3009Step: WalletStep = {
     return {
       chainIdHex: `0x${network.chainId.toString(16)}`,
       chainName: network.wallet.chainName || shortLabel(network),
-      rpcUrl: network.rpc,
+      rpcUrl: network.defaultRpc,
       explorer: network.explorer,
       nativeCurrency: network.wallet.nativeCurrency,
     };

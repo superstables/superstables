@@ -21,7 +21,8 @@ import type { OwnerChain, OwnerTerms, SolanaTransactionPort } from "../../src/co
 import { verifyEd25519 } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { DEFAULT_SITE } from "../site.mjs";
-import { AGENT_KEY_PATH, PUBLIC_PATH, RPC_URL, USDC_MINT, agentKeyFileValues, formatUnits, parseEnvFile, retryRead, sleep } from "./lib.mjs";
+import { DEFAULT_RPC } from "../rpc.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, formatUnits, parseEnvFile, retryRead, sleep } from "./lib.mjs";
 
 export { closeOwnerPage };
 
@@ -29,7 +30,7 @@ export const SOLANA_OWNER_CHAIN: OwnerChain = {
   family: "solana",
   chainId: 0,
   chainName: "Solana devnet",
-  rpcUrl: RPC_URL,
+  rpcUrl: DEFAULT_RPC.solana,
   explorer: "https://explorer.solana.com",
   explorerQuery: "?cluster=devnet",
   walletChain: "solana:devnet",
