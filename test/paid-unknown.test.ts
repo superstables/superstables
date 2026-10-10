@@ -1015,6 +1015,25 @@ const ROWS: Row[] = [
     expect: [{ verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, reason: "the rail script exited 1", next: "superstables budget status --rail evm: read whether it landed before running this again" } }],
   },
   {
+    path: "budget wait after a recover's background worker stopped: its first page's wallet was asked, its second page's never was",
+    covers: [],
+    run: async () => {
+      const home = newHome();
+      const id = "oa-20261010120000-1a1b1c1d";
+      const [revoke, gas] = ["cd".repeat(16), "ef".repeat(16)];
+      mkdirSync(join(home, "budget", "approvals"), { recursive: true });
+      // what recordLink keeps after recover's second link; no process of it runs any more
+      writeFileSync(join(home, "budget", "approvals", `${id}.json`), JSON.stringify({
+        id, command: "recover", rail: "evm", chain: "base-sepolia", state: "waiting_owner", createdAt: new Date().toISOString(),
+        url: `http://127.0.0.1:1/owner/${gas}`, earlierUrls: [`http://127.0.0.1:1/owner/${revoke}`], links: 2,
+      }), { mode: 0o600 });
+      const line = (page: string, status: string, sending?: true) => JSON.stringify({ at: new Date().toISOString(), id: page, kind: "evm-transaction", title: "recover", status, ...(sending ? { sending } : {}) });
+      writeFileSync(join(home, "budget", "owner-approvals.jsonl"), [line(revoke, "sent", true), line(revoke, "confirmed", true), line(gas, "pending")].join("\n") + "\n", { mode: 0o600 });
+      return [seenBudget("wait --shown", "wait", await budget(home, ["wait", "--shown", "--id", id, "--timeout", "5"]))];
+    },
+    expect: [{ verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true, reason: "the background approval stopped after the wallet was asked to send (last page state: pending)" } }],
+  },
+  {
     path: "budget fund-agent on solana, on this machine: the transfer lands with the planned amount, and the agent's balance then reads lower",
     covers: ["budget fund-agent solana"],
     run: async () => {

@@ -499,6 +499,8 @@ export function recordLink(id, approve, { wordsLogged = true } = {}) {
     state: "waiting_owner",
     action: approve.action,
     url: approve.url,
+    // recover asks on a second page: whether the wallet was asked is read from every page this approval had
+    earlierUrls: record.url && record.url !== approve.url ? [...(record.earlierUrls ?? []), record.url] : record.earlierUrls,
     expires: approve.expires,
     terms: approve.terms,
     matchCode: typeof approve.matchCode === "string" ? approve.matchCode : undefined,
@@ -746,12 +748,13 @@ export function pageWords(page, rail) {
 
 /**
  * Whether the owner's wallet was asked to send for this approval: the page's state (pageStateOf) says so, or the page log
- * did earlier. Without `page`, the log alone decides, and nothing is read over the network.
+ * did earlier, on this page or an earlier one of the same approval. Without `page`, the log alone decides, and nothing is
+ * read over the network.
  */
 export function walletWasAsked(record, page = null) {
   if (page?.walletAsked === true || page?.sending === true) return true;
   if (["sending", "sent", "hosted:sending", "hosted:unknown", "hosted:sent", "hosted:confirmed", "hosted:failed"].includes(page?.status)) return true;
-  return lastPageStatus(record?.url).sending;
+  return [record?.url, ...(record?.earlierUrls ?? [])].some((url) => lastPageStatus(url).sending);
 }
 
 /** The page id in a link: the loopback page's 32 hex digits, or a hosted request id (bl_..., ba_...). */
@@ -783,7 +786,7 @@ function lastPageStatus(url) {
  * (`hostedCancelled`) or it was a link, which moves no funds.
  */
 function abandoned(record, hostedCancelled = false) {
-  const page = lastPageStatus(record.url);
+  const page = { ...lastPageStatus(record.url), sending: walletWasAsked(record) };
   // the logged value stays as written (`connected`, `linked`); the reason says what it means for this approval
   const last = page.status === "connected" ? (record.hosted ? "agent added" : "owner connected") : page.status === "linked" ? "agent added" : page.status;
   const base = { command: record.command, rail: record.rail, chain: record.chain };
