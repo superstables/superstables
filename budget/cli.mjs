@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, recordMayHaveSent, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -1476,7 +1476,7 @@ const carriesTx = (tx) => (typeof tx === "string" ? tx !== "" : Boolean(tx) && t
  * answer names a transaction, or the page log or superstables.com says the owner's wallet was asked.
  */
 function mayHaveSent(fields) {
-  return railSending || (interrupted && Boolean(approvalUrl)) || carriesTx(fields.tx) || (APPROVAL_ID !== undefined && walletWasAsked(readApproval(APPROVAL_ID)));
+  return railSending || (interrupted && Boolean(approvalUrl)) || carriesTx(fields.tx) || (APPROVAL_ID !== undefined && recordMayHaveSent(readApproval(APPROVAL_ID)));
 }
 /** The flags of the command this process runs, once parsed: the read-only check an unknown owner answer names. */
 let RUN_FLAGS;
@@ -1646,6 +1646,8 @@ const waitNext = (id, r = {}) => {
   return `${showFirst(id, false)} Only the owner uses the page, in the browser with their wallet. It is on this machine only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. waiting_owner does not mean approved. If the approval link expires first, the command ends refused and nothing is sent: run it again for a new one. Do not start another owner command`;
 };
 /** The next step of a wait that is still waiting: poll again. A new link (recover can ask twice) is written first. */
+/** An approval whose command sent a transaction of its own (recover's revoke) before it needed the owner. */
+const OWN_SEND = "this command already began sending a transaction of its own for this approval, and whether it landed is not known yet.";
 const stillWaiting = (id) => `the owner has not finished. Say so in one line and end your turn; run superstables budget wait --id ${id} --shown again when they say they've approved. If the url is not the one you showed, write the new approval link and code first. The owner has not finished approving; do not approve for the owner.`;
 const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCode: r.matchCode, expires: r.expires, terms: r.terms, message_for_owner: messageForOwner(r) });
 
@@ -1714,12 +1716,20 @@ async function ownerGate({ cmd, f, ctx }) {
   if (r.kind === "final") {
     // it ended before it needed the owner (a refusal before any page, or nothing to do): the same RESULT as blocking
     const { code, result } = r.record.final;
-    delete result.id;
-    forget(id);
+    // one that may have sent keeps its record and id, for every later wait
+    if (!recordMayHaveSent(r.record)) {
+      delete result.id;
+      forget(id);
+    }
     writeResult(result);
     process.exit(code);
   }
-  if (r.kind === "failed") return emit(1, { ...ctx, state: "failed", id, next: `check wallet activity before retrying. The log is ${logFile(id)}`, reason: r.reason });
+  if (r.kind === "failed") {
+    // the worker's group would not stop; its command may have sent before that
+    const failed = { ...ctx, state: "failed", id, next: `check wallet activity before retrying. The log is ${logFile(id)}`, reason: r.reason };
+    const a = recordMayHaveSent(readApproval(id)) ? afterSend(1, failed, checkCommand(failed)) : { code: 1, fields: failed };
+    return emit(a.code, a.fields);
+  }
   const rec = r.record;
   writeApprove(`APPROVE ${JSON.stringify({ action: rec.action, url: rec.url, expires: rec.expires, terms: rec.terms, ...(rec.matchCode ? { matchCode: rec.matchCode } : {}) })}`);
   log(rec.matchCode
@@ -1728,6 +1738,9 @@ async function ownerGate({ cmd, f, ctx }) {
   // never a link without the words for the owner, silently: the rail did not write them in time (a fault)
   const missing = rec.wordsMissing ? `the rail's instructions for the owner were not in its log when the approval link was recorded; read them in ${logFile(id)} before writing to the owner, and use message_for_owner and next from this result` : undefined;
   if (missing) log(`\nsuperstables budget: ${missing}.`);
+  if (recordMayHaveSent(rec)) {
+    return emit(5, { ...ctx, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} The owner still has to approve the next step: ${showFirst(id, Boolean(rec.matchCode))} Do not start another owner command`, ...(missing ? { reason: missing } : {}) });
+  }
   emit(0, { ...ctx, state: "waiting_owner", ...approvalFields(rec), next: waitNext(id, rec), ...(missing ? { reason: missing } : {}) });
 }
 
@@ -1749,7 +1762,7 @@ async function wait({ f }) {
   // Nothing is polled until the caller says the owner can read the link: an agent that polls first tends to never write it.
   // a buy-once whose cancel was not confirmed has no link to show, and one the owner already acted on (the owner's wallet
   // was asked, or the site showed payment evidence) has no "not approved yet" to say: wait reads them at once
-  const acted = once && (once.command === "buy-once" ? !mayBeUnpaid(once.seen) : walletWasAsked(once));
+  const acted = once && (once.command === "buy-once" ? !mayBeUnpaid(once.seen) : recordMayHaveSent(once));
   if (once && !once.final && !f.shown && !once.cancelUnconfirmed && !acted) {
     log(`superstables budget: wait refused without reading the approval: write the approval link, the code and the terms in your reply to the owner first, then run: superstables budget wait --id ${f.id} --shown`);
     return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", ...approvalFields(once), next: unshownNext(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
@@ -1760,7 +1773,7 @@ async function wait({ f }) {
   if (r.final) {
     // Stored command completion is separate from payment finality, including older records. A record a worker stored
     // before this rule, once its wallet was asked, is answered by it as well.
-    const sent = OWNER_COMMANDS.has(r.result.command) && (walletWasAsked(r.record) || carriesTx(r.result.tx));
+    const sent = OWNER_COMMANDS.has(r.result.command) && (recordMayHaveSent(r.record) || carriesTx(r.result.tx));
     const a = sent ? afterSend(r.code, r.result, checkCommand(r.result)) : { code: r.code, fields: r.result };
     writeResult({ ...a.fields, ok: a.code === 0, final: true });
     process.exit(a.code);
@@ -1770,6 +1783,9 @@ async function wait({ f }) {
     ? `the background worker stopped, but its page or chain reads are still running (${pageWords(r.page, rec.rail)}); nothing is final until they stop. Do not start another owner command`
     : pageWords(r.page, rec.rail);
   log(`superstables budget: ${rec.id} (${rec.command}) has no final result: ${words}. Approval link: ${rec.url}${rec.matchCode ? ` (match code ${rec.matchCode})` : ""}`);
+  if (!walletWasAsked(rec, r.page) && recordMayHaveSent(rec)) {
+    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} Its approval link is still open for the owner: if the url is not the one you showed, write the new approval link and code first. Run superstables budget wait --id ${rec.id} --shown again when the owner says they've approved; do not run another owner command on this chain. Do not approve for the owner`, reason: words });
+  }
   if (walletWasAsked(rec, r.page)) {
     return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet was asked to send, and whether it sent is not known yet. Tell the owner the outcome is unknown and end your turn; do not run this command or another owner command on this chain. Run superstables budget wait --id ${rec.id} --shown again later: it gives the final result once the command has read the chain. Do not approve for the owner`, reason: words });
   }

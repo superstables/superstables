@@ -9,7 +9,7 @@
 // page or the budget RESULT showed; assertProperty checks every one of those outputs, and each row pins its literal values.
 // The coverage test reads from the code the routes of every wallet step and of the owner approval page, the attempt
 // states, the pay CLI's commands, the budget dispatcher's handlers and each owner command on each rail, and fails while
-// any of them has neither a row nor a reason in NO_ANSWER_AFTER_BOUNDARY or IN_PROCESS_ONLY. It needs no row to have run.
+// any of them has neither a row nor a reason in NO_ANSWER_AFTER_BOUNDARY. It needs no row to have run.
 // The rail scan reads every rail script and fails on any place that ends failed or not_revoked without naming a proof
 // from budget/proof.mjs, unless UNPROVEN_FAILED says why that place cannot answer after a send, or what answers instead.
 
@@ -210,9 +210,10 @@ afterAll(() => {
 });
 
 type Ran = { code: number; stdout: string; stderr: string };
-function exec(args: string[], env: Record<string, string | undefined>): Promise<Ran> {
+function exec(args: string[], env: Record<string, string | undefined>, onChild?: (child: ReturnType<typeof spawn>) => void): Promise<Ran> {
   return new Promise((done, fail) => {
     const child = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, ...env } as NodeJS.ProcessEnv });
+    onChild?.(child);
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -227,7 +228,7 @@ const payEnv = (home: string, env: Record<string, string> = {}) => ({
 /** `superstables ...` in one process, as the installed command runs (a signal reaches the process that pays). */
 const superstables = (home: string, args: string[], env: Record<string, string> = {}) => exec(["--import", "tsx", MAIN, ...args], payEnv(home, env));
 const budgetEnv = (home: string, env: Record<string, string> = {}) => ({ SUPERSTABLES_HOME: home, SUPERSTABLES_SITE: undefined, SUPERSTABLES_BUDGET_APPROVAL_ID: undefined, ...env });
-const budget = (home: string, args: string[], env: Record<string, string> = {}) => exec([BUDGET, ...args], budgetEnv(home, env));
+const budget = (home: string, args: string[], env: Record<string, string> = {}, onChild?: (child: ReturnType<typeof spawn>) => void) => exec([BUDGET, ...args], budgetEnv(home, env), onChild);
 const resultOf = (stdout: string) => {
   const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));
   return line ? JSON.parse(line.slice(7)) : null;
@@ -382,24 +383,29 @@ async function ownerAsked(url: string, address = OWNER) {
 
 /** Another spender than the agent, for a grant the wallet changed. */
 const SPENDER = "0x5555555555555555555555555555555555555555";
-/** `status`: the receipt's, "0x1" (success) unless given. */
-type OwnerTx = { to: string; input: Hex; value: bigint; logs: unknown[]; status?: "0x0" | "0x1" };
-/**
- * An owner command on this machine (no superstables.com), whose page's wallet reports these transactions: the RPC shows
- * each one mined in block 101, after the request started at block 100, from the owner, successful, with these logs.
- */
-async function ownerOnThisMachine(txs: Record<string, OwnerTx>, extra?: (method: string, params: any[]) => unknown) {
+/** `status`: the receipt's, "0x1" (success) unless given. `from`: the sender, the owner unless given. */
+type OwnerTx = { to: string; input: Hex; value: bigint; logs: unknown[]; status?: "0x0" | "0x1"; from?: string };
+/** An RPC that shows each of these transactions mined in block 101, after a request that started at block 100. */
+function minedChain(txs: Record<string, OwnerTx>, extra?: (method: string, params: any[]) => unknown) {
   const blockHash = `0x${"ef".repeat(32)}`;
-  const b = await hostedBudget((method, params) => {
+  return (method: string, params: any[]) => {
     if (method === "eth_blockNumber") return "0x64";
     const answer = extra?.(method, params);
     if (answer !== undefined) return answer;
     const t = txs[params[0]];
     if (!t) return undefined;
-    if (method === "eth_getTransactionByHash") return { hash: params[0], blockHash, blockNumber: "0x65", from: OWNER, to: t.to, input: t.input, value: `0x${t.value.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
-    if (method === "eth_getTransactionReceipt") return { transactionHash: params[0], blockHash, blockNumber: "0x65", from: OWNER, to: t.to, status: t.status ?? "0x1", logs: t.logs, gasUsed: "0x5208", cumulativeGasUsed: "0x5208", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+    const from = t.from ?? OWNER;
+    if (method === "eth_getTransactionByHash") return { hash: params[0], blockHash, blockNumber: "0x65", from, to: t.to, input: t.input, value: `0x${t.value.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
+    if (method === "eth_getTransactionReceipt") return { transactionHash: params[0], blockHash, blockNumber: "0x65", from, to: t.to, status: t.status ?? "0x1", logs: t.logs, gasUsed: "0x5208", cumulativeGasUsed: "0x5208", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
     return undefined;
-  });
+  };
+}
+/**
+ * An owner command on this machine (no superstables.com), whose page's wallet reports these transactions: the RPC shows
+ * each one mined in block 101, after the request started at block 100, from the owner, successful, with these logs.
+ */
+async function ownerOnThisMachine(txs: Record<string, OwnerTx>, extra?: (method: string, params: any[]) => unknown) {
+  const b = await hostedBudget(minedChain(txs, extra));
   writeFileSync(join(b.home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${AGENT}\n`);
   return b;
 }
@@ -417,6 +423,37 @@ async function ownerPageSent(b: { home: string; env: Record<string, string> }, f
   }, "the command's verdict on the page", 60_000);
   return [sent, verdict, seenBudget("wait for the end", "wait", await budget(b.home, ["wait", "--shown", "--id", first.id, "--timeout", "90"], b.env))];
 }
+
+/**
+ * budget recover on this machine with an allowance of 1 USDC and an agent with gas: the agent lowers it with its own key
+ * (transferFrom(owner, owner, n)), and no page is needed while the owner holds all of it. Unless it `lands`, the agent's revoke
+ * gets no receipt, so the rail keeps reading the chain (budget/evm/lib.ts receiptOf) until the test stops it. When the owner
+ * holds less, what is left needs the owner's revoke on a page.
+ */
+async function recoverOnThisMachine(o: { ownerHolds?: bigint; lands?: boolean } = {}) {
+  let broadcast = false;
+  const REVOKE: Hex = `0x${"d1".repeat(32)}`;
+  const owns = o.ownerHolds ?? 10n ** 6n;
+  const word = (v: bigint) => `0x${v.toString(16).padStart(64, "0")}`;
+  const b = await ownerOnThisMachine({}, (method, params) => {
+    if (method === "eth_getBlockByNumber") return rpcBlock(100n);
+    if (method === "eth_estimateGas") return "0x10000";
+    const data = String(params[0]?.data ?? "");
+    // the agent's transferFrom(owner, owner, n) lowers the allowance by what the owner holds
+    if (method === "eth_call" && data.startsWith("0xdd62ed3e")) return word(broadcast && o.lands ? 10n ** 6n - owns : 10n ** 6n);
+    if (method === "eth_call" && data.startsWith("0x70a08231")) return word(data.toLowerCase().includes(OWNER.slice(2).toLowerCase()) ? owns : 0n);
+    if (method === "eth_sendRawTransaction") { broadcast = true; return REVOKE; }
+    if (method === "eth_getTransactionReceipt") return o.lands && params[0] === REVOKE ? { ...rpcReceipt(REVOKE, 101n, []), from: AGENT } : new Error("not yet");
+    return undefined;
+  });
+  const record = async () => {
+    const dir = join(b.home, "budget", "approvals");
+    const file = await until(() => broadcast && existsSync(dir) && readdirSync(dir).find((f) => f.endsWith(".json")), "the agent's revoke broadcast under an approval", 60_000);
+    return JSON.parse(readFileSync(join(dir, file), "utf8")) as { id: string; pid: number; railPgid?: number };
+  };
+  return { ...b, record, broadcast: () => broadcast };
+}
+const killGroup = (pgid?: number) => { if (pgid) try { process.kill(-pgid, "SIGKILL"); } catch {} };
 
 // ---- budget on tempo and solana: superstables.com (fake site) or the page on this machine, and fake chains -------------
 
@@ -1146,6 +1183,74 @@ const ROWS: Row[] = [
     ],
   },
   {
+    path: "budget recover, detached: the agent's own revoke is broadcast before any page, then the worker is killed before its RESULT; then again with the command that started it killed first",
+    covers: ["budget recover", "budget recover evm"],
+    run: async () => {
+      const b = await recoverOnThisMachine();
+      const first = budget(b.home, ["recover", "--rail", "evm", "--no-open"], b.env);
+      const r = await b.record();
+      killGroup(r.railPgid);
+      killGroup(r.pid);
+      const answer = seenBudget("the worker is killed after the broadcast", "recover", await first);
+      const replay = seenBudget("wait --shown", "wait", await budget(b.home, ["wait", "--shown", "--id", r.id, "--timeout", "5"], b.env));
+      const c = await recoverOnThisMachine();
+      let parent: ReturnType<typeof spawn> | undefined;
+      const started = budget(c.home, ["recover", "--rail", "evm", "--no-open"], c.env, (child) => (parent = child));
+      const r2 = await c.record();
+      parent!.kill("SIGKILL");
+      await started;
+      killGroup(r2.railPgid);
+      killGroup(r2.pid);
+      return [answer, replay, seenBudget("wait, after every process is gone", "wait", await budget(c.home, ["wait", "--id", r2.id, "--timeout", "10"], c.env))];
+    },
+    expect: [
+      { verdict: "unknown", match: { exit: 5, command: "recover", rail: "evm", state: "unknown", id: expect.stringMatching(/^oa-/), reason: "the background approval stopped before it opened a page, after its command was about to broadcast a transaction", next: "superstables budget status --rail evm --chain base-sepolia: read whether it landed before running this again" } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true, reason: "the background approval stopped before it opened a page, after its command was about to broadcast a transaction" } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true, reason: "the background approval stopped after its command was about to broadcast a transaction (last page state: none)" } },
+    ],
+    timeout: 150_000,
+  },
+  {
+    path: "budget recover, detached: the agent's own revoke is broadcast, and no page comes within the link wait (budget/approvals.mjs startDetached, as the dispatcher runs it, with a 20 s wait)",
+    covers: [],
+    run: async () => {
+      const b = await recoverOnThisMachine();
+      const script = `const a = await import(${JSON.stringify(resolve(ROOT, "budget/approvals.mjs"))});
+        const id = a.newApprovalId();
+        if (!a.claim("evm", "base-sepolia", id).ok) throw new Error("chain held");
+        const r = await a.startDetached({ id, command: "recover", rail: "evm", chain: "base-sepolia", cmd: process.execPath, args: [${JSON.stringify(BUDGET)}, "recover", "--rail", "evm", "--no-open", "--wait"], cwd: process.cwd(), timeoutS: 600, linkWaitMs: 20000 });
+        console.log("STARTED " + JSON.stringify({ kind: r.kind, id, final: r.record?.final }));`;
+      const ran = await exec(["--input-type=module", "-e", script], budgetEnv(b.home, b.env));
+      const started = JSON.parse(ran.stdout.split("\n").find((l) => l.startsWith("STARTED "))!.slice(8));
+      expect(b.broadcast(), "the agent's revoke was broadcast within the link wait").toBe(true);
+      // the final the record holds: what the dispatcher prints for it, and what every later wait replays
+      const answer: Seen = { at: "no page within the link wait", surface: "budget", cmd: "budget recover (startDetached's stored final)", exit: started.final?.code, body: started.final?.result, text: ran.stdout + ran.stderr };
+      return [answer, seenBudget("wait --shown", "wait", await budget(b.home, ["wait", "--shown", "--id", started.id, "--timeout", "5"], b.env))];
+    },
+    expect: [
+      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown" } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true } },
+    ],
+    timeout: 120_000,
+  },
+  {
+    path: "budget recover, detached: the agent's own revoke lands and lowers part of the allowance, then the owner's page for the rest opens, waits and expires",
+    covers: [],
+    run: async () => {
+      const b = await recoverOnThisMachine({ ownerHolds: 500_000n, lands: true });
+      const first = seenBudget("the owner's page opens after the agent's revoke", "recover", await budget(b.home, ["recover", "--rail", "evm", "--no-open", "--timeout", "10"], b.env));
+      const id = first.body?.id as string;
+      const waiting = seenBudget("wait --shown, while the page waits", "wait", await budget(b.home, ["wait", "--shown", "--id", id, "--timeout", "0"], b.env));
+      return [first, waiting, seenBudget("wait for the end", "wait", await budget(b.home, ["wait", "--shown", "--id", id, "--timeout", "60"], b.env))];
+    },
+    expect: [
+      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/owner\//), next: expect.stringMatching(/^this command already began sending a transaction of its own for this approval, and whether it landed is not known yet\. The owner still has to approve the next step: reply to the owner/) } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, next: expect.stringMatching(/^this command already began sending a transaction of its own/) } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true, next: expect.stringMatching(/this step sent nothing/) } },
+    ],
+    timeout: 150_000,
+  },
+  {
     path: "budget recover: its gas step on the owner's page ended while the wallet may be sending (budget/evm/owner.ts, as recover runs it)",
     covers: [],
     run: async () => {
@@ -1377,16 +1482,7 @@ const NO_ANSWER_AFTER_BOUNDARY: Record<string, string> = {
   "budget unlock": "clears locks after the owner stopped every process; it reports lock state only, and its next for an operation is reconcile",
 };
 
-/**
- * Commands that do answer after the boundary, but that no row runs through the dispatcher, each with what checks it instead.
- * A gap, written down: listing a command here is not a reason it is safe.
- */
-const RECOVER_IN_PROCESS = "not run through the dispatcher: recover needs the agent key to sign and send its own revoke and the return of the price, then two owner pages, and no fake here answers those sends. Its gas step's answer is checked by running budget/evm/owner.ts fundInWallet in process (row: budget recover: its gas step ...), and its partial return by running budget/evm/ops.ts makeSafe in process. The dispatcher's recover passes the rail's state and next through ownerOutcome, ownerNext and emit's afterSend, which the fund-agent and grant rows drive through the dispatcher, the crash rows included";
-const IN_PROCESS_ONLY: Record<string, string> = {
-  "budget recover": RECOVER_IN_PROCESS,
-  "budget recover evm": RECOVER_IN_PROCESS,
-};
-const REASONS: Record<string, string> = { ...NO_ANSWER_AFTER_BOUNDARY, ...IN_PROCESS_ONLY };
+const REASONS: Record<string, string> = NO_ANSWER_AFTER_BOUNDARY;
 /** The declared keys that no row covers and no reason explains. An empty or missing reason explains nothing. */
 function unexplained(declared: string[], covered: Set<string>, reasons: Record<string, string | undefined>): string[] {
   return declared.filter((k) => !covered.has(k) && !(typeof reasons[k] === "string" && reasons[k]!.trim() !== ""));

@@ -6,9 +6,11 @@
 // The command may have sent once its wallet or page was asked, or reported sending (the page log, superstables.com's
 // wallet_asked or transaction hash), or once its rail script is about to broadcast. The rail says so with one stdout line,
 // `SENDING {...}`, written synchronously before the broadcast leaves: the dispatcher reads it even when the script then
-// crashes before its RESULT. The RPC clients in evm/lib.ts, tempo/lib/common.ts and solana/lib.mjs mark every broadcast
+// crashes before its RESULT. Under an owner approval it also writes `sending: true` on the approval's record first, which
+// every other process that answers for the approval reads (approvals.mjs recordMayHaveSent). The RPC clients in evm/lib.ts, tempo/lib/common.ts and solana/lib.mjs mark every broadcast
 // that goes through them (markSend), so a new send path through them is covered.
 import { writeSync } from "node:fs";
+import { HOLDER_ENV, recordSending } from "./approvals.mjs";
 
 /** The chain facts that prove a sent transaction changed nothing. The only values a `proof` may take. */
 export const PROOFS = Object.freeze({
@@ -19,9 +21,20 @@ export const PROOFS = Object.freeze({
 /** The marker line a rail prints right before it broadcasts. */
 export const SENDING_LINE = /^SENDING \{/;
 
-/** Print the marker, synchronously: a crash right after the broadcast must still find it on stdout. */
+let began = false;
+/** Whether this process was about to broadcast a transaction (sendBegins ran). */
+export const sendBegan = () => began;
+
+/**
+ * Print the marker, synchronously: a crash right after the broadcast must still find it on stdout. Under an owner approval
+ * (HOLDER_ENV) it is also kept on the approval's record before the broadcast leaves, so a process that stops this one, or
+ * reads the record after both are gone, still sees it. A write that fails throws, and the broadcast does not leave.
+ */
 export function sendBegins(method) {
+  began = true;
   writeSync(1, `SENDING ${JSON.stringify({ method })}\n`);
+  const holder = process.env[HOLDER_ENV];
+  if (holder) recordSending(holder);
 }
 
 const BROADCAST = /"method":\s*"(eth_sendRawTransaction\w*|eth_sendTransaction|sendTransaction)"/;
