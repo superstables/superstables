@@ -10,13 +10,10 @@
 // every other process that answers for the approval reads (approvals.mjs recordMayHaveSent). The RPC clients in evm/lib.ts, tempo/lib/common.ts and solana/lib.mjs mark every broadcast
 // that goes through them (markSend), so a new send path through them is covered.
 import { writeSync } from "node:fs";
+import { isProof } from "../src/core/proofs.mjs";
 import { HOLDER_ENV, recordSending } from "./approvals.mjs";
 
-/** The chain facts that prove a sent transaction changed nothing. The only values a `proof` may take. */
-export const PROOFS = Object.freeze({
-  reverted: "the transaction landed and failed on chain, so it changed nothing (its network fee may still be charged)",
-  blockhash_expired: "solana: the chain is past the transaction's last valid block height and has no status for its signature, so it can never land",
-});
+export { PROOFS } from "../src/core/proofs.mjs";
 
 /** The marker line a rail prints right before it broadcasts. */
 export const SENDING_LINE = /^SENDING \{/;
@@ -45,7 +42,7 @@ export function markSend(body) {
 }
 
 /** A failed answer the chain proved: `state` failed or not_revoked with a known `proof`. */
-export const proven = (o) => ["failed", "not_revoked"].includes(o?.state) && Object.hasOwn(PROOFS, o?.proof ?? "");
+export const proven = (o) => ["failed", "not_revoked"].includes(o?.state) && isProof(o?.proof);
 
 /** What an owner command may still say once it may have sent: done, unknown, or a failure the chain proved. */
 const STANDS = new Set(["settled", "ok", "unknown"]);

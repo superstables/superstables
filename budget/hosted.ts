@@ -44,6 +44,7 @@ import { dirname } from "node:path";
 import { getAddress, isAddress, recoverMessageAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { OwnerActionOutcome, OwnerTerms, OwnerVerdict } from "../src/core/signer/owner-approval-server.ts";
+import { isProof } from "../src/core/proofs.mjs";
 import { BUDGET_API, accountRefusalNext, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteText, siteWord } from "./site.mjs";
 
 export { scrub, siteFailedWords, siteWord };
@@ -500,7 +501,7 @@ export class HostedApprovals {
         link: { id: created.id, code: created.matchCode },
         settled,
         bundle,
-        finish: (verdict) => this.audit({ id: created.id, kind, title: input.terms.title, status: verdict.outcome, reason: verdict.outcome === "confirmed" ? undefined : scrub(siteText(verdict.message)), hash: verdict.hash }),
+        finish: (verdict) => this.audit(verdictLine(created.id, kind, input.terms.title, verdict)),
       };
     }
     void this.poll({ id: created.id, token: created.token, kind, title: input.terms.title, expected, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve }).catch((err: Error) =>
@@ -514,7 +515,7 @@ export class HostedApprovals {
       ...(kind === "link" ? { link: { id: created.id, code: created.matchCode } } : {}),
       settled,
       // the site reads the receipt itself; this only records the command's own verdict locally
-      finish: (verdict) => this.audit({ id: created.id, kind, title: input.terms.title, status: verdict.outcome, reason: verdict.outcome === "confirmed" ? undefined : scrub(siteText(verdict.message)), hash: verdict.hash }),
+      finish: (verdict) => this.audit(verdictLine(created.id, kind, input.terms.title, verdict)),
     };
   }
 
@@ -871,7 +872,7 @@ export class HostedApprovals {
     }
   }
 
-  private audit(line: { id: string; kind: string; title: string; status: string; reason?: string; address?: string; hash?: string; sending?: boolean }) {
+  private audit(line: { id: string; kind: string; title: string; status: string; reason?: string; address?: string; hash?: string; sending?: boolean; proof?: string }) {
     if (!this.s.auditPath) return;
     try {
       mkdirSync(dirname(this.s.auditPath), { recursive: true, mode: 0o700 });
@@ -881,6 +882,15 @@ export class HostedApprovals {
       // an unwritable audit file never stops the owner from deciding
     }
   }
+}
+
+/**
+ * The page log's line for the command's verdict on a transaction the site reported, so always after the wallet was asked:
+ * failed only with the chain's proof (../src/core/proofs.mjs), else unknown, as on the page on this machine.
+ */
+function verdictLine(id: string, kind: string, title: string, verdict: OwnerVerdict) {
+  const status = verdict.outcome === "failed" && !isProof(verdict.proof) ? "unknown" : verdict.outcome;
+  return { id, kind, title, status, ...(status === "failed" ? { proof: verdict.proof } : {}), reason: status === "confirmed" ? undefined : scrub(siteText(verdict.message)), hash: verdict.hash };
 }
 
 /** The reason of a 401 agent_proof answer: { error: { code: "agent_proof", reason } }, or "". */
