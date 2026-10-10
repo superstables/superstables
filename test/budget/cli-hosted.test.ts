@@ -994,7 +994,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     expect(done.result).toMatchObject({ state: "ok", chain: "arc-testnet", tx: { fundAgent: FUND_HASH, grant: GRANT_HASH }, steps: [{ kind: "fund_agent", state: "settled", amount: "0.1" }, { kind: "grant", state: "settled" }] });
   }, 180_000);
 
-  it("a grant the owner rejects after the link: the link and the gas are recorded and reported, the budget is not", async () => {
+  it("a grant the owner rejects after the link: the link and the gas are recorded and reported, the budget is not; the command is unknown once its gas was sent", async () => {
     await prepare();
     const first = await start();
     const r = site.requests[0];
@@ -1002,9 +1002,9 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND_HASH, wallet_asked: true });
     Object.assign(r.steps![1], { state: "rejected", reason: "The owner rejected this in their wallet.", reason_code: "owner_rejected" });
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
-    expect(done.code, done.stderr).toBe(3);
+    expect(done.code, done.stderr).toBe(5);
     expect(done.result).toMatchObject({
-      ok: false, state: "refused_precheck", final: true, owner: OWNER, linked: true, approvals: "hosted", tx: { fundAgent: FUND_HASH },
+      ok: false, state: "unknown", final: true, owner: OWNER, linked: true, approvals: "hosted", tx: { fundAgent: FUND_HASH },
       steps: [{ kind: "fund_agent", state: "settled", tx: FUND_HASH }, { kind: "grant", state: "refused_precheck", reasonCode: "owner_rejected" }],
     });
     // the site's code in the client's words; the site's own sentence is not repeated
@@ -1060,8 +1060,8 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
     expect(r.cancels).toBe(1);
     expect(r.steps![1].state).toBe("cancelled");
-    expect(done.code, done.stderr).toBe(3);
-    expect(done.result).toMatchObject({ state: "refused_precheck", linked: true, steps: [{ kind: "fund_agent", state: "settled" }, { kind: "grant", state: "refused_precheck" }] });
+    expect(done.code, done.stderr).toBe(5);
+    expect(done.result).toMatchObject({ state: "unknown", linked: true, steps: [{ kind: "fund_agent", state: "settled" }, { kind: "grant", state: "refused_precheck" }] });
     expect(done.result.steps[1].reason).toMatch(/^nothing was sent: withdrawn on superstables\.com/);
   }, 180_000);
 

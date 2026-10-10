@@ -101,9 +101,10 @@ if (OWNER_KEY_FILE) {
     process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget status --rail solana" }));
   }
   if (c.status !== "success") {
-    handle.finish({ outcome: "failed", message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. This transaction did not revoke the budget. Check superstables budget status --rail solana; run revoke again only if a delegate remains.`, hash: sig });
+    const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
+    handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. This transaction did not revoke the budget. Check superstables budget status --rail solana; run revoke again only if a delegate remains.`, hash: sig });
     await closeOwnerPage();
-    process.exit(result(1, { state: "not_revoked", tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget status --rail solana; run revoke again only if a delegate remains" }));
+    process.exit(result(1, { state: "not_revoked", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget status --rail solana; run revoke again only if a delegate remains" }));
   }
   if (c.problems.length) {
     // not the Revoke alone: the transaction did something else as well (or instead), so it is not reported as a revoke

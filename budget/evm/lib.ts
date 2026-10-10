@@ -15,6 +15,7 @@ import { CFG, type GasOp } from "./chains.ts";
 import { EVM_CHAINS } from "./chains.mjs";
 import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
+import { markSend } from "../proof.mjs";
 
 export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
@@ -157,10 +158,12 @@ export function writePublic(updates: Record<string, string>, drop: string[] = []
 export const newKey = () => generatePrivateKey();
 
 // ---- clients ----
-export const publicClient = createPublicClient({ chain, transport: http(RPC, { retryCount: 5, retryDelay: 400 }) });
+// every request passes markSend: a broadcast prints SENDING before it leaves (../proof.mjs)
+const transport = () => http(RPC, { retryCount: 5, retryDelay: 400, onFetchRequest: (_request, init) => markSend(init.body) });
+export const publicClient = createPublicClient({ chain, transport: transport() });
 export const walletFor = (key: Hex, opts?: { nonceManager?: NonceManager }) => {
   const account = privateKeyToAccount(key, opts?.nonceManager ? { nonceManager: opts.nonceManager } : undefined);
-  return { account, client: createWalletClient({ account, chain, transport: http(RPC, { retryCount: 5, retryDelay: 400 }) }) };
+  return { account, client: createWalletClient({ account, chain, transport: transport() }) };
 };
 export type Wallet = ReturnType<typeof walletFor>;
 

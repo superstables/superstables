@@ -193,7 +193,8 @@ export function fundValue(amt: string): bigint {
 }
 
 /** What the chain shows for a transaction the owner's wallet reported, checked against the plan. */
-export type SentCheck = { state: "settled" | "mismatch" | "failed" | "unknown"; tx: string; reason?: string; next?: string; allowance?: bigint; agentGas?: bigint };
+/** `proof`: a failed check names the chain's proof (../proof.mjs). */
+export type SentCheck = { state: "settled" | "mismatch" | "failed" | "unknown"; proof?: "reverted"; tx: string; reason?: string; next?: string; allowance?: bigint; agentGas?: bigint };
 
 /**
  * The gas transfer: the owner's account sent exactly `t` (to, data, value), mined after `afterBlock`, and successful: sent
@@ -208,7 +209,7 @@ export async function checkFundSent(hash: Hex, o: { owner: Address; agent: Addre
     const why = [...sent.problems, ...(sent.status !== "success" ? ["it reverted on chain"] : [])].join("; ");
     const mismatch = sent.status === "success";
     console.log(`${mismatch ? "MISMATCH" : "FAILED"}: ${why}`);
-    return { state: mismatch ? "mismatch" : "failed", tx: sent.hash, reason: mismatch ? mismatchReason(sent.problems, sent.siteFailed, sent.hash) : why };
+    return mismatch ? { state: "mismatch", tx: sent.hash, reason: mismatchReason(sent.problems, sent.siteFailed, sent.hash) } : { state: "failed", proof: "reverted", tx: sent.hash, reason: why };
   }
   if (sent.unresolved) {
     console.log(`UNKNOWN: ${sent.unresolved}`);
@@ -244,7 +245,7 @@ export async function checkGrantSent(hash: Hex, o: { owner: Address; agent: Addr
   if (!sent) return { state: "unknown", tx: hash, reason: "the wallet reported a transaction the chain does not show (replaced, dropped or still pending)" };
   const events = approvalsIn(sent.logs, o.owner, o.agent);
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, Approval events: ${events.map((v) => usdc(v)).join(", ") || "none"} ${SYM}`);
-  if (sent.status !== "success") return { state: "failed", tx: sent.hash, reason: "the approve reverted on chain" };
+  if (sent.status !== "success") return { state: "failed", proof: "reverted", tx: sent.hash, reason: "the approve reverted on chain" };
   if (sent.problems.length) {
     const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}. The budget was not recorded.`;
     console.log(`MISMATCH: ${reason}`);
@@ -343,9 +344,9 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     const state = now === null ? "could not be read" : now === 0n ? `reads 0, but not because of this transaction` : `still reads ${usdc(now)} ${SYM}`;
     const reason = `the revoke reverted on chain${sent.problems.length ? ` (${sent.problems.join("; ")})` : ""}; the allowance ${state}`;
     console.log(`FAILED: ${reason}`);
-    handle.finish({ outcome: "failed", message: `The transaction reverted, so it revoked nothing. The allowance ${state}. ${now === 0n ? "Check that this is what you expect." : "Run the revoke again."}`, hash: sent.hash });
+    handle.finish({ outcome: "failed", proof: "reverted", message: `The transaction reverted, so it revoked nothing. The allowance ${state}. ${now === 0n ? "Check that this is what you expect." : "Run the revoke again."}`, hash: sent.hash });
     await closeOwnerPage();
-    process.exit(emit(command, 1, withEarlier(earlier, { state: "failed", tx: sent.hash, allowance: now === null ? null : usdc(now), reason, next: now === 0n ? `superstables budget status --rail evm${chainFlag}: the allowance reads 0, set by another transaction` : "run revoke again" })));
+    process.exit(emit(command, 1, withEarlier(earlier, { state: "failed", proof: "reverted", tx: sent.hash, allowance: now === null ? null : usdc(now), reason, next: now === 0n ? `superstables budget status --rail evm${chainFlag}: the allowance reads 0, set by another transaction` : "run revoke again" })));
   }
   if (sent.status === "success" && sent.unresolved) {
     const reason = `the transaction is on chain, but whether it revoked the allowance is not known yet: ${sent.unresolved}`;
@@ -411,9 +412,9 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
   if (c.state !== "settled") {
     // the RESULT's reason, as a sentence for the page: a chain mismatch about the transfer, or the site's verdict as it is
     const prefix = "the transaction was not accepted as the planned step: ";
-    handle.finish({ outcome: c.state === "mismatch" ? "unknown" : "failed", message: c.reason!.startsWith(prefix) ? `The transfer was not confirmed as the planned step: ${c.reason!.slice(prefix.length)}.` : `${c.reason}.`, hash: c.tx });
+    handle.finish({ outcome: c.state === "mismatch" ? "unknown" : "failed", proof: c.proof, message: c.reason!.startsWith(prefix) ? `The transfer was not confirmed as the planned step: ${c.reason!.slice(prefix.length)}.` : `${c.reason}.`, hash: c.tx });
     await closeOwnerPage();
-    process.exit(emit(command, c.state === "mismatch" ? 3 : 1, withEarlier(earlier, { state: c.state, tx: c.tx, reason: c.reason, next: "check wallet activity, then superstables budget doctor --rail evm" })));
+    process.exit(emit(command, c.state === "mismatch" ? 3 : 1, withEarlier(earlier, { state: c.state, proof: c.proof, tx: c.tx, reason: c.reason, next: "check wallet activity, then superstables budget doctor --rail evm" })));
   }
   handle.finish({ outcome: "confirmed", message: `Done. Your agent received ${amt} ${GAS.symbol} and now has ${gasFmt(c.agentGas!)} ${GAS.symbol}. You can close this page.`, hash: c.tx });
   await closeOwnerPage();

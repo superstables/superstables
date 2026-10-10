@@ -32,7 +32,7 @@ import { WalletSigner } from "../src/core/signer/wallet.js";
 import { ATTEMPT_STATES } from "../src/core/types.js";
 import { startFakeBaseSepolia } from "./helpers/fake-base-sepolia.js";
 import { startFakePurchaseSite } from "./helpers/fake-purchase-site.js";
-import { evmOwner, startFakeRpc, startFakeSite, type FakeSite } from "./helpers/fake-site.js";
+import { evmOwner, evmOwnerKey, startFakeRpc, startFakeSite, type FakeSite } from "./helpers/fake-site.js";
 import { startFakeMppSeller, startFakeTempoPay } from "./helpers/fake-tempo-pay.js";
 import { startFacilitator, startPaidEndpoint, startWallet, type TestServer } from "./helpers/servers.js";
 
@@ -442,13 +442,12 @@ const rpcReceipt = (hash: Hex, block: bigint, logs: unknown[], status = "0x1") =
   transactionHash: hash, blockHash: BLOCK_HASH, blockNumber: hex(block), from: AGENT, to: BASE_USDC, status, logs, gasUsed: "0x5208", cumulativeGasUsed: "0x5208",
   effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x2",
 });
+/** eth_getBlockByNumber's answer for block `n`, at time 2000. */
+const rpcBlock = (n: bigint) => ({ number: hex(n), hash: BLOCK_HASH, parentHash: BLOCK_HASH, timestamp: hex(2000), transactions: [], gasLimit: "0x1c9c380", gasUsed: "0x0", baseFeePerGas: "0x1", difficulty: "0x0", extraData: "0x", logsBloom: `0x${"0".repeat(512)}`, miner: AGENT, nonce: "0x0000000000000000", receiptsRoot: BLOCK_HASH, sha3Uncles: BLOCK_HASH, size: "0x1", stateRoot: BLOCK_HASH, totalDifficulty: "0x0", transactionsRoot: BLOCK_HASH, uncles: [] });
 function rpcChain(receipts: Record<string, unknown>, held = 10000n) {
   return (method: string, params: any[]): unknown => {
     if (method === "eth_blockNumber") return hex(110);
-    if (method === "eth_getBlockByNumber") {
-      const n = params[0] === "finalized" ? 90n : params[0] === "latest" || params[0] === "safe" ? 110n : BigInt(params[0]);
-      return { number: hex(n), hash: BLOCK_HASH, parentHash: BLOCK_HASH, timestamp: hex(2000), transactions: [], gasLimit: "0x1c9c380", gasUsed: "0x0", baseFeePerGas: "0x1", difficulty: "0x0", extraData: "0x", logsBloom: `0x${"0".repeat(512)}`, miner: AGENT, nonce: "0x0000000000000000", receiptsRoot: BLOCK_HASH, sha3Uncles: BLOCK_HASH, size: "0x1", stateRoot: BLOCK_HASH, totalDifficulty: "0x0", transactionsRoot: BLOCK_HASH, uncles: [] };
-    }
+    if (method === "eth_getBlockByNumber") return rpcBlock(params[0] === "finalized" ? 90n : params[0] === "latest" || params[0] === "safe" ? 110n : BigInt(params[0]));
     if (method === "eth_getTransactionReceipt") return receipts[String(params[0]).toLowerCase()] ?? null;
     if (method === "eth_getTransactionByHash") return null;
     if (method === "eth_getTransactionCount") return "0x8";
@@ -865,6 +864,43 @@ const ROWS: Row[] = [
       { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, next: "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" } },
     ],
     timeout: 150_000,
+  },
+  {
+    path: "budget grant with the owner key file (--yes): the approval is broadcast, then the script stops before its RESULT",
+    covers: [],
+    run: async () => {
+      const SENT: Hex = `0x${"cd".repeat(32)}`;
+      const b = await ownerOnThisMachine({}, (method, params) => {
+        if (method === "eth_getBlockByNumber") return rpcBlock(100n);
+        if (method === "eth_estimateGas") return "0x10000";
+        if (method === "eth_sendRawTransaction") return SENT;
+        // the receipt shows it reverted: send() throws on that, so the script ends with no RESULT
+        if (method === "eth_getTransactionReceipt" && params[0] === SENT) return { ...rpcReceipt(SENT, 101n, [], "0x0"), from: OWNER };
+        return undefined;
+      });
+      const keyFile = join(b.home, "owner.env");
+      writeFileSync(keyFile, `B4_OWNER_KEY=${evmOwnerKey("22")}\n`, { mode: 0o600 });
+      return [seenBudget("grant --owner-key-file --yes", "grant", await budget(b.home, ["grant", "--rail", "evm", "--amount", "1", "--owner-key-file", keyFile, "--yes"], b.env))];
+    },
+    expect: [{ verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", reason: "the rail script exited 1", next: "superstables budget status --rail evm: read whether it landed before running this again" } }],
+    timeout: 90_000,
+  },
+  {
+    path: "budget wait on a finished owner approval that an earlier client stored as failed after the wallet was asked",
+    covers: [],
+    run: async () => {
+      const home = newHome();
+      const id = "oa-20261010120000-0a0b0c0d";
+      const page = "ab".repeat(16);
+      mkdirSync(join(home, "budget", "approvals"), { recursive: true });
+      writeFileSync(join(home, "budget", "approvals", `${id}.json`), JSON.stringify({
+        id, command: "grant", rail: "evm", chain: "base-sepolia", url: `http://127.0.0.1:1/owner/${page}`, state: "final", endedAt: new Date().toISOString(),
+        final: { code: 1, result: { ok: false, command: "grant", rail: "evm", chain: "base-sepolia", state: "failed", final: true, tx: {}, next: "read the output above", reason: "the rail script exited 1" } },
+      }), { mode: 0o600 });
+      writeFileSync(join(home, "budget", "owner-approvals.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), id: page, kind: "evm-transaction", title: "Grant a spending budget", status: "sent", sending: true })}\n`, { mode: 0o600 });
+      return [seenBudget("wait --shown", "wait", await budget(home, ["wait", "--shown", "--id", id, "--timeout", "0"]))];
+    },
+    expect: [{ verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, reason: "the rail script exited 1", next: "superstables budget status --rail evm: read whether it landed before running this again" } }],
   },
   {
     path: "owner approval page, solana transaction: the send answers with an error after the transaction left this machine; then every route again",

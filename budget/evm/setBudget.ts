@@ -110,9 +110,9 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   const events = approvalsIn(sent.logs, pub.owner, pub.agent);
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, Approval events: ${events.map((v) => usdc(v)).join(", ") || "none"} ${SYM}`);
   if (sent.status !== "success") {
-    handle.finish({ outcome: "failed", message: "The transaction reverted. No allowance was granted by it, but a network fee may have been charged.", hash: sent.hash });
+    handle.finish({ outcome: "failed", proof: "reverted", message: "The transaction reverted. No allowance was granted by it, but a network fee may have been charged.", hash: sent.hash });
     await closeOwnerPage();
-    process.exit(result(1, { state: "failed", tx: sent.hash, reason: "the approve reverted on chain", next: "superstables budget status --rail evm" }));
+    process.exit(result(1, { state: "failed", proof: "reverted", tx: sent.hash, reason: "the approve reverted on chain", next: "superstables budget status --rail evm" }));
   }
   // Any difference from the plan is a mismatch, whatever the allowance reads now: an edited higher allowance can be spent
   // down to the requested cap before the readback. The wallet already sent it, so the owner has to revoke it.

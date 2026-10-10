@@ -102,9 +102,9 @@ async function main() {
     const state = now === null ? 'could not be read' : now.revoked ? 'reads revoked on chain, but not by this transaction' : 'does not read as revoked on chain'
     const reason = `the revoke transaction reverted on chain${problems.length ? ` (${problems.join('; ')})` : ''}; the key ${state}`
     console.log(`FAILED: ${reason}`)
-    finish?.({ outcome: "failed", message: `The transaction reverted, so it revoked nothing. The key ${state}. ${now?.revoked ? 'Check that this is what you expect.' : 'Run the revoke again.'}`, hash: tx })
+    finish?.({ outcome: "failed", proof: 'reverted', message: `The transaction reverted, so it revoked nothing. The key ${state}. ${now?.revoked ? 'Check that this is what you expect.' : 'Run the revoke again.'}`, hash: tx })
     await closeOwnerPage()
-    process.exit(emit('revokeBudget', 1, { state: 'failed', tx, revoked: now ? now.revoked : null, reason, next: now?.revoked ? `superstables budget status --rail tempo${agentFlag(agentLabel)}: the key reads revoked, by another transaction` : 'run revoke again' }))
+    process.exit(emit('revokeBudget', 1, { state: 'failed', proof: 'reverted', tx, revoked: now ? now.revoked : null, reason, next: now?.revoked ? `superstables budget status --rail tempo${agentFlag(agentLabel)}: the key reads revoked, by another transaction` : 'run revoke again' }))
   }
 
   if (before.revoked) console.log('The key is already revoked; nothing to send.')

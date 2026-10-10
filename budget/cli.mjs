@@ -22,6 +22,7 @@
 // (and --owner-key-file ... --yes) take the same lock as detached ones. Every rail script of an owner command runs in its
 // own process group, recorded with the approval, so the page's process is tracked and stopped with it.
 import { afterPurchase, ownerCheck } from "./next-steps.mjs";
+import { SENDING_LINE, afterSend } from "./proof.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
@@ -616,8 +617,9 @@ function resultFacts(fields) {
 }
 
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
+  if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
   fields = resultFacts(fields);
   // an RPC other than the rail's default (B4_RPC, SUPERSTABLES_TEMPO_RPC, SUPERSTABLES_SOLANA_RPC) is named in every RESULT
   if (fields.rpc === undefined && fields.rail) fields.rpc = customRpc(fields.rail);
@@ -943,6 +945,8 @@ function passApproval(line) {
 let currentChild;
 /** A signal stopped this command (wait past its deadline, --replace, Ctrl-C): after a link existed, the outcome is uncertain. */
 let interrupted = false;
+/** A rail script printed SENDING: it was about to broadcast a transaction (proof.mjs). */
+let railSending = false;
 function run(spec) {
   return new Promise((resolve) => {
     if (spec.cmd === TSX && !existsSync(TSX)) { log(`superstables budget: dependencies are missing: run npm ci at the repo root (${REPO})`); return resolve({ code: 2, stdout: "", missing: true }); }
@@ -960,9 +964,12 @@ function run(spec) {
     let stdout = "";
     let partial = "";
     let stderrTail = "";
-    // The rail's log goes to stderr line by line, except its own RESULT and APPROVE lines: this command prints the one
-    // RESULT (normalized) and passes the APPROVE line on to stdout, so neither appears twice.
-    const forward = (l) => { if (!/^(RESULT|APPROVE) \{/.test(l)) process.stderr.write(scrubAgentTokens(l + "\n")); };
+    // The rail's log goes to stderr line by line, except its own RESULT, APPROVE and SENDING lines: this command prints the
+    // one RESULT (normalized) and passes the APPROVE line on to stdout, so neither appears twice.
+    const forward = (l) => {
+      if (SENDING_LINE.test(l)) railSending = true;
+      else if (!/^(RESULT|APPROVE) \{/.test(l)) process.stderr.write(scrubAgentTokens(l + "\n"));
+    };
     p.stdout.on("data", (d) => {
       stdout += d;
       const lines = (partial + d).split("\n");
@@ -1453,10 +1460,27 @@ async function reconcile({ f, ctx }) {
 }
 
 // Owner commands: the rail scripts end with a RESULT line whose state is a rail word (set, revoked, ok, planned, mismatch,
-// not_revoked); those map to the CLI states. Without a RESULT line, the rail's exit code says how it ended.
+// not_revoked); those map to the CLI states. Without a RESULT line, the rail's exit code says how it ended. That holds only
+// until the command may have sent: from then on emit (afterSend, proof.mjs) lets an answer stand only if it is done,
+// unknown, or a failure whose RESULT names the chain's proof, and makes every other one unknown.
 // mismatch: a transaction the owner's wallet sent landed and did something other than the plan (another amount, recipient
 // or call), so it moved something: unknown, never a refusal that says nothing was sent
 const OWNER_STATES = { set: "settled", revoked: "settled", ok: "settled", planned: "planned", refused_precheck: "refused_precheck", mismatch: "unknown", not_revoked: "failed", failed: "failed", unknown: "unknown" };
+const carriesTx = (tx) => (typeof tx === "string" ? tx !== "" : Boolean(tx) && typeof tx === "object" && Object.values(tx).some(Boolean));
+/**
+ * Whether this owner command may have sent: its rail was about to broadcast, a signal stopped it once a link existed, its
+ * answer names a transaction, or the page log or superstables.com says the owner's wallet was asked.
+ */
+function mayHaveSent(fields) {
+  return railSending || (interrupted && Boolean(approvalUrl)) || carriesTx(fields.tx) || (APPROVAL_ID !== undefined && walletWasAsked(readApproval(APPROVAL_ID)));
+}
+/** The flags of the command this process runs, once parsed: the read-only check an unknown owner answer names. */
+let RUN_FLAGS;
+function checkCommand(fields) {
+  const f = RUN_FLAGS?.rail ? RUN_FLAGS : { rail: fields.rail, chain: fields.chain };
+  if (!RAILS[f.rail]) return "superstables budget status";
+  return fields.command === "fund-agent" ? `superstables budget doctor --rail ${f.rail}${chainFlag(f)}` : statusCommand(f);
+}
 function ownerOutcome(code, rr = null) {
   // stopped by a signal once the owner had a link: the wallet may have been asked, so never "failed"
   if (interrupted && approvalUrl && !rr && code !== 0) return { code: 5, state: "unknown", reason: "the command was stopped after its approval link existed; the wallet may have been asked to send" };
@@ -1464,7 +1488,7 @@ function ownerOutcome(code, rr = null) {
   const c = [0, 2, 3, 5].includes(code) ? code : 1;
   const byCode = { 0: "settled", 2: "failed", 3: "refused_precheck", 5: "unknown" }[c] ?? "failed";
   const mapped = OWNER_STATES[rr?.state];
-  return { code: c, state: c !== 0 && mapped && mapped !== "settled" && mapped !== "planned" ? mapped : byCode, reason: rr?.reason };
+  return { code: c, state: c !== 0 && mapped && mapped !== "settled" && mapped !== "planned" ? mapped : byCode, reason: rr?.reason, proof: rr?.proof };
 }
 // Owner transaction hashes: the evm RESULT carries them; the other rails print an explorer line.
 const ownerTx = (rr, stdout) => (typeof rr?.tx === "string" ? rr.tx : rr?.tx && typeof rr.tx === "object" ? rr.tx : txOf(stdout));
@@ -1509,7 +1533,7 @@ async function grant({ f, ctx }) {
   const r = await run(railCommand("grant", f, { expirySeconds: secs }));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
-  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, amount: f.amount, tx: rr?.tx ? { grant: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, o.state === "refused_precheck" ? "read reason and tx; a changed wallet transaction may already be on chain. Check status before granting again" : `${statusCommand(f)}: the chain may or may not have changed`), reason: o.reason ?? `the rail script exited ${r.code}` });
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, amount: f.amount, tx: rr?.tx ? { grant: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, o.state === "refused_precheck" ? "read reason and tx; a changed wallet transaction may already be on chain. Check status before granting again" : `${statusCommand(f)}: the chain may or may not have changed`), reason: o.reason ?? `the rail script exited ${r.code}` });
   const after = await readBudget(f);
   emit(0, { ...ctx, state: "settled", amount: f.amount, remaining: after.ok ? after.remaining : null, tx: { grant: ownerTx(rr, r.stdout) ?? null }, expiry: after.ok ? after.expiry : null, url: approvalUrl, next: "none" });
 }
@@ -1537,12 +1561,12 @@ async function revoke({ f, ctx }) {
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
   if (walletFlow(f) && o.code !== 0 && ["refused_precheck", "unknown"].includes(o.state)) {
-    return emit(o.code, { ...ctx, state: o.state, remaining: now.ok ? now.remaining : null, revoked: false, tx: rr?.tx ? { revoke: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, "none"), reason: o.reason });
+    return emit(o.code, { ...ctx, state: o.state, proof: o.proof, remaining: now.ok ? now.remaining : null, revoked: false, tx: rr?.tx ? { revoke: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, "none"), reason: o.reason });
   }
   const after = await readBudget(f);
   const done = r.code === 0 && after.ok && after.revoked;
   emit(done ? 0 : o.code || 1, {
-    ...ctx, state: done ? "settled" : o.code === 0 ? "failed" : o.state, remaining: after.ok ? after.remaining : null, revoked: after.ok ? after.revoked : null,
+    ...ctx, state: done ? "settled" : o.code === 0 ? "failed" : o.state, proof: done || o.code === 0 ? undefined : o.proof, remaining: after.ok ? after.remaining : null, revoked: after.ok ? after.revoked : null,
     tx: { revoke: ownerTx(rr, r.stdout) ?? null }, url: approvalUrl, next: done ? "none" : `${statusCommand(f)}: confirm whether the revoke landed, then run superstables budget revoke again`, reason: done ? undefined : o.reason ?? `the rail script exited ${r.code}`,
   });
 }
@@ -1556,7 +1580,7 @@ async function recover({ f, ctx }) {
   const o = ownerOutcome(r.code, rr);
   const tx = {};
   for (const [k, v] of [["selfRevoke", rr?.selfRevokeTx], ["ownerRevoke", rr?.ownerRevokeTx], ["gas", rr?.gasTx], ["sweep", rr?.sweepTx]]) if (v) tx[k] = v;
-  emit(o.code, { ...ctx, state: o.state, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, url: approvalUrl, next: o.code === 0 ? "none" : ownerNext(o, rr, `superstables budget status --rail ${f.rail}; then superstables budget recover again`), reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
+  emit(o.code, { ...ctx, state: o.state, proof: o.proof, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, url: approvalUrl, next: o.code === 0 ? "none" : ownerNext(o, rr, `superstables budget status --rail ${f.rail}; then superstables budget recover again`), reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
 }
 
 async function setup({ f, ctx }) {
@@ -1581,7 +1605,7 @@ async function setup({ f, ctx }) {
   const o = ownerOutcome(r.code, rr);
   // the one-link set-up: the link is recorded, and each step's own outcome (the first one that did not complete sets the state)
   const steps = rr?.linked === true ? { linked: true, steps: rr.steps, tx: rr.tx ?? {}, amount: rr.cap, remaining: rr.allowance, approvals: "hosted", site: hostedSite(f) ?? undefined } : rr?.linked === false ? { linked: false } : {};
-  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, owner: rr?.owner, agent: rr?.agent, ...steps, url: approvalUrl, next: rr?.linked === true ? rr.next : ownerNext(o, rr, "read the output above"), reason: o.reason ?? `the setup script exited ${r.code}` });
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, owner: rr?.owner, agent: rr?.agent, ...steps, url: approvalUrl, next: rr?.linked === true ? rr.next : ownerNext(o, rr, "read the output above"), reason: o.reason ?? `the setup script exited ${r.code}` });
   if (rr?.replacedOwner) log(`superstables budget: the recorded owner changed from ${rr.replacedOwner} to ${rr.owner}`);
   const site = hostedSite(f);
   // Whoever completed the page is now the owner on record: the owner checks that it is their wallet before anything else.
@@ -1597,7 +1621,7 @@ async function fundAgent({ f, ctx }) {
   const r = await run(railCommand("fund-agent", f));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
-  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, `superstables budget doctor --rail ${f.rail}`), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, `superstables budget doctor --rail ${f.rail}`), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
   emit(0, { ...ctx, state: "settled", amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: f.rail === "solana" ? "superstables budget doctor --rail solana, then superstables budget grant --rail solana --amount A" : `superstables budget doctor --rail evm${chainFlag(f)}, then superstables budget grant --rail evm${chainFlag(f)} --amount A` });
 }
 
@@ -1730,9 +1754,12 @@ async function wait({ f }) {
   const r = await waitFor(f.id, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);
   if (!r) return badInput({ command: "wait" }, `no owner approval with id ${f.id} under ${approvalsDir()}`);
   if (r.final) {
-    // Stored command completion is separate from payment finality, including older records.
-    writeResult({ ...r.result, final: true });
-    process.exit(r.code);
+    // Stored command completion is separate from payment finality, including older records. A record a worker stored
+    // before this rule, once its wallet was asked, is answered by it as well.
+    const sent = OWNER_COMMANDS.has(r.result.command) && (walletWasAsked(r.record) || carriesTx(r.result.tx));
+    const a = sent ? afterSend(r.code, r.result, checkCommand(r.result)) : { code: r.code, fields: r.result };
+    writeResult({ ...a.fields, ok: a.code === 0, final: true });
+    process.exit(a.code);
   }
   const rec = r.record;
   const words = r.orphaned
@@ -1888,4 +1915,5 @@ if (WORKER_ID) {
 } else if (OWNER_COMMANDS.has(parsed.cmd) && sendsNow(parsed.f) && !parsed.f["fund-only"]) {
   await ownerGate(parsed);
 }
+RUN_FLAGS = parsed.f;
 await HANDLERS[parsed.cmd](parsed);

@@ -355,7 +355,8 @@ export async function findKeyEvent(kind: 'authorized' | 'revoked', owner: Addres
 }
 
 /** What the chain shows for a grant the site reported (setup --hosted --grant), checked against the plan as grant checks it. */
-export type SentCheck = { state: 'settled' | 'mismatch' | 'failed' | 'unknown'; tx: string; reason?: string; key?: FullKey }
+/** `proof`: a failed check names the chain's proof (../proof.mjs). */
+export type SentCheck = { state: 'settled' | 'mismatch' | 'failed' | 'unknown'; proof?: 'reverted'; tx: string; reason?: string; key?: FullKey }
 
 /**
  * The grant: authorizeKey(plan) from the owner, to the keychain, mined after `afterBlock`, successful, and the key on chain
@@ -374,7 +375,7 @@ export async function checkGrantSent(hash: Hex, o: { owner: Address; plan: Grant
   }
   if (!sent) return { state: 'unknown', tx: hash, reason: 'the wallet reported a transaction the chain does not show (replaced, dropped or still pending)' }
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a (the sender)'}`)
-  if (sent.status !== 'success') return { state: 'failed', tx: sent.hash, reason: 'the authorizeKey transaction reverted on chain' }
+  if (sent.status !== 'success') return { state: 'failed', proof: 'reverted', tx: sent.hash, reason: 'the authorizeKey transaction reverted on chain' }
   if (sent.problems.length) {
     const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash)
     console.log(`MISMATCH: ${reason}`)
