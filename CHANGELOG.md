@@ -19,6 +19,7 @@ Once a payment may have moved, the client reports it as unknown, never as unpaid
 - An owner command (`grant`, `fund-agent`, `revoke`, `setup` with `--grant` or `--fund`) whose transaction landed on chain but did not match the plan, such as another amount or recipient, answers `unknown` (exit 5) with the reason and the next step to revoke. It answered `refused_precheck` (exit 3), the answer for an approval that sent nothing.
 - `superstables budget buy-once --replace` whose cancel the site answers with the payment under way reports the open purchase as `pending.state: "unknown"`. It reported `waiting_owner`, from the record read before the cancel.
 - On EVM chains, a purchase whose pull landed and can no longer settle stays `unknown` (exit 5) until the pulled price is back with the owner. It was `failed` with `paid: false`. `superstables budget recover` returns the price.
+- On EVM chains, `superstables budget recover` returns the rest of a price that an earlier return gave back only in part. It sent no further return, so the purchase stayed `unknown` however often `recover` ran.
 
 An owner's sign-in on the approval page, which signs a message and sends nothing, no longer counts as the wallet being asked to send. For a `setup` whose page log recorded the sign-in, `superstables budget wait` answered `unknown` (exit 5) and said the owner's wallet was asked to send.
 
