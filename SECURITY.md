@@ -2,8 +2,13 @@
 
 ## Reporting a vulnerability
 
-Email **s@superstables.com**. Please don't open a public issue, pull request or discussion for a
-security problem.
+Report it privately, in one of two ways:
+
+- [open a private report](https://github.com/superstables/superstables/security/advisories/new)
+  on GitHub;
+- or email **s@superstables.com**.
+
+Please don't open a public issue, pull request or discussion for a security problem.
 
 Include what you can of the following:
 
