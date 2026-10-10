@@ -11,7 +11,7 @@
 // fails while any of them has neither a row nor a reason in NO_ANSWER_AFTER_BOUNDARY.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -621,6 +621,40 @@ const ROWS: Row[] = [
       return [seenBudget("buy again", "buy", await budget(b.home, ["buy", "--rail", "evm", "--url", "https://seller.example/x", "--max", "0.01", "--op", op], b.env))];
     },
     expect: [{ verdict: "unknown", match: { exit: 5, command: "buy", op: "rb-20261010120000-ab12", state: "unknown", paid: null, amount: null, reason: "op_already_unknown", next: expect.stringMatching(/^superstables budget reconcile --rail evm --chain base-sepolia --op rb-20261010120000-ab12/) } }],
+  },
+  {
+    path: "budget buy with the --op of a purchase whose outcome is unknown, without its agent key or with an unsafe key file; and with an op another buy holds before it wrote a journal",
+    covers: [],
+    run: async () => {
+      const b = await hostedBudget();
+      const op = "rb-20261010120000-cd34";
+      const dir = join(b.home, "budget", "ops", "evm-base-sepolia");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${op}.json`), JSON.stringify({ ...purchase(op), state: "unknown" }));
+      const buyAgain = () => budget(b.home, ["buy", "--rail", "evm", "--url", "https://seller.example/x", "--max", "0.01", "--op", op], b.env);
+      const keyFile = join(b.home, "keys", "budget", "evm-agent.env");
+      const key = readFileSync(keyFile, "utf8");
+      chmodSync(keyFile, 0o644);
+      const unsafe = seenBudget("the agent key file is readable by others", "buy", await buyAgain());
+      rmSync(keyFile);
+      const gone = seenBudget("the agent key is gone", "buy", await buyAgain());
+      writeFileSync(keyFile, key, { mode: 0o600 });
+      const guard = await import("../budget/buy-guard.mjs");
+      const held = "rb-20261010120000-ef56";
+      const lock = guard.lockOp(dir, held);
+      expect(lock.ok).toBe(true);
+      try {
+        const busy = await budget(b.home, ["buy", "--rail", "evm", "--url", "https://seller.example/x", "--max", "0.01", "--op", held], b.env);
+        return [unsafe, gone, seenBudget("another process holds the op", "buy", busy)];
+      } finally {
+        if (lock.ok) lock.release();
+      }
+    },
+    expect: [
+      { verdict: "unknown", match: { exit: 5, command: "buy", op: "rb-20261010120000-cd34", state: "unknown", paid: null, amount: null, reason: "op_already_unknown", next: expect.stringMatching(/^superstables budget reconcile --rail evm --chain base-sepolia --op rb-20261010120000-cd34/) } },
+      { verdict: "unknown", match: { exit: 5, command: "buy", state: "unknown", paid: null, amount: null, reason: "op_already_unknown" } },
+      { verdict: "unknown", match: { exit: 5, command: "buy", state: "unknown", paid: null, amount: null, reason: "op_in_progress", next: expect.stringMatching(/Another process \(buy or reconcile\) may be working on this op; wait for its RESULT, then superstables budget reconcile .* Never pay again for this op while its outcome is unknown$/) } },
+    ],
   },
   {
     path: "budget reconcile, evm: the pull landed and can no longer settle; unknown until the price is back with the owner",

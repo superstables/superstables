@@ -1269,7 +1269,26 @@ const statusCommand = (f) => `superstables budget status --rail ${f.rail}${chain
 /** "no budget has been set up here", with what is missing, in plain words. */
 const noBudgetWords = (f, gaps) => `no budget has been set up here for ${f.rail} on ${f.chain}: ${gaps.missing.join("; ")}`;
 
+/**
+ * The answer for an op whose journal says it may have paid (submitted or unknown; a journal that cannot be read; on solana
+ * also a chain refusal, which its rail treats as pending), or undefined. Every rail writes the journal before it signs, so
+ * this is read before any other refusal: a later setup or lock problem never makes such an op look unpaid.
+ */
+function journalAnswer(f, ctx) {
+  const j = readJournal(f);
+  const pending = j ? ["submitted", "unknown"].includes(j.state) || (f.rail === "solana" && j.state === "refused_chain") : existsSync(journal(f));
+  if (!pending && j?.state !== "settled") return undefined;
+  const state = j?.state ?? "unreadable";
+  log(`superstables budget: operation ${f.op} is already ${state}. Not paying again.`);
+  const tx = (j?.tx ?? j?.settleTx) ? { settle: j.tx ?? j.settleTx } : {};
+  // that purchase may have paid: its outcome is unknown until reconcile reads the chain, never a refusal before signing
+  if (pending) return () => emit(5, { ...ctx, op: f.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx, next: `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op} (never pay again for this op)`, reason: `op_already_${state}` });
+  return () => emit(3, { ...ctx, op: f.op, state: "refused_precheck", paid: true, delivered: j.delivered ?? null, amount: null, remaining: null, tx, next: "none: already settled; use a new --op for a new purchase", reason: "op_already_settled" });
+}
+
 async function buy({ f, ctx }) {
+  const earlier = f.op ? journalAnswer(f, ctx) : undefined;
+  if (earlier) return earlier();
   // No setup on this computer (no agent key, or no owner connected): refused before the lock, the journal or a rail script,
   // so nothing is signed and nothing is left behind that looks like a purchase. The grant itself is on chain: the rail
   // reads it before it signs.
@@ -1287,16 +1306,13 @@ async function buy({ f, ctx }) {
   // while its rail script runs: two overlapping buys would both find no journal and both pay.
   const lock = lockOp(opsDir(f.rail, f.chain), f.op);
   if (!lock.ok) {
-    log(`superstables budget: refused: another process (buy or reconcile) is working on operation ${f.op}. ${lock.details}. Nothing was signed by this command.`);
-    return emit(3, { ...ctx, state: "refused_precheck", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f.op, f.rail, f.chain), reason: "op_in_progress" });
+    // the process that holds it may be paying for this op right now
+    log(`superstables budget: another process (buy or reconcile) is working on operation ${f.op}. ${lock.details}. This command signed nothing; whether that process paid is not known yet.`);
+    return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f.op, f.rail, f.chain), reason: "op_in_progress" });
   }
-  const j = readJournal(f);
-  if (j && ["submitted", "unknown", "settled"].includes(j.state)) {
-    log(`superstables budget: operation ${f.op} is already ${j.state}. Not paying again.`);
-    // that purchase may have paid: its outcome is unknown until reconcile reads the chain, never a refusal before signing
-    if (j.state !== "settled") return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: (j.tx ?? j.settleTx) ? { settle: j.tx ?? j.settleTx } : {}, next: `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op} (never pay again for this op)`, reason: `op_already_${j.state}` });
-    return emit(3, { ...ctx, state: "refused_precheck", paid: true, delivered: j.delivered ?? null, amount: null, remaining: null, tx: (j.tx ?? j.settleTx) ? { settle: j.tx ?? j.settleTx } : {}, next: "none: already settled; use a new --op for a new purchase", reason: "op_already_settled" });
-  }
+  // read again under the lock: a buy that ran meanwhile may have written it
+  const now = journalAnswer(f, ctx);
+  if (now) return now();
   const journalBefore = existsSync(journal(f));
   const running = run(railCommand("buy", f));
   try { lock.holdAlso(currentChild); }
