@@ -486,7 +486,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const refused = await budget(["wait", "--id", id, "--timeout", "0"]);
     expect(refused.code).toBe(2);
     expect(refused.result).toMatchObject({ ok: false, command: "wait", state: "show_owner_first", id, matchCode: "KPT-RWD", url: first.approve.url, service: "demo-market-data" });
-    expect(refused.result.next).toMatch(/^reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id \S+ --shown\./);
+    expect(refused.result.next).toMatch(/^this wait did not read the approval, so it says nothing about whether the owner approved or paid it\. If you have not written the approval link for the owner yet, reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id \S+ --shown\./);
     expect(site.purchases[0].polls).toBe(0);
 
     const pending = await budget(["wait", "--shown", "--id", id, "--timeout", "0"]);

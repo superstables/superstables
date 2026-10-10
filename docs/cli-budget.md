@@ -624,8 +624,9 @@ exit 5; tell the owner the outcome is unknown and run wait --shown again later. 
 command's (or purchase's) own final RESULT and exit code, the same on every later call.
 Scripts test final, not the exit code.
 --shown means: I have written the approval link (and the match code) and the terms in a reply the owner can read.
-Without it, wait refuses (exit 2, state show_owner_first) and polls nothing; once the approval has ended, or the owner
-already acted on it (the wallet was asked; for buy-once, a read showed payment evidence), it reads it without --shown.
+Without it, wait refuses (exit 2, state show_owner_first) and polls nothing, so that answer says nothing about whether the
+owner approved or paid; once the approval has ended, or this machine already saw the owner act on it (the page log shows
+the wallet was asked; for buy-once, an earlier read showed payment evidence), it reads it without --shown.
 An agent writes the approval link, ends its turn, and runs wait when the owner says they've approved; while still
 waiting_owner it says so in one line and ends its turn again.
 --site is checked against the site the approval was made on, and refused if it differs.
