@@ -158,7 +158,9 @@ function assertNoUnpaidFields(at: string, surface: Surface, body: unknown, prove
     if ("money_moved" in inner) expect(inner.money_moved, `${at}: ${path}.money_moved`).not.toBe(false);
     if ("paid" in inner) expect(inner.paid, `${at}: ${path}.paid`).not.toBe(false);
     if ("amount" in inner) expect(inner.amount, `${at}: ${path}.amount`).not.toBe("0");
-    if (typeof inner.state === "string") expect(FORBIDDEN_STATES[surface], `${at}: ${path}.state`).not.toContain(inner.state);
+    // a step the chain proved changed nothing keeps its own failed state, with its proof (a multi-step setup)
+    const stepProven = ["failed", "not_revoked"].includes(inner.state as string) && typeof inner.proof === "string" && Object.hasOwn(PROOFS, inner.proof) && typeof inner.tx === "string";
+    if (typeof inner.state === "string" && !stepProven) expect(FORBIDDEN_STATES[surface], `${at}: ${path}.state`).not.toContain(inner.state);
   }
 }
 
@@ -1098,6 +1100,34 @@ const ROWS: Row[] = [
     ],
     timeout: 150_000,
   },
+  {
+    path: "budget setup on superstables.com with gas and a budget: the gas lands as planned, then the grant reverts on chain",
+    covers: [],
+    run: async () => {
+      const FUND: Hex = `0x${"c4".repeat(32)}`;
+      const GRANT: Hex = `0x${"c5".repeat(32)}`;
+      const gas = 10n ** 14n;
+      let funded = false;
+      const txs: Record<string, OwnerTx> = {
+        [FUND]: { to: AGENT, input: "0x", value: gas, logs: [] },
+        [GRANT]: { to: BASE_USDC, input: encodeFunctionData({ abi: erc20, functionName: "approve", args: [AGENT, 10000n] }), value: 0n, logs: [], status: "0x0" },
+      };
+      const b = await hostedBudget(minedChain(txs, (method, params) => {
+        if (method === "eth_getTransactionReceipt" && params[0] === FUND) funded = true;
+        if (method === "eth_getBalance" && String(params[0]).toLowerCase() === AGENT.toLowerCase()) return hex(10n ** 18n + (funded ? gas : 0n));
+        return undefined;
+      }));
+      b.site.onPoll = (r) => {
+        if (r.polls < 2 || r.state !== "awaiting_owner") return;
+        Object.assign(r, { state: "linked", owner: OWNER });
+        Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND, wallet_asked: true });
+        Object.assign(r.steps![1], { state: "failed", tx_hash: GRANT, wallet_asked: true });
+      };
+      return [seenBudget("setup --hosted --grant --fund --wait", "setup", await budget(b.home, ["setup", "--rail", "evm", "--hosted", "--site", b.site.url, "--grant", "0.01", "--fund", "--wait", "--no-open"], b.env))];
+    },
+    expect: [{ verdict: "unknown", match: { exit: 5, command: "setup", state: "unknown", linked: true, reason: expect.stringMatching(/^partly_done: fund_agent settled before grant failed \(reverted\); agent added: yes/), steps: [{ kind: "fund_agent", state: "settled", tx: `0x${"c4".repeat(32)}` }, { kind: "grant", state: "failed", proof: "reverted", tx: `0x${"c5".repeat(32)}` }] } }],
+    timeout: 120_000,
+  },
   ...(["tempo", "solana"] as const).map((rail): Row => ({
     path: `budget grant, revoke and setup with a budget on ${rail}, approved on superstables.com, waiting: the site cannot tell whether the wallet sent`,
     covers: [`budget grant ${rail}`, `budget revoke ${rail}`, `budget setup ${rail}`],
@@ -1609,6 +1639,9 @@ describe("once money may have moved, every answer says unknown or uncertain", ()
     expect(check({ money_moved: false })).toThrow(/self-test \(budget wait\): money_moved/);
     expect(check({ pending: { paid: false } })).toThrow(/self-test \(budget wait\): pending\.paid/);
     expect(check({ steps: [{ amount: "0" }] })).toThrow(/self-test \(budget wait\): steps\.0\.amount/);
+    expect(check({ steps: [{ kind: "grant", state: "failed", proof: "reverted", tx: "0x1" }] })).not.toThrow();
+    expect(check({ steps: [{ kind: "grant", state: "failed", tx: "0x1" }] })).toThrow(/self-test \(budget wait\): steps\.0\.state/);
+    expect(check({ steps: [{ kind: "grant", state: "failed", proof: "the site said so", tx: "0x1" }] })).toThrow(/self-test \(budget wait\): steps\.0\.state/);
     expect(unexplained(["route a /x", "route a /y", "route a /z", "route a /w"], new Set(["route a /x"]), { "route a /y": "", "route a /z": undefined, "route a /w": "it signs only" })).toEqual(["route a /y", "route a /z"]);
     expect(unexplained(["route a /y"], new Set(), { "route a /y": "   " })).toEqual(["route a /y"]);
   });
