@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Builds dist/budget/: `superstables budget` as plain JavaScript that runs with node alone (Node 20+).
+// Builds dist/budget/: `superstables budget` as plain JavaScript that runs with node alone (Node 22+).
 //
 // budget/ is TypeScript and ES modules that a checkout runs with its own tsx and node_modules. A standalone copy (the npm
 // package's dist/budget; the skill zip's scripts/budget/, see scripts/cli-build.mjs, is built the same way) has
@@ -310,7 +310,7 @@ export async function buildStandalone({ outdir, entryPoints, name, title, builtB
     splitting: true,
     format: "esm",
     platform: "node",
-    target: "node20",
+    target: "node22",
     outExtension: { ".js": ".mjs" },
     chunkNames: "lib/[name]-[hash]",
     // A CommonJS dependency inside an ES module bundle still calls require().

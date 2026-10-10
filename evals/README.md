@@ -27,7 +27,7 @@ There is no automated runner. They are run by hand, and a person grades each run
 
 - The skill zip: `npm ci && npm run skill` at the repository root builds `build/superstables-payments-skill-<version>.zip`.
 - An agent that loads Agent Skills and has a shell: Claude Code or Codex.
-- Node 20 or newer, on Linux or macOS (on Windows, WSL).
+- Node 22 or newer, on Linux or macOS (on Windows, WSL).
 - An owner wallet in a browser on the same computer, funded on Base Sepolia from faucets: test USDC ([faucet.circle.com](https://faucet.circle.com)) and a little Base Sepolia ETH for fees. Testnet only; no real money moves.
 - For `buy-once` and `hosted-budget-setup`: the owner's superstables.com account (made by signing in with the wallet), and the wallet on the device they approve from, such as a phone. To grade the fall-back, run `hosted-budget-setup` once more with an owner who says they have no account.
 - The owner present during the run, to approve or reject in their wallet. The agent must never do it.

@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The client now needs Node 22 or newer. Node 20 reached end of life on 30 April 2026 and is no longer supported.
+
 ## [0.3.1] - Safer payment recovery
 
 This release makes budget payments and single purchases on superstables.com safer to recover. Agents arriving from superstables.com's setup page are directed to approval there.

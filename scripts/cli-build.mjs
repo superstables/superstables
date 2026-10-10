@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Builds the whole `superstables` CLI as plain JavaScript that runs with node alone (Node 20+): the skill zip's scripts/
+// Builds the whole `superstables` CLI as plain JavaScript that runs with node alone (Node 22+): the skill zip's scripts/
 // (see scripts/skill.mjs). No checkout, no node_modules.
 //
 // One esbuild call bundles src/cli/main.ts and the budget's dispatcher and rail scripts (the same entries as
@@ -25,8 +25,8 @@ const ENTRY = `#!/usr/bin/env node
 // superstables, standalone: the same commands as the superstables binary, bundled with everything it needs.
 // See VERSION.json for the build and THIRD_PARTY_NOTICES.txt for the bundled packages.
 const major = Number(process.versions.node.split(".")[0]);
-if (major < 20) {
-  console.error(\`superstables needs Node 20 or newer; this is Node \${process.versions.node}.\`);
+if (major < 22) {
+  console.error(\`superstables needs Node 22 or newer; this is Node \${process.versions.node}.\`);
   process.exit(1);
 }
 await import("./cli/main.mjs");
