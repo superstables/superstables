@@ -1731,11 +1731,13 @@ async function ownerGate({ cmd, f, ctx }) {
     writeResult(result);
     process.exit(code);
   }
+  if (r.kind === "unstopped") {
+    // a command in the worker's group may still broadcast, whatever the record holds now
+    return emit(5, { ...ctx, state: "unknown", id, next: `the background approval could not be stopped, so it may still send a transaction. Check wallet activity and ${statusCommand(f)} before retrying, and do not start another owner command on this chain. The log is ${logFile(id)}`, reason: r.reason });
+  }
   if (r.kind === "failed") {
-    // the worker's group would not stop; its command may have sent before that
-    const failed = { ...ctx, state: "failed", id, next: `check wallet activity before retrying. The log is ${logFile(id)}`, reason: r.reason };
-    const a = recordMayHaveSent(readApproval(id)) ? afterSend(1, failed, checkCommand(failed)) : { code: 1, fields: failed };
-    return emit(a.code, a.fields);
+    // the worker's group stopped, and its record held no send when startDetached stored this under the record's lock
+    return emit(1, { ...ctx, state: "failed", id, next: `check wallet activity before retrying. The log is ${logFile(id)}`, reason: r.reason });
   }
   const rec = r.record;
   writeApprove(`APPROVE ${JSON.stringify({ action: rec.action, url: rec.url, expires: rec.expires, terms: rec.terms, ...(rec.matchCode ? { matchCode: rec.matchCode } : {}) })}`);

@@ -627,9 +627,10 @@ function forwardLog(id, at, onLog) {
 
 /**
  * Start the worker detached and return once it has a link ({ kind: "waiting" }), ended before it needed one
- * ({ kind: "final" }: a refusal before any page, nothing to do, or a stop after its command may have sent, unknown), or
- * failed to open a page before it was about to send anything ({ kind: "failed" }).
- * @returns {Promise<{ kind: "waiting" | "final" | "failed", record: any, reason?: string }>}
+ * ({ kind: "final" }: a refusal before any page, nothing to do, or a stop after its command may have sent, unknown),
+ * failed to open a page before it was about to send anything ({ kind: "failed" }), or opened none and its process group
+ * would not stop, so a command in it may still send ({ kind: "unstopped" }: no final is stored, and the chain stays held).
+ * @returns {Promise<{ kind: "waiting" | "final" | "failed" | "unstopped", record: any, reason?: string }>}
  * The caller must hold the chain (claim) first.
  */
 export async function startDetached({ id, command, rail, chain, cmd, args, cwd, env = process.env, timeoutS = 600, onLog = null, linkWaitMs = LINK_WAIT_MS }) {
@@ -686,12 +687,12 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
       if (last?.final) return { kind: "final", record: last };
       // no page asked a wallet, but the command may have sent with its own key (recover's revoke): stop anything left in
       // its group before freeing the chain
-      if (!(await stopGroup(child.pid, { start: childStart.pidStart, startUtc: childStart.pidStartUtc, location: childStart }))) return { kind: "failed", record: last, reason: `the background approval stopped before it opened a page, but process group ${child.pid} would not stop; the chain stays held` };
+      if (!(await stopGroup(child.pid, { start: childStart.pidStart, startUtc: childStart.pidStartUtc, location: childStart }))) return { kind: "unstopped", record: last, reason: `the background approval stopped before it opened a page, but process group ${child.pid} would not stop; the chain stays held` };
       const reason = spawnError ? `the background approval could not start: ${spawnError.message}` : "the background approval stopped before it opened a page";
       return endWithoutLink(reason, reason);
     }
     if (Date.now() > until) {
-      if (!(await stopGroup(child.pid, { start: childStart.pidStart, startUtc: childStart.pidStartUtc, location: childStart }))) return { kind: "failed", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s, and process group ${child.pid} would not stop; the chain stays held` };
+      if (!(await stopGroup(child.pid, { start: childStart.pidStart, startUtc: childStart.pidStartUtc, location: childStart }))) return { kind: "unstopped", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s, and process group ${child.pid} would not stop; the chain stays held` };
       return endWithoutLink(`no approval page within ${Math.round(linkWaitMs / 1000)} s`, `no approval page within ${Math.round(linkWaitMs / 1000)} s; the background approval was stopped`);
     }
     await sleep(150);
