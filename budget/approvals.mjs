@@ -627,7 +627,9 @@ function forwardLog(id, at, onLog) {
 
 /**
  * Start the worker detached and return once it has a link ({ kind: "waiting" }), ended before it needed one
- * ({ kind: "final" }: a refusal before any page, nothing to do), or failed to open a page ({ kind: "failed" }).
+ * ({ kind: "final" }: a refusal before any page, nothing to do, or a stop after its command may have sent, unknown), or
+ * failed to open a page before it was about to send anything ({ kind: "failed" }).
+ * @returns {Promise<{ kind: "waiting" | "final" | "failed", record: any, reason?: string }>}
  * The caller must hold the chain (claim) first.
  */
 export async function startDetached({ id, command, rail, chain, cmd, args, cwd, env = process.env, timeoutS = 600, onLog = null, linkWaitMs = LINK_WAIT_MS }) {
@@ -653,6 +655,15 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
   }
   const until = Date.now() + linkWaitMs;
   const at = { offset: 0, ino: undefined, text: "" };
+  // The worker is stopped and never showed a link. A final it stored stands; one that may have sent is unknown; only one
+  // that never was about to send fails. recordFinalWith frees the chain and removes any access token the worker recorded.
+  const endWithoutLink = (reason, failedReason) => {
+    const { record, stored } = recordFinalWith(id, (before) => recordMayHaveSent(before)
+      ? sentUnknown(before, `${reason}, after its command was about to broadcast a transaction`)
+      : { code: 1, result: { ok: false, command, rail, chain, state: "failed", id, next: "check wallet activity and budget status before retrying", reason } });
+    release(rail, chain, id);
+    return stored && !recordMayHaveSent(record) ? { kind: "failed", record, reason: failedReason } : { kind: "final", record: record ?? readApproval(id) };
+  };
   for (;;) {
     forwardLog(id, at, onLog);
     const record = readApproval(id);
@@ -673,19 +684,15 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
       forwardLog(id, at, onLog);
       const last = readApproval(id);
       if (last?.final) return { kind: "final", record: last };
-      // no link was ever shown, so no wallet was asked: stop anything left in its group before freeing the chain
+      // no page asked a wallet, but the command may have sent with its own key (recover's revoke): stop anything left in
+      // its group before freeing the chain
       if (!(await stopGroup(child.pid, { start: childStart.pidStart, startUtc: childStart.pidStartUtc, location: childStart }))) return { kind: "failed", record: last, reason: `the background approval stopped before it opened a page, but process group ${child.pid} would not stop; the chain stays held` };
       const reason = spawnError ? `the background approval could not start: ${spawnError.message}` : "the background approval stopped before it opened a page";
-      // final (recordFinal frees the chain and removes any access token the worker had recorded)
-      recordFinal(id, 1, { ok: false, command, rail, chain, state: "failed", id, next: "check wallet activity and budget status before retrying", reason });
-      release(rail, chain, id);
-      return { kind: "failed", record: readApproval(id), reason };
+      return endWithoutLink(reason, reason);
     }
     if (Date.now() > until) {
       if (!(await stopGroup(child.pid, { start: childStart.pidStart, startUtc: childStart.pidStartUtc, location: childStart }))) return { kind: "failed", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s, and process group ${child.pid} would not stop; the chain stays held` };
-      recordFinal(id, 1, { ok: false, command, rail, chain, state: "failed", id, next: "check wallet activity and budget status before retrying", reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s` });
-      release(rail, chain, id);
-      return { kind: "failed", record: readApproval(id), reason: `no approval page within ${Math.round(linkWaitMs / 1000)} s; the background approval was stopped` };
+      return endWithoutLink(`no approval page within ${Math.round(linkWaitMs / 1000)} s`, `no approval page within ${Math.round(linkWaitMs / 1000)} s; the background approval was stopped`);
     }
     await sleep(150);
   }
@@ -747,6 +754,22 @@ export function pageWords(page, rail) {
 }
 
 /**
+ * The approval's command is about to broadcast a transaction (its rail printed SENDING, ../proof.mjs). Kept on the record,
+ * so every later reader, in any process, knows the command may have sent, with or without a page.
+ */
+export function recordSending(id) {
+  const record = update(id, (r) => (r.sending ? null : { sending: true }));
+  // an approval that another process already ended (the link wait, wait, --replace) answered without a send: none leaves now
+  if (record?.final && !record.sending) throw new Error(`approval ${id} has already ended (${record.final.result?.state}); this transaction is not sent`);
+  return record;
+}
+
+/** Whether this approval may have sent: its command was about to broadcast (recordSending), or its wallet was asked. */
+export function recordMayHaveSent(record, page = null) {
+  return record?.sending === true || walletWasAsked(record, page);
+}
+
+/**
  * Whether the owner's wallet was asked to send for this approval: the page's state (pageStateOf) says so, or the page log
  * did earlier, on this page or an earlier one of the same approval. Without `page`, the log alone decides, and nothing is
  * read over the network.
@@ -786,20 +809,21 @@ function lastPageStatus(url) {
  * (`hostedCancelled`) or it was a link, which moves no funds.
  */
 function abandoned(record, hostedCancelled = false) {
-  const page = { ...lastPageStatus(record.url), sending: walletWasAsked(record) };
+  const page = lastPageStatus(record.url);
   // the logged value stays as written (`connected`, `linked`); the reason says what it means for this approval
   const last = page.status === "connected" ? (record.hosted ? "agent added" : "owner connected") : page.status === "linked" ? "agent added" : page.status;
-  const base = { command: record.command, rail: record.rail, chain: record.chain };
-  const status = `superstables budget status --rail ${record.rail}${record.chain ? ` --chain ${record.chain}` : ""}`;
   // a link moves no funds, unless wallet steps follow it on the same page (setup --hosted --grant/--fund)
   const hostedOpen = Boolean(record.hosted && (record.hosted.kind !== "link" || record.hosted.then?.length) && !hostedCancelled);
-  if (hostedOpen && !page.sending) {
-    return { code: 5, result: { ok: false, ...base, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason: "the background approval stopped while its request may still be open on superstables.com; the owner may still approve it there" } };
-  }
-  if (page.sending) {
-    return { code: 5, result: { ok: false, ...base, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason: `the background approval stopped after the wallet was asked to send (last page state: ${last})` } };
-  }
-  return { code: 3, result: { ok: false, ...base, state: "refused_precheck", id: record.id, url: record.url, next: "no submission is recorded. Check wallet activity and budget status; retry only at the owner's request", reason: `the background approval stopped without a recorded submission (last page state: ${last ?? "none"})` } };
+  if (walletWasAsked(record)) return sentUnknown(record, `the background approval stopped after the wallet was asked to send (last page state: ${last})`);
+  if (record.sending) return sentUnknown(record, `the background approval stopped after its command was about to broadcast a transaction (last page state: ${last ?? "none"})`);
+  if (hostedOpen) return sentUnknown(record, "the background approval stopped while its request may still be open on superstables.com; the owner may still approve it there");
+  return { code: 3, result: { ok: false, command: record.command, rail: record.rail, chain: record.chain, state: "refused_precheck", id: record.id, url: record.url, next: "no submission is recorded. Check wallet activity and budget status; retry only at the owner's request", reason: `the background approval stopped without a recorded submission (last page state: ${last ?? "none"})` } };
+}
+
+/** The final answer for an approval that may have sent and has no RESULT of its own: unknown, exit 5, read the chain next. */
+function sentUnknown(record, reason) {
+  const status = `superstables budget status --rail ${record.rail}${record.chain ? ` --chain ${record.chain}` : ""}`;
+  return { code: 5, result: { ok: false, command: record.command, rail: record.rail, chain: record.chain, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason } };
 }
 
 /**
@@ -836,9 +860,10 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
       // a hosted request is still on the site: ask it to cancel first (refused once the wallet was asked)
       const h = record.hosted?.token ? record.hosted : null;
       const cancelled = h ? (await cancelSiteRequest({ site: h.site, id: h.requestId, token: h.token }))?.cancelled === true : false;
-      const final = abandoned(record, cancelled);
-      recordFinal(id, final.code, final.result);
-      return { final: true, ...final, record: readApproval(id) };
+      // decided from the record as stored under its lock: a final another process stored meanwhile stands
+      const { record: ended } = recordFinalWith(id, (before) => abandoned(before, cancelled));
+      const stored = ended ?? readApproval(id);
+      return { final: true, code: stored.final.code, result: stored.final.result, record: stored };
     }
     const orphaned = !alive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined });
     if (record.url && record.url !== first.url) return { final: false, record, page: await pageStateOf(record), orphaned };
@@ -885,12 +910,13 @@ export async function replacePending(record, byId) {
   for (let i = 0; i < 100 && processesAlive(record); i++) await sleep(100);
   if (processesAlive(record)) await stopRecord(record);
   if (processesAlive(record)) return { ok: false, reason: `the pending approval ${record.id} was cancelled on its page, but its processes would not stop` };
-  if (!readApproval(record.id)?.final) {
-    recordFinal(record.id, 3, {
+  // its page never asked the wallet, but its command may have sent before that page (recover's own revoke)
+  recordFinalWith(record.id, (before) => recordMayHaveSent(before)
+    ? sentUnknown(before, `replaced by ${byId}: its page was cancelled before the wallet was asked, after its command was about to broadcast a transaction`)
+    : { code: 3, result: {
       ok: false, command: record.command, rail: record.rail, chain: record.chain, state: "refused_precheck", id: record.id, url: record.url,
       next: `the previous approval was cancelled before the wallet was asked. Check wallet activity before using the new approval ${byId}`, reason: `replaced by ${byId}: cancelled before the wallet was asked; nothing was sent`,
-    });
-  }
+    } });
   release(record.rail, record.chain, record.id);
   return { ok: true };
 }

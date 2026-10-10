@@ -26,6 +26,7 @@ import {
 } from "../src/core/signer/owner-approval-server.ts";
 import { ownerApprovalsLog } from "./paths.mjs";
 import { HOLDER_ENV, recordHosted } from "./approvals.mjs";
+import { sendBegan } from "./proof.mjs";
 import { HOSTED_KIND, HostedApprovals, HostedRefusal, type HostedBundleOutcome, type HostedSettings, type HostedStep, type PriorLink } from "./hosted.ts";
 import { isOtherSite, siteName, siteOrigin } from "./site.mjs";
 
@@ -301,7 +302,8 @@ export function ownerPageFor(rail: OwnerRail) {
       // the wallet was never asked to send: this approval sent nothing. An expired link is not a decision, so asking again is safe.
       const expired = outcome.status === "expired";
       const reason = expired && !/expired/.test(outcome.reason) ? `the approval link expired: ${outcome.reason}` : outcome.reason;
-      const nothing = earlier ? "this step sent nothing" : "nothing was sent";
+      // this page sent nothing, but this command may have broadcast a transaction of its own before it (recover's revoke)
+      const nothing = earlier || sendBegan() ? "this step sent nothing" : "nothing was sent";
       const next = expired
         ? `${before}${nothing}: the approval link expired before the owner approved. To try again, run the same command again for a new one${command === "setup" ? " (setup reuses the agent key it created)" : ""}`
         : `${before}${nothing}. Request a new approval only if the owner asks`;
