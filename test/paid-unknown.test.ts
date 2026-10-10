@@ -1722,6 +1722,22 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/cli.mjs", has: "no list to show; ${any}", why: "find reads a site's service list; it sends nothing" },
 ];
 
+describe("the send mark a rail keeps on its approval record (budget/proof.mjs sendBegins)", () => {
+  it("lets no broadcast leave without the mark: none for an approval with no record here, and the mark on one that has a record", async () => {
+    const script = `const p = await import(${JSON.stringify(resolve(ROOT, "budget/proof.mjs"))});
+      const a = await import(${JSON.stringify(resolve(ROOT, "budget/approvals.mjs"))});
+      const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: ["0x00"] });
+      const attempt = (id) => { process.env[a.HOLDER_ENV] = id; try { p.markSend(body); return "broadcast"; } catch (e) { return "refused: " + e.message; } };
+      const kept = a.newApprovalId();
+      a.startForeground({ id: kept, command: "grant", rail: "evm", chain: "base-sepolia" });
+      const missing = a.newApprovalId();
+      console.log("MARK " + JSON.stringify({ missing, refused: attempt(missing), record: a.readApproval(missing), kept: attempt(kept), sending: a.readApproval(kept)?.sending ?? null }));`;
+    const ran = await exec(["--input-type=module", "-e", script], budgetEnv(newHome()));
+    const mark = JSON.parse(ran.stdout.split("\n").find((l) => l.startsWith("MARK "))!.slice(5));
+    expect(mark).toEqual({ missing: mark.missing, refused: `refused: approval ${mark.missing} has no record on this machine to keep this send on; this transaction is not sent`, record: null, kept: "broadcast", sending: true });
+  });
+});
+
 describe("once money may have moved, every answer says unknown or uncertain", () => {
   for (const row of ROWS) {
     it(row.path, async () => {
