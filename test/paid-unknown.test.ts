@@ -132,6 +132,27 @@ function* nestedObjects(value: unknown, path = ""): Generator<[string, Record<st
   }
 }
 
+/**
+ * No answer past the boundary says nothing was paid in its fields, whatever its state: not at the top (unless the chain
+ * proved it, `proven`), and not in any object inside it (a setup's steps, the open purchase under pending, a payment),
+ * where a forbidden state is refused too.
+ */
+function assertNoUnpaidFields(at: string, surface: Surface, body: unknown, proven: boolean): void {
+  if (!body || typeof body !== "object") return;
+  const top = body as Record<string, unknown>;
+  if (!proven) {
+    if ("paid" in top) expect(top.paid, `${at}: paid`).not.toBe(false);
+    if ("amount" in top) expect(top.amount, `${at}: amount`).not.toBe("0");
+    if ("money_moved" in top) expect(top.money_moved, `${at}: money_moved`).not.toBe(false);
+  }
+  for (const [path, inner] of nestedObjects(body)) {
+    if ("money_moved" in inner) expect(inner.money_moved, `${at}: ${path}.money_moved`).not.toBe(false);
+    if ("paid" in inner) expect(inner.paid, `${at}: ${path}.paid`).not.toBe(false);
+    if ("amount" in inner) expect(inner.amount, `${at}: ${path}.amount`).not.toBe("0");
+    if (typeof inner.state === "string") expect(FORBIDDEN_STATES[surface], `${at}: ${path}.state`).not.toContain(inner.state);
+  }
+}
+
 function assertProperty(seen: Seen, e: Expect): void {
   const at = `${seen.at} (${seen.cmd ?? seen.route ?? seen.surface})`;
   if (e.verdict === "before") {
@@ -152,17 +173,8 @@ function assertProperty(seen: Seen, e: Expect): void {
     const says = SAYS[e.verdict as "unknown" | "paid"][seen.surface];
     expect(says, `${at}: state ${o.state} for ${e.verdict}`).toContain(o.state);
     expect(FORBIDDEN_STATES[seen.surface], `${at}: forbidden state`).not.toContain(o.state);
-    if (o.paid !== undefined) expect(o.paid, `${at}: paid`).not.toBe(false);
-    if (o.amount !== undefined) expect(o.amount, `${at}: amount`).not.toBe("0");
-    if (seen.body && typeof seen.body === "object" && "money_moved" in seen.body) expect(seen.body.money_moved, `${at}: money_moved`).not.toBe(false);
-    // the same for every object inside the answer: a setup's steps, the open purchase under pending, a payment
-    for (const [path, inner] of nestedObjects(seen.body)) {
-      if ("money_moved" in inner) expect(inner.money_moved, `${at}: ${path}.money_moved`).not.toBe(false);
-      if ("paid" in inner) expect(inner.paid, `${at}: ${path}.paid`).not.toBe(false);
-      if ("amount" in inner) expect(inner.amount, `${at}: ${path}.amount`).not.toBe("0");
-      if (typeof inner.state === "string") expect(FORBIDDEN_STATES[seen.surface], `${at}: ${path}.state`).not.toContain(inner.state);
-    }
   }
+  assertNoUnpaidFields(at, seen.surface, seen.body, exception !== undefined);
   if (o.own && o.state !== undefined) {
     const code = seen.surface === "budget" && o.state === "settled" && seen.body?.delivered !== true ? 4 : EXIT[seen.surface][o.state];
     expect(seen.exit, `${at}: exit for ${o.state}`).toBe(code);
@@ -1134,6 +1146,12 @@ const NO_ANSWER_AFTER_BOUNDARY: Record<string, string> = {
   "budget unlock": "clears locks after the owner stopped every process; it reports lock state only, and its next for an operation is reconcile",
 };
 
+const REASONS: Record<string, string> = NO_ANSWER_AFTER_BOUNDARY;
+/** The declared keys that no row covers and no reason explains. An empty or missing reason explains nothing. */
+function unexplained(declared: string[], covered: Set<string>, reasons: Record<string, string | undefined>): string[] {
+  return declared.filter((k) => !covered.has(k) && !(typeof reasons[k] === "string" && reasons[k]!.trim() !== ""));
+}
+
 /** A commander "Commands:" section's names, as scripts/cli-docs.mjs reads them. */
 function commandsOf(help: string): string[] {
   const lines = help.split("\n");
@@ -1178,6 +1196,19 @@ describe("once money may have moved, every answer says unknown or uncertain", ()
     }, row.timeout ?? 60_000);
   }
 
+  it("refuses a not-paid field on any answer past the boundary, and a listed key whose reason is empty", () => {
+    const wait = (body: Record<string, unknown>): Seen => ({ at: "self-test", surface: "budget", cmd: "budget wait", exit: 2, body: { command: "wait", state: "show_owner_first", next: "this wait did not read the approval, so it says nothing about whether the owner approved or paid it. Then wait --shown.", ...body }, text: "" });
+    const check = (body: Record<string, unknown>) => () => assertProperty(wait(body), { verdict: "unknown", match: {} });
+    expect(check({})).not.toThrow();
+    expect(check({ paid: false })).toThrow(/self-test \(budget wait\): paid/);
+    expect(check({ amount: "0" })).toThrow(/self-test \(budget wait\): amount/);
+    expect(check({ money_moved: false })).toThrow(/self-test \(budget wait\): money_moved/);
+    expect(check({ pending: { paid: false } })).toThrow(/self-test \(budget wait\): pending\.paid/);
+    expect(check({ steps: [{ amount: "0" }] })).toThrow(/self-test \(budget wait\): steps\.0\.amount/);
+    expect(unexplained(["route a /x", "route a /y", "route a /z", "route a /w"], new Set(["route a /x"]), { "route a /y": "", "route a /z": undefined, "route a /w": "it signs only" })).toEqual(["route a /y", "route a /z"]);
+    expect(unexplained(["route a /y"], new Set(), { "route a /y": "   " })).toEqual(["route a /y"]);
+  });
+
   it("covers every wallet route, attempt state and command the code declares", async () => {
     const main = commandsOf((await superstables(newHome(), ["--help"])).stdout);
     const budgetCommands = budgetHandlers();
@@ -1192,9 +1223,9 @@ describe("once money may have moved, every answer says unknown or uncertain", ()
     ];
     expect(declared).toEqual(expect.arrayContaining(["route tempo-transfer /sending", "route owner:evm-transaction /sending"]));
     const covered = new Set(ROWS.flatMap((r) => r.covers));
-    expect(declared.filter((k) => !covered.has(k) && !(k in NO_ANSWER_AFTER_BOUNDARY)), "declared, with no row and no reason").toEqual([]);
-    expect([...covered, ...Object.keys(NO_ANSWER_AFTER_BOUNDARY)].filter((k) => !declared.includes(k)), "listed, but not declared").toEqual([]);
-    expect([...covered].filter((k) => k in NO_ANSWER_AFTER_BOUNDARY), "both covered by a row and listed with a reason").toEqual([]);
+    expect(unexplained(declared, covered, REASONS), "declared, with no row and no reason").toEqual([]);
+    expect([...covered, ...Object.keys(REASONS)].filter((k) => !declared.includes(k)), "listed, but not declared").toEqual([]);
+    expect([...covered].filter((k) => k in REASONS), "both covered by a row and listed with a reason").toEqual([]);
     // every attempt state is either said after the boundary, and then a row covers it (the row checks it printed it), or never is
     const said = new Set<string | undefined>([...SAYS.unknown.pay, ...SAYS.paid.pay, EXCEPTIONS["pay-chain-unpaid"].state]);
     for (const state of ATTEMPT_STATES) {
