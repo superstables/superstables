@@ -9,7 +9,7 @@
 // page or the budget RESULT showed; assertProperty checks every one of those outputs, and each row pins its literal values.
 // The coverage test reads from the code the routes of every wallet step and of the owner approval page, the attempt
 // states, the pay CLI's commands and the budget dispatcher's handlers, and fails while any of them has neither a row nor
-// a reason in NO_ANSWER_AFTER_BOUNDARY. It needs no row to have run.
+// a reason in NO_ANSWER_AFTER_BOUNDARY or IN_PROCESS_ONLY. It needs no row to have run.
 
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -916,7 +916,7 @@ const ROWS: Row[] = [
   },
   {
     path: "budget recover: its gas step on the owner's page ended while the wallet may be sending (budget/evm/owner.ts, as recover runs it)",
-    covers: ["budget recover"],
+    covers: [],
     run: async () => {
       vi.resetModules();
       vi.doMock("../budget/evm/lib.js", async (original) => ({ ...(await original<object>()), sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), readUntil: async <T,>(read: () => Promise<T>) => read() }));
@@ -942,7 +942,7 @@ const ROWS: Row[] = [
         log.mockRestore();
         exit.mockRestore();
       }
-      return [{ at: "recover's gas step", surface: "budget", cmd: "budget recover", exit: code, body: resultOf(lines.join("\n")), text: lines.join("\n") }];
+      return [{ at: "recover's gas step", surface: "budget", cmd: "budget/evm/owner.ts fundInWallet, in process", exit: code, body: resultOf(lines.join("\n")), text: lines.join("\n") }];
     },
     expect: [{ verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", next: expect.stringMatching(/read whether it landed before running this again/) } }],
   },
@@ -1146,7 +1146,14 @@ const NO_ANSWER_AFTER_BOUNDARY: Record<string, string> = {
   "budget unlock": "clears locks after the owner stopped every process; it reports lock state only, and its next for an operation is reconcile",
 };
 
-const REASONS: Record<string, string> = NO_ANSWER_AFTER_BOUNDARY;
+/**
+ * Commands that do answer after the boundary, but that no row runs through the dispatcher, each with what checks it instead.
+ * A gap, written down: listing a command here is not a reason it is safe.
+ */
+const IN_PROCESS_ONLY: Record<string, string> = {
+  "budget recover": "not run through the dispatcher: recover needs the agent key to sign and send its own revoke and the return of the price, then two owner pages, and no fake here answers those sends. Its gas step's answer is checked by running budget/evm/owner.ts fundInWallet in process (row: budget recover: its gas step ...), and its partial return by running budget/evm/ops.ts makeSafe in process. The dispatcher's recover passes the rail's state and next through ownerOutcome and ownerNext, which the fund-agent and grant rows drive through the dispatcher",
+};
+const REASONS: Record<string, string> = { ...NO_ANSWER_AFTER_BOUNDARY, ...IN_PROCESS_ONLY };
 /** The declared keys that no row covers and no reason explains. An empty or missing reason explains nothing. */
 function unexplained(declared: string[], covered: Set<string>, reasons: Record<string, string | undefined>): string[] {
   return declared.filter((k) => !covered.has(k) && !(typeof reasons[k] === "string" && reasons[k]!.trim() !== ""));
@@ -1181,8 +1188,8 @@ function assertCovered(row: Row, seen: Seen[]): void {
     if (kind === "route") expect(seen.some((s) => s.step === name && s.route === route), key).toBe(true);
     if (kind === "state") expect(seen.some((s) => s.surface === "pay" && s.body.state === name), key).toBe(true);
     if (kind === "command") expect(seen.some((s) => s.cmd === `superstables ${name}`), key).toBe(true);
-    // wait prints the owner command's own RESULT, which names that command
-    if (kind === "budget") expect(seen.some((s) => s.cmd === `budget ${name}` || (s.surface === "budget" && s.body?.command === name)), key).toBe(true);
+    // wait prints the owner command's own RESULT, which names that command; a rail run in process is not the dispatcher
+    if (kind === "budget") expect(seen.some((s) => s.cmd === `budget ${name}` || (s.cmd?.startsWith("budget ") && s.body?.command === name)), key).toBe(true);
   }
 }
 
