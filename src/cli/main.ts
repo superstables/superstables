@@ -763,17 +763,19 @@ explain(
     .option("--limit <n>", "how many to show", toInteger, 20)
     .option("--json", "print the receipt records as a JSON array")
     .action((options: { limit: number; json?: boolean }) => {
-      const receipts = context().records.listReceipts(options.limit);
+      const all = context().records.listReceipts();
+      const receipts = all.slice(0, options.limit);
       if (options.json) {
         console.log(json(receipts.map(shownReceipt)));
         return;
       }
-      if (receipts.length === 0) {
+      // whether any receipt exists is read from all of them, never from the --limit window
+      if (all.length === 0) {
         // A receipt is written only once a payment is known; an attempt the owner approved may have paid without one.
         const open = context().records.listAttempts().filter(mayHavePaid);
         console.log(
           open.length === 0
-            ? "No payment has been made from this machine yet. `superstables attempts` lists attempts that did not pay."
+            ? "No receipt is recorded on this machine. `superstables attempts` lists every attempt and its state."
             : `No receipt is recorded on this machine, but ${open.length === 1 ? "1 attempt" : `${open.length} attempts`} may have paid: ` +
                 `${open.map((a) => `${a.id} (${a.state})`).join(", ")}. Whether ${open.length === 1 ? "it" : "they"} settled is unknown. ` +
                 "Do not pay again for them; `superstables status <attempt-id>` looks for each on chain.",
