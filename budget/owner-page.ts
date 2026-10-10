@@ -21,6 +21,7 @@ import {
   type OwnerActionOutcome,
   type OwnerChain,
   type OwnerTerms,
+  type OwnerVerdict,
   type SolanaTransactionPort,
 } from "../src/core/signer/owner-approval-server.ts";
 import { ownerApprovalsLog } from "./paths.mjs";
@@ -195,7 +196,7 @@ export function ownerPageFor(rail: OwnerRail) {
      * setup --new-owner replaces, shown on the page. Hosted: the owner adds this agent to their account instead.
      * `then` (hosted only): wallet steps on the same page after the link; `bundle` is what became of the link and each step.
      */
-    async askConnect(action: string, terms: OwnerTerms, signIn: string, replacing?: string, then?: HostedStep[], linkOpts: { prior?: PriorLink | null; newOwner?: boolean } = {}): Promise<{ handle: { finish(v: { ok: boolean; message: string; hash?: string }): void }; outcome: OwnerActionOutcome; bundle?: HostedBundleOutcome; link?: { id: string; code: string } }> {
+    async askConnect(action: string, terms: OwnerTerms, signIn: string, replacing?: string, then?: HostedStep[], linkOpts: { prior?: PriorLink | null; newOwner?: boolean } = {}): Promise<{ handle: { finish(v: OwnerVerdict): void }; outcome: OwnerActionOutcome; bundle?: HostedBundleOutcome; link?: { id: string; code: string } }> {
       const hosted = hostedSettings(action, "connect");
       if (then?.length && !hosted) throw new Error("wallet steps after adding the agent need hosted approvals");
       if (hosted) {

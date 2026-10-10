@@ -42,6 +42,7 @@ import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLin
 import { chosenSite, isSiteRequestId, siteOrigin } from '../site.mjs'
 import { KEYCHAIN, approvalSite, askConnect, checkGrantSent, closeOwnerPage, emit, endUnapproved, grantCalldata, iso, tokenBalance, useApprovalSite, useHostedAgent, type GrantPlan, type SentCheck } from './owner.ts'
 import { chainHead, readKey } from './lib/chain.ts'
+import type { OwnerVerdict } from '../../src/core/signer/owner-approval-server.ts'
 
 const { values: args } = parseCli({
   name: 'setup.ts',
@@ -349,7 +350,7 @@ async function main() {
   }
 
   let owner: Address
-  let finish: ((v: { ok: boolean; message: string }) => void) | null = null
+  let finish: ((v: OwnerVerdict) => void) | null = null
   let bundle: { steps: HostedStepOutcome[] } | undefined
   if (OWNER_KEY_FILE) {
     checkOwnerKeyFile(OWNER_KEY_FILE)
@@ -415,14 +416,14 @@ async function main() {
     console.log(`the owner connected ${owner} and signed the sign-in message`)
   }
   if (same(owner, agent)) {
-    finish?.({ ok: false, message: "That is the agent's own address. Connect your own wallet instead." })
+    finish?.({ outcome: "failed", message: "That is the agent's own address. Connect your own wallet instead." })
     await closeOwnerPage()
     process.exit(result(3, { state: 'refused_precheck', reason: "the owner address is the agent's address", next: "connect the owner's own wallet" }))
   }
   // every way an owner arrives (the key file, the page, the site): another owner than the one on record needs --new-owner
   if (recorded && !same(recorded, owner) && !newOwner) {
     const reason = `another owner (${recorded}) is recorded for this agent`
-    finish?.({ ok: false, message: `This machine records another owner for this agent (${recorded}). Nothing was changed.` })
+    finish?.({ outcome: "failed", message: `This machine records another owner for this agent (${recorded}). Nothing was changed.` })
     await closeOwnerPage()
     console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this machine.`)
     process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }))
@@ -465,7 +466,7 @@ async function main() {
   ]
   console.log('\nNext:')
   steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`))
-  finish?.({ ok: true, message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: grant a budget (the terminal lists the command).` })
+  finish?.({ outcome: "confirmed", message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: grant a budget (the terminal lists the command).` })
   await closeOwnerPage()
   process.exit(result(0, { state: 'ok', owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_ENV_PATH, agentKeyFile: AGENT_ENV_PATH, steps, next: 'superstables budget doctor --rail tempo, then superstables budget grant --rail tempo --amount A' }))
 }

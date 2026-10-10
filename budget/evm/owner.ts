@@ -296,7 +296,7 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     if (alt && alt.value === 0n) sent = await readSent(alt.hash, { from: owner, to: USDC, data, afterBlock: startBlock, siteFailed: outcome.siteFailed });
   }
   if (!sent) {
-    handle.finish({ ok: false, message: "The transaction did not show up on chain. Check your wallet's activity.", hash: outcome.hash });
+    handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain. Check your wallet's activity.", hash: outcome.hash });
     await closeOwnerPage();
     process.exit(emit(command, 5, withEarlier(earlier, { state: "unknown", tx: outcome.hash, reason: "the wallet reported a transaction the chain does not show (replaced, dropped or still pending)", next: `superstables budget status --rail evm${chainFlag}` })));
   }
@@ -306,7 +306,7 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash);
     console.log(`MISMATCH: ${reason}`);
     const now = await allowanceOf(owner, agent).catch(() => null);
-    handle.finish({ ok: false, message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Check the allowance and revoke again: ${REVOKE_HINT}`, hash: sent.hash });
+    handle.finish({ outcome: "failed", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Check the allowance and revoke again: ${REVOKE_HINT}`, hash: sent.hash });
     await closeOwnerPage();
     process.exit(emit(command, 3, withEarlier(earlier, { state: "mismatch", tx: sent.hash, allowance: now === null ? null : usdc(now), reason, next: `revoke again (superstables budget revoke --rail evm${chainFlag}) and check superstables budget status --rail evm${chainFlag}` })));
   }
@@ -317,24 +317,24 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     const state = now === null ? "could not be read" : now === 0n ? `reads 0, but not because of this transaction` : `still reads ${usdc(now)} ${SYM}`;
     const reason = `the revoke reverted on chain${sent.problems.length ? ` (${sent.problems.join("; ")})` : ""}; the allowance ${state}`;
     console.log(`FAILED: ${reason}`);
-    handle.finish({ ok: false, message: `The transaction reverted, so it revoked nothing. The allowance ${state}. ${now === 0n ? "Check that this is what you expect." : "Run the revoke again."}`, hash: sent.hash });
+    handle.finish({ outcome: "failed", message: `The transaction reverted, so it revoked nothing. The allowance ${state}. ${now === 0n ? "Check that this is what you expect." : "Run the revoke again."}`, hash: sent.hash });
     await closeOwnerPage();
     process.exit(emit(command, 1, withEarlier(earlier, { state: "failed", tx: sent.hash, allowance: now === null ? null : usdc(now), reason, next: now === 0n ? `superstables budget status --rail evm${chainFlag}: the allowance reads 0, set by another transaction` : "run revoke again" })));
   }
   if (sent.status === "success" && sent.unresolved) {
     const reason = `the transaction is on chain, but whether it revoked the allowance is not known yet: ${sent.unresolved}`;
     console.log(`UNKNOWN: ${reason}`);
-    handle.finish({ ok: false, message: "The transaction is on chain, but the command could not yet confirm what it did. Check the allowance before relying on it.", hash: sent.hash });
+    handle.finish({ outcome: "unknown", message: "The transaction is on chain, but the command could not yet confirm what it did. Check the allowance before relying on it.", hash: sent.hash });
     await closeOwnerPage();
     process.exit(emit(command, 5, withEarlier(earlier, { state: "unknown", tx: sent.hash, reason, next: `superstables budget status --rail evm${chainFlag}: read the allowance before running anything else` })));
   }
   const after = await readUntil(() => allowanceOf(owner, agent), (v) => v === 0n);
   if (after !== 0n) {
-    handle.finish({ ok: false, message: `The chain still shows an allowance of ${usdc(after)} ${SYM}. Run the revoke again.`, hash: sent.hash });
+    handle.finish({ outcome: "failed", message: `The chain still shows an allowance of ${usdc(after)} ${SYM}. Run the revoke again.`, hash: sent.hash });
     await closeOwnerPage();
     process.exit(emit(command, 1, withEarlier(earlier, { state: "not_revoked", tx: sent.hash, allowance: usdc(after), reason: "the allowance still reads above 0", next: "run revoke again" })));
   }
-  handle.finish({ ok: true, message: `Confirmed. This allowance is 0. Funds already withdrawn remain under the agent key. You can close this page.`, hash: sent.hash });
+  handle.finish({ outcome: "confirmed", message: `Confirmed. This allowance is 0. Funds already withdrawn remain under the agent key. You can close this page.`, hash: sent.hash });
   await closeOwnerPage();
   return sent.hash;
 }
@@ -378,18 +378,18 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
   console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`);
   const c = await checkFundSent(outcome.hash as Hex, { owner, agent, t, value, agentHad: agentHas, afterBlock: startBlock, siteFailed: outcome.siteFailed });
   if (c.state === "unknown") {
-    handle.finish({ ok: false, message: "The command could not confirm this transfer on chain yet. Check your wallet's activity.", hash: outcome.hash });
+    handle.finish({ outcome: "unknown", message: "The command could not confirm this transfer on chain yet. Check your wallet's activity.", hash: outcome.hash });
     await closeOwnerPage();
     process.exit(emit(command, 5, withEarlier(earlier, { state: "unknown", tx: c.tx, reason: c.reason, next: "superstables budget doctor --rail evm: read the agent's gas" })));
   }
   if (c.state !== "settled") {
     // the RESULT's reason, as a sentence for the page: a chain mismatch about the transfer, or the site's verdict as it is
     const prefix = "the transaction was not accepted as the planned step: ";
-    handle.finish({ ok: false, message: c.reason!.startsWith(prefix) ? `The transfer was not confirmed as the planned step: ${c.reason!.slice(prefix.length)}.` : `${c.reason}.`, hash: c.tx });
+    handle.finish({ outcome: "failed", message: c.reason!.startsWith(prefix) ? `The transfer was not confirmed as the planned step: ${c.reason!.slice(prefix.length)}.` : `${c.reason}.`, hash: c.tx });
     await closeOwnerPage();
     process.exit(emit(command, c.state === "mismatch" ? 3 : 1, withEarlier(earlier, { state: c.state, tx: c.tx, reason: c.reason, next: "check wallet activity, then superstables budget doctor --rail evm" })));
   }
-  handle.finish({ ok: true, message: `Done. Your agent received ${amt} ${GAS.symbol} and now has ${gasFmt(c.agentGas!)} ${GAS.symbol}. You can close this page.`, hash: c.tx });
+  handle.finish({ outcome: "confirmed", message: `Done. Your agent received ${amt} ${GAS.symbol} and now has ${gasFmt(c.agentGas!)} ${GAS.symbol}. You can close this page.`, hash: c.tx });
   await closeOwnerPage();
   return c.tx as Hex;
 }

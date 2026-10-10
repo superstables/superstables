@@ -788,7 +788,7 @@ describe("the owner approval page", () => {
     expect((await postJson(`${handle.url}/sent`, { address: OWNER.address, hash: HASH })).status).toBe(200);
     expect(await handle.settled).toEqual({ status: "sent", address: OWNER.address, hash: HASH });
     expect((await getJson(`${handle.url}/state`)).body.status).toBe("sent");
-    handle.finish({ ok: true, message: "Done. The chain shows a budget of 0.01 USDC.", hash: HASH });
+    handle.finish({ outcome: "confirmed", message: "Done. The chain shows a budget of 0.01 USDC.", hash: HASH });
     const state = await getJson(`${handle.url}/state`);
     expect(state.body.status).toBe("confirmed");
     expect(state.body.message).toContain("0.01 USDC");
@@ -1032,7 +1032,7 @@ describe("the owner approval page with a Solana wallet", () => {
     expect(calls.signed).toEqual(["c2lnbmVk"]);
     expect(calls.broadcast).toBe(1);
     expect(await handle.settled).toEqual({ status: "sent", address: SOL_OWNER.address, hash: "5".repeat(88) });
-    handle.finish({ ok: true, message: "Done. The chain shows a budget of 0.05 USDC." });
+    handle.finish({ outcome: "confirmed", message: "Done. The chain shows a budget of 0.05 USDC." });
     expect((await getJson(`${handle.url}/state`)).body.status).toBe("confirmed");
   });
 
@@ -1464,7 +1464,7 @@ const handle = server.request(input);
 const t = input.terms;
 recordLink(id, { action: "grant", url: handle.url, expires: new Date(handle.expiresAt).toISOString(), terms: { title: t.title, amount: t.amount, unit: t.unit, summary: t.summary } });
 const outcome = await handle.settled;
-if (outcome.status === "sent") handle.finish({ ok: true, message: "Done.", hash: outcome.hash });
+if (outcome.status === "sent") handle.finish({ outcome: "confirmed", message: "Done.", hash: outcome.hash });
 await server.close();
 const base = { command: "grant", rail: "evm", chain: "base-sepolia" };
 const code = outcome.status === "sent" ? 0 : 3;

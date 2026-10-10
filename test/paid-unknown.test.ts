@@ -24,6 +24,7 @@ import { DEFAULT_POLICY } from "../src/core/policy.js";
 import { quote } from "../src/core/quote.js";
 import { Records } from "../src/core/records.js";
 import { BrowserWalletSigner } from "../src/core/signer/browser.js";
+import { OwnerApprovalServer, type OwnerActionInput } from "../src/core/signer/owner-approval-server.js";
 import { STEPS } from "../src/core/signer/steps/index.js";
 import { WalletSigner } from "../src/core/signer/wallet.js";
 import { ATTEMPT_STATES } from "../src/core/types.js";
@@ -80,18 +81,19 @@ const EXCEPTIONS = {
 
 /** What may be said after the boundary, per surface. `undefined`: the answer states no outcome (a refused route). */
 const SAYS: Record<"unknown" | "paid", Record<Surface, (string | undefined)[]>> = {
-  unknown: { pay: ["uncertain", "approved", "submitting"], budget: ["unknown"], approval: ["unknown", "signed", undefined], listing: [undefined] },
+  unknown: { pay: ["uncertain", "approved", "submitting"], budget: ["unknown"], approval: ["unknown", "signed", "sending", "sent", undefined], listing: [undefined] },
   paid: { pay: ["settled", "paid_service_failed"], budget: ["settled"], approval: [], listing: [undefined] },
 };
 /** Never after the boundary, outside EXCEPTIONS. */
 const FORBIDDEN_STATES: Record<Surface, string[]> = {
   pay: ["awaiting_approval", "denied", "expired", "abandoned", "failed"],
   budget: ["failed", "not_found", "refused_precheck", "refused_chain", "waiting_owner"],
-  approval: ["denied", "expired", "abandoned", "refused"],
+  approval: ["denied", "expired", "abandoned", "refused", "rejected", "failed", "pending", "ready"],
   listing: [],
 };
+// "cannot prove nothing was submitted" says the opposite, so it is not one of them
 const FORBIDDEN_TEXT = [
-  /payment did not happen/i, /nothing was paid/i, /nothing was submitted/i, /nothing was sent/i, /nothing was signed or paid/i,
+  /payment did not happen/i, /nothing was paid/i, /(?<!prove )nothing was submitted/i, /(?<!prove )nothing was sent/i, /nothing was signed or paid/i,
   /nothing moved/i, /no funds moved/i, /not approved or paid yet/i, /has not finished approving/i, /no payment has been made/i, /did not pay/i,
 ];
 /** Budget answers that read nothing and so state no outcome, with the words each must say that in. */
@@ -195,9 +197,9 @@ async function seenRoute(at: string, link: string, route: string, body?: unknown
 }
 const status = async (at: string, home: string, id: string, env: Record<string, string>) => seenPay(at, "status", await superstables(home, ["status", id, "--json"], env));
 
-async function until<T>(read: () => T | undefined | false, what: string, ms = 20_000): Promise<T> {
+async function until<T>(read: () => T | undefined | false | Promise<T | undefined | false>, what: string, ms = 20_000): Promise<T> {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) {
-    const v = read();
+    const v = await read();
     if (v) return v;
   }
   throw new Error(`timed out waiting for ${what}`);
@@ -307,6 +309,29 @@ const loggedAsked = (home: string, requestId: string) =>
   }, "the page log to record the wallet was asked");
 const allowance = (value: bigint) => (method: string, params: any[]) =>
   method === "eth_call" && String(params[0]?.data).startsWith("0xdd62ed3e") ? `0x${value.toString(16).padStart(64, "0")}` : undefined;
+
+// ---- the owner approval page (src/core/signer/owner-approval-server.ts): the real server, the test posts what its page posts
+
+const OWNER_TERMS = { title: "Send funds for network fees", amount: "0.0001", unit: "ETH", summary: "Send 0.0001 ETH to the agent.", rows: [], enforced: [], notEnforced: [], notes: [] };
+const ownerTransfer = (timeoutMs: number): OwnerActionInput => ({
+  kind: "evm-transaction",
+  chain: { chainId: 84532, chainName: "Base Sepolia", rpcUrl: "http://127.0.0.1:1", explorer: "https://sepolia.basescan.org", nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 }, testnet: true },
+  terms: OWNER_TERMS,
+  account: OWNER,
+  transaction: { to: AGENT, data: "0x", value: "0x5af3107a4000" },
+  timeoutMs,
+});
+async function ownerServer(sendingGraceMs = 120_000) {
+  const server = new OwnerApprovalServer({ port: 0, sendingGraceMs });
+  await server.start();
+  opened.push({ close: () => server.close() });
+  return server;
+}
+/** The owner page asked the wallet to send: the owner's account connected, then /sending. */
+async function ownerAsked(url: string, address = OWNER) {
+  expect((await seenRoute("connect", url, "/account", { address })).http).toBe(200);
+  expect((await seenRoute("the wallet is asked to send", url, "/sending", { address })).body).toEqual({ status: "sending" });
+}
 
 // ---- budget, in process: the evm rail's reconcile and recover, the chain answered as in their own tests ------------------
 
@@ -612,6 +637,60 @@ const ROWS: Row[] = [
     },
     expect: [{ verdict: "unknown", match: { exit: 5, command: "fund-agent", state: "unknown", tx: { fundAgent: `0x${"c2".repeat(32)}` }, reason: expect.stringMatching(/value/) } }],
     timeout: 90_000,
+  },
+  {
+    path: "owner approval page, evm transaction: after the wallet was asked, a cancel, a rejection, and the end of the link",
+    covers: [],
+    run: async () => {
+      const server = await ownerServer(200);
+      const a = server.request(ownerTransfer(10_000));
+      await ownerAsked(a.url);
+      const cancel = await seenRoute("the command asks to cancel", a.url, "/cancel", {});
+      const reject = await seenRoute("the page's reject button", a.url, "/reject", { by: "page" });
+      const rejected = await seenRoute("the page's state after the rejection", a.url, "/state");
+      const b = server.request(ownerTransfer(300));
+      await ownerAsked(b.url);
+      await new Promise((r) => setTimeout(r, 800));
+      return [cancel, reject, rejected, await seenRoute("the page's state after its link ended", b.url, "/state")];
+    },
+    expect: [
+      { verdict: "unknown", match: { http: 409, cancelled: false, status: "sending", sending: true } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", reason: "a rejection was reported after the wallet was asked to send; the page cannot prove nothing was submitted, so the chain must be checked" } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, reason: "the wallet was asked to send, but no transaction came back to this page" } },
+    ],
+  },
+  {
+    path: "budget fund-agent on this machine: the owner's wallet reported a transfer the chain shows, but the agent's balance does not",
+    covers: [],
+    run: async () => {
+      const FUND: Hex = `0x${"c4".repeat(32)}`;
+      const blockHash = `0x${"ef".repeat(32)}`;
+      const b = await hostedBudget((method, params) => {
+        if (method === "eth_blockNumber") return "0x64";
+        if (params[0] !== FUND) return undefined;
+        if (method === "eth_getTransactionByHash") return { hash: FUND, blockHash, blockNumber: "0x65", from: OWNER, to: AGENT, input: "0x", value: "0x5af3107a4000", gas: "0x5208", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
+        if (method === "eth_getTransactionReceipt") return { transactionHash: FUND, blockHash, blockNumber: "0x65", from: OWNER, to: AGENT, status: "0x1", logs: [], gasUsed: "0x5208", cumulativeGasUsed: "0x5208", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+        return undefined;
+      });
+      writeFileSync(join(b.home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${AGENT}\n`);
+      const first = resultOf((await budget(b.home, ["fund-agent", "--rail", "evm", "--no-open"], b.env)).stdout);
+      expect(first).toMatchObject({ command: "fund-agent", state: "waiting_owner" });
+      await ownerAsked(first.url);
+      const sent = await seenRoute("the page reports the transaction", first.url, "/sent", { address: OWNER, hash: FUND });
+      const verdict = await until(async () => {
+        const st = await seenRoute("the page's state once the command read the chain", first.url, "/state");
+        return st.body.status !== "sent" && st;
+      }, "the command's verdict on the page", 60_000);
+      const done = seenBudget("wait for the end", "wait", await budget(b.home, ["wait", "--shown", "--id", first.id, "--timeout", "90"], b.env));
+      return [sent, verdict, done];
+    },
+    expect: [
+      { verdict: "unknown", match: { http: 200, status: "sent" } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"c4".repeat(32)}`, message: "The command could not confirm this transfer on chain yet. Check your wallet's activity." } },
+      { verdict: "unknown", match: { exit: 5, command: "fund-agent", state: "unknown", final: true, reason: expect.stringMatching(/^the transaction is on chain, but the agent's balance reads/) } },
+    ],
+    timeout: 150_000,
   },
   {
     path: "budget recover: its gas step on the owner's page ended while the wallet may be sending (budget/evm/owner.ts, as recover runs it)",

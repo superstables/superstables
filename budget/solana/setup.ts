@@ -31,6 +31,7 @@ import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
 import { chosenSite, isSiteRequestId, mismatchReason, siteOrigin } from "../site.mjs";
 import { askConnect, closeOwnerPage, confirmHosted, emit, endUnapproved, sol, useApprovalSite } from "./owner.ts";
+import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/setup.ts [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund | --fund-amount <sol>]]
                                       [--timeout <s>] [--no-open] [--owner-key-file <path>]
@@ -185,7 +186,7 @@ if (CAP !== undefined || LAMPORTS !== undefined) {
 }
 
 let owner: string;
-let finish: ((v: { ok: boolean; message: string }) => void) | null = null;
+let finish: ((v: OwnerVerdict) => void) | null = null;
 let bundle: { steps: HostedStepOutcome[] } | undefined;
 if (OWNER_KEY_FILE) {
   checkOwnerKeyFile(OWNER_KEY_FILE);
@@ -259,7 +260,7 @@ if (OWNER_KEY_FILE) {
 // every way an owner arrives (the key file, the page, the site): another owner than the one on record needs --new-owner
 if (owner === agent || (recorded && recorded !== owner && !newOwner)) {
   const reason = owner === agent ? "the owner address is the agent's address" : `another owner (${recorded}) is recorded for this agent`;
-  finish?.({ ok: false, message: owner === agent ? "That is the agent's own address. Connect your own wallet instead." : `This machine records another owner for this agent (${recorded}). Nothing was changed.` });
+  finish?.({ outcome: "failed", message: owner === agent ? "That is the agent's own address. Connect your own wallet instead." : `This machine records another owner for this agent (${recorded}). Nothing was changed.` });
   await closeOwnerPage();
   if (owner !== agent) console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this machine.`);
   process.exit(result(3, { state: "refused_precheck", reason, ...(owner === agent ? {} : { owner: recorded }), next: owner === agent ? "connect the owner's own wallet" : `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }));
@@ -306,7 +307,7 @@ const steps = [
 ];
 console.log("\nNext:");
 steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
-finish?.({ ok: true, message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: fund your wallet with devnet SOL and USDC, give the agent SOL for fees, then grant a budget (the terminal lists the commands).` });
+finish?.({ outcome: "confirmed", message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: fund your wallet with devnet SOL and USDC, give the agent SOL for fees, then grant a budget (the terminal lists the commands).` });
 await closeOwnerPage();
 process.exit(result(0, { state: "ok", owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_PATH, agentKeyFile: AGENT_KEY_PATH, steps, next: "superstables budget fund-agent --rail solana (SOL for the agent's fees), then superstables budget doctor --rail solana (it says what the owner still needs), then superstables budget grant --rail solana --amount A" }));
 

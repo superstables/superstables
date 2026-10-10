@@ -23,6 +23,7 @@ import { encodeFunctionData, type Hex } from "viem";
 import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, erc20Abi, USDC, publicClient, assertRpcChain, tx } from "./lib.ts";
 import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, tokenRow, approveRow, capWords, REVOKE_HINT, grantTx, grantEnforced, GRANT_NOT_ENFORCED } from "./owner.ts";
 import { mismatchPage, mismatchReason } from "../site.mjs";
+import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const cap = toUsdc(arg("cap")!);
 if (cap === 0n) { console.error("error: --cap must be above 0 (use revoke.ts to end a budget)"); process.exit(2); }
@@ -46,7 +47,7 @@ const liveRefusal = () => {
 };
 
 let approveTx: string | null = null;
-let finishPage: ((v: { ok: boolean; message: string; hash?: string }) => void) | null = null;
+let finishPage: ((v: OwnerVerdict) => void) | null = null;
 const { data } = grantTx(pub.agent, cap);
 
 if (!verifyOnly && OWNER_KEY_FILE) {
@@ -101,7 +102,7 @@ if (!verifyOnly && OWNER_KEY_FILE) {
     }
   }
   if (!sent) {
-    handle.finish({ ok: false, message: "The transaction did not show up on chain. Check your wallet's activity; the command reports it as unknown.", hash: outcome.hash });
+    handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain. Check your wallet's activity; the command reports it as unknown.", hash: outcome.hash });
     await closeOwnerPage();
     process.exit(result(5, { state: "unknown", tx: outcome.hash, reason: "the wallet reported a transaction the chain does not show (replaced, dropped or still pending)", next: "superstables budget status --rail evm: read the allowance before granting again" }));
   }
@@ -109,7 +110,7 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   const events = approvalsIn(sent.logs, pub.owner, pub.agent);
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, Approval events: ${events.map((v) => usdc(v)).join(", ") || "none"} ${SYM}`);
   if (sent.status !== "success") {
-    handle.finish({ ok: false, message: "The transaction reverted. No allowance was granted by it, but a network fee may have been charged.", hash: sent.hash });
+    handle.finish({ outcome: "failed", message: "The transaction reverted. No allowance was granted by it, but a network fee may have been charged.", hash: sent.hash });
     await closeOwnerPage();
     process.exit(result(1, { state: "failed", tx: sent.hash, reason: "the approve reverted on chain", next: "superstables budget status --rail evm" }));
   }
@@ -119,14 +120,14 @@ if (!verifyOnly && OWNER_KEY_FILE) {
     const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}. The budget was not recorded.`;
     console.log(`MISMATCH: ${reason}`);
     const now = await allowanceOf(pub.owner, pub.agent).catch(() => null);
-    handle.finish({ ok: false, message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: sent.hash });
+    handle.finish({ outcome: "failed", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: sent.hash });
     await closeOwnerPage();
     process.exit(result(3, { state: "mismatch", tx: sent.hash, reason, requested: usdc(cap), allowance: now === null ? null : usdc(now), next: "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" }));
   }
   if (sent.unresolved) {
     const reason = `the transaction is on chain, but whether it set the allowance is not known yet: ${sent.unresolved}. The budget was not recorded.`;
     console.log(`UNKNOWN: ${reason}`);
-    handle.finish({ ok: false, message: "The transaction is on chain, but the command could not yet confirm what it did. The budget was not recorded; the command reports it as unknown.", hash: sent.hash });
+    handle.finish({ outcome: "unknown", message: "The transaction is on chain, but the command could not yet confirm what it did. The budget was not recorded; the command reports it as unknown.", hash: sent.hash });
     await closeOwnerPage();
     process.exit(result(5, { state: "unknown", tx: sent.hash, reason, requested: usdc(cap), next: "superstables budget status --rail evm: read the allowance before granting again" }));
   }
@@ -137,7 +138,7 @@ console.log(`allowance read back: ${usdc(allowance)} ${SYM} (requested ${usdc(ca
 if (allowance !== cap) {
   const reason = `the allowance on chain is ${usdc(allowance)} ${SYM}, not the requested cap ${usdc(cap)}${allowance > cap ? ": the agent can spend MORE than the cap (the spending cap was changed in the wallet, or another amount was approved)" : ""}. The budget was not recorded.`;
   console.log(`REFUSED: ${reason}`);
-  finishPage?.({ ok: false, message: `The chain now shows an allowance of ${usdc(allowance)} ${SYM}, not ${capWords(cap)}. The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: approveTx ?? undefined });
+  finishPage?.({ outcome: "failed", message: `The chain now shows an allowance of ${usdc(allowance)} ${SYM}, not ${capWords(cap)}. The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: approveTx ?? undefined });
   await closeOwnerPage();
   process.exit(result(3, { state: "mismatch", tx: approveTx, reason, requested: usdc(cap), allowance: usdc(allowance), next: "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" }));
 }
@@ -151,6 +152,6 @@ writePublic(
 console.log(`budget: ${usdc(cap)} ${SYM}, allowance == cap on chain.${approveTx ? ` ${tx(approveTx)}` : ""}`);
 console.log(`no on-chain expiry and no on-chain period: the allowance stays until the agent spends it or someone revokes it${expiry ? `; advisory expiry ${new Date(expiry * 1000).toISOString()} is enforced only by buy's precheck, not by the chain` : ""}.`);
 console.log(`maximum that can move: ${usdc(cap < ownerBal ? cap : ownerBal)} ${SYM} (min of the cap and the owner's balance ${usdc(ownerBal)}), to ANY address the agent names, until the owner revokes.`);
-finishPage?.({ ok: true, message: `Done. The chain shows a budget of ${capWords(cap)} for your agent. You can close this page. To end it: ${REVOKE_HINT}`, hash: approveTx ?? undefined });
+finishPage?.({ outcome: "confirmed", message: `Done. The chain shows a budget of ${capWords(cap)} for your agent. You can close this page. To end it: ${REVOKE_HINT}`, hash: approveTx ?? undefined });
 await closeOwnerPage();
 process.exit(result(0, { state: "set", tx: approveTx, cap: usdc(cap), allowance: usdc(allowance), maxMovable: usdc(cap < ownerBal ? cap : ownerBal), expiry: expiry ? new Date(expiry * 1000).toISOString() : null, enforcedOnChain: { expiry: false, period: false, sellers: false }, next: "agent: buy" }));

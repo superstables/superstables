@@ -74,8 +74,16 @@ export type OwnerActionStatus =
   | "sent" // the page reported a transaction hash; waiting for the caller
   | "confirmed" // the caller checked the chain: done
   | "failed" // the caller checked the chain: it did not do what was planned
+  | "unknown" // the wallet was asked to send, and the chain does not show (yet) whether it did
   | "rejected"
   | "expired";
+
+/** The caller's verdict after reading the chain. "unknown": the wallet was asked to send and the chain cannot tell yet. */
+export interface OwnerVerdict {
+  outcome: "confirmed" | "failed" | "unknown";
+  message: string;
+  hash?: string;
+}
 
 export interface OwnerActionInput {
   kind: "connect" | "evm-transaction" | "solana-transaction";
@@ -113,7 +121,7 @@ export interface OwnerActionHandle {
   /** Resolves when the owner connected, sent, rejected, or the link expired (or was cancelled). */
   settled: Promise<OwnerActionOutcome>;
   /** The caller's verdict after reading the chain; the page shows it. */
-  finish(verdict: { ok: boolean; message: string; hash?: string }): void;
+  finish(verdict: OwnerVerdict): void;
 }
 
 interface OwnerRecord extends OwnerActionInput {
@@ -266,7 +274,7 @@ export class OwnerApprovalServer {
       settled,
       finish: (verdict) => {
         if (record.status !== "sent" && record.status !== "connected") return;
-        record.status = verdict.ok ? "confirmed" : "failed";
+        record.status = verdict.outcome;
         record.message = verdict.message;
         if (verdict.hash) record.hash = verdict.hash;
         this.audit(record);
@@ -291,7 +299,9 @@ export class OwnerApprovalServer {
   // ── lifecycle ──────────────────────────────────────────────────────────────────────────
 
   private end(record: OwnerRecord, status: "rejected" | "expired", reason: string): void {
-    record.status = status;
+    // once the wallet was asked to send, the page and its log say unknown: a rejection or an expiry cannot prove nothing went
+    // out. The caller still learns how it ended, with `sending`, and reads the chain.
+    record.status = record.sending ? "unknown" : status;
     record.reason = reason;
     this.audit(record);
     record.resolve({ status, reason, sending: record.sending });
@@ -411,6 +421,7 @@ export class OwnerApprovalServer {
         message: record.message,
         address: record.address,
         hash: record.hash,
+        sending: record.sending,
         expiresAt: record.expiresAt,
       });
     }

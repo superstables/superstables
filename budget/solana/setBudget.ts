@@ -20,6 +20,7 @@ import { connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnit
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, grantTerms, sol, transactionPort } from "./owner.ts";
+import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/setBudget.ts --amount <usdc> [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
@@ -78,7 +79,7 @@ console.log(`ApproveChecked: delegate ${agent.toBase58()}, ${formatUnits(cap)} U
 
 const ix = () => [createApproveCheckedInstruction(ata, USDC_MINT, agent, owner, cap, USDC_DECIMALS)];
 let sig: string;
-let finish: ((v: { ok: boolean; message: string; hash?: string }) => void) | null = null;
+let finish: ((v: OwnerVerdict) => void) | null = null;
 if (OWNER_KEY_FILE) {
   checkOwnerKeyFile(OWNER_KEY_FILE);
   const kp = loadOwner(OWNER_KEY_FILE).keypair;
@@ -103,20 +104,20 @@ if (OWNER_KEY_FILE) {
   const c = local ? { ...(await confirmSent(conn, local.sent()!)), problems: [] as string[] } : await confirmHosted(conn, sig, owner.toBase58(), startSlot, ix(), outcome.siteFailed);
   console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
   if (c.status === "unknown") {
-    handle.finish({ ok: false, message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
+    handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
     await closeOwnerPage();
     process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget status --rail solana: read the delegate before granting again" }));
   }
   if (c.status !== "success") {
     const why = c.status === "expired" ? "it was sent but never landed before its blockhash expired; nothing changed" : `it failed on chain (${JSON.stringify(c.err)}); nothing changed`;
-    handle.finish({ ok: false, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The grant is not confirmed. A failed on-chain transaction may still charge a fee.`, hash: sig });
+    handle.finish({ outcome: "failed", message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The grant is not confirmed. A failed on-chain transaction may still charge a fee.`, hash: sig });
     await closeOwnerPage();
     process.exit(result(1, { state: "failed", tx: sig, reason: why, next: "superstables budget status --rail solana" }));
   }
   if (c.problems.length) {
     const reason = mismatchReason(c.problems, c.siteFailed, sig);
     console.log(`MISMATCH: ${reason}`);
-    handle.finish({ ok: false, message: `${mismatchPage(c.problems, c.siteFailed, sig)} Revoke it: superstables budget revoke --rail solana.`, hash: sig });
+    handle.finish({ outcome: "failed", message: `${mismatchPage(c.problems, c.siteFailed, sig)} Revoke it: superstables budget revoke --rail solana.`, hash: sig });
     await closeOwnerPage();
     process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "revoke (superstables budget revoke --rail solana), then grant again" }));
   }
@@ -140,12 +141,12 @@ console.log(`explorer: ${explorerTx(sig)}`);
 if (problems().length) {
   const reason = `the chain does not show the planned budget: ${problems().join("; ")}`;
   console.log(`REFUSED: ${reason}`);
-  finish?.({ ok: false, message: `The chain shows something other than planned (${problems().join("; ")}). Revoke it: superstables budget revoke --rail solana.`, hash: sig });
+  finish?.({ outcome: "failed", message: `The chain shows something other than planned (${problems().join("; ")}). Revoke it: superstables budget revoke --rail solana.`, hash: sig });
   await closeOwnerPage();
   process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "revoke (superstables budget revoke --rail solana), then grant again" }));
 }
 const most = after.delegatedAmount < after.amount ? after.delegatedAmount : after.amount;
 console.log(`True maximum: ${formatUnits(most)} USDC in total (the smaller of the cap and the owner's balance ${formatUnits(after.amount)}). No expiry, no seller list: it lasts until spent or revoked.`);
-finish?.({ ok: true, message: `Done. The chain shows a budget of ${formatUnits(cap)} USDC for your agent. You can close this page. To end it: superstables budget revoke --rail solana. You approve that in your wallet too.`, hash: sig });
+finish?.({ outcome: "confirmed", message: `Done. The chain shows a budget of ${formatUnits(cap)} USDC for your agent. You can close this page. To end it: superstables budget revoke --rail solana. You approve that in your wallet too.`, hash: sig });
 await closeOwnerPage();
 process.exit(result(0, { state: "set", tx: sig, cap: formatUnits(cap), remaining: formatUnits(after.delegatedAmount), maxMovable: formatUnits(most), enforcedOnChain: { expiry: false, period: false, sellers: false }, next: "agent: buy" }));
