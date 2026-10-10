@@ -7,6 +7,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana
+
+Testnet only.
+
+### Upgrade and recovery
+
+Stop all older client processes, including agents, servers and approval processes, and upgrade every install before restarting.
+
+Ordinary payment lock recovery now requires proof that its processes have stopped; unverifiable locks need an explicit owner override. Recovery also covers cap locks, approval locks and single-purchase runners. Agents must stop and ask the owner. Recovery keeps payment evidence; check the original payment next. See [owner recovery instructions](https://github.com/superstables/superstables/blob/v0.4.0/budget/CLI.md#operation-lock-recovery).
+
+For `pay`, owners whose `policy.yaml` explicitly lists allowed stablecoins must add `USDG` if they want to allow it. Defaults include it.
+
+### Added
+
+- Budgets and Single purchase now support Robinhood Chain Testnet, `robinhood-testnet`, on your machine and on superstables.com, using Paxos test USDG. Budgets need ETH for gas; for single purchases, the seller or facilitator pays gas. `pay` caps count USDC, pathUSD and USDG together. See [Budgets](https://superstables.com/docs/client/budget).
+- The client supports owners using Sign in with Solana on superstables.com. Solana accounts support only Solana agents, budgets and single purchases, using the wallet they signed in with. Signing in grants no spending authority. See [Single purchase](https://superstables.com/docs/client/buy-once).
+- `quote --chain <chain>` selects that chain's offer. Quotes list other supported chains the seller offers; `pay` and suggested requotes keep the quoted chain.
+
+### Fixed
+
+- Refused purchase-status reads on superstables.com remain `unknown`, with `paid: null`. Resolve the account issue and check the original purchase; do not buy again. `--site https://superstables.com` now accepts the site's www approval links.
+- Budget journal writes are now durable. Approval pages on your machine offer wallets public RPCs, keeping configured RPC access keys out of those offers. `SUPERSTABLES_TEMPO_RPC` now also applies to Tempo payments.
+
+
 ## [0.3.1] - Safer payment recovery
 
 This release makes budget payments and single purchases on superstables.com safer to recover. Agents arriving from superstables.com's setup page are directed to approval there.
