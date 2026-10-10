@@ -1336,11 +1336,13 @@ const ROWS: Row[] = [
       const b = await recoverOnThisMachine({ ownerHolds: 500_000n, lands: true });
       const first = seenBudget("the owner's page opens after the agent's revoke", "recover", await budget(b.home, ["recover", "--rail", "evm", "--no-open", "--timeout", "10"], b.env));
       const id = first.body?.id as string;
+      const port = new URL(first.body?.url).port;
+      expect(first.body?.next, "the page's port, forwarded over SSH, as waiting_owner gives it").toContain(`It is on this machine only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host.`);
       const waiting = seenBudget("wait --shown, while the page waits", "wait", await budget(b.home, ["wait", "--shown", "--id", id, "--timeout", "0"], b.env));
       return [first, waiting, seenBudget("wait for the end", "wait", await budget(b.home, ["wait", "--shown", "--id", id, "--timeout", "60"], b.env))];
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/owner\//), next: expect.stringMatching(/^this command already began sending a transaction of its own for this approval, and whether it landed is not known yet\. The owner still has to approve the next step: reply to the owner/) } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/owner\//), message_for_owner: expect.stringMatching(/^Review and approve in your wallet: .+\nhttp:\/\/127\.0\.0\.1:\d+\/owner\/[\s\S]*\nTell me when you've approved\.$/), next: expect.stringMatching(/^this command already began sending a transaction of its own for this approval, and whether it landed is not known yet\. The owner still has to approve the next step: reply to the owner with message_for_owner, word for word .* Only the owner uses the page, in the browser with their wallet\. It is on this machine only: over SSH the owner first runs ssh -L (\d+):127\.0\.0\.1:\1 user@this-host\. Do not start another owner command$/) } },
       { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, next: expect.stringMatching(/^this command already began sending a transaction of its own/) } },
       { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true, next: expect.stringMatching(/this step sent nothing/) } },
     ],

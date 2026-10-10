@@ -80,6 +80,17 @@ describe("skills/superstables-payments/SKILL.md", () => {
     for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/wait --id ID --shown/);
   });
 
+  it("says an exit 5 with final false and message_for_owner still needs the owner: recover, after the agent's own revoke", () => {
+    const rules = skill.slice(skill.indexOf("## Safety rules"), skill.indexOf("## Before you answer"));
+    const rule10 = rules.slice(rules.indexOf("10. **Reply with `message_for_owner` and end your turn.**"), rules.indexOf("11. **"));
+    expect(rule10).toContain("`recover` that already sent the agent's own revoke returns `unknown`, exit 5, `final: false`, with `message_for_owner` and the approval link: the owner still has to approve the rest. Reply the same way, and add one line saying that the outcome of that revoke is not known yet.");
+    expect(skill).toContain("- [ ] A budget command or buy-once returned waiting_owner, or unknown with final: false and message_for_owner (recover)? Your reply is message_for_owner, word for word, and it ends your turn.");
+    expect(skill).toContain("`recover` that already sent the agent's own revoke returns `unknown`, `final: false`, exit 5, with the same fields: that is not approval either, and you reply the same way (step 4).");
+    expect(skill).toContain("If it is `unknown` with `final: false` (exit 5) and has `message_for_owner` (`recover`, after the agent's own revoke), the owner still has to approve: write the approval link again if `url` changed, and end your turn. If it is `unknown` with `final: false` and no `message_for_owner`, the owner's wallet was asked to send");
+    const exit5 = skill.split("\n").find((l) => l.startsWith("| any | 5 |")) ?? "";
+    expect(exit5).toContain("With `final: false` and `message_for_owner` (`recover`, after the agent's own revoke), the owner still has to approve: reply with `message_for_owner` and end your turn, as for `waiting_owner`");
+  });
+
   it("points only to files that exist, and the references state testnet too", () => {
     const files = new Set([...skill.matchAll(/\]\(((?:references\/)[A-Za-z]+\.md)(?:#[^)]*)?\)/g)].map((m) => m[1]));
     for (const f of ["references/once.md", "references/budget.md", "references/pay.md", "references/discovery.md"]) expect(files).toContain(f);

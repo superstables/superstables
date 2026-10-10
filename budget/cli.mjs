@@ -147,8 +147,10 @@ On a chain set up with --hosted, the approval link is on superstables.com instea
 owner is signed in with their wallet, and the APPROVE line carries a matchCode the owner picks there (recover stays on
 this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
-waiting_owner, final false and an approval id; the page stays open in the background. Write the approval link (and the
-match code) and the terms in your reply to the owner, a visible message, and end your turn there. When they say they've
+waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
+agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
+yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
+in your reply to the owner, a visible message, and end your turn there. When they say they've
 approved, run superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way
 the approval link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
@@ -384,7 +386,9 @@ Without it, wait refuses (exit 2, state show_owner_first) and polls nothing, so 
 owner approved or paid; once the approval has ended, or this machine already saw the owner act on it (the page log shows
 the wallet was asked; for buy-once, an earlier read showed payment evidence), it reads it without --shown.
 An agent writes the approval link, ends its turn, and runs wait when the owner says they've approved; while still
-waiting_owner it says so in one line and ends its turn again.
+waiting_owner it says so in one line and ends its turn again. unknown with final false and message_for_owner (recover,
+after the agent's own revoke) also means the owner has not finished: write the approval link again if url changed, and
+end the turn.
 --site is checked against the site the approval was made on, and refused if it differs.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
 approval sent nothing; after setup --hosted with --grant or --fund, or recover, an earlier step may have completed (read
@@ -551,8 +555,8 @@ Output: logs go to stderr. stdout ends with one line
   RESULT {"ok","command","rail","chain","op","state","final","chain_final","proof","paid","delivered","amount","remaining",
           "tx","rpc","id","url","matchCode","message_for_owner","budget_spent","next","reason"}
 Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
-while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read,
-true otherwise, unchanged from 0.3.0. Scripts test final for command completion.
+while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), and for a
+buy-once unknown that a later wait can still read, true otherwise, unchanged from 0.3.0. Scripts test final for command completion.
 chain_final is true only after the payment meets the chain finality rule, false for included-but-not-final payments,
 and null when no current matching payment inclusion is established. A paid provisional result has final true and
 chain_final false; reconcile or wait checks finality again. Command completion never proves payment finality.
@@ -560,7 +564,8 @@ next is the command to run next, or none.
 proof (an owner command's failed): the chain fact that shows its transaction changed nothing, reverted (it landed and
 failed) or, on solana, blockhash_expired (it can no longer land). Once the owner's wallet was asked or the command began
 to send, an owner command says failed only with a proof; any other end is unknown.
-message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
+message_for_owner (with waiting_owner, with recover's unknown that still needs the owner, and with budget_spent): the
+reply an agent sends the owner, word for word: the
 approval link, the match code (on superstables.com), the amount and chain, the testnet line. The agent sends it and ends its turn.
 budget_spent: true when buy was refused because the budget cannot cover the purchase (spent, revoked, never granted).
 --json (every command): stdout is only that object, as JSON without the RESULT prefix, like the rest of superstables;
@@ -577,7 +582,8 @@ Exit codes (the same numbers as superstables):
      a chain read failed or disagreed with the plan, its transaction differs from the plan, or a later step of setup
      --hosted with --grant or --fund, or of recover, was refused after an earlier one sent (read tx and steps); and a
      buy whose --op another process holds. Purchases: superstables budget reconcile --rail R --op ID. Owner commands:
-     status and the wallet's activity. buy-once: wait --id ID --shown while final is false. Never pay twice
+     status and the wallet's activity; with final false and message_for_owner (recover, after the agent's own revoke),
+     the owner still has to approve: send message_for_owner first, as for waiting_owner. buy-once: wait --id ID --shown while final is false. Never pay twice
 
 Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
   keys/budget/<rail>-agent.env               the agent key (mode 600). No owner key is ever stored here
@@ -1637,13 +1643,14 @@ const OWNER_COMMANDS = new Set(OWNER_COMMANDS_LIST);
  */
 const backstopS = (cmd, f) => Number(f.timeout ?? 600) * (cmd === "setup" && (f.grant !== undefined || f.fund !== undefined) ? 2 : 1) + (cmd === "setup" && (f.grant !== undefined || f.fund !== undefined) ? 420 : 0);
 /**
- * The next step after an owner command returned waiting_owner: write the link in a reply and end the turn; wait --shown
- * once the owner says they've approved. A link on this computer also needs the port forwarded over SSH.
+ * The next step after an owner command returned its approval link: write the link in a reply and end the turn; wait
+ * --shown once the owner says they've approved. A link on this computer also needs the port forwarded over SSH. `end`:
+ * the words after that, for a link on this computer.
  */
-const waitNext = (id, r = {}) => {
+const waitNext = (id, r = {}, end = "waiting_owner does not mean approved. If the approval link expires first, the command ends refused and nothing is sent: run it again for a new one. Do not start another owner command") => {
   if (r.matchCode) return showFirst(id, true);
   const port = /^http:\/\/127\.0\.0\.1:(\d+)\//.exec(r.url ?? "")?.[1] ?? "PORT";
-  return `${showFirst(id, false)} Only the owner uses the page, in the browser with their wallet. It is on this machine only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. waiting_owner does not mean approved. If the approval link expires first, the command ends refused and nothing is sent: run it again for a new one. Do not start another owner command`;
+  return `${showFirst(id, false)} Only the owner uses the page, in the browser with their wallet. It is on this machine only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. ${end}`;
 };
 /** The next step of a wait that is still waiting: poll again. A new link (recover can ask twice) is written first. */
 /** An approval whose command sent a transaction of its own (recover's revoke) before it needed the owner. */
@@ -1739,7 +1746,7 @@ async function ownerGate({ cmd, f, ctx }) {
   const missing = rec.wordsMissing ? `the rail's instructions for the owner were not in its log when the approval link was recorded; read them in ${logFile(id)} before writing to the owner, and use message_for_owner and next from this result` : undefined;
   if (missing) log(`\nsuperstables budget: ${missing}.`);
   if (recordMayHaveSent(rec)) {
-    return emit(5, { ...ctx, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} The owner still has to approve the next step: ${showFirst(id, Boolean(rec.matchCode))} Do not start another owner command`, ...(missing ? { reason: missing } : {}) });
+    return emit(5, { ...ctx, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} The owner still has to approve the next step: ${waitNext(id, rec, "Do not start another owner command")}`, ...(missing ? { reason: missing } : {}) });
   }
   emit(0, { ...ctx, state: "waiting_owner", ...approvalFields(rec), next: waitNext(id, rec), ...(missing ? { reason: missing } : {}) });
 }
