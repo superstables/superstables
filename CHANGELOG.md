@@ -14,6 +14,7 @@ Once a payment may have moved, the client reports it as unknown, never as unpaid
 - `superstables receipts` with no receipts names the attempts that may have paid (approved, in flight or uncertain). It said no payment had been made.
 - `superstables budget wait` answers `unknown` (exit 5, `final: false`) for an open owner approval once the owner's wallet was asked to send. It answered `waiting_owner` (exit 0) and said the owner had not finished approving.
 - `superstables budget wait` without `--shown` reads an owner approval whose wallet was asked, and a single purchase on superstables.com that showed payment evidence. It answered that the purchase was not approved or paid yet.
+- `superstables budget buy` with the `--op` of a purchase that is still `submitted` or `unknown` answers `unknown` (exit 5) and points to `reconcile`. It answered `refused_precheck` (exit 3).
 
 ## [0.3.1] - Safer payment recovery
 

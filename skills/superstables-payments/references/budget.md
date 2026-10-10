@@ -142,7 +142,7 @@ superstables budget reconcile --rail R --chain C --op ID
 
 Run it after a `buy` exits 5, after a `buy` was stopped (Ctrl-C, a tool timeout: that is always `unknown`), or before reusing an `--op`. It reads the chain from the purchase's journal on your machine and never signs or sends. States: `settled` (paid; report `tx`), `failed` (the purchase did not settle; funds may have been pulled, and returned or not: report what `tx`, `amount` and `reason` establish, with the hashes), `not_found` (no payment on chain for that op), `unknown` (still unclear: report it and do not pay again). On `solana` a refused payment stays `unknown` until its blockhash expires, about a minute.
 
-A `buy` with the same `--op` after `submitted` or `unknown` is refused and points to `reconcile`. Never switch to a new `--op` to retry an uncertain purchase.
+A `buy` with the same `--op` after `submitted` or `unknown` sends nothing and answers `unknown` (exit 5, `reason: "op_already_unknown"` or `"op_already_submitted"`), pointing to `reconcile`. Never switch to a new `--op` to retry an uncertain purchase.
 
 ## Recover (evm)
 
