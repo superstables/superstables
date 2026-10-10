@@ -592,6 +592,28 @@ const ROWS: Row[] = [
     timeout: 120_000,
   },
   {
+    path: "budget fund-agent on superstables.com: the owner's wallet sent the agent another amount than planned",
+    covers: [],
+    run: async () => {
+      const FUND: Hex = `0x${"c2".repeat(32)}`;
+      const blockHash = `0x${"ef".repeat(32)}`;
+      const sent = 2n * 10n ** 14n;
+      const b = await hostedBudget((method, params) => {
+        if (method === "eth_blockNumber") return "0x64";
+        if (params[0] !== FUND) return undefined;
+        if (method === "eth_getTransactionByHash") return { hash: FUND, blockHash, blockNumber: "0x65", from: OWNER, to: AGENT, input: "0x", value: `0x${sent.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
+        if (method === "eth_getTransactionReceipt") return { transactionHash: FUND, blockHash, blockNumber: "0x65", from: OWNER, to: AGENT, status: "0x1", logs: [], gasUsed: "0x5208", cumulativeGasUsed: "0x5208", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+        return undefined;
+      });
+      b.site.onPoll = (r) => {
+        if (r.polls >= 2) Object.assign(r, { state: "sent", tx_hash: FUND, wallet_asked: true });
+      };
+      return [seenBudget("fund-agent --wait", "fund-agent", await budget(b.home, ["fund-agent", "--rail", "evm", "--wait", "--no-open"], b.env))];
+    },
+    expect: [{ verdict: "unknown", match: { exit: 5, command: "fund-agent", state: "unknown", tx: { fundAgent: `0x${"c2".repeat(32)}` }, reason: expect.stringMatching(/value/) } }],
+    timeout: 90_000,
+  },
+  {
     path: "budget recover: its gas step on the owner's page ended while the wallet may be sending (budget/evm/owner.ts, as recover runs it)",
     covers: ["budget recover"],
     run: async () => {

@@ -128,7 +128,7 @@ const FLOW_HELP = `The owner's steps, in order, once per rail and chain:
   solana  setup, fund-agent, doctor, grant. fund-agent sends the agent SOL for fees (default 0.01). grant makes the agent
           the delegate of the owner's USDC account, up to the amount; the USDC stays in the owner's account until a purchase.`;
 const EXITS_SHORT = "Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 5 unknown (the full table: superstables budget --help)";
-const EXITS_OWNER = "Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,\n  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check\n  status before trying again)";
+const EXITS_OWNER = "Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,\n  or the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, or the\n  chain shows a transaction that does not match the plan: check status before trying again)";
 const CHAIN_LINE = `--chain C: evm ${EVM_CHAIN_KEYS.map((k) => (k === EVM_DEFAULT_CHAIN ? `${k} (default)` : k)).join(", ")};
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.`;
 /** One command's help, in the order every command uses. */
@@ -1448,10 +1448,13 @@ async function reconcile({ f, ctx }) {
 
 // Owner commands: the rail scripts end with a RESULT line whose state is a rail word (set, revoked, ok, planned, mismatch,
 // not_revoked); those map to the CLI states. Without a RESULT line, the rail's exit code says how it ended.
-const OWNER_STATES = { set: "settled", revoked: "settled", ok: "settled", planned: "planned", refused_precheck: "refused_precheck", mismatch: "refused_precheck", not_revoked: "failed", failed: "failed", unknown: "unknown" };
+// mismatch: a transaction the owner's wallet sent landed and did something other than the plan (another amount, recipient
+// or call), so it moved something: unknown, never a refusal that says nothing was sent
+const OWNER_STATES = { set: "settled", revoked: "settled", ok: "settled", planned: "planned", refused_precheck: "refused_precheck", mismatch: "unknown", not_revoked: "failed", failed: "failed", unknown: "unknown" };
 function ownerOutcome(code, rr = null) {
   // stopped by a signal once the owner had a link: the wallet may have been asked, so never "failed"
   if (interrupted && approvalUrl && !rr && code !== 0) return { code: 5, state: "unknown", reason: "the command was stopped after its approval link existed; the wallet may have been asked to send" };
+  if (rr?.state === "mismatch") return { code: 5, state: "unknown", reason: rr.reason };
   const c = [0, 2, 3, 5].includes(code) ? code : 1;
   const byCode = { 0: "settled", 2: "failed", 3: "refused_precheck", 5: "unknown" }[c] ?? "failed";
   const mapped = OWNER_STATES[rr?.state];
