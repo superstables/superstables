@@ -1037,7 +1037,7 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
     const c = await cancelPurchase({ site: open.hosted.site, id: open.hosted.requestId, token: open.hosted.token, fetchImpl });
     // the cancel answer's evidence is kept too, whatever it says
     const kept = c?.view ? accumulate(open, c.view) : open;
-    if (!c?.cancelled) return refused(`the pending purchase ${open.id} ${c ? `could not be cancelled (${c.reason}): the owner may be signing it` : `could not be reached on ${open.hosted.site}`}, so it is not replaced`, `superstables budget wait --id ${open.id} --shown`, 3, { pending: open });
+    if (!c?.cancelled) return refused(`the pending purchase ${open.id} ${c ? `could not be cancelled (${c.reason}): the owner may be signing it` : `could not be reached on ${open.hosted.site}`}, so it is not replaced`, `superstables budget wait --id ${open.id} --shown`, 3, { pending: kept });
     // the old purchase must be finished as unpaid, on the evidence stored for it, before another is created
     const after = await settleOnce(kept, { waitS: 0, fetchImpl });
     const old = readApproval(open.id) ?? after.record ?? kept;

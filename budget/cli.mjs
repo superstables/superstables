@@ -1758,7 +1758,9 @@ async function buyOnce({ f, ctx }) {
     // under pending; nothing here says whether it was paid
     if (r.pending) {
       const p = r.pending;
-      return emit(3, { ...ctx, service: f.service, state: "refused_pending", paid: null, delivered: null, amount: null, tx: {}, pending: { id: p.id, purchase: p.hosted?.requestId, service: p.service?.id, state: r.pendingState ?? (p.cancelUnconfirmed ? "unknown" : "waiting_owner"), ...(p.url && r.pendingState !== "unknown" ? { url: p.url, matchCode: p.matchCode, expires: p.expires, terms: p.terms, message_for_owner: messageForOwner(p) } : {}) }, next: r.next, reason: `no new purchase was started: ${r.reason}` });
+      // the open purchase's state comes from its own evidence: one the site named a payment for is never waiting_owner
+      const state = r.pendingState ?? (p.cancelUnconfirmed || !mayBeUnpaid(p.seen) ? "unknown" : "waiting_owner");
+      return emit(3, { ...ctx, service: f.service, state: "refused_pending", paid: null, delivered: null, amount: null, tx: {}, pending: { id: p.id, purchase: p.hosted?.requestId, service: p.service?.id, state, ...(p.url && state !== "unknown" ? { url: p.url, matchCode: p.matchCode, expires: p.expires, terms: p.terms, message_for_owner: messageForOwner(p) } : {}) }, next: r.next, reason: `no new purchase was started: ${r.reason}` });
     }
     return emit(r.code, { ...ctx, service: f.service, state: r.state, paid: false, delivered: false, amount: "0", tx: {}, next: r.next, reason: r.reason });
   }
