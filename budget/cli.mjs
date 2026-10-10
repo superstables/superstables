@@ -29,7 +29,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -39,7 +39,7 @@ import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs"
 import { DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin } from "./site.mjs";
 import { customRpc, refusedRpcEnv } from "./rpc.mjs";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
-import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, messageForOwner, showFirst, startOnce, waitOnce } from "./once.mjs";
+import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, waitOnce } from "./once.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // The rail scripts run in their own folders: a relative SUPERSTABLES_HOME would point each of them somewhere else.
@@ -373,12 +373,15 @@ ${RECOVER_OWNER_HELP}`,
       usage: "superstables budget wait --id ID --shown [--timeout S] [--site URL] [--abandon]",
       about: `After an owner command or buy-once returned waiting_owner: waits up to S seconds (default 30, at most 300) for that
 approval, then prints its state. While the owner has not decided: state waiting_owner, final false, exit 0. That is not
-an approval. Once it ended: final true, and the owner command's (or purchase's) own final RESULT and exit code, the same
-on every later call. Scripts test final, not the exit code.
+an approval. Once the owner's wallet was asked to send and there is no final result yet: state unknown, final false,
+exit 5; tell the owner the outcome is unknown and run wait --shown again later. Once it ended: final true, and the owner
+command's (or purchase's) own final RESULT and exit code, the same on every later call.
+Scripts test final, not the exit code.
 --shown means: I have written the approval link (and the match code) and the terms in a reply the owner can read.
-Without it, wait refuses (exit 2, state show_owner_first) and polls nothing; once the approval has ended it prints the
-final result without it. An agent writes the approval link, ends its turn, and runs wait when the owner says they've
-approved; while still waiting_owner it says so in one line and ends its turn again.
+Without it, wait refuses (exit 2, state show_owner_first) and polls nothing; once the approval has ended, or the owner
+already acted on it (the wallet was asked; for buy-once, a read showed payment evidence), it reads it without --shown.
+An agent writes the approval link, ends its turn, and runs wait when the owner says they've approved; while still
+waiting_owner it says so in one line and ends its turn again.
 --site is checked against the site the approval was made on, and refused if it differs.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
 approval sent nothing; after setup --hosted with --grant or --fund, or recover, an earlier step may have completed (read
@@ -1688,8 +1691,10 @@ async function wait({ f }) {
     return emit(5, s.result);
   }
   // Nothing is polled until the caller says the owner can read the link: an agent that polls first tends to never write it.
-  // a buy-once whose cancel was not confirmed has no link to show: wait reads it at once
-  if (once && !once.final && !f.shown && !once.cancelUnconfirmed) {
+  // a buy-once whose cancel was not confirmed has no link to show, and one the owner already acted on (the owner's wallet
+  // was asked, or the site showed payment evidence) has no "not approved yet" to say: wait reads them at once
+  const acted = once && (once.command === "buy-once" ? !mayBeUnpaid(once.seen) : walletWasAsked(once));
+  if (once && !once.final && !f.shown && !once.cancelUnconfirmed && !acted) {
     log(`superstables budget: wait refused: write the approval link, the code and the terms in your reply to the owner first, then run: superstables budget wait --id ${f.id} --shown`);
     return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", ...approvalFields(once), next: showFirst(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
   }
@@ -1706,6 +1711,9 @@ async function wait({ f }) {
     ? `the background worker stopped, but its page or chain reads are still running (${pageWords(r.page, rec.rail)}); nothing is final until they stop. Do not start another owner command`
     : pageWords(r.page, rec.rail);
   log(`superstables budget: ${rec.id} (${rec.command}) has no final result: ${words}. Approval link: ${rec.url}${rec.matchCode ? ` (match code ${rec.matchCode})` : ""}`);
+  if (walletWasAsked(rec, r.page)) {
+    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet was asked to send, and whether it sent is not known yet. Tell the owner the outcome is unknown and end your turn; do not run this command or another owner command on this chain. Run superstables budget wait --id ${rec.id} --shown again later: it gives the final result once the command has read the chain. Do not approve for the owner`, reason: words });
+  }
   emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: stillWaiting(rec.id), reason: words });
 }
 

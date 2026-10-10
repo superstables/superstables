@@ -219,7 +219,7 @@ const evidenceWords = (s) =>
  * other than false. Every unpaid outcome goes through here: a final read, a confirmed cancel, a creation error, a refusal
  * after a purchase exists.
  */
-const mayBeUnpaid = (seen) => !anyEvidence(seen);
+export const mayBeUnpaid = (seen) => !anyEvidence(seen);
 
 /**
  * The one evidence accumulator per purchase: every answer the client receives for it (a read or a cancel, success or

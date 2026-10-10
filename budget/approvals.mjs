@@ -744,6 +744,16 @@ export function pageWords(page, rail) {
   }
 }
 
+/**
+ * Whether the owner's wallet was asked to send for this approval: the page's state (pageStateOf) says so, or the page log
+ * did earlier. Without `page`, the log alone decides, and nothing is read over the network.
+ */
+export function walletWasAsked(record, page = null) {
+  if (page?.walletAsked === true || page?.sending === true) return true;
+  if (["sending", "sent", "hosted:sending", "hosted:unknown", "hosted:sent", "hosted:confirmed", "hosted:failed"].includes(page?.status)) return true;
+  return lastPageStatus(record?.url).sending;
+}
+
 /** The page id in a link: the loopback page's 32 hex digits, or a hosted request id (bl_..., ba_...). */
 const pageIdOf = (url) => /\/owner\/([0-9a-f]{32})/.exec(url ?? "")?.[1] ?? /\/approve\/budget\/(b[la]_[A-Za-z0-9_-]+)/.exec(url ?? "")?.[1];
 
