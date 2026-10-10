@@ -473,6 +473,9 @@ explain(
       if (taken.serviceName) console.log(field("service", taken.serviceName));
       console.log(field("price", money(taken.terms.amountDecimal, taken.terms.asset)));
       console.log(field("network", taken.terms.networkLabel));
+      if (taken.otherChains?.length) {
+        console.log(field("also on", `${taken.otherChains.join(", ")} (the seller offers these too; \`--chain <chain>\` quotes one of them)`));
+      }
       console.log(field("recipient", taken.terms.recipient));
       console.log(field("expires", `${taken.expiresAt} (${QUOTE_TTL_MS / 60_000} minutes; one quote starts at most one payment)`));
       const where = existsSync(policyPath()) ? policyPath() : "the built-in defaults (no policy file)";
@@ -496,6 +499,9 @@ explain(
       "A quote reads the seller's HTTP 402 challenge and records the exact terms the owner will be " +
         `asked to approve. It lasts ${QUOTE_TTL_MS / 60_000} minutes and can start one payment attempt; ` +
         "after that attempt ends, however it ends, take a new quote.",
+      "A seller may offer the same thing on several chains. Without --chain, quote takes the first offer this client " +
+        "can pay, in the seller's order, and names the other chains under `also on` (otherChains with --json): to pay " +
+        "on one of those, quote again with --chain. A new quote suggested after a payment keeps the quote's chain.",
     ],
     money: "no. Nothing is signed or sent; the seller is asked for its price without payment.",
     who: "the agent or the owner.",
@@ -504,8 +510,8 @@ explain(
       "superstables quote 'https://www.superstables.com/api/demo/market?asset=ETH'",
     ],
     prints:
-      "the quote id, price, network, recipient, expiry, and each policy rule it was checked against. " +
-      "With --json: the quote record, with policy.checks [{rule, ok, detail}] and next.",
+      "the quote id, price, network, the seller's other chains (also on), recipient, expiry, and each policy rule it " +
+      "was checked against. With --json: the quote record, with policy.checks [{rule, ok, detail}], otherChains and next.",
     exits:
       "0 quoted and allowed, 1 the endpoint could not be quoted (not a paid endpoint, unreachable, or no " +
       "payment this client can make), 2 bad input, 3 quoted but the spend policy refuses it",

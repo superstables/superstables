@@ -65,13 +65,16 @@ export function exitCodeFor(attempt: Attempt): ExitCode {
 }
 
 /** The command that takes a fresh quote for the same request, so a retry is one paste away. */
-export function requoteCommand(quote: Pick<Quote, "url" | "serviceId" | "request"> | undefined): string {
+export function requoteCommand(quote: Pick<Quote, "url" | "serviceId" | "request" | "terms" | "chain" | "otherChains"> | undefined): string {
   if (!quote) return "superstables quote <url>";
+  // A seller on several chains: the new quote keeps this quote's chain instead of falling back to the seller's first offer.
+  const chain = quote.chain ?? (quote.otherChains?.length ? networkFor(quote.terms.network)?.key : undefined);
+  const on = chain ? ` --chain ${chain}` : "";
   if (quote.serviceId && quote.request) {
     const params = Object.entries(quote.request.params).map(([key, value]) => ` --param ${shellWord(`${key}=${value}`)}`);
-    return `superstables quote --service ${shellWord(quote.serviceId)}${params.join("")}`;
+    return `superstables quote --service ${shellWord(quote.serviceId)}${params.join("")}${on}`;
   }
-  return `superstables quote ${shellWord(quote.url)}`;
+  return `superstables quote ${shellWord(quote.url)}${on}`;
 }
 
 /** The status command that searches the payment's chain for it, when its rail can search. */

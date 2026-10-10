@@ -163,7 +163,10 @@ describe("site URL", () => {
     const before = process.env.SUPERSTABLES_ALLOW_SITE;
     try {
       delete process.env.SUPERSTABLES_ALLOW_SITE;
-      expect(siteOrigin("https://superstables.com").origin).toBe("https://superstables.com");
+      // The apex is www.superstables.com's site, which makes its approval links on www.
+      expect(siteOrigin("https://superstables.com").origin).toBe("https://www.superstables.com");
+      expect(siteOrigin("https://superstables.com/").origin).toBe("https://www.superstables.com");
+      expect(siteOrigin("https://superstables.com:8443").origin).toBe("https://superstables.com:8443");
       expect(siteOrigin("https://staging.superstables.com").origin).toBe("https://staging.superstables.com");
       expect(siteOrigin("https://localhost:8443").origin).toBe("https://localhost:8443");
       for (const bad of ["https://evil.example", "https://superstables.com.evil.example", "https://evilsuperstables.com", "https://xn--superstables-xyz.com"]) {
