@@ -144,18 +144,21 @@ export interface Quote {
 
 // ── Attempt ──────────────────────────────────────────────────────────────────────────────
 
-export type AttemptState =
-  | "awaiting_approval"
-  | "denied"
-  | "expired"
-  | "approved"
-  | "submitting"
-  | "settled"
-  | "paid_service_failed"
-  | "failed"
-  | "uncertain"
+export const ATTEMPT_STATES = [
+  "awaiting_approval",
+  "denied",
+  "expired",
+  "approved",
+  "submitting",
+  "settled",
+  "paid_service_failed",
+  "failed",
+  "uncertain",
   /** Nobody decided: whoever was waiting for the owner stopped first. Nothing was submitted. */
-  | "abandoned";
+  "abandoned",
+] as const;
+
+export type AttemptState = (typeof ATTEMPT_STATES)[number];
 
 /** States an attempt never leaves. */
 export const FINAL_ATTEMPT_STATES: readonly AttemptState[] = [

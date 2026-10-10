@@ -6,7 +6,7 @@ import { tempoStep } from "./tempo.js";
 import { solanaStep } from "./solana.js";
 import type { WalletStep } from "./types.js";
 
-const STEPS: readonly WalletStep[] = [
+export const STEPS: readonly WalletStep[] = [
   eip3009Step,
   tempoStep,
   solanaStep,
