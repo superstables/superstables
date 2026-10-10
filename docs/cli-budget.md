@@ -119,8 +119,8 @@ http on this machine only; RESULT names one in use as rpc. A wallet adding the c
 on this machine is offered the chain's public RPC.
 
 Output: logs go to stderr. stdout ends with one line
-  RESULT {"ok","command","rail","chain","op","state","final","chain_final","paid","delivered","amount","remaining","tx","rpc","id","url",
-          "matchCode","message_for_owner","budget_spent","next","reason"}
+  RESULT {"ok","command","rail","chain","op","state","final","chain_final","proof","paid","delivered","amount","remaining",
+          "tx","rpc","id","url","matchCode","message_for_owner","budget_spent","next","reason"}
 Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
 while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read,
 true otherwise, unchanged from 0.3.0. Scripts test final for command completion.
@@ -128,6 +128,9 @@ chain_final is true only after the payment meets the chain finality rule, false 
 and null when no current matching payment inclusion is established. A paid provisional result has final true and
 chain_final false; reconcile or wait checks finality again. Command completion never proves payment finality.
 next is the command to run next, or none.
+proof (an owner command's failed): the chain fact that shows its transaction changed nothing, reverted (it landed and
+failed) or, on solana, blockhash_expired (it can no longer land). Once the owner's wallet was asked or the command began
+to send, an owner command says failed only with a proof; any other end is unknown.
 message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
 approval link, the match code (on superstables.com), the amount and chain, the testnet line. The agent sends it and ends its turn.
 budget_spent: true when buy was refused because the budget cannot cover the purchase (spent, revoked, never granted).
@@ -136,15 +139,16 @@ the APPROVE line goes to stderr with the logs. The fields and exit codes are the
 
 Exit codes (the same numbers as superstables):
   0  done. Also state waiting_owner, with final false: the owner has not decided yet
-  1  failed: read reason and next; don't retry blindly
+  1  failed: read reason and next; don't retry blindly. An owner command that may have sent says failed only with proof
   2  bad input: fix the command. Nothing was done
-  3  refused (no setup, no budget, over --max, the owner rejected it or the approval link expired). An owner command
-     can also end refused after an earlier step of setup --hosted with --grant or --fund, or of recover, went through.
-     Read tx, steps and budget status. Respect it; never raise --max to get around it
+  3  refused (no setup, no budget, over --max, the owner rejected it or the approval link expired) before anything was
+     sent. Respect it; never raise --max to get around it
   4  paid, not delivered: never pay again; report it
-  5  unknown: it may have paid. Also an owner transaction on chain that differs from the plan, and a buy whose --op
-     another process holds. Purchases: superstables budget reconcile --rail R --op ID. Owner commands: status and
-     the wallet's activity. buy-once: wait --id ID --shown while final is false. Never pay twice
+  5  unknown: it may have paid. Also an owner command that may have sent and has no proof of the outcome: it stopped,
+     a chain read failed or disagreed with the plan, its transaction differs from the plan, or a later step of setup
+     --hosted with --grant or --fund, or of recover, was refused after an earlier one sent (read tx and steps); and a
+     buy whose --op another process holds. Purchases: superstables budget reconcile --rail R --op ID. Owner commands:
+     status and the wallet's activity. buy-once: wait --id ID --shown while final is false. Never pay twice
 
 Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
   keys/budget/<rail>-agent.env               the agent key (mode 600). No owner key is ever stored here
@@ -238,9 +242,11 @@ Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT
   with --grant or --fund also linked (true once the agent is added), steps (kind, state, tx, amount, reason
   for each), tx, amount, remaining.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
-Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  or the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, or the
-  chain shows a transaction that does not match the plan: check status before trying again)
+Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wallet was asked or the send began, only
+  when the chain proves the transaction changed nothing, named in proof), 2 bad input, 3 refused (the owner rejected it, or
+  the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command
+  stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:
+  check status before trying again)
 ```
 
 ## superstables budget fund-agent
@@ -290,9 +296,11 @@ Example:
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
   false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), amount (what was sent), tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
-Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  or the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, or the
-  chain shows a transaction that does not match the plan: check status before trying again)
+Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wallet was asked or the send began, only
+  when the chain proves the transaction changed nothing, named in proof), 2 bad input, 3 refused (the owner rejected it, or
+  the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command
+  stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:
+  check status before trying again)
 ```
 
 ## superstables budget doctor
@@ -368,9 +376,11 @@ Example:
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
   false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), amount, remaining, tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
-Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  or the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, or the
-  chain shows a transaction that does not match the plan: check status before trying again)
+Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wallet was asked or the send began, only
+  when the chain proves the transaction changed nothing, named in proof), 2 bad input, 3 refused (the owner rejected it, or
+  the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command
+  stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:
+  check status before trying again)
 ```
 
 ## superstables budget status
@@ -563,9 +573,11 @@ Example:
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
   false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), revoked, remaining, tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
-Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  or the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, or the
-  chain shows a transaction that does not match the plan: check status before trying again)
+Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wallet was asked or the send began, only
+  when the chain proves the transaction changed nothing, named in proof), 2 bad input, 3 refused (the owner rejected it, or
+  the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command
+  stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:
+  check status before trying again)
 ```
 
 ## superstables budget recover
@@ -608,9 +620,11 @@ Example:
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
   false, id, url, expires and next; or, when it waited, the final RESULT: state settled (or ok), amount (returned), tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
-Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  or the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, or the
-  chain shows a transaction that does not match the plan: check status before trying again)
+Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wallet was asked or the send began, only
+  when the chain proves the transaction changed nothing, named in proof), 2 bad input, 3 refused (the owner rejected it, or
+  the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command
+  stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:
+  check status before trying again)
 ```
 
 ## superstables budget wait
