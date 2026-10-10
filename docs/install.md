@@ -21,7 +21,7 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
   wallet cannot sign. Choose [budget approvals on superstables.com](budget.md#approve-on-superstablescom-instead)
   or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 
-These instructions describe **client 0.3.1** and require that release build. Install it from npm
+These instructions describe **client 0.4.0** and require that release build. Install it from npm
 as `@superstables/client`, or use the released commit and skill from
 [GitHub Releases](https://github.com/superstables/superstables-client/releases).
 The CLI/skill runs on your own machine or server,
@@ -52,7 +52,7 @@ client. The client's package is `@superstables/client`.
 ### From npm
 
 ```bash
-npm install -g @superstables/client@0.3.1
+npm install -g @superstables/client@0.4.0
 superstables --version
 ```
 
@@ -63,7 +63,7 @@ the command, not the agent skill: to connect an agent, also install the skill, a
 ### From a checkout
 
 To run the client from its sources, for example to work on it, replace `<commit>` with the full
-commit hash of the 0.3.1 release:
+commit hash of the 0.4.0 release:
 
 ```bash
 git clone https://github.com/superstables/superstables-client.git
@@ -83,7 +83,7 @@ checkout's command, it downloads whatever package the npm registry has under tha
 
 ### With npm, from git
 
-In any folder, with `<commit>` replaced by the full commit hash of the 0.3.1 release (its
+In any folder, with `<commit>` replaced by the full commit hash of the 0.4.0 release (its
 page on GitHub names the commit):
 
 ```bash
@@ -100,7 +100,7 @@ Run it as `npx --no superstables …` in that folder, or as `node_modules/.bin/s
 ### The agent skill, with the whole CLI bundled
 
 `npm run skill` in a checkout builds `build/superstables-payments-skill-<version>.zip`, and
-the 0.3.1 release uses that versioned zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
+the 0.4.0 release uses that versioned zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
 Claude Code or `~/.agents/skills/` for Codex. It unpacks to `superstables-payments/`, and needs
 only Node:
 
@@ -130,7 +130,7 @@ which account last connected, that the approval port is free, and that the demo 
 index and the facilitators answer:
 
 ```
-  client version           0.3.1
+  client version           0.4.0
   home                     /home/you/.superstables
 
 ✓ home directory           /home/you/.superstables (writable)
