@@ -7,8 +7,9 @@
 //
 // One table. Each row drives one path past that point with the repo's own fakes and returns what the CLI, the approval
 // page or the budget RESULT showed; assertProperty checks every one of those outputs, and each row pins its literal values.
-// The coverage test reads the wallet steps' routes, the attempt states and both CLIs' command lists from the code, and
-// fails while any of them has neither a row nor a reason in NO_ANSWER_AFTER_BOUNDARY.
+// The coverage test reads from the code the routes of every wallet step and of the owner approval page, the attempt
+// states, the pay CLI's commands and the budget dispatcher's handlers, and fails while any of them has neither a row nor
+// a reason in NO_ANSWER_AFTER_BOUNDARY. It needs no row to have run.
 
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -25,7 +26,7 @@ import { DEFAULT_POLICY } from "../src/core/policy.js";
 import { quote } from "../src/core/quote.js";
 import { Records } from "../src/core/records.js";
 import { BrowserWalletSigner } from "../src/core/signer/browser.js";
-import { OwnerApprovalServer, type OwnerActionInput } from "../src/core/signer/owner-approval-server.js";
+import { OWNER_ACTION_KINDS, OWNER_ROUTES, OwnerApprovalServer, type OwnerActionInput } from "../src/core/signer/owner-approval-server.js";
 import { STEPS } from "../src/core/signer/steps/index.js";
 import { WalletSigner } from "../src/core/signer/wallet.js";
 import { ATTEMPT_STATES } from "../src/core/types.js";
@@ -46,8 +47,9 @@ type Surface = "pay" | "approval" | "budget" | "listing";
 interface Seen {
   at: string;
   surface: Surface;
-  /** The command that printed it (`superstables status`, `budget wait`), or the approval route that answered. */
+  /** The command that printed it (`superstables status`, `budget wait`), or the approval page's step and route that answered. */
   cmd?: string;
+  step?: string;
   route?: string;
   exit?: number;
   http?: number;
@@ -118,6 +120,17 @@ function outcomeOf(seen: Seen): { state?: string; paid?: unknown; amount?: unkno
   return { state: b.state, paid: b.paid, amount: b.amount, own: true };
 }
 
+/** Every object inside an answer, with its path (`steps.0`, `pending`); not `history`, the states an attempt had before. */
+function* nestedObjects(value: unknown, path = ""): Generator<[string, Record<string, unknown>]> {
+  if (!value || typeof value !== "object") return;
+  for (const [key, inner] of Object.entries(value)) {
+    if (!inner || typeof inner !== "object" || (path === "" && key === "history")) continue;
+    const at = path ? `${path}.${key}` : key;
+    yield [at, inner as Record<string, unknown>];
+    yield* nestedObjects(inner, at);
+  }
+}
+
 function assertProperty(seen: Seen, e: Expect): void {
   const at = `${seen.at} (${seen.cmd ?? seen.route ?? seen.surface})`;
   if (e.verdict === "before") {
@@ -140,6 +153,14 @@ function assertProperty(seen: Seen, e: Expect): void {
     expect(FORBIDDEN_STATES[seen.surface], `${at}: forbidden state`).not.toContain(o.state);
     if (o.paid !== undefined) expect(o.paid, `${at}: paid`).not.toBe(false);
     if (o.amount !== undefined) expect(o.amount, `${at}: amount`).not.toBe("0");
+    if (seen.body && typeof seen.body === "object" && "money_moved" in seen.body) expect(seen.body.money_moved, `${at}: money_moved`).not.toBe(false);
+    // the same for every object inside the answer: a setup's steps, the open purchase under pending, a payment
+    for (const [path, inner] of nestedObjects(seen.body)) {
+      if ("money_moved" in inner) expect(inner.money_moved, `${at}: ${path}.money_moved`).not.toBe(false);
+      if ("paid" in inner) expect(inner.paid, `${at}: ${path}.paid`).not.toBe(false);
+      if ("amount" in inner) expect(inner.amount, `${at}: ${path}.amount`).not.toBe("0");
+      if (typeof inner.state === "string") expect(FORBIDDEN_STATES[seen.surface], `${at}: ${path}.state`).not.toContain(inner.state);
+    }
   }
   if (o.own && o.state !== undefined) {
     const code = seen.surface === "budget" && o.state === "settled" && seen.body?.delivered !== true ? 4 : EXIT[seen.surface][o.state];
@@ -191,10 +212,11 @@ const resultOf = (stdout: string) => {
 const seenPay = (at: string, cmd: string, r: Ran): Seen => ({ at, surface: "pay", cmd: `superstables ${cmd}`, exit: r.code, body: JSON.parse(r.stdout), text: r.stdout + r.stderr });
 const seenListing = (at: string, cmd: string, r: Ran): Seen => ({ at, surface: "listing", cmd: `superstables ${cmd}`, exit: r.code, text: r.stdout + r.stderr });
 const seenBudget = (at: string, cmd: string, r: Ran): Seen => ({ at, surface: "budget", cmd: `budget ${cmd}`, exit: r.code, body: resultOf(r.stdout), text: r.stdout + r.stderr });
-async function seenRoute(at: string, link: string, route: string, body?: unknown): Promise<Seen> {
+/** `step`: the wallet step whose page answered (a local payment's step kind, or owner:<kind> for the owner approval page). */
+async function seenRoute(step: string, at: string, link: string, route: string, body?: unknown): Promise<Seen> {
   const res = await fetch(`${link}${route}`, body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json", origin: new URL(link).origin }, body: JSON.stringify(body) });
   const text = await res.text();
-  return { at, surface: "approval", route, http: res.status, body: JSON.parse(text), text };
+  return { at, surface: "approval", step, route, http: res.status, body: JSON.parse(text), text };
 }
 const status = async (at: string, home: string, id: string, env: Record<string, string>) => seenPay(at, "status", await superstables(home, ["status", id, "--json"], env));
 
@@ -228,9 +250,9 @@ async function tempoPay(options: { timeoutMs?: number } = {}) {
 type Tempo = Awaited<ReturnType<typeof tempoPay>>;
 /** The page connects the owner's account and asks the wallet to send: the attempt is approved from here on. */
 async function walletAsked(t: Tempo) {
-  const account = await seenRoute("connect", t.link, "/account", { address: t.owner });
+  const account = await seenRoute("tempo-transfer", "connect", t.link, "/account", { address: t.owner });
   expect(account.http).toBe(200);
-  const sending = await seenRoute("the wallet is asked to send", t.link, "/sending", { address: t.owner });
+  const sending = await seenRoute("tempo-transfer", "the wallet is asked to send", t.link, "/sending", { address: t.owner });
   expect(sending.body).toEqual({ status: "send" });
   expect(t.engine.getAttempt(t.id)?.state).toBe("approved");
   return account.body.transaction as { to: string; data: string };
@@ -280,8 +302,8 @@ async function payProcessAsked() {
   const link = await until(() => /http:\/\/127\.0\.0\.1:\d+\/approve\/[0-9a-f]+/.exec(stderr)?.[0], "pay's approval link");
   const id = /\(attempt ([0-9a-f-]+)\)/.exec(stderr)![1];
   const owner = privateKeyToAccount(generatePrivateKey()).address;
-  expect((await seenRoute("connect", link, "/account", { address: owner })).http).toBe(200);
-  expect((await seenRoute("ask the wallet", link, "/sending", { address: owner })).body).toEqual({ status: "send" });
+  expect((await seenRoute("tempo-transfer", "connect", link, "/account", { address: owner })).http).toBe(200);
+  expect((await seenRoute("tempo-transfer", "ask the wallet", link, "/sending", { address: owner })).body).toEqual({ status: "send" });
   expect(new Records(join(home, "records")).getAttempt(id)?.state).toBe("approved");
   return { home, env, id, child, closed, out: () => ({ stdout, stderr }) };
 }
@@ -330,8 +352,8 @@ async function ownerServer(sendingGraceMs = 120_000) {
 }
 /** The owner page asked the wallet to send: the owner's account connected, then /sending. */
 async function ownerAsked(url: string, address = OWNER) {
-  expect((await seenRoute("connect", url, "/account", { address })).http).toBe(200);
-  expect((await seenRoute("the wallet is asked to send", url, "/sending", { address })).body).toEqual({ status: "sending" });
+  expect((await seenRoute("owner:evm-transaction", "connect", url, "/account", { address })).http).toBe(200);
+  expect((await seenRoute("owner:evm-transaction", "the wallet is asked to send", url, "/sending", { address })).body).toEqual({ status: "sending" });
 }
 
 // ---- budget, in process: the evm rail's reconcile and recover, the chain answered as in their own tests ------------------
@@ -394,9 +416,9 @@ const ROWS: Row[] = [
     run: async () => {
       const t = await tempoPay();
       await walletAsked(t);
-      const button = await seenRoute("the page's reject button", t.link, "/reject", {});
-      const wallet = await seenRoute("the page says the wallet rejected", t.link, "/reject", { by: "wallet" });
-      const state = await seenRoute("the page's state", t.link, "/state");
+      const button = await seenRoute("tempo-transfer", "the page's reject button", t.link, "/reject", {});
+      const wallet = await seenRoute("tempo-transfer", "the page says the wallet rejected", t.link, "/reject", { by: "wallet" });
+      const state = await seenRoute("tempo-transfer", "the page's state", t.link, "/state");
       await t.engine.waitForAttempt(t.id, 5_000);
       return [button, wallet, state, await status("status", t.home, t.id, t.env)];
     },
@@ -413,8 +435,8 @@ const ROWS: Row[] = [
     run: async () => {
       const t = await tempoPay();
       await walletAsked(t);
-      const again = await seenRoute("ask the wallet again", t.link, "/sending", { address: t.owner });
-      const other = await seenRoute("connect another account", t.link, "/account", { address: privateKeyToAccount(generatePrivateKey()).address });
+      const again = await seenRoute("tempo-transfer", "ask the wallet again", t.link, "/sending", { address: t.owner });
+      const other = await seenRoute("tempo-transfer", "connect another account", t.link, "/account", { address: privateKeyToAccount(generatePrivateKey()).address });
       const open = await status("status while the wallet may be sending", t.home, t.id, t.env);
       await t.signer.close();
       await t.engine.waitForAttempt(t.id, 5_000);
@@ -434,7 +456,7 @@ const ROWS: Row[] = [
       const t = await tempoPay({ timeoutMs: 2_500 });
       await walletAsked(t);
       await new Promise((r) => setTimeout(r, 3_000));
-      const state = await seenRoute("the page's state after its window", t.link, "/state");
+      const state = await seenRoute("tempo-transfer", "the page's state after its window", t.link, "/state");
       await t.engine.waitForAttempt(t.id, 5_000);
       return [state, await status("status", t.home, t.id, t.env)];
     },
@@ -450,7 +472,7 @@ const ROWS: Row[] = [
       const t = await tempoPay();
       const call = await walletAsked(t);
       const hash = t.chain.send(t.owner, call, { pending: true });
-      const sent = await seenRoute("the page reports the transaction", t.link, "/sent", { address: t.owner, hash });
+      const sent = await seenRoute("tempo-transfer", "the page reports the transaction", t.link, "/sent", { address: t.owner, hash });
       await until(() => t.engine.getAttempt(t.id)?.state === "submitting", "submitting");
       const checking = await status("status while the chain is read", t.home, t.id, t.env);
       t.chain.confirm(hash);
@@ -640,21 +662,25 @@ const ROWS: Row[] = [
     timeout: 90_000,
   },
   {
-    path: "owner approval page, evm transaction: after the wallet was asked, a cancel, a rejection, and the end of the link",
-    covers: [],
+    path: "owner approval page, evm transaction: after the wallet was asked, a connect and an ask again, a cancel, a rejection, and the end of the link",
+    covers: ["route owner:evm-transaction /account", "route owner:evm-transaction /sending", "route owner:evm-transaction /cancel", "route owner:evm-transaction /reject", "route owner:evm-transaction /state"],
     run: async () => {
       const server = await ownerServer(200);
       const a = server.request(ownerTransfer(10_000));
       await ownerAsked(a.url);
-      const cancel = await seenRoute("the command asks to cancel", a.url, "/cancel", {});
-      const reject = await seenRoute("the page's reject button", a.url, "/reject", { by: "page" });
-      const rejected = await seenRoute("the page's state after the rejection", a.url, "/state");
+      const connect = await seenRoute("owner:evm-transaction", "connect again", a.url, "/account", { address: OWNER });
+      const again = await seenRoute("owner:evm-transaction", "ask the wallet again", a.url, "/sending", { address: OWNER });
+      const cancel = await seenRoute("owner:evm-transaction", "the command asks to cancel", a.url, "/cancel", {});
+      const reject = await seenRoute("owner:evm-transaction", "the page's reject button", a.url, "/reject", { by: "page" });
+      const rejected = await seenRoute("owner:evm-transaction", "the page's state after the rejection", a.url, "/state");
       const b = server.request(ownerTransfer(300));
       await ownerAsked(b.url);
       await new Promise((r) => setTimeout(r, 800));
-      return [cancel, reject, rejected, await seenRoute("the page's state after its link ended", b.url, "/state")];
+      return [connect, again, cancel, reject, rejected, await seenRoute("owner:evm-transaction", "the page's state after its link ended", b.url, "/state")];
     },
     expect: [
+      { verdict: "unknown", match: { http: 409, error: "this is already sending" } },
+      { verdict: "unknown", match: { http: 409, error: "connect the owner account first" } },
       { verdict: "unknown", match: { http: 409, cancelled: false, status: "sending", sending: true } },
       { verdict: "unknown", match: { http: 200, status: "unknown", reason: "a rejection was reported after the wallet was asked to send; the page cannot prove nothing was submitted, so the chain must be checked" } },
       { verdict: "unknown", match: { http: 200, status: "unknown", sending: true } },
@@ -663,7 +689,7 @@ const ROWS: Row[] = [
   },
   {
     path: "budget fund-agent on this machine: the owner's wallet reported a transfer the chain shows, but the agent's balance does not",
-    covers: [],
+    covers: ["route owner:evm-transaction /sent"],
     run: async () => {
       const FUND: Hex = `0x${"c4".repeat(32)}`;
       const blockHash = `0x${"ef".repeat(32)}`;
@@ -678,9 +704,9 @@ const ROWS: Row[] = [
       const first = resultOf((await budget(b.home, ["fund-agent", "--rail", "evm", "--no-open"], b.env)).stdout);
       expect(first).toMatchObject({ command: "fund-agent", state: "waiting_owner" });
       await ownerAsked(first.url);
-      const sent = await seenRoute("the page reports the transaction", first.url, "/sent", { address: OWNER, hash: FUND });
+      const sent = await seenRoute("owner:evm-transaction", "the page reports the transaction", first.url, "/sent", { address: OWNER, hash: FUND });
       const verdict = await until(async () => {
-        const st = await seenRoute("the page's state once the command read the chain", first.url, "/state");
+        const st = await seenRoute("owner:evm-transaction", "the page's state once the command read the chain", first.url, "/state");
         return st.body.status !== "sent" && st;
       }, "the command's verdict on the page", 60_000);
       const done = seenBudget("wait for the end", "wait", await budget(b.home, ["wait", "--shown", "--id", first.id, "--timeout", "90"], b.env));
@@ -694,8 +720,8 @@ const ROWS: Row[] = [
     timeout: 150_000,
   },
   {
-    path: "owner approval page, solana transaction: the send answers with an error after the transaction left this machine",
-    covers: [],
+    path: "owner approval page, solana transaction: the send answers with an error after the transaction left this machine; then every route again",
+    covers: ["route owner:solana-transaction /prepare", "route owner:solana-transaction /signed", "route owner:solana-transaction /state", "route owner:solana-transaction /account", "route owner:solana-transaction /reject", "route owner:solana-transaction /cancel"],
     run: async () => {
       const owner = Keypair.generate();
       const agent = Keypair.generate().publicKey;
@@ -715,19 +741,31 @@ const ROWS: Row[] = [
         const { transactionPort } = await import(new URL("../budget/solana/owner.ts", import.meta.url).href);
         const { port } = transactionPort(conn, owner.publicKey, () => [SystemProgram.transfer({ fromPubkey: owner.publicKey, toPubkey: agent, lamports: 10_000_000 })], () => {});
         const handle = server.request({ ...ownerTransfer(10_000), kind: "solana-transaction", chain: { family: "solana", chainId: 0, chainName: "Solana devnet", rpcUrl: "http://127.0.0.1:1", explorer: "https://explorer.solana.com", explorerQuery: "?cluster=devnet", walletChain: "solana:devnet", nativeCurrency: { name: "SOL", symbol: "SOL", decimals: 9 }, testnet: true }, account: owner.publicKey.toBase58(), transaction: undefined, solana: port });
-        expect((await seenRoute("connect", handle.url, "/account", { address: owner.publicKey.toBase58() })).http).toBe(200);
-        const prepared = await seenRoute("prepare", handle.url, "/prepare", { address: owner.publicKey.toBase58() });
+        expect((await seenRoute("owner:solana-transaction", "connect", handle.url, "/account", { address: owner.publicKey.toBase58() })).http).toBe(200);
+        const prepared = await seenRoute("owner:solana-transaction", "prepare", handle.url, "/prepare", { address: owner.publicKey.toBase58() });
         const tx = Transaction.from(Buffer.from(prepared.body.transaction, "base64"));
         tx.sign(owner);
-        seen.push(await seenRoute(`the signed transaction is sent (${["the RPC's own error", "an error named as the RPC's", "a transport error"][i]})`, handle.url, "/signed", { address: owner.publicKey.toBase58(), signedTransaction: tx.serialize().toString("base64") }));
-        seen.push(await seenRoute("the page's state after it", handle.url, "/state"));
+        seen.push(await seenRoute("owner:solana-transaction", `the signed transaction is sent (${["the RPC's own error", "an error named as the RPC's", "a transport error"][i]})`, handle.url, "/signed", { address: owner.publicKey.toBase58(), signedTransaction: tx.serialize().toString("base64") }));
+        seen.push(await seenRoute("owner:solana-transaction", "the page's state after it", handle.url, "/state"));
+        if (i < errors.length - 1) continue;
+        const address = owner.publicKey.toBase58();
+        seen.push(await seenRoute("owner:solana-transaction", "connect again", handle.url, "/account", { address }));
+        seen.push(await seenRoute("owner:solana-transaction", "prepare again", handle.url, "/prepare", { address }));
+        seen.push(await seenRoute("owner:solana-transaction", "the page's reject button", handle.url, "/reject", { by: "page" }));
+        seen.push(await seenRoute("owner:solana-transaction", "the command asks to cancel", handle.url, "/cancel", {}));
       }
       return seen;
     },
-    expect: [0, 1, 2].flatMap(() => [
-      { verdict: "unknown" as const, match: { http: 200, status: "sent", hash: expect.any(String) } },
-      { verdict: "unknown" as const, match: { http: 200, status: "sent", sending: true } },
-    ]),
+    expect: [
+      ...[0, 1, 2].flatMap(() => [
+        { verdict: "unknown" as const, match: { http: 200, status: "sent", hash: expect.any(String) } },
+        { verdict: "unknown" as const, match: { http: 200, status: "sent", sending: true } },
+      ]),
+      { verdict: "unknown", match: { http: 409, error: "this is already sent" } },
+      { verdict: "unknown", match: { http: 409, error: "this is sent; it takes no transaction now" } },
+      { verdict: "unknown", match: { http: 409, error: "this is already sent", status: "sent" } },
+      { verdict: "unknown", match: { http: 409, cancelled: false, status: "sent", sending: true } },
+    ],
   },
   {
     path: "budget recover: its gas step on the owner's page ended while the wallet may be sending (budget/evm/owner.ts, as recover runs it)",
@@ -931,14 +969,18 @@ const ROWS: Row[] = [
 ];
 
 /**
- * What the code declares that no row drives, with the reason it never answers after the boundary. A new route, state or
- * command fails the coverage test until it has a row or a line here.
+ * What the code declares that no row drives, each with the reason it never answers after the boundary. Every key is written
+ * out: a new route, state or command fails the coverage test until it has a row or a line here.
  */
 const SIGNS_ONLY = "the wallet signs and nothing leaves this machine until the payment engine accepts the signature, after this page has closed the approval as signed; every later answer here is 'already signed', and the engine's outcome is what pay and status print (rows: pay with x402)";
+const SIGN_IN = "a sign-in: the wallet signs a message, never a transaction, so no answer on this link is about a payment";
+const NOT_THIS_KIND = "answers 404 for this kind of owner action, before reading anything; it states no outcome";
 const NO_ANSWER_AFTER_BOUNDARY: Record<string, string> = {
-  ...Object.fromEntries(
-    STEPS.filter((s) => !s.mayHaveSent).flatMap((s) => [...s.routes, "/state", "/reject"].map((r) => [`route ${s.kind} ${r}`, SIGNS_ONLY])),
-  ),
+  ...Object.fromEntries(["/account", "/signature", "/state", "/reject"].map((r) => [`route eip3009 ${r}`, SIGNS_ONLY])),
+  ...Object.fromEntries(["/account", "/prepare", "/signed", "/state", "/reject"].map((r) => [`route solana-transaction ${r}`, SIGNS_ONLY])),
+  ...Object.fromEntries(["/state", "/account", "/connect", "/sending", "/sent", "/prepare", "/signed", "/reject", "/cancel"].map((r) => [`route owner:connect ${r}`, SIGN_IN])),
+  ...Object.fromEntries(["/connect", "/prepare", "/signed"].map((r) => [`route owner:evm-transaction ${r}`, NOT_THIS_KIND])),
+  ...Object.fromEntries(["/connect", "/sending", "/sent"].map((r) => [`route owner:solana-transaction ${r}`, NOT_THIS_KIND])),
   "state awaiting_approval": "the state before the boundary: an attempt leaves it for approved when the wallet is asked to send (Tempo) or its signature is accepted (x402), and nothing moves it back",
   "state denied": "a refusal from the signer after approved ends the attempt uncertain (pay.ts sentMaybe); denied is reached only before",
   "state expired": "the same: an expired approval after the wallet was asked ends uncertain (row: the approval window ends)",
@@ -970,49 +1012,59 @@ function commandsOf(help: string): string[] {
   }
   return names;
 }
-/** The rows of `superstables budget --help`'s commands table: name, who, what. */
-const budgetCommandsOf = (help: string) => [...help.matchAll(/^ {2}([a-z][a-z-]*) +(?:owner|agent|anyone) {2,}/gm)].map((m) => m[1]);
+/**
+ * The commands budget/cli.mjs dispatches: the keys of its HANDLERS table, read from the file. Importing it would run the
+ * CLI (it parses process.argv at the top level), so its text is read, as scripts/budget-build.mjs reads it.
+ */
+function budgetHandlers(): string[] {
+  const line = /^const HANDLERS = \{ (.+) \};$/m.exec(readFileSync(BUDGET, "utf8"))?.[1];
+  if (!line) throw new Error("budget/cli.mjs has no one-line HANDLERS table to read");
+  return line.split(", ").map((entry) => entry.split(":")[0].replace(/"/g, "").trim());
+}
+
+/** Each row's own runs check it drove what it covers: the route answered, the state was printed, the command ran. */
+function assertCovered(row: Row, seen: Seen[]): void {
+  for (const key of row.covers) {
+    const [kind, name, route] = key.split(" ");
+    if (kind === "route") expect(seen.some((s) => s.step === name && s.route === route), key).toBe(true);
+    if (kind === "state") expect(seen.some((s) => s.surface === "pay" && s.body.state === name), key).toBe(true);
+    if (kind === "command") expect(seen.some((s) => s.cmd === `superstables ${name}`), key).toBe(true);
+    // wait prints the owner command's own RESULT, which names that command
+    if (kind === "budget") expect(seen.some((s) => s.cmd === `budget ${name}` || (s.surface === "budget" && s.body?.command === name)), key).toBe(true);
+  }
+}
 
 describe("once money may have moved, every answer says unknown or uncertain", () => {
-  const observedStates = new Set<string>();
   for (const row of ROWS) {
     it(row.path, async () => {
       const seen = await row.run();
       expect(seen.map((s) => s.at), "one expectation per output").toHaveLength(row.expect.length);
       seen.forEach((s, i) => assertProperty(s, row.expect[i]));
-      for (const s of seen) if (s.surface === "pay") observedStates.add(s.body.state);
-      // a row covers only what it drove: the route answered, the state was printed, the command ran
-      for (const key of row.covers) {
-        const [kind, ...rest] = key.split(" ");
-        const name = rest.join(" ");
-        if (kind === "route") expect(seen.some((s) => s.route === name.split(" ")[1]), key).toBe(true);
-        if (kind === "state") expect(seen.some((s) => s.surface === "pay" && s.body.state === name), key).toBe(true);
-        if (kind === "command") expect(seen.some((s) => s.cmd === `superstables ${name}`), key).toBe(true);
-        // wait prints the owner command's own RESULT, which names that command
-        if (kind === "budget") expect(seen.some((s) => s.cmd === `budget ${name}` || (s.surface === "budget" && s.body?.command === name)), key).toBe(true);
-      }
+      assertCovered(row, seen);
     }, row.timeout ?? 60_000);
   }
 
   it("covers every wallet route, attempt state and command the code declares", async () => {
     const main = commandsOf((await superstables(newHome(), ["--help"])).stdout);
-    const budgetCommands = budgetCommandsOf((await budget(newHome(), ["--help"])).stdout);
+    const budgetCommands = budgetHandlers();
     expect(main).toEqual(expect.arrayContaining(["pay", "status", "receipts", "attempts", "budget"]));
     expect(budgetCommands).toEqual(expect.arrayContaining(["setup", "grant", "buy", "reconcile", "wait", "buy-once"]));
     const declared = [
       ...STEPS.flatMap((s) => [...s.routes, "/state", "/reject"].map((r) => `route ${s.kind} ${r}`)),
+      ...OWNER_ACTION_KINDS.flatMap((k) => OWNER_ROUTES.map((r) => `route owner:${k} ${r}`)),
       ...ATTEMPT_STATES.map((s) => `state ${s}`),
       ...main.map((c) => `command ${c}`),
       ...budgetCommands.map((c) => `budget ${c}`),
     ];
-    expect(declared).toContain("route tempo-transfer /sending");
+    expect(declared).toEqual(expect.arrayContaining(["route tempo-transfer /sending", "route owner:evm-transaction /sending"]));
     const covered = new Set(ROWS.flatMap((r) => r.covers));
     expect(declared.filter((k) => !covered.has(k) && !(k in NO_ANSWER_AFTER_BOUNDARY)), "declared, with no row and no reason").toEqual([]);
     expect([...covered, ...Object.keys(NO_ANSWER_AFTER_BOUNDARY)].filter((k) => !declared.includes(k)), "listed, but not declared").toEqual([]);
-    // every attempt state is either said after the boundary (and a row printed it) or never is
+    expect([...covered].filter((k) => k in NO_ANSWER_AFTER_BOUNDARY), "both covered by a row and listed with a reason").toEqual([]);
+    // every attempt state is either said after the boundary, and then a row covers it (the row checks it printed it), or never is
     const said = new Set<string | undefined>([...SAYS.unknown.pay, ...SAYS.paid.pay, EXCEPTIONS["pay-chain-unpaid"].state]);
     for (const state of ATTEMPT_STATES) {
-      if (said.has(state)) expect(observedStates.has(state), `no row printed ${state}`).toBe(true);
+      if (said.has(state)) expect(covered.has(`state ${state}`), `no row covers ${state}`).toBe(true);
       else expect(FORBIDDEN_STATES.pay, `${state} is neither said nor forbidden`).toContain(state);
     }
   }, 60_000);

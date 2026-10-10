@@ -85,8 +85,13 @@ export interface OwnerVerdict {
   hash?: string;
 }
 
+/** The kinds of owner action, and the routes under an approval link (each kind answers some of them; the rest are 404). */
+export const OWNER_ACTION_KINDS = ["connect", "evm-transaction", "solana-transaction"] as const;
+export const OWNER_ROUTES = ["/state", "/account", "/connect", "/sending", "/sent", "/prepare", "/signed", "/reject", "/cancel"] as const;
+const OWNER_PATH = new RegExp(`^/owner/([0-9a-f]{32})(${OWNER_ROUTES.join("|")})?$`);
+
 export interface OwnerActionInput {
-  kind: "connect" | "evm-transaction" | "solana-transaction";
+  kind: (typeof OWNER_ACTION_KINDS)[number];
   chain: OwnerChain;
   terms: OwnerTerms;
   /** A transaction: the only account that may approve it. */
@@ -406,7 +411,7 @@ export class OwnerApprovalServer {
     this.sweep();
     const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname.replace(/\/+$/, "") || "/";
     const method = req.method ?? "GET";
-    const match = /^\/owner\/([0-9a-f]{32})(\/state|\/account|\/connect|\/sending|\/sent|\/prepare|\/signed|\/reject|\/cancel)?$/.exec(path);
+    const match = OWNER_PATH.exec(path);
     const record = match ? this.records.get(match[1]) : undefined;
     const leaf = match?.[2];
     if (!record) {
