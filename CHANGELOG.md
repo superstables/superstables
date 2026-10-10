@@ -7,6 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+Once a payment may have moved, the client reports it as unknown, never as unpaid:
+
+- `superstables receipts` with no receipts names the attempts that may have paid (approved, in flight or uncertain). It said no payment had been made.
+
 ## [0.3.1] - Safer payment recovery
 
 This release makes budget payments and single purchases on superstables.com safer to recover. Agents arriving from superstables.com's setup page are directed to approval there.
