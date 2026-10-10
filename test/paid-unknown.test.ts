@@ -446,8 +446,8 @@ function rpcChain(receipts: Record<string, unknown>, held = 10000n) {
   };
 }
 /** `budget reconcile` on one journal, through the dispatcher, as an agent runs it. */
-async function reconcileCli(at: string, receipts: Record<string, unknown>, journal: Record<string, unknown>) {
-  const b = await hostedBudget(rpcChain(receipts));
+async function reconcileCli(at: string, receipts: Record<string, unknown>, journal: Record<string, unknown>, held?: bigint) {
+  const b = await hostedBudget(rpcChain(receipts, held));
   const dir = join(b.home, "budget", "ops", "evm-base-sepolia");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${journal.op}.json`), JSON.stringify({ ...journal, token: BASE_USDC }));
@@ -1031,11 +1031,14 @@ const ROWS: Row[] = [
       const stranded = (await reconcileCli("not returned", { [PULL]: pull }, purchase("pull-landed-cli"))).seen;
       const back = rpcReceipt(RETURN, 85n, [rpcTransfer(AGENT, OWNER, 10000n, RETURN, 85n)]);
       const returned = (await reconcileCli("returned", { [PULL]: pull, [RETURN]: back }, { ...purchase("pull-returned-cli"), returnTx: RETURN })).seen;
-      return [stranded, returned];
+      const part = rpcReceipt(RETURN, 85n, [rpcTransfer(AGENT, OWNER, 4000n, RETURN, 85n)]);
+      const emptied = (await reconcileCli("part returned, and the agent holds nothing", { [PULL]: pull, [RETURN]: part }, { ...purchase("pull-partly-returned-cli"), returnTx: RETURN }, 0n)).seen;
+      return [stranded, returned, emptied];
     },
     expect: [
       { verdict: "unknown", match: { exit: 5, command: "reconcile", state: "unknown", paid: null, amount: null, tx: { pull: PULL }, reason: expect.stringMatching(/the payment authorization is expired on chain .*; the price 0\.01 USDC pulled from the owner has not been returned$/), next: expect.stringMatching(/superstables budget recover --rail evm/) } },
       { verdict: "evm-funds-returned", match: { exit: 1, command: "reconcile", state: "failed", paid: false, amount: "0", tx: { pull: PULL, return: RETURN } } },
+      { verdict: "unknown", match: { exit: 5, command: "reconcile", state: "unknown", paid: null, amount: null, next: "the agent key holds 0 USDC; check the owner balance by hand. Never pay again for this op." } },
     ],
   },
   {
