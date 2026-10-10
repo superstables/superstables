@@ -13,6 +13,8 @@ Testnet only.
 
 ### Upgrade and recovery
 
+The client now needs Node 22 or newer. Node 20 reached end of life on 30 April 2026 and is no longer supported.
+
 Stop all older client processes, including agents, servers and approval processes, and upgrade every install before restarting.
 
 Ordinary payment lock recovery now requires proof that its processes have stopped; unverifiable locks need an explicit owner override. Recovery also covers cap locks, approval locks and single-purchase runners. Agents must stop and ask the owner. Recovery keeps payment evidence; check the original payment next. See [owner recovery instructions](https://github.com/superstables/superstables/blob/v0.4.0/budget/CLI.md#operation-lock-recovery).
@@ -29,7 +31,6 @@ For `pay`, owners whose `policy.yaml` explicitly lists allowed stablecoins must 
 
 - Refused purchase-status reads on superstables.com remain `unknown`, with `paid: null`. Resolve the account issue and check the original purchase; do not buy again. `--site https://superstables.com` now accepts the site's www approval links.
 - Budget journal writes are now durable. Approval pages on your machine offer wallets public RPCs, keeping configured RPC access keys out of those offers. `SUPERSTABLES_TEMPO_RPC` now also applies to Tempo payments.
-
 
 ## [0.3.1] - Safer payment recovery
 

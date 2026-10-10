@@ -7,7 +7,7 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
 
 ## What you need
 
-- Node 20 or newer.
+- Node 22 or newer.
 - Linux or macOS. On Windows, use WSL: `superstables budget` refuses to run on native Windows.
 - Network access to sellers and testnet RPCs, and to the approval site when using approvals on superstables.com.
 - For **local approvals**, an owner browser wallet that can reach the client's `127.0.0.1` page:

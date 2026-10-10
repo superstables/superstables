@@ -3,7 +3,7 @@
 //
 // The skill is skills/superstables-payments/ (SKILL.md, references/, agents/openai.yaml), plus scripts/: the whole
 // `superstables` CLI with the budget, bundled by scripts/cli-build.mjs so that it imports only Node built-ins. So the
-// skill needs Node 20 or newer and nothing else: no checkout, no npm install. The agent runs
+// skill needs Node 22 or newer and nothing else: no checkout, no npm install. The agent runs
 // `node <skill folder>/scripts/superstables.mjs <command>`. Keys and state live where every copy of the tool keeps them
 // ($SUPERSTABLES_HOME, default ~/.superstables). scripts/VERSION.json names the build, and
 // scripts/THIRD_PARTY_NOTICES.txt the bundled packages and their licences.
@@ -37,7 +37,7 @@ const source = join(root, "skills", NAME);
 const outRoot = join(root, "build", "skill");
 const out = join(outRoot, NAME);
 
-const RUN_IN_ZIP = `\`superstables\` is \`node scripts/superstables.mjs\` in this skill's folder (the folder this SKILL.md is in). Run it with that folder's absolute path, for example \`node ~/.claude/skills/${NAME}/scripts/superstables.mjs find weather\` or \`node ~/.claude/skills/${NAME}/scripts/superstables.mjs budget doctor --rail evm\`. It needs Node 20+ and nothing else: \`scripts/\` holds the whole tool, bundled. \`node scripts/superstables.mjs --version\` names the build. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine.`;
+const RUN_IN_ZIP = `\`superstables\` is \`node scripts/superstables.mjs\` in this skill's folder (the folder this SKILL.md is in). Run it with that folder's absolute path, for example \`node ~/.claude/skills/${NAME}/scripts/superstables.mjs find weather\` or \`node ~/.claude/skills/${NAME}/scripts/superstables.mjs budget doctor --rail evm\`. It needs Node 22+ and nothing else: \`scripts/\` holds the whole tool, bundled. \`node scripts/superstables.mjs --version\` names the build. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine.`;
 
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const version = process.argv.includes("--dev") ? devVersion(pkg.version, revisionOf(root)) : pkg.version;
