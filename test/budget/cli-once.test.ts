@@ -1024,7 +1024,8 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const [a, b] = await Promise.all([once(), once()]);
     expect([a.code, b.code].sort()).toEqual([0, 3]);
     const refused = a.code === 3 ? a : b;
-    expect(refused.result.reason).toBe("The start lock for a single purchase is held.");
+    // The second start either meets the start lock or, if the first already released it, the first's waiting purchase.
+    expect(refused.result.reason).toMatch(/^(The start lock for a single purchase is held\.|no new purchase was started: buy-once purchase \S+ is still waiting for the owner: one at a time)$/);
     expect(site.purchases).toHaveLength(1);
   }, 30_000);
 
