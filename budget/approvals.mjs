@@ -769,7 +769,9 @@ function lastPageStatus(url) {
       const entry = JSON.parse(line);
       if (entry.id !== pageId) continue;
       status = entry.status;
-      if (entry.sending || ["sending", "sent", "confirmed", "failed", "unknown"].includes(entry.status)) sending = true;
+      // a sign-in (the loopback page's connect, a link on superstables.com) asks the wallet for a message, never to send
+      const signIn = entry.kind === "connect" || entry.kind === "link";
+      if (entry.sending || (!signIn && ["sending", "sent", "confirmed", "failed", "unknown"].includes(entry.status))) sending = true;
     } catch {}
   }
   return { status, sending };
