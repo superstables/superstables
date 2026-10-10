@@ -10,8 +10,9 @@
 // The coverage test reads from the code the routes of every wallet step and of the owner approval page, the attempt
 // states, the pay CLI's commands, the budget dispatcher's handlers and each owner command on each rail, and fails while
 // any of them has neither a row nor a reason in NO_ANSWER_AFTER_BOUNDARY. It needs no row to have run.
-// The rail scan reads every rail script and fails on any place that ends failed or not_revoked without naming a proof
-// from budget/proof.mjs, unless UNPROVEN_FAILED says why that place cannot answer after a send, or what answers instead.
+// The rail scan reads every rail script, and the dispatcher, approval record and page code that answer outside it, and fails
+// on any place that may end failed or not_revoked without naming a proof from budget/proof.mjs, unless UNPROVEN_FAILED says
+// why that place cannot answer after a send, or what answers instead.
 
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -1628,17 +1629,29 @@ function assertCovered(row: Row, seen: Seen[]): void {
   }
 }
 
-// ---- the rail scan: where a rail script can end failed, and why each place without a proof is safe -----------------------
+// ---- the rail scan: where an owner command can end failed, and why each place without a proof is safe -------------------
 
 const RAIL_DIRS = ["evm", "solana", "tempo"];
-/** A place that ends failed or not_revoked: a page verdict, a RESULT's state, or a call that takes the state first. */
-const FAILED_SITE = /\b(?:outcome|state)\s*[:=](?!=)[^,}|;]*?["'](?:failed|not_revoked)["']|\b\w+\(\s*["'](?:failed|not_revoked)["']/;
+/** The code that answers for an owner approval from outside its rail script: the dispatcher, the worker's record, the pages. */
+const ANSWERING = ["budget/approvals.mjs", "budget/owner-page.ts", "budget/hosted.ts", "budget/cli.mjs"];
+/**
+ * A place that may end failed or not_revoked: the word as a string, wherever it is written (a page verdict, a RESULT's
+ * state, a call that takes it, a variable or one arm of a ternary, on one line or on its own line), except where it is
+ * compared with (`===`, `case`), listed (`[...]`, `.includes(`, `.has(`), or a type (`| "failed"`). A state put together at
+ * run time (from a variable holding another word, or from the rail's own RESULT) is not found here: the dispatcher's
+ * default (budget/proof.mjs afterSend) answers unknown for it.
+ */
+const FAILED_SITE = /(?<!(?:[=!]==?|\bcase|\||\[|["'`]\s*,|\.includes\(|\.has\()\s*)["'`](?:failed|not_revoked)["'`](?!\s*(?:\||:(?!\s*["'`])\s*\w|,\s*["'`][\w ]*["'`]\s*[,\]]))/;
 /** A proof written out: `proof: "x"`, `proof?: "x"` (a type), or `proof = a ? "x" : "y"`. */
 const PROOF_LITERAL = /\bproof\??\s*[:=]\s*(?:[^;,}]*?\?\s*)?["'](\w+)["'](?:\s*:\s*["'](\w+)["'])?/g;
+/** `proof` as a property in code: `proof: x`, `{ proof }`, `, proof,` (strings are taken out first, so words do not count). */
+const PROOF_PROPERTY = /(?:^|[{,(\s])proof\??\s*[:,}]/;
+/** A line as code: no comment line, no trailing `// ...` comment. */
+const codeOf = (text: string) => (/^(\/\/|\*|\/\*)/.test(text) ? "" : text.replace(/\s\/\/\s.*$/, ""));
+const withoutStrings = (code: string) => code.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
 function railLines(): { file: string; line: number; text: string }[] {
-  return RAIL_DIRS.flatMap((dir) =>
-    readdirSync(resolve(ROOT, "budget", dir), { recursive: true }).map(String).filter((f) => /\.(ts|mjs)$/.test(f)).sort().flatMap((f) =>
-      readFileSync(resolve(ROOT, "budget", dir, f), "utf8").split("\n").map((text, i) => ({ file: `budget/${dir}/${f}`, line: i + 1, text: text.trim() }))));
+  const files = [...RAIL_DIRS.flatMap((dir) => readdirSync(resolve(ROOT, "budget", dir), { recursive: true }).map(String).filter((f) => /\.(ts|mjs)$/.test(f)).sort().map((f) => `budget/${dir}/${f}`)), ...ANSWERING];
+  return files.flatMap((file) => readFileSync(resolve(ROOT, file), "utf8").split("\n").map((text, i) => ({ file, line: i + 1, text: codeOf(text.trim()) })));
 }
 
 const AFTER_SEND_UNPROVEN = "no chain proof: the transaction was sent and the chain reads otherwise than planned, so the page shows unknown (OwnerApprovalServer.finish) and the dispatcher answers unknown, exit 5 (budget/proof.mjs afterSend; rows: the grant whose read-back fails, the key-file grant that stops after its broadcast)";
@@ -1683,6 +1696,30 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/tempo/setup.ts", has: "That is the agent's own address", why: SIGN_IN_ONLY },
   { file: "budget/tempo/setup.ts", has: "This machine records another owner for this agent", why: SIGN_IN_ONLY },
   { file: "budget/tempo/lib/resolve.ts", has: "payment transaction reverted on chain", why: TEMPO_PURCHASE },
+  { file: "budget/evm/ops.ts", has: 'return { j, verdict: "failed" };', why: "a purchase's verdict inside ops.ts, after it saved one of the agreed chain proofs evm-pull-reverted or evm-funds-returned (the two places above)" },
+  { file: "budget/solana/ops.mjs", has: '{ verdict: "failed", tx: t.sig, err: t.err', why: SOLANA_PURCHASE },
+  { file: "budget/solana/owner.ts", has: 'status: tx.meta?.err ? "failed" : "success"', why: "the chain's own status for a transaction it shows with an error (meta.err): the rails name it as the reverted proof only when the transaction is the requested one (budget/site.mjs differsFromRequest)" },
+  { file: "budget/approvals.mjs", has: 'state: "failed", id, next: "check wallet activity and budget status before retrying"', why: "the link wait or the worker's exit before any page: decided under the record's lock (recordFinalWith), failed only when the record holds no send (recordMayHaveSent), else unknown (rows: budget recover, detached ...)" },
+  { file: "budget/approvals.mjs", has: '{ kind: "failed", record, reason: failedReason }', why: "startDetached's own result, not an answer: the dispatcher's ownerGate prints it as failed only when the record holds no send, else unknown through afterSend" },
+  { file: "budget/approvals.mjs", has: "the background approval stopped before it opened a page, but process group", why: "startDetached's own result while the worker's group would not stop: the dispatcher's ownerGate answers unknown through afterSend when the record holds a send" },
+  { file: "budget/approvals.mjs", has: "and process group ${child.pid} would not stop; the chain stays held` };", why: "startDetached's own result while the worker's group would not stop: the dispatcher's ownerGate answers unknown through afterSend when the record holds a send" },
+  { file: "budget/cli.mjs", has: "emit(2, { ...ctx, state: \"failed\", next: `fix the command; see superstables budget ${ctx.command", why: "badInput: through emit, whose afterSend answers unknown for an owner command that may have sent" },
+  { file: "budget/cli.mjs", has: "native Windows is not supported; use WSL", why: "refused before any command runs" },
+  { file: "budget/cli.mjs", has: "a checkout without dev packages needs its dist/budget build", why: "refused before any command runs" },
+  { file: "budget/cli.mjs", has: "the rail script rejected the input", why: "normalize serves buy and reconcile only: the rail refused its flags before it read the journal or signed anything" },
+  { file: "budget/cli.mjs", has: 'const state = ["buy", "reconcile"].includes(cmd) ? "unknown" : "failed";', why: "normalize serves buy and reconcile only, and both take unknown here; failed is for a command that is neither, which no caller passes" },
+  { file: "budget/cli.mjs", has: "doctor check", why: "doctor reads files and the chain; it sends nothing" },
+  { file: "budget/cli.mjs", has: "the preflight script exited ${r.code} without a RESULT line", why: READ_ONLY },
+  { file: "budget/cli.mjs", has: 'state: ok ? "ok" : "failed", amount: ok ? rr.price', why: READ_ONLY },
+  { file: "budget/cli.mjs", has: "no budget yet in ${HOME}", why: "status reads files and the chain; it sends nothing" },
+  { file: "budget/cli.mjs", has: "setup is done, but the budget could not be read from the chain", why: "status reads files and the chain; it sends nothing" },
+  { file: "budget/cli.mjs", has: "const OWNER_STATES = {", why: "the map from a rail's state to the dispatcher's: every owner command's answer then goes through emit's afterSend, which keeps failed only with the chain's proof" },
+  { file: "budget/cli.mjs", has: 'const byCode = { 0: "settled", 2: "failed"', why: "ownerOutcome's state for an exit code: every owner command's answer then goes through emit's afterSend, which keeps failed only with the chain's proof" },
+  { file: "budget/cli.mjs", has: 'state: rr?.state ?? "failed", owner: rr?.owner', why: "setup --fund-only on tempo: the faucet tops up the owner, and the answer goes through emit's afterSend like every owner command" },
+  { file: "budget/cli.mjs", has: 'const failed = { ...ctx, state: "failed", id, next: `check wallet activity before retrying', why: "the worker's group would not stop: answered through afterSend, so unknown, when the record holds a send" },
+  { file: "budget/cli.mjs", has: 'emit(2, { ...ctx, service: f.service, state: "failed"', why: "buy-once's bad input, before any purchase exists on the site" },
+  { file: "budget/cli.mjs", has: 'this site has no purchase API; a service can still be paid from a budget', why: "find reads a site's service list; it sends nothing" },
+  { file: "budget/cli.mjs", has: "no list to show; ${any}", why: "find reads a site's service list; it sends nothing" },
 ];
 
 describe("once money may have moved, every answer says unknown or uncertain", () => {
@@ -1739,12 +1776,16 @@ describe("once money may have moved, every answer says unknown or uncertain", ()
 
   it("lets no rail script end failed after it may have sent unless it names the chain's proof, or a reason says why that place is safe", () => {
     // the scan itself: what it counts as a place that ends failed, and as a proof
-    expect(['finish?.({ outcome: "failed", message: "x" })', "{ state: x ? 'not_revoked' : 'revoked' }", 'const state = a ? "ok" : "failed";', 'report("failed", why)'].map((l) => FAILED_SITE.test(l))).toEqual([true, true, true, true]);
-    expect(['if (j.state === "failed") x()', 'type R = { state: "settled" | "failed" }', 'const n = ["failed", "unknown"].length'].map((l) => FAILED_SITE.test(l))).toEqual([false, false, false]);
+    const site = (l: string) => FAILED_SITE.test(codeOf(l.trim()));
+    expect(['finish?.({ outcome: "failed", message: "x" })', "{ state: x ? 'not_revoked' : 'revoked' }", 'const state = a ? "ok" : "failed";', 'report("failed", why)', ': "failed",', 'state: `failed`,', 'const s = "failed";', 'return { kind: "failed", record };', 'const M = { gone: "failed", ok: "settled" };'].map(site)).toEqual(Array(9).fill(true));
+    expect(['if (j.state === "failed") x()', 'type R = { state: "settled" | "failed" }', 'const n = ["failed", "unknown"].length', 'const n = ["sent", "failed", "unknown"].length', 'case "failed":', 'if (x.includes("failed")) y()', 'new Set(["sent", "failed"])', '// state: "failed"', ' * state: "failed"', 'a(); // ends "failed"', 'x !== "not_revoked"'].map(site)).toEqual(Array(11).fill(false));
+    const proofProperty = (l: string) => PROOF_PROPERTY.test(withoutStrings(codeOf(l.trim())));
+    expect(['{ state: "failed", proof: "reverted" }', '{ outcome: "failed", proof, message }', '...(r ? { proof: "reverted" } : {})', 'proof?: "reverted"'].map(proofProperty)).toEqual([true, true, true, true]);
+    expect(['{ state: "failed", reason: "no proof, sadly" }', '{ state: "failed" } // proof: none', 'const proofs = 1;'].map(proofProperty)).toEqual([false, false, false]);
     expect([...'{ proof: "reverted" } const proof = c.status === "expired" ? "blockhash_expired" : "reverted";'.matchAll(PROOF_LITERAL)].flatMap((m) => [m[1], m[2]].filter(Boolean))).toEqual(["reverted", "blockhash_expired", "reverted"]);
     const lines = railLines();
     const sites = lines.filter((l) => FAILED_SITE.test(l.text));
-    const unproven = sites.filter((l) => !/\bproof\b/.test(l.text));
+    const unproven = sites.filter((l) => !PROOF_PROPERTY.test(withoutStrings(l.text)));
     const listed = (l: { file: string; text: string }) => UNPROVEN_FAILED.filter((u) => u.file === l.file && l.text.includes(u.has));
     expect(sites.length - unproven.length, "places that name a proof").toBeGreaterThanOrEqual(18);
     expect(unproven.filter((l) => listed(l).length !== 1).map((l) => `${l.file}:${l.line}: ${l.text}`), "ends failed with no proof and no reason (or two reasons)").toEqual([]);
