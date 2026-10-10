@@ -239,8 +239,8 @@ Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT
   for each), tx, amount, remaining.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
 Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
-  status before trying again)
+  or the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, or the
+  chain shows a transaction that does not match the plan: check status before trying again)
 ```
 
 ## superstables budget fund-agent
@@ -291,8 +291,8 @@ Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT
   false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), amount (what was sent), tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
 Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
-  status before trying again)
+  or the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, or the
+  chain shows a transaction that does not match the plan: check status before trying again)
 ```
 
 ## superstables budget doctor
@@ -369,8 +369,8 @@ Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT
   false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), amount, remaining, tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
 Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
-  status before trying again)
+  or the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, or the
+  chain shows a transaction that does not match the plan: check status before trying again)
 ```
 
 ## superstables budget status
@@ -563,8 +563,8 @@ Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT
   false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), revoked, remaining, tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
 Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
-  status before trying again)
+  or the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, or the
+  chain shows a transaction that does not match the plan: check status before trying again)
 ```
 
 ## superstables budget recover
@@ -608,8 +608,8 @@ Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT
   false, id, url, expires and next; or, when it waited, the final RESULT: state settled (or ok), amount (returned), tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
 Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
-  status before trying again)
+  or the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, or the
+  chain shows a transaction that does not match the plan: check status before trying again)
 ```
 
 ## superstables budget wait

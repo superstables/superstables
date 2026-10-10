@@ -536,7 +536,7 @@ describe("owner commands on a hosted chain", () => {
     expect(r.approve).toMatchObject({ action: "grant", matchCode: "ABC-DEF" });
   }, 60_000);
 
-  it("a confirmed transaction mined before the request started is refused, even when the site confirms it", async () => {
+  it("a confirmed transaction mined before the request started is unknown, never settled, even when the site confirms it", async () => {
     hostedChain();
     const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
     const AGENT = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A";
@@ -556,8 +556,8 @@ describe("owner commands on a hosted chain", () => {
       if (r.polls >= 2) Object.assign(r, { state: "confirmed", tx_hash: HASH });
     };
     const r = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"]);
-    expect(r.code, r.stderr).toBe(3);
-    expect(r.result.state).toBe("refused_precheck");
+    expect(r.code, r.stderr).toBe(5);
+    expect(r.result.state).toBe("unknown");
     expect(r.result.reason).toBe("the transaction was not accepted as the planned step: it was mined in block 50, before this request started (block 100). The budget was not recorded.");
     expect(publicFile()).not.toMatch(/^B4_CAP=/m);
   }, 60_000);
@@ -600,7 +600,7 @@ describe("owner commands on a hosted chain", () => {
         if (r.polls >= 2) Object.assign(r, { state: "failed", tx_hash: hash, wallet_asked: true, reason: "The transaction is not the one planned.", reason_code: "mismatch" });
       };
       const r = await budget([...command, "--wait", "--no-open"]);
-      expect(r.code, `${command[0]}: ${r.stderr}`).toBe(3);
+      expect(r.code, `${command[0]}: ${r.stderr}`).toBe(5);
       expect(r.result.ok).toBe(false);
       expect(r.result.reason, command[0]).toBe(`${new URL(site.url).host} reported this step as failed (reason: mismatch), so it is not counted as done (transaction ${hash})${command[0] === "grant" ? ". The budget was not recorded." : ""}`);
     }
@@ -637,7 +637,7 @@ describe("owner commands on a hosted chain", () => {
     expect(publicFile()).not.toMatch(/^B4_REVOKED_AT=/m);
   }, 60_000);
 
-  it("a lying site: a confirmed grant whose transaction approves another spender, another amount or other calldata is refused", async () => {
+  it("a lying site: a confirmed grant whose transaction approves another spender, another amount or other calldata is unknown, never settled", async () => {
     hostedChain();
     const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
     const AGENT = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A";
@@ -663,7 +663,7 @@ describe("owner commands on a hosted chain", () => {
         if (r.polls >= 2) Object.assign(r, { state: "confirmed", tx_hash: HASH });
       };
       const r = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"]);
-      expect(r.code, `${what}: ${r.stderr}`).toBe(3);
+      expect(r.code, `${what}: ${r.stderr}`).toBe(5);
       expect(r.result.reason, what).toMatch(/^the transaction was not accepted as the planned step: .*The budget was not recorded\.$/);
       expect(publicFile()).not.toMatch(/^B4_CAP=/m);
     }
@@ -1025,7 +1025,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     Object.assign(r.steps![0], { state: "failed", tx_hash: FUND_HASH, wallet_asked: true, reason: "The transaction is not the one planned.", reason_code: "mismatch" });
     Object.assign(r.steps![1], { state: "failed", tx_hash: GRANT_HASH, wallet_asked: true, reason: "The transaction is not the one planned.", reason_code: "mismatch" });
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
-    expect(done.code, done.stderr).toBe(3);
+    expect(done.code, done.stderr).toBe(5);
     expect(done.result).toMatchObject({ ok: false, linked: true, owner: OWNER, steps: [{ kind: "fund_agent", state: "mismatch", tx: FUND_HASH }, { kind: "grant", state: "mismatch", tx: GRANT_HASH }] });
     for (const step of done.result.steps) expect(step.reason).toBe(`${new URL(site.url).host} reported this step as failed (reason: mismatch), so it is not counted as done (transaction ${step.tx})${step.kind === "grant" ? ". The budget was not recorded." : ""}`);
     expect(done.result.cap).toBeUndefined();
