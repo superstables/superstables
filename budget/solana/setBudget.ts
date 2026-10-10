@@ -118,7 +118,7 @@ if (OWNER_KEY_FILE) {
   if (c.problems.length) {
     const reason = mismatchReason(c.problems, c.siteFailed, sig);
     console.log(`MISMATCH: ${reason}`);
-    handle.finish({ outcome: "unknown", message: `${mismatchPage(c.problems, c.siteFailed, sig)} Revoke it: superstables budget revoke --rail solana.`, hash: sig });
+    handle.finish({ outcome: "unknown", message: `${mismatchPage(c.problems, c.siteFailed, sig, { ended: c.status === "failed" ? "failed on chain" : undefined })} Revoke it: superstables budget revoke --rail solana.`, hash: sig });
     await closeOwnerPage();
     process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "revoke (superstables budget revoke --rail solana), then grant again" }));
   }

@@ -335,7 +335,7 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}${sent.status !== "success" ? "; it reverted on chain" : ""}`;
     console.log(`MISMATCH: ${reason}`);
     const now = await allowanceOf(owner, agent).catch(() => null);
-    handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Check the allowance and revoke again: ${REVOKE_HINT}`, hash: sent.hash });
+    handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash, { ended: sent.status !== "success" ? "reverted on chain" : undefined })} Check the allowance and revoke again: ${REVOKE_HINT}`, hash: sent.hash });
     await closeOwnerPage();
     process.exit(emit(command, 3, withEarlier(earlier, { state: "mismatch", tx: sent.hash, allowance: now === null ? null : usdc(now), reason, next: `revoke again (superstables budget revoke --rail evm${chainFlag}) and check superstables budget status --rail evm${chainFlag}` })));
   }

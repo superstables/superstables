@@ -67,6 +67,25 @@ const delegationsType = [{
 export type Call = { to: Address; value: bigint; data: Hex };
 
 const same = (a?: string | null, b?: string | null) => (a ?? "").toLowerCase() === (b ?? "").toLowerCase();
+const approveAbi = parseAbi(["function approve(address spender, uint256 amount)"]);
+const approveArgs = (data: Hex) => {
+  try {
+    const d = decodeFunctionData({ abi: approveAbi, data });
+    return { spender: d.args[0], amount: d.args[1] };
+  } catch {
+    return null;
+  }
+};
+/** How a call's data differs from the planned data: for two approve calls, the spender or the amount; else the data. */
+function dataProblems(got: Hex, want: Hex): string[] {
+  const g = approveArgs(got);
+  const w = approveArgs(want);
+  if (!g || !w) return ["it carries other transaction data than the planned call"];
+  const problems: string[] = [];
+  if (!same(g.spender, w.spender)) problems.push(`it approved the spender ${g.spender}, not ${w.spender}`);
+  if (g.amount !== w.amount) problems.push(`it approved ${g.amount} in the token's smallest units, not ${w.amount}`);
+  return problems.length ? problems : ["it carries other transaction data than the planned call"];
+}
 
 /**
  * The one call `owner`'s account makes in this transaction through the DelegationManager, or null when the transaction is
@@ -206,7 +225,7 @@ export function plannedCall(tx: MinedTx, owner: Address, want: Call): { via: "di
   const problems: string[] = [];
   if (!same(call.from, owner)) problems.push(`it was sent from ${call.from}, not the owner ${owner}`);
   if (!same(call.to, want.to)) problems.push(`it was sent to ${call.to}, not ${want.to}`);
-  if (!same(call.data, want.data)) problems.push("the wallet changed the transaction data (for example the spending cap)");
+  if (!same(call.data, want.data)) problems.push(...dataProblems(call.data, want.data));
   if (call.value !== want.value) problems.push(`it sent a value of ${call.value}, not ${want.value}`);
   return { via: inner ? "delegation" : "direct", call, problems };
 }
