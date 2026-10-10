@@ -120,7 +120,7 @@ if (!verifyOnly && OWNER_KEY_FILE) {
     const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}. The budget was not recorded.`;
     console.log(`MISMATCH: ${reason}`);
     const now = await allowanceOf(pub.owner, pub.agent).catch(() => null);
-    handle.finish({ outcome: "failed", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: sent.hash });
+    handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: sent.hash });
     await closeOwnerPage();
     process.exit(result(3, { state: "mismatch", tx: sent.hash, reason, requested: usdc(cap), allowance: now === null ? null : usdc(now), next: "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" }));
   }

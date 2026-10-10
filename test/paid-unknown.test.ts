@@ -18,7 +18,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodePaymentResponseHeader } from "@x402/core/http";
 import { Keypair, SendTransactionError, SystemProgram, Transaction, type Connection } from "@solana/web3.js";
-import { encodeEventTopics, parseAbi, type Hex } from "viem";
+import { encodeEventTopics, encodeFunctionData, parseAbi, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { PaymentEngine } from "../src/core/pay.js";
@@ -357,6 +357,41 @@ async function ownerAsked(url: string, address = OWNER) {
   expect((await seenRoute("owner:evm-transaction", "the wallet is asked to send", url, "/sending", { address })).body).toEqual({ status: "sending" });
 }
 
+/** Another spender than the agent, for a grant the wallet changed. */
+const SPENDER = "0x5555555555555555555555555555555555555555";
+type OwnerTx = { to: string; input: Hex; value: bigint; logs: unknown[] };
+/**
+ * An owner command on this machine (no superstables.com), whose page's wallet reports these transactions: the RPC shows
+ * each one mined in block 101, after the request started at block 100, from the owner, successful, with these logs.
+ */
+async function ownerOnThisMachine(txs: Record<string, OwnerTx>) {
+  const blockHash = `0x${"ef".repeat(32)}`;
+  const b = await hostedBudget((method, params) => {
+    if (method === "eth_blockNumber") return "0x64";
+    const t = txs[params[0]];
+    if (!t) return undefined;
+    if (method === "eth_getTransactionByHash") return { hash: params[0], blockHash, blockNumber: "0x65", from: OWNER, to: t.to, input: t.input, value: `0x${t.value.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
+    if (method === "eth_getTransactionReceipt") return { transactionHash: params[0], blockHash, blockNumber: "0x65", from: OWNER, to: t.to, status: "0x1", logs: t.logs, gasUsed: "0x5208", cumulativeGasUsed: "0x5208", effectiveGasPrice: "0x1", contractAddress: null, logsBloom: `0x${"0".repeat(512)}`, transactionIndex: "0x0", type: "0x0" };
+    return undefined;
+  });
+  writeFileSync(join(b.home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${AGENT}\n`);
+  return b;
+}
+const approval = (owner: string, spender: string, value: bigint, hash: Hex) => ({
+  address: BASE_USDC, topics: encodeEventTopics({ abi: erc20, eventName: "Approval", args: { owner: owner as Hex, spender: spender as Hex } }), data: `0x${value.toString(16).padStart(64, "0")}`,
+  blockNumber: "0x65", blockHash: `0x${"ef".repeat(32)}`, transactionHash: hash, transactionIndex: "0x0", logIndex: "0x0", removed: false,
+});
+/** The owner's page asked the wallet, which reported `hash`: the page's answer, its state once the command read the chain, and the command's final RESULT. */
+async function ownerPageSent(b: { home: string; env: Record<string, string> }, first: any, hash: Hex): Promise<Seen[]> {
+  await ownerAsked(first.url);
+  const sent = await seenRoute("owner:evm-transaction", "the page reports the transaction", first.url, "/sent", { address: OWNER, hash });
+  const verdict = await until(async () => {
+    const st = await seenRoute("owner:evm-transaction", "the page's state once the command read the chain", first.url, "/state");
+    return st.body.status !== "sent" && st;
+  }, "the command's verdict on the page", 60_000);
+  return [sent, verdict, seenBudget("wait for the end", "wait", await budget(b.home, ["wait", "--shown", "--id", first.id, "--timeout", "90"], b.env))];
+}
+
 // ---- budget, in process: the evm rail's reconcile and recover, the chain answered as in their own tests ------------------
 
 const TOKEN = "0x3333333333333333333333333333333333333333";
@@ -368,6 +403,8 @@ const NONCE: Hex = `0x${"ef".repeat(32)}`;
 const erc20 = parseAbi([
   "event Transfer(address indexed from, address indexed to, uint256 value)",
   "event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)",
+  "event Approval(address indexed owner, address indexed spender, uint256 value)",
+  "function approve(address spender, uint256 value)",
 ]);
 const transfer = (from: string, to: string, value = 10000n) => ({ address: TOKEN, topics: encodeEventTopics({ abi: erc20, eventName: "Transfer", args: { from: from as Hex, to: to as Hex } }), data: `0x${value.toString(16).padStart(64, "0")}`, removed: false });
 const mined = (hash: Hex, block: bigint, logs: unknown[], status = "success") => ({ transactionHash: hash, blockNumber: block, blockHash: BLOCK_HASH, status, logs });
@@ -755,6 +792,41 @@ const ROWS: Row[] = [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
       { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"c4".repeat(32)}`, message: "The command could not confirm this transfer on chain yet. Check your wallet's activity." } },
       { verdict: "unknown", match: { exit: 5, command: "fund-agent", state: "unknown", final: true, reason: expect.stringMatching(/^the transaction is on chain, but the agent's balance reads/) } },
+    ],
+    timeout: 150_000,
+  },
+  {
+    path: "budget fund-agent on this machine: the owner's wallet sent the agent another amount than planned",
+    covers: [],
+    run: async () => {
+      const FUND: Hex = `0x${"c6".repeat(32)}`;
+      const b = await ownerOnThisMachine({ [FUND]: { to: AGENT, input: "0x", value: 2n * 10n ** 14n, logs: [] } });
+      const first = resultOf((await budget(b.home, ["fund-agent", "--rail", "evm", "--no-open"], b.env)).stdout);
+      expect(first).toMatchObject({ command: "fund-agent", state: "waiting_owner" });
+      return ownerPageSent(b, first, FUND);
+    },
+    expect: [
+      { verdict: "unknown", match: { http: 200, status: "sent" } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"c6".repeat(32)}`, message: expect.stringMatching(/^The transfer was not confirmed as the planned step: it sent a value of 200000000000000, not 100000000000000\.$/) } },
+      { verdict: "unknown", match: { exit: 5, command: "fund-agent", state: "unknown", final: true, reason: expect.stringMatching(/it sent a value of 200000000000000, not 100000000000000$/) } },
+    ],
+    timeout: 150_000,
+  },
+  {
+    path: "budget grant on this machine: the owner's wallet approved another spender than the agent",
+    covers: [],
+    run: async () => {
+      const GRANT: Hex = `0x${"c8".repeat(32)}`;
+      const input = encodeFunctionData({ abi: erc20, functionName: "approve", args: [SPENDER, 10n ** 6n] });
+      const b = await ownerOnThisMachine({ [GRANT]: { to: BASE_USDC, input, value: 0n, logs: [approval(OWNER, SPENDER, 10n ** 6n, GRANT)] } });
+      const first = resultOf((await budget(b.home, ["grant", "--rail", "evm", "--amount", "1", "--no-open"], b.env)).stdout);
+      expect(first).toMatchObject({ command: "grant", state: "waiting_owner" });
+      return ownerPageSent(b, first, GRANT);
+    },
+    expect: [
+      { verdict: "unknown", match: { http: 200, status: "sent" } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"c8".repeat(32)}`, message: expect.stringMatching(/^The transaction was not accepted as the planned step \(the wallet changed the transaction data/) } },
+      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, tx: { grant: `0x${"c8".repeat(32)}` } } },
     ],
     timeout: 150_000,
   },

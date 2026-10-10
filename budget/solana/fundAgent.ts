@@ -93,7 +93,7 @@ if (OWNER_KEY_FILE) {
   if (c.problems.length) {
     const reason = mismatchReason(c.problems, c.siteFailed, sig);
     console.log(`MISMATCH: ${reason}`);
-    handle.finish({ outcome: "failed", message: mismatchPage(c.problems, c.siteFailed, sig, "transfer"), hash: sig });
+    handle.finish({ outcome: "unknown", message: mismatchPage(c.problems, c.siteFailed, sig, "transfer"), hash: sig });
     await closeOwnerPage();
     process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "check the owner's wallet activity, then superstables budget doctor --rail solana" }));
   }
