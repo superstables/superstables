@@ -1,7 +1,7 @@
 import { stopHolder } from '../helpers/budget-holder-cleanup.mjs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -41,6 +41,23 @@ function refusal(r: ReturnType<typeof unlock>, pid: number) {
   let stat: string; try { stat = readFileSync(`/proc/${pid}/stat`, 'utf8').trim(); } catch (err) { stat = String((err as NodeJS.ErrnoException).code); }
   return `stdout: ${r.stdout}\nstderr: ${r.stderr}\nholder /proc/${pid}/stat: ${stat}`;
 }
+// The PID the holder has inside its own namespace.
+function innerPid(hostPid: number) {
+  return Number(readFileSync(`/proc/${hostPid}/status`, 'utf8').match(/^NSpid:\s+(.+)$/m)![1].trim().split(/\s+/).at(-1));
+}
+// Another process with the same inner PID whose namespace this user cannot read, such as another user's sandbox.
+// Recovery cannot rule it out as the holder, so unlock must refuse instead of recovering.
+function unreadableTwin(hostPid: number, inner: number) {
+  for (const entry of readdirSync('/proc')) {
+    if (!/^\d+$/.test(entry) || Number(entry) === hostPid) continue;
+    try {
+      const ids = readFileSync(`/proc/${entry}/status`, 'utf8').match(/^NSpid:\s+(.+)$/m)?.[1].trim().split(/\s+/).map(Number) ?? [];
+      if (ids.length < 2 || ids.at(-1) !== inner) continue;
+      readlinkSync(`/proc/${entry}/ns/pid`);
+    } catch (err) { if (!['ENOENT', 'ESRCH'].includes(String((err as NodeJS.ErrnoException).code))) return true; }
+  }
+  return false;
+}
 async function waitFor(fn: () => boolean) {
   const end = Date.now() + 5000;
   while (!fn()) { if (Date.now() > end) throw new Error('probe did not reach expected state'); await sleep(10); }
@@ -62,9 +79,11 @@ describe.runIf(canUnsharePid)('real PID namespace ownership', () => {
     expect(record.hostPid).toBe(holder.pid);
     expect(record.pidStart).toBe((await import('../../budget/procs.mjs')).processStart(holder.pid));
     expect(tryLock(b)).toBe(false); expect(unlock(b).status).toBe(5);
+    const inner = innerPid(holder.pid);
     process.kill(holder.pid, 'SIGKILL');
     await waitFor(() => { try { return readFileSync(`/proc/${holder.pid}/stat`, 'utf8').includes(') Z '); } catch { return true; } });
-    const r = unlock(b); expect(r.status, refusal(r, holder.pid)).toBe(0); expect(existsSync(b.path)).toBe(false);
+    const twin = unreadableTwin(holder.pid, inner);
+    const r = unlock(b); expect(r.status, refusal(r, holder.pid)).toBe(twin ? 5 : 0); expect(existsSync(b.path)).toBe(twin);
   });
   it('never takes a running foreign holder after a forward or backward clock jump', async () => {
     const b = box(); await hold(b);
@@ -101,8 +120,10 @@ describe.runIf(canUnsharePid)('real PID namespace ownership', () => {
     if (successor.ok) successor.release();
   });
   it('recovers a foreign holder after its namespace exits', async () => {
-    const b = box(); const holder = await hold(b); process.kill(holder.pid, 'SIGKILL'); await sleep(100);
+    const b = box(); const holder = await hold(b); const inner = innerPid(holder.pid);
+    process.kill(holder.pid, 'SIGKILL'); await sleep(100);
     const text = readFileSync(b.path, 'utf8');
+    if (unreadableTwin(holder.pid, inner)) { const r = unlock(b); expect(r.status, refusal(r, holder.pid)).toBe(5); expect(readFileSync(b.path, 'utf8')).toBe(text); return; }
     const r = unlock(b); expect(r.status, refusal(r, holder.pid)).toBe(0); expect(existsSync(b.path)).toBe(false);
     writeFileSync(b.path, text); expect(tryLock(b, 86400000)).toBe(true);
   });
