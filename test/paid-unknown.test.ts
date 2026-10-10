@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodePaymentResponseHeader } from "@x402/core/http";
+import { Keypair, SendTransactionError, SystemProgram, Transaction, type Connection } from "@solana/web3.js";
 import { encodeEventTopics, parseAbi, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -691,6 +692,42 @@ const ROWS: Row[] = [
       { verdict: "unknown", match: { exit: 5, command: "fund-agent", state: "unknown", final: true, reason: expect.stringMatching(/^the transaction is on chain, but the agent's balance reads/) } },
     ],
     timeout: 150_000,
+  },
+  {
+    path: "owner approval page, solana transaction: the send answers with an error after the transaction left this machine",
+    covers: [],
+    run: async () => {
+      const owner = Keypair.generate();
+      const agent = Keypair.generate().publicKey;
+      const errors = [
+        new SendTransactionError({ action: "simulate", signature: "", transactionMessage: "Transaction simulation failed: Blockhash not found", logs: [] }),
+        Object.assign(new Error("Transaction simulation failed: Blockhash not found"), { name: "SendTransactionError" }),
+        new Error("fetch failed"),
+      ];
+      const server = await ownerServer();
+      const seen: Seen[] = [];
+      for (const [i, error] of errors.entries()) {
+        const conn = {
+          getLatestBlockhash: async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 100 }),
+          getBlockHeight: async () => 10,
+          sendRawTransaction: async () => { throw error; },
+        } as unknown as Connection;
+        const { transactionPort } = await import(new URL("../budget/solana/owner.ts", import.meta.url).href);
+        const { port } = transactionPort(conn, owner.publicKey, () => [SystemProgram.transfer({ fromPubkey: owner.publicKey, toPubkey: agent, lamports: 10_000_000 })], () => {});
+        const handle = server.request({ ...ownerTransfer(10_000), kind: "solana-transaction", chain: { family: "solana", chainId: 0, chainName: "Solana devnet", rpcUrl: "http://127.0.0.1:1", explorer: "https://explorer.solana.com", explorerQuery: "?cluster=devnet", walletChain: "solana:devnet", nativeCurrency: { name: "SOL", symbol: "SOL", decimals: 9 }, testnet: true }, account: owner.publicKey.toBase58(), transaction: undefined, solana: port });
+        expect((await seenRoute("connect", handle.url, "/account", { address: owner.publicKey.toBase58() })).http).toBe(200);
+        const prepared = await seenRoute("prepare", handle.url, "/prepare", { address: owner.publicKey.toBase58() });
+        const tx = Transaction.from(Buffer.from(prepared.body.transaction, "base64"));
+        tx.sign(owner);
+        seen.push(await seenRoute(`the signed transaction is sent (${["the RPC's own error", "an error named as the RPC's", "a transport error"][i]})`, handle.url, "/signed", { address: owner.publicKey.toBase58(), signedTransaction: tx.serialize().toString("base64") }));
+        seen.push(await seenRoute("the page's state after it", handle.url, "/state"));
+      }
+      return seen;
+    },
+    expect: [0, 1, 2].flatMap(() => [
+      { verdict: "unknown" as const, match: { http: 200, status: "sent", hash: expect.any(String) } },
+      { verdict: "unknown" as const, match: { http: 200, status: "sent", sending: true } },
+    ]),
   },
   {
     path: "budget recover: its gas step on the owner's page ended while the wallet may be sending (budget/evm/owner.ts, as recover runs it)",
