@@ -11,7 +11,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Once a payment may have moved, the client reports it as unknown, never as unpaid:
 
-- `superstables receipts` with no receipts names the attempts that may have paid (approved, in flight or uncertain). It said no payment had been made.
+- `superstables receipts` with no receipts names the attempts that may have paid (approved, in flight or uncertain), and otherwise says no receipt is recorded. It said no payment had been made. Whether any receipt exists is now read from all of them: `--limit 0` said no payment had been made even after a settled one.
 - `superstables budget wait` answers `unknown` (exit 5, `final: false`) for an open owner approval once the owner's wallet was asked to send. It answered `waiting_owner` (exit 0) and said the owner had not finished approving.
 - `superstables budget wait` without `--shown` reads an owner approval whose wallet was asked, and a single purchase on superstables.com that showed payment evidence. It answered that the purchase was not approved or paid yet. When this machine has not seen the owner act, `wait` without `--shown` still refuses (exit 2, `show_owner_first`), and now says it read nothing, so it says nothing about whether the owner approved or paid.
 - `superstables budget buy` with the `--op` of a purchase that is still `submitted` or `unknown` answers `unknown` (exit 5) and points to `reconcile`, also when the agent key file is missing or unsafe. It answered `refused_precheck` (exit 3), and with a missing or unsafe key file also `paid: false`.

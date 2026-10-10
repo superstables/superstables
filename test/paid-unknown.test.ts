@@ -424,12 +424,15 @@ const ROWS: Row[] = [
       const checking = await status("status while the chain is read", t.home, t.id, t.env);
       t.chain.confirm(hash);
       await t.engine.waitForAttempt(t.id, 20_000);
-      return [sent, checking, await status("status once it landed", t.home, t.id, t.env)];
+      const landed = await status("status once it landed", t.home, t.id, t.env);
+      const none = seenListing("receipts --limit 0", "receipts", await superstables(t.home, ["receipts", "--limit", "0"], t.env));
+      return [sent, checking, landed, none];
     },
     expect: [
       { verdict: "unknown", match: { http: 200, status: "signed" } },
       { verdict: "unknown", match: { exit: 0, state: "submitting", final: false, message: expect.stringMatching(/The client is checking that transfer on chain before it calls the service/) } },
       { verdict: "paid", match: { exit: 0, state: "settled", chain: "verified", message: expect.stringMatching(/^Paid 0\.01 pathUSD on Tempo Moderato/) } },
+      { verdict: "paid", match: { exit: 0, text: "when  amount  service  outcome  chain  attempt  transaction\n----  ------  -------  -------  -----  -------  -----------\n" } },
     ],
     timeout: 60_000,
   },
