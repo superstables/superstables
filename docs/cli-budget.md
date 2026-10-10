@@ -619,12 +619,15 @@ superstables budget wait --id ID --shown [--timeout S] [--site URL] [--abandon]
 
 After an owner command or buy-once returned waiting_owner: waits up to S seconds (default 30, at most 300) for that
 approval, then prints its state. While the owner has not decided: state waiting_owner, final false, exit 0. That is not
-an approval. Once it ended: final true, and the owner command's (or purchase's) own final RESULT and exit code, the same
-on every later call. Scripts test final, not the exit code.
+an approval. Once the owner's wallet was asked to send and there is no final result yet: state unknown, final false,
+exit 5; tell the owner the outcome is unknown and run wait --shown again later. Once it ended: final true, and the owner
+command's (or purchase's) own final RESULT and exit code, the same on every later call.
+Scripts test final, not the exit code.
 --shown means: I have written the approval link (and the match code) and the terms in a reply the owner can read.
-Without it, wait refuses (exit 2, state show_owner_first) and polls nothing; once the approval has ended it prints the
-final result without it. An agent writes the approval link, ends its turn, and runs wait when the owner says they've
-approved; while still waiting_owner it says so in one line and ends its turn again.
+Without it, wait refuses (exit 2, state show_owner_first) and polls nothing; once the approval has ended, or the owner
+already acted on it (the wallet was asked; for buy-once, a read showed payment evidence), it reads it without --shown.
+An agent writes the approval link, ends its turn, and runs wait when the owner says they've approved; while still
+waiting_owner it says so in one line and ends its turn again.
 --site is checked against the site the approval was made on, and refused if it differs.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
 approval sent nothing; after setup --hosted with --grant or --fund, or recover, an earlier step may have completed (read
