@@ -763,7 +763,7 @@ export function recordSending(id) {
   // with no record, no later reader would know this approval may have sent: none leaves
   if (!record) throw new Error(`approval ${id} has no record on this machine to keep this send on; this transaction is not sent`);
   // an approval that another process already ended (the link wait, wait, --replace) answered without a send: none leaves now
-  if (record?.final && !record.sending) throw new Error(`approval ${id} has already ended (${record.final.result?.state}); this transaction is not sent`);
+  if (record.final && !record.sending) throw new Error(`approval ${id} has already ended (${record.final.result?.state}); this transaction is not sent`);
   return record;
 }
 
