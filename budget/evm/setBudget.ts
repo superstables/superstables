@@ -22,7 +22,7 @@ import "./cli-guard.mjs";
 import { encodeFunctionData, type Hex } from "viem";
 import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, erc20Abi, USDC, publicClient, assertRpcChain, tx } from "./lib.ts";
 import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, grantMismatchSteps, tokenRow, approveRow, capWords, REVOKE_HINT, grantTx, grantEnforced, GRANT_NOT_ENFORCED } from "./owner.ts";
-import { mismatchPage, mismatchReason } from "../site.mjs";
+import { differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const cap = toUsdc(arg("cap")!);
@@ -109,7 +109,7 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   approveTx = sent.hash;
   const events = approvalsIn(sent.logs, pub.owner, pub.agent);
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, Approval events: ${events.map((v) => usdc(v)).join(", ") || "none"} ${SYM}`);
-  if (sent.status !== "success") {
+  if (sent.status !== "success" && !differsFromRequest(sent.problems, sent.siteFailed)) {
     handle.finish({ outcome: "failed", proof: "reverted", message: "The transaction reverted. No allowance was granted by it, but a network fee may have been charged.", hash: sent.hash });
     await closeOwnerPage();
     process.exit(result(1, { state: "failed", proof: "reverted", tx: sent.hash, reason: "the approve reverted on chain", next: "superstables budget status --rail evm" }));

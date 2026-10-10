@@ -4,12 +4,12 @@
 // the agent key signs each request, and the site must act for the owner recorded here.
 import { encodeFunctionData, parseEventLogs, parseUnits, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { DEFAULT_SITE, mismatchPage, mismatchReason } from "../site.mjs";
+import { DEFAULT_SITE, differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import { EVM_CHAINS } from "./chains.mjs";
 import { CHAINS } from "./chains.ts";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
-import { ownerEvidence, type EvidenceReads } from "./delegation.ts";
+import { ownerEvidence, plannedCall, type EvidenceReads } from "./delegation.ts";
 import { CFG, GAS, SYM, USDC, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need } from "./lib.ts";
 
 export { closeOwnerPage };
@@ -100,8 +100,9 @@ export async function readSent(hash: Hex, want: { from: Address; to: Address; da
   const block = BigInt(r.blockNumber);
   const problems: string[] = [];
   let unresolved: string | undefined;
-  // a reverted transaction did nothing: the callers report it as failed, whatever it was
-  if (r.status === "success") {
+  // a reverted transaction did nothing, but that is about this request only when it is the owner's planned call
+  if (r.status !== "success") problems.push(...plannedCall(t, want.from, { to: want.to, data: want.data ?? "0x", value: want.value ?? 0n }).problems);
+  else {
     const e = await ownerEvidence({
       chainKey: CFG.key, chainLabel: CFG.label, chainId: CFG.chainId, token: USDC, owner: want.from,
       want: { to: want.to, data: want.data ?? "0x", value: want.value ?? 0n }, tx: t, block, logs: r.logs,
@@ -207,9 +208,10 @@ export async function checkFundSent(hash: Hex, o: { owner: Address; agent: Addre
   if (!sent) return { state: "unknown", tx: hash, reason: "the wallet reported a transaction the chain does not show" };
   if (sent.problems.length || sent.status !== "success") {
     const why = [...sent.problems, ...(sent.status !== "success" ? ["it reverted on chain"] : [])].join("; ");
-    const mismatch = sent.status === "success";
+    // a revert proves the transfer changed nothing only when the transaction is the one planned
+    const mismatch = sent.status === "success" || differsFromRequest(sent.problems, sent.siteFailed);
     console.log(`${mismatch ? "MISMATCH" : "FAILED"}: ${why}`);
-    return mismatch ? { state: "mismatch", tx: sent.hash, reason: mismatchReason(sent.problems, sent.siteFailed, sent.hash) } : { state: "failed", proof: "reverted", tx: sent.hash, reason: why };
+    return mismatch ? { state: "mismatch", tx: sent.hash, reason: `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}${sent.status !== "success" ? "; it reverted on chain" : ""}` } : { state: "failed", proof: "reverted", tx: sent.hash, reason: why };
   }
   if (sent.unresolved) {
     console.log(`UNKNOWN: ${sent.unresolved}`);
@@ -245,9 +247,9 @@ export async function checkGrantSent(hash: Hex, o: { owner: Address; agent: Addr
   if (!sent) return { state: "unknown", tx: hash, reason: "the wallet reported a transaction the chain does not show (replaced, dropped or still pending)" };
   const events = approvalsIn(sent.logs, o.owner, o.agent);
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, Approval events: ${events.map((v) => usdc(v)).join(", ") || "none"} ${SYM}`);
-  if (sent.status !== "success") return { state: "failed", proof: "reverted", tx: sent.hash, reason: "the approve reverted on chain" };
+  if (sent.status !== "success" && !differsFromRequest(sent.problems, sent.siteFailed)) return { state: "failed", proof: "reverted", tx: sent.hash, reason: "the approve reverted on chain" };
   if (sent.problems.length) {
-    const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}. The budget was not recorded.`;
+    const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}${sent.status !== "success" ? "; it reverted on chain" : ""}. The budget was not recorded.`;
     console.log(`MISMATCH: ${reason}`);
     const now = await allowanceOf(o.owner, o.agent).catch(() => undefined);
     return { state: "mismatch", tx: sent.hash, reason, next: grantMismatchSteps(sent.logs, o.owner, o.agent, sent.hash)?.next, allowance: now };
@@ -329,8 +331,8 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
   }
   const events = approvalsIn(sent.logs, owner, agent);
   console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, Approval events: ${events.map((v) => usdc(v)).join(", ") || "none"} ${SYM}`);
-  if (sent.status === "success" && sent.problems.length) {
-    const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash);
+  if (sent.status === "success" ? sent.problems.length : differsFromRequest(sent.problems, sent.siteFailed)) {
+    const reason = `${mismatchReason(sent.problems, sent.siteFailed, sent.hash)}${sent.status !== "success" ? "; it reverted on chain" : ""}`;
     console.log(`MISMATCH: ${reason}`);
     const now = await allowanceOf(owner, agent).catch(() => null);
     handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash)} Check the allowance and revoke again: ${REVOKE_HINT}`, hash: sent.hash });

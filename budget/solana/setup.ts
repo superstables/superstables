@@ -29,7 +29,7 @@ import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
-import { chosenSite, isSiteRequestId, mismatchReason, siteOrigin } from "../site.mjs";
+import { chosenSite, differsFromRequest, isSiteRequestId, mismatchReason, siteOrigin } from "../site.mjs";
 import { askConnect, closeOwnerPage, confirmHosted, emit, endUnapproved, sol, useApprovalSite } from "./owner.ts";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
@@ -334,7 +334,7 @@ async function finishBundle(): Promise<never> {
       console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
       const report = (state: Report["state"], reason?: string, extra: Pick<Report, "proof"> = {}) => reports.push({ kind: s.kind, state, ...extra, tx: s.hash!, txUrl: explorerTx(s.hash!), amount, reason });
       if (c.status === "unknown") { report("unknown", "the site reported a signature the chain does not show yet"); continue; }
-      if (c.status !== "success") { report("failed", `it failed on chain (${JSON.stringify(c.err)})`, { proof: "reverted" }); continue; }
+      if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) { report("failed", `it failed on chain (${JSON.stringify(c.err)})`, { proof: "reverted" }); continue; }
       if (c.problems.length) { report("mismatch", mismatchReason(c.problems, c.siteFailed, s.hash)); continue; }
       if (s.kind === "fund_agent") {
         const i = c.accountKeys?.indexOf(agent) ?? -1;
