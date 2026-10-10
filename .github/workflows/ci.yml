@@ -1,13 +1,10 @@
-# Release candidate pushes to main are type-checked, tested and built, and the skill zip is built and
-# run on its own.
+# Every push to main is type-checked, tested without the slow suites, and built, and the skill zip
+# is built and run on its own. The slow suites (the files listed in vitest.config.ts) and the
+# install routes run in ci-full.yml, which gates every release.
 # It runs only in the private repo; the public copy of this file never starts a job.
 #
 # The tests never reach the network (they stand up their own servers on loopback), so CI needs
 # no keys, no funded wallet and no facilitator.
-#
-# The install job installs the client the five ways people do (the packed tarball, a global
-# install, a checkout, a checkout without dev packages, a git URL) and runs it, with scripts/install-check.mjs. Its
-# `budget doctor` reads a public testnet RPC; everything else stays local.
 
 name: CI
 
@@ -20,8 +17,8 @@ permissions:
   contents: read
 
 concurrency:
-  # a dispatch on another ref skips its jobs, so it must not cancel the release candidate's run
-  group: ${{ github.ref == 'refs/heads/main' && 'ci-release' || format('ci-{0}', github.run_id) }}
+  # a newer push supersedes the older run; a dispatch on another ref skips its jobs, so it gets its own group
+  group: ${{ github.ref == 'refs/heads/main' && 'ci-main' || format('ci-{0}', github.run_id) }}
   cancel-in-progress: true
 
 jobs:
@@ -29,7 +26,7 @@ jobs:
     if: github.event.repository.private && github.ref == 'refs/heads/main'
     name: Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
-    timeout-minutes: 25
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +39,6 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
 
       - run: npm ci
 
@@ -54,7 +50,7 @@ jobs:
       # The tests write their temporary homes and checkouts to TMPDIR. On the runner /tmp is a small
       # tmpfs shared with everything else on the machine; the job's own temp folder is on disk.
       - name: Test
-        run: npm test -- --maxWorkers=2 --minWorkers=1 --testTimeout=60000 --hookTimeout=60000
+        run: npm run test:fast -- --maxWorkers=2 --minWorkers=1 --testTimeout=60000 --hookTimeout=60000
         env:
           TMPDIR: ${{ runner.temp }}
 
@@ -69,31 +65,5 @@ jobs:
       # hosted catalogue, the one step here that needs the network.
       - name: Skill zip
         run: npm run skill && npm run skill:check
-        env:
-          TMPDIR: ${{ runner.temp }}
-
-  install:
-    if: github.event.repository.private && github.ref == 'refs/heads/main'
-    name: Install routes, Node ${{ matrix.node }}
-    runs-on: [self-hosted, Linux, X64, superstables-ci]
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ["22"]
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-          # the git route clones this checkout, and the build stamps the commit count
-          fetch-depth: 0
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-
-      - name: Install five ways and run
-        run: node scripts/install-check.mjs
         env:
           TMPDIR: ${{ runner.temp }}

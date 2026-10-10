@@ -24,6 +24,7 @@
     "prepublishOnly": "node scripts/publish-check.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:fast": "SUPERSTABLES_TEST_TIER=fast vitest run",
     "test:live": "SUPERSTABLES_LIVE=1 vitest run test/live",
     "dev": "tsx src/cli/main.ts",
     "skill": "node scripts/skill.mjs",
