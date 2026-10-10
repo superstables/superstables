@@ -36,6 +36,11 @@ function tryLock(b: ReturnType<typeof box>, skew = 0) {
 function unlock(b: ReturnType<typeof box>) {
   return spawnSync(process.execPath, ['--import', join(root, 'test/helpers/budget-owner-terminal.mjs'), join(root, 'budget/cli.mjs'), 'unlock', '--rail', 'solana', '--op', 'paid-op', '--confirm'], { env: { ...process.env, SUPERSTABLES_HOME: b.home }, encoding: 'utf8', input: 'paid-op\n' });
 }
+// Why unlock refused, and what the host still shows for the killed holder.
+function refusal(r: ReturnType<typeof unlock>, pid: number) {
+  let stat: string; try { stat = readFileSync(`/proc/${pid}/stat`, 'utf8').trim(); } catch (err) { stat = String((err as NodeJS.ErrnoException).code); }
+  return `stdout: ${r.stdout}\nstderr: ${r.stderr}\nholder /proc/${pid}/stat: ${stat}`;
+}
 async function waitFor(fn: () => boolean) {
   const end = Date.now() + 5000;
   while (!fn()) { if (Date.now() > end) throw new Error('probe did not reach expected state'); await sleep(10); }
@@ -59,7 +64,7 @@ describe.runIf(canUnsharePid)('real PID namespace ownership', () => {
     expect(tryLock(b)).toBe(false); expect(unlock(b).status).toBe(5);
     process.kill(holder.pid, 'SIGKILL');
     await waitFor(() => { try { return readFileSync(`/proc/${holder.pid}/stat`, 'utf8').includes(') Z '); } catch { return true; } });
-    expect(unlock(b).status).toBe(0); expect(existsSync(b.path)).toBe(false);
+    const r = unlock(b); expect(r.status, refusal(r, holder.pid)).toBe(0); expect(existsSync(b.path)).toBe(false);
   });
   it('never takes a running foreign holder after a forward or backward clock jump', async () => {
     const b = box(); await hold(b);
@@ -98,7 +103,7 @@ describe.runIf(canUnsharePid)('real PID namespace ownership', () => {
   it('recovers a foreign holder after its namespace exits', async () => {
     const b = box(); const holder = await hold(b); process.kill(holder.pid, 'SIGKILL'); await sleep(100);
     const text = readFileSync(b.path, 'utf8');
-    expect(unlock(b).status).toBe(0); expect(existsSync(b.path)).toBe(false);
+    const r = unlock(b); expect(r.status, refusal(r, holder.pid)).toBe(0); expect(existsSync(b.path)).toBe(false);
     writeFileSync(b.path, text); expect(tryLock(b, 86400000)).toBe(true);
   });
 });
