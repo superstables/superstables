@@ -379,13 +379,19 @@ A quote reads the seller's HTTP 402 challenge and records the exact terms the ow
 approve. It lasts 10 minutes and can start one payment attempt; after that attempt ends, however it
 ends, take a new quote.
 
+A seller may offer the same thing on several chains. Without --chain, quote takes the first offer
+this client can pay, in the seller's order, and names the other chains under `also on` (otherChains
+with --json): to pay on one of those, quote again with --chain. A new quote suggested after a
+payment keeps the quote's chain.
+
 Moves money: no. Nothing is signed or sent; the seller is asked for its price without payment.
 Run by: the agent or the owner.
 Example:
   $ superstables quote --service x402-coin-api.vercel.app --param symbol=BTC
   $ superstables quote 'https://www.superstables.com/api/demo/market?asset=ETH'
-Prints: the quote id, price, network, recipient, expiry, and each policy rule it was checked
-  against. With --json: the quote record, with policy.checks [{rule, ok, detail}] and next.
+Prints: the quote id, price, network, the seller's other chains (also on), recipient, expiry, and
+  each policy rule it was checked against. With --json: the quote record, with policy.checks [{rule,
+  ok, detail}], otherChains and next.
 Exit codes: 0 quoted and allowed, 1 the endpoint could not be quoted (not a paid endpoint,
   unreachable, or no payment this client can make), 2 bad input, 3 quoted but the spend policy
   refuses it (the full table: superstables --help)

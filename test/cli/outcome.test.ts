@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { SOLANA_DEVNET, TEMPO_MODERATO } from "../../src/core/chain.js";
-import { exitCodeFor, nextFor } from "../../src/cli/outcome.js";
+import { exitCodeFor, nextFor, requoteCommand } from "../../src/cli/outcome.js";
 import type { Attempt, AttemptState } from "../../src/core/types.js";
 
 function attempt(state: AttemptState, extra: Partial<Attempt> = {}, network = "eip155:84532"): Attempt {
@@ -63,5 +63,20 @@ describe("nextFor", () => {
   it("points a payment the seller reported, and the chain has not confirmed, at status", () => {
     expect(nextFor(attempt("settled", { chain: "verified" }))).toBe("Nothing to do: the service's answer is above, and `superstables receipts` lists the payment.");
     expect(nextFor(attempt("settled", { chain: "unchecked" }))).toContain("The seller reported the payment and the chain has not confirmed it yet; `superstables status a-1` checks again.");
+  });
+});
+
+describe("requoteCommand", () => {
+  const terms = attempt("denied", {}, "eip155:46630").terms;
+  const base = { url: "https://seller.example/x", terms };
+  it("keeps the quote's chain when the seller offers several, or when the agent asked for one", () => {
+    expect(requoteCommand({ ...base, otherChains: ["base-sepolia"] })).toBe("superstables quote https://seller.example/x --chain robinhood-testnet");
+    expect(requoteCommand({ ...base, chain: "robinhood-testnet" })).toBe("superstables quote https://seller.example/x --chain robinhood-testnet");
+    expect(requoteCommand({ ...base, serviceId: "svc", request: { method: "GET", url: "https://seller.example/x?a=1", params: { a: "1" } }, otherChains: ["base-sepolia"] })).toBe(
+      "superstables quote --service svc --param a=1 --chain robinhood-testnet",
+    );
+  });
+  it("adds no chain for a seller on one chain", () => {
+    expect(requoteCommand(base)).toBe("superstables quote https://seller.example/x");
   });
 });
