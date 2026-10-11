@@ -1333,7 +1333,7 @@ async function buy({ f, ctx }) {
   const lock = lockOp(opsDir(f.rail, f.chain), f.op);
   if (!lock.ok) {
     // the process that holds it may be paying for this op right now
-    log(`superstables budget: another process (buy or reconcile) is working on operation ${f.op}. ${lock.details}. This command signed nothing; whether that process paid is not known yet.`);
+    log(`superstables budget: another process (buy or reconcile) is working on operation ${f.op}. ${lock.details}. This command signed nothing; the other process may have paid.`);
     return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f.op, f.rail, f.chain), reason: "op_in_progress" });
   }
   // read again under the lock: a buy that ran meanwhile may have written it
@@ -1656,7 +1656,7 @@ const waitNext = (id, r = {}, end = "waiting_owner does not mean approved. If th
 };
 /** The next step of a wait that is still waiting: poll again. A new link (recover can ask twice) is written first. */
 /** An approval whose command sent a transaction of its own (recover's revoke) before it needed the owner. */
-const OWN_SEND = "this command already began sending a transaction of its own for this approval, and whether it landed is not known yet.";
+const OWN_SEND = "this command already began sending its own transaction for this approval; its outcome is not known yet.";
 const stillWaiting = (id) => `the owner has not finished. Say so in one line and end your turn; run superstables budget wait --id ${id} --shown again when they say they've approved. If the url is not the one you showed, write the new approval link and code first. The owner has not finished approving; do not approve for the owner.`;
 const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCode: r.matchCode, expires: r.expires, terms: r.terms, message_for_owner: messageForOwner(r) });
 
@@ -1798,7 +1798,7 @@ async function wait({ f }) {
     return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} Its approval link is still open for the owner: if the url is not the one you showed, write the new approval link and code first. Run superstables budget wait --id ${rec.id} --shown again when the owner says they've approved; do not run another owner command on this chain. Do not approve for the owner`, reason: words });
   }
   if (walletWasAsked(rec, r.page)) {
-    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet was asked to send, and whether it sent is not known yet. Tell the owner the outcome is unknown and end your turn; do not run this command or another owner command on this chain. Run superstables budget wait --id ${rec.id} --shown again later: it gives the final result once the command has read the chain. Do not approve for the owner`, reason: words });
+    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet may have sent the transaction. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. Later, run superstables budget wait --id ${rec.id} --shown for the final result. Do not approve for the owner`, reason: words });
   }
   emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: stillWaiting(rec.id), reason: words });
 }

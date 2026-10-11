@@ -459,8 +459,8 @@ is not trusted to say who the owner is or what was paid.
   revoke it. `revoke` never waits on the agent key file: one it cannot read is ignored there.
 - **Every result is read from the chain.** On `evm` and `tempo` the command checks the transaction
   the site reports as it checks one from the local page. A step the site reports as failed is never
-  reported as settled by the client, even if it succeeded on chain: it is a mismatch, reported as
-  unknown (exit 5), failed if it reverted, or unknown when the chain does not show it. On `solana`, where the site
+  reported as settled by the client, even if it succeeded on chain: it is failed only when it
+  reverted and matches the plan, otherwise unknown (exit 5). On `solana`, where the site
   builds the transaction, it must be exactly the planned instruction (`ApproveChecked`, `Revoke` or the SOL
   transfer, same accounts and amount), signed and paid for by the owner alone, plus at most a
   bounded compute-budget addition (a priority fee of at most 0.001 SOL, the same bound the local
