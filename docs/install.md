@@ -23,7 +23,7 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
 
 These instructions describe **client 0.4.0** and require that release build. Install it from npm
 as `@superstables/client`, or use the released commit and skill from
-[GitHub Releases](https://github.com/superstables/superstables-client/releases).
+[GitHub Releases](https://github.com/superstables/superstables/releases).
 The CLI/skill runs on your own machine or server,
 even with approvals on superstables.com. EVM `recover` still needs a reachable local approval page and the
 agent key on that runtime. Test-token and gas requirements belong to the chosen
@@ -66,8 +66,8 @@ To run the client from its sources, for example to work on it, replace `<commit>
 commit hash of the 0.4.0 release:
 
 ```bash
-git clone https://github.com/superstables/superstables-client.git
-cd superstables-client
+git clone https://github.com/superstables/superstables.git
+cd superstables
 git checkout --detach <commit>
 npm ci
 npm run build
@@ -87,7 +87,7 @@ In any folder, with `<commit>` replaced by the full commit hash of the 0.4.0 rel
 page on GitHub names the commit):
 
 ```bash
-npm install github:superstables/superstables-client#<commit>
+npm install github:superstables/superstables#<commit>
 npx --no superstables --version
 ```
 
@@ -227,8 +227,9 @@ secret to yourself: it approves payments.
 
 Every other command needs `--wallet local` too, or `SUPERSTABLES_WALLET=local` in the
 environment the agent's commands run in.
-Fund the address it prints with test USDC on the EVM chain you pay on: on SKALE Base Sepolia, Base
-Sepolia test USDC bridged over the SKALE bridge; on the other EVM chains, test USDC from
+Fund the address it prints with test USDC (USDG on Robinhood Chain Testnet) on the EVM chain you
+pay on: on SKALE Base Sepolia, Base Sepolia test USDC bridged over the SKALE bridge; on Robinhood
+Chain Testnet, test USDG from <https://faucet.paxos.com>; on the other EVM chains, test USDC from
 <https://faucet.circle.com> with the payment's chain selected. The local wallet signs on the EVM
 chains only (Tempo and Solana payments are approved in a browser wallet on the approval page). Stopping the wallet is the off switch: with no
 wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
