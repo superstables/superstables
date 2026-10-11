@@ -4,14 +4,17 @@
 // and only by the exact origin of their endpoint. The token carries nothing about the buyer.
 //
 // One small JSON file next to the other records, mode 0600: origin -> { listingId, token, expiresAt, terms, seenAt }.
-// Expired entries are dropped whenever it is written. SUPERSTABLES_REFERRALS=off neither remembers nor sends.
+// It is the only place the token is kept: a quote records which referral it found, and the paid request reads the
+// token from here. Expired entries are dropped whenever it is written, and each write goes to a file of its own that
+// is then renamed into place, so two processes writing at once never leave a torn file (the later write wins).
+// SUPERSTABLES_REFERRALS=off neither remembers nor sends.
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { decodeReferral, isReferralToken } from "../seller/referral.js";
 import { ensureDir, recordsDir } from "./home.js";
-import type { QuoteReferral, ServiceListing } from "./types.js";
+import type { ServiceListing } from "./types.js";
 
 export const REFERRALS_FILE = "referrals.json";
 
@@ -21,6 +24,15 @@ export interface RememberedReferral {
   expiresAt: string;
   terms: string;
   seenAt: string;
+}
+
+/** A remembered referral that applies to a URL now, with its referral id. */
+export interface ActiveReferral {
+  id: string;
+  token: string;
+  listingId: string;
+  terms: string;
+  expiresAt: string;
 }
 
 /** Is remembering and sending referrals switched on? On unless SUPERSTABLES_REFERRALS is off (or 0, false, no). */
@@ -33,6 +45,18 @@ export function referralsEnabled(): boolean {
 export function referralId(token: string): string | undefined {
   const jti = decodeReferral(token)?.payload.jti;
   return typeof jti === "string" && jti.length > 0 && jti.length <= 200 ? jti : undefined;
+}
+
+/**
+ * When a referral stops being sent: the index's expires_at, but never later than the token's own `exp` (read without
+ * verifying it). Undefined for a token without an `exp`, which no seller would accept.
+ */
+function expiryOf(token: string, expiresAt: string): string | undefined {
+  const exp = decodeReferral(token)?.payload.exp;
+  if (typeof exp !== "number" || !Number.isFinite(exp)) return undefined;
+  const listed = Date.parse(expiresAt);
+  const until = Number.isFinite(listed) ? Math.min(listed, exp * 1000) : exp * 1000;
+  return Number.isFinite(until) ? new Date(until).toISOString() : undefined;
 }
 
 function originOf(url: string): string | undefined {
@@ -88,10 +112,12 @@ export function rememberReferrals(listings: readonly ServiceListing[], dir: stri
   try {
     const kept = Object.fromEntries(Object.entries(read(dir)).filter(([, entry]) => live(entry, now)));
     for (const listing of fresh) {
+      const expiresAt = expiryOf(listing.referral!.token, listing.referral!.expiresAt);
+      if (!expiresAt) continue;
       const entry: RememberedReferral = {
         listingId: listing.id,
         token: listing.referral!.token,
-        expiresAt: listing.referral!.expiresAt,
+        expiresAt,
         terms: listing.referral!.terms,
         seenAt: now.toISOString(),
       };
@@ -107,13 +133,18 @@ export function rememberReferrals(listings: readonly ServiceListing[], dir: stri
   }
 }
 
-/** The referral remembered for this URL's exact origin, when there is one that has not expired and referrals are on. */
-export function referralFor(url: string, dir: string = recordsDir(), now: Date = new Date()): QuoteReferral | undefined {
+/**
+ * The referral remembered for this URL's exact origin, when referrals are on and there is one that has not expired
+ * and whose token names that origin as its audience (read without verifying it: a token for another seller is never
+ * sent to this one).
+ */
+export function referralFor(url: string, dir: string = recordsDir(), now: Date = new Date()): ActiveReferral | undefined {
   if (!referralsEnabled()) return undefined;
   const origin = originOf(url);
   const entry = origin ? read(dir)[origin] : undefined;
   if (!entry || !live(entry, now)) return undefined;
+  const payload = decodeReferral(entry.token)?.payload;
   const id = referralId(entry.token);
-  if (!id) return undefined;
+  if (!id || payload?.aud !== origin) return undefined;
   return { id, token: entry.token, listingId: entry.listingId, terms: entry.terms, expiresAt: entry.expiresAt };
 }

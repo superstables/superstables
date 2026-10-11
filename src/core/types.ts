@@ -86,9 +86,11 @@ export interface ReferralRecord {
   terms: string;
 }
 
-/** A referral attached to a quote: the token to send, and what is recorded once it is sent. */
+/**
+ * The referral a quote found for its origin. The token is not copied into the quote: the paid request reads it from the
+ * remembered referrals (core/referrals.ts) when it leaves, if it is still there and has not expired.
+ */
 export interface QuoteReferral extends ReferralRecord {
-  token: string;
   expiresAt: string;
 }
 

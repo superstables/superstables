@@ -331,9 +331,17 @@ explain(
             json({
               services: services.map((s) => {
                 const commands = listingCommands(s);
+                // The referral token goes to the seller with the paid request only; the listing says that it has one.
+                const { referral, ...listing } = s;
                 // mock is always present: true (marked as sample output), false (marked as not sample output), or null
                 // when the listing does not say, so an agent never has to guess from a missing key.
-                return { ...s, mock: s.mock ?? null, next: commands[0]?.run[0] ?? null, commands };
+                return {
+                  ...listing,
+                  ...(referral ? { referral: { expiresAt: referral.expiresAt, terms: referral.terms } } : {}),
+                  mock: s.mock ?? null,
+                  next: commands[0]?.run[0] ?? null,
+                  commands,
+                };
               }),
               warnings: found.warnings,
             }),
@@ -465,10 +473,7 @@ explain(
         : "superstables policy show";
       if (!taken.policy.allowed) process.exitCode = EXIT.refused;
       if (options.json) {
-        // The referral token goes to the seller with the paid request; the quote's JSON says only which referral it is.
-        const { referral, ...shown } = taken;
-        const named = referral && { id: referral.id, listingId: referral.listingId, terms: referral.terms, expiresAt: referral.expiresAt };
-        console.log(json({ ...shown, ...(named ? { referral: named } : {}), next }));
+        console.log(json({ ...taken, next }));
         return;
       }
       console.log(field("quote", taken.id));

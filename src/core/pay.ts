@@ -27,8 +27,8 @@ import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
 import { evaluatePolicy, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
 import { firstPayable, railFor } from "./rails/index.js";
-import { referralsEnabled } from "./referrals.js";
-import { PURCHASE_REF_HEADER, REFERRAL_HEADER, isReferralToken } from "../seller/referral.js";
+import { referralFor } from "./referrals.js";
+import { PURCHASE_REF_HEADER, REFERRAL_HEADER } from "../seller/referral.js";
 import type { ChainReadOptions, Offer, PaymentFacts, PushRail, RailAdapter, X402Rail } from "./rails/types.js";
 import { join } from "node:path";
 import type { AbandonCause, Attempt, AttemptState, Quote, Receipt, ServiceOutcome } from "./types.js";
@@ -793,18 +793,25 @@ export class PaymentEngine {
   // ── Plumbing ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * The referral headers for this attempt's paid request: the quote's referral token, and the attempt id as the purchase
-   * reference (one attempt makes one paid request, and `superstables status` recovers it under the same id). Recorded on
-   * the attempt before the request leaves, so its receipt says the referral went with it. None when the quote has no
-   * referral, it has expired since, or SUPERSTABLES_REFERRALS is off. Never on the unpaid challenge request.
+   * The referral headers for this attempt's paid request: the token remembered for the quote's origin and listing, and
+   * the attempt id as the purchase reference (one attempt makes one paid request, and `superstables status` recovers it
+   * under the same id). Recorded on the attempt before the request leaves, so its receipt says the referral went with
+   * it. None when the quote found no referral, the remembered one has expired or gone since, or SUPERSTABLES_REFERRALS
+   * is off. Never on the unpaid challenge request. A referral is never worth a payment: if anything here fails (the
+   * attempt cannot be written, say), the request goes without it.
    */
   private referralHeaders(attempt: Attempt, quote: Quote): Record<string, string> {
-    const referral = quote.referral;
-    if (!referral || !referralsEnabled() || !isReferralToken(referral.token) || !(Date.parse(referral.expiresAt) > Date.now())) return {};
-    attempt.discoveredVia = "superstables";
-    attempt.referral = { id: referral.id, listingId: referral.listingId, terms: referral.terms };
-    this.records.saveAttempt(attempt);
-    return { [REFERRAL_HEADER]: referral.token, [PURCHASE_REF_HEADER]: attempt.id };
+    try {
+      if (!quote.referral) return {};
+      const found = referralFor(quote.url, this.records.dir);
+      if (!found || found.listingId !== quote.referral.listingId) return {};
+      const record = { discoveredVia: "superstables" as const, referral: { id: found.id, listingId: found.listingId, terms: found.terms } };
+      this.records.saveAttempt({ ...attempt, ...record });
+      Object.assign(attempt, record);
+      return { [REFERRAL_HEADER]: found.token, [PURCHASE_REF_HEADER]: attempt.id };
+    } catch {
+      return {};
+    }
   }
 
   /**
