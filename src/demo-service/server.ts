@@ -31,7 +31,7 @@ import { HTTPFacilitatorClient } from "@x402/core/server";
 import type { PaymentPayload, PaymentRequired, PaymentRequirements, SettleResponse, VerifyResponse } from "@x402/core/types";
 import { BASE_SEPOLIA, isSameAddress, toCaip2, usdcRequirement } from "../core/chain.js";
 import { DEFAULT_DEMO_SERVICE_PORT } from "../core/home.js";
-import { CLAIM_HEADER, DEFAULT_SITE, fetchReferralKeys, readReferral, verifyReferral } from "../seller/referral.js";
+import { CLAIM_HEADER, DEFAULT_SITE, checkReferral, readReferral } from "../seller/referral.js";
 import { ReferralReportError, createReferralReporter, type ReferralEvent, type ReferralSettlement } from "../seller/reporter.js";
 import { DEMO_ASSETS, fetchSpotPrices, type PriceLookup, type SpotPrice } from "./prices.js";
 
@@ -65,7 +65,8 @@ export interface DemoHandlerOptions {
   priceSource?: PriceLookup;
   /**
    * A claim challenge from superstables.com (ssc_…): served at /.well-known/superstables.txt and sent as the
-   * Superstables-Claim header on every 402, so the site can confirm this host is the operator's.
+   * Superstables-Claim header on every answer of the market endpoint, so the site can confirm this host is the
+   * operator's.
    */
   claimChallenge?: string;
   /** Verify Superstables referrals on paid requests and report what happened to each referred purchase. */
@@ -77,11 +78,14 @@ export interface SellerReferralOptions {
   apiKey: string;
   /** The site that signs referrals and receives events. Default DEFAULT_SITE. */
   site?: string;
-  /**
-   * This listing's id in the directory, checked against the token's `sub`. Without it, the token's `aud` is checked
-   * against the origin the request was made to.
-   */
+  /** This listing's id in the directory, checked against the token's `sub`. */
   listingId?: string;
+  /**
+   * This service's public origin (e.g. https://api.example.com), checked against the token's `aud`. Never taken from a
+   * request: its Host header is the caller's to choose. With neither this nor `listingId`, referrals are not checked
+   * or reported.
+   */
+  origin?: string;
   /** Injected in tests. */
   fetch?: typeof fetch;
 }
@@ -130,7 +134,9 @@ const CLAIM_CHALLENGE = /^ssc_[A-Za-z0-9_-]{1,200}$/;
  *   SUPERSTABLES_CLAIM_CHALLENGE  the claim challenge to publish
  *   SUPERSTABLES_SELLER_KEY       the seller API key; switches referral reporting on
  *   SUPERSTABLES_SELLER_SITE      the site (default https://www.superstables.com)
- *   SUPERSTABLES_SELLER_LISTING   this listing's id, checked against the token instead of the request's origin
+ *   SUPERSTABLES_SELLER_LISTING   this listing's id, checked against the token's `sub`
+ *   SUPERSTABLES_SELLER_ORIGIN    this service's public origin, checked against the token's `aud`
+ * With a key but neither of the last two, referrals are not checked (the service says so when it starts).
  * Throws on a value that cannot be used; the message never repeats the key.
  */
 export function sellerOptionsFromEnvironment(env: NodeJS.ProcessEnv = process.env): Pick<DemoHandlerOptions, "claimChallenge" | "referrals"> {
@@ -141,6 +147,12 @@ export function sellerOptionsFromEnvironment(env: NodeJS.ProcessEnv = process.en
   const apiKey = env.SUPERSTABLES_SELLER_KEY?.trim();
   const site = env.SUPERSTABLES_SELLER_SITE?.trim() || DEFAULT_SITE;
   const listingId = env.SUPERSTABLES_SELLER_LISTING?.trim();
+  const rawOrigin = env.SUPERSTABLES_SELLER_ORIGIN?.trim();
+  let origin: string | undefined;
+  if (rawOrigin) {
+    origin = originOf(rawOrigin);
+    if (!origin) throw new Error("SUPERSTABLES_SELLER_ORIGIN is not an origin: it is https://<host>, or http://<host>:<port>");
+  }
   if (apiKey) {
     try {
       createReferralReporter({ apiKey, site });
@@ -150,29 +162,45 @@ export function sellerOptionsFromEnvironment(env: NodeJS.ProcessEnv = process.en
   }
   return {
     ...(claim ? { claimChallenge: claim } : {}),
-    ...(apiKey ? { referrals: { apiKey, site, ...(listingId ? { listingId } : {}) } } : {}),
+    ...(apiKey ? { referrals: { apiKey, site, ...(listingId ? { listingId } : {}), ...(origin ? { origin } : {}) } } : {}),
   };
 }
 
+function originOf(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Referral checks and reports for one service. `accept` verifies a token against the site's published keys and never
+ * Referral checks and reports for one service, or undefined (said once, in the log) when there is nothing to check a
+ * token against: no listing id and no origin. `accept` verifies a token against the site's published keys and never
  * rejects; `report` sends an event once `accept` said yes, in the background, and logs a failure by its error code only.
  */
 function referralTracking(options: SellerReferralOptions, log: (line: string) => void) {
   const site = options.site ?? DEFAULT_SITE;
   const reporter = createReferralReporter({ apiKey: options.apiKey, site, ...(options.fetch ? { fetch: options.fetch } : {}) });
+  const origin = options.origin === undefined ? undefined : originOf(options.origin);
+  if (options.origin !== undefined && !origin) throw new TypeError("referrals.origin is not an http or https origin");
+  if (!options.listingId && !origin) {
+    log(
+      "referrals are not checked or reported: no listing id or origin is set (SUPERSTABLES_SELLER_LISTING or " +
+        "SUPERSTABLES_SELLER_ORIGIN), so a token cannot be checked against this listing",
+    );
+    return undefined;
+  }
+  const expected = { ...(options.listingId ? { listingId: options.listingId } : {}), ...(origin ? { audience: origin } : {}) };
   return {
     site,
-    accept: async (token: string, origin: string): Promise<boolean> => {
-      try {
-        const keys = await fetchReferralKeys(site, options.fetch ? { fetch: options.fetch } : {});
-        const result = verifyReferral(token, { keys, issuer: site, ...(options.listingId ? { listingId: options.listingId } : { audience: origin }) });
-        if (!result.ok) log(`referral not accepted: ${result.reason}`);
-        return result.ok;
-      } catch {
-        log("referral not checked: the site's referral keys could not be read");
-        return false;
+    accept: async (token: string): Promise<boolean> => {
+      const result = await checkReferral(token, { site, ...expected, ...(options.fetch ? { fetch: options.fetch } : {}) });
+      if (!result.ok) {
+        log(result.reason === "keys_unavailable" ? "referral not checked: the site's referral keys could not be read" : `referral not accepted: ${result.reason}`);
       }
+      return result.ok;
     },
     report: (accepted: Promise<boolean>, event: ReferralEvent): void => {
       void accepted
@@ -264,7 +292,7 @@ export function createDemoHandler(opts: DemoHandlerOptions): (req: IncomingMessa
 
   const send402 = (res: ServerResponse, resourceUrl: string, error: string): void => {
     const body = challengeFor(resourceUrl, error);
-    sendJson(res, 402, body, { "payment-required": encodePaymentRequiredHeader(body), ...(claim ? { [CLAIM_HEADER]: claim } : {}) });
+    sendJson(res, 402, body, { "payment-required": encodePaymentRequiredHeader(body) });
   };
 
   const describe = (base: string) => ({
@@ -304,6 +332,8 @@ export function createDemoHandler(opts: DemoHandlerOptions): (req: IncomingMessa
 
   const handleMarket = async (req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> => {
     const resourceUrl = url.toString();
+    // On every answer of the listed endpoint, whatever its status: superstables.com may read it from any of them.
+    if (claim) res.setHeader(CLAIM_HEADER, claim);
 
     // 1. Validate first. A buyer must never be charged for a request we were going to refuse.
     const raw = url.searchParams.get("asset");
@@ -342,7 +372,7 @@ export function createDemoHandler(opts: DemoHandlerOptions): (req: IncomingMessa
     // A referral on a paid request is checked alongside the payment, never in its way, and its outcome is reported
     // after the buyer has its answer.
     const referral = tracking ? readReferral(req.headers) : null;
-    const accepted = tracking && referral ? tracking.accept(referral.token, url.origin) : undefined;
+    const accepted = tracking && referral ? tracking.accept(referral.token) : undefined;
     const followUp = (type: "fulfilled" | "failed", settlement?: ReferralSettlement): void => {
       if (!tracking || !referral || !accepted) return;
       tracking.report(accepted, {
@@ -482,8 +512,10 @@ export async function startDemoService(opts: DemoServiceOptions): Promise<DemoSe
   // published as, so the line a reader can use is the loopback one.
   const url = `http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${boundPort}`;
   log(`${SERVICE_NAME} on ${url} — ${priceDecimal} USDC per call on ${network.label}, paid to ${opts.payTo}`);
-  if (opts.claimChallenge) log(`claim challenge served at ${url}/.well-known/superstables.txt and on every 402`);
-  if (opts.referrals) log(`referrals on paid requests are verified and reported to ${opts.referrals.site ?? DEFAULT_SITE}`);
+  if (opts.claimChallenge) log(`claim challenge served at ${url}/.well-known/superstables.txt and on every answer of /v1/market`);
+  if (opts.referrals && (opts.referrals.listingId || opts.referrals.origin)) {
+    log(`referrals on paid requests are verified and reported to ${opts.referrals.site ?? DEFAULT_SITE}`);
+  }
 
   return {
     port: boundPort,

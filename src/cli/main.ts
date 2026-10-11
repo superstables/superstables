@@ -905,11 +905,12 @@ explain(
       "The seller side of the demo. Point discovery at it with " +
         `SUPERSTABLES_DEMO_SERVICE_URL=http://127.0.0.1:${DEFAULT_DEMO_SERVICE_PORT}/v1/market.`,
       "Seller referrals, off unless set (testnet only): SUPERSTABLES_CLAIM_CHALLENGE=<ssc_...> serves " +
-        "/.well-known/superstables.txt and adds a Superstables-Claim header to every 402, so superstables.com can " +
-        "confirm this host is yours. SUPERSTABLES_SELLER_KEY=<sssk_...> verifies the Superstables-Referral header on " +
-        "paid requests and reports each referred purchase to superstables.com as fulfilled or failed, after the buyer " +
-        "has its answer. SUPERSTABLES_SELLER_SITE names another site; SUPERSTABLES_SELLER_LISTING checks the token " +
-        "against this listing's id instead of the origin the request was made to.",
+        "/.well-known/superstables.txt and adds a Superstables-Claim header to every answer of /v1/market, so " +
+        "superstables.com can confirm this host is yours. SUPERSTABLES_SELLER_KEY=<sssk_...> verifies the " +
+        "Superstables-Referral header on paid requests and reports each referred purchase to superstables.com as " +
+        "fulfilled or failed, after the buyer has its answer. It needs SUPERSTABLES_SELLER_LISTING (this listing's id, " +
+        "checked against the token's sub) or SUPERSTABLES_SELLER_ORIGIN (this service's public origin, checked " +
+        "against its aud); with neither, referrals are not checked. SUPERSTABLES_SELLER_SITE names another site.",
     ],
     money: "it receives test USDC; it never pays.",
     who: "a developer who wants to see the seller side.",

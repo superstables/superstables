@@ -16,6 +16,8 @@ import { referralKey, signReferral, startFakeReferralSite, type FakeReferralSite
 const PAY_TO = "0x1234567890AbcdEF1234567890aBcdef12345678";
 const API_KEY = `sssk_${"B".repeat(43)}`;
 const CLAIM = `ssc_${"c".repeat(32)}`;
+/** The public origin the demo is told it serves; tokens name it as their audience. */
+const ORIGIN = "https://api.example.com";
 const PRICES = { BTC: { usd: 65000, at: "2026-10-11T10:00:00.000Z", change24hPct: 1, source: "live" as const } };
 
 const closers: Array<() => Promise<void>> = [];
@@ -70,8 +72,9 @@ async function until(check: () => boolean, ms = 5_000): Promise<void> {
 }
 
 describe("claim challenge", () => {
-  it("serves /.well-known/superstables.txt and adds Superstables-Claim to every 402", async () => {
-    const service = await demo({ claimChallenge: CLAIM });
+  it("serves /.well-known/superstables.txt and adds Superstables-Claim to every answer of the endpoint", async () => {
+    const fake = await facilitator();
+    const service = await demo({ claimChallenge: CLAIM, facilitators: [fake.url] });
     const txt = await fetch(`${service.url}/.well-known/superstables.txt`);
     expect(txt.status).toBe(200);
     expect(txt.headers.get("content-type")).toContain("text/plain");
@@ -79,6 +82,12 @@ describe("claim challenge", () => {
     const challenge = await fetch(`${service.url}/v1/market?asset=BTC`);
     expect(challenge.status).toBe(402);
     expect(challenge.headers.get("superstables-claim")).toBe(CLAIM);
+    const refused = await fetch(`${service.url}/v1/market`);
+    expect(refused.status).toBe(400);
+    expect(refused.headers.get("superstables-claim")).toBe(CLAIM);
+    const paid = await paidRequest(`${service.url}/v1/market?asset=BTC`);
+    expect(paid.status).toBe(200);
+    expect(paid.headers.get("superstables-claim")).toBe(CLAIM);
   });
 
   it("is off by default", async () => {
@@ -93,8 +102,8 @@ describe("referral reporting", () => {
     const key = referralKey();
     const s = await site(key);
     const fake = await facilitator();
-    const service = await demo({ facilitators: [fake.url], referrals: { apiKey: API_KEY, site: s.url } });
-    const { token } = signReferral(key, { iss: s.url, aud: service.url, sub: new URL(service.url).host });
+    const service = await demo({ facilitators: [fake.url], referrals: { apiKey: API_KEY, site: s.url, origin: ORIGIN } });
+    const { token } = signReferral(key, { iss: s.url, aud: ORIGIN });
 
     const res = await paidRequest(`${service.url}/v1/market?asset=BTC`, { "Superstables-Referral": token, "Superstables-Purchase-Ref": "att-1" });
     expect(res.status).toBe(200);
@@ -135,8 +144,8 @@ describe("referral reporting", () => {
     const key = referralKey();
     const s = await site(key);
     const fake = await facilitator({ settleOk: false });
-    const service = await demo({ facilitators: [fake.url], referrals: { apiKey: API_KEY, site: s.url } });
-    const { token } = signReferral(key, { iss: s.url, aud: service.url });
+    const service = await demo({ facilitators: [fake.url], referrals: { apiKey: API_KEY, site: s.url, origin: ORIGIN } });
+    const { token } = signReferral(key, { iss: s.url, aud: ORIGIN });
     const res = await paidRequest(`${service.url}/v1/market?asset=BTC`, { "Superstables-Referral": token, "Superstables-Purchase-Ref": "att-2" });
     expect(res.status).toBe(402);
     await until(() => s.events.length === 1);
@@ -144,15 +153,33 @@ describe("referral reporting", () => {
     expect(s.events[0]!.body.settlement).toBeUndefined();
   });
 
-  it("reports nothing for a referral it does not accept, and answers the buyer as usual", async () => {
+  it("reports nothing for a referral it does not accept, and never takes the audience from the request", async () => {
+    const key = referralKey();
+    const s = await site(key);
+    const fake = await facilitator();
+    const lines = logLines();
+    const service = await demo({ quiet: false, facilitators: [fake.url], referrals: { apiKey: API_KEY, site: s.url, origin: ORIGIN } });
+    // A token for the origin the request was made to (its Host header), which is not the configured origin.
+    const { token } = signReferral(key, { iss: s.url, aud: service.url, sub: new URL(service.url).host });
+    expect((await paidRequest(`${service.url}/v1/market?asset=BTC`, { "Superstables-Referral": token })).status).toBe(200);
+    await until(() => lines.some((l) => l.includes("referral not accepted: wrong_audience")));
+    expect(s.events).toHaveLength(0);
+  });
+
+  it("checks and reports nothing without a listing id or an origin, and says why once", async () => {
     const key = referralKey();
     const s = await site(key);
     const fake = await facilitator();
     const lines = logLines();
     const service = await demo({ quiet: false, facilitators: [fake.url], referrals: { apiKey: API_KEY, site: s.url } });
-    const { token } = signReferral(key, { iss: s.url, aud: "https://someone-else.example" });
-    expect((await paidRequest(`${service.url}/v1/market?asset=BTC`, { "Superstables-Referral": token })).status).toBe(200);
-    await until(() => lines.some((l) => l.includes("referral not accepted: wrong_audience")));
+    const { token } = signReferral(key, { iss: s.url, aud: service.url });
+    for (let i = 0; i < 2; i += 1) {
+      expect((await paidRequest(`${service.url}/v1/market?asset=BTC`, { "Superstables-Referral": token })).status).toBe(200);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(lines.filter((l) => l.includes("referrals are not checked or reported"))).toHaveLength(1);
+    expect(lines.some((l) => l.includes("verified and reported"))).toBe(false);
+    expect(s.keyReads).toBe(0);
     expect(s.events).toHaveLength(0);
   });
 
@@ -162,8 +189,8 @@ describe("referral reporting", () => {
     s.failNext.push(503, 503, 503, 503);
     const fake = await facilitator();
     const lines = logLines();
-    const service = await demo({ quiet: false, facilitators: [fake.url], referrals: { apiKey: API_KEY, site: s.url } });
-    const { token } = signReferral(key, { iss: s.url, aud: service.url });
+    const service = await demo({ quiet: false, facilitators: [fake.url], referrals: { apiKey: API_KEY, site: s.url, origin: ORIGIN } });
+    const { token } = signReferral(key, { iss: s.url, aud: ORIGIN });
     expect((await paidRequest(`${service.url}/v1/market?asset=BTC`, { "Superstables-Referral": token })).status).toBe(200);
     await until(() => lines.some((l) => l.includes("referral fulfilled not reported: internal_error")), 15_000);
     expect(lines.join("\n")).not.toContain(API_KEY);
@@ -184,7 +211,7 @@ describe("referral reporting", () => {
 });
 
 describe("sellerOptionsFromEnvironment", () => {
-  it("is empty when nothing is set, and reads the four variables", () => {
+  it("is empty when nothing is set, and reads the five variables", () => {
     expect(sellerOptionsFromEnvironment({})).toEqual({});
     expect(
       sellerOptionsFromEnvironment({
@@ -192,13 +219,18 @@ describe("sellerOptionsFromEnvironment", () => {
         SUPERSTABLES_SELLER_KEY: API_KEY,
         SUPERSTABLES_SELLER_SITE: "http://127.0.0.1:3000",
         SUPERSTABLES_SELLER_LISTING: "127.0.0.1:4402",
+        SUPERSTABLES_SELLER_ORIGIN: "http://127.0.0.1:4402/v1/market",
       }),
-    ).toEqual({ claimChallenge: CLAIM, referrals: { apiKey: API_KEY, site: "http://127.0.0.1:3000", listingId: "127.0.0.1:4402" } });
+    ).toEqual({
+      claimChallenge: CLAIM,
+      referrals: { apiKey: API_KEY, site: "http://127.0.0.1:3000", listingId: "127.0.0.1:4402", origin: "http://127.0.0.1:4402" },
+    });
     expect(sellerOptionsFromEnvironment({ SUPERSTABLES_SELLER_KEY: API_KEY }).referrals?.site).toBe("https://www.superstables.com");
   });
 
   it("refuses values it cannot use, without repeating the key", () => {
     expect(() => sellerOptionsFromEnvironment({ SUPERSTABLES_CLAIM_CHALLENGE: "ssc_bad value\r\n" })).toThrow(/SUPERSTABLES_CLAIM_CHALLENGE/);
+    expect(() => sellerOptionsFromEnvironment({ SUPERSTABLES_SELLER_ORIGIN: "api.example.com" })).toThrow(/SUPERSTABLES_SELLER_ORIGIN/);
     const bad = "not-a-seller-key-but-secret";
     let message = "";
     try {
