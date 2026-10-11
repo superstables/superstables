@@ -43,28 +43,19 @@ three ways:
 ## Verify the referral
 
 ```ts
-import {
-  DEFAULT_SITE,
-  createReferralReporter,
-  fetchReferralKeys,
-  readReferral,
-  verifyReferral,
-} from "@superstables/client/seller";
+import { checkReferral, createReferralReporter, readReferral } from "@superstables/client/seller";
 
 const reporter = createReferralReporter({ apiKey: process.env.SUPERSTABLES_SELLER_KEY! });
 
-// In the handler of a paid request, alongside checking the payment:
+// In the handler of a paid request, alongside checking the payment. checkReferral never throws:
+// when the site's keys cannot be read, it answers { ok: false, reason: "keys_unavailable" }.
 const referral = readReferral(req.headers); // Fetch Headers, Node headers or a plain object
-const accepted = referral
-  ? verifyReferral(referral.token, {
-      keys: await fetchReferralKeys(DEFAULT_SITE),
-      issuer: DEFAULT_SITE,
-      audience: "https://api.example.com", // your listing's origin
-    })
+const checked = referral
+  ? checkReferral(referral.token, { audience: "https://api.example.com" }) // your listing's origin
   : undefined;
 
 // After the payment settled and the answer was sent:
-if (referral && accepted?.ok) {
+if (referral && (await checked)?.ok) {
   reporter
     .report({
       type: "fulfilled",
@@ -86,28 +77,37 @@ if (referral && accepted?.ok) {
 `readReferral` returns `{ token, purchaseRef }`, or `null` when the request has no referral. It
 leaves out a purchase reference that breaks the character or length rule.
 
-`verifyReferral` returns `{ ok: true, claims }` or `{ ok: false, reason }`. It never throws on a bad
-token. It accepts a token when:
+`checkReferral(token, options)` reads the site's published keys and calls `verifyReferral` with them.
+`site` defaults to `https://www.superstables.com`, which is also the expected issuer. When a token
+names a key the cached set does not have, it reads the keys once more, at most once a minute per
+site, so a key rotation is picked up without a request for every unknown key.
 
-- the header is `alg: EdDSA`, `typ: superstables-referral+jwt`, with a `kid` the published key set has;
+`verifyReferral(token, { keys, issuer, ... })` does the check with keys you supply. Both return
+`{ ok: true, claims }` or `{ ok: false, reason }` and never throw on a bad token. A token is accepted
+when:
+
+- the header is `alg: EdDSA`, `typ: superstables-referral+jwt`, with a `kid` the published key set
+  has, and no `crit`;
 - the Ed25519 signature checks against that key;
-- `iss` is the site you name in `issuer`;
+- `iss` is the expected site;
 - `aud` is your origin (`audience`), or `sub` is your listing id (`listingId`);
 - `exp` has not passed at the time of the request, and `iat` is not in the future, each with 60
   seconds of clock skew (`skewSeconds`). Pass `now` to check another time.
 
 The reasons are `malformed`, `unsupported_header`, `unknown_key`, `bad_signature`, `wrong_issuer`,
-`wrong_audience`, `expired`, `not_yet_valid`, and `no_audience` when you gave neither `audience` nor
-`listingId`. Use `listingId` when your service cannot know its public origin, for example behind a
-proxy: a request's `Host` header is the caller's to choose.
+`wrong_audience`, `expired`, `not_yet_valid`, `no_audience` when you gave neither `audience` nor
+`listingId`, `invalid_options` when `skewSeconds` is not a finite number of 0 or more or `now` is not
+a valid `Date`, and, from `checkReferral` only, `keys_unavailable`. Set `audience` and `listingId`
+from your own configuration, never from the request: its `Host` header is the caller's to choose.
 
 `claims` holds `iss`, `jti` (the referral id), `sub`, `aud`, `sel` (seller account), `agr`
 (agreement), `terms`, `ch` (`directory` for an index token, `hosted` for a purchase made on
 superstables.com, which also has `pur`, its purchase id), `iat` and `exp`.
 
 `fetchReferralKeys(site)` reads `/.well-known/superstables-referral-keys.json` from the site and keeps
-it in memory for ten minutes. It throws when the keys cannot be read; treat that as a referral you
-could not check. Both it and the reporter accept https sites only, or plain http on this machine.
+it in memory for ten minutes. It throws when the keys cannot be read. If you call it yourself, catch
+that error and treat the referral as not checked, so a site outage never fails your paid request.
+Both it and the reporter accept https sites only, or plain http on this machine.
 
 Report after the buyer has its answer, and never let a failed report change that answer.
 
@@ -128,11 +128,13 @@ id), `occurred_at` (default: now) and `refund: { amount, transaction }`. `settle
 `settled`, `pending` or `unknown`. The body must be 8 KB or less.
 
 Each request carries an `Idempotency-Key`: the hex SHA-256 of
-`type|referral id|purchase_ref|order_id|settlement transaction|refund transaction`, with an empty
-string for each part that is absent. The same event sent twice is recorded once, and the second
-answer has `replayed: true`. The reporter retries network errors, 5xx and 429 answers, three times
-by default (`retries`). It waits 500 ms before the first retry and twice as long before each next one
-(`backoffMs`), or longer when the site sends `Retry-After`, up to 30 seconds. Other errors are not
+`type|referral id|purchase_ref|order_id|settlement transaction|settlement status|settlement amount|refund transaction|refund amount`,
+with an empty string for each part that is absent. The same event sent twice is recorded once, and
+the second answer has `replayed: true`. An update is a new event: `fulfilled` with a `pending`
+settlement, then `fulfilled` with the same transaction `settled`, gives two keys. The reporter
+retries network errors, 5xx and 429 answers, three times by default (`retries`, at most 10). It
+waits 500 ms before the first retry and twice as long before each next one (`backoffMs`), or longer
+when the site sends `Retry-After`, never more than 30 seconds at a time. Other errors are not
 retried. A report that fails is thrown as a `ReferralReportError` whose `code` is the site's error
 code, or `network_error`, `invalid_response`, `body_too_large` or `http_<status>`. Its message never
 contains the key or the token.
@@ -143,13 +145,18 @@ contains the key or the token.
 
 | Variable | Effect |
 | --- | --- |
-| `SUPERSTABLES_CLAIM_CHALLENGE` | Serves `/.well-known/superstables.txt` and adds `Superstables-Claim` to every 402 |
+| `SUPERSTABLES_CLAIM_CHALLENGE` | Serves `/.well-known/superstables.txt` and adds `Superstables-Claim` to every answer of `/v1/market` |
 | `SUPERSTABLES_SELLER_KEY` | Verifies the referral on each paid request and reports the purchase as `fulfilled`, with its settlement, or `failed` |
+| `SUPERSTABLES_SELLER_LISTING` | This listing's id, checked against the token's `sub` |
+| `SUPERSTABLES_SELLER_ORIGIN` | This service's public origin, for example `https://api.example.com`, checked against the token's `aud` |
 | `SUPERSTABLES_SELLER_SITE` | The site to verify against and report to. Default `https://www.superstables.com` |
-| `SUPERSTABLES_SELLER_LISTING` | Checks the token's `sub` against this listing id, instead of its `aud` against the origin the request was made to |
+
+Referrals need `SUPERSTABLES_SELLER_LISTING` or `SUPERSTABLES_SELLER_ORIGIN`. With a key and neither of
+them, the demo seller says once that it does not check referrals, and reports nothing.
 
 ```bash
-SUPERSTABLES_SELLER_KEY=sssk_… superstables demo-service --pay-to 0xYourAddress
+SUPERSTABLES_SELLER_KEY=sssk_… SUPERSTABLES_SELLER_ORIGIN=https://api.example.com \
+  superstables demo-service --pay-to 0xYourAddress
 ```
 
 A failed report is logged with its error code only.
@@ -158,10 +165,14 @@ A failed report is logged with its error code only.
 
 The client remembers a referral only for a listing the Superstables index returned (`superstables
 find`, or `superstables quote --service` with an index listing), by the origin of the listing's
-endpoint, in `records/referrals.json` (mode 0600). A quote for a URL with that exact origin carries
-the referral while it has not expired. The paid request then sends `Superstables-Referral` and
-`Superstables-Purchase-Ref`, whose value is the payment's attempt id. The request that reads the
-price never carries them.
+endpoint, in `records/referrals.json` (mode 0600), until the index's `expires_at` or the token's own
+`exp`, whichever is earlier. That file is the only place the client keeps the token. A quote for a
+URL with that exact origin records which referral applies, when the token names that origin as its
+`aud`. The paid request then reads the token from `referrals.json`, if it is still there and has not
+expired, and sends `Superstables-Referral` and `Superstables-Purchase-Ref`, whose value is the
+payment's attempt id. The request that reads the price never carries them, and a referral that
+cannot be recorded is left off rather than holding up the payment.
 
-The receipt records `discoveredVia: "superstables"` and `referral: { id, listingId, terms }`, never the
-token. `SUPERSTABLES_REFERRALS=off` stops the client from remembering and sending referrals.
+`superstables find --json` shows a listing's `referral` as `{ expiresAt, terms }`, without the token.
+The receipt records `discoveredVia: "superstables"` and `referral: { id, listingId, terms }`.
+`SUPERSTABLES_REFERRALS=off` stops the client from remembering and sending referrals.
