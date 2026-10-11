@@ -227,8 +227,8 @@ function writeNotices(outdir, metafile, version, { title, builtBy, rebuild }) {
   const out = [];
   out.push(`THIRD-PARTY NOTICES for ${title} ${version.version}${version.commit ? ` (commit ${version.commit})` : ""}`);
   out.push("");
-  out.push(`This folder was built by ${builtBy} from the superstables-client source`);
-  out.push("(https://github.com/superstables/superstables-client). The Superstables code in it is licensed under Apache-2.0");
+  out.push(`This folder was built by ${builtBy} from the Superstables client source`);
+  out.push("(https://github.com/superstables/superstables). The Superstables code in it is licensed under Apache-2.0");
   out.push(`(the LICENSE file of that repository). The bundled .mjs files also contain code from the ${list.length} packages listed`);
   out.push("below, each under its own licence. The code is bundled by esbuild and not minified: a comment names the");
   out.push("node_modules path each part comes from. Each package's licence files follow the list, as the package ships them.");
@@ -244,7 +244,7 @@ function writeNotices(outdir, metafile, version, { title, builtBy, rebuild }) {
         out.push(`- Its source: ${p.source ?? "(no repository in its package.json)"}; the published package, bundled unmodified:`);
         out.push(`  ${p.tarball ?? `npm package ${p.name}@${p.version}`}.`);
         out.push(`- To use a modified ${p.name}: edit its part of the bundled lib/*.mjs files (the comments mark it), or build this`);
-        out.push("  folder again from the superstables-client source at the commit in VERSION.json with your copy in node_modules");
+        out.push("  folder again from the Superstables client source at the commit in VERSION.json with your copy in node_modules");
         out.push(`  (npm ci, replace the package, ${rebuild}).`);
       }
       out.push("");
