@@ -128,6 +128,9 @@ describe("--site on every command", () => {
     // the refusal comes before the --shown check: nothing is read for a request that is not on this site
     const noShown = await budget(["wait", "--id", first.result.id, "--site", "https://staging.superstables.com"]);
     expect(noShown.result.reason).toMatch(/is not the site this approval was made on/);
+    // settled, so its background worker ends with the test instead of polling a closed site for 10 minutes
+    Object.assign(site.requests[0], { state: "linked", owner: OWNER });
+    expect((await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30", "--site", site.url])).result).toMatchObject({ state: "ok", id: first.result.id });
   }, 60_000);
 });
 

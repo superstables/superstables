@@ -7,7 +7,7 @@ With Budgets, you approve an amount in your wallet and the agent can spend withi
 
 ## Get started with your agent
 
-You need Node 20+, Linux or macOS, or WSL on Windows, and an agent that can run commands.
+You need Node 22+, Linux or macOS, or WSL on Windows, and an agent that can run commands.
 Payments also need a compatible wallet and test funds, as described in the guides below.
 
 1. Follow [Install the client](docs/install.md) to download the skill zip from the GitHub Release.
