@@ -34,7 +34,11 @@ outcomes and key-held funds are checked, then follow [Uninstalling](install.md#u
 ~/.superstables/records/attempts.jsonl    what happened when we tried to pay
 ~/.superstables/records/receipts.jsonl    payments the seller reported as settled, each with chain: verified, unchecked or mismatch after a later check
 ~/.superstables/records/approvals.jsonl   what the owner was asked, and what they answered
+~/.superstables/records/referrals.json    referral tokens from the Superstables index, by the seller's origin
 ```
+
+`referrals.json` is the one file that is rewritten rather than appended to: expired entries are
+dropped each time it is written. See [Seller referrals](seller-referrals.md#what-the-client-sends).
 
 One JSON object per line, append-only, mode 0600. A record is never rewritten in place: a
 change is a new line with the same `id`, and the newest line for an id wins. The whole history
@@ -252,6 +256,8 @@ reason), how long the whole attempt took, and, separately, what the service did:
 | `serviceOutcome: "failed"` | The seller reported settlement, and the service answered outside 2xx |
 | `serviceStatus` | The HTTP status the service answered |
 | `serviceBodyPreview` | The first 4,000 characters of its answer |
+| `discoveredVia: "superstables"` | The paid request carried a referral from the Superstables index |
+| `referral` | That referral's `id`, `listingId` and `terms`. The token itself is not kept in the receipt |
 
 Payment success and service success are two different facts, and the receipt keeps them apart.
 A receipt is not a promise that you got what you paid for; it is a record of what was paid and

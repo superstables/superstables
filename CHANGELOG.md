@@ -7,6 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `@superstables/client/seller` reads the `Superstables-Referral` header on a paid request, verifies the token against the keys superstables.com publishes, and reports the purchase's outcome to superstables.com with a seller API key. See `docs/seller-referrals.md`.
+- When a listing from the Superstables index carries a referral, `pay` sends it to that seller with the paid request, with the attempt id as `Superstables-Purchase-Ref`. Receipts record `discoveredVia` and the referral's id, listing and terms, never the token. `SUPERSTABLES_REFERRALS=off` turns this off.
+- `superstables demo-service` can publish a claim challenge (`SUPERSTABLES_CLAIM_CHALLENGE`) and verify and report referrals (`SUPERSTABLES_SELLER_KEY`). Both are off unless set.
+
 ## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana
 
 Testnet only.
