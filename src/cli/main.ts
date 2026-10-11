@@ -465,7 +465,10 @@ explain(
         : "superstables policy show";
       if (!taken.policy.allowed) process.exitCode = EXIT.refused;
       if (options.json) {
-        console.log(json({ ...taken, next }));
+        // The referral token goes to the seller with the paid request; the quote's JSON says only which referral it is.
+        const { referral, ...shown } = taken;
+        const named = referral && { id: referral.id, listingId: referral.listingId, terms: referral.terms, expiresAt: referral.expiresAt };
+        console.log(json({ ...shown, ...(named ? { referral: named } : {}), next }));
         return;
       }
       console.log(field("quote", taken.id));

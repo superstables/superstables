@@ -155,14 +155,17 @@ export interface FakeMppSeller extends TestServer {
   issued: { id: string; realm: string; expires: string }[];
   /** When set, the paid request answers this status instead of 200. */
   failWith?: number;
+  /** Every request's headers, in order, and whether it carried a credential. */
+  seen: { paid: boolean; headers: Record<string, string | string[] | undefined> }[];
 }
 
 /** An MPP seller of one resource, priced in pathUSD on Tempo Moderato, checking payments on `chain`. */
 export async function startFakeMppSeller(chain: FakeTempoPay, options: MppSellerOptions): Promise<FakeMppSeller> {
-  const seller = { paid: [], credentials: [], issued: [] } as unknown as FakeMppSeller;
+  const seller = { paid: [], credentials: [], issued: [], seen: [] } as unknown as FakeMppSeller;
   const amount = options.amount ?? "10000";
   const server = await startServer(async (req, res) => {
     const auth = req.headers.authorization;
+    seller.seen.push({ paid: Boolean(auth), headers: { ...req.headers } });
     if (auth) {
       seller.credentials.push(auth);
       let credential;

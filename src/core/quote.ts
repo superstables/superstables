@@ -13,6 +13,7 @@ import { chainName, payNetworkFor } from "./routes.js";
 import { evaluatePolicy, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
 import { Records } from "./records.js";
+import { referralFor } from "./referrals.js";
 import type { Quote, ResolvedRequest, ServiceListing } from "./types.js";
 
 /** How long a quote is good for. Long enough to ask a human, short enough to re-check. */
@@ -50,6 +51,8 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
     spentTodayDecimal: deps.records.spentToday(asset),
   };
   const verdict = evaluatePolicy(deps.policy, payment);
+  // A referral the index gave for this exact origin, if one is remembered and has not expired (core/referrals.ts).
+  const referral = referralFor(url, deps.records.dir);
 
   const now = Date.now();
   const record: Quote = {
@@ -68,6 +71,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
     ...(others.length ? { otherChains: others } : {}),
     policy: { allowed: verdict.allowed, reason: verdict.reason, checks: policyChecks(deps.policy, payment) },
     approval: "wallet",
+    ...(referral ? { referral } : {}),
   };
   return deps.records.saveQuote(record);
 }

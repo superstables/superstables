@@ -61,6 +61,8 @@ function receiptView(receipt: Receipt): object {
     recipient: receipt.terms.recipient,
     service_outcome: receipt.serviceOutcome,
     service_status: receipt.serviceStatus,
+    ...(receipt.discoveredVia ? { discovered_via: receipt.discoveredVia } : {}),
+    ...(receipt.referral ? { referral: receipt.referral } : {}),
   };
 }
 

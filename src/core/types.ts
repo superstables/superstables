@@ -61,6 +61,35 @@ export interface ServiceListing {
   chains?: string[];
   /** Which way this client could pay the listing, judged from its rails and chains alone. */
   routes?: PayRoutes;
+  /**
+   * The Superstables index's referral for this listing, present only when its seller opted in. The token is sent to
+   * the seller with the paid request, so the seller can tell the purchase came through Superstables.
+   */
+  referral?: ListingReferral;
+}
+
+/** A referral token from the Superstables index, as a listing carries it. */
+export interface ListingReferral {
+  token: string;
+  /** ISO time after which the token is not sent. */
+  expiresAt: string;
+  /** The terms version the seller agreed to. */
+  terms: string;
+}
+
+/** What a receipt and an attempt record about a referral: never the token itself. */
+export interface ReferralRecord {
+  /** The referral id (the token's `jti`), read from the token without verifying it. */
+  id: string;
+  /** The listing id the referral was given for. */
+  listingId: string;
+  terms: string;
+}
+
+/** A referral attached to a quote: the token to send, and what is recorded once it is sent. */
+export interface QuoteReferral extends ReferralRecord {
+  token: string;
+  expiresAt: string;
 }
 
 /** A `superstables budget` rail and the chain it would pay on. */
@@ -140,6 +169,11 @@ export interface Quote {
   policy: { allowed: boolean; reason?: string; checks?: PolicyCheck[] };
   /** Who decides: always the owner's wallet in this release. */
   approval: "wallet";
+  /**
+   * A referral remembered from the Superstables index for this URL's exact origin, when there was one that had not
+   * expired. Its token goes with the paid request only (Superstables-Referral, with Superstables-Purchase-Ref).
+   */
+  referral?: QuoteReferral;
 }
 
 // ── Attempt ──────────────────────────────────────────────────────────────────────────────
@@ -270,6 +304,10 @@ export interface Attempt {
   /** Classifies the rejected transaction. Uncertain attempts still recover by their own payment identity. */
   chainMismatch?: ChainMismatch;
   receiptId?: string;
+  /** Set when the paid request carried a Superstables referral: the listing was found in the Superstables index. */
+  discoveredVia?: "superstables";
+  /** The referral the paid request carried. */
+  referral?: ReferralRecord;
   history: AttemptTransition[];
 }
 
@@ -310,6 +348,10 @@ export interface Receipt {
   serviceStatus?: number;
   serviceBodyPreview?: string;
   ms: number;
+  /** Set when the paid request carried a Superstables referral: the listing was found in the Superstables index. */
+  discoveredVia?: "superstables";
+  /** The referral the paid request carried (no token). */
+  referral?: ReferralRecord;
 }
 
 // ── Wallet wire types (daemon ⇄ client) ──────────────────────────────────────────────────

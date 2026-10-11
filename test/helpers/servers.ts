@@ -2,7 +2,7 @@
 // owner's wallet. All three are real HTTP servers on 127.0.0.1 port 0, so the tests exercise
 // the same code paths as production without a network and without a private key that matters.
 
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { decodePaymentSignatureHeader, encodePaymentRequiredHeader, encodePaymentResponseHeader } from "@x402/core/http";
 import type { PaymentRequirements, SettleResponse } from "@x402/core/types";
@@ -107,6 +107,8 @@ export interface PaidEndpoint extends TestServer {
   options: PaidEndpointOptions;
   payTo: string;
   requests: number;
+  /** Every request's headers, in order, and whether it carried a payment credential. */
+  seen: { paid: boolean; headers: IncomingHttpHeaders }[];
 }
 
 /**
@@ -125,12 +127,14 @@ export async function startPaidEndpoint(
   };
   const payTo = privateKeyToAccount(generatePrivateKey()).address;
   const state = { requests: 0 };
+  const seen: PaidEndpoint["seen"] = [];
 
   const server = await startServer(async (req, res) => {
     state.requests += 1;
     const self = `http://127.0.0.1:${(req.socket.address() as AddressInfo).port}${req.url ?? "/"}`;
     const requirement: PaymentRequirements = usdcRequirement(options.price, payTo);
     const credential = req.headers["payment-signature"];
+    seen.push({ paid: typeof credential === "string", headers: { ...req.headers } });
 
     if (typeof credential !== "string") {
       const challenge = {
@@ -168,6 +172,7 @@ export async function startPaidEndpoint(
     ...server,
     options,
     payTo,
+    seen,
     get requests() {
       return state.requests;
     },

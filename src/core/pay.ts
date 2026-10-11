@@ -27,6 +27,8 @@ import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
 import { evaluatePolicy, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
 import { firstPayable, railFor } from "./rails/index.js";
+import { referralsEnabled } from "./referrals.js";
+import { PURCHASE_REF_HEADER, REFERRAL_HEADER, isReferralToken } from "../seller/referral.js";
 import type { ChainReadOptions, Offer, PaymentFacts, PushRail, RailAdapter, X402Rail } from "./rails/types.js";
 import { join } from "node:path";
 import type { AbandonCause, Attempt, AttemptState, Quote, Receipt, ServiceOutcome } from "./types.js";
@@ -525,6 +527,7 @@ export class PaymentEngine {
     // 3. Replay the request with the credential. From here on the credential has left this
     //    machine, so every failure is a known-unknown, not a clean failure.
     const header = rail.credentialHeaders(offer, signed, x402);
+    const referral = this.referralHeaders(attempt, quote);
     let res: Response;
     const deadline = Date.now() + this.timeoutMs;
     try {
@@ -533,7 +536,7 @@ export class PaymentEngine {
         // The credential is on this request, so it goes to the seller this quote named and nowhere else:
         // a redirect would carry it to a host the operator never chose.
         redirect: "error",
-        headers: { ...header, accept: "application/json, */*" },
+        headers: { ...header, ...referral, accept: "application/json, */*" },
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
@@ -719,6 +722,7 @@ export class PaymentEngine {
     }
 
     // The payment is on chain. The seller checks it again and answers once for it.
+    const referral = this.referralHeaders(attempt, quote);
     let res: Response | undefined;
     let failure = "";
     const deadline = Date.now() + this.timeoutMs;
@@ -726,7 +730,7 @@ export class PaymentEngine {
       res = await this.fetchImpl(quote.url, {
         method: "GET",
         redirect: "error",
-        headers: { ...rail.credentialHeaders(offer, signed), accept: "application/json, */*" },
+        headers: { ...rail.credentialHeaders(offer, signed), ...referral, accept: "application/json, */*" },
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
@@ -787,6 +791,21 @@ export class PaymentEngine {
   }
 
   // ── Plumbing ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * The referral headers for this attempt's paid request: the quote's referral token, and the attempt id as the purchase
+   * reference (one attempt makes one paid request, and `superstables status` recovers it under the same id). Recorded on
+   * the attempt before the request leaves, so its receipt says the referral went with it. None when the quote has no
+   * referral, it has expired since, or SUPERSTABLES_REFERRALS is off. Never on the unpaid challenge request.
+   */
+  private referralHeaders(attempt: Attempt, quote: Quote): Record<string, string> {
+    const referral = quote.referral;
+    if (!referral || !referralsEnabled() || !isReferralToken(referral.token) || !(Date.parse(referral.expiresAt) > Date.now())) return {};
+    attempt.discoveredVia = "superstables";
+    attempt.referral = { id: referral.id, listingId: referral.listingId, terms: referral.terms };
+    this.records.saveAttempt(attempt);
+    return { [REFERRAL_HEADER]: referral.token, [PURCHASE_REF_HEADER]: attempt.id };
+  }
 
   /**
    * Read the seller's current challenge. Mirrors x402.detect(), but through this engine's
@@ -1434,6 +1453,8 @@ function receiptFor(input: {
     serviceStatus: input.serviceStatus,
     serviceBodyPreview: input.body || undefined,
     ms: input.ms,
+    // The referral the paid request carried, if it carried one: its id, listing and terms, never the token.
+    ...(attempt.referral ? { discoveredVia: "superstables" as const, referral: attempt.referral } : {}),
   };
 }
 
