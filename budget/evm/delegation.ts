@@ -82,8 +82,8 @@ function dataProblems(got: Hex, want: Hex): string[] {
   const w = approveArgs(want);
   if (!g || !w) return ["it carries other transaction data than the planned call"];
   const problems: string[] = [];
-  if (!same(g.spender, w.spender)) problems.push(`it approved the spender ${g.spender}, not ${w.spender}`);
-  if (g.amount !== w.amount) problems.push(`it approved ${g.amount} in the token's smallest units, not ${w.amount}`);
+  if (!same(g.spender, w.spender)) problems.push(`its call approves the spender ${g.spender}, not ${w.spender}`);
+  if (g.amount !== w.amount) problems.push(`its call approves ${g.amount} in the token's smallest units, not ${w.amount}`);
   return problems.length ? problems : ["it carries other transaction data than the planned call"];
 }
 
