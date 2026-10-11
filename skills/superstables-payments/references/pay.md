@@ -152,7 +152,7 @@ An error under `--json` prints `{"error", "exit_code"}`.
 ## Checking later: status, receipts, attempts
 
 - `superstables status ATTEMPT_ID`: where one attempt got to. Exits with the attempt's own code, and 0 while it is not final. It never starts or repeats a payment.
-- `superstables receipts`: payments made from this machine, newest first, one for each payment the seller reported settled or the chain showed, with `chain` (verified, unchecked, or after a later check mismatch or unpaid).
+- `superstables receipts`: payments made from this machine, newest first, one for each payment the seller reported settled or the chain showed, with `chain` (verified, unchecked, or after a later check mismatch or unpaid). With no receipts, it lists the attempts that may have paid: do not pay again for them.
 - `superstables attempts`: every attempt, paid or not.
 
 ## When something is missing

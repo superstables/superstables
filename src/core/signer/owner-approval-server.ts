@@ -28,6 +28,7 @@
 
 import { createPublicKey, randomBytes, verify as verifySignature } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
+import { isProof, type PROOFS } from "../proofs.mjs";
 import { dirname } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { getAddress, isAddress, verifyMessage } from "viem";
@@ -74,11 +75,29 @@ export type OwnerActionStatus =
   | "sent" // the page reported a transaction hash; waiting for the caller
   | "confirmed" // the caller checked the chain: done
   | "failed" // the caller checked the chain: it did not do what was planned
+  | "unknown" // the wallet was asked to send, and the chain does not show (yet) whether it did
   | "rejected"
   | "expired";
 
+/**
+ * The caller's verdict after reading the chain. "unknown": the wallet was asked to send and the chain cannot tell yet.
+ * `proof`: the chain fact that shows a sent transaction changed nothing (../proofs.mjs). Once the wallet was asked to
+ * send, a "failed" verdict without one of those shows as unknown.
+ */
+export interface OwnerVerdict {
+  outcome: "confirmed" | "failed" | "unknown";
+  message: string;
+  hash?: string;
+  proof?: keyof typeof PROOFS;
+}
+
+/** The kinds of owner action, and the routes under an approval link (each kind answers some of them; the rest are 404). */
+export const OWNER_ACTION_KINDS = ["connect", "evm-transaction", "solana-transaction"] as const;
+export const OWNER_ROUTES = ["/state", "/account", "/connect", "/sending", "/sent", "/prepare", "/signed", "/reject", "/cancel"] as const;
+const OWNER_PATH = new RegExp(`^/owner/([0-9a-f]{32})(${OWNER_ROUTES.join("|")})?$`);
+
 export interface OwnerActionInput {
-  kind: "connect" | "evm-transaction" | "solana-transaction";
+  kind: (typeof OWNER_ACTION_KINDS)[number];
   chain: OwnerChain;
   terms: OwnerTerms;
   /** A transaction: the only account that may approve it. */
@@ -113,7 +132,7 @@ export interface OwnerActionHandle {
   /** Resolves when the owner connected, sent, rejected, or the link expired (or was cancelled). */
   settled: Promise<OwnerActionOutcome>;
   /** The caller's verdict after reading the chain; the page shows it. */
-  finish(verdict: { ok: boolean; message: string; hash?: string }): void;
+  finish(verdict: OwnerVerdict): void;
 }
 
 interface OwnerRecord extends OwnerActionInput {
@@ -124,6 +143,8 @@ interface OwnerRecord extends OwnerActionInput {
   reason?: string;
   address?: string;
   hash?: string;
+  /** A failed verdict's proof (OwnerVerdict). */
+  proof?: string;
   sending: boolean;
   /** solana: a signed transaction is being checked or sent; a second one is refused meanwhile. */
   submitting?: boolean;
@@ -266,7 +287,8 @@ export class OwnerApprovalServer {
       settled,
       finish: (verdict) => {
         if (record.status !== "sent" && record.status !== "connected") return;
-        record.status = verdict.ok ? "confirmed" : "failed";
+        record.status = verdict.outcome === "failed" && record.sending && !isProof(verdict.proof) ? "unknown" : verdict.outcome;
+        if (record.status === "failed" && isProof(verdict.proof)) record.proof = verdict.proof;
         record.message = verdict.message;
         if (verdict.hash) record.hash = verdict.hash;
         this.audit(record);
@@ -291,7 +313,9 @@ export class OwnerApprovalServer {
   // ── lifecycle ──────────────────────────────────────────────────────────────────────────
 
   private end(record: OwnerRecord, status: "rejected" | "expired", reason: string): void {
-    record.status = status;
+    // once the wallet was asked to send, the page and its log say unknown: a rejection or an expiry cannot prove nothing went
+    // out. The caller still learns how it ended, with `sending`, and reads the chain.
+    record.status = record.sending ? "unknown" : status;
     record.reason = reason;
     this.audit(record);
     record.resolve({ status, reason, sending: record.sending });
@@ -396,7 +420,7 @@ export class OwnerApprovalServer {
     this.sweep();
     const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname.replace(/\/+$/, "") || "/";
     const method = req.method ?? "GET";
-    const match = /^\/owner\/([0-9a-f]{32})(\/state|\/account|\/connect|\/sending|\/sent|\/prepare|\/signed|\/reject|\/cancel)?$/.exec(path);
+    const match = OWNER_PATH.exec(path);
     const record = match ? this.records.get(match[1]) : undefined;
     const leaf = match?.[2];
     if (!record) {
@@ -411,6 +435,8 @@ export class OwnerApprovalServer {
         message: record.message,
         address: record.address,
         hash: record.hash,
+        proof: record.proof,
+        sending: record.sending,
         expiresAt: record.expiresAt,
       });
     }

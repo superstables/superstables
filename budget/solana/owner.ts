@@ -306,13 +306,9 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
         await conn.sendRawTransaction(raw, { skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 5 });
         log(`sent ${sig}`);
       } catch (err) {
+        // any error, the RPC's own refusal included, leaves it tracked: once it left this machine only the chain says
+        // whether it landed
         const text = String((err as Error)?.message ?? err);
-        // A JSON-RPC answer to sendTransaction with preflight on is the node's refusal: nothing was forwarded.
-        if ((err as Error)?.name === "SendTransactionError" && !/already been processed/i.test(text)) {
-          last = null;
-          log(`the RPC refused the transaction before sending it: ${text.slice(0, 300)}`);
-          return refused(`The network refused it before sending: ${text.slice(0, 160)}.`);
-        }
         log(`the send answered with an error (${text.slice(0, 160)}); it may have gone out, the command reads the chain`);
       }
       return { status: "sent", hash: sig };
@@ -338,8 +334,9 @@ export type Confirmed = {
 
 /**
  * Read a transaction the command sent: confirmed with no error, and signer 0 the owner. "expired" means its blockhash ran out
- * and the chain answered that it has no such signature: it can no longer land. A read that fails is never taken as "not
- * there": if the last reads failed, or nothing is decided within the wait, the answer is "unknown".
+ * and the chain answered, from at least the slot of that block height, that it has no such signature: it can no longer
+ * land. A read that fails is never taken as "not there": if the last reads failed, or nothing is decided within the wait,
+ * the answer is "unknown".
  */
 export async function confirmSent(conn: Connection, s: Issued, waitMs = 120_000): Promise<Confirmed> {
   const until = Date.now() + waitMs;
@@ -357,11 +354,13 @@ export async function confirmSent(conn: Connection, s: Issued, waitMs = 120_000)
       const instructions = m.compiledInstructions.map((ix: { programIdIndex: number; accountKeyIndexes: number[]; data: Uint8Array }) => ({ program: keys[ix.programIdIndex] ?? `#${ix.programIdIndex}`, accounts: ix.accountKeyIndexes.map((i: number) => keys[i] ?? `#${i}`), data: Buffer.from(ix.data) }));
       return { status: tx.meta?.err ? "failed" : "success", slot: tx.slot, err: tx.meta?.err ?? undefined, signer: keys[0], meta: tx.meta, accountKeys: keys, instructions, signers: m.header.numRequiredSignatures, lookups: m.addressTableLookups.length };
     }
-    const height = txRead ? await retryRead(() => conn.getBlockHeight("confirmed")).catch(() => null) : null;
-    if (height !== null && height > s.lastValidBlockHeight + 10) {
-      // expired only on a successful answer that the signature is unknown to the chain
+    // the block height and the slot it was read at, in one answer
+    const at = txRead ? await retryRead(() => conn.getEpochInfo("confirmed")).catch(() => null) : null;
+    if (at?.blockHeight !== undefined && at.blockHeight > s.lastValidBlockHeight + 10) {
+      // expired only on a successful answer that the signature is unknown to the chain, from a node at or past the slot of
+      // that height: a node behind it may not have seen the block the transaction landed in yet
       const st = await retryRead(() => conn.getSignatureStatus(s.signature, { searchTransactionHistory: true })).then((v) => ({ ok: true as const, v }), () => ({ ok: false as const }));
-      if (st.ok && !st.v?.value) return { status: "expired" };
+      if (st.ok && !st.v?.value && st.v?.context?.slot >= at.absoluteSlot) return { status: "expired" };
     }
     await sleep(2000);
   }
@@ -433,7 +432,7 @@ export function fundTerms(p: { owner: string; agent: string; lamports: bigint; a
     rows: [
       { label: "To your agent", value: p.agent, mono: true },
       { label: "From your wallet", value: p.owner, mono: true },
-      { label: "Agent balance", value: `${sol(p.agentHas)} SOL` },
+      { label: "Agent balance before this transfer", value: `${sol(p.agentHas)} SOL` },
       { label: "Transaction", value: `a plain transfer of ${sol(p.lamports)} SOL` },
     ],
     enforced: [],

@@ -392,7 +392,7 @@ undo an owner signature or a transaction already sent through setup on superstab
 - **The checks depend on the rail.** The command builds the page's terms and the transaction
   from the same plan: the command's arguments and the chain's state, not the agent's description.
   On `evm` and `tempo`, the wallet signs and submits, and the command then checks the transaction
-  on chain: one that differs from the plan is reported (exit 3), naming each difference, even if it
+  on chain: one that differs from the plan is reported as unknown (exit 5), naming each difference, even if it
   already confirmed. That detects it; it cannot undo it. On `evm` the step counts only when the
   owner's account made exactly the planned call. For a grant or revoke, the receipt must show the
   token's `Approval(owner, agent, amount)`; for a token top-up, `Transfer(owner, agent, amount)`.
@@ -459,8 +459,8 @@ is not trusted to say who the owner is or what was paid.
   revoke it. `revoke` never waits on the agent key file: one it cannot read is ignored there.
 - **Every result is read from the chain.** On `evm` and `tempo` the command checks the transaction
   the site reports as it checks one from the local page. A step the site reports as failed is never
-  reported as settled by the client, even if it succeeded on chain: it is a mismatch (exit 3),
-  failed if it reverted, or unknown when the chain does not show it. On `solana`, where the site
+  reported as settled by the client, even if it succeeded on chain: it is failed only when it
+  reverted and matches the plan, otherwise unknown (exit 5). On `solana`, where the site
   builds the transaction, it must be exactly the planned instruction (`ApproveChecked`, `Revoke` or the SOL
   transfer, same accounts and amount), signed and paid for by the owner alone, plus at most a
   bounded compute-budget addition (a priority fee of at most 0.001 SOL, the same bound the local

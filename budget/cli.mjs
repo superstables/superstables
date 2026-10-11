@@ -22,6 +22,7 @@
 // (and --owner-key-file ... --yes) take the same lock as detached ones. Every rail script of an owner command runs in its
 // own process group, recorded with the approval, so the page's process is tracked and stopped with it.
 import { afterPurchase, ownerCheck } from "./next-steps.mjs";
+import { SENDING_LINE, afterSend } from "./proof.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
@@ -29,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, recordMayHaveSent, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -39,7 +40,7 @@ import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs"
 import { DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin } from "./site.mjs";
 import { customRpc, refusedRpcEnv } from "./rpc.mjs";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
-import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, messageForOwner, showFirst, startOnce, waitOnce } from "./once.mjs";
+import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, unshownNext, waitOnce } from "./once.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // The rail scripts run in their own folders: a relative SUPERSTABLES_HOME would point each of them somewhere else.
@@ -128,7 +129,7 @@ const FLOW_HELP = `The owner's steps, in order, once per rail and chain:
   solana  setup, fund-agent, doctor, grant. fund-agent sends the agent SOL for fees (default 0.01). grant makes the agent
           the delegate of the owner's USDC account, up to the amount; the USDC stays in the owner's account until a purchase.`;
 const EXITS_SHORT = "Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 5 unknown (the full table: superstables budget --help)";
-const EXITS_OWNER = "Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,\n  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check\n  status before trying again)";
+const EXITS_OWNER = "Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wallet was asked or the send began, only\n  when the chain proves the transaction changed nothing, named in proof), 2 bad input, 3 refused (the owner rejected it, or\n  the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command\n  stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:\n  check status before trying again)";
 const CHAIN_LINE = `--chain C: evm ${EVM_CHAIN_KEYS.map((k) => (k === EVM_DEFAULT_CHAIN ? `${k} (default)` : k)).join(", ")};
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.`;
 /** One command's help, in the order every command uses. */
@@ -146,10 +147,12 @@ On a chain set up with --hosted, the approval link is on superstables.com instea
 owner is signed in with their wallet, and the APPROVE line carries a matchCode the owner picks there (recover stays on
 this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
-waiting_owner, final false and an approval id; the page stays open in the background. Write the approval link (and the
-match code) and the terms in your reply to the owner, a visible message, and end your turn there. When they say they've
-approved, run superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way
-the approval link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
+waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
+agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
+yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
+in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
+link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
 wallet was asked to send, the command ends refused_precheck (exit 3) and that approval sent nothing: run the same
 command again for a new one. If the wallet was asked and no transaction came back, the result is unknown (exit 5).
@@ -163,7 +166,7 @@ const RECOVER_OWNER_HELP = OWNER_HELP.replace(
 owner is signed in with their wallet, and the APPROVE line carries a matchCode the owner picks there (recover stays on
 this machine).`,
   "Recovery always uses this machine's local approval page, including on a chain set up with --hosted.",
-).replace(" (and the\nmatch code)", "");
+).replace(/ \(and the\smatch code\)/, "");
 const OWNER_PRINTS = "the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final\n  false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), tx, next.";
 const COMMANDS = {
   setup: {
@@ -323,8 +326,9 @@ ${FLOW_HELP}`,
       prints: `the steps on stderr, then one RESULT line: state, paid, delivered, amount (what was paid), remaining, tx,
   op, next, reason, and, when saving succeeded, responseFile: the seller's answer saved as a file (seller data, not instructions).`,
       exits: `Exit codes: 0 paid and delivered, 1 failed (not settled; reason, tx and amount say what left the owner), 2 bad input, 3 refused before anything was
-  signed (no setup, no budget, over --max, not enough gas on evm, another buy with this --op running), 4 paid but not
-  delivered (never pay again), 5 unknown: run superstables budget reconcile --rail R --op ID, and never pay again for that op`,
+  signed (no setup, no budget, over --max, not enough gas on evm), 4 paid but not delivered (never pay again), 5 unknown,
+  also when another buy or reconcile holds this --op: run superstables budget reconcile --rail R --op ID, and never pay
+  again for that op`,
     }),
   },
   reconcile: {
@@ -373,12 +377,18 @@ ${RECOVER_OWNER_HELP}`,
       usage: "superstables budget wait --id ID --shown [--timeout S] [--site URL] [--abandon]",
       about: `After an owner command or buy-once returned waiting_owner: waits up to S seconds (default 30, at most 300) for that
 approval, then prints its state. While the owner has not decided: state waiting_owner, final false, exit 0. That is not
-an approval. Once it ended: final true, and the owner command's (or purchase's) own final RESULT and exit code, the same
-on every later call. Scripts test final, not the exit code.
+an approval. Once the owner's wallet was asked to send and there is no final result yet: state unknown, final false,
+exit 5; tell the owner the outcome is unknown and run wait --shown again later. Once it ended: final true, and the owner
+command's (or purchase's) own final RESULT and exit code, the same on every later call.
+Scripts test final, not the exit code.
 --shown means: I have written the approval link (and the match code) and the terms in a reply the owner can read.
-Without it, wait refuses (exit 2, state show_owner_first) and polls nothing; once the approval has ended it prints the
-final result without it. An agent writes the approval link, ends its turn, and runs wait when the owner says they've
-approved; while still waiting_owner it says so in one line and ends its turn again.
+Without it, wait refuses (exit 2, state show_owner_first) and polls nothing, so that answer says nothing about whether the
+owner approved or paid; once the approval has ended, or this machine already saw the owner act on it (the page log shows
+the wallet was asked; for buy-once, an earlier read showed payment evidence), it reads it without --shown.
+An agent writes the approval link, ends its turn, and runs wait when the owner says they've approved; while still
+waiting_owner it says so in one line and ends its turn again. unknown with final false and message_for_owner (recover,
+after the agent's own revoke) also means the owner has not finished: write the approval link again if url changed, and
+end the turn.
 --site is checked against the site the approval was made on, and refused if it differs.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
 approval sent nothing; after setup --hosted with --grant or --fund, or recover, an earlier step may have completed (read
@@ -542,32 +552,40 @@ http on this machine only; RESULT names one in use as rpc. A wallet adding the c
 on this machine is offered the chain's public RPC.
 
 Output: logs go to stderr. stdout ends with one line
-  RESULT {"ok","command","rail","chain","op","state","final","chain_final","paid","delivered","amount","remaining","tx","rpc","id","url",
-          "matchCode","message_for_owner","budget_spent","next","reason"}
+  RESULT {"ok","command","rail","chain","op","state","final","chain_final","proof","paid","delivered","amount","remaining",
+          "tx","rpc","id","url","matchCode","message_for_owner","budget_spent","next","reason"}
 Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
-while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read,
-true otherwise, unchanged from 0.3.0. Scripts test final for command completion.
+while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), and for a
+buy-once unknown that a later wait can still read, true otherwise, unchanged from 0.3.0. Scripts test final for
+command completion.
 chain_final is true only after the payment meets the chain finality rule, false for included-but-not-final payments,
 and null when no current matching payment inclusion is established. A paid provisional result has final true and
 chain_final false; reconcile or wait checks finality again. Command completion never proves payment finality.
 next is the command to run next, or none.
-message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
-approval link, the match code (on superstables.com), the amount and chain, the testnet line. The agent sends it and ends its turn.
+proof (an owner command's failed): the chain fact that shows its transaction changed nothing, reverted (it landed and
+failed) or, on solana, blockhash_expired (it can no longer land). Once the owner's wallet was asked or the command began
+to send, an owner command says failed only with a proof; any other end is unknown.
+message_for_owner (with waiting_owner, with recover's unknown that still needs the owner, and with budget_spent): the
+reply an agent sends the owner, word for word: the approval link, the match code (on superstables.com), the amount and
+chain, the testnet line. The agent sends it and ends its turn.
 budget_spent: true when buy was refused because the budget cannot cover the purchase (spent, revoked, never granted).
 --json (every command): stdout is only that object, as JSON without the RESULT prefix, like the rest of superstables;
 the APPROVE line goes to stderr with the logs. The fields and exit codes are the same.
 
 Exit codes (the same numbers as superstables):
   0  done. Also state waiting_owner, with final false: the owner has not decided yet
-  1  failed: read reason and next; don't retry blindly
+  1  failed: read reason and next; don't retry blindly. An owner command that may have sent says failed only with proof
   2  bad input: fix the command. Nothing was done
-  3  refused (no setup, no budget, over --max, the owner rejected it or the approval link expired). An owner command
-     can also end refused after a transaction: one on chain that differs from the plan, or an earlier step of
-     setup --hosted with --grant or --fund, or of recover. Read tx, steps and budget status.
-     Respect it; never raise --max to get around it
+  3  refused (no setup, no budget, over --max, the owner rejected it or the approval link expired) before anything was
+     sent. Respect it; never raise --max to get around it
   4  paid, not delivered: never pay again; report it
-  5  unknown: it may have paid. Purchases: superstables budget reconcile --rail R --op ID. Owner commands: status and
-     the wallet's activity. buy-once: wait --id ID --shown while final is false. Never pay twice
+  5  unknown: it may have paid. Also an owner command that may have sent and has no proof of the outcome: it stopped,
+     a chain read failed or disagreed with the plan, its transaction differs from the plan, or a later step of setup
+     --hosted with --grant or --fund, or of recover, was refused after an earlier one sent (read tx and steps); and a
+     buy whose --op another process holds. Purchases: superstables budget reconcile --rail R --op ID. Owner commands:
+     status and the wallet's activity; with final false and message_for_owner (recover, after the agent's own revoke),
+     the owner still has to approve: send message_for_owner first, as for waiting_owner. buy-once: wait --id ID --shown
+     while final is false. Never pay twice
 
 Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
   keys/budget/<rail>-agent.env               the agent key (mode 600). No owner key is ever stored here
@@ -611,8 +629,9 @@ function resultFacts(fields) {
 }
 
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
+  if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
   fields = resultFacts(fields);
   // an RPC other than the rail's default (B4_RPC, SUPERSTABLES_TEMPO_RPC, SUPERSTABLES_SOLANA_RPC) is named in every RESULT
   if (fields.rpc === undefined && fields.rail) fields.rpc = customRpc(fields.rail);
@@ -938,6 +957,8 @@ function passApproval(line) {
 let currentChild;
 /** A signal stopped this command (wait past its deadline, --replace, Ctrl-C): after a link existed, the outcome is uncertain. */
 let interrupted = false;
+/** A rail script printed SENDING: it was about to broadcast a transaction (proof.mjs). */
+let railSending = false;
 function run(spec) {
   return new Promise((resolve) => {
     if (spec.cmd === TSX && !existsSync(TSX)) { log(`superstables budget: dependencies are missing: run npm ci at the repo root (${REPO})`); return resolve({ code: 2, stdout: "", missing: true }); }
@@ -955,9 +976,12 @@ function run(spec) {
     let stdout = "";
     let partial = "";
     let stderrTail = "";
-    // The rail's log goes to stderr line by line, except its own RESULT and APPROVE lines: this command prints the one
-    // RESULT (normalized) and passes the APPROVE line on to stdout, so neither appears twice.
-    const forward = (l) => { if (!/^(RESULT|APPROVE) \{/.test(l)) process.stderr.write(scrubAgentTokens(l + "\n")); };
+    // The rail's log goes to stderr line by line, except its own RESULT, APPROVE and SENDING lines: this command prints the
+    // one RESULT (normalized) and passes the APPROVE line on to stdout, so neither appears twice.
+    const forward = (l) => {
+      if (SENDING_LINE.test(l)) railSending = true;
+      else if (!/^(RESULT|APPROVE) \{/.test(l)) process.stderr.write(scrubAgentTokens(l + "\n"));
+    };
     p.stdout.on("data", (d) => {
       stdout += d;
       const lines = (partial + d).split("\n");
@@ -1117,6 +1141,11 @@ const nextFor = (state, delivered, f, cmd) => {
 // evm buy: the seller's answer, saved next to the journal (a path, its content type, its size in bytes, whether it was cut).
 const responseOf = (rail) => (typeof rail.responseFile === "string" ? { responseFile: rail.responseFile, responseType: rail.responseType ?? null, responseBytes: rail.responseBytes ?? null, responseTruncated: rail.responseTruncated === true } : {});
 
+// A rail that says unknown knows the way out (recover a landed pull, check a balance by hand, reconcile later): its next is
+// kept, since reconcile again in its place can loop.
+const ownWayOut = (rail) => typeof rail.next === "string" && rail.next !== "" && rail.next !== "none";
+const neverPayAgain = (next) => (/(never|do not) pay again/i.test(next) ? next : `${next.replace(/\.?$/, ".")} Never pay again for this op.`);
+
 // Turn the rail's RESULT (or its absence) into the CLI's normalized fields.
 function normalize(cmd, f, rail, code) {
   const base = { command: cmd, rail: f.rail, chain: f.chain, op: f.op };
@@ -1138,7 +1167,7 @@ function normalize(cmd, f, rail, code) {
   const amount = state === "unknown" ? null : nothingMoved ? "0" : rail.debit == null ? null : String(rail.debit);
   return {
     code: exitFor(cmd, state, delivered),
-    fields: { ...base, state, paid, delivered, chain_final: rail.chain_final ?? null, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.chain_final === false && state === "settled" ? `Run superstables budget reconcile --rail ${f.rail}${f.rail === "evm" ? ` --chain ${f.chain}` : ""} --op ${f.op} later to check finality. Do not pay again.${delivered === false ? " Contact the seller." : ""}` : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
+    fields: { ...base, state, paid, delivered, chain_final: rail.chain_final ?? null, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : rail.state === "unknown" && ownWayOut(rail) ? neverPayAgain(rail.next) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.chain_final === false && state === "settled" ? `Run superstables budget reconcile --rail ${f.rail}${f.rail === "evm" ? ` --chain ${f.chain}` : ""} --op ${f.op} later to check finality. Do not pay again.${delivered === false ? " Contact the seller." : ""}` : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
   };
 }
 
@@ -1266,7 +1295,26 @@ const statusCommand = (f) => `superstables budget status --rail ${f.rail}${chain
 /** "no budget has been set up here", with what is missing, in plain words. */
 const noBudgetWords = (f, gaps) => `no budget has been set up here for ${f.rail} on ${f.chain}: ${gaps.missing.join("; ")}`;
 
+/**
+ * The answer for an op whose journal says it may have paid (submitted or unknown; a journal that cannot be read; on solana
+ * also a chain refusal, which its rail treats as pending), or undefined. Every rail writes the journal before it signs, so
+ * this is read before any other refusal: a later setup or lock problem never makes such an op look unpaid.
+ */
+function journalAnswer(f, ctx) {
+  const j = readJournal(f);
+  const pending = j ? ["submitted", "unknown"].includes(j.state) || (f.rail === "solana" && j.state === "refused_chain") : existsSync(journal(f));
+  if (!pending && j?.state !== "settled") return undefined;
+  const state = j?.state ?? "unreadable";
+  log(`superstables budget: operation ${f.op} is already ${state}. Not paying again.`);
+  const tx = (j?.tx ?? j?.settleTx) ? { settle: j.tx ?? j.settleTx } : {};
+  // that purchase may have paid: its outcome is unknown until reconcile reads the chain, never a refusal before signing
+  if (pending) return () => emit(5, { ...ctx, op: f.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx, next: `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op} (never pay again for this op)`, reason: `op_already_${state}` });
+  return () => emit(3, { ...ctx, op: f.op, state: "refused_precheck", paid: true, delivered: j.delivered ?? null, amount: null, remaining: null, tx, next: "none: already settled; use a new --op for a new purchase", reason: "op_already_settled" });
+}
+
 async function buy({ f, ctx }) {
+  const earlier = f.op ? journalAnswer(f, ctx) : undefined;
+  if (earlier) return earlier();
   // No setup on this computer (no agent key, or no owner connected): refused before the lock, the journal or a rail script,
   // so nothing is signed and nothing is left behind that looks like a purchase. The grant itself is on chain: the rail
   // reads it before it signs.
@@ -1284,14 +1332,13 @@ async function buy({ f, ctx }) {
   // while its rail script runs: two overlapping buys would both find no journal and both pay.
   const lock = lockOp(opsDir(f.rail, f.chain), f.op);
   if (!lock.ok) {
-    log(`superstables budget: refused: another process (buy or reconcile) is working on operation ${f.op}. ${lock.details}. Nothing was signed by this command.`);
-    return emit(3, { ...ctx, state: "refused_precheck", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f.op, f.rail, f.chain), reason: "op_in_progress" });
+    // the process that holds it may be paying for this op right now
+    log(`superstables budget: another process (buy or reconcile) is working on operation ${f.op}. ${lock.details}. This command signed nothing; the other process may have paid.`);
+    return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f.op, f.rail, f.chain), reason: "op_in_progress" });
   }
-  const j = readJournal(f);
-  if (j && ["submitted", "unknown", "settled"].includes(j.state)) {
-    log(`superstables budget: operation ${f.op} is already ${j.state}. Not paying again.`);
-    return emit(3, { ...ctx, state: "refused_precheck", paid: j.state === "settled" ? true : null, delivered: j.delivered ?? null, amount: null, remaining: null, tx: (j.tx ?? j.settleTx) ? { settle: j.tx ?? j.settleTx } : {}, next: j.state === "settled" ? "none: already settled; use a new --op for a new purchase" : `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`, reason: `op_already_${j.state}` });
-  }
+  // read again under the lock: a buy that ran meanwhile may have written it
+  const now = journalAnswer(f, ctx);
+  if (now) return now();
   const journalBefore = existsSync(journal(f));
   const running = run(railCommand("buy", f));
   try { lock.holdAlso(currentChild); }
@@ -1425,15 +1472,35 @@ async function reconcile({ f, ctx }) {
 }
 
 // Owner commands: the rail scripts end with a RESULT line whose state is a rail word (set, revoked, ok, planned, mismatch,
-// not_revoked); those map to the CLI states. Without a RESULT line, the rail's exit code says how it ended.
-const OWNER_STATES = { set: "settled", revoked: "settled", ok: "settled", planned: "planned", refused_precheck: "refused_precheck", mismatch: "refused_precheck", not_revoked: "failed", failed: "failed", unknown: "unknown" };
+// not_revoked); those map to the CLI states. Without a RESULT line, the rail's exit code says how it ended. That holds only
+// until the command may have sent: from then on emit (afterSend, proof.mjs) lets an answer stand only if it is done,
+// unknown, or a failure whose RESULT names the chain's proof, and makes every other one unknown.
+// mismatch: a transaction the owner's wallet sent landed and did something other than the plan (another amount, recipient
+// or call), so it moved something: unknown, never a refusal that says nothing was sent
+const OWNER_STATES = { set: "settled", revoked: "settled", ok: "settled", planned: "planned", refused_precheck: "refused_precheck", mismatch: "unknown", not_revoked: "failed", failed: "failed", unknown: "unknown" };
+const carriesTx = (tx) => (typeof tx === "string" ? tx !== "" : Boolean(tx) && typeof tx === "object" && Object.values(tx).some(Boolean));
+/**
+ * Whether this owner command may have sent: its rail was about to broadcast, a signal stopped it once a link existed, its
+ * answer names a transaction, or the page log or superstables.com says the owner's wallet was asked.
+ */
+function mayHaveSent(fields) {
+  return railSending || (interrupted && Boolean(approvalUrl)) || carriesTx(fields.tx) || (APPROVAL_ID !== undefined && recordMayHaveSent(readApproval(APPROVAL_ID)));
+}
+/** The flags of the command this process runs, once parsed: the read-only check an unknown owner answer names. */
+let RUN_FLAGS;
+function checkCommand(fields) {
+  const f = RUN_FLAGS?.rail ? RUN_FLAGS : { rail: fields.rail, chain: fields.chain };
+  if (!RAILS[f.rail]) return "superstables budget status";
+  return fields.command === "fund-agent" ? `superstables budget doctor --rail ${f.rail}${chainFlag(f)}` : statusCommand(f);
+}
 function ownerOutcome(code, rr = null) {
   // stopped by a signal once the owner had a link: the wallet may have been asked, so never "failed"
   if (interrupted && approvalUrl && !rr && code !== 0) return { code: 5, state: "unknown", reason: "the command was stopped after its approval link existed; the wallet may have been asked to send" };
+  if (rr?.state === "mismatch") return { code: 5, state: "unknown", reason: rr.reason };
   const c = [0, 2, 3, 5].includes(code) ? code : 1;
   const byCode = { 0: "settled", 2: "failed", 3: "refused_precheck", 5: "unknown" }[c] ?? "failed";
   const mapped = OWNER_STATES[rr?.state];
-  return { code: c, state: c !== 0 && mapped && mapped !== "settled" && mapped !== "planned" ? mapped : byCode, reason: rr?.reason };
+  return { code: c, state: c !== 0 && mapped && mapped !== "settled" && mapped !== "planned" ? mapped : byCode, reason: rr?.reason, proof: rr?.proof };
 }
 // Owner transaction hashes: the evm RESULT carries them; the other rails print an explorer line.
 const ownerTx = (rr, stdout) => (typeof rr?.tx === "string" ? rr.tx : rr?.tx && typeof rr.tx === "object" ? rr.tx : txOf(stdout));
@@ -1478,7 +1545,7 @@ async function grant({ f, ctx }) {
   const r = await run(railCommand("grant", f, { expirySeconds: secs }));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
-  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, amount: f.amount, tx: rr?.tx ? { grant: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, o.state === "refused_precheck" ? "read reason and tx; a changed wallet transaction may already be on chain. Check status before granting again" : `${statusCommand(f)}: the chain may or may not have changed`), reason: o.reason ?? `the rail script exited ${r.code}` });
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, amount: f.amount, tx: rr?.tx ? { grant: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, o.state === "refused_precheck" ? "read reason and tx; a changed wallet transaction may already be on chain. Check status before granting again" : `${statusCommand(f)}: the chain may or may not have changed`), reason: o.reason ?? `the rail script exited ${r.code}` });
   const after = await readBudget(f);
   emit(0, { ...ctx, state: "settled", amount: f.amount, remaining: after.ok ? after.remaining : null, tx: { grant: ownerTx(rr, r.stdout) ?? null }, expiry: after.ok ? after.expiry : null, url: approvalUrl, next: "none" });
 }
@@ -1506,12 +1573,12 @@ async function revoke({ f, ctx }) {
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
   if (walletFlow(f) && o.code !== 0 && ["refused_precheck", "unknown"].includes(o.state)) {
-    return emit(o.code, { ...ctx, state: o.state, remaining: now.ok ? now.remaining : null, revoked: false, tx: rr?.tx ? { revoke: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, "none"), reason: o.reason });
+    return emit(o.code, { ...ctx, state: o.state, proof: o.proof, remaining: now.ok ? now.remaining : null, revoked: false, tx: rr?.tx ? { revoke: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, "none"), reason: o.reason });
   }
   const after = await readBudget(f);
   const done = r.code === 0 && after.ok && after.revoked;
   emit(done ? 0 : o.code || 1, {
-    ...ctx, state: done ? "settled" : o.code === 0 ? "failed" : o.state, remaining: after.ok ? after.remaining : null, revoked: after.ok ? after.revoked : null,
+    ...ctx, state: done ? "settled" : o.code === 0 ? "failed" : o.state, proof: done || o.code === 0 ? undefined : o.proof, remaining: after.ok ? after.remaining : null, revoked: after.ok ? after.revoked : null,
     tx: { revoke: ownerTx(rr, r.stdout) ?? null }, url: approvalUrl, next: done ? "none" : `${statusCommand(f)}: confirm whether the revoke landed, then run superstables budget revoke again`, reason: done ? undefined : o.reason ?? `the rail script exited ${r.code}`,
   });
 }
@@ -1525,7 +1592,7 @@ async function recover({ f, ctx }) {
   const o = ownerOutcome(r.code, rr);
   const tx = {};
   for (const [k, v] of [["selfRevoke", rr?.selfRevokeTx], ["ownerRevoke", rr?.ownerRevokeTx], ["gas", rr?.gasTx], ["sweep", rr?.sweepTx]]) if (v) tx[k] = v;
-  emit(o.code, { ...ctx, state: o.state, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, url: approvalUrl, next: o.code === 0 ? "none" : ownerNext(o, rr, `superstables budget status --rail ${f.rail}; then superstables budget recover again`), reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
+  emit(o.code, { ...ctx, state: o.state, proof: o.proof, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, url: approvalUrl, next: o.code === 0 ? "none" : ownerNext(o, rr, `superstables budget status --rail ${f.rail}; then superstables budget recover again`), reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
 }
 
 async function setup({ f, ctx }) {
@@ -1550,7 +1617,7 @@ async function setup({ f, ctx }) {
   const o = ownerOutcome(r.code, rr);
   // the one-link set-up: the link is recorded, and each step's own outcome (the first one that did not complete sets the state)
   const steps = rr?.linked === true ? { linked: true, steps: rr.steps, tx: rr.tx ?? {}, amount: rr.cap, remaining: rr.allowance, approvals: "hosted", site: hostedSite(f) ?? undefined } : rr?.linked === false ? { linked: false } : {};
-  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, owner: rr?.owner, agent: rr?.agent, ...steps, url: approvalUrl, next: rr?.linked === true ? rr.next : ownerNext(o, rr, "read the output above"), reason: o.reason ?? `the setup script exited ${r.code}` });
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, owner: rr?.owner, agent: rr?.agent, ...steps, url: approvalUrl, next: rr?.linked === true ? rr.next : ownerNext(o, rr, "read the output above"), reason: o.reason ?? `the setup script exited ${r.code}` });
   if (rr?.replacedOwner) log(`superstables budget: the recorded owner changed from ${rr.replacedOwner} to ${rr.owner}`);
   const site = hostedSite(f);
   // Whoever completed the page is now the owner on record: the owner checks that it is their wallet before anything else.
@@ -1566,7 +1633,7 @@ async function fundAgent({ f, ctx }) {
   const r = await run(railCommand("fund-agent", f));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
-  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, `superstables budget doctor --rail ${f.rail}`), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, `superstables budget doctor --rail ${f.rail}`), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
   emit(0, { ...ctx, state: "settled", amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: f.rail === "solana" ? "superstables budget doctor --rail solana, then superstables budget grant --rail solana --amount A" : `superstables budget doctor --rail evm${chainFlag(f)}, then superstables budget grant --rail evm${chainFlag(f)} --amount A` });
 }
 
@@ -1578,15 +1645,18 @@ const OWNER_COMMANDS = new Set(OWNER_COMMANDS_LIST);
  */
 const backstopS = (cmd, f) => Number(f.timeout ?? 600) * (cmd === "setup" && (f.grant !== undefined || f.fund !== undefined) ? 2 : 1) + (cmd === "setup" && (f.grant !== undefined || f.fund !== undefined) ? 420 : 0);
 /**
- * The next step after an owner command returned waiting_owner: write the link in a reply and end the turn; wait --shown
- * once the owner says they've approved. A link on this computer also needs the port forwarded over SSH.
+ * The next step after an owner command returned its approval link: write the link in a reply and end the turn; wait
+ * --shown once the owner says they've approved. A link on this computer also needs the port forwarded over SSH. `end`:
+ * the words after that, for a link on this computer.
  */
-const waitNext = (id, r = {}) => {
+const waitNext = (id, r = {}, end = "waiting_owner does not mean approved. If the approval link expires first, the command ends refused and nothing is sent: run it again for a new one. Do not start another owner command") => {
   if (r.matchCode) return showFirst(id, true);
   const port = /^http:\/\/127\.0\.0\.1:(\d+)\//.exec(r.url ?? "")?.[1] ?? "PORT";
-  return `${showFirst(id, false)} Only the owner uses the page, in the browser with their wallet. It is on this machine only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. waiting_owner does not mean approved. If the approval link expires first, the command ends refused and nothing is sent: run it again for a new one. Do not start another owner command`;
+  return `${showFirst(id, false)} Only the owner uses the page, in the browser with their wallet. It is on this machine only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. ${end}`;
 };
 /** The next step of a wait that is still waiting: poll again. A new link (recover can ask twice) is written first. */
+/** An approval whose command sent a transaction of its own (recover's revoke) before it needed the owner. */
+const OWN_SEND = "this command already began sending its own transaction for this approval; its outcome is not known yet.";
 const stillWaiting = (id) => `the owner has not finished. Say so in one line and end your turn; run superstables budget wait --id ${id} --shown again when they say they've approved. If the url is not the one you showed, write the new approval link and code first. The owner has not finished approving; do not approve for the owner.`;
 const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCode: r.matchCode, expires: r.expires, terms: r.terms, message_for_owner: messageForOwner(r) });
 
@@ -1655,12 +1725,22 @@ async function ownerGate({ cmd, f, ctx }) {
   if (r.kind === "final") {
     // it ended before it needed the owner (a refusal before any page, or nothing to do): the same RESULT as blocking
     const { code, result } = r.record.final;
-    delete result.id;
-    forget(id);
+    // one that may have sent keeps its record and id, for every later wait
+    if (!recordMayHaveSent(r.record)) {
+      delete result.id;
+      forget(id);
+    }
     writeResult(result);
     process.exit(code);
   }
-  if (r.kind === "failed") return emit(1, { ...ctx, state: "failed", id, next: `check wallet activity before retrying. The log is ${logFile(id)}`, reason: r.reason });
+  if (r.kind === "unstopped") {
+    // a command in the worker's group may still broadcast, whatever the record holds now
+    return emit(5, { ...ctx, state: "unknown", id, next: `the background approval could not be stopped, so it may still send a transaction. Check wallet activity and ${statusCommand(f)} before retrying, and do not start another owner command on this chain. The log is ${logFile(id)}`, reason: r.reason });
+  }
+  if (r.kind === "failed") {
+    // the worker's group stopped, and its record held no send when startDetached stored this under the record's lock
+    return emit(1, { ...ctx, state: "failed", id, next: `check wallet activity before retrying. The log is ${logFile(id)}`, reason: r.reason });
+  }
   const rec = r.record;
   writeApprove(`APPROVE ${JSON.stringify({ action: rec.action, url: rec.url, expires: rec.expires, terms: rec.terms, ...(rec.matchCode ? { matchCode: rec.matchCode } : {}) })}`);
   log(rec.matchCode
@@ -1669,6 +1749,9 @@ async function ownerGate({ cmd, f, ctx }) {
   // never a link without the words for the owner, silently: the rail did not write them in time (a fault)
   const missing = rec.wordsMissing ? `the rail's instructions for the owner were not in its log when the approval link was recorded; read them in ${logFile(id)} before writing to the owner, and use message_for_owner and next from this result` : undefined;
   if (missing) log(`\nsuperstables budget: ${missing}.`);
+  if (recordMayHaveSent(rec)) {
+    return emit(5, { ...ctx, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} The owner still has to approve the next step: ${waitNext(id, rec, "Do not start another owner command")}`, ...(missing ? { reason: missing } : {}) });
+  }
   emit(0, { ...ctx, state: "waiting_owner", ...approvalFields(rec), next: waitNext(id, rec), ...(missing ? { reason: missing } : {}) });
 }
 
@@ -1688,24 +1771,35 @@ async function wait({ f }) {
     return emit(5, s.result);
   }
   // Nothing is polled until the caller says the owner can read the link: an agent that polls first tends to never write it.
-  // a buy-once whose cancel was not confirmed has no link to show: wait reads it at once
-  if (once && !once.final && !f.shown && !once.cancelUnconfirmed) {
-    log(`superstables budget: wait refused: write the approval link, the code and the terms in your reply to the owner first, then run: superstables budget wait --id ${f.id} --shown`);
-    return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", ...approvalFields(once), next: showFirst(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
+  // a buy-once whose cancel was not confirmed has no link to show, and one the owner already acted on (the owner's wallet
+  // was asked, or the site showed payment evidence) has no "not approved yet" to say: wait reads them at once
+  const acted = once && (once.command === "buy-once" ? !mayBeUnpaid(once.seen) : recordMayHaveSent(once));
+  if (once && !once.final && !f.shown && !once.cancelUnconfirmed && !acted) {
+    log(`superstables budget: wait refused without reading the approval: write the approval link, the code and the terms in your reply to the owner first, then run: superstables budget wait --id ${f.id} --shown`);
+    return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", ...approvalFields(once), next: unshownNext(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
   }
   if (once?.command === "buy-once") return waitBuyOnce(once, f);
   const r = await waitFor(f.id, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);
   if (!r) return badInput({ command: "wait" }, `no owner approval with id ${f.id} under ${approvalsDir()}`);
   if (r.final) {
-    // Stored command completion is separate from payment finality, including older records.
-    writeResult({ ...r.result, final: true });
-    process.exit(r.code);
+    // Stored command completion is separate from payment finality, including older records. A record a worker stored
+    // before this rule, once its wallet was asked, is answered by it as well.
+    const sent = OWNER_COMMANDS.has(r.result.command) && (recordMayHaveSent(r.record) || carriesTx(r.result.tx));
+    const a = sent ? afterSend(r.code, r.result, checkCommand(r.result)) : { code: r.code, fields: r.result };
+    writeResult({ ...a.fields, ok: a.code === 0, final: true });
+    process.exit(a.code);
   }
   const rec = r.record;
   const words = r.orphaned
     ? `the background worker stopped, but its page or chain reads are still running (${pageWords(r.page, rec.rail)}); nothing is final until they stop. Do not start another owner command`
     : pageWords(r.page, rec.rail);
   log(`superstables budget: ${rec.id} (${rec.command}) has no final result: ${words}. Approval link: ${rec.url}${rec.matchCode ? ` (match code ${rec.matchCode})` : ""}`);
+  if (!walletWasAsked(rec, r.page) && recordMayHaveSent(rec)) {
+    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} Its approval link is still open for the owner: if the url is not the one you showed, write the new approval link and code first. Run superstables budget wait --id ${rec.id} --shown again when the owner says they've approved; do not run another owner command on this chain. Do not approve for the owner`, reason: words });
+  }
+  if (walletWasAsked(rec, r.page)) {
+    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet may have sent the transaction. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. Later, run superstables budget wait --id ${rec.id} --shown for the final result. Do not approve for the owner`, reason: words });
+  }
   emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: stillWaiting(rec.id), reason: words });
 }
 
@@ -1731,7 +1825,9 @@ async function buyOnce({ f, ctx }) {
     // under pending; nothing here says whether it was paid
     if (r.pending) {
       const p = r.pending;
-      return emit(3, { ...ctx, service: f.service, state: "refused_pending", paid: null, delivered: null, amount: null, tx: {}, pending: { id: p.id, purchase: p.hosted?.requestId, service: p.service?.id, state: r.pendingState ?? (p.cancelUnconfirmed ? "unknown" : "waiting_owner"), ...(p.url && r.pendingState !== "unknown" ? { url: p.url, matchCode: p.matchCode, expires: p.expires, terms: p.terms, message_for_owner: messageForOwner(p) } : {}) }, next: r.next, reason: `no new purchase was started: ${r.reason}` });
+      // the open purchase's state comes from its own evidence: one the site named a payment for is never waiting_owner
+      const state = r.pendingState ?? (p.cancelUnconfirmed || !mayBeUnpaid(p.seen) ? "unknown" : "waiting_owner");
+      return emit(3, { ...ctx, service: f.service, state: "refused_pending", paid: null, delivered: null, amount: null, tx: {}, pending: { id: p.id, purchase: p.hosted?.requestId, service: p.service?.id, state, ...(p.url && state !== "unknown" ? { url: p.url, matchCode: p.matchCode, expires: p.expires, terms: p.terms, message_for_owner: messageForOwner(p) } : {}) }, next: r.next, reason: `no new purchase was started: ${r.reason}` });
     }
     return emit(r.code, { ...ctx, service: f.service, state: r.state, paid: false, delivered: false, amount: "0", tx: {}, next: r.next, reason: r.reason });
   }
@@ -1850,4 +1946,5 @@ if (WORKER_ID) {
 } else if (OWNER_COMMANDS.has(parsed.cmd) && sendsNow(parsed.f) && !parsed.f["fund-only"]) {
   await ownerGate(parsed);
 }
+RUN_FLAGS = parsed.f;
 await HANDLERS[parsed.cmd](parsed);

@@ -29,8 +29,9 @@ import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
-import { chosenSite, isSiteRequestId, mismatchReason, siteOrigin } from "../site.mjs";
+import { chosenSite, differsFromRequest, isSiteRequestId, mismatchReason, siteOrigin } from "../site.mjs";
 import { askConnect, closeOwnerPage, confirmHosted, emit, endUnapproved, sol, useApprovalSite } from "./owner.ts";
+import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/setup.ts [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund | --fund-amount <sol>]]
                                       [--timeout <s>] [--no-open] [--owner-key-file <path>]
@@ -185,7 +186,7 @@ if (CAP !== undefined || LAMPORTS !== undefined) {
 }
 
 let owner: string;
-let finish: ((v: { ok: boolean; message: string }) => void) | null = null;
+let finish: ((v: OwnerVerdict) => void) | null = null;
 let bundle: { steps: HostedStepOutcome[] } | undefined;
 if (OWNER_KEY_FILE) {
   checkOwnerKeyFile(OWNER_KEY_FILE);
@@ -259,7 +260,7 @@ if (OWNER_KEY_FILE) {
 // every way an owner arrives (the key file, the page, the site): another owner than the one on record needs --new-owner
 if (owner === agent || (recorded && recorded !== owner && !newOwner)) {
   const reason = owner === agent ? "the owner address is the agent's address" : `another owner (${recorded}) is recorded for this agent`;
-  finish?.({ ok: false, message: owner === agent ? "That is the agent's own address. Connect your own wallet instead." : `This machine records another owner for this agent (${recorded}). Nothing was changed.` });
+  finish?.({ outcome: "failed", message: owner === agent ? "That is the agent's own address. Connect your own wallet instead." : `This machine records another owner for this agent (${recorded}). Nothing was changed.` });
   await closeOwnerPage();
   if (owner !== agent) console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this machine.`);
   process.exit(result(3, { state: "refused_precheck", reason, ...(owner === agent ? {} : { owner: recorded }), next: owner === agent ? "connect the owner's own wallet" : `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }));
@@ -306,7 +307,7 @@ const steps = [
 ];
 console.log("\nNext:");
 steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
-finish?.({ ok: true, message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: fund your wallet with devnet SOL and USDC, give the agent SOL for fees, then grant a budget (the terminal lists the commands).` });
+finish?.({ outcome: "confirmed", message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: fund your wallet with devnet SOL and USDC, give the agent SOL for fees, then grant a budget (the terminal lists the commands).` });
 await closeOwnerPage();
 process.exit(result(0, { state: "ok", owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_PATH, agentKeyFile: AGENT_KEY_PATH, steps, next: "superstables budget fund-agent --rail solana (SOL for the agent's fees), then superstables budget doctor --rail solana (it says what the owner still needs), then superstables budget grant --rail solana --amount A" }));
 
@@ -316,7 +317,7 @@ process.exit(result(0, { state: "ok", owner, ...(replaced ? { replacedOwner: rep
  * state of the first step that is not, with what did happen.
  */
 async function finishBundle(): Promise<never> {
-  type Report = { kind: string; state: "settled" | "mismatch" | "failed" | "unknown" | "refused_precheck"; tx?: string; txUrl?: string; amount?: string; reason?: string; reasonCode?: string };
+  type Report = { kind: string; state: "settled" | "mismatch" | "failed" | "unknown" | "refused_precheck"; proof?: "reverted"; tx?: string; txUrl?: string; amount?: string; reason?: string; reasonCode?: string };
   const reports: Report[] = [];
   let remaining: bigint | undefined;
   for (const s of bundle?.steps ?? []) {
@@ -331,9 +332,9 @@ async function finishBundle(): Promise<never> {
       // a step the site reported as failed is read too, but never settled
       const c = await confirmHosted(conn, s.hash, owner, startSlot, planned, s.state === "failed" ? siteFailedWords(HOST, s.reasonCode) : undefined);
       console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
-      const report = (state: Report["state"], reason?: string) => reports.push({ kind: s.kind, state, tx: s.hash!, txUrl: explorerTx(s.hash!), amount, reason });
+      const report = (state: Report["state"], reason?: string, extra: Pick<Report, "proof"> = {}) => reports.push({ kind: s.kind, state, ...extra, tx: s.hash!, txUrl: explorerTx(s.hash!), amount, reason });
       if (c.status === "unknown") { report("unknown", "the site reported a signature the chain does not show yet"); continue; }
-      if (c.status !== "success") { report("failed", `it failed on chain (${JSON.stringify(c.err)})`); continue; }
+      if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) { report("failed", `it failed on chain (${JSON.stringify(c.err)})`, { proof: "reverted" }); continue; }
       if (c.problems.length) { report("mismatch", mismatchReason(c.problems, c.siteFailed, s.hash)); continue; }
       if (s.kind === "fund_agent") {
         const i = c.accountKeys?.indexOf(agent) ?? -1;
@@ -384,12 +385,12 @@ async function finishBundle(): Promise<never> {
     console.log(`\nDone with one approval link: the agent was added to the account${funded ? ", has SOL for fees" : ""}${granted ? ` and has a budget of ${formatUnits(CAP!)} USDC` : ""}.`);
     process.exit(result(0, { state: "ok", ...base, next: granted ? "none: the agent can buy under the budget. superstables budget status --rail solana shows what is left" : "superstables budget grant --rail solana --amount A, only when the owner asks for a budget" }));
   }
-  const f = first ?? { kind: "grant", state: "unknown" as const, reason: "superstables.com reported fewer steps than asked for" };
+  const f: Report = first ?? { kind: "grant", state: "unknown", reason: "superstables.com reported fewer steps than asked for" };
   const later = reports.filter((r) => r.state !== "settled").map((r) => (r.kind === "grant" ? "superstables budget grant --rail solana --amount A" : "superstables budget fund-agent --rail solana")).join(" and ");
   const next = f.state === "unknown"
     ? `superstables budget status --rail solana and the owner's wallet activity: read whether ${f.kind === "grant" ? "the grant" : "the SOL"} landed before running anything again. The agent has been added to the account`
     : f.state === "mismatch"
       ? f.kind === "grant" ? "the chain shows another delegation than planned: the owner revokes it (superstables budget revoke --rail solana); grant again only if the owner asks" : "check the owner's wallet activity, then superstables budget doctor --rail solana"
       : `the agent has been added to the account${funded ? " and has SOL for fees" : ""}. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: ${later}`;
-  process.exit(result(f.state === "unknown" ? 5 : f.state === "failed" ? 1 : 3, { state: f.state, ...base, reason: summary, next }));
+  process.exit(result(f.state === "unknown" ? 5 : f.state === "failed" ? 1 : 3, { state: f.state, proof: f.proof, ...base, reason: summary, next }));
 }

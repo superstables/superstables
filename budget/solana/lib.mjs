@@ -12,6 +12,7 @@ import { dirname } from "node:path";
 import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret-file.mjs";
 import { DEFAULT_RPC, rpcFromEnv } from "../rpc.mjs";
+import { markSend } from "../proof.mjs";
 import {
   Connection,
   Keypair,
@@ -58,7 +59,8 @@ export const PUBLIC_PATH = publicFile("solana", "devnet");
 export const OPS_DIR = opsDir("solana", "devnet");
 
 export function connection() {
-  return new Connection(RPC_URL, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }) });
+  // a broadcast prints SENDING before it leaves (../proof.mjs)
+  return new Connection(RPC_URL, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (url, init) => { markSend(init?.body); return fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }); } });
 }
 
 // Exact decimal parse. Throws on anything that is not a plain non-negative

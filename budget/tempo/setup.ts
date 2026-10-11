@@ -36,12 +36,13 @@ import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 import { LABEL, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
 import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
-import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from '../owner-page.ts'
+import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { UNSAFE_SECRET_FILE } from '../secret-file.mjs'
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from '../hosted.ts'
 import { chosenSite, isSiteRequestId, siteOrigin } from '../site.mjs'
 import { KEYCHAIN, approvalSite, askConnect, checkGrantSent, closeOwnerPage, emit, endUnapproved, grantCalldata, iso, tokenBalance, useApprovalSite, useHostedAgent, type GrantPlan, type SentCheck } from './owner.ts'
 import { chainHead, readKey } from './lib/chain.ts'
+import type { OwnerVerdict } from '../../src/core/signer/owner-approval-server.ts'
 
 const { values: args } = parseCli({
   name: 'setup.ts',
@@ -349,7 +350,7 @@ async function main() {
   }
 
   let owner: Address
-  let finish: ((v: { ok: boolean; message: string }) => void) | null = null
+  let finish: ((v: OwnerVerdict) => void) | null = null
   let bundle: { steps: HostedStepOutcome[] } | undefined
   if (OWNER_KEY_FILE) {
     checkOwnerKeyFile(OWNER_KEY_FILE)
@@ -415,14 +416,14 @@ async function main() {
     console.log(`the owner connected ${owner} and signed the sign-in message`)
   }
   if (same(owner, agent)) {
-    finish?.({ ok: false, message: "That is the agent's own address. Connect your own wallet instead." })
+    finish?.({ outcome: "failed", message: "That is the agent's own address. Connect your own wallet instead." })
     await closeOwnerPage()
     process.exit(result(3, { state: 'refused_precheck', reason: "the owner address is the agent's address", next: "connect the owner's own wallet" }))
   }
   // every way an owner arrives (the key file, the page, the site): another owner than the one on record needs --new-owner
   if (recorded && !same(recorded, owner) && !newOwner) {
     const reason = `another owner (${recorded}) is recorded for this agent`
-    finish?.({ ok: false, message: `This machine records another owner for this agent (${recorded}). Nothing was changed.` })
+    finish?.({ outcome: "failed", message: `This machine records another owner for this agent (${recorded}). Nothing was changed.` })
     await closeOwnerPage()
     console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this machine.`)
     process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }))
@@ -465,7 +466,7 @@ async function main() {
   ]
   console.log('\nNext:')
   steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`))
-  finish?.({ ok: true, message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: grant a budget (the terminal lists the command).` })
+  finish?.({ outcome: "confirmed", message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: grant a budget (the terminal lists the command).` })
   await closeOwnerPage()
   process.exit(result(0, { state: 'ok', owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_ENV_PATH, agentKeyFile: AGENT_ENV_PATH, steps, next: 'superstables budget doctor --rail tempo, then superstables budget grant --rail tempo --amount A' }))
 }
@@ -475,7 +476,7 @@ async function main() {
  * already recorded. Ends the process with one RESULT: ok when the key is on chain as planned, else the grant's state.
  */
 async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, startBlock: bigint, steps: HostedStepOutcome[]): Promise<never> {
-  type Report = { kind: string; state: SentCheck['state'] | 'refused_precheck'; tx?: string; txUrl?: string; amount?: string; reason?: string; reasonCode?: string }
+  type Report = { kind: string; state: SentCheck['state'] | 'refused_precheck'; proof?: SentCheck['proof']; tx?: string; txUrl?: string; amount?: string; reason?: string; reasonCode?: string }
   const amount = fromBaseUnits(plan.limit)
   const reports: Report[] = []
   let done: SentCheck | undefined
@@ -485,7 +486,7 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
       // a step the site reported as failed is read too, but never settled
       const c = await checkGrantSent(s.hash as Hex, { owner, plan, afterBlock: startBlock, siteFailed: s.state === 'failed' ? siteFailedWords(HOST, s.reasonCode) : undefined })
       if (c.state === 'settled') done = c
-      reports.push({ kind: s.kind, state: c.state, tx: c.tx, txUrl: explorerTx(c.tx), amount, reason: c.reason })
+      reports.push({ kind: s.kind, state: c.state, proof: c.proof, tx: c.tx, txUrl: explorerTx(c.tx), amount, reason: c.reason })
     } else if (s.walletAsked || s.state === 'unknown') {
       reports.push({ kind: s.kind, state: 'unknown', amount, reason: s.reason || 'the wallet was asked to send, but superstables.com reported no transaction' })
     } else {
@@ -499,7 +500,7 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
     }
   }
   await closeOwnerPage()
-  const r = reports[0] ?? { kind: 'grant', state: 'unknown' as const, amount, reason: 'superstables.com reported no grant step' }
+  const r: Report = reports[0] ?? { kind: 'grant', state: 'unknown', amount, reason: 'superstables.com reported no grant step' }
   console.log(`  budget: ${r.state === 'settled' ? `${amount} ${TOKEN_LABEL} authorized until ${iso(plan.expiry)} (tx ${r.tx})` : `${r.state}${r.tx ? ` (tx ${r.tx})` : ''}: ${r.reason}`}`)
   const base = { owner, agent, linked: true, steps: reports, tx: r.tx ? { grant: r.tx } : {}, cap: done ? amount : undefined, allowance: done?.key ? fromBaseUnits(done.key.remaining) : undefined, expiry: done?.key ? iso(done.key.expiry) : undefined, publicFile: PUBLIC_ENV_PATH, agentKeyFile: AGENT_ENV_PATH }
   if (r.state === 'settled') {
@@ -512,10 +513,10 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
     : r.state === 'mismatch'
       ? 'the chain shows another key than planned: the owner revokes it (superstables budget revoke --rail tempo); grant again only with a new key (setup --agent LABEL), and only if the owner asks'
       : 'the agent has been added to the account. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: superstables budget grant --rail tempo --amount A'
-  process.exit(result(r.state === 'unknown' ? 5 : r.state === 'failed' ? 1 : 3, { state: r.state, ...base, reason: summary, next }))
+  process.exit(result(r.state === 'unknown' ? 5 : r.state === 'failed' ? 1 : 3, { state: r.state, proof: r.proof, ...base, reason: summary, next }))
 }
 
 main().catch((err) => {
   console.error('setup failed:', err?.message ?? err)
-  process.exit(1)
+  return exitAfterError()
 })

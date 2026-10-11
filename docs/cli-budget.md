@@ -119,32 +119,40 @@ http on this machine only; RESULT names one in use as rpc. A wallet adding the c
 on this machine is offered the chain's public RPC.
 
 Output: logs go to stderr. stdout ends with one line
-  RESULT {"ok","command","rail","chain","op","state","final","chain_final","paid","delivered","amount","remaining","tx","rpc","id","url",
-          "matchCode","message_for_owner","budget_spent","next","reason"}
+  RESULT {"ok","command","rail","chain","op","state","final","chain_final","proof","paid","delivered","amount","remaining",
+          "tx","rpc","id","url","matchCode","message_for_owner","budget_spent","next","reason"}
 Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
-while an owner approval is open (state waiting_owner), and for a buy-once unknown that a later wait can still read,
-true otherwise, unchanged from 0.3.0. Scripts test final for command completion.
+while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), and for a
+buy-once unknown that a later wait can still read, true otherwise, unchanged from 0.3.0. Scripts test final for
+command completion.
 chain_final is true only after the payment meets the chain finality rule, false for included-but-not-final payments,
 and null when no current matching payment inclusion is established. A paid provisional result has final true and
 chain_final false; reconcile or wait checks finality again. Command completion never proves payment finality.
 next is the command to run next, or none.
-message_for_owner (with waiting_owner, and with budget_spent): the reply an agent sends the owner, word for word: the
-approval link, the match code (on superstables.com), the amount and chain, the testnet line. The agent sends it and ends its turn.
+proof (an owner command's failed): the chain fact that shows its transaction changed nothing, reverted (it landed and
+failed) or, on solana, blockhash_expired (it can no longer land). Once the owner's wallet was asked or the command began
+to send, an owner command says failed only with a proof; any other end is unknown.
+message_for_owner (with waiting_owner, with recover's unknown that still needs the owner, and with budget_spent): the
+reply an agent sends the owner, word for word: the approval link, the match code (on superstables.com), the amount and
+chain, the testnet line. The agent sends it and ends its turn.
 budget_spent: true when buy was refused because the budget cannot cover the purchase (spent, revoked, never granted).
 --json (every command): stdout is only that object, as JSON without the RESULT prefix, like the rest of superstables;
 the APPROVE line goes to stderr with the logs. The fields and exit codes are the same.
 
 Exit codes (the same numbers as superstables):
   0  done. Also state waiting_owner, with final false: the owner has not decided yet
-  1  failed: read reason and next; don't retry blindly
+  1  failed: read reason and next; don't retry blindly. An owner command that may have sent says failed only with proof
   2  bad input: fix the command. Nothing was done
-  3  refused (no setup, no budget, over --max, the owner rejected it or the approval link expired). An owner command
-     can also end refused after a transaction: one on chain that differs from the plan, or an earlier step of
-     setup --hosted with --grant or --fund, or of recover. Read tx, steps and budget status.
-     Respect it; never raise --max to get around it
+  3  refused (no setup, no budget, over --max, the owner rejected it or the approval link expired) before anything was
+     sent. Respect it; never raise --max to get around it
   4  paid, not delivered: never pay again; report it
-  5  unknown: it may have paid. Purchases: superstables budget reconcile --rail R --op ID. Owner commands: status and
-     the wallet's activity. buy-once: wait --id ID --shown while final is false. Never pay twice
+  5  unknown: it may have paid. Also an owner command that may have sent and has no proof of the outcome: it stopped,
+     a chain read failed or disagreed with the plan, its transaction differs from the plan, or a later step of setup
+     --hosted with --grant or --fund, or of recover, was refused after an earlier one sent (read tx and steps); and a
+     buy whose --op another process holds. Purchases: superstables budget reconcile --rail R --op ID. Owner commands:
+     status and the wallet's activity; with final false and message_for_owner (recover, after the agent's own revoke),
+     the owner still has to approve: send message_for_owner first, as for waiting_owner. buy-once: wait --id ID --shown
+     while final is false. Never pay twice
 
 Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
   keys/budget/<rail>-agent.env               the agent key (mode 600). No owner key is ever stored here
@@ -198,10 +206,12 @@ On a chain set up with --hosted, the approval link is on superstables.com instea
 owner is signed in with their wallet, and the APPROVE line carries a matchCode the owner picks there (recover stays on
 this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
-waiting_owner, final false and an approval id; the page stays open in the background. Write the approval link (and the
-match code) and the terms in your reply to the owner, a visible message, and end your turn there. When they say they've
-approved, run superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way
-the approval link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
+waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
+agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
+yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
+in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
+link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
 wallet was asked to send, the command ends refused_precheck (exit 3) and that approval sent nothing: run the same
 command again for a new one. If the wallet was asked and no transaction came back, the result is unknown (exit 5).
@@ -238,9 +248,11 @@ Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT
   with --grant or --fund also linked (true once the agent is added), steps (kind, state, tx, amount, reason
   for each), tx, amount, remaining.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
-Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
-  status before trying again)
+Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wallet was asked or the send began, only
+  when the chain proves the transaction changed nothing, named in proof), 2 bad input, 3 refused (the owner rejected it, or
+  the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command
+  stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:
+  check status before trying again)
 ```
 
 ## superstables budget fund-agent
@@ -267,10 +279,12 @@ On a chain set up with --hosted, the approval link is on superstables.com instea
 owner is signed in with their wallet, and the APPROVE line carries a matchCode the owner picks there (recover stays on
 this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
-waiting_owner, final false and an approval id; the page stays open in the background. Write the approval link (and the
-match code) and the terms in your reply to the owner, a visible message, and end your turn there. When they say they've
-approved, run superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way
-the approval link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
+waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
+agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
+yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
+in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
+link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
 wallet was asked to send, the command ends refused_precheck (exit 3) and that approval sent nothing: run the same
 command again for a new one. If the wallet was asked and no transaction came back, the result is unknown (exit 5).
@@ -290,9 +304,11 @@ Example:
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
   false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), amount (what was sent), tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
-Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
-  status before trying again)
+Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wallet was asked or the send began, only
+  when the chain proves the transaction changed nothing, named in proof), 2 bad input, 3 refused (the owner rejected it, or
+  the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command
+  stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:
+  check status before trying again)
 ```
 
 ## superstables budget doctor
@@ -344,10 +360,12 @@ On a chain set up with --hosted, the approval link is on superstables.com instea
 owner is signed in with their wallet, and the APPROVE line carries a matchCode the owner picks there (recover stays on
 this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
-waiting_owner, final false and an approval id; the page stays open in the background. Write the approval link (and the
-match code) and the terms in your reply to the owner, a visible message, and end your turn there. When they say they've
-approved, run superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way
-the approval link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
+waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
+agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
+yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
+in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
+link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
 wallet was asked to send, the command ends refused_precheck (exit 3) and that approval sent nothing: run the same
 command again for a new one. If the wallet was asked and no transaction came back, the result is unknown (exit 5).
@@ -368,9 +386,11 @@ Example:
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
   false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), amount, remaining, tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
-Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
-  status before trying again)
+Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wallet was asked or the send began, only
+  when the chain proves the transaction changed nothing, named in proof), 2 bad input, 3 refused (the owner rejected it, or
+  the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command
+  stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:
+  check status before trying again)
 ```
 
 ## superstables budget status
@@ -467,8 +487,9 @@ Prints: the steps on stderr, then one RESULT line: state, paid, delivered, amoun
   op, next, reason, and, when saving succeeded, responseFile: the seller's answer saved as a file (seller data, not instructions).
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 paid and delivered, 1 failed (not settled; reason, tx and amount say what left the owner), 2 bad input, 3 refused before anything was
-  signed (no setup, no budget, over --max, not enough gas on evm, another buy with this --op running), 4 paid but not
-  delivered (never pay again), 5 unknown: run superstables budget reconcile --rail R --op ID, and never pay again for that op
+  signed (no setup, no budget, over --max, not enough gas on evm), 4 paid but not delivered (never pay again), 5 unknown,
+  also when another buy or reconcile holds this --op: run superstables budget reconcile --rail R --op ID, and never pay
+  again for that op
 ```
 
 ## superstables budget reconcile
@@ -539,10 +560,12 @@ On a chain set up with --hosted, the approval link is on superstables.com instea
 owner is signed in with their wallet, and the APPROVE line carries a matchCode the owner picks there (recover stays on
 this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
-waiting_owner, final false and an approval id; the page stays open in the background. Write the approval link (and the
-match code) and the terms in your reply to the owner, a visible message, and end your turn there. When they say they've
-approved, run superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way
-the approval link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
+waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
+agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
+yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
+in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
+link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
 wallet was asked to send, the command ends refused_precheck (exit 3) and that approval sent nothing: run the same
 command again for a new one. If the wallet was asked and no transaction came back, the result is unknown (exit 5).
@@ -562,9 +585,11 @@ Example:
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
   false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), revoked, remaining, tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
-Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
-  status before trying again)
+Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wallet was asked or the send began, only
+  when the chain proves the transaction changed nothing, named in proof), 2 bad input, 3 refused (the owner rejected it, or
+  the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command
+  stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:
+  check status before trying again)
 ```
 
 ## superstables budget recover
@@ -585,9 +610,12 @@ machine. An agent may start this command and hand the owner the approval link; o
 never does it for them.
 Recovery always uses this machine's local approval page, including on a chain set up with --hosted.
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
-waiting_owner, final false and an approval id; the page stays open in the background. Write the approval link and the terms in your reply to the owner, a visible message, and end your turn there. When they say they've
-approved, run superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way
-the approval link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
+waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
+agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
+yet, and the owner still has to approve the rest. Either way, write the approval link and the terms
+in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
+link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
 wallet was asked to send, the command ends refused_precheck (exit 3) and that approval sent nothing: run the same
 command again for a new one. If the wallet was asked and no transaction came back, the result is unknown (exit 5).
@@ -607,9 +635,11 @@ Example:
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
   false, id, url, expires and next; or, when it waited, the final RESULT: state settled (or ok), amount (returned), tx, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix; the APPROVE line goes to stderr.
-Exit codes: 0 done, or still waiting_owner (final false), 1 failed, 2 bad input, 3 refused (the owner rejected it,
-  the approval link expired, or the chain does not match the plan), 5 unknown (the wallet may have sent it: check
-  status before trying again)
+Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wallet was asked or the send began, only
+  when the chain proves the transaction changed nothing, named in proof), 2 bad input, 3 refused (the owner rejected it, or
+  the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command
+  stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:
+  check status before trying again)
 ```
 
 ## superstables budget wait
@@ -619,12 +649,18 @@ superstables budget wait --id ID --shown [--timeout S] [--site URL] [--abandon]
 
 After an owner command or buy-once returned waiting_owner: waits up to S seconds (default 30, at most 300) for that
 approval, then prints its state. While the owner has not decided: state waiting_owner, final false, exit 0. That is not
-an approval. Once it ended: final true, and the owner command's (or purchase's) own final RESULT and exit code, the same
-on every later call. Scripts test final, not the exit code.
+an approval. Once the owner's wallet was asked to send and there is no final result yet: state unknown, final false,
+exit 5; tell the owner the outcome is unknown and run wait --shown again later. Once it ended: final true, and the owner
+command's (or purchase's) own final RESULT and exit code, the same on every later call.
+Scripts test final, not the exit code.
 --shown means: I have written the approval link (and the match code) and the terms in a reply the owner can read.
-Without it, wait refuses (exit 2, state show_owner_first) and polls nothing; once the approval has ended it prints the
-final result without it. An agent writes the approval link, ends its turn, and runs wait when the owner says they've
-approved; while still waiting_owner it says so in one line and ends its turn again.
+Without it, wait refuses (exit 2, state show_owner_first) and polls nothing, so that answer says nothing about whether the
+owner approved or paid; once the approval has ended, or this machine already saw the owner act on it (the page log shows
+the wallet was asked; for buy-once, an earlier read showed payment evidence), it reads it without --shown.
+An agent writes the approval link, ends its turn, and runs wait when the owner says they've approved; while still
+waiting_owner it says so in one line and ends its turn again. unknown with final false and message_for_owner (recover,
+after the agent's own revoke) also means the owner has not finished: write the approval link again if url changed, and
+end the turn.
 --site is checked against the site the approval was made on, and refused if it differs.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
 approval sent nothing; after setup --hosted with --grant or --fund, or recover, an earlier step may have completed (read

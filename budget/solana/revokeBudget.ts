@@ -16,9 +16,10 @@ import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { AGENT_KEY_PATH, connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseEnvText, parseStrict, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
-import { mismatchPage, mismatchReason, siteName } from "../site.mjs";
+import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { readRegularFile } from "../secret-file.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort } from "./owner.ts";
+import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/revokeBudget.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
@@ -71,7 +72,7 @@ if (lamports < MIN_FEE_LAMPORTS) refuse(`the owner holds ${sol(lamports)} SOL, t
 
 const ix = () => [createRevokeInstruction(ata, owner)];
 let sig: string;
-let finish: ((v: { ok: boolean; message: string; hash?: string }) => void) | null = null;
+let finish: ((v: OwnerVerdict) => void) | null = null;
 if (OWNER_KEY_FILE) {
   checkOwnerKeyFile(OWNER_KEY_FILE);
   const kp = loadOwner(OWNER_KEY_FILE).keypair;
@@ -95,21 +96,22 @@ if (OWNER_KEY_FILE) {
   const c = local ? { ...(await confirmSent(conn, local.sent()!)), problems: [] as string[] } : await confirmHosted(conn, sig, owner.toBase58(), startSlot, ix(), outcome.siteFailed);
   console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
   if (c.status === "unknown") {
-    handle.finish({ ok: false, message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
+    handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
     await closeOwnerPage();
     process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget status --rail solana" }));
   }
-  if (c.status !== "success") {
-    handle.finish({ ok: false, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. This transaction did not revoke the budget. Check superstables budget status --rail solana; run revoke again only if a delegate remains.`, hash: sig });
+  if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) {
+    const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
+    handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. This transaction did not revoke the budget. Check superstables budget status --rail solana; run revoke again only if a delegate remains.`, hash: sig });
     await closeOwnerPage();
-    process.exit(result(1, { state: "not_revoked", tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget status --rail solana; run revoke again only if a delegate remains" }));
+    process.exit(result(1, { state: "not_revoked", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget status --rail solana; run revoke again only if a delegate remains" }));
   }
   if (c.problems.length) {
     // not the Revoke alone: the transaction did something else as well (or instead), so it is not reported as a revoke
     const reason = mismatchReason(c.problems, c.siteFailed, sig);
     console.log(`MISMATCH: ${reason}`);
     const now = await retryRead(() => getAccountOrNull(conn, ata)).catch(() => undefined);
-    handle.finish({ ok: false, message: mismatchPage(c.problems, c.siteFailed, sig), hash: sig });
+    handle.finish({ outcome: "unknown", message: mismatchPage(c.problems, c.siteFailed, sig, { ended: c.status === "failed" ? "failed on chain" : undefined }), hash: sig });
     await closeOwnerPage();
     process.exit(result(3, { state: "mismatch", tx: sig, ...(now !== undefined ? { remaining: formatUnits(now?.delegatedAmount ?? 0n) } : {}), reason, next: "check the owner's wallet activity, then superstables budget status --rail solana; revoke again if a delegate still reads" }));
   }
@@ -123,11 +125,11 @@ for (let i = 0; i < 8 && (after.delegate || after.delegatedAmount !== 0n); i++) 
 console.log(`After: delegate=${after.delegate?.toBase58() ?? "none"} remaining=${formatUnits(after.delegatedAmount)} USDC`);
 console.log(`explorer: ${explorerTx(sig)}`);
 if (after.delegate || after.delegatedAmount !== 0n) {
-  finish?.({ ok: false, message: `The chain still shows delegate ${after.delegate?.toBase58() ?? "none"} with ${formatUnits(after.delegatedAmount)} USDC. Run the revoke again.`, hash: sig });
+  finish?.({ outcome: "failed", message: `The chain still shows delegate ${after.delegate?.toBase58() ?? "none"} with ${formatUnits(after.delegatedAmount)} USDC. Run the revoke again.`, hash: sig });
   await closeOwnerPage();
   process.exit(result(1, { state: "not_revoked", tx: sig, remaining: formatUnits(after.delegatedAmount), reason: "a delegate still reads on chain", next: "run revoke again" }));
 }
 console.log("This delegation is cleared. Transactions that still require it will fail. Previously transferred funds are not recovered.");
-finish?.({ ok: true, message: "Confirmed. Your USDC account has no delegate. This does not recover tokens already transferred. You can close this page.", hash: sig });
+finish?.({ outcome: "confirmed", message: "Confirmed. Your USDC account has no delegate. This does not recover tokens already transferred. You can close this page.", hash: sig });
 await closeOwnerPage();
 process.exit(result(0, { state: "revoked", tx: sig, remaining: "0", next: "none" }));

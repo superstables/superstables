@@ -219,7 +219,7 @@ const evidenceWords = (s) =>
  * other than false. Every unpaid outcome goes through here: a final read, a confirmed cancel, a creation error, a refusal
  * after a purchase exists.
  */
-const mayBeUnpaid = (seen) => !anyEvidence(seen);
+export const mayBeUnpaid = (seen) => !anyEvidence(seen);
 
 /**
  * The one evidence accumulator per purchase: every answer the client receives for it (a read or a cancel, success or
@@ -493,7 +493,12 @@ function termsOf(service, created, net) {
  * The `next` of every command that returns waiting_owner: the link is written for the owner first, and `wait` refuses
  * without --shown (cli.mjs), so an agent cannot poll before the owner can read it.
  */
-export const showFirst = (id, withCode = true) => `reply to the owner with message_for_owner, word for word (it has the approval link${withCode ? ", the code" : ""} and the amount), and end your turn there. When they say they've approved, run superstables budget wait --id ${id} --shown. Not approved or paid yet: do not approve for the owner. ${TESTNET_LINE}`;
+export const showFirst = (id, withCode = true) => `reply to the owner with message_for_owner, word for word (it has the approval link${withCode ? ", the code" : ""} and the amount), and end your turn there. When they say they've approved, run superstables budget wait --id ${id} --shown. Do not approve for the owner. ${TESTNET_LINE}`;
+/**
+ * The `next` of a wait run without --shown: it read nothing (the owner may have acted since this machine last looked), so
+ * it says nothing about whether the approval was approved or paid.
+ */
+export const unshownNext = (id, withCode = true) => `this wait did not read the approval, so whether the owner approved or paid is not known. If you have not written the approval link for the owner yet, ${showFirst(id, withCode)}`;
 
 const OTHER_NETWORKS = { moderato: "Tempo Moderato", devnet: "Solana devnet" };
 /**
@@ -1032,7 +1037,7 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
     const c = await cancelPurchase({ site: open.hosted.site, id: open.hosted.requestId, token: open.hosted.token, fetchImpl });
     // the cancel answer's evidence is kept too, whatever it says
     const kept = c?.view ? accumulate(open, c.view) : open;
-    if (!c?.cancelled) return refused(`the pending purchase ${open.id} ${c ? `could not be cancelled (${c.reason}): the owner may be signing it` : `could not be reached on ${open.hosted.site}`}, so it is not replaced`, `superstables budget wait --id ${open.id} --shown`, 3, { pending: open });
+    if (!c?.cancelled) return refused(`the pending purchase ${open.id} ${c ? `could not be cancelled (${c.reason}): the owner may be signing it` : `could not be reached on ${open.hosted.site}`}, so it is not replaced`, `superstables budget wait --id ${open.id} --shown`, 3, { pending: kept });
     // the old purchase must be finished as unpaid, on the evidence stored for it, before another is created
     const after = await settleOnce(kept, { waitS: 0, fetchImpl });
     const old = readApproval(open.id) ?? after.record ?? kept;

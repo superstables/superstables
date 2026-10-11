@@ -8,12 +8,13 @@
 //
 // npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 // Exit codes: 0 sent, 1 failed on chain or never landed, 2 bad flags, 3 refused (too little SOL, the owner rejected or the link
-// expired), 5 unknown (read the chain).
+// expired) or a mismatch (the transaction moved another amount), 5 unknown (read the chain).
 import { SystemProgram, Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { connection, loadOwner, explorerTx, parseUnits, parseStrict, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
-import { mismatchPage, mismatchReason, siteName } from "../site.mjs";
+import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort } from "./owner.ts";
+import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
@@ -55,7 +56,7 @@ if (ownerHas < amount + MIN_FEE_LAMPORTS) refuse(`the owner holds ${sol(ownerHas
 
 const ix = () => [SystemProgram.transfer({ fromPubkey: owner, toPubkey: agent, lamports: amount })];
 let sig: string;
-let finish: ((v: { ok: boolean; message: string; hash?: string }) => void) | null = null;
+let finish: ((v: OwnerVerdict) => void) | null = null;
 let delta: bigint | null = null;
 if (OWNER_KEY_FILE) {
   checkOwnerKeyFile(OWNER_KEY_FILE);
@@ -80,19 +81,20 @@ if (OWNER_KEY_FILE) {
   const c = local ? { ...(await confirmSent(conn, local.sent()!)), problems: [] as string[] } : await confirmHosted(conn, sig, owner.toBase58(), startSlot, ix(), outcome.siteFailed);
   console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
   if (c.status === "unknown") {
-    handle.finish({ ok: false, message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
+    handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
     await closeOwnerPage();
     process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget doctor --rail solana: read the agent's SOL" }));
   }
-  if (c.status !== "success") {
-    handle.finish({ ok: false, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The transfer is not confirmed. Check the command result and wallet activity before retrying.`, hash: sig });
+  if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) {
+    const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
+    handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The transfer is not confirmed. Check the command result and wallet activity before retrying.`, hash: sig });
     await closeOwnerPage();
-    process.exit(result(1, { state: "failed", tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget doctor --rail solana" }));
+    process.exit(result(1, { state: "failed", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget doctor --rail solana" }));
   }
   if (c.problems.length) {
     const reason = mismatchReason(c.problems, c.siteFailed, sig);
     console.log(`MISMATCH: ${reason}`);
-    handle.finish({ ok: false, message: mismatchPage(c.problems, c.siteFailed, sig, "transfer"), hash: sig });
+    handle.finish({ outcome: "unknown", message: mismatchPage(c.problems, c.siteFailed, sig, { what: "transfer", ended: c.status === "failed" ? "failed on chain" : undefined }), hash: sig });
     await closeOwnerPage();
     process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "check the owner's wallet activity, then superstables budget doctor --rail solana" }));
   }
@@ -106,12 +108,24 @@ for (let i = 0; i < 8 && after < agentHas + amount; i++) {
   after = BigInt(await retryRead(() => conn.getBalance(agent, "confirmed")));
 }
 console.log(`agent ${sol(after)} SOL${delta !== null ? ` (this transaction added ${sol(delta)})` : ""}. explorer: ${explorerTx(sig)}`);
-if ((delta !== null && delta !== amount) || after < agentHas + amount) {
-  const why = delta !== null && delta !== amount ? `the transaction moved ${sol(delta)} SOL to the agent, not ${sol(amount)}` : "the agent's balance did not go up by the amount";
-  finish?.({ ok: false, message: `The transfer was not confirmed as the planned step: ${why}.`, hash: sig });
+// The transaction's own balance change is the chain's answer: the planned amount is a confirmed transfer, whatever the
+// balance reads later (the agent may spend, or the node lag). Only without it does the balance decide, and then a short
+// one leaves the transfer unknown.
+if (delta !== null && delta !== amount) {
+  const why = `the transaction moved ${sol(delta)} SOL to the agent, not ${sol(amount)}`;
+  console.log(`MISMATCH: ${why}`);
+  finish?.({ outcome: "unknown", message: `The transfer was not confirmed as the planned step: ${why}.`, hash: sig });
   await closeOwnerPage();
-  process.exit(result(1, { state: "failed", tx: sig, reason: why, next: "superstables budget doctor --rail solana" }));
+  process.exit(result(3, { state: "mismatch", tx: sig, reason: why, next: "check the owner's wallet activity, then superstables budget doctor --rail solana" }));
 }
-finish?.({ ok: true, message: `Done. Your agent received ${sol(amount)} SOL. You can close this page.`, hash: sig });
+if (delta === null && after < agentHas + amount) {
+  const why = `the transaction landed, but the agent's balance reads ${sol(after)} SOL, not at least ${sol(agentHas + amount)} SOL (the node may lag behind, or the agent spent some meanwhile)`;
+  console.log(`UNKNOWN: ${why}`);
+  finish?.({ outcome: "unknown", message: "The command could not confirm this transfer on chain yet. Check your wallet's activity.", hash: sig });
+  await closeOwnerPage();
+  process.exit(result(5, { state: "unknown", tx: sig, reason: why, next: "superstables budget doctor --rail solana: read the agent's SOL" }));
+}
+if (after < agentHas + amount) console.log(`the agent's balance reads ${sol(after)} SOL now, less than ${sol(agentHas + amount)}: it spent some, or the node lags behind; the transaction itself moved ${sol(amount)} SOL`);
+finish?.({ outcome: "confirmed", message: `Done. Your agent received ${sol(amount)} SOL. You can close this page.`, hash: sig });
 await closeOwnerPage();
 process.exit(result(0, { state: "ok", tx: sig, sent: sol(amount), agentBefore: sol(agentHas), agentAfter: sol(after), next: "none" }));

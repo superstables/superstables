@@ -64,8 +64,9 @@ export type Journal = {
   cancelTx?: Hex;
   cancelNonce?: number;
   cancelStatus?: "success" | "reverted";
-  // stranded funds returned to the owner
+  // stranded funds returned to the owner: the latest return, and earlier ones that landed with part of the price
   returnTx?: Hex;
+  earlierReturnTxs?: Hex[];
   returnNonce?: number;
   returnStatus?: "success" | "reverted";
   returned?: string; // decimal USDC that went back to the owner
@@ -338,11 +339,11 @@ async function differentFinalNonceTransaction(j: Journal): Promise<Hex | undefin
 }
 
 /** A return is recorded as completed only after it is final on chain. */
-async function readReturn(j: Journal): Promise<{ found: boolean; status?: "success" | "reverted"; moved: bigint }> {
-  if (!j.returnTx) return { found: false, moved: 0n };
+/** One return transaction on chain: whether it is there, its status, and what it moved from the agent to the owner. */
+async function readOneReturn(j: Journal, hash: Hex): Promise<{ found: boolean; status?: "success" | "reverted"; moved: bigint }> {
   let receipt: Receipt;
-  try { receipt = await publicClient.getTransactionReceipt({ hash: j.returnTx }); } catch { return { found: false, moved: 0n }; }
-  if (!receipt || receipt.transactionHash.toLowerCase() !== j.returnTx.toLowerCase() || !(await canonicalReceipt(receipt))) return { found: false, moved: 0n };
+  try { receipt = await publicClient.getTransactionReceipt({ hash }); } catch { return { found: false, moved: 0n }; }
+  if (!receipt || receipt.transactionHash.toLowerCase() !== hash.toLowerCase() || !(await canonicalReceipt(receipt))) return { found: false, moved: 0n };
   let moved = 0n;
   if (receipt.status === "success") {
     for (const l of parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: "Transfer" })) {
@@ -350,6 +351,24 @@ async function readReturn(j: Journal): Promise<{ found: boolean; status?: "succe
     }
   }
   return { found: true, status: receipt.status, moved };
+}
+
+/**
+ * The returns of this op's price: `found` and `status` are the latest return's, `moved` what all of them moved together.
+ * `earlierUnread`: an earlier return can no longer be read, so the total is not known and nothing more is sent.
+ */
+async function readReturn(j: Journal): Promise<{ found: boolean; status?: "success" | "reverted"; moved: bigint; earlierUnread?: boolean }> {
+  if (!j.returnTx && !j.earlierReturnTxs?.length) return { found: false, moved: 0n };
+  let moved = 0n;
+  let earlierUnread = false;
+  for (const hash of j.earlierReturnTxs ?? []) {
+    const r = await readOneReturn(j, hash);
+    if (r.found && r.status === "success") moved += r.moved;
+    else earlierUnread = true;
+  }
+  // no latest one: the process stopped after it kept the earlier returns and before it sent the next
+  const latest = j.returnTx ? await readOneReturn(j, j.returnTx) : { found: true, status: "success" as const, moved: 0n };
+  return { ...latest, moved: moved + latest.moved, ...(earlierUnread ? { earlierUnread } : {}) };
 }
 
 export type Settlement =
@@ -448,11 +467,12 @@ export async function authDead(j: Journal, s: Settlement): Promise<boolean> {
 /**
  * Decide the state of an operation from the chain alone. Never sends anything.
  *   settled   the pull landed and this operation's own authorization was used by a successful transaction that paid the recipient
- *   failed    the pull reverted; or the pull landed and no settlement can ever happen: the authorization was never signed,
- *             was cancelled on chain, or is expired by the chain's own clock (`authDead`).
- *             `returned` says whether the pulled price is back with the owner; if not, `next` names the safe step
+ *   failed    the pull reverted; or the pull landed, no settlement can ever happen (the authorization was never signed,
+ *             was cancelled on chain, or is expired by the chain's own clock: `authDead`), and the pulled price is back with the
+ *             owner (`returned`)
  *   unknown   the authorization may still be settled by the seller (before validBefore), or the pull is not proven either way:
- *             a signed pull that is not on chain stays unknown until a DIFFERENT transaction used the agent's nonce at that position
+ *             a signed pull that is not on chain stays unknown until a DIFFERENT transaction used the agent's nonce at that position.
+ *             Also a pull that landed and can no longer settle while its price has not been returned: `next` names the safe step
  *   not_found nothing can land for this operation: no pull was ever signed, or the agent's nonce at the pull's position was used
  *             by a different transaction while this pull is not on chain
  */
@@ -553,8 +573,9 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
     const next = held > 0n
       ? `${usdc(held)} ${SYM} is in the agent key (on a gas-in-${SYM} chain that includes its gas reserve). Owner: "superstables budget recover --rail evm --chain ${CFG.key} --op ${j.op}" (stops the allowance first, cancels the authorization if it is still open, then returns the price to the owner). Never pay again for this op.`
       : `the agent key holds 0 ${SYM}; check the owner balance by hand. Never pay again for this op.`;
-    save("failed", why, next, "failed (pull landed, not settled, not returned)");
-    return { j, verdict: "failed" };
+    // the owner's price left their wallet and is not back: not a purchase that moved nothing, so not failed until returned
+    save("unknown", `${why}; the price ${j.pulled} ${SYM} pulled from the owner has not been returned`, next, "unknown (pull landed, not settled, not returned)");
+    return { j, verdict: "unknown" };
   }
   const until = new Date(j.auth!.validBefore * 1000).toISOString();
   save("unknown", `the pull landed and a signed payment may still be settled by the seller until ${until} (chain time)`, `run "${cmd("reconcile.ts", `--op ${j.op}`)}" again after ${until}, or the owner runs "superstables budget recover --rail evm --chain ${CFG.key} --op ${j.op}" to stop the allowance, cancel the authorization and return the price now. Never pay again for this op.`, "unknown (authorization still valid)");
@@ -633,21 +654,32 @@ export async function makeSafe(j: Journal, w: Wallet, o: { log?: (s: string) => 
     writeJournal(j);
     return (await reconcileJournal(j, { quiet: true })).j;
   }
-  if (j.returnTx) {
+  let returnedBefore = 0n;
+  if (j.returnTx || j.earlierReturnTxs?.length) {
     const prior = await readReturn(j);
-    if (!prior.found || prior.status === "success") {
+    // a return not on chain yet may still land, and an unreadable earlier one leaves the total unknown: never send twice
+    if (!prior.found || prior.earlierUnread || (prior.status === "success" && prior.moved >= pulled)) {
       j.notes.push(`makeSafe: an earlier return ${j.returnTx} is ${prior.found ? "on chain" : "not on chain yet"}; not sending another`);
       writeJournal(j);
       return (await reconcileJournal(j, { quiet: true })).j;
     }
+    returnedBefore = prior.moved;
+    if (prior.status === "success" && j.returnTx) {
+      // it landed with part of the price: keep it, and return the rest
+      j.earlierReturnTxs = [...(j.earlierReturnTxs ?? []), j.returnTx];
+      j.returnTx = undefined;
+      j.returnStatus = undefined;
+      writeJournal(j);
+    }
   }
-  log(`returning ${usdc(amount)} ${SYM} from the agent to the owner ${j.owner}`);
-  const data = encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [j.owner, amount] });
+  const rest = amount < pulled - returnedBefore ? amount : pulled - returnedBefore;
+  log(`returning ${usdc(rest)} ${SYM} from the agent to the owner ${j.owner}`);
+  const data = encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [j.owner, rest] });
   try {
     const sent = await sendJournaled(w, USDC, data, "return price to owner (agent)", ({ hash, nonce }) => { j.returnTx = hash; j.returnNonce = nonce; writeJournal(j); }, { op: "return" });
     j.returnStatus = "success";
     addFee(j, sent.feeWei);
-    j.returned = usdc(amount);
+    j.returned = usdc(returnedBefore + rest);
     writeJournal(j);
   } catch (e: any) {
     if (e?.txHash) { j.returnStatus = "reverted"; if (e.feeWei) addFee(j, e.feeWei); }
