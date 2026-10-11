@@ -61,11 +61,11 @@ export interface ReferralReporterOptions {
   /** Default: DEFAULT_SITE. */
   site?: string;
   fetch?: typeof fetch;
-  /** Retries after the first try, for network errors, 5xx and 429 only. Default 3. */
+  /** Retries after the first try, for network errors, 5xx and 429 only. Default 3, at most 10. */
   retries?: number;
-  /** The wait before the first retry; it doubles each time. Default 500 ms. */
+  /** The wait before the first retry; it doubles each time, up to 30 s. Default 500 ms. */
   backoffMs?: number;
-  /** How long one request may take. Default 10 s. */
+  /** How long one request may take. Default 10 s, at most 120 s. */
   timeoutMs?: number;
 }
 
@@ -92,12 +92,15 @@ export class ReferralReportError extends Error {
 
 const EVENT_TYPES: readonly string[] = ["acknowledged", "fulfilled", "failed", "refunded"];
 const MAX_BODY_BYTES = 8 * 1024;
-const MAX_RETRY_AFTER_MS = 30_000;
+/** The longest single wait between two tries, whatever the backoff or the site's Retry-After says. */
+const MAX_WAIT_MS = 30_000;
 const API_KEY = /^sssk_[A-Za-z0-9_-]+$/;
 
 /**
- * The Idempotency-Key for an event: hex SHA-256 of `type|referral id|purchase_ref|order_id|settlement transaction|refund
- * transaction`, an empty string for each part that is absent. The referral id is read from the token without checking it.
+ * The Idempotency-Key for an event: hex SHA-256 of `type|referral id|purchase_ref|order_id|settlement transaction|
+ * settlement status|settlement amount|refund transaction|refund amount`, an empty string for each part that is absent.
+ * The referral id is read from the token without checking it. The same event sent again has the same key; an update
+ * (a settlement that went from pending to settled, a second partial refund) has another.
  */
 export function idempotencyKey(event: ReferralEvent): string {
   const jti = decodeReferral(event.referral)?.payload.jti;
@@ -107,9 +110,17 @@ export function idempotencyKey(event: ReferralEvent): string {
     event.purchase_ref ?? "",
     event.order_id ?? "",
     event.settlement?.transaction ?? "",
+    event.settlement?.status ?? "",
+    event.settlement?.amount ?? "",
     event.refund?.transaction ?? "",
+    event.refund?.amount ?? "",
   ];
   return createHash("sha256").update(parts.join("|")).digest("hex");
+}
+
+/** A count or a duration as an integer from 0 to `max`; the default for anything that is not a finite number. */
+function bounded(value: number | undefined, fallback: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(0, Math.floor(value))) : fallback;
 }
 
 /** A reporter for one seller API key. Throws at once when the key or the site is not usable. */
@@ -119,9 +130,9 @@ export function createReferralReporter(options: ReferralReporterOptions): Referr
   }
   const endpoint = new URL("/api/v1/seller/events", siteUrl(options.site ?? DEFAULT_SITE)).toString();
   const doFetch = options.fetch ?? fetch;
-  const retries = Math.max(0, options.retries ?? 3);
-  const backoffMs = options.backoffMs ?? 500;
-  const timeoutMs = options.timeoutMs ?? 10_000;
+  const retries = bounded(options.retries, 3, 10);
+  const backoffMs = bounded(options.backoffMs, 500, MAX_WAIT_MS);
+  const timeoutMs = bounded(options.timeoutMs, 10_000, 120_000) || 10_000;
   const authorization = `Bearer ${options.apiKey}`;
 
   return {
@@ -147,7 +158,7 @@ export function createReferralReporter(options: ReferralReporterOptions): Referr
           res = await doFetch(endpoint, { method: "POST", headers, body, signal: AbortSignal.timeout(timeoutMs) });
         } catch {
           if (last) throw new ReferralReportError("network_error", "the seller events API could not be reached");
-          await pause(backoffMs * 2 ** attempt);
+          await pause(Math.min(backoffMs * 2 ** attempt, MAX_WAIT_MS));
           continue;
         }
 
@@ -166,8 +177,8 @@ export function createReferralReporter(options: ReferralReporterOptions): Referr
         if (!retryable || last) {
           throw new ReferralReportError(code, `the seller events API did not record the event (HTTP ${res.status}, ${code})`, res.status, retryAfter);
         }
-        const wait = backoffMs * 2 ** attempt;
-        await pause(retryAfter === undefined ? wait : Math.min(Math.max(wait, retryAfter * 1000), MAX_RETRY_AFTER_MS));
+        const wait = Math.min(backoffMs * 2 ** attempt, MAX_WAIT_MS);
+        await pause(retryAfter === undefined ? wait : Math.min(Math.max(wait, retryAfter * 1000), MAX_WAIT_MS));
       }
     },
   };

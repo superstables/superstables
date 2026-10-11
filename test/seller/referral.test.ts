@@ -2,12 +2,13 @@
 // expected site, and it has not expired; anything else is a rejection with a reason, never an exception. Reports are
 // retried only when the site could not answer, always with the same Idempotency-Key.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SITE,
   PURCHASE_REF_HEADER,
   REFERRAL_HEADER,
   ReferralReportError,
+  checkReferral,
   clearReferralKeysCache,
   createReferralReporter,
   fetchReferralKeys,
@@ -24,6 +25,7 @@ const API_KEY = `sssk_${"A".repeat(43)}`;
 
 const opened: { close(): Promise<void> }[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   clearReferralKeysCache();
   while (opened.length) await opened.pop()!.close();
 });
@@ -94,9 +96,24 @@ describe("verifyReferral", () => {
     expect(verifyReferral(signReferral(key, { iat: now, exp: now }).token, { keys, issuer: ISSUER, audience: AUDIENCE })).toEqual({ ok: false, reason: "malformed" });
   });
 
-  it("refuses another algorithm or type before looking for a key", () => {
+  it("refuses another algorithm or type, or critical header parameters, before looking for a key", () => {
     expect(verifyReferral(signReferral(key, {}, { alg: "none" }).token, { keys, issuer: ISSUER, audience: AUDIENCE })).toEqual({ ok: false, reason: "unsupported_header" });
     expect(verifyReferral(signReferral(key, {}, { typ: "JWT" }).token, { keys, issuer: ISSUER, audience: AUDIENCE })).toEqual({ ok: false, reason: "unsupported_header" });
+    expect(verifyReferral(signReferral(key, {}, { crit: ["b64"], b64: false }).token, { keys, issuer: ISSUER, audience: AUDIENCE })).toEqual({ ok: false, reason: "unsupported_header" });
+    expect(verifyReferral(signReferral(key, {}, { crit: [] }).token, { keys, issuer: ISSUER, audience: AUDIENCE })).toEqual({ ok: false, reason: "unsupported_header" });
+  });
+
+  it("refuses a skew or a time that is not a usable number, so an expired token never passes", () => {
+    const iat = Math.floor(Date.now() / 1000) - 3600;
+    const { token: expired } = signReferral(key, { iat, exp: iat + 600 });
+    const { token: valid } = signReferral(key);
+    for (const skewSeconds of [Number.NaN, -1, Number.POSITIVE_INFINITY, "60" as unknown as number]) {
+      expect(verifyReferral(expired, { keys, issuer: ISSUER, audience: AUDIENCE, skewSeconds })).toEqual({ ok: false, reason: "invalid_options" });
+      expect(verifyReferral(valid, { keys, issuer: ISSUER, audience: AUDIENCE, skewSeconds })).toEqual({ ok: false, reason: "invalid_options" });
+    }
+    expect(verifyReferral(expired, { keys, issuer: ISSUER, audience: AUDIENCE, now: new Date("not a date") })).toEqual({ ok: false, reason: "invalid_options" });
+    expect(verifyReferral(valid, { keys, issuer: ISSUER, audience: AUDIENCE, now: Date.now() as unknown as Date })).toEqual({ ok: false, reason: "invalid_options" });
+    expect(verifyReferral(valid, { keys, issuer: ISSUER, audience: AUDIENCE, skewSeconds: 0 }).ok).toBe(true);
   });
 
   it("never throws on malformed input", () => {
@@ -148,6 +165,41 @@ describe("fetchReferralKeys", () => {
   });
 });
 
+describe("checkReferral", () => {
+  it("verifies against the site's keys, and reads them again once for a key it does not have, at most once a minute", async () => {
+    const first = referralKey();
+    const rotated = referralKey();
+    const s = await site([first.jwk]);
+    const options = { site: s.url, audience: AUDIENCE };
+    expect((await checkReferral(signReferral(first, { iss: s.url }).token, options)).ok).toBe(true);
+    expect(s.keyReads).toBe(1);
+
+    // The site rotates its key. Within a minute of the last read, an unknown key id does not read the keys again.
+    s.keys = [first.jwk, rotated.jwk];
+    const token = signReferral(rotated, { iss: s.url }).token;
+    expect(await checkReferral(token, options)).toEqual({ ok: false, reason: "unknown_key" });
+    expect(s.keyReads).toBe(1);
+
+    // A minute later it does, once, and the token checks.
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
+    expect((await checkReferral(token, options)).ok).toBe(true);
+    expect(s.keyReads).toBe(2);
+    expect(await checkReferral(signReferral(referralKey(), { iss: s.url }).token, options)).toEqual({ ok: false, reason: "unknown_key" });
+    expect(s.keyReads).toBe(2);
+  });
+
+  it("answers keys_unavailable, and never throws, when the keys cannot be read", async () => {
+    const key = referralKey();
+    const down = await site([]);
+    const url = down.url;
+    await down.close();
+    opened.pop();
+    expect(await checkReferral(signReferral(key, { iss: url }).token, { site: url, audience: AUDIENCE })).toEqual({ ok: false, reason: "keys_unavailable" });
+    expect(await checkReferral("garbage", { site: "not a url", audience: AUDIENCE })).toEqual({ ok: false, reason: "keys_unavailable" });
+  });
+});
+
 describe("createReferralReporter", () => {
   const token = signReferral(referralKey()).token;
   const fulfilled: ReferralEvent = {
@@ -170,10 +222,15 @@ describe("createReferralReporter", () => {
     expect((await reporter.report({ ...fulfilled, occurred_at: "2026-10-11T23:00:00Z" })).replayed).toBe(true);
   });
 
-  it("derives the key from type, referral id, purchase ref, order id and the two transactions only", () => {
+  it("derives the key from type, referral id, purchase ref, order id, the transactions, the status and the amounts", () => {
     const base = idempotencyKey(fulfilled);
     expect(idempotencyKey({ ...fulfilled, occurred_at: "2020-01-01T00:00:00Z" })).toBe(base);
     expect(idempotencyKey({ ...fulfilled, settlement: { ...fulfilled.settlement!, payer: "0xother" } })).toBe(base);
+    // An update to the same purchase is not a replay: pending, then settled; a corrected amount; a second refund.
+    expect(idempotencyKey({ ...fulfilled, settlement: { ...fulfilled.settlement!, status: "pending" } })).not.toBe(base);
+    expect(idempotencyKey({ ...fulfilled, settlement: { ...fulfilled.settlement!, amount: "20000" } })).not.toBe(base);
+    const refunded: ReferralEvent = { type: "refunded", referral: token, purchase_ref: "att_1", refund: { amount: "5000" } };
+    expect(idempotencyKey({ ...refunded, refund: { amount: "10000" } })).not.toBe(idempotencyKey(refunded));
     expect(idempotencyKey({ ...fulfilled, type: "failed" })).not.toBe(base);
     expect(idempotencyKey({ ...fulfilled, purchase_ref: "att_2" })).not.toBe(base);
     expect(idempotencyKey({ ...fulfilled, order_id: "o-1" })).not.toBe(base);
@@ -233,6 +290,37 @@ describe("createReferralReporter", () => {
     expect(calls).toBe(1);
     expect(error.message).not.toContain(API_KEY);
     expect(error.message).not.toContain(token);
+  });
+
+  it("reports pending and then settled for one transaction as two events, not a replay", async () => {
+    const s = await site([]);
+    const reporter = createReferralReporter({ apiKey: API_KEY, site: s.url });
+    const pending = await reporter.report({ ...fulfilled, settlement: { ...fulfilled.settlement!, status: "pending" } });
+    const settled = await reporter.report(fulfilled);
+    expect([pending.replayed, settled.replayed]).toEqual([false, false]);
+    expect(s.events[0]!.headers["idempotency-key"]).not.toBe(s.events[1]!.headers["idempotency-key"]);
+  });
+
+  it("takes retries and backoff as non-negative whole numbers, and the defaults for anything else", async () => {
+    const calls = async (options: { retries?: number; backoffMs?: number }) => {
+      let n = 0;
+      const reporter = createReferralReporter({
+        apiKey: API_KEY,
+        backoffMs: 0,
+        ...options,
+        fetch: async () => {
+          n += 1;
+          return new Response("{}", { status: 503 });
+        },
+      });
+      await reporter.report(fulfilled).catch(() => undefined);
+      return n;
+    };
+    expect(await calls({ retries: -1 })).toBe(1);
+    expect(await calls({ retries: 1.9 })).toBe(2);
+    expect(await calls({ retries: Number.NaN })).toBe(4);
+    expect(await calls({ retries: Number.POSITIVE_INFINITY })).toBe(4);
+    expect(await calls({ retries: 1, backoffMs: -50 })).toBe(2);
   });
 
   it("refuses an API key that is not one, an http site, and an event over 8 KB", async () => {

@@ -53,6 +53,8 @@ export interface ReceivedEvent {
 }
 
 export interface FakeReferralSite extends TestServer {
+  /** The key set it publishes; replace it to rotate keys. */
+  keys: ReferralJwk[];
   events: ReceivedEvent[];
   keyReads: number;
   /** Statuses to answer the next event posts with, in order, before answering 200. */
@@ -61,11 +63,11 @@ export interface FakeReferralSite extends TestServer {
 
 /** A site that publishes `keys` and answers seller events the way the API does. */
 export async function startFakeReferralSite(keys: ReferralJwk[]): Promise<FakeReferralSite> {
-  const state = { events: [] as ReceivedEvent[], keyReads: 0, failNext: [] as number[] };
+  const state = { keys, events: [] as ReceivedEvent[], keyReads: 0, failNext: [] as number[] };
   const server = await startServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/.well-known/superstables-referral-keys.json") {
       state.keyReads += 1;
-      sendJson(res, 200, { keys });
+      sendJson(res, 200, { keys: state.keys });
       return;
     }
     if (req.method === "POST" && req.url === "/api/v1/seller/events") {

@@ -72,7 +72,9 @@ export type ReferralRejection =
   | "wrong_audience"
   | "expired"
   | "not_yet_valid"
-  | "no_audience";
+  | "no_audience"
+  | "invalid_options"
+  | "keys_unavailable";
 
 export type ReferralVerification = { ok: true; claims: ReferralClaims } | { ok: false; reason: ReferralRejection };
 
@@ -85,9 +87,9 @@ export interface VerifyReferralOptions {
   audience?: string;
   /** This service's listing id, checked against `sub`. Either this or `audience` must match. */
   listingId?: string;
-  /** The time of the request. Default: now. */
+  /** The time of the request. Default: now. An invalid Date is refused with `invalid_options`. */
   now?: Date;
-  /** Clock skew allowed either side of `iat` and `exp`. Default 60 seconds. */
+  /** Clock skew allowed either side of `iat` and `exp`, a finite number of seconds >= 0. Default 60. */
   skewSeconds?: number;
 }
 
@@ -161,13 +163,19 @@ const shortString = (value: unknown): value is string => typeof value === "strin
  */
 export function verifyReferral(token: unknown, options: VerifyReferralOptions): ReferralVerification {
   const skew = options.skewSeconds ?? 60;
-  const now = Math.floor((options.now ?? new Date()).getTime() / 1000);
+  const at = options.now ?? new Date();
+  // A skew or a time that is not a number would make every comparison below false, and an expired token pass.
+  if (typeof skew !== "number" || !Number.isFinite(skew) || skew < 0 || !(at instanceof Date) || !Number.isFinite(at.getTime())) {
+    return { ok: false, reason: "invalid_options" };
+  }
+  const now = Math.floor(at.getTime() / 1000);
   if (options.audience === undefined && options.listingId === undefined) return { ok: false, reason: "no_audience" };
 
   const decoded = decodeReferral(token);
   if (!decoded) return { ok: false, reason: "malformed" };
   const { header, payload } = decoded;
-  if (header.alg !== "EdDSA" || header.typ !== REFERRAL_TYPE || typeof header.kid !== "string") {
+  // `crit` names header parameters a verifier must understand; this one understands none beyond these.
+  if (header.alg !== "EdDSA" || header.typ !== REFERRAL_TYPE || typeof header.kid !== "string" || "crit" in header) {
     return { ok: false, reason: "unsupported_header" };
   }
 
@@ -228,6 +236,8 @@ export function readReferral(headers: HeaderSource): { token: string; purchaseRe
 
 const KEYS_PATH = "/.well-known/superstables-referral-keys.json";
 const KEYS_CACHE_MS = 10 * 60_000;
+/** A refresh asked for (a token named a key the cached set does not have) reads the keys again at most this often. */
+const KEYS_REFRESH_MS = 60_000;
 const KEYS_TIMEOUT_MS = 8_000;
 const keyCache = new Map<string, { at: number; keys: Promise<ReferralKeySet> }>();
 
@@ -250,13 +260,15 @@ export function siteUrl(site: string): URL {
 }
 
 /**
- * The site's published referral keys, read once per ten minutes per site. Throws when the keys cannot be read; keys
- * that are not Ed25519 public keys are left out.
+ * The site's published referral keys, read once per ten minutes per site. `refresh` reads them again sooner, for a
+ * token signed by a key the cached set does not have (the site rotated its key), but at most once a minute per site.
+ * Throws when the keys cannot be read; keys that are not Ed25519 public keys are left out.
  */
-export function fetchReferralKeys(site: string = DEFAULT_SITE, options: { fetch?: typeof fetch } = {}): Promise<ReferralKeySet> {
+export function fetchReferralKeys(site: string = DEFAULT_SITE, options: { fetch?: typeof fetch; refresh?: boolean } = {}): Promise<ReferralKeySet> {
   const url = new URL(KEYS_PATH, siteUrl(site)).toString();
   const cached = keyCache.get(url);
-  if (cached && Date.now() - cached.at < KEYS_CACHE_MS) return cached.keys;
+  const age = cached ? Date.now() - cached.at : Infinity;
+  if (cached && age < (options.refresh ? KEYS_REFRESH_MS : KEYS_CACHE_MS)) return cached.keys;
   const doFetch = options.fetch ?? fetch;
   const keys = (async () => {
     const res = await doFetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(KEYS_TIMEOUT_MS) });
@@ -276,4 +288,28 @@ export function fetchReferralKeys(site: string = DEFAULT_SITE, options: { fetch?
 /** Forget every cached key set. */
 export function clearReferralKeysCache(): void {
   keyCache.clear();
+}
+
+export interface CheckReferralOptions extends Omit<VerifyReferralOptions, "keys" | "issuer"> {
+  /** The site that signs the tokens and publishes the keys. Default DEFAULT_SITE; it is also the expected issuer. */
+  site?: string;
+  fetch?: typeof fetch;
+}
+
+/**
+ * verifyReferral with the site's published keys: reads them (cached), reads them once more when the token names a key
+ * the cached set does not have (at most once a minute per site), and answers `keys_unavailable` when the keys cannot
+ * be read. Never throws, so a site outage never fails the request being checked.
+ */
+export async function checkReferral(token: unknown, options: CheckReferralOptions = {}): Promise<ReferralVerification> {
+  const { site = DEFAULT_SITE, fetch: doFetch, ...rest } = options;
+  try {
+    const keys = await fetchReferralKeys(site, doFetch ? { fetch: doFetch } : {});
+    const first = verifyReferral(token, { ...rest, keys, issuer: site });
+    if (first.ok || first.reason !== "unknown_key") return first;
+    const fresh = await fetchReferralKeys(site, { ...(doFetch ? { fetch: doFetch } : {}), refresh: true });
+    return fresh === keys ? first : verifyReferral(token, { ...rest, keys: fresh, issuer: site });
+  } catch {
+    return { ok: false, reason: "keys_unavailable" };
+  }
 }

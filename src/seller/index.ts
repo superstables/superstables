@@ -7,6 +7,7 @@ export {
   PURCHASE_REF_HEADER,
   REFERRAL_HEADER,
   REFERRAL_TYPE,
+  checkReferral,
   clearReferralKeysCache,
   decodeReferral,
   fetchReferralKeys,
@@ -16,6 +17,7 @@ export {
   verifyReferral,
 } from "./referral.js";
 export type {
+  CheckReferralOptions,
   HeaderSource,
   ReferralClaims,
   ReferralJwk,
