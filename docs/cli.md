@@ -579,6 +579,14 @@ Options:
 The seller side of the demo. Point discovery at it with
 SUPERSTABLES_DEMO_SERVICE_URL=http://127.0.0.1:4402/v1/market.
 
+Seller referrals, off unless set (testnet only): SUPERSTABLES_CLAIM_CHALLENGE=<ssc_...> serves
+/.well-known/superstables.txt and adds a Superstables-Claim header to every 402, so superstables.com
+can confirm this host is yours. SUPERSTABLES_SELLER_KEY=<sssk_...> verifies the
+Superstables-Referral header on paid requests and reports each referred purchase to superstables.com
+as fulfilled or failed, after the buyer has its answer. SUPERSTABLES_SELLER_SITE names another site;
+SUPERSTABLES_SELLER_LISTING checks the token against this listing's id instead of the origin the
+request was made to.
+
 Moves money: it receives test USDC; it never pays.
 Run by: a developer who wants to see the seller side.
 Example:

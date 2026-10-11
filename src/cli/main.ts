@@ -37,7 +37,7 @@ import type { Signer } from "../core/signer/types.js";
 import { walletStatus } from "../core/signer/wallet.js";
 import type { Attempt, Quote, Receipt, ServiceListing, WalletStatus } from "../core/types.js";
 import { clientVersion } from "../core/version.js";
-import { startDemoService } from "../demo-service/server.js";
+import { sellerOptionsFromEnvironment, startDemoService } from "../demo-service/server.js";
 import { policySummary, startWallet } from "../wallet/daemon.js";
 import { initKey, keyExists, keyPath, loadAccount, readSecretFile } from "../wallet/keystore.js";
 import { SellerTextError, UNTRUSTED_LABEL, untrustedText } from "../core/text.js";
@@ -879,13 +879,19 @@ explain(
         throwaway = true;
       }
       if (!isAddress(payTo)) throw badInput(`"${payTo}" is not an address; --pay-to takes a 0x-prefixed address.`);
+      let seller: ReturnType<typeof sellerOptionsFromEnvironment>;
+      try {
+        seller = sellerOptionsFromEnvironment();
+      } catch (err) {
+        throw badInput(`${messageOf(err)}.`);
+      }
       if (throwaway) {
         console.log(`No recipient was given, so this run pays to a throwaway address: ${payTo}`);
         console.log("Nobody holds its key, so any test USDC paid to it is gone for good.");
         console.log("Set SUPERSTABLES_DEMO_PAY_TO or pass --pay-to to keep what the service earns.");
         console.log("");
       }
-      const service = await startDemoService({ port: options.port, payTo, priceDecimal: options.price });
+      const service = await startDemoService({ port: options.port, payTo, priceDecimal: options.price, ...seller });
       console.log("Leave this running. Press Ctrl-C to stop.");
       await untilStopped(() => service.close());
     }),
@@ -893,6 +899,12 @@ explain(
     notes: [
       "The seller side of the demo. Point discovery at it with " +
         `SUPERSTABLES_DEMO_SERVICE_URL=http://127.0.0.1:${DEFAULT_DEMO_SERVICE_PORT}/v1/market.`,
+      "Seller referrals, off unless set (testnet only): SUPERSTABLES_CLAIM_CHALLENGE=<ssc_...> serves " +
+        "/.well-known/superstables.txt and adds a Superstables-Claim header to every 402, so superstables.com can " +
+        "confirm this host is yours. SUPERSTABLES_SELLER_KEY=<sssk_...> verifies the Superstables-Referral header on " +
+        "paid requests and reports each referred purchase to superstables.com as fulfilled or failed, after the buyer " +
+        "has its answer. SUPERSTABLES_SELLER_SITE names another site; SUPERSTABLES_SELLER_LISTING checks the token " +
+        "against this listing's id instead of the origin the request was made to.",
     ],
     money: "it receives test USDC; it never pays.",
     who: "a developer who wants to see the seller side.",
