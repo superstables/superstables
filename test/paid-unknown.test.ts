@@ -948,7 +948,7 @@ const ROWS: Row[] = [
     },
     expect: [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
-      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"c8".repeat(32)}`, message: "The transaction was not accepted as the planned step: it approved the spender 0x5555555555555555555555555555555555555555, not 0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A. The budget was not recorded. superstables budget revoke cannot end this approval. Send from your wallet: approve(0x5555555555555555555555555555555555555555, 0) on token 0x036CbD53842c5426634e7929541eC2318f3dCF7e, which this transaction approved for 1 USDC." } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"c8".repeat(32)}`, message: "The transaction was not accepted as the planned step: its call approves the spender 0x5555555555555555555555555555555555555555, not 0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A. The budget was not recorded. superstables budget revoke cannot end this approval. Send from your wallet: approve(0x5555555555555555555555555555555555555555, 0) on token 0x036CbD53842c5426634e7929541eC2318f3dCF7e, which this transaction approved for 1 USDC." } },
       { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, tx: { grant: `0x${"c8".repeat(32)}` }, next: "superstables budget revoke --rail evm cannot end this: it sets only the agent's USDC allowance to 0. The owner sends from their own wallet, by hand: approve(0x5555555555555555555555555555555555555555, 0) on token 0x036CbD53842c5426634e7929541eC2318f3dCF7e, which this transaction approved for 1 USDC. Grant again only if the owner asks" } },
     ],
     timeout: 150_000,
@@ -1036,7 +1036,7 @@ const ROWS: Row[] = [
     timeout: 150_000,
   },
   {
-    path: "budget grant on this machine: the owner's transaction reverted on chain, and it approved another spender than the agent",
+    path: "budget grant on this machine: the owner's transaction reverted on chain, and its call approves another spender than the agent",
     covers: [],
     run: async () => {
       const GRANT: Hex = `0x${"d4".repeat(32)}`;
@@ -1048,8 +1048,8 @@ const ROWS: Row[] = [
     },
     expect: [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
-      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"d4".repeat(32)}`, message: "The transaction reverted on chain, but it is not the one this page asked for: it approved the spender 0x5555555555555555555555555555555555555555, not 0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A. The budget was not recorded. It shows no approval this command can read: check it in your wallet's activity and set whatever it approved to 0 from your wallet." } },
-      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, tx: { grant: `0x${"d4".repeat(32)}` }, reason: "the transaction was not accepted as the planned step: it approved the spender 0x5555555555555555555555555555555555555555, not 0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A; it reverted on chain. The budget was not recorded." } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"d4".repeat(32)}`, message: "The transaction reverted on chain, but it is not the one this page asked for: its call approves the spender 0x5555555555555555555555555555555555555555, not 0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A. The budget was not recorded. It shows no approval this command can read: check it in your wallet's activity and, if it approved anything, set that approval to 0 from your wallet." } },
+      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, tx: { grant: `0x${"d4".repeat(32)}` }, reason: "the transaction was not accepted as the planned step: its call approves the spender 0x5555555555555555555555555555555555555555, not 0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A; it reverted on chain. The budget was not recorded." } },
     ],
     timeout: 150_000,
   },
