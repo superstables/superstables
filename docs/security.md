@@ -510,7 +510,7 @@ What a compatible site must serve, with both proofs spelled out:
 ## What you install
 
 For 0.3.0, use the agent skill zip built from that released commit, once it is available on
-[GitHub Releases](https://github.com/superstables/superstables-client/releases);
+[GitHub Releases](https://github.com/superstables/superstables/releases);
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with
