@@ -7,6 +7,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+Once a payment may have moved, the client reports it as unknown, never as unpaid:
+
+- `superstables receipts` with no receipts lists the attempts that may have paid, or says no receipt is recorded. It said no payment had been made, even with `--limit 0` after a settled payment.
+- `superstables budget wait` answers `unknown` (exit 5, `final: false`) for an open owner approval once the owner's wallet was asked to send. It answered `waiting_owner` (exit 0) and said the owner had not finished approving.
+- `superstables budget wait` without `--shown` reads an owner approval whose wallet was asked, and a single purchase on superstables.com that showed payment evidence. It answered that the purchase was not approved or paid yet. When this machine has not seen the owner act, `wait` without `--shown` still refuses (exit 2, `show_owner_first`), and now says it read nothing, so whether the owner approved or paid is not known.
+- `superstables budget buy` with the `--op` of a purchase that is still `submitted` or `unknown` answers `unknown` (exit 5) and points to `reconcile`, also when the agent key file is missing or unsafe. It answered `refused_precheck` (exit 3), and with a missing or unsafe key file also `paid: false`.
+- `superstables budget buy` with an `--op` that another buy or reconcile is working on answers `unknown` (exit 5), since that process may be paying. It answered `refused_precheck` (exit 3).
+- An owner command (`grant`, `fund-agent`, `revoke`, `setup` with `--grant` or `--fund`) whose transaction landed on chain but did not match the plan, such as another amount or recipient, answers `unknown` (exit 5) with the reason and the next step to revoke. It answered `refused_precheck` (exit 3), the answer for an approval that sent nothing.
+- The owner approval page on this machine says the outcome is unknown, and its state reports `unknown` with `sending: true`, once the owner's wallet was asked to send and the approval was then rejected, expired, or could not be confirmed on chain. It reported `rejected`, `expired` or `failed`, and the page showed an expired link or a failure.
+- When the site answers the cancel of `superstables budget buy-once --replace` with the payment under way, the open purchase is reported as `pending.state: "unknown"`. It was `waiting_owner`, read before the cancel.
+- On EVM chains, a purchase whose pull landed and can no longer settle stays `unknown` (exit 5) until the pulled price is back with the owner. It was `failed` with `paid: false`. `superstables budget recover` returns the price, and `superstables budget reconcile` names it as the next step.
+- On EVM chains, `superstables budget recover` returns what is left of a price after a partial return. It sent nothing more, so the purchase stayed `unknown` however often it ran.
+- Once an owner command's wallet was asked to send, or the command began to broadcast with an owner key file, `failed` (exit 1) needs chain proof that the transaction did not take effect, named in the new `proof` field: `reverted`, or on Solana `blockhash_expired`. Any other end is now `unknown` (exit 5), including a script that stopped with an error, a chain read that failed or disagreed with the plan after the transaction landed, and a later step of `setup` or `recover` refused after an earlier one sent. These answered `failed` (exit 1) or `refused_precheck` (exit 3). A finished approval that `superstables budget wait` reads back is answered the same way.
+- On Solana, `superstables budget fund-agent` reports a transfer whose transaction moved the planned SOL as done, even when the agent's balance reads lower afterwards because it spent some or the node lags behind. It answered `failed` (exit 1). With an owner key file, where the command reads only the balance, a balance that does not show the transfer is `unknown` (exit 5).
+- The owner approval page on this machine shows the outcome as unknown when the command stops with an error after the page reported the transaction, or when the chain still shows a budget after a revoke the wallet sent. The page stopped answering, or showed a failure.
+- `superstables budget wait` for a `recover` whose background process stopped answers `unknown` (exit 5) when the owner's wallet was asked on its first approval page. It answered `refused_precheck` (exit 3) when the second page had not asked the wallet yet.
+- A background `superstables budget recover` that sent the agent's own revoke before it needed the owner answers `unknown` (exit 5), and so does every later `superstables budget wait`, when its process stops without a result or opens no approval page in time. It answered `failed` (exit 1), or `refused_precheck` (exit 3) with no submission recorded. When it then opens the owner's page, it answers `unknown` (exit 5, `final: false`) with the approval link, not `waiting_owner`.
+- `superstables budget setup` on superstables.com with `--grant` and `--fund` whose gas landed and whose grant then reverted answers `unknown` (exit 5), with a reason that starts with `partly_done`. It answered `failed` (exit 1). Each entry in `steps` keeps its own state.
+- An owner command whose transaction reverted on chain, but was not the planned call from the owner (another sender, recipient, call or amount), answers `unknown` (exit 5). It answered `failed` (exit 1) with `proof: "reverted"`.
+- On Solana, a transaction the owner's page sent counts as expired only when the chain reports no status for it from a node that has reached the block height that shows its blockhash expired. A node that lagged behind could make a transaction that later landed read as `failed` (exit 1).
+- An owner command started in the background answers `unknown` (exit 5) when its background process opened no approval page and could not be stopped, because that process may still send a transaction. It answered `failed` (exit 1).
+- When the owner's transaction is not the planned call, the owner approval page on this machine and the command's `reason` name what differs, such as the spender or the amount its call approves, without nested parentheses. When that transaction reverted or failed on chain, they say so. They said only that the wallet changed the transaction data, with the spending cap as an example.
+
+An owner's sign-in on the approval page, which signs a message and sends nothing, no longer counts as the wallet being asked to send. For a `setup` whose page log recorded the sign-in, `superstables budget wait` answered `unknown` (exit 5) and said the owner's wallet was asked to send.
+
 ## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana
 
 Testnet only.

@@ -224,17 +224,27 @@ export function siteFailedWords(site, reasonCode) {
  * site's verdict (`siteFailed`) among them when there is one. The verdict alone never claims the chain shows something
  * else: it is said in its own words, with the transaction.
  */
+/**
+ * Whether the transaction on chain differs from the request itself (another sender, call, amount, block), beyond the site
+ * reporting it failed. Only a transaction that matches the request proves anything about it, a revert included.
+ */
+export const differsFromRequest = (problems, siteFailed) => problems.some((p) => p !== siteFailed);
+
 export function mismatchReason(problems, siteFailed, hash) {
   const chain = problems.filter((p) => p !== siteFailed);
   if (!chain.length && siteFailed) return `${siteFailed} (transaction ${hash})`;
   return `the transaction was not accepted as the planned step: ${problems.join("; ")}`;
 }
 
-/** The same for the owner's page, a sentence: "The transaction was not accepted as the planned step (...)." */
-export function mismatchPage(problems, siteFailed, hash, what = "transaction") {
+/**
+ * The same for the owner's page, a sentence: "The transaction was not accepted as the planned step: ...". `ended`: how the
+ * chain shows it ended, when that is not success ("reverted on chain"), said first.
+ */
+export function mismatchPage(problems, siteFailed, hash, { what = "transaction", ended } = {}) {
   const chain = problems.filter((p) => p !== siteFailed);
   if (!chain.length && siteFailed) return `${siteFailed} (transaction ${hash}).`;
-  return what === "transfer" ? `The transfer was not confirmed as the planned step: ${problems.join("; ")}.` : `The transaction was not accepted as the planned step (${problems.join("; ")}).`;
+  if (ended) return `The ${what} ${ended}, but it is not the one this page asked for: ${problems.join("; ")}.`;
+  return what === "transfer" ? `The transfer was not confirmed as the planned step: ${problems.join("; ")}.` : `The transaction was not accepted as the planned step: ${problems.join("; ")}.`;
 }
 
 export const isSiteRequestId = (id) => typeof id === "string" && /^b[la]_[A-Za-z0-9_-]{4,128}$/.test(id);

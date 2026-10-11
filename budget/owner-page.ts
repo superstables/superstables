@@ -21,10 +21,12 @@ import {
   type OwnerActionOutcome,
   type OwnerChain,
   type OwnerTerms,
+  type OwnerVerdict,
   type SolanaTransactionPort,
 } from "../src/core/signer/owner-approval-server.ts";
 import { ownerApprovalsLog } from "./paths.mjs";
 import { HOLDER_ENV, recordHosted } from "./approvals.mjs";
+import { sendBegan } from "./proof.mjs";
 import { HOSTED_KIND, HostedApprovals, HostedRefusal, type HostedBundleOutcome, type HostedSettings, type HostedStep, type PriorLink } from "./hosted.ts";
 import { isOtherSite, siteName, siteOrigin } from "./site.mjs";
 
@@ -106,6 +108,24 @@ export async function closeOwnerPage(lingerMs = 4000) {
   server = undefined;
 }
 
+// A rail that stops on an error after a page reported its transaction ends that page as unknown, in the page's own words
+// for it, and keeps it up a moment so the owner sees that, then exits 1 (the dispatcher then answers unknown too).
+const reported = new Set<{ finish(v: OwnerVerdict): void }>();
+let stopping = false;
+/** For a rail's last error handler, after it printed the error: end every reported page as unknown, close the pages, exit 1. */
+export async function exitAfterError(): Promise<never> {
+  if (!stopping && reported.size > 0) {
+    stopping = true;
+    for (const h of reported) h.finish({ outcome: "unknown", message: "" });
+    await closeOwnerPage().catch(() => {});
+  }
+  process.exit(1);
+}
+const crashed = (err: unknown) => {
+  process.stderr.write(`${(err as Error)?.stack ?? String(err)}\n`);
+  void exitAfterError();
+};
+
 function openBrowser(url: string) {
   const [cmd, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
   try {
@@ -136,6 +156,20 @@ export interface OwnerRail {
 }
 
 export type Unapproved = Extract<OwnerActionOutcome, { status: "rejected" | "expired" }>;
+
+/** A transaction request's outcome; once it reports a transaction, a crash ends its page as unknown (exitAfterError). */
+async function settledOf<T extends { finish(v: OwnerVerdict): void; settled: Promise<OwnerActionOutcome> }>(handle: T) {
+  const outcome = await handle.settled;
+  if (outcome.status === "sent") {
+    // until a transaction is reported, a crash ends as it always did
+    if (reported.size === 0) {
+      process.prependListener("uncaughtException", crashed);
+      process.prependListener("unhandledRejection", crashed);
+    }
+    reported.add(handle);
+  }
+  return { handle, outcome };
+}
 
 /** The page helpers bound to one rail and chain. */
 export function ownerPageFor(rail: OwnerRail) {
@@ -195,7 +229,7 @@ export function ownerPageFor(rail: OwnerRail) {
      * setup --new-owner replaces, shown on the page. Hosted: the owner adds this agent to their account instead.
      * `then` (hosted only): wallet steps on the same page after the link; `bundle` is what became of the link and each step.
      */
-    async askConnect(action: string, terms: OwnerTerms, signIn: string, replacing?: string, then?: HostedStep[], linkOpts: { prior?: PriorLink | null; newOwner?: boolean } = {}): Promise<{ handle: { finish(v: { ok: boolean; message: string; hash?: string }): void }; outcome: OwnerActionOutcome; bundle?: HostedBundleOutcome; link?: { id: string; code: string } }> {
+    async askConnect(action: string, terms: OwnerTerms, signIn: string, replacing?: string, then?: HostedStep[], linkOpts: { prior?: PriorLink | null; newOwner?: boolean } = {}): Promise<{ handle: { finish(v: OwnerVerdict): void }; outcome: OwnerActionOutcome; bundle?: HostedBundleOutcome; link?: { id: string; code: string } }> {
       const hosted = hostedSettings(action, "connect");
       if (then?.length && !hosted) throw new Error("wallet steps after adding the agent need hosted approvals");
       if (hosted) {
@@ -222,12 +256,12 @@ export function ownerPageFor(rail: OwnerRail) {
       if (hosted) {
         const handle = await hostedFor(hosted).request({ kind: "evm-transaction", action, terms, account: owner, transaction, timeoutMs: OWNER_TIMEOUT_MS }).catch((e) => refusedBySite(action, e));
         announce(action, handle, terms, hosted.site);
-        return { handle, outcome: await handle.settled };
+        return settledOf(handle);
       }
       const s = await page();
       const handle = s.request({ kind: "evm-transaction", chain: rail.chain, terms, account: owner, timeoutMs: OWNER_TIMEOUT_MS, transaction });
       announce(action, handle, terms);
-      return { handle, outcome: await handle.settled };
+      return settledOf(handle);
     },
 
     /**
@@ -239,7 +273,7 @@ export function ownerPageFor(rail: OwnerRail) {
       if (!hosted) throw new Error(`${action} on solana asks through the site only when the chain is hosted`);
       const handle = await hostedFor(hosted).request({ kind: "solana-intent", action, terms, account: owner, solana, timeoutMs: OWNER_TIMEOUT_MS }).catch((e) => refusedBySite(action, e));
       announce(action, handle, terms, hosted.site);
-      return { handle, outcome: await handle.settled };
+      return settledOf(handle);
     },
 
     /** Solana: the owner's wallet signs what `port` builds when the owner presses Approve; `port` checks and sends it. */
@@ -247,7 +281,7 @@ export function ownerPageFor(rail: OwnerRail) {
       const s = await page();
       const handle = s.request({ kind: "solana-transaction", chain: rail.chain, terms, account: owner, solana: port, timeoutMs: OWNER_TIMEOUT_MS });
       announce(action, handle, terms);
-      return { handle, outcome: await handle.settled };
+      return settledOf(handle);
     },
 
     /**
@@ -268,7 +302,8 @@ export function ownerPageFor(rail: OwnerRail) {
       // the wallet was never asked to send: this approval sent nothing. An expired link is not a decision, so asking again is safe.
       const expired = outcome.status === "expired";
       const reason = expired && !/expired/.test(outcome.reason) ? `the approval link expired: ${outcome.reason}` : outcome.reason;
-      const nothing = earlier ? "this step sent nothing" : "nothing was sent";
+      // this page sent nothing, but this command may have broadcast a transaction of its own before it (recover's revoke)
+      const nothing = earlier || sendBegan() ? "this step sent nothing" : "nothing was sent";
       const next = expired
         ? `${before}${nothing}: the approval link expired before the owner approved. To try again, run the same command again for a new one${command === "setup" ? " (setup reuses the agent key it created)" : ""}`
         : `${before}${nothing}. Request a new approval only if the owner asks`;

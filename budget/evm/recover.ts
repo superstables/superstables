@@ -139,7 +139,7 @@ try {
   const reason = `recover stopped at the gas step: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300);
   console.log(`${reverted ? "FAILED" : "UNKNOWN"}: ${reason}`);
   const doctor = `superstables budget doctor --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}`;
-  process.exit(emit("recover", reverted ? 1 : 5, { state: reverted ? "failed" : "unknown", op: opId ?? null, ...revoked, gasTx: reverted ?? gasTx, reason, next: `${revokedWords}. ${doctor}: read the agent's gas and the allowance, then run recover again` }));
+  process.exit(emit("recover", reverted ? 1 : 5, { state: reverted ? "failed" : "unknown", ...(reverted ? { proof: "reverted" } : {}), op: opId ?? null, ...revoked, gasTx: reverted ?? gasTx, reason, next: `${revokedWords}. ${doctor}: read the agent's gas and the allowance, then run recover again` }));
 }
 
 // 2. CANCEL / RETURN journaled pulls

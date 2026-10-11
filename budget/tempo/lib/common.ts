@@ -14,6 +14,7 @@ import type { Address, Hex } from 'viem'
 import { CHAIN_ID as CHAIN_ID_, RPC_URL as RPC_URL_, TOKEN_DECIMALS as TOKEN_DECIMALS_, TOKEN_LABEL as TOKEN_LABEL_ } from './constants.mjs'
 import { agentKeyFile, ownerKeyFile, publicFile } from '../../paths.mjs'
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from '../../secret-file.mjs'
+import { markSend } from '../../proof.mjs'
 
 export const RPC_URL: string = RPC_URL_
 export const EXPLORER_BASE = 'https://explore.testnet.tempo.xyz'
@@ -212,7 +213,8 @@ export function makeClient(account?: ReturnType<typeof ownerAccount> | ReturnTyp
   return createClient({
     account,
     testnet: true,
-    transport: http(RPC_URL),
+    // a broadcast prints SENDING before it leaves (../../proof.mjs)
+    transport: http(RPC_URL, { onFetchRequest: (_request, init) => markSend(init.body) }),
     feeToken: TOKEN_ADDRESS,
   })
 }

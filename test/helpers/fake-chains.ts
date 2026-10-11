@@ -2,7 +2,7 @@
 // rail scripts to read what the owner's wallet sent (a transaction, its receipt, the keychain or the token account) after the
 // site reports it. A test changes the chain by calling the helpers below, as the owner's wallet would. No network.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
 import { decodeFunctionData, encodeFunctionResult, type Hex } from "viem";
 import { Abis, Addresses } from "viem/tempo";
@@ -132,7 +132,17 @@ export interface FakeSolana extends TestServer {
    * the instruction than the one applied. `signers` requires more signatures than the owner's; `lookupTable` makes it a
    * version 0 transaction that loads accounts from that address lookup table.
    */
-  land(t: { kind: "grant" | "revoke" | "fund_agent"; owner: string; agent: string; amount?: bigint; signer?: string; slot?: number; extra?: { program: string; accounts: string[]; data: Buffer }[]; budget?: Buffer[]; instructionAmount?: bigint; signers?: number; lookupTable?: string }): string;
+  land(t: { kind: "grant" | "revoke" | "fund_agent"; owner: string; agent: string; amount?: bigint; signer?: string; slot?: number; extra?: { program: string; accounts: string[]; data: Buffer }[]; budget?: Buffer[]; instructionAmount?: bigint; signers?: number; lookupTable?: string; signature?: string }): string;
+  /**
+   * sendTransaction: a SOL transfer the command sent (the owner page on this computer) lands under its own signature;
+   * any other transaction is refused. Then `afterSend` runs with that signature, before the RPC answers.
+   */
+  afterSend?: (signature: string) => void;
+  /** sendTransaction takes the transfer but does not land it until `landHeld` (a transaction still on its way). */
+  hold?: boolean;
+  landHeld?: () => string | undefined;
+  /** The slot getSignatureStatuses answers from (default: the current slot): a node lagging behind answers from an earlier one. */
+  statusSlot?: () => number;
 }
 
 /** A compute-budget SetComputeUnitLimit (2) or SetComputeUnitPrice (3) instruction's data. */
@@ -151,7 +161,7 @@ export async function startFakeSolana(): Promise<FakeSolana> {
     chain.slot += 1;
     const slot = t.slot ?? chain.slot;
     const signer = t.signer ?? t.owner;
-    const sig = bs58.encode(Buffer.alloc(64, txs.size + 1));
+    const sig = t.signature ?? bs58.encode(Buffer.alloc(64, txs.size + 1));
     const ata = ataOf(t.owner).toBase58();
     const acc = chain.usdc.get(t.owner) ?? { amount: 0n, delegate: null, delegated: 0n };
     const u64 = (n: bigint) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(n); return b; };
@@ -239,8 +249,20 @@ export async function startFakeSolana(): Promise<FakeSolana> {
         return ctx(owner ? tokenAccount(owner) : null);
       }
       case "getTransaction": return txs.get(params[0]) ?? null;
-      case "getSignatureStatuses": return ctx(params[0].map((s: string) => (txs.has(s) ? { slot: txs.get(s).slot, confirmations: null, err: null, confirmationStatus: "confirmed" } : null)));
+      case "getEpochInfo": return { absoluteSlot: chain.slot, blockHeight: chain.slot, epoch: 0, slotIndex: chain.slot, slotsInEpoch: 432000 };
+      case "getSignatureStatuses": return { context: { slot: chain.statusSlot?.() ?? chain.slot }, value: params[0].map((s: string) => (txs.has(s) ? { slot: txs.get(s).slot, confirmations: null, err: null, confirmationStatus: "confirmed" } : null)) };
       case "getLatestBlockhash": return ctx({ blockhash: bs58.encode(Buffer.alloc(32, 9)), lastValidBlockHeight: chain.slot + 150 });
+      case "sendTransaction": {
+        const tx = Transaction.from(Buffer.from(params[0], "base64"));
+        const transfer = tx.instructions.find((ix) => ix.programId.toBase58() === SYSTEM_PROGRAM);
+        if (!transfer || tx.instructions.length !== 1) throw new Error("fake solana: sendTransaction lands one SOL transfer only");
+        const signature = bs58.encode(tx.signature!);
+        const landIt = () => chain.land({ kind: "fund_agent", owner: transfer.keys[0].pubkey.toBase58(), agent: transfer.keys[1].pubkey.toBase58(), amount: transfer.data.readBigUInt64LE(4), signature });
+        if (chain.hold) chain.landHeld = () => { chain.landHeld = undefined; return landIt(); };
+        else landIt();
+        chain.afterSend?.(signature);
+        return signature;
+      }
       default: throw new Error(`fake solana: ${method}`);
     }
   };

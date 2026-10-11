@@ -3,8 +3,10 @@ import { requireRecordLock } from "../op-lock.mjs";
 // reconcile (B4): READ ONLY. Reads an operation's journal and the chain, then sets settled / failed / unknown / not_found in the
 // journal file. It opens no key file and never signs, sends or pays. (Returning stranded funds is recover.ts --op <id>, an owner command.)
 //   settled    the pull landed and this operation's own authorization was used by a successful transaction that paid the recipient
-//   failed     the pull reverted, or it landed and the authorization can never settle (never signed, cancelled, expired by chain time)
-//   unknown    the authorization may still settle, or the signed pull is not proven either way (never pay again; run this again)
+//   failed     the pull reverted, or it landed, the authorization can never settle (never signed, cancelled, expired by chain time)
+//              and the pulled price was returned to the owner
+//   unknown    the authorization may still settle, the signed pull is not proven either way, or it landed and its price has not
+//              been returned yet (never pay again; run this again, or recover returns the price)
 //   not_found  nothing can land: no pull was signed, or the agent's nonce at the pull's position was used by a different transaction
 // npx tsx budget/evm/reconcile.ts [--chain <name>] --op <id>
 // Exit codes: 0 settled and delivered, 1 failed or not_found, 4 settled on chain but delivery not confirmed, 5 unknown.
