@@ -112,7 +112,7 @@ const FORBIDDEN_TEXT = [
 ];
 /** Budget answers that read nothing and so state no outcome, with the words each must say that in. */
 const NO_OUTCOME: Record<string, RegExp> = {
-  show_owner_first: /^this wait did not read the approval, so it says nothing about whether the owner approved or paid it\./,
+  show_owner_first: /^this wait did not read the approval, so whether the owner approved or paid is not known\./,
 };
 /** The exit code each state stands for: pay (src/cli/outcome.ts), budget (budget/cli.mjs). */
 const EXIT: Record<Surface, Record<string, number>> = {
@@ -750,7 +750,7 @@ const ROWS: Row[] = [
       return [plain, shown, done];
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: false, next: expect.stringMatching(/^the owner's wallet was asked to send, and whether it sent is not known yet/) } },
+      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: false, next: expect.stringMatching(/^the owner's wallet may have sent the transaction\. Tell the owner the outcome is unknown/) } },
       { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: false, reason: "the owner's wallet was asked to send; no transaction is reported yet" } },
       { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, next: expect.stringMatching(/read whether it landed before running this again/) } },
     ],
@@ -1048,7 +1048,7 @@ const ROWS: Row[] = [
     },
     expect: [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
-      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"d4".repeat(32)}`, message: "The transaction reverted on chain, but it is not the one this page asked for: its call approves the spender 0x5555555555555555555555555555555555555555, not 0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A. The budget was not recorded. It shows no approval this command can read: check it in your wallet's activity and, if it approved anything, set that approval to 0 from your wallet." } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"d4".repeat(32)}`, message: "The transaction reverted on chain, but it is not the one this page asked for: its call approves the spender 0x5555555555555555555555555555555555555555, not 0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A. The budget was not recorded. This command can't read an approval from the transaction. Check your wallet's activity and, if it approved anything, set that approval to 0 from your wallet." } },
       { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, tx: { grant: `0x${"d4".repeat(32)}` }, reason: "the transaction was not accepted as the planned step: its call approves the spender 0x5555555555555555555555555555555555555555, not 0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A; it reverted on chain. The budget was not recorded." } },
     ],
     timeout: 150_000,
@@ -1391,8 +1391,8 @@ const ROWS: Row[] = [
       return [first, waiting, seenBudget("wait for the end", "wait", await budget(b.home, ["wait", "--shown", "--id", id, "--timeout", "60"], b.env))];
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/owner\//), message_for_owner: expect.stringMatching(/^Review and approve in your wallet: .+\nhttp:\/\/127\.0\.0\.1:\d+\/owner\/[\s\S]*\nTell me when you've approved\.$/), next: expect.stringMatching(/^this command already began sending a transaction of its own for this approval, and whether it landed is not known yet\. The owner still has to approve the next step: reply to the owner with message_for_owner, word for word .* Only the owner uses the page, in the browser with their wallet\. It is on this machine only: over SSH the owner first runs ssh -L (\d+):127\.0\.0\.1:\1 user@this-host\. Do not start another owner command$/) } },
-      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, next: expect.stringMatching(/^this command already began sending a transaction of its own/) } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/owner\//), message_for_owner: expect.stringMatching(/^Review and approve in your wallet: .+\nhttp:\/\/127\.0\.0\.1:\d+\/owner\/[\s\S]*\nTell me when you've approved\.$/), next: expect.stringMatching(/^this command already began sending its own transaction for this approval; its outcome is not known yet\. The owner still has to approve the next step: reply to the owner with message_for_owner, word for word .* Only the owner uses the page, in the browser with their wallet\. It is on this machine only: over SSH the owner first runs ssh -L (\d+):127\.0\.0\.1:\1 user@this-host\. Do not start another owner command$/) } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, next: expect.stringMatching(/^this command already began sending its own transaction/) } },
       { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true, next: expect.stringMatching(/this step sent nothing/) } },
     ],
     timeout: 150_000,
@@ -1798,7 +1798,7 @@ describe("once money may have moved, every answer says unknown or uncertain", ()
   }
 
   it("refuses a not-paid field on any answer past the boundary, and a listed key whose reason is empty", () => {
-    const wait = (body: Record<string, unknown>): Seen => ({ at: "self-test", surface: "budget", cmd: "budget wait", exit: 2, body: { command: "wait", state: "show_owner_first", next: "this wait did not read the approval, so it says nothing about whether the owner approved or paid it. Then wait --shown.", ...body }, text: "" });
+    const wait = (body: Record<string, unknown>): Seen => ({ at: "self-test", surface: "budget", cmd: "budget wait", exit: 2, body: { command: "wait", state: "show_owner_first", next: "this wait did not read the approval, so whether the owner approved or paid is not known. Then wait --shown.", ...body }, text: "" });
     const check = (body: Record<string, unknown>) => () => assertProperty(wait(body), { verdict: "unknown", match: {} });
     expect(check({})).not.toThrow();
     expect(check({ paid: false })).toThrow(/self-test \(budget wait\): paid/);

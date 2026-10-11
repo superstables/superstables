@@ -139,7 +139,7 @@ export function grantMismatchSteps(logs: any[], owner: Address, agent: Address, 
   if (approvals.length === 0) {
     return {
       next: `transaction ${hash} shows no approval the command can read: the owner checks it in their wallet's activity and, if it approved anything, sets that approval to 0 by hand. ${revokeOnly}`,
-      page: "It shows no approval this command can read: check it in your wallet's activity and, if it approved anything, set that approval to 0 from your wallet.",
+      page: "This command can't read an approval from the transaction. Check your wallet's activity and, if it approved anything, set that approval to 0 from your wallet.",
     };
   }
   const value = (l: any) => (same(l.address, USDC) ? `${usdc(l.args.value)} ${SYM}` : `${l.args.value} in that token's smallest units`);

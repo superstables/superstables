@@ -498,7 +498,7 @@ export const showFirst = (id, withCode = true) => `reply to the owner with messa
  * The `next` of a wait run without --shown: it read nothing (the owner may have acted since this machine last looked), so
  * it says nothing about whether the approval was approved or paid.
  */
-export const unshownNext = (id, withCode = true) => `this wait did not read the approval, so it says nothing about whether the owner approved or paid it. If you have not written the approval link for the owner yet, ${showFirst(id, withCode)}`;
+export const unshownNext = (id, withCode = true) => `this wait did not read the approval, so whether the owner approved or paid is not known. If you have not written the approval link for the owner yet, ${showFirst(id, withCode)}`;
 
 const OTHER_NETWORKS = { moderato: "Tempo Moderato", devnet: "Solana devnet" };
 /**

@@ -181,7 +181,7 @@ export const OWNER_PAGE_SCRIPT = `
     }
     if (state.status === "confirmed") say(state.message || "Confirmed. You can return to the agent.", "good", state.hash ? txLink(state.hash) : null);
     else if (state.status === "failed") say(state.message || "Not confirmed. Check the command result and wallet activity before trying again.", "bad", state.hash ? txLink(state.hash) : null);
-    else if (state.status === "unknown") say(state.message || "Your wallet was asked to send this, and whether it did is not known. If your wallet still has a request open, cancel it. Check your wallet's activity and the command result before trying again.", "bad", state.hash ? txLink(state.hash) : null);
+    else if (state.status === "unknown") say(state.message || "Your wallet may have sent this. If it still has a request open, cancel it. Check your wallet's activity and the command result before you try again.", "bad", state.hash ? txLink(state.hash) : null);
     else if (state.status === "expired") say("This approval link expired. If your wallet still has a request open, cancel it. Check the command result and wallet activity before requesting a new one.", "bad");
     else say(state.mine || "This request was rejected. Check the command result. Rejecting this page does not cancel a transaction already submitted in your wallet.", "bad");
   }
