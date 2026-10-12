@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `attempts --json` no longer includes the `runner` field. Attempt records on disk are unchanged.
+
 ## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana
 
 Testnet only.
