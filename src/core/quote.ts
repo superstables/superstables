@@ -53,8 +53,12 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
   const verdict = evaluatePolicy(deps.policy, payment);
   // A referral the index gave for this exact origin, if one is remembered and has not expired (core/referrals.ts). The
   // quote records which one; the token stays in the remembered referrals until the paid request reads it.
+  // A quote for a listing takes only that listing's referral, even when another one is remembered for the same origin.
   const found = referralFor(url, deps.records.dir);
-  const referral = found && { id: found.id, listingId: found.listingId, terms: found.terms, expiresAt: found.expiresAt };
+  const referral =
+    found && (!service || found.listingId === service.id)
+      ? { id: found.id, listingId: found.listingId, terms: found.terms, expiresAt: found.expiresAt }
+      : undefined;
 
   const now = Date.now();
   const record: Quote = {

@@ -3,7 +3,7 @@
 // paid request only, with the attempt id as the purchase reference. The receipt records which referral went, never
 // the token. SUPERSTABLES_REFERRALS=off neither remembers nor sends.
 
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -175,6 +175,30 @@ describe("remembering referrals from the index", () => {
     expect(referralFor(other, r.dir)).toBeUndefined();
   });
 
+  it("skips a token whose exp is out of range without losing the other listings written with it", () => {
+    const r = records();
+    const bad = "https://bad.example.com/x";
+    const good = "https://good.example.com/x";
+    rememberReferrals(
+      [
+        indexListing(bad, tokenFor(bad, { exp: -1e20 }).token, "not a date"),
+        indexListing(good, tokenFor(good).token),
+      ],
+      r.dir,
+    );
+    expect(referralFor(bad, r.dir)).toBeUndefined();
+    expect(referralFor(good, r.dir)).toBeDefined();
+  });
+
+  it("removes its temporary file when the referrals file cannot be replaced", () => {
+    const r = records();
+    // A directory where the file should be: the rename fails.
+    mkdirSync(join(r.dir, REFERRALS_FILE, "blocked"), { recursive: true });
+    const endpoint = "https://api.example.com/x";
+    rememberReferrals([indexListing(endpoint, tokenFor(endpoint).token)], r.dir);
+    expect(readdirSync(r.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
   it("does not use a remembered token whose audience is another origin", () => {
     const r = records();
     const endpoint = "https://api.example.com/v1/weather";
@@ -205,6 +229,21 @@ describe("referrals on quotes", () => {
     expect(byService.referral?.id).toBe(claims.jti);
     // The token stays in the remembered referrals: it is not copied into the quotes.
     expect(readFileSync(join(s.records.dir, "quotes.jsonl"), "utf8")).not.toContain(token);
+  });
+
+  it("attaches nothing to a quote for a listing other than the one the referral was remembered for", async () => {
+    const s = await x402Stack();
+    rememberReferrals([indexListing(s.endpoint, tokenFor(s.endpoint).token)], s.records.dir);
+    const listing = { ...indexListing(s.endpoint, "unused"), id: "another-listing-on-this-origin" };
+    expect((await quote({ service: listing, params: {} }, { records: s.records, policy: DEFAULT_POLICY })).referral).toBeUndefined();
+    // And at pay time: a quote for another listing never sends the token remembered for this one.
+    const forged = await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY });
+    expect(forged.referral).toBeDefined();
+    s.records.saveQuote({ ...forged, serviceId: "another-listing-on-this-origin" });
+    const done = await s.engine.waitForAttempt(s.engine.startPayment(forged.id).id, 10_000);
+    expect(done.state).toBe("settled");
+    expect(done.referral).toBeUndefined();
+    expect(s.seller.seen.filter((r) => r.paid)[0]!.headers["superstables-referral"]).toBeUndefined();
   });
 
   it("attaches nothing for another origin, an expired referral, or with referrals off", async () => {

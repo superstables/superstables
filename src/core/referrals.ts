@@ -9,7 +9,7 @@
 // is then renamed into place, so two processes writing at once never leave a torn file (the later write wins).
 // SUPERSTABLES_REFERRALS=off neither remembers nor sends.
 
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { decodeReferral, isReferralToken } from "../seller/referral.js";
@@ -55,8 +55,9 @@ function expiryOf(token: string, expiresAt: string): string | undefined {
   const exp = decodeReferral(token)?.payload.exp;
   if (typeof exp !== "number" || !Number.isFinite(exp)) return undefined;
   const listed = Date.parse(expiresAt);
-  const until = Number.isFinite(listed) ? Math.min(listed, exp * 1000) : exp * 1000;
-  return Number.isFinite(until) ? new Date(until).toISOString() : undefined;
+  const until = new Date(Number.isFinite(listed) ? Math.min(listed, exp * 1000) : exp * 1000);
+  // An exp past the range of a Date has no ISO form; such a token is skipped, not the whole batch.
+  return Number.isFinite(until.getTime()) ? until.toISOString() : undefined;
 }
 
 function originOf(url: string): string | undefined {
@@ -112,22 +113,35 @@ export function rememberReferrals(listings: readonly ServiceListing[], dir: stri
   try {
     const kept = Object.fromEntries(Object.entries(read(dir)).filter(([, entry]) => live(entry, now)));
     for (const listing of fresh) {
-      const expiresAt = expiryOf(listing.referral!.token, listing.referral!.expiresAt);
-      if (!expiresAt) continue;
-      const entry: RememberedReferral = {
-        listingId: listing.id,
-        token: listing.referral!.token,
-        expiresAt,
-        terms: listing.referral!.terms,
-        seenAt: now.toISOString(),
-      };
-      if (live(entry, now)) kept[originOf(listing.endpoint)!] = entry;
+      try {
+        const expiresAt = expiryOf(listing.referral!.token, listing.referral!.expiresAt);
+        if (!expiresAt) continue;
+        const entry: RememberedReferral = {
+          listingId: listing.id,
+          token: listing.referral!.token,
+          expiresAt,
+          terms: listing.referral!.terms,
+          seenAt: now.toISOString(),
+        };
+        if (live(entry, now)) kept[originOf(listing.endpoint)!] = entry;
+      } catch {
+        // One listing that cannot be remembered does not cost the others.
+      }
     }
     ensureDir(dir);
     const path = join(dir, REFERRALS_FILE);
     const temporary = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     writeFileSync(temporary, `${JSON.stringify(kept, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-    renameSync(temporary, path);
+    try {
+      renameSync(temporary, path);
+    } catch (err) {
+      try {
+        unlinkSync(temporary);
+      } catch {
+        // already gone
+      }
+      throw err;
+    }
   } catch {
     // Discovery goes on without it.
   }

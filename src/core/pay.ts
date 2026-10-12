@@ -803,8 +803,9 @@ export class PaymentEngine {
   private referralHeaders(attempt: Attempt, quote: Quote): Record<string, string> {
     try {
       if (!quote.referral) return {};
+      // The listing the quote was for, when it was for one; otherwise the listing its referral was found for.
       const found = referralFor(quote.url, this.records.dir);
-      if (!found || found.listingId !== quote.referral.listingId) return {};
+      if (!found || found.listingId !== (quote.serviceId ?? quote.referral.listingId)) return {};
       const record = { discoveredVia: "superstables" as const, referral: { id: found.id, listingId: found.listingId, terms: found.terms } };
       this.records.saveAttempt({ ...attempt, ...record });
       Object.assign(attempt, record);
