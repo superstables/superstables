@@ -80,6 +80,13 @@ describe("verifyReferral", () => {
     expect(verifyReferral(token, { keys, issuer: ISSUER })).toEqual({ ok: false, reason: "no_audience" });
   });
 
+  it("requires both the origin and the listing id when both are given", () => {
+    const { token } = signReferral(key);
+    expect(verifyReferral(token, { keys, issuer: ISSUER, audience: AUDIENCE, listingId: "api.example.com" }).ok).toBe(true);
+    expect(verifyReferral(token, { keys, issuer: ISSUER, audience: AUDIENCE, listingId: "other.example" })).toEqual({ ok: false, reason: "wrong_audience" });
+    expect(verifyReferral(token, { keys, issuer: ISSUER, audience: "https://other.example", listingId: "api.example.com" })).toEqual({ ok: false, reason: "wrong_audience" });
+  });
+
   it("refuses an expired token, allowing the clock skew", () => {
     const iat = Math.floor(Date.now() / 1000) - 3600;
     const { token } = signReferral(key, { iat, exp: iat + 600 });
@@ -189,14 +196,60 @@ describe("checkReferral", () => {
     expect(s.keyReads).toBe(2);
   });
 
-  it("answers keys_unavailable, and never throws, when the keys cannot be read", async () => {
+  it("keeps the key set it holds when a refresh fails, and answers unknown_key, not keys_unavailable", async () => {
+    const key = referralKey();
+    const s = await site([key.jwk]);
+    const options = { site: s.url, audience: AUDIENCE };
+    const known = signReferral(key, { iss: s.url }).token;
+    expect((await checkReferral(known, options)).ok).toBe(true);
+
+    // The site goes down; a minute later a token with a key id nobody published asks for a refresh, which fails.
+    s.keysStatus = 503;
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
+    expect(await checkReferral(signReferral(referralKey(), { iss: s.url }).token, options)).toEqual({ ok: false, reason: "unknown_key" });
+    expect(s.keyReads).toBe(2);
+    // The held set still checks the known key, without another read.
+    expect((await checkReferral(known, options)).ok).toBe(true);
+    expect(s.keyReads).toBe(2);
+  });
+
+  it("does not make a check with a known key wait for a refresh in flight", async () => {
+    const key = referralKey();
+    const s = await site([key.jwk]);
+    const options = { site: s.url, audience: AUDIENCE };
+    const known = signReferral(key, { iss: s.url }).token;
+    expect((await checkReferral(known, options)).ok).toBe(true);
+
+    s.keysDelayMs = 1_000;
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
+    const refreshing = checkReferral(signReferral(referralKey(), { iss: s.url }).token, options);
+    const started = performance.now();
+    expect((await checkReferral(known, options)).ok).toBe(true);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(await refreshing).toEqual({ ok: false, reason: "unknown_key" });
+  });
+
+  it("answers keys_unavailable only when no key set could be read, and never throws", async () => {
     const key = referralKey();
     const down = await site([]);
     const url = down.url;
     await down.close();
     opened.pop();
     expect(await checkReferral(signReferral(key, { iss: url }).token, { site: url, audience: AUDIENCE })).toEqual({ ok: false, reason: "keys_unavailable" });
-    expect(await checkReferral("garbage", { site: "not a url", audience: AUDIENCE })).toEqual({ ok: false, reason: "keys_unavailable" });
+  });
+
+  it("checks its options, the site and the token's shape before fetching anything", async () => {
+    const key = referralKey();
+    const s = await site([key.jwk]);
+    const token = signReferral(key, { iss: s.url }).token;
+    expect(await checkReferral(token, null)).toEqual({ ok: false, reason: "no_audience" });
+    expect(await checkReferral(token, { site: "not a url", audience: AUDIENCE })).toEqual({ ok: false, reason: "invalid_options" });
+    expect(await checkReferral(token, { site: "http://keys.example.com", audience: AUDIENCE })).toEqual({ ok: false, reason: "invalid_options" });
+    expect(await checkReferral(token, { site: s.url, audience: AUDIENCE, fetch: "no" as unknown as typeof fetch })).toEqual({ ok: false, reason: "invalid_options" });
+    expect(await checkReferral(token, { site: s.url, audience: AUDIENCE, skewSeconds: Number.NaN })).toEqual({ ok: false, reason: "invalid_options" });
+    expect(await checkReferral("garbage", { site: s.url, audience: AUDIENCE })).toEqual({ ok: false, reason: "malformed" });
+    expect(await checkReferral(signReferral(key, { iss: s.url }, { alg: "none" }).token, { site: s.url, audience: AUDIENCE })).toEqual({ ok: false, reason: "unsupported_header" });
+    expect(s.keyReads).toBe(0);
   });
 });
 

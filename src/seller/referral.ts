@@ -85,7 +85,7 @@ export interface VerifyReferralOptions {
   issuer: string;
   /** This service's origin, checked against `aud`. */
   audience?: string;
-  /** This service's listing id, checked against `sub`. Either this or `audience` must match. */
+  /** This service's listing id, checked against `sub`. Give this, `audience`, or both: each one given must match. */
   listingId?: string;
   /** The time of the request. Default: now. An invalid Date is refused with `invalid_options`. */
   now?: Date;
@@ -200,9 +200,9 @@ export function verifyReferral(token: unknown, options: VerifyReferralOptions): 
   if (!Number.isSafeInteger(c.iat) || !Number.isSafeInteger(c.exp) || c.exp! <= c.iat!) return { ok: false, reason: "malformed" };
 
   if (c.iss !== originOf(options.issuer)) return { ok: false, reason: "wrong_issuer" };
-  const audienceMatches = options.audience !== undefined && c.aud === originOf(options.audience);
-  const listingMatches = options.listingId !== undefined && c.sub === options.listingId;
-  if (!audienceMatches && !listingMatches) return { ok: false, reason: "wrong_audience" };
+  // Each one given must match: with both, the token must name this origin and this listing.
+  if (options.audience !== undefined && c.aud !== originOf(options.audience)) return { ok: false, reason: "wrong_audience" };
+  if (options.listingId !== undefined && c.sub !== options.listingId) return { ok: false, reason: "wrong_audience" };
   if (now > c.exp! + skew) return { ok: false, reason: "expired" };
   if (now < c.iat! - skew) return { ok: false, reason: "not_yet_valid" };
   return { ok: true, claims: c as ReferralClaims };
@@ -239,7 +239,16 @@ const KEYS_CACHE_MS = 10 * 60_000;
 /** A refresh asked for (a token named a key the cached set does not have) reads the keys again at most this often. */
 const KEYS_REFRESH_MS = 60_000;
 const KEYS_TIMEOUT_MS = 8_000;
-const keyCache = new Map<string, { at: number; keys: Promise<ReferralKeySet> }>();
+/**
+ * Per keys URL: the last key set read successfully and when, the read in flight if there is one, and when the last read
+ * started (for the once-a-minute limit on refreshes). A failed read never removes a key set that was read before.
+ */
+interface KeyEntry {
+  good?: { at: number; keys: ReferralKeySet };
+  inflight?: Promise<ReferralKeySet>;
+  lastRead: number;
+}
+const keyCache = new Map<string, KeyEntry>();
 
 /**
  * The site's base URL, checked: https, or plain http on this machine. A seller's API key travels there, and the keys
@@ -261,28 +270,42 @@ export function siteUrl(site: string): URL {
 
 /**
  * The site's published referral keys, read once per ten minutes per site. `refresh` reads them again sooner, for a
- * token signed by a key the cached set does not have (the site rotated its key), but at most once a minute per site.
- * Throws when the keys cannot be read; keys that are not Ed25519 public keys are left out.
+ * token signed by a key the cached set does not have (the site rotated its key), but at most once a minute per site;
+ * when that read fails, the key set already held is returned. A check whose key is in the held set never waits for a
+ * refresh. Throws when no key set can be had; keys that are not Ed25519 public keys are left out.
  */
 export function fetchReferralKeys(site: string = DEFAULT_SITE, options: { fetch?: typeof fetch; refresh?: boolean } = {}): Promise<ReferralKeySet> {
   const url = new URL(KEYS_PATH, siteUrl(site)).toString();
-  const cached = keyCache.get(url);
-  const age = cached ? Date.now() - cached.at : Infinity;
-  if (cached && age < (options.refresh ? KEYS_REFRESH_MS : KEYS_CACHE_MS)) return cached.keys;
-  const doFetch = options.fetch ?? fetch;
-  const keys = (async () => {
+  const now = Date.now();
+  const entry = keyCache.get(url) ?? { lastRead: 0 };
+  keyCache.set(url, entry);
+  const good = entry.good;
+  if (!options.refresh) {
+    if (good && now - good.at < KEYS_CACHE_MS) return Promise.resolve(good.keys);
+  } else if (good && now - entry.lastRead < KEYS_REFRESH_MS) {
+    return Promise.resolve(good.keys);
+  }
+  const read = entry.inflight ?? startRead(entry, url, options.fetch ?? fetch, now);
+  return options.refresh && good ? read.catch(() => good.keys) : read;
+}
+
+function startRead(entry: KeyEntry, url: string, doFetch: typeof fetch, now: number): Promise<ReferralKeySet> {
+  entry.lastRead = now;
+  const read = (async () => {
     const res = await doFetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(KEYS_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`the referral keys could not be read (HTTP ${res.status})`);
     const body = (await res.json().catch(() => undefined)) as { keys?: unknown } | undefined;
     if (!body || !Array.isArray(body.keys)) throw new Error("the referral keys answer is not a key set");
-    return { keys: body.keys.filter(isEd25519).map(({ kty, crv, x, kid, use, alg }) => ({ kty, crv, x, kid, ...(use ? { use } : {}), ...(alg ? { alg } : {}) })) };
+    const keys = { keys: body.keys.filter(isEd25519).map(({ kty, crv, x, kid, use, alg }) => ({ kty, crv, x, kid, ...(use ? { use } : {}), ...(alg ? { alg } : {}) })) };
+    entry.good = { at: Date.now(), keys };
+    return keys;
   })();
-  keyCache.set(url, { at: Date.now(), keys });
-  // A failed read is not remembered: the next request tries again.
-  keys.catch(() => {
-    if (keyCache.get(url)?.keys === keys) keyCache.delete(url);
-  });
-  return keys;
+  entry.inflight = read;
+  const done = () => {
+    if (entry.inflight === read) entry.inflight = undefined;
+  };
+  read.then(done, done);
+  return read;
 }
 
 /** Forget every cached key set. */
@@ -298,18 +321,43 @@ export interface CheckReferralOptions extends Omit<VerifyReferralOptions, "keys"
 
 /**
  * verifyReferral with the site's published keys: reads them (cached), reads them once more when the token names a key
- * the cached set does not have (at most once a minute per site), and answers `keys_unavailable` when the keys cannot
- * be read. Never throws, so a site outage never fails the request being checked.
+ * the cached set does not have (at most once a minute per site; if that read fails, the answer is `unknown_key`), and
+ * answers `keys_unavailable` only when no key set could be read at all. Options, the site and the token's shape are
+ * checked before anything is fetched (`invalid_options`, `no_audience`, `malformed`, `unsupported_header`). Never
+ * throws, so a site outage never fails the request being checked.
  */
-export async function checkReferral(token: unknown, options: CheckReferralOptions = {}): Promise<ReferralVerification> {
-  const { site = DEFAULT_SITE, fetch: doFetch, ...rest } = options;
+export async function checkReferral(token: unknown, options?: CheckReferralOptions | null): Promise<ReferralVerification> {
   try {
-    const keys = await fetchReferralKeys(site, doFetch ? { fetch: doFetch } : {});
+    const given = options ?? {};
+    if (typeof given !== "object") return { ok: false, reason: "invalid_options" };
+    const { site = DEFAULT_SITE, fetch: doFetch, ...rest } = given;
+    if (doFetch !== undefined && typeof doFetch !== "function") return { ok: false, reason: "invalid_options" };
+    try {
+      siteUrl(site);
+    } catch {
+      return { ok: false, reason: "invalid_options" };
+    }
+    // Everything that needs no key first: a token refused here costs the site no request.
+    const shape = verifyReferral(token, { ...rest, keys: [], issuer: site });
+    if (shape.ok || shape.reason !== "unknown_key") return shape;
+
+    const fetchOptions = doFetch ? { fetch: doFetch } : {};
+    let keys: ReferralKeySet;
+    try {
+      keys = await fetchReferralKeys(site, fetchOptions);
+    } catch {
+      return { ok: false, reason: "keys_unavailable" };
+    }
     const first = verifyReferral(token, { ...rest, keys, issuer: site });
     if (first.ok || first.reason !== "unknown_key") return first;
-    const fresh = await fetchReferralKeys(site, { ...(doFetch ? { fetch: doFetch } : {}), refresh: true });
+    let fresh: ReferralKeySet;
+    try {
+      fresh = await fetchReferralKeys(site, { ...fetchOptions, refresh: true });
+    } catch {
+      return first;
+    }
     return fresh === keys ? first : verifyReferral(token, { ...rest, keys: fresh, issuer: site });
   } catch {
-    return { ok: false, reason: "keys_unavailable" };
+    return { ok: false, reason: "invalid_options" };
   }
 }
