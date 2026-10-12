@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_NETWORK } from "../../src/core/chain.js";
 import { Records } from "../../src/core/records.js";
 import { sendJson, startFacilitator, startPaidEndpoint, startServer, type TestServer } from "../helpers/servers.js";
 
@@ -361,12 +362,14 @@ describe("the help", () => {
 describe("quote, pay and status against a local seller", () => {
   const servers: TestServer[] = [];
   let url = "";
+  let payTo = "";
 
   beforeAll(async () => {
     const facilitator = await startFacilitator();
     const seller = await startPaidEndpoint(facilitator.url);
     servers.push(facilitator, seller);
     url = `${seller.url}/v1/market?asset=BTC`;
+    payTo = seller.payTo;
   });
 
   afterAll(async () => {
@@ -419,7 +422,14 @@ describe("quote, pay and status against a local seller", () => {
 
     const statusJson = JSON.parse((await run(["status", String(outcome.attempt_id), "--json"], env)).stdout) as Record<string, unknown>;
     expect(statusJson.state).toBe("abandoned");
-    expect(Object.keys(statusJson).sort()).toEqual(Object.keys(outcome).sort());
+    // The fields agents read: a rename here breaks callers even when pay and status change together.
+    expect(statusJson).toMatchObject({
+      recipient: payTo,
+      price: { amount: 0.01, asset: "USDC", network: DEFAULT_NETWORK.caip2, network_label: DEFAULT_NETWORK.label },
+    });
+    const keys = ["abandoned_by", "attempt_id", "chain_final", "exit_code", "final", "history", "message", "next", "price", "quote_id", "reason", "recipient", "state", "url"];
+    expect(Object.keys(statusJson).sort()).toEqual(keys);
+    expect(Object.keys(outcome).sort()).toEqual(keys);
 
     // The quote is spent: paying it again is bad input, and the error names the payment that
     // exists, how to look it up, and the command to requote.
