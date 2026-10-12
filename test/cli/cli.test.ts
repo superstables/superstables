@@ -524,6 +524,12 @@ describe("quote, pay and status against a local seller", () => {
     // records why it stopped.
     const runner = new Records(join(home, "records")).getAttempt(String(attemptId))?.runner;
     expect(runner?.pid).toBe(child.pid);
+    // The record names the process and its machine for the lock checks; the JSON an agent reads does not.
+    const listed = JSON.parse((await run(["attempts", "--json"], env)).stdout) as Record<string, unknown>[];
+    expect(listed.find((a) => a.id === attemptId)).toBeDefined();
+    expect(listed.find((a) => a.id === attemptId)).not.toHaveProperty("runner");
+    const bootId = (runner as { bootId?: string | null } | undefined)?.bootId;
+    if (bootId) expect(JSON.stringify(listed)).not.toContain(bootId);
     child.kill("SIGSTOP");
     child.kill("SIGTERM");
     await new Promise((resume) => setTimeout(resume, 200));

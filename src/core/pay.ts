@@ -1515,14 +1515,15 @@ export function paymentOutput(record: Attempt | Receipt) {
 /**
  * An attempt as it may be printed as JSON: the transaction, its link and the payer checked as for a receipt, and the
  * seller's own text (its answer and its reason) moved under `untrusted_seller_data`, together with any transaction,
- * link or payer the record holds that did not pass the check (a record from an earlier version may).
+ * link or payer the record holds that did not pass the check (a record from an earlier version may). The runner stays in
+ * the record only: it names this machine (hostname, machine and boot ids) and only the lock checks read it.
  */
-export function shownAttempt(attempt: Attempt): Omit<Attempt, "serviceBody" | "serviceReason" | "chainFinal" | "chainMismatch"> & {
+export function shownAttempt(attempt: Attempt): Omit<Attempt, "serviceBody" | "serviceReason" | "chainFinal" | "chainMismatch" | "runner"> & {
   chain_final: boolean | null;
   chain_mismatch?: Attempt["chainMismatch"];
   untrusted_seller_data?: { serviceBody?: string; serviceReason?: string; transaction?: string; transactionUrl?: string; payer?: string };
 } {
-  const { serviceBody, serviceReason, transaction, transactionUrl, payer, chainFinal: _finality, chainMismatch, ...rest } = attempt;
+  const { serviceBody, serviceReason, transaction, transactionUrl, payer, chainFinal: _finality, chainMismatch, runner: _runner, ...rest } = attempt;
   const tx = shownTransaction(transaction, attempt.terms.network);
   const checkedPayer = shownPayer(payer, attempt.terms.network);
   const untrusted = {
