@@ -310,7 +310,7 @@ describe("tempo, hosted", () => {
     };
     const g = await budget(["grant", "--rail", "tempo", "--amount", "0.05", "--wait", "--no-open"]);
     expect(g.code, g.stderr).toBe(1);
-    expect(g.result).toMatchObject({ ok: false, state: "failed" });
+    expect(g.result).toMatchObject({ ok: false, state: "failed", proof: "reverted", final: true });
     expect(g.result.reason).toMatch(/reverted on chain/);
   }, 90_000);
 

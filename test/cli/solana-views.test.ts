@@ -74,7 +74,7 @@ describe("a Solana payment in the CLI", () => {
     const receipts = await run(["receipts"]);
     expect(receipts.stdout).toContain(url);
     const listed = JSON.parse((await run(["receipts", "--json"])).stdout) as Record<string, unknown>[];
-    expect(listed[0]).toMatchObject({ payer, transaction, transactionUrl: url, network: SOLANA_DEVNET.caip2 });
+    expect(listed[0]).toMatchObject({ payer, transaction, transactionUrl: url, network: SOLANA_DEVNET.caip2, untrusted_seller_report: receipt.settlement });
     const json = JSON.parse((await run(["status", id, "--json"])).stdout) as { receipt: Record<string, unknown> };
     expect(json.receipt).toMatchObject({ payer, transaction, transaction_url: url });
   }, 60_000);
