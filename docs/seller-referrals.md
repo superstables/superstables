@@ -78,9 +78,12 @@ if (referral && (await checked)?.ok) {
 leaves out a purchase reference that breaks the character or length rule.
 
 `checkReferral(token, options)` reads the site's published keys and calls `verifyReferral` with them.
-`site` defaults to `https://www.superstables.com`, which is also the expected issuer. When a token
-names a key the cached set does not have, it reads the keys once more, at most once a minute per
-site, so a key rotation is picked up without a request for every unknown key.
+`site` defaults to `https://www.superstables.com`, which is also the expected issuer. It checks its
+options, the site and the token's shape before it fetches anything. When a token names a key the
+cached set does not have, it reads the keys once more, at most once a minute per site, so a key
+rotation is picked up without a request for every unknown key. If that read fails, it keeps the key
+set it already holds and answers `unknown_key`; it answers `keys_unavailable` only when no key set
+could be read at all. A check whose key is in the held set never waits for a refresh.
 
 `verifyReferral(token, { keys, issuer, ... })` does the check with keys you supply. Both return
 `{ ok: true, claims }` or `{ ok: false, reason }` and never throw on a bad token. A token is accepted
@@ -90,14 +93,16 @@ when:
   has, and no `crit`;
 - the Ed25519 signature checks against that key;
 - `iss` is the expected site;
-- `aud` is your origin (`audience`), or `sub` is your listing id (`listingId`);
+- `aud` is your origin, when you give `audience`, and `sub` is your listing id, when you give
+  `listingId`. Give one or both: each one you give must match;
 - `exp` has not passed at the time of the request, and `iat` is not in the future, each with 60
   seconds of clock skew (`skewSeconds`). Pass `now` to check another time.
 
 The reasons are `malformed`, `unsupported_header`, `unknown_key`, `bad_signature`, `wrong_issuer`,
 `wrong_audience`, `expired`, `not_yet_valid`, `no_audience` when you gave neither `audience` nor
 `listingId`, `invalid_options` when `skewSeconds` is not a finite number of 0 or more or `now` is not
-a valid `Date`, and, from `checkReferral` only, `keys_unavailable`. Set `audience` and `listingId`
+a valid `Date` (and, for `checkReferral`, when `site` is not https or plain http on this machine, or
+`fetch` is not a function), and, from `checkReferral` only, `keys_unavailable`. Set `audience` and `listingId`
 from your own configuration, never from the request: its `Host` header is the caller's to choose.
 
 `claims` holds `iss`, `jti` (the referral id), `sub`, `aud`, `sel` (seller account), `agr`
@@ -151,8 +156,10 @@ contains the key or the token.
 | `SUPERSTABLES_SELLER_ORIGIN` | This service's public origin, for example `https://api.example.com`, checked against the token's `aud` |
 | `SUPERSTABLES_SELLER_SITE` | The site to verify against and report to. Default `https://www.superstables.com` |
 
-Referrals need `SUPERSTABLES_SELLER_LISTING` or `SUPERSTABLES_SELLER_ORIGIN`. With a key and neither of
-them, the demo seller says once that it does not check referrals, and reports nothing.
+Referrals need `SUPERSTABLES_SELLER_LISTING`, `SUPERSTABLES_SELLER_ORIGIN`, or both; with both, a token
+must match both. With a key and neither of them, the demo seller says once that it does not check
+referrals, and reports nothing. It checks a referral only once the facilitator has verified the
+payment, so a request that pays nothing never makes it read the site's keys.
 
 ```bash
 SUPERSTABLES_SELLER_KEY=sssk_… SUPERSTABLES_SELLER_ORIGIN=https://api.example.com \

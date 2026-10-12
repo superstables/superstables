@@ -166,6 +166,32 @@ describe("referral reporting", () => {
     expect(s.events).toHaveLength(0);
   });
 
+  it("requires both the listing id and the origin when both are configured", async () => {
+    const key = referralKey();
+    const s = await site(key);
+    const fake = await facilitator();
+    const lines = logLines();
+    const service = await demo({ quiet: false, facilitators: [fake.url], referrals: { apiKey: API_KEY, site: s.url, origin: ORIGIN, listingId: "api.example.com" } });
+    const wrongListing = signReferral(key, { iss: s.url, aud: ORIGIN, sub: "other.example" }).token;
+    expect((await paidRequest(`${service.url}/v1/market?asset=BTC`, { "Superstables-Referral": wrongListing })).status).toBe(200);
+    await until(() => lines.some((l) => l.includes("referral not accepted: wrong_audience")));
+    const both = signReferral(key, { iss: s.url, aud: ORIGIN, sub: "api.example.com" }).token;
+    expect((await paidRequest(`${service.url}/v1/market?asset=BTC`, { "Superstables-Referral": both })).status).toBe(200);
+    await until(() => s.events.length === 1);
+  });
+
+  it("does not check a referral on a payment the facilitator rejects", async () => {
+    const key = referralKey();
+    const s = await site(key);
+    const fake = await facilitator({ verifyOk: false });
+    const service = await demo({ facilitators: [fake.url], referrals: { apiKey: API_KEY, site: s.url, origin: ORIGIN } });
+    const { token } = signReferral(key, { iss: s.url, aud: ORIGIN });
+    expect((await paidRequest(`${service.url}/v1/market?asset=BTC`, { "Superstables-Referral": token })).status).toBe(402);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(s.keyReads).toBe(0);
+    expect(s.events).toHaveLength(0);
+  });
+
   it("checks and reports nothing without a listing id or an origin, and says why once", async () => {
     const key = referralKey();
     const s = await site(key);

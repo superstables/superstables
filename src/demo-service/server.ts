@@ -82,8 +82,8 @@ export interface SellerReferralOptions {
   listingId?: string;
   /**
    * This service's public origin (e.g. https://api.example.com), checked against the token's `aud`. Never taken from a
-   * request: its Host header is the caller's to choose. With neither this nor `listingId`, referrals are not checked
-   * or reported.
+   * request: its Host header is the caller's to choose. With both this and `listingId`, a token must match both; with
+   * neither, referrals are not checked or reported.
    */
   origin?: string;
   /** Injected in tests. */
@@ -136,7 +136,8 @@ const CLAIM_CHALLENGE = /^ssc_[A-Za-z0-9_-]{1,200}$/;
  *   SUPERSTABLES_SELLER_SITE      the site (default https://www.superstables.com)
  *   SUPERSTABLES_SELLER_LISTING   this listing's id, checked against the token's `sub`
  *   SUPERSTABLES_SELLER_ORIGIN    this service's public origin, checked against the token's `aud`
- * With a key but neither of the last two, referrals are not checked (the service says so when it starts).
+ * With both of the last two, a token must match both. With a key but neither, referrals are not checked (the service
+ * says so when it starts).
  * Throws on a value that cannot be used; the message never repeats the key.
  */
 export function sellerOptionsFromEnvironment(env: NodeJS.ProcessEnv = process.env): Pick<DemoHandlerOptions, "claimChallenge" | "referrals"> {
@@ -369,10 +370,11 @@ export function createDemoHandler(opts: DemoHandlerOptions): (req: IncomingMessa
       return;
     }
 
-    // A referral on a paid request is checked alongside the payment, never in its way, and its outcome is reported
-    // after the buyer has its answer.
+    // A referral on a paid request is checked once the facilitator has verified the payment (so a request that pays
+    // nothing makes no request to the site), alongside the settlement, never in its way; its outcome is reported after
+    // the buyer has its answer.
     const referral = tracking ? readReferral(req.headers) : null;
-    const accepted = tracking && referral ? tracking.accept(referral.token) : undefined;
+    let accepted: Promise<boolean> | undefined;
     const followUp = (type: "fulfilled" | "failed", settlement?: ReferralSettlement): void => {
       if (!tracking || !referral || !accepted) return;
       tracking.report(accepted, {
@@ -395,6 +397,7 @@ export function createDemoHandler(opts: DemoHandlerOptions): (req: IncomingMessa
       send402(res, resourceUrl, verified.invalidReason ?? "the facilitator rejected this payment");
       return;
     }
+    if (tracking && referral) accepted = tracking.accept(referral.token);
 
     let settled: SettleResponse;
     try {

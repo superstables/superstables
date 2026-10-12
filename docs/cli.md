@@ -585,8 +585,8 @@ superstables.com can confirm this host is yours. SUPERSTABLES_SELLER_KEY=<sssk_.
 Superstables-Referral header on paid requests and reports each referred purchase to superstables.com
 as fulfilled or failed, after the buyer has its answer. It needs SUPERSTABLES_SELLER_LISTING (this
 listing's id, checked against the token's sub) or SUPERSTABLES_SELLER_ORIGIN (this service's public
-origin, checked against its aud); with neither, referrals are not checked. SUPERSTABLES_SELLER_SITE
-names another site.
+origin, checked against its aud); with both, a token must match both, and with neither, referrals
+are not checked. SUPERSTABLES_SELLER_SITE names another site.
 
 Moves money: it receives test USDC; it never pays.
 Run by: a developer who wants to see the seller side.
