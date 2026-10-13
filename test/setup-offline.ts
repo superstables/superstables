@@ -5,6 +5,8 @@
 //   listens, whatever the environment says, unless a test points at a fake chain.
 // - fetch reaches this computer only (test/fetch-guard.mjs), here and, through NODE_OPTIONS, in every node process a
 //   test starts.
+// - The account's own ~/.superstables/policy.yaml is never the developer's real one (test/account-guard.mjs), here and in every
+//   node process a test starts.
 import { fileURLToPath } from "node:url";
 
 if (!process.env.SUPERSTABLES_LIVE) {
@@ -21,5 +23,11 @@ if (!process.env.SUPERSTABLES_LIVE) {
   const option = `--import=${guard}`;
   if (!(process.env.NODE_OPTIONS ?? "").includes(option)) {
     process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} ${option}`.trim();
+  }
+  const accountGuard = fileURLToPath(new URL("./account-guard.mjs", import.meta.url));
+  await import("./account-guard.mjs");
+  const accountOption = `--import=${accountGuard}`;
+  if (!(process.env.NODE_OPTIONS ?? "").includes(accountOption)) {
+    process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} ${accountOption}`.trim();
   }
 }

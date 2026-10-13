@@ -5,7 +5,10 @@
 // policy; nothing here is enforced by the chain, and the docs say so.
 
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { accountPolicyPath, policyPath } from "./home.js";
+import { untrustedText } from "./text.js";
 import type { PolicyCheck } from "./types.js";
 
 export interface Money {
@@ -26,6 +29,8 @@ export interface Policy {
   killSwitch: boolean;
   /** The only mode in this release: the owner approves every payment in the wallet. */
   approval: "ask-every-payment";
+  /** The account's own policy file, which applies as well: both must allow a payment. */
+  also?: { file: string; policy: Policy };
 }
 
 /**
@@ -70,42 +75,116 @@ approval: ask-every-payment   # the wallet asks the owner before every payment
 `;
 
 export function parseMoney(value: string | number): Money {
-  const [amount, asset] = String(value).trim().split(/\s+/);
-  const n = Number(amount.replace(",", "."));
-  if (!Number.isFinite(n) || n < 0) throw new Error(`not an amount: "${value}"`);
-  return { amount: n, asset: (asset ?? "USDC").toUpperCase() };
+  if (typeof value !== "string" && typeof value !== "number") throw new Error(`not an amount: "${untrustedText(value, 40)}"`);
+  const match = /^(\d+(?:[.,]\d+)?)(?:\s+([A-Za-z0-9]{1,12}))?$/.exec(String(value).trim());
+  const n = match ? Number(match[1].replace(",", ".")) : NaN;
+  if (!match || !Number.isFinite(n)) throw new Error(`not an amount: "${untrustedText(value, 40)}"`);
+  return { amount: n, asset: (match[2] ?? "USDC").toUpperCase() };
 }
 
 export function formatMoney(m?: Money): string | undefined {
   return m ? `${m.amount} ${m.asset}` : undefined;
 }
 
+const POLICY_KEYS = ["caps", "allow", "deny", "stablecoins", "approval", "kill_switch"];
+const CAP_KEYS = ["per_call", "per_day"];
+
+/**
+ * Reads a policy file's text. A rule the file does not set takes the default; a file that cannot be read as the
+ * policy it was meant to be (an unknown key, a kill_switch that is not true or false, a scalar where a list belongs,
+ * an amount that is not one) throws with the key named, because reading it as "no rule" would lift the limits the
+ * owner meant to set.
+ */
 export function parsePolicy(yamlText: string): Policy {
-  const raw = (parseYaml(yamlText) ?? {}) as Record<string, any>;
-  const money = (v: unknown) => (v === undefined || v === null ? undefined : parseMoney(v as string));
-  const approval = raw.approval ?? "ask-every-payment";
+  const raw: unknown = parseYaml(yamlText) ?? {};
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new Error("the policy must be a YAML mapping");
+  const doc = raw as Record<string, unknown>;
+  for (const key of Object.keys(doc)) {
+    if (!POLICY_KEYS.includes(key)) {
+      throw new Error(`unknown key "${untrustedText(key, 40)}" (the keys are ${POLICY_KEYS.join(", ")})`);
+    }
+  }
+
+  const caps = doc.caps ?? {};
+  if (typeof caps !== "object" || Array.isArray(caps)) throw new Error("caps must be a mapping of per_call and per_day");
+  for (const key of Object.keys(caps)) {
+    if (!CAP_KEYS.includes(key)) throw new Error(`unknown cap "${untrustedText(key, 40)}" in caps (the caps are ${CAP_KEYS.join(", ")})`);
+  }
+  const cap = (key: "per_call" | "per_day", fallback: Money | undefined): Money | undefined => {
+    const value = (caps as Record<string, unknown>)[key];
+    if (value === undefined || value === null) return fallback;
+    try {
+      return parseMoney(value as string | number);
+    } catch (err) {
+      throw new Error(`caps.${key}: ${(err as Error).message}`);
+    }
+  };
+  const list = (key: "allow" | "deny" | "stablecoins", fallback: string[]): string[] => {
+    const value = doc[key];
+    if (value === undefined) return fallback;
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim() === "")) {
+      throw new Error(`${key} must be a list of ${key === "stablecoins" ? "asset names" : "host names"}`);
+    }
+    return value as string[];
+  };
+
+  const killSwitch = doc.kill_switch === undefined ? false : doc.kill_switch;
+  if (typeof killSwitch !== "boolean") throw new Error("kill_switch must be true or false");
+  const approval = doc.approval ?? "ask-every-payment";
   if (approval !== "ask-every-payment") {
-    throw new Error(`approval: "${approval}" is not supported in this release (only ask-every-payment)`);
+    throw new Error(`approval: "${untrustedText(approval, 40)}" is not supported in this release (only ask-every-payment)`);
   }
   return {
-    perCall: money(raw.caps?.per_call),
-    perDay: money(raw.caps?.per_day),
-    allow: Array.isArray(raw.allow) ? raw.allow.map(String) : [],
-    deny: Array.isArray(raw.deny) ? raw.deny.map(String) : [],
-    stablecoins: Array.isArray(raw.stablecoins) ? raw.stablecoins.map((s: unknown) => assetName(String(s))) : [...USD_STABLECOINS],
-    killSwitch: raw.kill_switch === true,
+    perCall: cap("per_call", DEFAULT_POLICY.perCall),
+    perDay: cap("per_day", DEFAULT_POLICY.perDay),
+    allow: list("allow", []),
+    deny: list("deny", []),
+    stablecoins: list("stablecoins", [...USD_STABLECOINS]).map(assetName),
+    killSwitch,
     approval: "ask-every-payment",
   };
 }
 
-/** Reads a policy file; a missing file means the default policy. */
-export function loadPolicy(path: string): Policy {
+/**
+ * Reads a policy file; undefined only when the file is genuinely absent (ENOENT). Every other failure refuses every
+ * payment: an unreadable file or a parent directory the process may not enter (EACCES, EPERM), an I/O error, a symlink
+ * loop, a path that runs through something that is not a directory (ENOTDIR: that could be an owner's file hidden
+ * behind a replaced directory, so it is not taken for absence) and text that is not a policy. A rule that cannot be
+ * read is not a rule that is not there.
+ */
+export function loadOptionalPolicy(path: string): Policy | undefined {
+  const unusable = (err: unknown) =>
+    new Error(`the spend policy ${path} cannot be used: ${(err as Error).message}. Fix the file; until then nothing is paid`);
+  let text: string;
   try {
-    return parsePolicy(readFileSync(path, "utf8"));
+    text = readFileSync(path, "utf8");
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_POLICY;
-    throw err;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw unusable(err);
   }
+  try {
+    return parsePolicy(text);
+  } catch (err) {
+    throw unusable(err);
+  }
+}
+
+/** Reads a policy file; a missing file means the default policy, and a file that cannot be used refuses every payment. */
+export function loadPolicy(path: string): Policy {
+  return loadOptionalPolicy(path) ?? DEFAULT_POLICY;
+}
+
+/**
+ * The policy quote and pay apply: the file SUPERSTABLES_POLICY or SUPERSTABLES_HOME names, and, when the account's own
+ * ~/.superstables/policy.yaml is another file that is there, that one as well (also). An agent's environment chooses
+ * the first; it cannot choose away the second. Only an absent account file is skipped: one that exists but cannot be
+ * read (a directory above it closed to this process, say) refuses every payment.
+ */
+export function loadPaymentPolicy(path = policyPath(), accountPath = accountPolicyPath()): Policy {
+  const chosen = loadPolicy(path);
+  if (resolve(path) === resolve(accountPath)) return chosen;
+  const account = loadOptionalPolicy(accountPath);
+  return account ? { ...chosen, also: { file: accountPath, policy: account } } : chosen;
 }
 
 export interface Attempt {
@@ -123,13 +202,18 @@ export interface Verdict {
 }
 
 function domainMatches(pattern: string, domain: string): boolean {
-  const p = pattern.toLowerCase();
-  const d = domain.toLowerCase();
+  const norm = (s: string) => s.toLowerCase().replace(/\.$/, "");
+  const p = norm(pattern);
+  const d = norm(domain);
   if (p.startsWith("*.")) return d === p.slice(2) || d.endsWith(p.slice(1));
   return d === p;
 }
 
 export function evaluatePolicy(policy: Policy, a: Attempt): Verdict {
+  if (policy.also) {
+    const v = evaluatePolicy(policy.also.policy, a);
+    if (!v.allowed) return { allowed: false, reason: `${v.reason} (in ${policy.also.file})` };
+  }
   if (policy.killSwitch) return { allowed: false, reason: "kill_switch is on" };
   if (a.domain) {
     if (policy.deny.some((p) => domainMatches(p, a.domain))) return { allowed: false, reason: `host ${a.domain} is on the deny list` };
@@ -196,6 +280,10 @@ export function policyChecks(policy: Policy, a: Attempt): PolicyCheck[] {
       ok: total <= policy.perDay.amount,
       detail: `${round6(a.spentTodayDecimal)} ${a.asset} paid today (UTC) + this ${a.amountDecimal} = ${total}, at most ${formatMoney(policy.perDay)}`,
     });
+  }
+  if (policy.also) {
+    const file = policy.also.file;
+    for (const check of policyChecks(policy.also.policy, a)) checks.push({ ...check, detail: `${file}: ${check.detail}` });
   }
   return checks;
 }

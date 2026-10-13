@@ -132,7 +132,7 @@ Discovery:
 Environment:
   SUPERSTABLES_HOME              where state lives (default ~/.superstables)
   SUPERSTABLES_WALLET            browser (default) or local: who signs pay's payments
-  SUPERSTABLES_POLICY            the spend policy file (default $SUPERSTABLES_HOME/policy.yaml)
+  SUPERSTABLES_POLICY            the spend policy file (default $SUPERSTABLES_HOME/policy.yaml); ~/.superstables/policy.yaml applies as well when it exists
   SUPERSTABLES_INDEX_URL         the index find reads; `off` to skip it
   SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the catalogue on superstables.com
                                  (most are simulated; the market data service returns live prices)
@@ -657,7 +657,8 @@ Moves money: no.
 Run by: the agent or the owner.
 Example:
   $ superstables policy show
-Prints: the file, a one-line summary and the file's text. With --json, the parsed policy.
+Prints: the file (and ~/.superstables/policy.yaml when it applies as well), a one-line summary and
+  the text. With --json, the parsed policy.
 Exit codes: 0 printed, 1 the file could not be parsed (the full table: superstables --help)
 ```
 

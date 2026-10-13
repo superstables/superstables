@@ -1,6 +1,7 @@
 // Where the client keeps its state. One directory, SUPERSTABLES_HOME (default ~/.superstables):
 //
-//   policy.yaml            the owner's spend policy (optional; defaults apply)
+//   policy.yaml            the owner's spend policy (optional; defaults apply). ~/.superstables/policy.yaml of the
+//                          account itself applies as well when it exists, whichever home is in use
 //   records/               quotes, attempts and receipts, append-only JSONL (the agent side)
 //   browser-wallet.json    which browser account last connected, when one is used
 //   wallet/                the local wallet's own state: key, owner secret, agent token, audit log
@@ -9,7 +10,7 @@
 // and the key are the wallet process's alone; no code outside src/wallet opens them.
 
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 
 /**
@@ -47,6 +48,20 @@ export function walletDir(): string {
 
 export function policyPath(): string {
   return process.env.SUPERSTABLES_POLICY ?? join(homeDir(), "policy.yaml");
+}
+
+/**
+ * policy.yaml in the account's own ~/.superstables: the home directory the operating system records for this user, not
+ * $HOME, SUPERSTABLES_HOME or SUPERSTABLES_POLICY, which whoever starts the process sets.
+ */
+export function accountPolicyPath(): string {
+  let home: string;
+  try {
+    home = userInfo().homedir;
+  } catch {
+    home = homedir();
+  }
+  return join(home, ".superstables", "policy.yaml");
 }
 
 /** The wallet writes this; the agent side reads it. Bearer token for the agent-facing routes only. */

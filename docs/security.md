@@ -67,6 +67,13 @@ cannot misreport the amount, the asset, the chain or the recipient, so `caps.per
 `caps.per_day`, `stablecoins` and `kill_switch` are all judged on verified facts. Treat host
 rules as a convenience, not as a boundary.
 
+The facts are verified; the policy file is not. The process that runs `quote` and `pay` is the agent's, and its
+environment chooses which `policy.yaml` is read: `SUPERSTABLES_POLICY`, `SUPERSTABLES_HOME` or `--home`. Your
+own `~/.superstables/policy.yaml`, in the home directory your system account records, applies as well whenever it
+exists, so no such setting can lift a rule written there. An agent that can edit files as you can still change
+that file, and a different home starts its own daily count. Treat the policy as a guard against mistakes, not as a
+boundary against a hostile agent. The amount in your wallet's prompt is the boundary.
+
 ## The approval link is the capability
 
 This section, and the three after it, describe the page `superstables pay` serves on `127.0.0.1`.
@@ -185,10 +192,16 @@ authoritative, at the gate, before an approval is created at all. A payment the 
 never becomes an approval link, so there is nothing to open and nobody is asked.
 
 Nothing in the policy is enforced by the blockchain, and nothing in it is enforced by the wallet.
-A cap of 0.05 USDC per payment means this software will not ask you to sign more than that; it
-does not mean your account cannot sign more. The only limits that survive a compromised machine
-are the ones inside what you sign — the amount and the recipient in the authorization — and the
-balance of the account, which is why this release is testnet only.
+A cap of 0.05 USDC per payment means this software will not ask you to sign more than that while it
+runs with your policy. An agent that runs as you can edit or delete your policy file, or run its own
+code, so it is not a promise against a hostile agent, and it never means your account cannot sign
+more. Your own `~/.superstables/policy.yaml` applies whichever policy file or home the environment
+names, but its daily count and the file itself are only as safe as your account's files. An empty
+policy file means the defaults. A file with a misspelled key, a `kill_switch` that is not `true` or
+`false`, a scalar where a list belongs or an unreadable amount stops every payment until it is
+fixed. The only limits that survive a compromised machine are the ones inside what you sign —
+the amount and the recipient in the authorization — and the balance of the account, which is why
+this release is testnet only.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
 including pending, in-flight and uncertain payments; the local wallet counts the authorizations in
