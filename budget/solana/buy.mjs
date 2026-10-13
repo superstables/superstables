@@ -45,6 +45,8 @@ import {
 } from "./token.mjs";
 import bs58 from "bs58";
 import {
+  CLUSTER_NEXT,
+  clusterProblem,
   connection,
   loadAgent,
   readPublic,
@@ -222,6 +224,11 @@ if (checkOnly) {
 
 // --- 4. the agent key, chain reads, intent journal ------------------------------------------------
 const conn = connection();
+const cluster = await clusterProblem(conn);
+if (cluster) {
+  updateOp(opId, { state: "refused_precheck", reasons: [cluster] });
+  refuse(cluster, { next: `${CLUSTER_NEXT}; nothing was signed or paid` });
+}
 const agentInfo = loadAgent();
 const agent = agentInfo.keypair;
 const pub = readPublic();

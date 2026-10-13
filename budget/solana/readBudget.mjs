@@ -15,6 +15,7 @@ import {
   fromBaseUnits,
   parseStrict,
   parsePubkeyFlag,
+  clusterProblem,
 } from "./lib.mjs";
 
 const USAGE = `Usage: node budget/solana/readBudget.mjs [--owner <address>]
@@ -28,6 +29,11 @@ const flags = parseStrict(process.argv.slice(2), { owner: "value" }, { usage: US
 const ownerFlag = parsePubkeyFlag(flags, "owner", USAGE);
 
 const conn = connection();
+const cluster = await clusterProblem(conn);
+if (cluster) {
+  console.error(`${cluster}: the budget is not read from another cluster.`);
+  process.exit(1);
+}
 
 const ownerPk = ownerFlag ?? readPublic().owner;
 if (!ownerPk) {

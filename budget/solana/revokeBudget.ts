@@ -14,7 +14,7 @@
 // owner rejected or the link expired, no SOL for the fee), 5 unknown (read the chain).
 import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { AGENT_KEY_PATH, connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseEnvText, parseStrict, readPublic, retryRead, sleep } from "./lib.mjs";
+import { AGENT_KEY_PATH, CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseEnvText, parseStrict, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { readRegularFile } from "../secret-file.mjs";
@@ -40,6 +40,8 @@ function refuse(reason: string, next: string): never {
 }
 
 const conn = connection();
+const cluster = await clusterProblem(conn);
+if (cluster) refuse(cluster, CLUSTER_NEXT);
 const pub = readPublic();
 if (!pub.owner) refuse("the public file names no owner", "superstables budget setup --rail solana");
 const owner: PublicKey = pub.owner;

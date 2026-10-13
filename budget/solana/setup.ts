@@ -24,7 +24,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import bs58 from "bs58";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, connection, explorerTx, formatUnits, loadOwner, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
@@ -135,6 +135,11 @@ if (bound && publicOwner && bound !== publicOwner && !newOwner) {
   process.exit(result(3, { state: "refused_precheck", reason, owner: publicOwner, next: `${newOwnerCmd(recordedSite)} records one owner again (refused while a budget is live on either)` }));
 }
 if (newOwner && recorded) {
+  const cluster = await clusterProblem(connection());
+  if (cluster) {
+    console.log(`REFUSED: ${cluster}. Nothing was changed.`);
+    process.exit(result(3, { state: "refused_precheck", reason: cluster, next: CLUSTER_NEXT }));
+  }
   // never move the owner while the agent is still the delegate of a recorded owner's USDC account
   for (const was of [...new Set([publicOwner, bound].filter((o): o is string => Boolean(o)))]) {
     const acc = await retryRead(() => getAccountOrNull(connection(), getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(was)))).then((a) => ({ ok: true as const, a }), (e) => ({ ok: false as const, e }));
@@ -160,6 +165,11 @@ let then: HostedStep[] | undefined;
 let startSlot = 0;
 let agentHad = 0n;
 if (CAP !== undefined || LAMPORTS !== undefined) {
+  const cluster = await clusterProblem(connection());
+  if (cluster) {
+    console.log(`REFUSED: ${cluster}. Nothing was requested.`);
+    process.exit(result(3, { state: "refused_precheck", reason: cluster, next: CLUSTER_NEXT }));
+  }
   then = [];
   if (LAMPORTS !== undefined) then.push({ kind: "fund_agent", solana: { amount_atomic: String(LAMPORTS) } });
   if (CAP !== undefined) {

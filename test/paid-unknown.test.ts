@@ -1265,6 +1265,7 @@ const ROWS: Row[] = [
       const seen: Seen[] = [];
       for (const [i, error] of errors.entries()) {
         const conn = {
+          getGenesisHash: async () => "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
           getLatestBlockhash: async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 100 }),
           getBlockHeight: async () => 10,
           sendRawTransaction: async () => { throw error; },
