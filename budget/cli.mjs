@@ -1266,7 +1266,7 @@ async function status({ f, ctx }) {
   const owner = recordedOwner(f);
   log(ownerLine(owner));
   const s = await readBudget(f);
-  if (!s.ok) return emit(s.code === 2 ? 2 : 1, { ...ctx, state: "failed", owner: owner ?? undefined, next: `superstables budget doctor --rail ${f.rail}${chainFlag(f)}: it checks the RPC and the files`, reason: "setup is done, but the budget could not be read from the chain" });
+  if (!s.ok) return emit(s.code === 2 ? 2 : 1, { ...ctx, state: "failed", owner: owner ?? undefined, next: `superstables budget doctor --rail ${f.rail}${chainFlag(f)}: it checks the RPC and the files${f.rail === "solana" ? "; if SUPERSTABLES_SOLANA_RPC is set, check that it points at Solana devnet" : ""}`, reason: "setup is done, but the budget could not be read from the chain" });
   // setup done, nothing granted (or all of it spent): the owner's next step is a grant
   const empty = !s.revoked && s.remaining !== null && Number(s.remaining) === 0;
   const ag = agentFlag(f);

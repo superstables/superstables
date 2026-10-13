@@ -6,6 +6,7 @@ import { PublicKey, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
 import { decodeFunctionData, encodeFunctionResult, type Hex } from "viem";
 import { Abis, Addresses } from "viem/tempo";
+import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import { readBody, startServer, type TestServer } from "./servers.js";
 
 const json = (res: ServerResponse, body: unknown) => {
@@ -143,6 +144,10 @@ export interface FakeSolana extends TestServer {
   landHeld?: () => string | undefined;
   /** The slot getSignatureStatuses answers from (default: the current slot): a node lagging behind answers from an earlier one. */
   statusSlot?: () => number;
+  /** What getGenesisHash answers (default: Solana devnet's); null makes it fail. */
+  genesis: string | null;
+  /** Every RPC method asked, in order. */
+  calls: string[];
 }
 
 /** A compute-budget SetComputeUnitLimit (2) or SetComputeUnitPrice (3) instruction's data. */
@@ -156,6 +161,8 @@ export async function startFakeSolana(): Promise<FakeSolana> {
   chain.slot = 5000;
   chain.balances = new Map();
   chain.usdc = new Map();
+  chain.genesis = SOLANA_DEVNET_GENESIS;
+  chain.calls = [];
   const txs = new Map<string, any>();
   chain.land = (t) => {
     chain.slot += 1;
@@ -241,6 +248,10 @@ export async function startFakeSolana(): Promise<FakeSolana> {
   const ctx = (value: unknown) => ({ context: { slot: chain.slot }, value });
   const answer = (method: string, params: any[]): unknown => {
     switch (method) {
+      case "getGenesisHash": {
+        if (chain.genesis === null) throw new Error("fake solana: no genesis hash");
+        return chain.genesis;
+      }
       case "getSlot": return chain.slot;
       case "getBlockHeight": return chain.slot;
       case "getBalance": return ctx(Number(chain.balances.get(params[0]) ?? 0n));
@@ -269,6 +280,7 @@ export async function startFakeSolana(): Promise<FakeSolana> {
   const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const body = JSON.parse(await readBody(req));
     const one = (c: { id: number | string; method: string; params?: any[] }) => {
+      chain.calls.push(c.method);
       try {
         return { jsonrpc: "2.0", id: c.id, result: answer(c.method, c.params ?? []) };
       } catch (e) {

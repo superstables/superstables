@@ -503,6 +503,10 @@ is not trusted to say who the owner is or what was paid.
   replacement in use is named in the `RESULT` (`rpc`). Approval pages on your machine do not
   pass replacement RPC URLs to the owner's wallet, including URLs that carry access keys.
   When asking the wallet to add a chain, they offer the chain's public RPC.
+  On `solana`, `fund-agent`, `grant`, `revoke`, `buy`, and `setup` when it replaces a recorded owner
+  or asks for `--fund` or `--grant`, first check that the RPC answers Solana devnet's genesis hash. On
+  another cluster, or when the hash can't be read, they refuse (exit 3) before a blockhash is fetched
+  or anything is signed or sent. `status` then says the budget could not be read (exit 1).
 
 What a compatible site must serve, with both proofs spelled out:
 [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).

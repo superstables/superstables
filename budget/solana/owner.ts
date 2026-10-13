@@ -22,7 +22,7 @@ import { verifyEd25519 } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { DEFAULT_SITE } from "../site.mjs";
 import { DEFAULT_RPC } from "../rpc.mjs";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, formatUnits, parseEnvFile, retryRead, sleep } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, clusterProblem, formatUnits, parseEnvFile, retryRead, sleep } from "./lib.mjs";
 
 export { closeOwnerPage };
 
@@ -267,6 +267,11 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
   const refused = (reason: string) => ({ status: "refused" as const, reason });
   const port: SolanaTransactionPort = {
     async prepare() {
+      const cluster = await clusterProblem(conn);
+      if (cluster) {
+        log(`REFUSED: ${cluster}. Nothing was built.`);
+        throw new Error(`${cluster}; nothing was built or sent`);
+      }
       const { blockhash, lastValidBlockHeight } = await retryRead(() => conn.getLatestBlockhash("confirmed"));
       const tx = new Transaction({ feePayer: owner, blockhash, lastValidBlockHeight }).add(...instructions());
       issued = { message: tx.serializeMessage(), blockhash, lastValidBlockHeight };
@@ -293,6 +298,11 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
       if (count !== 1) return refused(`The wallet returned ${count} signatures; this transaction has exactly one signer, you.`);
       const signature = raw.subarray(at, at + 64);
       if (!verifyEd25519(owner.toBase58(), message, signature)) return refused(`That is not a signature by ${owner.toBase58()}.`);
+      const cluster = await clusterProblem(conn);
+      if (cluster) {
+        issued = null;
+        return refused(`${cluster}, so the command did not send it.`);
+      }
       const height = await retryRead(() => conn.getBlockHeight("confirmed"));
       if (height > want.lastValidBlockHeight) {
         issued = null;
