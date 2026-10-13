@@ -382,6 +382,8 @@ export class OwnerApprovalServer {
       "x-frame-options": "DENY",
       // Framing only. A stricter connect-src would break wallets whose injected provider calls RPC from the page.
       "content-security-policy": "frame-ancestors 'none'",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
     });
     res.end(html);
   }

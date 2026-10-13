@@ -142,6 +142,27 @@ describe("termsFor", () => {
     expect(termsFor({ ...v2, amount: undefined }, 2)).toMatchObject({ supported: false });
     expect(termsFor({ ...v2, payTo: "not-an-address" }, 2)).toMatchObject({ supported: false });
   });
+
+  it("refuses an amount that is zero, not canonical, not a string, or 2^256 or more", () => {
+    for (const amount of ["0", "007", 1000, "1e6", String(2n ** 256n)]) {
+      expect(termsFor({ ...v2, amount: amount as string }, 2), String(amount)).toMatchObject({
+        supported: false,
+        reason: expect.stringMatching(/missing, zero, not a canonical whole number of base units, or too large/),
+      });
+    }
+    expect(termsFor({ ...v1, maxAmountRequired: "0" }, 1)).toMatchObject({ supported: false });
+    expect(termsFor({ ...v2, amount: String(2n ** 256n - 1n) }, 2).supported).toBe(true);
+  });
+
+  it("refuses the zero address, and the token contract itself, as the recipient", () => {
+    const zero = termsFor({ ...v2, payTo: `0x${"00".repeat(20)}` }, 2);
+    expect(zero).toMatchObject({ supported: false, reason: "the recipient is the zero address" });
+    const asset = usdcRequirement(0.01, PAY_TO).asset;
+    for (const payTo of [asset, asset.toLowerCase()]) {
+      expect(termsFor({ ...v2, payTo }, 2), payTo).toMatchObject({ supported: false, reason: "the recipient is the USDC contract itself" });
+    }
+    expect(termsFor({ ...v2, payTo: 5 as unknown as string }, 2)).toMatchObject({ supported: false });
+  });
 });
 
 describe("parseChallenge", () => {

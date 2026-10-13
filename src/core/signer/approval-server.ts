@@ -353,7 +353,16 @@ export class ApprovalServer {
   }
 
   private sendHtml(res: ServerResponse, status: number, html: string): void {
-    res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    res.writeHead(status, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "x-frame-options": "DENY",
+      // Framing only. A stricter connect-src would break wallets whose injected provider calls RPC from the page.
+      "content-security-policy": "frame-ancestors 'none'",
+      // the link carries the approval id, which is the capability: it must not leave in a Referer
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    });
     res.end(html);
   }
 

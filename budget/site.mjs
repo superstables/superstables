@@ -1,5 +1,5 @@
 // superstables.com for `superstables budget`: which site, and the requests that need no agent signature. Plain JavaScript with
-// Node built-ins only, so the dispatcher (cli.mjs), approvals.mjs and the rail scripts share it.
+// Node built-ins only (and response.mjs, which has the same), so the dispatcher (cli.mjs), approvals.mjs and the rail scripts share it.
 //
 // Hosted approvals (`setup --hosted`, every rail) record APPROVALS=hosted and SITE=<origin> in the chain's public file. Every
 // later owner command on that chain then asks the owner through the site instead of the page on 127.0.0.1. The site API is
@@ -11,6 +11,8 @@
 //
 // The bearer token is the agent's access to one request. It is kept only in that approval's record (approvals.mjs, mode
 // 600) and in memory; nothing here logs it.
+
+import { readCapped } from "./response.mjs";
 
 export const DEFAULT_SITE = "https://www.superstables.com";
 export const BUDGET_API = "/api/v1/budget";
@@ -251,6 +253,8 @@ export const isSiteRequestId = (id) => typeof id === "string" && /^b[la]_[A-Za-z
 /** An agent access token: ssbt_... */
 export const isSiteToken = (t) => typeof t === "string" && /^ssbt_[A-Za-z0-9_-]{8,256}$/.test(t);
 
+export const SITE_MAX_BYTES = 1_000_000;
+
 export async function call(url, init, timeoutMs, fetchImpl = fetch) {
   let res;
   try {
@@ -258,8 +262,11 @@ export async function call(url, init, timeoutMs, fetchImpl = fetch) {
   } catch (err) {
     return { ok: false, status: 0, body: null, network: siteText(err?.cause?.code ?? err?.cause?.message ?? err?.message ?? err) };
   }
+  const { bytes, truncated } = await readCapped(res, SITE_MAX_BYTES);
+  // an answer cut off or longer than the cap is no answer to act on: never parsed, never ok
+  if (truncated) return { ok: false, status: res.status, body: null, network: `the answer from ${siteText(new URL(url).host, 80)} was cut off or longer than ${SITE_MAX_BYTES} bytes` };
   let body = null;
-  try { body = await res.json(); } catch {}
+  try { body = JSON.parse(bytes.toString("utf8")); } catch {}
   return { ok: res.ok, status: res.status, body };
 }
 

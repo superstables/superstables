@@ -9,6 +9,10 @@
 // be read or answered by anyone on the way, and every check the commands make reads the chain through it. The dispatcher
 // refuses a command when one of them is set to anything else (exit 2), and every RESULT names a replacement in use (`rpc`).
 
+import { readCapped } from "./response.mjs";
+
+const RPC_MAX_BYTES = 4_000_000;
+
 export const RPC_ENV = { evm: "B4_RPC", tempo: "SUPERSTABLES_TEMPO_RPC", solana: "SUPERSTABLES_SOLANA_RPC" };
 export const DEFAULT_RPC = { tempo: "https://rpc.moderato.tempo.xyz", solana: "https://api.devnet.solana.com" };
 
@@ -61,7 +65,9 @@ export function customRpc(rail) {
 /** One JSON-RPC call. Throws on a transport error or an RPC error answer. */
 export async function jsonRpc(url, method, params = [], timeoutMs = 15_000) {
   const res = await fetch(url, { method: "POST", redirect: "error", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(timeoutMs) });
-  const j = await res.json();
+  const { bytes, truncated } = await readCapped(res, RPC_MAX_BYTES);
+  if (truncated) throw new Error(`the RPC answer was cut off or longer than ${RPC_MAX_BYTES} bytes`);
+  const j = JSON.parse(bytes.toString("utf8"));
   if (j.error) throw new Error(j.error.message ?? JSON.stringify(j.error));
   return j.result;
 }

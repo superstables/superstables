@@ -43,13 +43,17 @@ export const evmRail: X402Rail = {
       return { supported: false, reason: `the offer's signing domain is not ${network.token.symbol}'s on ${network.label} (expected name "${domain.name}", version "${domain.version}"), so the signature would not verify` };
     }
     const atomic = accept.amount ?? accept.maxAmountRequired;
-    if (!atomic || !/^\d+$/.test(String(atomic))) return { supported: false, reason: "the offered amount is missing or malformed" };
-    if (!accept.payTo || !/^0x[0-9a-fA-F]{40}$/.test(accept.payTo)) return { supported: false, reason: "the recipient (payTo) is missing or malformed" };
+    if (typeof atomic !== "string" || !/^[1-9]\d*$/.test(atomic) || BigInt(atomic) >= 2n ** 256n) {
+      return { supported: false, reason: "the offered amount is missing, zero, not a canonical whole number of base units, or too large" };
+    }
+    if (typeof accept.payTo !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(accept.payTo)) return { supported: false, reason: "the recipient (payTo) is missing or malformed" };
+    if (/^0x0{40}$/i.test(accept.payTo)) return { supported: false, reason: "the recipient is the zero address" };
+    if (isSameAddress(accept.payTo, network.usdc.address)) return { supported: false, reason: `the recipient is the ${network.token.symbol} contract itself` };
     const timeout = accept.maxTimeoutSeconds ?? 300;
     if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout <= 0 || timeout > MAX_TIMEOUT_SECONDS) {
       return { supported: false, reason: `the offer's payment window is outside what is signed (at most ${MAX_TIMEOUT_SECONDS} seconds)` };
     }
-    const amountAtomic = String(atomic);
+    const amountAtomic = atomic;
     const terms: PaymentTerms = {
       amountDecimal: fromAtomic(amountAtomic, network.usdc.decimals),
       amountAtomic,
