@@ -607,7 +607,7 @@ describe("hosted approvals", () => {
 
   it("no owner named, and the site will not cancel because the wallet was asked: unknown (sending), never nothing sent", async () => {
     site.owner = null;
-    site.cancelAnswer = () => ({ status: 409, body: { error: { code: "wallet_asked" }, state: "sending", wallet_asked: true } });
+    site.cancelAnswer = () => ({ status: 409, body: { error: { code: "wallet_asked", state: "sending", wallet_asked: true, money_moved: "unknown" } } });
     const err = await grant(client()).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
     expect(err.sending).toBe(true);
@@ -616,13 +616,13 @@ describe("hosted approvals", () => {
     expect(err.next).toMatch(/read whether anything landed/);
   });
 
-  it("no owner named, and the cancel gets no clear answer: no claim that nothing was sent", async () => {
+  it("no owner named, and the cancel gets no clear answer: unknown (sending), no claim that nothing was sent", async () => {
     site.owner = null;
     site.cancelFails = true;
     const err = await grant(client()).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
-    expect(err.sending).toBe(false);
-    expect(err.message).toMatch(/This command did not show an approval link\. Check wallet activity before retrying$/);
+    expect(err.sending).toBe(true);
+    expect(err.message).toMatch(/The site did not confirm the request was cancelled before the owner's wallet was asked, so whether anything was sent is unknown; read the chain before retrying$/);
     expect(err.message).not.toMatch(/nothing was sent/);
   });
 
@@ -835,7 +835,8 @@ describe("hosted approvals", () => {
       expect(JSON.stringify(o)).not.toMatch(/untrusted|ssbt_/);
       if (kind === "bundle") expect((await h.bundle!).steps).toMatchObject([{ state: "skipped", walletAsked: false }]);
       expect(reads).toBe(kind === "transaction" ? 2 : 1);
-      expect(site.requests[0]).toMatchObject({ state: "awaiting_owner", cancels: 0 });
+      // an unapproved link with steps is withdrawn on the site first: only a confirmed withdrawal makes its steps "nothing sent"
+      expect(site.requests[0]).toMatchObject(kind === "bundle" ? { state: "cancelled", cancels: 1 } : { state: "awaiting_owner", cancels: 0 });
       await c.close();
     });
   }
