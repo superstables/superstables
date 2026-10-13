@@ -7,7 +7,7 @@ import { appendFileSync, mkdtempSync, readdirSync, readFileSync, statSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Records } from "../../src/core/records.js";
+import { Records, attemptRunner } from "../../src/core/records.js";
 import type { Attempt, PaymentTerms, Quote, Receipt } from "../../src/core/types.js";
 
 const dirs: string[] = [];
@@ -99,6 +99,41 @@ describe("Records", () => {
     // Append-only: the superseded line is still on disk.
     const lines = readFileSync(join(r.dir, "quotes.jsonl"), "utf8").trim().split("\n");
     expect(lines).toHaveLength(3);
+  });
+
+  it("keeps the process running an attempt on disk for the lock checks, and out of every attempt it returns", () => {
+    const r = records();
+    const runner = { pid: 4242, start: "linux:boot:1", hostname: "owner-laptop", hostId: "a".repeat(32), bootId: "boot" };
+    const attempt: Attempt = {
+      id: "a1",
+      quoteId: "q1",
+      createdAt: "2026-01-01T10:00:01.000Z",
+      updatedAt: "2026-01-01T10:00:01.000Z",
+      state: "awaiting_approval",
+      url: "http://127.0.0.1/x",
+      paymentMemo: "memo",
+      terms: terms(),
+      history: [{ at: "2026-01-01T10:00:01.000Z", state: "awaiting_approval" }],
+    };
+    expect(r.saveAttempt({ ...attempt, runner } as Attempt)).not.toHaveProperty("runner");
+    // A later line, written from an attempt read back, keeps the runner the attempt started with.
+    r.saveAttempt({ ...r.getAttempt("a1")!, state: "approved" });
+
+    const lines = readFileSync(join(r.dir, "attempts.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(lines.map((l) => l.runner)).toEqual([runner, runner]);
+    expect(attemptRunner(r, "a1")).toEqual(runner);
+    for (const read of [r.getAttempt("a1"), r.listAttempts()[0], r.attemptForQuote("q1"), r.attemptsWithMemo("memo")[0]]) {
+      expect(read).toMatchObject({ id: "a1", state: "approved" });
+      expect(read).not.toHaveProperty("runner");
+    }
+
+    // A line written without one (a released runner) leaves none to carry on.
+    appendFileSync(join(r.dir, "attempts.jsonl"), `${JSON.stringify({ ...lines[1], runner: undefined, state: "submitting" })}\n`);
+    r.saveAttempt({ ...r.getAttempt("a1")!, state: "uncertain" });
+    expect(attemptRunner(r, "a1")).toBeUndefined();
+    // The process running it names itself again on every line it writes.
+    r.saveAttempt({ ...r.getAttempt("a1")!, runner } as Attempt);
+    expect(attemptRunner(r, "a1")).toEqual(runner);
   });
 
   it("creates its files readable by their owner only", () => {

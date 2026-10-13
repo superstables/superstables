@@ -10,7 +10,22 @@ import { join } from "node:path";
 import { networkFor } from "./chain.js";
 import { ensureDir, recordsDir } from "./home.js";
 import { capUnit, round6 } from "./policy.js";
+import type { thisProcess } from "./lock.js";
 import type { Attempt, Quote, Receipt } from "./types.js";
+
+/**
+ * The process running an attempt (its pid, that process's start identity where the system gives one, and its machine:
+ * hostname, machine and boot ids): while it runs, it carries the attempt on; once it is gone, an attempt it left approved
+ * or submitting is for `superstables status` to reconcile from the chain. The attempt's line on disk keeps it for those
+ * checks, which read it with attemptRunner; no attempt Records returns carries it.
+ */
+export type AttemptRunner = ReturnType<typeof thisProcess>;
+type StoredAttempt = Attempt & { runner?: AttemptRunner };
+
+/** The process recorded as running attempt `id`, as its newest line on disk says. */
+export function attemptRunner(records: Records, id: string): AttemptRunner | undefined {
+  return rowsById<StoredAttempt>(join(records.dir, "attempts.jsonl")).get(id)?.runner;
+}
 
 /** How long a reservation without a recorded end counts: the longest default approval window, and more. */
 const RESERVATION_FALLBACK_MS = 10 * 60_000;
@@ -104,9 +119,14 @@ export class Records {
 
   // ── Attempts ─────────────────────────────────────────────────────────────────────────
 
+  /**
+   * The process running the attempt saves it with its runner (see PaymentEngine). Any other save keeps the one the newest
+   * line has (none, once `superstables budget unlock --attempt` released it).
+   */
   saveAttempt(attempt: Attempt): Attempt {
-    const normalized = { ...attempt, chainFinal: attempt.chainFinal ?? null };
-    this.append("attempts.jsonl", normalized);
+    const { runner = attemptRunner(this, attempt.id), ...normalized }: StoredAttempt = { ...attempt, chainFinal: attempt.chainFinal ?? null };
+    const row: StoredAttempt = runner ? { ...normalized, runner } : normalized;
+    this.append("attempts.jsonl", row);
     return normalized;
   }
 
@@ -317,36 +337,43 @@ export class Records {
     appendFileSync(path, `${prefix}${JSON.stringify(row)}\n`, { mode: FILE_MODE });
   }
 
-  /**
-   * Reads a file into "latest row per id". A half-written last line (a crash mid-append,
-   * a truncated copy) is skipped rather than allowed to hide every record behind it.
-   */
+  /** Latest row per id. Attempts and receipts read without a runner (see attemptRunner), and chainFinal null if unset. */
   private byId<T extends Identified>(file: string): Map<string, T> {
-    const rows = new Map<string, T>();
-    let text: string;
-    try {
-      text = readFileSync(this.path(file), "utf8");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return rows;
-      throw err;
-    }
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      let row: T;
-      try {
-        row = JSON.parse(line) as T;
-      } catch {
-        continue; // a torn line: skip it, keep reading
-      }
-      if (row && typeof row.id === "string") {
-        if (file === "attempts.jsonl" || file === "receipts.jsonl") {
-          row = { chainFinal: null, ...row };
-        }
-        rows.set(row.id, row);
-      }
+    const rows = rowsById<T>(this.path(file));
+    if (file !== "attempts.jsonl" && file !== "receipts.jsonl") return rows;
+    for (const [id, row] of rows) {
+      const shown = { chainFinal: null, ...row };
+      delete (shown as { runner?: unknown }).runner;
+      rows.set(id, shown);
     }
     return rows;
   }
+}
+
+/**
+ * Reads a file into "latest row per id". A half-written last line (a crash mid-append,
+ * a truncated copy) is skipped rather than allowed to hide every record behind it.
+ */
+function rowsById<T extends Identified>(path: string): Map<string, T> {
+  const rows = new Map<string, T>();
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return rows;
+    throw err;
+  }
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let row: T;
+    try {
+      row = JSON.parse(line) as T;
+    } catch {
+      continue; // a torn line: skip it, keep reading
+    }
+    if (row && typeof row.id === "string") rows.set(row.id, row);
+  }
+  return rows;
 }
 
 /** A claim's file name: a hash of the quote id, so no id can name a path. */

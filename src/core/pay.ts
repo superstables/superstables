@@ -22,7 +22,7 @@ import { MAX_CHALLENGE_BYTES, NotPaidEndpointError, readBody, readCapped, readSe
 import { readMppReceipt } from "./mpp.js";
 import { untrustedText } from "./text.js";
 import type { ChainCheck } from "./settlement.js";
-import { Records } from "./records.js";
+import { Records, attemptRunner, type AttemptRunner } from "./records.js";
 import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
 import { evaluatePolicy, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
@@ -92,6 +92,8 @@ export class PaymentEngine {
   private readonly now: () => number;
   /** Attempts this process is running, so a caller sees the live state without a file read. */
   private readonly live = new Map<string, Attempt>();
+  /** The process recorded on each attempt this one started: every line it writes names it again, as when it started. */
+  private readonly runners = new Map<string, AttemptRunner>();
 
   constructor(options: PaymentEngineOptions) {
     this.records = options.records;
@@ -132,7 +134,6 @@ export class PaymentEngine {
       serviceId: quote.serviceId,
       serviceName: quote.serviceName,
       terms: quote.terms,
-      runner: thisProcess(),
       history: [{ at, state: "awaiting_approval" }],
     };
     // Claim the quote before any await, and across processes: another `pay` sharing these records may have
@@ -141,7 +142,8 @@ export class PaymentEngine {
     const holder = this.records.claimQuote(quote.id, attempt.id);
     if (holder !== undefined) throw new QuoteUsedError(quote.id, holder ? this.claimedBy(holder) : undefined);
     this.records.saveQuote({ ...quote, status: "used" });
-    this.records.saveAttempt(attempt);
+    this.runners.set(attempt.id, thisProcess());
+    this.save(attempt);
     this.live.set(attempt.id, attempt);
     this.events.emit("transition", attempt);
 
@@ -189,6 +191,12 @@ export class PaymentEngine {
     });
   }
 
+  /** Write an attempt this process runs, naming this process as its runner on the line (see Records.saveAttempt). */
+  private save(attempt: Attempt): void {
+    const runner = this.runners.get(attempt.id);
+    this.records.saveAttempt(runner ? ({ ...attempt, runner } as Attempt) : attempt);
+  }
+
   /** Is this attempt's cap reservation still running? */
   private reservationOpen(attempt: Attempt): boolean {
     const until = attempt.reservedUntil ? Date.parse(attempt.reservedUntil) : NaN;
@@ -210,7 +218,7 @@ export class PaymentEngine {
     if (judged.allowed) {
       attempt.reservedAt = new Date(now).toISOString();
       attempt.reservedUntil = new Date(now + (this.signer.approvalWindowMs ?? DEFAULT_APPROVAL_WINDOW_MS) + RESERVATION_GRACE_MS).toISOString();
-      this.records.saveAttempt(attempt);
+      this.save(attempt);
     }
     return judged;
   }
@@ -881,7 +889,7 @@ export class PaymentEngine {
     attempt.state = state;
     attempt.updatedAt = new Date().toISOString();
     attempt.history.push({ at: attempt.updatedAt, state, ...(note ? { note } : {}) });
-    this.records.saveAttempt(attempt);
+    this.save(attempt);
     this.events.emit("transition", attempt);
     return attempt;
   }
@@ -997,7 +1005,7 @@ export async function recheckChain(records: Records, id: string, rpc?: string | 
   // A seller's answer waiting to be recorded is recorded before anything else is decided.
   if (records.pendingAnswer(id)) attempt = await commit(records, attempt, (_records, current) => current);
   if (attempt.state === "approved" || attempt.state === "submitting") {
-    if (processRunning(attempt.runner)) return records.getAttempt(attempt.id) ?? attempt;
+    if (processRunning(attemptRunner(records, attempt.id))) return records.getAttempt(attempt.id) ?? attempt;
     attempt = await commit(records, attempt, orphaned);
   }
   if (rejectedTransaction(attempt) || rejectedTransaction(receiptOf(records, attempt))) return reconcile(records, attempt, rail, options);
@@ -1105,7 +1113,7 @@ function recordChain(records: Records, attempt: Attempt, check: ChainCheck): Att
 
 /** An attempt left approved or submitting by a process that is gone: whether its payment moved is unknown. */
 function orphaned(records: Records, attempt: Attempt): Attempt {
-  if ((attempt.state !== "approved" && attempt.state !== "submitting") || processRunning(attempt.runner)) return records.getAttempt(attempt.id) ?? attempt;
+  if ((attempt.state !== "approved" && attempt.state !== "submitting") || processRunning(attemptRunner(records, attempt.id))) return records.getAttempt(attempt.id) ?? attempt;
   const at = new Date().toISOString();
   const updated: Attempt = {
     ...attempt,
@@ -1515,15 +1523,14 @@ export function paymentOutput(record: Attempt | Receipt) {
 /**
  * An attempt as it may be printed as JSON: the transaction, its link and the payer checked as for a receipt, and the
  * seller's own text (its answer and its reason) moved under `untrusted_seller_data`, together with any transaction,
- * link or payer the record holds that did not pass the check (a record from an earlier version may). The runner stays in
- * the record only: it names this machine (hostname, machine and boot ids) and only the lock checks read it.
+ * link or payer the record holds that did not pass the check (a record from an earlier version may).
  */
-export function shownAttempt(attempt: Attempt): Omit<Attempt, "serviceBody" | "serviceReason" | "chainFinal" | "chainMismatch" | "runner"> & {
+export function shownAttempt(attempt: Attempt): Omit<Attempt, "serviceBody" | "serviceReason" | "chainFinal" | "chainMismatch"> & {
   chain_final: boolean | null;
   chain_mismatch?: Attempt["chainMismatch"];
   untrusted_seller_data?: { serviceBody?: string; serviceReason?: string; transaction?: string; transactionUrl?: string; payer?: string };
 } {
-  const { serviceBody, serviceReason, transaction, transactionUrl, payer, chainFinal: _finality, chainMismatch, runner: _runner, ...rest } = attempt;
+  const { serviceBody, serviceReason, transaction, transactionUrl, payer, chainFinal: _finality, chainMismatch, ...rest } = attempt;
   const tx = shownTransaction(transaction, attempt.terms.network);
   const checkedPayer = shownPayer(payer, attempt.terms.network);
   const untrusted = {
