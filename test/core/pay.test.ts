@@ -184,6 +184,7 @@ describe("PaymentEngine", () => {
     expect(refused).toBeInstanceOf(QuoteUsedError);
     expect((refused as QuoteUsedError).attempt?.id).toBe(first.id);
     expect((refused as QuoteUsedError).attempt?.state).toBe(s.engine.getAttempt(first.id)?.state);
+    expect((refused as QuoteUsedError).attempt).not.toHaveProperty("runner");
     expect((refused as Error).message).not.toContain("(not final)");
     expect(s.engine.listAttempts()).toHaveLength(1);
   });

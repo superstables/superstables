@@ -120,11 +120,11 @@ export class Records {
   // ── Attempts ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * `runner` is given by the process running the attempt. Any other save keeps the one the newest line has (none, once
-   * `superstables budget unlock --attempt` released it).
+   * The process running the attempt saves it with its runner (see PaymentEngine). Any other save keeps the one the newest
+   * line has (none, once `superstables budget unlock --attempt` released it).
    */
-  saveAttempt(attempt: Attempt, runner: AttemptRunner | undefined = attemptRunner(this, attempt.id)): Attempt {
-    const { runner: _given, ...normalized }: StoredAttempt = { ...attempt, chainFinal: attempt.chainFinal ?? null };
+  saveAttempt(attempt: Attempt): Attempt {
+    const { runner = attemptRunner(this, attempt.id), ...normalized }: StoredAttempt = { ...attempt, chainFinal: attempt.chainFinal ?? null };
     const row: StoredAttempt = runner ? { ...normalized, runner } : normalized;
     this.append("attempts.jsonl", row);
     return normalized;

@@ -115,14 +115,12 @@ describe("Records", () => {
       terms: terms(),
       history: [{ at: "2026-01-01T10:00:01.000Z", state: "awaiting_approval" }],
     };
-    expect(r.saveAttempt(attempt, runner)).not.toHaveProperty("runner");
+    expect(r.saveAttempt({ ...attempt, runner } as Attempt)).not.toHaveProperty("runner");
     // A later line, written from an attempt read back, keeps the runner the attempt started with.
     r.saveAttempt({ ...r.getAttempt("a1")!, state: "approved" });
-    // So does one handed a runner from an earlier version's record.
-    r.saveAttempt({ ...r.getAttempt("a1")!, runner: { pid: 1 } } as Attempt);
 
     const lines = readFileSync(join(r.dir, "attempts.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    expect(lines.map((l) => l.runner)).toEqual([runner, runner, runner]);
+    expect(lines.map((l) => l.runner)).toEqual([runner, runner]);
     expect(attemptRunner(r, "a1")).toEqual(runner);
     for (const read of [r.getAttempt("a1"), r.listAttempts()[0], r.attemptForQuote("q1"), r.attemptsWithMemo("memo")[0]]) {
       expect(read).toMatchObject({ id: "a1", state: "approved" });
@@ -130,11 +128,11 @@ describe("Records", () => {
     }
 
     // A line written without one (a released runner) leaves none to carry on.
-    appendFileSync(join(r.dir, "attempts.jsonl"), `${JSON.stringify({ ...lines[2], runner: undefined, state: "submitting" })}\n`);
+    appendFileSync(join(r.dir, "attempts.jsonl"), `${JSON.stringify({ ...lines[1], runner: undefined, state: "submitting" })}\n`);
     r.saveAttempt({ ...r.getAttempt("a1")!, state: "uncertain" });
     expect(attemptRunner(r, "a1")).toBeUndefined();
     // The process running it names itself again on every line it writes.
-    r.saveAttempt(r.getAttempt("a1")!, runner);
+    r.saveAttempt({ ...r.getAttempt("a1")!, runner } as Attempt);
     expect(attemptRunner(r, "a1")).toEqual(runner);
   });
 

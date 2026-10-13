@@ -143,7 +143,7 @@ export class PaymentEngine {
     if (holder !== undefined) throw new QuoteUsedError(quote.id, holder ? this.claimedBy(holder) : undefined);
     this.records.saveQuote({ ...quote, status: "used" });
     this.runners.set(attempt.id, thisProcess());
-    this.records.saveAttempt(attempt, this.runners.get(attempt.id));
+    this.save(attempt);
     this.live.set(attempt.id, attempt);
     this.events.emit("transition", attempt);
 
@@ -191,6 +191,12 @@ export class PaymentEngine {
     });
   }
 
+  /** Write an attempt this process runs, naming this process as its runner on the line (see Records.saveAttempt). */
+  private save(attempt: Attempt): void {
+    const runner = this.runners.get(attempt.id);
+    this.records.saveAttempt(runner ? ({ ...attempt, runner } as Attempt) : attempt);
+  }
+
   /** Is this attempt's cap reservation still running? */
   private reservationOpen(attempt: Attempt): boolean {
     const until = attempt.reservedUntil ? Date.parse(attempt.reservedUntil) : NaN;
@@ -212,7 +218,7 @@ export class PaymentEngine {
     if (judged.allowed) {
       attempt.reservedAt = new Date(now).toISOString();
       attempt.reservedUntil = new Date(now + (this.signer.approvalWindowMs ?? DEFAULT_APPROVAL_WINDOW_MS) + RESERVATION_GRACE_MS).toISOString();
-      this.records.saveAttempt(attempt, this.runners.get(attempt.id));
+      this.save(attempt);
     }
     return judged;
   }
@@ -883,7 +889,7 @@ export class PaymentEngine {
     attempt.state = state;
     attempt.updatedAt = new Date().toISOString();
     attempt.history.push({ at: attempt.updatedAt, state, ...(note ? { note } : {}) });
-    this.records.saveAttempt(attempt, this.runners.get(attempt.id));
+    this.save(attempt);
     this.events.emit("transition", attempt);
     return attempt;
   }
