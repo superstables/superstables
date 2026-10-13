@@ -745,6 +745,32 @@ describe("find", () => {
     expect(JSON.parse(j.stdout).services).toEqual(r.result.services);
   }, 30_000);
 
+  it("next never carries listing text", async () => {
+    const hostile = { name: "Weather", price: "0.001", url: "https://seller.example/w" };
+    const cases: { rows: object[]; next: string; chain?: string; rail?: string }[] = [
+      // an unknown network: the listing's chain and rail are data, so the command stays a placeholder
+      { rows: [{ ...hostile, network: "eip155:999999", rail: "evm", chain: "base-sepolia;touch${IFS}/tmp/x;#" }], next: "superstables budget preflight --rail R --chain C --url U, with R and C from the listing" },
+      // a known network under another chain's name: the client's table wins
+      { rows: [{ ...hostile, network: "eip155:84532", chain: "arc-testnet;id", rail: "tempo" }], next: "superstables budget preflight --rail evm --chain base-sepolia --url U", chain: "base-sepolia", rail: "evm" },
+      // a network no rail pays
+      { rows: [{ ...hostile, network: "cosmos:1", rail: "evm;id" }], next: "superstables budget preflight --rail R --chain C --url U, with R and C from the listing" },
+      { rows: [1, 2, 3].map(() => ({ ...hostile, network: "eip155:999999", rail: "evm", chain: "base-sepolia;touch${IFS}/tmp/x;#" })), next: "superstables budget preflight --rail R --chain C --url U, with R and C from the listing" },
+      // a network named like an inherited property is not a known one
+      ...["constructor", "__proto__", "toString"].map((network) => ({ rows: [{ ...hostile, network, chain: "arc-testnet" }], next: "superstables budget preflight --rail R --chain C --url U, with R and C from the listing" })),
+    ];
+    for (const c of cases) {
+      site.services = c.rows;
+      for (const args of [["find", "--site", site.url], ["find", "--json", "--site", site.url]]) {
+        const r = await budget(args);
+        expect(r.code, r.stderr).toBe(0);
+        const out = args.includes("--json") ? JSON.parse(r.stdout) : r.result;
+        expect(out.next).toBe(`check the price with ${c.next} before you buy`);
+        for (const bad of [";", "$", "`", "|", "&", "tmp", "id", "cosmos", "arc-testnet", "tempo"]) expect(out.next).not.toContain(bad);
+        if (c.chain) expect(out.services[0]).toMatchObject({ chain: c.chain, rail: c.rail });
+      }
+    }
+  }, 60_000);
+
   describe("every rail and chain, and whether a listing is simulated", () => {
     // the shape GET /api/v1/budget/services has on the site: rail and chain named, `sample` for prepared output
     beforeEach(() => {

@@ -364,8 +364,11 @@ function serviceOf(s, chainByNetwork) {
   const amount = p && typeof p === "object" ? str(p.amount ?? p.value) : str(p ?? s.amount);
   const asset = p && typeof p === "object" ? str(p.asset ?? p.currency ?? p.symbol) : str(s.asset ?? s.currency) ?? "USDC";
   const network = str(s.network ?? s.chain_id ?? s.chainId);
-  const chain = str(s.chain) ?? (network ? chainByNetwork[network] ?? null : null);
-  return { name: str(s.name ?? s.title) ?? new URL(url).host, price: amount ? `${amount}${asset ? ` ${asset}` : ""}` : null, chain, network, rail: str(s.rail) ?? railOf(network), simulated: simulatedOf(s), url };
+  // the client's own key for a network it knows; the listing's own chain and rail words only for one it does not (data)
+  const known = network && Object.hasOwn(chainByNetwork, network) ? chainByNetwork[network] : undefined;
+  const chain = known ?? str(s.chain);
+  const rail = known ? railOf(network) : str(s.rail) ?? railOf(network);
+  return { name: str(s.name ?? s.title) ?? new URL(url).host, price: amount ? `${amount}${asset ? ` ${asset}` : ""}` : null, chain, network, rail, simulated: simulatedOf(s), url };
 }
 
 /**

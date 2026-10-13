@@ -1111,6 +1111,8 @@ describe("find: the site's list of services", () => {
         { name: "Bad\nname", price: "0.01", chain: "arc-testnet", url: "https://arc.example/x" },
         { name: "Briefing", price: "0.003", network: "eip155:84532", sample: true, url: "https://seller.example/briefing" },
         { name: "Market", price: "0.01", network: "eip155:84532", simulated: false, sample: "yes", url: "https://seller.example/market" },
+        { name: "Mislabelled", price: "0.01", network: "eip155:84532", chain: "arc-testnet", url: "https://seller.example/mislabelled" },
+        { name: "Proto", price: "0.01", network: "constructor", chain: "arc-testnet", url: "https://seller.example/proto" },
       ] };
       const r = await listSiteServices({ site: site.url, chainByNetwork: { "eip155:84532": "base-sepolia" } });
       // simulated: the site's simulated, mock or sample flag when it is true or false; null when it gives none
@@ -1119,6 +1121,10 @@ describe("find: the site's list of services", () => {
         { name: "Bad name", price: "0.01 USDC", chain: "arc-testnet", network: null, rail: null, simulated: null, url: "https://arc.example/x" },
         { name: "Briefing", price: "0.003 USDC", chain: "base-sepolia", network: "eip155:84532", rail: "evm", simulated: true, url: "https://seller.example/briefing" },
         { name: "Market", price: "0.01 USDC", chain: "base-sepolia", network: "eip155:84532", rail: "evm", simulated: false, url: "https://seller.example/market" },
+        // the network is one the client knows: its own chain and rail win over the listing's words
+        { name: "Mislabelled", price: "0.01 USDC", chain: "base-sepolia", network: "eip155:84532", rail: "evm", simulated: null, url: "https://seller.example/mislabelled" },
+        // a network named like an inherited property is not one the client knows: the listing's words stay data
+        { name: "Proto", price: "0.01 USDC", chain: "arc-testnet", network: "constructor", rail: null, simulated: null, url: "https://seller.example/proto" },
       ] });
     } finally {
       await site.close();
