@@ -544,6 +544,134 @@ describe("quote, pay and status against a local seller", () => {
   }, 90_000);
 });
 
+// ── The account's own policy, which an agent's environment cannot lift ─────────────────
+
+describe("the account's own spend policy", () => {
+  const servers: TestServer[] = [];
+  let url = "";
+  let account = "";
+  let other = "";
+
+  beforeAll(async () => {
+    const facilitator = await startFacilitator();
+    const seller = await startPaidEndpoint(facilitator.url, { price: 0.5 });
+    servers.push(facilitator, seller);
+    url = `${seller.url}/v1/market?asset=BTC`;
+  });
+
+  afterAll(async () => {
+    await Promise.all(servers.map((server) => server.close()));
+  });
+
+  // The account's home directory is what the test setup (test/account-guard.mjs) hands out as the user's own.
+  beforeEach(() => {
+    account = join(home, "account");
+    other = join(home, "other");
+    mkdirSync(join(account, ".superstables"), { recursive: true });
+    mkdirSync(other);
+  });
+
+  const accountPolicy = (text: string) => writeFileSync(join(account, ".superstables", "policy.yaml"), text);
+  const env = () => ({ SUPERSTABLES_TEST_ACCOUNT_HOME: account });
+
+  it("refuses when the account's kill switch is on, whichever policy or home the environment names", async () => {
+    accountPolicy("kill_switch: true\n");
+    const reason = `kill_switch is on (in ${join(account, ".superstables", "policy.yaml")})`;
+    const attempts: [string[], Record<string, string>][] = [
+      [["quote", url], { SUPERSTABLES_POLICY: "/dev/null" }],
+      [["--home", other, "quote", url], {}],
+      [["quote", url], { SUPERSTABLES_HOME: other }],
+      [["quote", url], { HOME: other }],
+      [["quote", url], { HOME: other, SUPERSTABLES_HOME: other, SUPERSTABLES_POLICY: "/dev/null" }],
+    ];
+    for (const [args, extra] of attempts) {
+      const result = await run(args, { ...env(), ...extra });
+      expect(result.code, args.join(" ")).toBe(3);
+      expect(result.stdout, args.join(" ")).toContain(reason);
+      // The file to edit is the one that refused, not the /dev/null or the other home the environment named.
+      expect(result.stdout, args.join(" ")).toContain(`the owner edits ${join(account, ".superstables", "policy.yaml")} if they are wrong`);
+    }
+  }, 90_000);
+
+  it("with no account file, an empty policy file still holds the default caps", async () => {
+    const result = await run(["quote", url], { ...env(), SUPERSTABLES_POLICY: "/dev/null" });
+    expect(result.code).toBe(3);
+    expect(result.stdout).toContain("0.5 USDC exceeds caps.per_call (0.05 USDC)");
+  }, 90_000);
+
+  it("stops on a policy file it cannot read as written, naming the key", async () => {
+    const yes = join(home, "yes.yaml");
+    writeFileSync(yes, "kill_switch: yes\n");
+    const result = await run(["quote", url], { ...env(), SUPERSTABLES_POLICY: yes });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("kill_switch must be true or false");
+    expect(result.stderr).toContain(yes);
+    expect(result.stdout).not.toContain("allowed");
+  }, 90_000);
+
+  it("stops on an account file it cannot read as written", async () => {
+    accountPolicy("kill_switch: maybe\n");
+    const result = await run(["quote", url], { ...env(), SUPERSTABLES_POLICY: "/dev/null" });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("kill_switch must be true or false");
+  }, 90_000);
+
+  it("makes `doctor` report an account file it cannot read as a problem, and a good one as in place", async () => {
+    accountPolicy("kill_swtich: true\n");
+    const bad = JSON.parse((await run(["doctor", "--json"], env())).stdout) as { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] };
+    const check = bad.checks.find((c) => c.name === "account spend policy");
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toContain("unknown key");
+    expect(bad.ok).toBe(false);
+
+    accountPolicy("caps:\n  per_call: 0.02 USDC\n");
+    const good = JSON.parse((await run(["doctor", "--json"], env())).stdout) as { checks: { name: string; ok: boolean; detail: string }[] };
+    const fine = good.checks.find((c) => c.name === "account spend policy");
+    expect(fine?.ok).toBe(true);
+    expect(fine?.detail).toContain("up to 0.02 USDC per payment");
+
+    const none = JSON.parse((await run(["doctor", "--json"], { SUPERSTABLES_TEST_ACCOUNT_HOME: join(home, "nobody") })).stdout) as { checks: { name: string }[] };
+    expect(none.checks.map((c) => c.name)).not.toContain("account spend policy");
+  }, 90_000);
+
+  // Root bypasses file modes, so the closed directory cannot be shown there.
+  it.skipIf(process.getuid?.() === 0)("refuses, and `doctor` reports a problem, when the account's file is behind a directory it may not enter", async () => {
+    accountPolicy("kill_switch: true\n");
+    const closed = join(account, ".superstables");
+    chmodSync(closed, 0o000);
+    try {
+      const quoted = await run(["quote", url], { ...env(), SUPERSTABLES_POLICY: "/dev/null" });
+      expect(quoted.code).not.toBe(0);
+      expect(quoted.stdout).not.toContain("allowed");
+      expect(quoted.stderr).toContain("cannot be used");
+      expect(quoted.stderr).toContain("until then nothing is paid");
+
+      const doctor = JSON.parse((await run(["doctor", "--json"], env())).stdout) as { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] };
+      const check = doctor.checks.find((c) => c.name === "account spend policy");
+      expect(check?.ok).toBe(false);
+      expect(check?.detail).toContain("cannot be used");
+      expect(doctor.ok).toBe(false);
+    } finally {
+      chmodSync(closed, 0o700);
+    }
+  }, 90_000);
+
+  it("shows the account's policy in `policy show` when it applies as well", async () => {
+    accountPolicy("caps:\n  per_call: 0.02 USDC\n");
+    const shown = await run(["policy", "show"], env());
+    expect(shown.code).toBe(0);
+    expect(shown.stdout).toContain("also applies");
+    expect(shown.stdout).toContain(join(account, ".superstables", "policy.yaml"));
+    expect(shown.stdout).toContain("per_call: 0.02 USDC");
+
+    const json = JSON.parse((await run(["policy", "show", "--json"], env())).stdout) as { also?: { file: string } };
+    expect(json.also?.file).toBe(join(account, ".superstables", "policy.yaml"));
+
+    const alone = await run(["policy", "show"], { SUPERSTABLES_TEST_ACCOUNT_HOME: join(home, "nobody") });
+    expect(alone.stdout).not.toContain("also applies");
+  }, 90_000);
+});
+
 // ── find: the commands for each listing fit the ways it can be paid ──────────────────
 
 describe("find against a local index", () => {

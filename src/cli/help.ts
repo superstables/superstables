@@ -129,7 +129,7 @@ Discovery:
 Environment:
   SUPERSTABLES_HOME              where state lives (default ~/.superstables)
   SUPERSTABLES_WALLET            browser (default) or local: who signs pay's payments
-  SUPERSTABLES_POLICY            the spend policy file (default $SUPERSTABLES_HOME/policy.yaml)
+  SUPERSTABLES_POLICY            the spend policy file (default $SUPERSTABLES_HOME/policy.yaml); ~/.superstables/policy.yaml applies as well when it exists
   SUPERSTABLES_INDEX_URL         the index find reads; \`off\` to skip it
   SUPERSTABLES_DEMO_SERVICES     on: also list Superstables' testnet services from the catalogue on superstables.com
                                  (most are simulated; the market data service returns live prices)
