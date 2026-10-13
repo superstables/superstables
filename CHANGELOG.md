@@ -11,6 +11,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `@superstables/client/seller` reads the `Superstables-Referral` header on a paid request and verifies the token against the keys superstables.com publishes. See `docs/seller-referrals.md`.
 - When a listing from the Superstables index carries a referral, `pay` sends it to that seller with the paid request, with the attempt id as `Superstables-Purchase-Ref`. Receipts record `discoveredVia` and the referral's id, listing and terms, never the token. `SUPERSTABLES_REFERRALS=off` turns this off.
+- On EVM chains, a referred payment carries its referral in the EIP-3009 nonce: the marker `SSRF`, the 16 bytes of the referral id, then 12 random bytes. The token is sent only when the signed nonce names the same referral. See `docs/seller-referrals.md`.
+- `superstables budget buy` on an EVM chain sends the seller's referral too, and marks its nonce the same way. The operation keeps its referral and nonce for every run under the same `--op`.
 - `superstables demo-service` can publish a claim challenge (`SUPERSTABLES_CLAIM_CHALLENGE`). It is off unless set.
 
 ## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana

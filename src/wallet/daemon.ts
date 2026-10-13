@@ -22,6 +22,7 @@ import { homedir } from "node:os";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import type { PaymentRequirements } from "@x402/core/types";
+import type { Hex } from "viem";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { DEFAULT_NETWORK, evmNetworkFor, fromAtomic, usdcBalance } from "../core/chain.js";
 import { DEFAULT_WALLET_PORT, ensureDir, policyPath, walletDir } from "../core/home.js";
@@ -103,6 +104,8 @@ interface WalletRequestRecord {
   /** The seller's requirement verbatim: what an approval signs, byte for byte. */
   requirement?: PaymentRequirements;
   x402Version: 1 | 2;
+  /** The authorization's nonce the agent's payment engine chose, so a referred payment carries its referral. */
+  nonce?: Hex;
   result?: Eip3009SignResult;
 }
 
@@ -301,6 +304,11 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       audit(record);
       return record;
     }
+    if (request.nonce !== undefined && !(typeof request.nonce === "string" && /^0x[0-9a-fA-F]{64}$/.test(request.nonce))) {
+      record.reason = "the request's authorization nonce is not 32 bytes of hex";
+      audit(record);
+      return record;
+    }
 
     // The single source of truth for what the owner is shown, and for what gets signed.
     const judged = termsFor(request.requirements as RawAccept, version);
@@ -317,6 +325,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     }
     record.verified = { ...judged.terms, payer: account.address };
     record.requirement = judged.requirement;
+    if (request.nonce) record.nonce = request.nonce;
 
     const verdict = evaluatePolicy(policy, {
       domain: policyDomain(reported),
@@ -345,6 +354,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       // Exactly the requirement that was checked and shown, not a rebuilt one.
       requirements: record.requirement as PaymentRequirements,
       x402Version: record.x402Version,
+      ...(record.nonce ? { nonce: record.nonce } : {}),
     });
     record.result = result;
     record.status = "signed";

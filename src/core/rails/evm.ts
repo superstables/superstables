@@ -6,6 +6,7 @@
 import { encodePaymentSignatureHeader } from "@x402/core/http";
 import type { PaymentRequirements } from "@x402/core/types";
 import { BASE_SEPOLIA, EVM_NETWORKS, fromAtomic, isSameAddress, isTransactionId, type NetworkInfo } from "../chain.js";
+import { referralNonce } from "../referral-nonce.js";
 import { checkSettlement, findAuthorization } from "../settlement.js";
 import { untrustedText } from "../text.js";
 import type { SignResult } from "../signer/types.js";
@@ -75,8 +76,8 @@ export const evmRail: X402Rail = {
     return { supported: true, offer: { rail: "evm", terms, requirement } };
   },
 
-  signRequest(offer, x402Version, context) {
-    return { kind: "eip3009", requirements: offer.requirement as PaymentRequirements, x402Version, context };
+  signRequest(offer, x402Version, context, referralId) {
+    return { kind: "eip3009", requirements: offer.requirement as PaymentRequirements, x402Version, nonce: referralNonce(referralId), context };
   },
 
   signedFacts(signed: SignResult): SignedFacts {
@@ -110,8 +111,8 @@ export const evmRail: X402Rail = {
     );
   },
 
-  // The nonce is this payment's alone (32 random bytes, chosen when the page built the typed data), so a transaction that
-  // used it is this payment, whichever attempt's seller named it.
+  // The nonce is this payment's alone (random, after the referral marker when there is one: core/referral-nonce.ts), so a
+  // transaction that used it is this payment, whichever attempt's seller named it.
   findPayment(facts: PaymentFacts, options: ChainReadOptions) {
     const network = NETWORKS.find((n) => n.caip2 === facts.network);
     return findAuthorization(

@@ -112,10 +112,29 @@ find`, or `superstables quote --service` with an index listing), by the origin o
 endpoint, in `records/referrals.json` (mode 0600), until the index's `expires_at` or the token's own
 `exp`, whichever is earlier. That file is the only place the client keeps the token. A quote for a
 URL with that exact origin records which referral applies, when the token names that origin as its
-`aud`. The paid request then reads the token from `referrals.json`, if it is still there and has not
-expired, and sends `Superstables-Referral` and `Superstables-Purchase-Ref`, whose value is the
-payment's attempt id. The request that reads the price never carries them, and a referral that
-cannot be recorded is left off rather than holding up the payment.
+`aud`. Before the owner signs, the payment reads the token from `referrals.json`, if it is still
+there and has not expired. The paid request then sends `Superstables-Referral` and
+`Superstables-Purchase-Ref`, whose value is the payment's attempt id. The request that reads the
+price never carries them, and a referral that cannot be recorded is left off rather than holding up
+the payment.
+
+On an EVM chain, the EIP-3009 authorization the owner signs also carries the referral, in its
+32-byte nonce:
+
+| Bytes | Value |
+| --- | --- |
+| 0 to 3 | The marker, ASCII `SSRF` |
+| 4 to 19 | The 16 bytes of the referral id (`ref_` and 22 base64url characters) |
+| 20 to 31 | Random |
+
+The chain records the nonce when the payment settles, in the token's `AuthorizationUsed` event.
+A payment without a referral, or with a referral id in another format, has a nonce of 32 random
+bytes. The client sends the token only when the signed nonce carries the same referral, so a
+Permit2 payment, whose nonce the x402 SDK chooses, carries neither.
+
+`superstables budget buy` on an EVM chain does the same, with the operation id as
+`Superstables-Purchase-Ref`. The operation records its referral and nonce when it starts, and a
+later run under the same `--op` uses them again.
 
 `superstables find --json` shows a listing's `referral` as `{ expiresAt, terms }`, without the token.
 The receipt records `discoveredVia: "superstables"` and `referral: { id, listingId, terms }`.

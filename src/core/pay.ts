@@ -27,7 +27,8 @@ import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
 import { evaluatePolicy, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
 import { firstPayable, railFor } from "./rails/index.js";
-import { referralFor } from "./referrals.js";
+import { nonceReferral } from "./referral-nonce.js";
+import { referralFor, type ActiveReferral } from "./referrals.js";
 import { PURCHASE_REF_HEADER, REFERRAL_HEADER } from "../seller/referral.js";
 import type { ChainReadOptions, Offer, PaymentFacts, PushRail, RailAdapter, X402Rail } from "./rails/types.js";
 import { join } from "node:path";
@@ -355,6 +356,10 @@ export class PaymentEngine {
     }
     if (isFinal(attempt.state)) return;
 
+    // The referral the paid request carries, decided before the owner signs: an EVM authorization's nonce carries it too
+    // (core/referral-nonce.ts), so the nonce signed and the token sent name the same referral.
+    const referral = this.paidReferral(quote);
+
     // 2. Ask the owner. Nothing has left this machine yet.
     let asked = false;
     let signed: SignResult;
@@ -367,7 +372,7 @@ export class PaymentEngine {
           description: quote.description,
           quoteId: quote.id,
           attemptId: attempt.id,
-        }),
+        }, referral?.id),
         {
           // Right before the owner is asked: a reservation that lapsed while the signer started (a slow page start, a
           // slow wallet) is checked against the cap again and renewed, or the payment stops with nobody asked.
@@ -466,15 +471,15 @@ export class PaymentEngine {
       });
       return;
     }
-    if (rail.flow === "push") return this.submitPush(attempt, quote, offer, rail, signed, started);
-    return this.submitX402(attempt, quote, offer, rail, challenge, signed, started);
+    if (rail.flow === "push") return this.submitPush(attempt, quote, offer, rail, signed, referral, started);
+    return this.submitX402(attempt, quote, offer, rail, challenge, signed, referral, started);
   }
 
   /**
    * x402: the owner's wallet signed, nothing has moved. The signature is sent to the seller once; the seller's
    * facilitator settles it and names a transaction, which the chain is read for.
    */
-  private async submitX402(attempt: Attempt, quote: Quote, offer: Offer, rail: X402Rail, challenge: SellerChallenge, signed: SignResult, started: number): Promise<void> {
+  private async submitX402(attempt: Attempt, quote: Quote, offer: Offer, rail: X402Rail, challenge: SellerChallenge, signed: SignResult, referral: ActiveReferral | undefined, started: number): Promise<void> {
     const x402 = challenge.x402;
     if (!x402) {
       this.settleState(attempt, "failed", { reason: "the seller's challenge has no x402 offer to pay" });
@@ -527,7 +532,7 @@ export class PaymentEngine {
     // 3. Replay the request with the credential. From here on the credential has left this
     //    machine, so every failure is a known-unknown, not a clean failure.
     const header = rail.credentialHeaders(offer, signed, x402);
-    const referral = this.referralHeaders(attempt, quote);
+    const referralHeaders = this.referralHeaders(attempt, referral, signed);
     let res: Response;
     const deadline = Date.now() + this.timeoutMs;
     try {
@@ -536,7 +541,7 @@ export class PaymentEngine {
         // The credential is on this request, so it goes to the seller this quote named and nowhere else:
         // a redirect would carry it to a host the operator never chose.
         redirect: "error",
-        headers: { ...header, ...referral, accept: "application/json, */*" },
+        headers: { ...header, ...referralHeaders, accept: "application/json, */*" },
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
@@ -687,7 +692,7 @@ export class PaymentEngine {
    * transfer, with this payment's memo, counts. Then the seller is called once with a credential naming it. A
    * transaction the chain does not show (yet), or shows as something else, ends `uncertain` with the seller not called.
    */
-  private async submitPush(attempt: Attempt, quote: Quote, offer: Offer, rail: PushRail, signed: SignResult, started: number): Promise<void> {
+  private async submitPush(attempt: Attempt, quote: Quote, offer: Offer, rail: PushRail, signed: SignResult, referral: ActiveReferral | undefined, started: number): Promise<void> {
     if (signed.kind !== "tempo-transfer") return;
     // Compared with what was recorded when the wallet was asked, before anything is overwritten.
     const another = attempt.paymentMemo !== signed.memo || !isAddressOn(offer.terms.network, signed.signer) || attempt.payer !== signed.signer;
@@ -722,7 +727,7 @@ export class PaymentEngine {
     }
 
     // The payment is on chain. The seller checks it again and answers once for it.
-    const referral = this.referralHeaders(attempt, quote);
+    const referralHeaders = this.referralHeaders(attempt, referral, signed);
     let res: Response | undefined;
     let failure = "";
     const deadline = Date.now() + this.timeoutMs;
@@ -730,7 +735,7 @@ export class PaymentEngine {
       res = await this.fetchImpl(quote.url, {
         method: "GET",
         redirect: "error",
-        headers: { ...rail.credentialHeaders(offer, signed), ...referral, accept: "application/json, */*" },
+        headers: { ...rail.credentialHeaders(offer, signed), ...referralHeaders, accept: "application/json, */*" },
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
@@ -793,23 +798,37 @@ export class PaymentEngine {
   // ── Plumbing ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * The referral headers for this attempt's paid request: the token remembered for the quote's origin and listing, and
-   * the attempt id as the purchase reference (one attempt makes one paid request, and `superstables status` recovers it
-   * under the same id). Recorded on the attempt before the request leaves, so its receipt says the referral went with
-   * it. None when the quote found no referral, the remembered one has expired or gone since, or SUPERSTABLES_REFERRALS
-   * is off. Never on the unpaid challenge request. A referral is never worth a payment: if anything here fails (the
-   * attempt cannot be written, say), the request goes without it.
+   * The referral this payment's paid request carries: the one remembered for the quote's origin and listing. None when
+   * the quote found no referral, the remembered one has expired or gone since, or SUPERSTABLES_REFERRALS is off. A
+   * referral is never worth a payment: if reading it fails, the payment goes without one.
    */
-  private referralHeaders(attempt: Attempt, quote: Quote): Record<string, string> {
+  private paidReferral(quote: Quote): ActiveReferral | undefined {
     try {
-      if (!quote.referral) return {};
+      if (!quote.referral) return undefined;
       // The listing the quote was for, when it was for one; otherwise the listing its referral was found for.
       const found = referralFor(quote.url, this.records.dir);
-      if (!found || found.listingId !== (quote.serviceId ?? quote.referral.listingId)) return {};
-      const record = { discoveredVia: "superstables" as const, referral: { id: found.id, listingId: found.listingId, terms: found.terms } };
+      return found && found.listingId === (quote.serviceId ?? quote.referral.listingId) ? found : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * The referral headers for this attempt's paid request: the referral's token, and the attempt id as the purchase
+   * reference (one attempt makes one paid request, and `superstables status` recovers it under the same id). Recorded on
+   * the attempt before the request leaves, so its receipt says the referral went with it. Never on the unpaid challenge
+   * request. An EIP-3009 authorization whose nonce does not carry this referral (a wallet that chose its own nonce) gets
+   * none, so the token never names another referral than the payment. If the attempt cannot be written, the request goes
+   * without them.
+   */
+  private referralHeaders(attempt: Attempt, referral: ActiveReferral | undefined, signed: SignResult): Record<string, string> {
+    try {
+      if (!referral) return {};
+      if (signed.kind === "eip3009" && nonceReferral(String(signed.payload.authorization.nonce ?? "")) !== referral.id) return {};
+      const record = { discoveredVia: "superstables" as const, referral: { id: referral.id, listingId: referral.listingId, terms: referral.terms } };
       this.records.saveAttempt({ ...attempt, ...record });
       Object.assign(attempt, record);
-      return { [REFERRAL_HEADER]: found.token, [PURCHASE_REF_HEADER]: attempt.id };
+      return { [REFERRAL_HEADER]: referral.token, [PURCHASE_REF_HEADER]: attempt.id };
     } catch {
       return {};
     }

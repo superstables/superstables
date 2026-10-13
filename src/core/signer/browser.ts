@@ -197,6 +197,7 @@ export class BrowserWalletSigner implements Signer {
       reported: req.context,
       requirement,
       x402Version: req.kind === "eip3009" && req.x402Version === 1 ? 1 : 2,
+      ...(req.kind === "eip3009" && req.nonce ? { nonce: req.nonce } : {}),
       timeoutMs: this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       ...(hooks?.beforeWalletSends ? { beforeWalletSends: hooks.beforeWalletSends } : {}),
     });

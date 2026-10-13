@@ -14,6 +14,7 @@
 //                       facilitator, which completes and sends it.
 
 import type { PaymentRequirements } from "@x402/core/types";
+import type { Hex } from "viem";
 import type { MppChallenge } from "../mpp.js";
 import type { PaymentContext } from "../types.js";
 
@@ -24,6 +25,11 @@ export interface Eip3009SignRequest {
   requirements: PaymentRequirements;
   /** Which x402 wire version the requirement is in. */
   x402Version: 1 | 2;
+  /**
+   * The authorization's nonce, which the payment engine decides so that a referred payment carries its referral
+   * (core/referral-nonce.ts). Absent, the signer picks a random one.
+   */
+  nonce?: Hex;
   /** What the agent says this is for. Displayed as unverified context; never trusted for the terms. */
   context?: PaymentContext;
 }

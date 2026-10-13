@@ -224,7 +224,7 @@ export async function startWallet(mode: WalletMode = "approve"): Promise<FakeWal
     }
 
     if (req.method === "POST" && path === "/requests") {
-      const body = JSON.parse(await readBody(req)) as { sign: { requirements: PaymentRequirements; x402Version: 1 | 2 } };
+      const body = JSON.parse(await readBody(req)) as { sign: { requirements: PaymentRequirements; x402Version: 1 | 2; nonce?: `0x${string}` } };
       const judged = termsFor(body.sign.requirements, body.sign.x402Version);
       if (!judged.supported) {
         sendJson(res, 200, { id: "rejected", status: "rejected", createdAt: Date.now(), expiresAt: Date.now(), reason: judged.reason });
@@ -243,7 +243,7 @@ export async function startWallet(mode: WalletMode = "approve"): Promise<FakeWal
         return;
       }
       // The owner will "decide" on the next poll; sign now so the answer is ready.
-      const result = await signer.sign({ kind: "eip3009", requirements: judged.requirement, x402Version: body.sign.x402Version });
+      const result = await signer.sign({ kind: "eip3009", requirements: judged.requirement, x402Version: body.sign.x402Version, nonce: body.sign.nonce });
       const view: WalletRequestView = {
         id,
         status: "pending",

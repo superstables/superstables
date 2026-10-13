@@ -14,7 +14,10 @@ import { DEFAULT_POLICY } from "../../src/core/policy.js";
 import { quote } from "../../src/core/quote.js";
 import { Records } from "../../src/core/records.js";
 import { REFERRALS_FILE, referralFor, rememberReferrals } from "../../src/core/referrals.js";
+import { nonceReferral } from "../../src/core/referral-nonce.js";
 import { BrowserWalletSigner } from "../../src/core/signer/browser.js";
+import { LocalKeySigner } from "../../src/core/signer/local.js";
+import type { SignRequest, Signer } from "../../src/core/signer/types.js";
 import { WalletSigner } from "../../src/core/signer/wallet.js";
 import type { ServiceListing } from "../../src/core/types.js";
 import { attemptView } from "../../src/cli/views.js";
@@ -278,6 +281,8 @@ describe("referrals on x402 payments", () => {
     expect(paid).toHaveLength(1);
     expect(paid[0]!.headers["superstables-referral"]).toBe(token);
     expect(paid[0]!.headers["superstables-purchase-ref"]).toBe(done.id);
+    // The nonce the owner signed names the same referral as the token.
+    expect(nonceReferral(done.authorizationNonce!)).toBe(claims.jti);
     // The quote's probe and the engine's fresh challenge: neither carries the referral.
     expect(unpaid.length).toBeGreaterThanOrEqual(2);
     for (const request of unpaid) {
@@ -314,6 +319,8 @@ describe("referrals on x402 payments", () => {
     const second = await s.engine.waitForAttempt(s.engine.startPayment(lapsed.id).id, 10_000);
     expect(second.state).toBe("settled");
     expect(second.referral).toBeUndefined();
+    expect(second.authorizationNonce).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(nonceReferral(second.authorizationNonce!)).toBeUndefined();
     rememberReferrals([indexListing(s.endpoint, token)], s.records.dir);
 
     const off = await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY });
@@ -325,6 +332,30 @@ describe("referrals on x402 payments", () => {
 
     expect(s.seller.seen.filter((r) => r.paid)).toHaveLength(3);
     for (const request of s.seller.seen) expect(request.headers["superstables-referral"]).toBeUndefined();
+  });
+
+  it("sends no token when the wallet signed a nonce of its own, so token and nonce never name different referrals", async () => {
+    const facilitator = await startFacilitator();
+    const seller = await startPaidEndpoint(facilitator.url);
+    opened.push(facilitator, seller);
+    const r = records();
+    const local = new LocalKeySigner(privateKeyToAccount(generatePrivateKey()));
+    // A wallet from before the payment engine chose the nonce: it ignores the one it is handed.
+    const ownNonce: Signer = { kind: "local", address: (network) => local.address(network), sign: (req) => local.sign({ ...req, nonce: undefined } as SignRequest) };
+    const engine = new PaymentEngine({ records: r, policy: DEFAULT_POLICY, signer: ownNonce });
+    const endpoint = `${seller.url}/v1/market`;
+    rememberReferrals([indexListing(endpoint, tokenFor(endpoint).token)], r.dir);
+    const q = await quote({ url: `${endpoint}?asset=BTC` }, { records: r, policy: DEFAULT_POLICY });
+    expect(q.referral).toBeDefined();
+
+    const done = await engine.waitForAttempt(engine.startPayment(q.id).id, 10_000);
+    expect(done.state).toBe("settled");
+    expect(nonceReferral(done.authorizationNonce!)).toBeUndefined();
+    expect(done.referral).toBeUndefined();
+    const paid = seller.seen.filter((x) => x.paid);
+    expect(paid).toHaveLength(1);
+    expect(paid[0]!.headers["superstables-referral"]).toBeUndefined();
+    expect(paid[0]!.headers["superstables-purchase-ref"]).toBeUndefined();
   });
 });
 

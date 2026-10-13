@@ -55,6 +55,9 @@ export type Journal = {
   pullStatus?: "success" | "reverted";
   pulled?: string; // decimal USDC that left the owner
   pullRefusal?: string;
+  // attribution, decided when the operation starts and kept by every later run under the same --op
+  referral?: JournalReferral; // the referral the paid request carries; none when the seller's origin had none
+  authorizationNonce?: Hex; // the EIP-3009 nonce this operation signs, marked with the referral (src/core/referral-nonce.ts)
   // payment (transaction 2, sent by the seller's facilitator)
   signed: boolean;
   auth?: { nonce: Hex; validBefore: number; validAfter: number; value: string; to: Address; from: Address };
@@ -82,6 +85,9 @@ export type Journal = {
   next?: string;
   notes: string[];
 };
+
+/** A referral the Superstables index gave for the seller's origin, as an operation froze it. */
+export type JournalReferral = { id: string; listingId: string; terms: string; token: string };
 
 export const PENDING: OpState[] = ["submitted", "unknown"];
 /** An operation id may be reused only while nothing was signed or sent under it. */

@@ -7,6 +7,7 @@
 //   tempo-transfer      ./tempo.ts    /account, /sending, /sent: the wallet sends a call the server built
 //   solana-transaction  ./solana.ts   the wallet signs a transaction the server built
 
+import type { Hex } from "viem";
 import type { NetworkInfo } from "../../chain.js";
 import type { RailRequirement } from "../../rails/types.js";
 import type { VerifiedTerms } from "../../types.js";
@@ -21,6 +22,8 @@ export interface StepRecord {
   /** The seller's requirement as it was judged: what the wallet's request is built from. */
   requirement: RailRequirement;
   x402Version: 1 | 2;
+  /** EIP-3009: the nonce the payment engine chose for the authorization (core/referral-nonce.ts). */
+  nonce?: Hex;
   expiresAt: number;
   /** The account the page connected, once it has. */
   account?: string;

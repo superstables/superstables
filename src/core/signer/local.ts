@@ -10,7 +10,9 @@ import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { evmNetworkFor, networkFor } from "../chain.js";
 import { x402RailFor } from "../rails/index.js";
+import { referralNonce } from "../referral-nonce.js";
 import { untrustedText } from "../text.js";
+import { usdcAuthorization } from "./steps/eip3009.js";
 import { LOCAL_WALLET_EVM_ONLY, SignRefused, type Eip3009SignResult, type SignHooks, type SignRequest, type Signer } from "./types.js";
 
 export class LocalKeySigner implements Signer {
@@ -33,23 +35,29 @@ export class LocalKeySigner implements Signer {
       const kind = (req as { kind: unknown }).kind;
       throw new SignRefused("invalid", kind === "tempo-transfer" || kind === "solana-transaction" ? LOCAL_WALLET_EVM_ONLY : `cannot sign ${String(kind)}`);
     }
-    // v1 requirements carry maxAmountRequired and a vernacular network name; the SDK has a
-    // separate scheme for them. Both produce the same {signature, authorization} payload.
-    const scheme = req.x402Version === 1 ? new ExactEvmSchemeV1(this.account) : new ExactEvmScheme(this.account);
-    // The signing domain is USDC's own, from this client's chain table, never the seller's `extra`: quoting already
-    // refuses an offer that names another one, and an offer that names none is signed with USDC's, as the approval page
-    // does. Only the signature is taken from what the SDK builds; the requirement sent back to the seller is unchanged.
     // `pay` pays on the chains its rails name only; quoting refuses any other before the owner is asked, and this refuses
     // it again rather than sign over a domain the client does not know.
     const network = evmNetworkFor(String(req.requirements.network ?? ""));
     if (!network || !x402RailFor(network)) throw new SignRefused("invalid", `this wallet does not sign on ${untrustedText(req.requirements.network ?? "an unnamed chain", 60)}`);
+    if (req.x402Version === 1 && !network.v1Name) throw new SignRefused("invalid", `x402 v1 has no name for ${network.label}, so this wallet does not sign a v1 payment there`);
+    // An EIP-3009 offer (the default) is signed as the approval page signs it, over USDC's own domain from this client's
+    // chain table, never the seller's `extra`, and with the nonce the payment engine chose. The requirement sent back to
+    // the seller is unchanged.
+    const method = req.requirements.extra?.assetTransferMethod ?? "eip3009";
+    if (method === "eip3009") {
+      const typedData = usdcAuthorization(network, req.requirements, req.x402Version, this.account.address, req.nonce ?? referralNonce());
+      const signature = await this.account.signTypedData(typedData as unknown as Parameters<PrivateKeyAccount["signTypedData"]>[0]);
+      return { kind: "eip3009", payload: { signature, authorization: { ...typedData.message } }, signer: this.account.address };
+    }
+    // Any other transfer method (Permit2) is the x402 SDK's to build, with a nonce of its own and so without the referral.
+    // v1 requirements carry maxAmountRequired and a vernacular network name; the SDK has a separate scheme for them.
+    const scheme = req.x402Version === 1 ? new ExactEvmSchemeV1(this.account) : new ExactEvmScheme(this.account);
     const requirements = {
       ...req.requirements,
       // The x402 v1 SDK knows a chain by its v1 name only; a v1 offer that names the chain by CAIP-2 is signed under it.
       ...(req.x402Version === 1 && network.v1Name ? { network: network.v1Name } : {}),
       extra: { ...(req.requirements.extra ?? {}), name: network.usdc.eip712.name, version: network.usdc.eip712.version },
     } as typeof req.requirements;
-    if (req.x402Version === 1 && !network.v1Name) throw new SignRefused("invalid", `x402 v1 has no name for ${network.label}, so this wallet does not sign a v1 payment there`);
     const created = await scheme.createPaymentPayload(req.x402Version, requirements);
     return {
       kind: "eip3009",

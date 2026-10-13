@@ -99,8 +99,8 @@ interface RailCommon {
   readonly signKind: SignKind;
   /** The chains this rail pays on. */
   readonly networks: readonly NetworkInfo[];
-  /** The owner's wallet request for an offer of this rail. */
-  signRequest(offer: Offer, x402Version: 1 | 2, context: PaymentContext): SignRequest;
+  /** The owner's wallet request for an offer of this rail, marked with the referral the paid request carries, if any. */
+  signRequest(offer: Offer, x402Version: 1 | 2, context: PaymentContext, referralId?: string): SignRequest;
   /** What a signed result records on the attempt, before anything leaves this machine. */
   signedFacts(signed: SignResult): SignedFacts;
   /** A transaction id in this rail's shape (a 0x hash, a base58 signature): the only shape one is repeated in. */

@@ -2,11 +2,11 @@
 // TransferWithAuthorization for it over the chain's USDC domain, the wallet signs it with eth_signTypedData_v4, and the
 // server checks the signature is that account's before it is believed. The page's main script does the wallet side.
 
-import { randomBytes } from "node:crypto";
 import type { PaymentRequirements } from "@x402/core/types";
 import { authorizationTypes } from "@x402/evm";
-import { getAddress, toHex, verifyTypedData } from "viem";
-import { isAddress, shortLabel } from "../../chain.js";
+import { getAddress, verifyTypedData, type Hex } from "viem";
+import { isAddress, shortLabel, type NetworkInfo } from "../../chain.js";
+import { referralNonce } from "../../referral-nonce.js";
 import type { StepAnswer, StepRecord, WalletStep } from "./types.js";
 
 /** The EIP-712 payload, in the JSON-safe shape a browser wallet's signTypedData_v4 expects. */
@@ -31,27 +31,32 @@ const EIP712_DOMAIN_TYPE = [
   { name: "verifyingContract", type: "address" },
 ];
 
+/** The parts of a seller's requirement an EIP-3009 authorization is built from, in either x402 wire version. */
+export interface AuthorizationRequirement {
+  payTo: string;
+  amount?: string;
+  maxAmountRequired?: string;
+  maxTimeoutSeconds?: number;
+}
+
 /**
- * Builds exactly the authorization the x402 exact scheme signs, for the account the page
- * reported. The values match what the SDK's own client produces field for field, because the
- * facilitator that settles this credential checks all of them: a v1 requirement backdates
- * validAfter by ten minutes and carries its amount as maxAmountRequired, a v2 one does not.
+ * Builds exactly the authorization the x402 exact scheme signs. The values match what the SDK's own client produces field
+ * for field, because the facilitator that settles this credential checks all of them: a v1 requirement backdates
+ * validAfter by ten minutes and carries its amount as maxAmountRequired, a v2 one does not. Only the nonce is the
+ * caller's: core/referral-nonce.ts decides it, so a referred payment carries its referral.
  */
-export function buildTypedData(record: StepRecord, payer: string): ApprovalTypedData {
-  const network = record.network;
-  if (network.rail !== "evm") throw new Error(`${network.label} is not an x402 EVM chain`);
-  const requirement = record.requirement as PaymentRequirements & { maxAmountRequired?: string };
+export function authorizationTypedData(input: {
+  domain: ApprovalTypedData["domain"];
+  requirement: AuthorizationRequirement;
+  x402Version: 1 | 2;
+  payer: string;
+  nonce: Hex;
+}): ApprovalTypedData {
+  const { requirement } = input;
   const now = Math.floor(Date.now() / 1000);
   const timeout = Number(requirement.maxTimeoutSeconds ?? 300);
   return {
-    domain: {
-      // USDC's own domain, never the seller's `extra`: the wallet shows the domain name as the signing application,
-      // and quoting refuses an offer whose `extra` names another one (rails/evm.ts).
-      name: network.usdc.eip712.name,
-      version: network.usdc.eip712.version,
-      chainId: network.chainId,
-      verifyingContract: getAddress(String(requirement.asset)),
-    },
+    domain: input.domain,
     // Copied rather than referenced: this object is serialised to the page as JSON, and the
     // SDK's own table is frozen and read-only.
     types: {
@@ -63,14 +68,40 @@ export function buildTypedData(record: StepRecord, payer: string): ApprovalTyped
     },
     primaryType: "TransferWithAuthorization",
     message: {
-      from: getAddress(payer),
+      from: getAddress(input.payer),
       to: getAddress(String(requirement.payTo)),
       value: String(requirement.amount ?? requirement.maxAmountRequired ?? "0"),
-      validAfter: record.x402Version === 1 ? String(now - 600) : "0",
+      validAfter: input.x402Version === 1 ? String(now - 600) : "0",
       validBefore: String(now + timeout),
-      nonce: toHex(randomBytes(32)),
+      nonce: input.nonce,
     },
   };
+}
+
+/**
+ * The authorization for one payment on a chain of this client's table, signed over USDC's own domain, never the seller's
+ * `extra`: the wallet shows the domain name as the signing application, and quoting refuses an offer whose `extra` names
+ * another one (rails/evm.ts).
+ */
+export function usdcAuthorization(network: NetworkInfo, requirement: PaymentRequirements, x402Version: 1 | 2, payer: string, nonce: Hex): ApprovalTypedData {
+  if (network.rail !== "evm") throw new Error(`${network.label} is not an x402 EVM chain`);
+  return authorizationTypedData({
+    domain: {
+      name: network.usdc.eip712.name,
+      version: network.usdc.eip712.version,
+      chainId: network.chainId,
+      verifyingContract: getAddress(String(requirement.asset)),
+    },
+    requirement: requirement as AuthorizationRequirement,
+    x402Version,
+    payer,
+    nonce,
+  });
+}
+
+/** The authorization the approval page asks the account it reported to sign. */
+export function buildTypedData(record: StepRecord, payer: string): ApprovalTypedData {
+  return usdcAuthorization(record.network, record.requirement as PaymentRequirements, record.x402Version, payer, record.nonce ?? referralNonce());
 }
 
 export const eip3009Step: WalletStep = {

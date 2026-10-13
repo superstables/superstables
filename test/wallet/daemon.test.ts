@@ -409,6 +409,24 @@ describe("approving and denying", () => {
     expect(authorization.value).toBe("30000");
   });
 
+  it("signs the nonce the agent's payment engine chose, and rejects one that is not 32 bytes", async () => {
+    const { wallet } = await startTestWallet();
+    const nonce = `0x53535246000102030405060708090a0b0c0d0e0f${"aa".repeat(12)}`;
+    const res = await call(wallet, "/requests", wallet.agentToken, "POST", {
+      sign: { kind: "eip3009", requirements: usdcRequirement(0.03, PAYEE), x402Version: 2, nonce },
+    });
+    const created = (await res.json()) as WalletRequestView;
+    expect((await call(wallet, `/owner/requests/${created.id}/approve`, wallet.ownerSecret, "POST")).status).toBe(200);
+    expect(((await readRequest(wallet, created.id)).result?.payload.authorization as Record<string, string>).nonce).toBe(nonce);
+
+    const short = await call(wallet, "/requests", wallet.agentToken, "POST", {
+      sign: { kind: "eip3009", requirements: usdcRequirement(0.03, PAYEE), x402Version: 2, nonce: "0x5353" },
+    });
+    const rejected = (await short.json()) as WalletRequestView;
+    expect(rejected.status).toBe("rejected");
+    expect(rejected.reason).toBe("the request's authorization nonce is not 32 bytes of hex");
+  });
+
   it("never lists a signature on the owner's list", async () => {
     const { wallet } = await startTestWallet();
     const created = await ask(wallet, usdcRequirement(0.01, PAYEE) as unknown as Record<string, unknown>);
