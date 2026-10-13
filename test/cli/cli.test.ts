@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_NETWORK } from "../../src/core/chain.js";
-import { Records } from "../../src/core/records.js";
+import { Records, attemptRunner } from "../../src/core/records.js";
 import { sendJson, startFacilitator, startPaidEndpoint, startServer, type TestServer } from "../helpers/servers.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -522,7 +522,7 @@ describe("quote, pay and status against a local seller", () => {
 
     // The signal reaches the process running the payment, and one slow to take it (as on a loaded machine) still
     // records why it stopped.
-    const runner = new Records(join(home, "records")).getAttempt(String(attemptId))?.runner;
+    const runner = attemptRunner(new Records(join(home, "records")), String(attemptId));
     expect(runner?.pid).toBe(child.pid);
     // The record names the process and its machine for the lock checks; the JSON an agent reads does not.
     const listed = JSON.parse((await run(["attempts", "--json"], env)).stdout) as Record<string, unknown>[];

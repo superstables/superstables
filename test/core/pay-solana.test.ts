@@ -278,7 +278,6 @@ describe("a Single purchase on Solana devnet", () => {
     const crashed = (attempt: Attempt): Attempt => ({
       ...attempt,
       state: "submitting",
-      runner: GONE,
       receiptId: undefined,
       reason: undefined,
       history: attempt.history.filter((h) => h.state !== "uncertain"),
@@ -286,7 +285,7 @@ describe("a Single purchase on Solana devnet", () => {
     // The signed record was written, the facilitator landed it, and the process died before it heard back.
     const s = await stack("drop-after-landing");
     const landed = await pay(s);
-    s.records.saveAttempt(crashed(landed));
+    s.records.saveAttempt(crashed(landed), GONE);
     expect(s.records.spentToday("USDC", new Date(Date.now() + 5 * 24 * 60 * 60 * 1000))).toBe(0.01);
     const found = await recheckChain(s.records, landed.id, chain.url);
     expect(found).toMatchObject({ state: "paid_service_failed", chain: "verified", transaction: s.seller.landed });
@@ -296,7 +295,7 @@ describe("a Single purchase on Solana devnet", () => {
     // Nothing landed: it stays uncertain while it can, and is unpaid once the chain shows it cannot.
     const t = await stack("drop-before-landing");
     const lost = await pay(t);
-    t.records.saveAttempt(crashed(lost));
+    t.records.saveAttempt(crashed(lost), GONE);
     const open = await recheckChain(t.records, lost.id, chain.url);
     expect(open?.state).toBe("uncertain");
     expect(open?.reason).toBe("the process running this payment stopped after the owner approved it, while the payment was being submitted, so whether it settled is unknown");
@@ -305,7 +304,7 @@ describe("a Single purchase on Solana devnet", () => {
     expect(t.records.spentToday("USDC", new Date(Date.now() + 5 * 24 * 60 * 60 * 1000))).toBe(0);
 
     // A process that is still running carries its own attempt on: status leaves it alone.
-    t.records.saveAttempt({ ...crashed(lost), id: "live", runner: { pid: process.pid, start: null } });
+    t.records.saveAttempt({ ...crashed(lost), id: "live" }, { pid: process.pid, start: null });
     expect((await recheckChain(t.records, "live", chain.url))?.state).toBe("submitting");
   });
 

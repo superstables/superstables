@@ -15,7 +15,7 @@ import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
 import { PaymentEngine, QuoteUsedError, recheckChain, shownAttempt, shownReceipt } from "../../src/core/pay.js";
 import { paymentReceipt, startFakeBaseSepolia } from "../helpers/fake-base-sepolia.js";
 import { attemptView, messageFor } from "../../src/cli/views.js";
-import { Records } from "../../src/core/records.js";
+import { Records, attemptRunner } from "../../src/core/records.js";
 import { quote } from "../../src/core/quote.js";
 import { WalletSigner } from "../../src/core/signer/wallet.js";
 import { SignRefused } from "../../src/core/signer/types.js";
@@ -119,6 +119,12 @@ describe("PaymentEngine", () => {
     expect(final.history[1].note).toContain("waiting for the owner");
     expect(final.walletRequestId).toBeTruthy();
     expect(s.transitions.at(-1)?.state).toBe("settled");
+
+    // The record names this process and its machine for the lock checks; no attempt the SDK hands out does.
+    expect(attemptRunner(s.records, final.id)?.pid).toBe(process.pid);
+    for (const attempt of [started, final, ...s.transitions, s.engine.getAttempt(final.id), ...s.engine.listAttempts()]) {
+      expect(attempt).not.toHaveProperty("runner");
+    }
   });
 
   it("signs nothing and pays nothing when the owner denies", async () => {

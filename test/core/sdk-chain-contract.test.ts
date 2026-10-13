@@ -6,6 +6,7 @@ import bs58 from "bs58";
 import { afterEach, expect, it } from "vitest";
 import { Records, BASE_SEPOLIA, SOLANA_DEVNET, TEMPO_MODERATO, type Attempt, type Receipt } from "../../src/index.js";
 import { recheckChain, shownAttempt, shownReceipt } from "../../src/core/pay.js";
+import { attemptRunner } from "../../src/core/records.js";
 import { startFakeBaseSepolia } from "../helpers/fake-base-sepolia.js";
 import { startFakeTempoPay } from "../helpers/fake-tempo-pay.js";
 import { MINT, randomAddress, signAsOwner, solanaKey, startFakeDevnet } from "../helpers/fake-solana-pay.js";
@@ -166,7 +167,10 @@ it("loads the mismatch record actually written by 0.3.0 as uncertain without a r
   const fixture = JSON.parse(readFileSync(new URL("fixtures/030-mismatch.json", import.meta.url), "utf8"));
   appendFileSync(join(s.dir, "attempts.jsonl"), JSON.stringify(fixture.attempt) + "\n");
   const loaded = s.records.getAttempt(fixture.attempt.id);
-  expect(loaded).toEqual({ ...fixture.attempt, chainFinal: null });
+  // Its runner stays on disk for the lock checks and out of the attempt read back.
+  const { runner, ...shown } = fixture.attempt;
+  expect(loaded).toEqual({ ...shown, chainFinal: null });
+  expect(attemptRunner(s.records, fixture.attempt.id)).toEqual(runner);
   expect(loaded).toMatchObject({ state: "uncertain", chain: "mismatch" });
   expect(s.records.getReceipt(fixture.attempt.id)).toBeUndefined();
   expect(await recheckChain(s.records, fixture.attempt.id, { ...s.options, fetchImpl: async () => { throw new Error("RPC unavailable"); } })).toMatchObject({ state: "uncertain", chain: "mismatch" });

@@ -248,12 +248,6 @@ export interface Attempt {
    */
   searchedToSlot?: number;
   /**
-   * The process running this attempt (its pid, and that process's start identity where the system gives one): while it
-   * runs, it carries the attempt on; once it is gone, an attempt it left approved or submitting is for
-   * `superstables status` to reconcile from the chain.
-   */
-  runner?: ReturnType<typeof import("./lock.js").thisProcess>;
-  /**
    * What the chain says about the payment: "verified" (the transaction is this payment), "mismatch" (the transaction the
    * seller named is not; the attempt is then uncertain), "unchecked" (the chain could not say yet), or "unpaid" (a later
    * check found the payment was never made and can no longer be; the attempt is then failed).
