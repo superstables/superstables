@@ -36,6 +36,8 @@ The README says which owner action stops the agent even if the agent key is stol
 - the price exceeds `--max <amount>` (required; no default);
 - the token is not the rail's expected token (the chain's USDC, Tempo pathUSD, the Solana devnet USDC mint) or decimals don't match;
 - the recipient is not the one in `--pay-to <address>`, when given;
+- the recipient is the zero address, the token contract, the agent or the owner;
+- (evm) the authorization lifetime is missing, not a whole number of seconds, or outside 30 to 3600;
 - the amount has more precision than the token allows.
 
 Refusal exits with code 3 and a `RESULT` line with `state: "refused_precheck"` and the reason.

@@ -5,6 +5,6 @@ export type ChargeRequest = Record<string, any>
 export type Precheck =
   | { ok: true; amount: bigint; recipient: string; splits: { recipient: string; amount: string }[] }
   | { ok: false; code: string; reason: string }
-export const precheckCharge = check as (request: ChargeRequest, opts: { maxBase: bigint; payTo?: string }) => Precheck
+export const precheckCharge = check as (request: ChargeRequest, opts: { maxBase: bigint; payTo?: string; agent?: string; owner?: string }) => Precheck
 export { tempoChargeChallenges } from './precheck.mjs'
 export { budgetShortfall, recipientsOutsideScope, TRANSFER_WITH_MEMO_SELECTOR } from './precheck.mjs'

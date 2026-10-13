@@ -436,7 +436,9 @@ undo an owner signature or a transaction already sent through setup on superstab
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds
   already transferred. On `evm`, a purchase whose price was already pulled can still settle, and
   `recover` returns the USDC it can, leaving up to 2 USDC of gas on Arc Testnet. On `tempo`, it does
-  not close payment sessions the key opened elsewhere.
+  not close payment sessions the key opened elsewhere. On `evm`, `revoke` sends `approve(agent, 0)`
+  every time it is asked, even when the allowance already reads 0: one RPC's read is not proof that
+  nothing is live, and it reports `revoked` only after its own transaction and a read of 0.
 
 Per rail, with what each revoke does not cover:
 [Budget rails and chains](../budget/README.md#safety-model).

@@ -3,7 +3,8 @@
 //   - the price is missing, not an integer number of base units (more precision than USDC allows), or zero;
 //   - the price exceeds --max;
 //   - the offered token is not the devnet USDC mint, or the offered decimals are not 6;
-//   - the recipient is not a valid address, or is not the --pay-to address when one is given.
+//   - the recipient is not a valid address, is the all-zero address, the USDC mint, the agent or the owner, or is not the
+//     --pay-to address when one is given.
 // and, once the owner's USDC token account has been read (checkDelegation), when
 //   - the account does not exist or is frozen;
 //   - the agent is not its delegate (revoked, never granted, or granted to another key);
@@ -29,8 +30,9 @@ export function selectRequirement(accepts) {
   return cands.find((a) => a.asset === USDC_MINT.toBase58()) ?? cands[0] ?? null;
 }
 
+// `agent` and `owner` (PublicKeys, optional) are the keys this budget runs on: a purchase never pays either of them.
 // Returns { ok, reasons, amountBase, payTo, mint }.
-export function checkOffer(requirement, { maxBase, payTo }) {
+export function checkOffer(requirement, { maxBase, payTo, agent, owner }) {
   const reasons = [];
   if (!requirement) {
     return { ok: false, reasons: ["no exact-scheme Solana devnet offer in the seller's challenge"], amountBase: null };
@@ -62,6 +64,10 @@ export function checkOffer(requirement, { maxBase, payTo }) {
 
   const to = validKey(requirement.payTo);
   if (!to) reasons.push(`recipient '${requirement.payTo ?? ""}' is not a valid address`);
+  else if (to.equals(PublicKey.default)) reasons.push("recipient is the all-zero address");
+  else if (to.equals(USDC_MINT)) reasons.push("recipient is the USDC mint itself");
+  else if (agent && to.equals(agent)) reasons.push("recipient is this agent's own key");
+  else if (owner && to.equals(owner)) reasons.push("recipient is the owner's wallet, which funds this budget");
   else if (payTo && !to.equals(payTo)) {
     reasons.push(`recipient ${to.toBase58()} is not the expected --pay-to ${payTo.toBase58()}`);
   }

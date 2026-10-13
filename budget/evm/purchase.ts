@@ -2,7 +2,8 @@
 // Chain-specific behavior is marked "CHAIN:" below.
 //   1. GET the seller (free) -> 402 with the price.
 //   2. Prechecks (rule 4), all before anything is signed or sent: token, decimals, precision, price vs --max,
-//      recipient vs --pay-to, authorization lifetime, then (unless `precheck: false`) the budget expiry, the allowance,
+//      recipient (not the zero address, the token, the agent or the owner) vs --pay-to, authorization lifetime (a whole number
+//      of seconds, 30 to 3600), then (unless `precheck: false`) the budget expiry, the allowance,
 //      the owner's balance and the agent's own balance (must be 0, and have the gas for the pull and for the cancel and return a
 //      failure would need, at the current fee).
 //   3. Journal the intent (rule 5), then the agent pulls exactly the price: USDC.transferFrom(owner, agent, price).
@@ -31,6 +32,8 @@ import {
 } from "./ops.ts";
 
 const MAX_AUTH_LIFETIME_S = 3600; // an authorization that can be settled later than this is refused
+// A shorter window can expire after the pull and before settlement, which costs gas for a cancel and a refund.
+const MIN_AUTH_LIFETIME_S = 30;
 /** The most of the seller's answer that is kept (buy saves it next to the journal). A longer answer is cut here and flagged. */
 export const MAX_RESPONSE_BYTES = 1_000_000;
 
@@ -61,7 +64,7 @@ async function readCapped(r: Response, cap: number): Promise<{ bytes: Buffer; tr
 }
 
 /** The rule 4 checks on one payment option. Returns the reason to refuse, or null. Pure. */
-export function checkAccept(a: any, o: { max: bigint; payTo?: string }): string | null {
+export function checkAccept(a: any, o: { max: bigint; payTo?: string; agent?: string; owner?: string }): string | null {
   const asset = String(a.asset ?? "");
   if (asset.toLowerCase() !== USDC.toLowerCase()) return `token ${asset || "(none)"} is not ${CFG.label} ${SYM} ${USDC}`;
   const dec = a.extra?.decimals;
@@ -80,10 +83,34 @@ export function checkAccept(a: any, o: { max: bigint; payTo?: string }): string 
   if (price === 0n) return "price is zero";
   if (price > o.max) return `price ${usdc(price)} ${SYM} exceeds --max ${usdc(o.max)} ${SYM}`;
   if (!isAddress(String(a.payTo ?? ""))) return `recipient "${a.payTo}" is not an address`;
+  const to = String(a.payTo).toLowerCase();
+  if (/^0x0{40}$/.test(to)) return "recipient is the zero address";
+  if (to === USDC.toLowerCase()) return `recipient is the ${SYM} token contract itself`;
+  if (o.agent && to === o.agent.toLowerCase()) return "recipient is this agent's own key";
+  if (o.owner && to === o.owner.toLowerCase()) return "recipient is the owner's wallet, which funds this budget";
   if (o.payTo && String(a.payTo).toLowerCase() !== o.payTo.toLowerCase()) return `recipient ${a.payTo} is not the expected --pay-to ${o.payTo}`;
-  const timeout = Number(a.maxTimeoutSeconds ?? 0);
-  if (timeout > MAX_AUTH_LIFETIME_S) return `authorization lifetime ${timeout}s is longer than ${MAX_AUTH_LIFETIME_S}s`;
+  const t = a.maxTimeoutSeconds;
+  if (typeof t !== "number" || !Number.isInteger(t) || t < MIN_AUTH_LIFETIME_S || t > MAX_AUTH_LIFETIME_S) return `authorization lifetime ${oneLine(JSON.stringify(t ?? null), 40)} is not a whole number of seconds from ${MIN_AUTH_LIFETIME_S} to ${MAX_AUTH_LIFETIME_S}`;
   return null;
+}
+
+/**
+ * Whether two payment options are the same one for everything a signature depends on: scheme, network, token, price,
+ * recipient, authorization lifetime and the EIP-712 domain the seller names. A seller can list two options that differ
+ * only in one of these (a 1 s lifetime first, a 60 s one second): only the one that passed the prechecks may be signed.
+ * Pure.
+ */
+export function sameOption(a: any, b: any): boolean {
+  if (!a || !b) return false;
+  const price = (x: any) => String(x.amount ?? x.maxAmountRequired);
+  return a.scheme === b.scheme && a.network === b.network && a.asset === b.asset && price(a) === price(b) && a.payTo === b.payTo
+    && a.maxTimeoutSeconds === b.maxTimeoutSeconds && a.extra?.name === b.extra?.name && String(a.extra?.version) === String(b.extra?.version)
+    && a.extra?.assetTransferMethod === b.extra?.assetTransferMethod;
+}
+
+/** The options the x402 client may select: only the one that passed the prechecks (none before one has). Pure. */
+export function onlyOption(reqs: any[], chosen: any): any[] {
+  return chosen ? reqs.filter((r) => sameOption(r, chosen)) : [];
 }
 
 export type PurchaseOpts = {
@@ -191,6 +218,7 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
     async signTypedData(m: any) {
       // last gate before a signature exists: the message must be exactly the quote that passed the prechecks
       const msg = m.message ?? {};
+      const validBefore = Number(msg.validBefore);
       const bad =
         !chosen ? "no validated quote" :
         Number(m.domain?.chainId ?? 0) !== CFG.chainId ? `signing domain chainId is not ${CFG.chainId}` :
@@ -198,7 +226,8 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
         String(msg.from ?? "").toLowerCase() !== agent.account.address.toLowerCase() ? "payer is not the agent" :
         String(msg.to ?? "").toLowerCase() !== String(chosen.payTo).toLowerCase() ? "authorization recipient differs from the validated quote" :
         BigInt(msg.value ?? -1) !== BigInt(chosen.amount ?? chosen.maxAmountRequired) ? "authorization amount differs from the validated quote" :
-        Number(msg.validBefore ?? 0) > Math.floor(Date.now() / 1000) + MAX_AUTH_LIFETIME_S + 60 ? "authorization would stay valid too long" :
+        !Number.isFinite(validBefore) ? "authorization has no valid expiry" :
+        validBefore > Math.floor(Date.now() / 1000) + MAX_AUTH_LIFETIME_S + 60 ? "authorization would stay valid too long" :
         null;
       if (bad || res.pulled === 0n) {
         stop = new Stop("precheck", bad ? `signer refused: ${bad}` : "signer refused: this purchase's own pull has not landed");
@@ -217,7 +246,7 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
   // no version argument: a v1 name registered there is never matched, and every v1 seller was refused.
   for (const legacy of CFG.legacyNetworks) core.registerV1(legacy, new ExactEvmSchemeV1(signer as any));
   // only the option that passed the prechecks can be selected
-  core.registerPolicy((_v: number, reqs: any[]) => (chosen ? reqs.filter((r) => r.asset === chosen.asset && r.payTo === chosen.payTo && String(r.amount ?? r.maxAmountRequired) === String(chosen.amount ?? chosen.maxAmountRequired) && r.network === chosen.network && r.scheme === chosen.scheme) : []));
+  core.registerPolicy((_v: number, reqs: any[]) => onlyOption(reqs, chosen));
   // CHAIN: the SDK signs only "default assets" (a table inside @x402/evm 2.27.0 that does not list Arc's USDC yet) or assets named in
   // spendControls.allowedAssets. Without this entry the client refuses Arc AFTER the pull has landed (seen on Arc Testnet: the pull was
   // returned, gas wasted). So the chain's USDC is allowed explicitly, capped at --max. The same call is dry-run before the pull below.
@@ -234,7 +263,7 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
       const reasons: string[] = [];
       let pick: any = null;
       for (const x of opts) {
-        const why = checkAccept(x, { max, payTo: o.payTo });
+        const why = checkAccept(x, { max, payTo: o.payTo, agent: o.c.agent, owner: o.c.owner });
         if (!why) { pick = x; break; }
         reasons.push(why);
       }
@@ -252,7 +281,7 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
       // Its refusal after a landed pull would cost gas and force a return.
       try {
         const sel: any = (core as any).selectPaymentRequirements(paymentRequired.x402Version, paymentRequired.accepts);
-        if (!sel || sel.asset !== pick.asset || sel.payTo !== pick.payTo || sel.network !== pick.network || String(sel.amount ?? sel.maxAmountRequired) !== String(pick.amount ?? pick.maxAmountRequired)) throw new Error("the client would select a different option than the one that passed the prechecks");
+        if (!sameOption(sel, pick)) throw new Error("the client would select a different option than the one that passed the prechecks");
       } catch (e: any) {
         throw new Stop("precheck", `the x402 client would not sign this option (${String(e?.message ?? e).split("\n")[0]}); nothing was pulled`);
       }

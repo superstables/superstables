@@ -196,7 +196,8 @@ for (const a of accepts) {
 
 // --- 3. prechecks: before any key is opened or anything is signed ---------------------------------
 const requirement = selectRequirement(accepts);
-const check = checkOffer(requirement, { maxBase, payTo: payToFlag });
+const recorded = readPublic();
+const check = checkOffer(requirement, { maxBase, payTo: payToFlag, agent: recorded.agent, owner: ownerFlag ?? recorded.owner });
 if (!check.ok) {
   if (!checkOnly) updateOp(opId, {
     rail: "solana", kind: "buy", state: "refused_precheck", url, method, reasons: check.reasons,
@@ -234,6 +235,12 @@ const ownerPk = ownerFlag ?? pub.owner ?? agentInfo.owner;
 if (!ownerPk) {
   updateOp(opId, { state: "refused_precheck", reasons: ["owner address unknown"] });
   refuse("owner address unknown: pass --owner or run superstables budget setup --rail solana");
+}
+// the step 3 check used the owner and agent the public file records; these are the ones this purchase really runs with
+const sameKey = payToPk.equals(ownerPk) ? "the owner's wallet, which funds this budget" : payToPk.equals(agent.publicKey) ? "this agent's own key" : null;
+if (sameKey) {
+  updateOp(opId, { state: "refused_precheck", reasons: [`recipient is ${sameKey}`] });
+  refuse(`recipient is ${sameKey}`);
 }
 console.log(`Owner (source of funds): ${ownerPk.toBase58()}`);
 console.log(`Agent (delegate authority, signs the payment): ${agent.publicKey.toBase58()}`);
