@@ -184,7 +184,7 @@ async function main() {
 
   const check = challenge.intent !== 'charge' || challenge.method !== 'tempo'
     ? ({ ok: false, code: 'unsupported_intent', reason: `challenge is ${challenge.method}.${challenge.intent}, only tempo.charge is bought here` } as const)
-    : precheckCharge(req, { maxBase, payTo })
+    : precheckCharge(req, { maxBase, payTo, agent: agentKey, owner: ownerAddress })
 
   op = baseOp(
     {

@@ -2210,18 +2210,29 @@ describe("the owner commands' words on an evm chain", () => {
     });
   }
 
-  it("revoke with nothing to revoke says so, and promises no page", async () => {
+  it("revoke on evm with a 0 allowance still asks the owner to send approve(agent, 0)", async () => {
     const { env } = amoyBudget(0n, 0n, 0n);
-    for (const mode of ["--wait", "--detach"]) {
-      const r = await cli(["revoke", "--rail", "evm", "--chain", "polygon-amoy", mode, "--no-open"], env);
-      expect(r.code).toBe(0);
-      expect(r.result).toMatchObject({ command: "revoke", state: "ok", revoked: true, reason: "already revoked; nothing to send" });
-      expect(r.stderr).toContain("revoke on evm (polygon-amoy): nothing to revoke, the budget is already revoked (the allowance is 0). No page opens and nothing is sent.");
-      expect(r.stderr).not.toContain("opens a page");
-      expect(r.stderr).not.toContain("runs in the background");
-      expect(r.stdout).not.toContain("APPROVE ");
-    }
-  });
+    const first = await cli(["revoke", "--rail", "evm", "--chain", "polygon-amoy", "--detach", "--no-open"], env);
+    expect(first.code).toBe(0);
+    expect(first.result).toMatchObject({ command: "revoke", state: "waiting_owner" });
+    expect(first.result.revoked).not.toBe(true);
+    expect(first.result.reason).not.toBe("already revoked; nothing to send");
+    expect(first.stdout).toContain("APPROVE ");
+    expect(first.stderr).toContain("the allowance reads 0; revoke sends approve(agent, 0) anyway");
+    // the owner rejects on the page; the chain is free for the next command
+    const pending = approvals.findPending("evm", "polygon-amoy");
+    expect(pending?.id).toBe(first.result.id);
+    workers.push(pending.pid);
+    await postJson(`${first.result.url}/reject`, { by: "page" });
+    await approvals.waitFor(pending.id, 10_000);
+
+    const waited = await cli(["revoke", "--rail", "evm", "--chain", "polygon-amoy", "--wait", "--timeout", "10", "--no-open"], env);
+    expect(waited.code).toBe(3);
+    expect(waited.result).toMatchObject({ command: "revoke", state: "refused_precheck" });
+    expect(waited.result.revoked).not.toBe(true);
+    expect(waited.result.reason).not.toBe("already revoked; nothing to send");
+    expect(waited.stdout).toContain("APPROVE ");
+  }, 60_000);
 
   it("buy short on gas: exit 3, and the RESULT's next is the owner's fund-agent", async () => {
     // the live Amoy case: 0.006 POL in the agent, the tip at 242 gwei

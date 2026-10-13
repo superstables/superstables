@@ -1072,6 +1072,24 @@ const ROWS: Row[] = [
     timeout: 150_000,
   },
   {
+    path: "budget revoke on this machine: the allowance already reads 0, and the owner's revoke is still sent and read from the chain",
+    covers: [],
+    run: async () => {
+      const REVOKE: Hex = `0x${"cf".repeat(32)}`;
+      const input = encodeFunctionData({ abi: erc20, functionName: "approve", args: [AGENT, 0n] });
+      const b = await ownerOnThisMachine({ [REVOKE]: { to: BASE_USDC, input, value: 0n, logs: [approval(OWNER, AGENT, 0n, REVOKE)] } }, allowance(0n));
+      const first = resultOf((await budget(b.home, ["revoke", "--rail", "evm", "--no-open"], b.env)).stdout);
+      expect(first).toMatchObject({ command: "revoke", state: "waiting_owner" });
+      return ownerPageSent(b, first, REVOKE);
+    },
+    expect: [
+      { verdict: "unknown", match: { http: 200, status: "sent" } },
+      { verdict: "paid", match: { http: 200, status: "confirmed", sending: true, hash: `0x${"cf".repeat(32)}` } },
+      { verdict: "paid", match: { exit: 0, command: "revoke", state: "settled", revoked: true, tx: { revoke: `0x${"cf".repeat(32)}` } } },
+    ],
+    timeout: 150_000,
+  },
+  {
     path: "budget wait on a finished owner approval that an earlier client stored as failed after the wallet was asked",
     covers: [],
     run: async () => {

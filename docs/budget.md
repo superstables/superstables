@@ -262,7 +262,7 @@ Choosing a compatible site is an advanced API option; `--hosted` does not deploy
 
 Run by an agent (stdout is not a terminal), an owner command that needs the wallet does not wait
 for the owner. It returns in seconds with an `APPROVE` line and a `RESULT` whose `state` is
-`waiting_owner` and `final` is `false`, exit 0. A command that needs no wallet, such as a revoke
+`waiting_owner` and `final` is `false`, exit 0. A command that needs no wallet, such as a revoke on `tempo` or `solana`
 with nothing to revoke, returns its final result at once. `--wait` makes it block instead:
 
 ```
