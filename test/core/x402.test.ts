@@ -2,10 +2,10 @@
 // whether this client can pay at all. Everything it refuses must be refused with a reason a
 // person can act on, because "unsupported" alone tells an agent nothing.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { DeadlineError, UnsupportedX402Version, detect, parseChallenge, readSellerChallenge, sameTerms, termsFor, type RawAccept } from "../../src/core/x402.js";
+import { DeadlineError, UnsupportedX402Version, detect, detectPayment, parseChallenge, readSellerChallenge, sameTerms, termsFor, type RawAccept } from "../../src/core/x402.js";
 import { encodePaymentRequiredHeader } from "@x402/core/http";
 import { usdcRequirement } from "../../src/core/chain.js";
 
@@ -195,6 +195,18 @@ describe("sameTerms", () => {
 });
 
 describe("detect", () => {
+  it("refuses a seller on plain http before any request", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 402 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(detect("http://example.com/x")).rejects.toThrow(/^the seller URL is plain http/);
+      await expect(detectPayment("http://127.0.0.2:9/x")).rejects.toThrow(/^the seller URL is plain http/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("gives up on a service that drips its answer forever, within its own deadline", async () => {
     // A 402 whose body never ends: one byte every 50 ms. A timeout on the request alone does not end it.
     const sockets = new Set<import("node:net").Socket>();

@@ -8,6 +8,7 @@ import { sameAddressOn, toCaip2 } from "./chain.js";
 import { DETECT_TIMEOUT_MS, DeadlineError, MAX_CHALLENGE_BYTES, readCapped } from "./http.js";
 import { parseMppChallenges, type MppChallenge } from "./mpp.js";
 import { judgeAccept } from "./rails/index.js";
+import { sellerUrlProblem } from "./seller-url.mjs";
 import { untrustedText } from "./text.js";
 import type { PaymentTerms } from "./types.js";
 
@@ -161,6 +162,8 @@ async function fetch402(
   init: RequestInit,
   options: { timeoutMs?: number },
 ): Promise<{ paymentRequiredHeader: string | null; wwwAuthenticate: string | null; body: string }> {
+  const problem = sellerUrlProblem(url);
+  if (problem) throw new Error(`the seller URL ${problem}`);
   const timeoutMs = options.timeoutMs ?? DETECT_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   const controller = new AbortController();

@@ -316,9 +316,14 @@ control or invisible characters.
 
 **Where the signed payment goes.** `pay` sends the signed authorization only to the URL it quoted:
 it refuses a redirect, and the attempt then ends `uncertain`, because the client cannot tell whether
-the seller acted on it. A listing from the index or the catalogue is payable only when its endpoint
-is `https`, or `http` on this machine. Reading a seller's 402 challenge has a deadline and a size
-limit and follows no redirect.
+the seller acted on it. Every seller URL must be `https`, or `http` on this machine (127.0.0.1,
+localhost, [::1]). That covers a URL given to `quote`, a listing's endpoint, and every `budget buy`
+and `preflight` URL. Anything else is refused before the first request, because on plain http
+anyone on the way can change the recipient and read the signed payment. Reading a seller's 402
+challenge has a deadline and a size limit and follows no redirect, and `budget preflight` follows
+none either. Discovery reads of the index and the catalogue follow no redirect and are cut at 2 MB.
+`SUPERSTABLES_INDEX_URL`, `SUPERSTABLES_CATALOGUE_URL` and `SUPERSTABLES_DEMO_SERVICE_URL` follow the
+same https rule.
 
 ## The local wallet mode
 

@@ -60,6 +60,7 @@ function checkoutWithoutDevPackages(): string {
   cpSync(resolve(ROOT, "src/core/process-identity.mjs"), join(repo, "src/core/process-identity.mjs"));
   cpSync(resolve(ROOT, "src/core/owner-recovery.mjs"), join(repo, "src/core/owner-recovery.mjs"));
   cpSync(resolve(ROOT, "src/core/proofs.mjs"), join(repo, "src/core/proofs.mjs"));
+  cpSync(resolve(ROOT, "src/core/seller-url.mjs"), join(repo, "src/core/seller-url.mjs"));
   writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "checkout", version: "9.9.9" }));
   return repo;
 }
