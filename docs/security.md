@@ -490,7 +490,18 @@ is not trusted to say who the owner is or what was paid.
   the request is final; it is never logged or printed.
 - **An unclear outcome is unknown.** Once the site reports that the owner's wallet was asked, or
   reports a transaction, an unfinished request ends as `unknown` (exit 5), never as "nothing was
-  sent". Read the chain before trying again.
+  sent". Read the chain before trying again. A cancel counts as "nothing was sent" only when the
+  site answers `200` with that request, `cancelled` and final, or, to a second cancel, `409
+  not_open` with state `cancelled`, no wallet request and no transaction (that answer has no id
+  and is not marked final; it is never accepted with another request's id). Either way the
+  answer, its `error` and their steps must show no wallet request, transaction, send-implying
+  state or money that may have moved, and no earlier answer, from the creation on, may have shown
+  one (an error answer to a read counts too: `error.money_moved` on a 429 says the wallet was
+  asked): what an answer showed is never taken back by a later, cleaner one. For a link with steps, a step
+  is "nothing was sent" only when an answer about this request shows it ended without being asked,
+  or the site confirmed an unapproved link withdrawn, and no answer showed evidence no step
+  accounts for; otherwise it is unknown and the link's result says to read the chain. An empty, unreadable or
+  contradictory answer, or none at all, is unknown (exit 5) for anything that can move funds.
 - **`recover` stays local.** On a chain with approvals on superstables.com, `grant`, `revoke` and `fund-agent` go through the
   site; the owner's part of `recover` still uses the page on this machine.
 - **A revoke on superstables.com needs the agent key.** The agent key signs every request to the site. On
