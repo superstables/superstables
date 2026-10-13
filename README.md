@@ -44,7 +44,7 @@ Don't run `npx superstables`; it can download a different package.
 - [Single purchase: on your machine or on superstables.com](docs/buy-once.md)
 - [CLI reference](docs/cli.md) and [budget commands](docs/cli-budget.md)
 - [Receipts and interrupted payments](docs/records.md)
-- [Seller referrals: verify and report referred purchases](docs/seller-referrals.md)
+- [Seller referrals: claim a listing and verify referrals](docs/seller-referrals.md)
 - [Security and spending limits](docs/security.md)
 - [Revoke and uninstall](docs/install.md#uninstalling)
 - [Contributing](README.md#contributing) and [Changelog](CHANGELOG.md)

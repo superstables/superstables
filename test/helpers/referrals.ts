@@ -1,10 +1,9 @@
 // Referral tokens for tests: an Ed25519 key made per test, a signer that writes tokens shaped like the site's, and a
-// fake site that publishes the key set and records the seller events it receives. Tests only; the client never signs.
+// fake site that publishes the key set. Tests only; the client never signs.
 
 import { createHash, generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
-import type { IncomingHttpHeaders } from "node:http";
 import { REFERRAL_TYPE, type ReferralClaims, type ReferralJwk } from "../../src/seller/referral.js";
-import { readBody, sendJson, startServer, type TestServer } from "./servers.js";
+import { sendJson, startServer, type TestServer } from "./servers.js";
 
 export interface TestReferralKey {
   kid: string;
@@ -47,11 +46,6 @@ export function signReferral(
   return { token: `${input}.${signature}`, claims: full };
 }
 
-export interface ReceivedEvent {
-  headers: IncomingHttpHeaders;
-  body: Record<string, any>;
-}
-
 export interface FakeReferralSite extends TestServer {
   /** The key set it publishes; replace it to rotate keys. */
   keys: ReferralJwk[];
@@ -59,40 +53,18 @@ export interface FakeReferralSite extends TestServer {
   keysStatus?: number;
   /** Delay the keys route's answer by this long. */
   keysDelayMs?: number;
-  events: ReceivedEvent[];
   keyReads: number;
-  /** Statuses to answer the next event posts with, in order, before answering 200. */
-  failNext: number[];
 }
 
-/** A site that publishes `keys` and answers seller events the way the API does. */
+/** A site that publishes `keys`. */
 export async function startFakeReferralSite(keys: ReferralJwk[]): Promise<FakeReferralSite> {
-  const state = { keys, events: [] as ReceivedEvent[], keyReads: 0, failNext: [] as number[] } as Pick<
-    FakeReferralSite,
-    "keys" | "events" | "keyReads" | "failNext" | "keysStatus" | "keysDelayMs"
-  >;
+  const state = { keys, keyReads: 0 } as Pick<FakeReferralSite, "keys" | "keyReads" | "keysStatus" | "keysDelayMs">;
   const server = await startServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/.well-known/superstables-referral-keys.json") {
       state.keyReads += 1;
       if (state.keysDelayMs) await new Promise((resolve) => setTimeout(resolve, state.keysDelayMs));
       if (state.keysStatus) sendJson(res, state.keysStatus, { error: { code: "internal_error", message: "down" } });
       else sendJson(res, 200, { keys: state.keys });
-      return;
-    }
-    if (req.method === "POST" && req.url === "/api/v1/seller/events") {
-      const body = JSON.parse((await readBody(req)) || "{}") as Record<string, any>;
-      const status = state.failNext.shift();
-      if (status !== undefined) {
-        sendJson(res, status, { error: { code: status === 429 ? "rate_limited" : "internal_error", message: "try again" } }, status === 429 ? { "retry-after": "0" } : {});
-        return;
-      }
-      if (req.headers.authorization?.startsWith("Bearer sssk_") !== true) {
-        sendJson(res, 401, { error: { code: "unauthorized", message: "a seller API key is required" } });
-        return;
-      }
-      const replayed = state.events.some((e) => e.headers["idempotency-key"] === req.headers["idempotency-key"]);
-      state.events.push({ headers: req.headers, body });
-      sendJson(res, 200, { purchase: { id: "pur_test", status: body.type === "fulfilled" ? "held" : "not_billable", reason: null, fee: null }, replayed });
       return;
     }
     sendJson(res, 404, { error: { code: "not_found", message: "no such path" } });

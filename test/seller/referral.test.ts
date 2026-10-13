@@ -1,27 +1,21 @@
 // The seller helper: a referral token is accepted only when a published key signed it for this service, from the
-// expected site, and it has not expired; anything else is a rejection with a reason, never an exception. Reports are
-// retried only when the site could not answer, always with the same Idempotency-Key.
+// expected site, and it has not expired; anything else is a rejection with a reason, never an exception.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SITE,
   PURCHASE_REF_HEADER,
   REFERRAL_HEADER,
-  ReferralReportError,
   checkReferral,
   clearReferralKeysCache,
-  createReferralReporter,
   fetchReferralKeys,
-  idempotencyKey,
   readReferral,
   verifyReferral,
-  type ReferralEvent,
 } from "../../src/seller/index.js";
 import { referralKey, signReferral, startFakeReferralSite, type FakeReferralSite } from "../helpers/referrals.js";
 
 const ISSUER = DEFAULT_SITE;
 const AUDIENCE = "https://api.example.com";
-const API_KEY = `sssk_${"A".repeat(43)}`;
 
 const opened: { close(): Promise<void> }[] = [];
 afterEach(async () => {
@@ -250,136 +244,5 @@ describe("checkReferral", () => {
     expect(await checkReferral("garbage", { site: s.url, audience: AUDIENCE })).toEqual({ ok: false, reason: "malformed" });
     expect(await checkReferral(signReferral(key, { iss: s.url }, { alg: "none" }).token, { site: s.url, audience: AUDIENCE })).toEqual({ ok: false, reason: "unsupported_header" });
     expect(s.keyReads).toBe(0);
-  });
-});
-
-describe("createReferralReporter", () => {
-  const token = signReferral(referralKey()).token;
-  const fulfilled: ReferralEvent = {
-    type: "fulfilled",
-    referral: token,
-    purchase_ref: "att_1",
-    settlement: { network: "eip155:84532", transaction: `0x${"ab".repeat(32)}`, payer: `0x${"11".repeat(20)}`, amount: "10000", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", status: "settled" },
-  };
-
-  it("posts the event with the key and a stable Idempotency-Key, and returns the site's answer", async () => {
-    const s = await site([]);
-    const reporter = createReferralReporter({ apiKey: API_KEY, site: s.url });
-    const answer = await reporter.report(fulfilled);
-    expect(answer).toEqual({ purchase: { id: "pur_test", status: "held", reason: null, fee: null }, replayed: false });
-    expect(s.events).toHaveLength(1);
-    expect(s.events[0]!.headers.authorization).toBe(`Bearer ${API_KEY}`);
-    expect(s.events[0]!.headers["idempotency-key"]).toBe(idempotencyKey(fulfilled));
-    expect(s.events[0]!.body).toMatchObject({ ...fulfilled, occurred_at: expect.any(String) });
-    // The same event again: the same key, and the site says it is a replay.
-    expect((await reporter.report({ ...fulfilled, occurred_at: "2026-10-11T23:00:00Z" })).replayed).toBe(true);
-  });
-
-  it("derives the key from type, referral id, purchase ref, order id, the transactions, the status and the amounts", () => {
-    const base = idempotencyKey(fulfilled);
-    expect(idempotencyKey({ ...fulfilled, occurred_at: "2020-01-01T00:00:00Z" })).toBe(base);
-    expect(idempotencyKey({ ...fulfilled, settlement: { ...fulfilled.settlement!, payer: "0xother" } })).toBe(base);
-    // An update to the same purchase is not a replay: pending, then settled; a corrected amount; a second refund.
-    expect(idempotencyKey({ ...fulfilled, settlement: { ...fulfilled.settlement!, status: "pending" } })).not.toBe(base);
-    expect(idempotencyKey({ ...fulfilled, settlement: { ...fulfilled.settlement!, amount: "20000" } })).not.toBe(base);
-    const refunded: ReferralEvent = { type: "refunded", referral: token, purchase_ref: "att_1", refund: { amount: "5000" } };
-    expect(idempotencyKey({ ...refunded, refund: { amount: "10000" } })).not.toBe(idempotencyKey(refunded));
-    expect(idempotencyKey({ ...fulfilled, type: "failed" })).not.toBe(base);
-    expect(idempotencyKey({ ...fulfilled, purchase_ref: "att_2" })).not.toBe(base);
-    expect(idempotencyKey({ ...fulfilled, order_id: "o-1" })).not.toBe(base);
-    expect(idempotencyKey({ ...fulfilled, settlement: { ...fulfilled.settlement!, transaction: "0x01" } })).not.toBe(base);
-    expect(idempotencyKey({ ...fulfilled, refund: { amount: "10000", transaction: "0x02" } })).not.toBe(base);
-    expect(idempotencyKey({ ...fulfilled, referral: signReferral(referralKey()).token })).not.toBe(base);
-    expect(base).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it("retries a 5xx and a 429 with the same key, then succeeds", async () => {
-    const s = await site([]);
-    s.failNext.push(503, 429);
-    const keys: string[] = [];
-    const reporter = createReferralReporter({
-      apiKey: API_KEY,
-      site: s.url,
-      backoffMs: 1,
-      fetch: (input, init) => {
-        keys.push(String(new Headers(init?.headers).get("idempotency-key")));
-        return fetch(input, init);
-      },
-    });
-    expect((await reporter.report(fulfilled)).purchase.id).toBe("pur_test");
-    expect(keys).toHaveLength(3);
-    expect(new Set(keys).size).toBe(1);
-  });
-
-  it("retries a network error, and gives up after the retries with the error code", async () => {
-    let calls = 0;
-    const reporter = createReferralReporter({
-      apiKey: API_KEY,
-      backoffMs: 1,
-      retries: 2,
-      fetch: async () => {
-        calls += 1;
-        throw new TypeError("fetch failed");
-      },
-    });
-    const error = await reporter.report(fulfilled).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(ReferralReportError);
-    expect(error).toMatchObject({ code: "network_error" });
-    expect(calls).toBe(3);
-  });
-
-  it("does not retry a refusal, and carries the site's error code without the key or the token", async () => {
-    let calls = 0;
-    const reporter = createReferralReporter({
-      apiKey: API_KEY,
-      backoffMs: 1,
-      fetch: async () => {
-        calls += 1;
-        return new Response(JSON.stringify({ error: { code: "invalid_event", message: "settlement is required" } }), { status: 400 });
-      },
-    });
-    const error = (await reporter.report(fulfilled).catch((e: unknown) => e)) as ReferralReportError;
-    expect(error).toMatchObject({ name: "ReferralReportError", code: "invalid_event", status: 400 });
-    expect(calls).toBe(1);
-    expect(error.message).not.toContain(API_KEY);
-    expect(error.message).not.toContain(token);
-  });
-
-  it("reports pending and then settled for one transaction as two events, not a replay", async () => {
-    const s = await site([]);
-    const reporter = createReferralReporter({ apiKey: API_KEY, site: s.url });
-    const pending = await reporter.report({ ...fulfilled, settlement: { ...fulfilled.settlement!, status: "pending" } });
-    const settled = await reporter.report(fulfilled);
-    expect([pending.replayed, settled.replayed]).toEqual([false, false]);
-    expect(s.events[0]!.headers["idempotency-key"]).not.toBe(s.events[1]!.headers["idempotency-key"]);
-  });
-
-  it("takes retries and backoff as non-negative whole numbers, and the defaults for anything else", async () => {
-    const calls = async (options: { retries?: number; backoffMs?: number }) => {
-      let n = 0;
-      const reporter = createReferralReporter({
-        apiKey: API_KEY,
-        backoffMs: 0,
-        ...options,
-        fetch: async () => {
-          n += 1;
-          return new Response("{}", { status: 503 });
-        },
-      });
-      await reporter.report(fulfilled).catch(() => undefined);
-      return n;
-    };
-    expect(await calls({ retries: -1 })).toBe(1);
-    expect(await calls({ retries: 1.9 })).toBe(2);
-    expect(await calls({ retries: Number.NaN })).toBe(4);
-    expect(await calls({ retries: Number.POSITIVE_INFINITY })).toBe(4);
-    expect(await calls({ retries: 1, backoffMs: -50 })).toBe(2);
-  });
-
-  it("refuses an API key that is not one, an http site, and an event over 8 KB", async () => {
-    expect(() => createReferralReporter({ apiKey: "sk_live_x" })).toThrow(/seller API key/);
-    expect(() => createReferralReporter({ apiKey: API_KEY, site: "http://site.example.com" })).toThrow(/https/);
-    const reporter = createReferralReporter({ apiKey: API_KEY, fetch: async () => new Response("{}") });
-    await expect(reporter.report({ ...fulfilled, order_id: "x".repeat(9000) })).rejects.toMatchObject({ code: "body_too_large" });
   });
 });

@@ -2,12 +2,11 @@
 
 When a buyer finds your listing in the Superstables index and pays it with the Superstables
 client, the paid request carries a referral token signed by superstables.com. Your service can
-verify that token and report what happened to the purchase: delivered, failed or refunded.
-`@superstables/client/seller` does both, with Node built-ins only.
+verify that token with `@superstables/client/seller`, which uses Node built-ins only. You don't
+report sales to superstables.com.
 
 **Testnet only.** Purchases, fees and statements are kept by superstables.com. The client carries
-the token from the index to your service, and this helper checks it and sends your reports; neither
-computes a fee.
+the token from the index to your service, and this helper checks it; neither computes a fee.
 
 ## How it works
 
@@ -22,12 +21,11 @@ computes a fee.
    | `Superstables-Referral` | The referral token |
    | `Superstables-Purchase-Ref` | An id for this purchase, the same on every retry of it: 1 to 128 characters of `A-Z a-z 0-9 . _ : -` |
 
-4. Your service verifies the token and, once the purchase has an outcome, reports it to
-   `POST https://www.superstables.com/api/v1/seller/events` with your seller API key.
+4. Your service can verify the token.
 
 The token names your listing and your agreement. It carries nothing about the buyer. Index tokens
 belong to the listing, not to one purchase, so anyone who reads the index can copy one. A valid
-token alone does not prove a purchase; the settlement you report is the evidence of it.
+token alone does not prove a purchase.
 
 ## Claim your listing
 
@@ -43,9 +41,7 @@ three ways:
 ## Verify the referral
 
 ```ts
-import { checkReferral, createReferralReporter, readReferral } from "@superstables/client/seller";
-
-const reporter = createReferralReporter({ apiKey: process.env.SUPERSTABLES_SELLER_KEY! });
+import { checkReferral, readReferral } from "@superstables/client/seller";
 
 // In the handler of a paid request, alongside checking the payment. checkReferral never throws:
 // when the site's keys cannot be read, it answers { ok: false, reason: "keys_unavailable" }.
@@ -55,23 +51,8 @@ const checked = referral
   : undefined;
 
 // After the payment settled and the answer was sent:
-if (referral && (await checked)?.ok) {
-  reporter
-    .report({
-      type: "fulfilled",
-      referral: referral.token,
-      purchase_ref: referral.purchaseRef,
-      settlement: {
-        network: "eip155:84532",
-        transaction: "0x…",
-        payer: "0x…",
-        amount: "10000", // atomic units
-        asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        status: "settled",
-      },
-    })
-    .catch((err) => console.error(`referral report failed: ${err.code}`));
-}
+const result = await checked;
+if (result?.ok) console.log(`referred by Superstables: ${result.claims.jti}`);
 ```
 
 `readReferral` returns `{ token, purchaseRef }`, or `null` when the request has no referral. It
@@ -112,61 +93,17 @@ superstables.com, which also has `pur`, its purchase id), `iat` and `exp`.
 `fetchReferralKeys(site)` reads `/.well-known/superstables-referral-keys.json` from the site and keeps
 it in memory for ten minutes. It throws when the keys cannot be read. If you call it yourself, catch
 that error and treat the referral as not checked, so a site outage never fails your paid request.
-Both it and the reporter accept https sites only, or plain http on this machine.
+It accepts https sites only, or plain http on this machine.
 
-Report after the buyer has its answer, and never let a failed report change that answer.
+## Try a claim with the demo seller
 
-## Report events
-
-`reporter.report(event)` sends one event and returns the site's answer,
-`{ purchase: { id, status, reason, fee }, replayed }`.
-
-| `type` | When |
-| --- | --- |
-| `acknowledged` | You saw a valid referral on a request. Optional. |
-| `fulfilled` | The buyer paid and your service delivered. `settlement` is required. |
-| `failed` | Your service did not deliver. |
-| `refunded` | You returned the payment. `refund.amount` is required. |
-
-An event also takes `purchase_ref` (the buyer's `Superstables-Purchase-Ref`), `order_id` (your own
-id), `occurred_at` (default: now) and `refund: { amount, transaction }`. `settlement.status` is
-`settled`, `pending` or `unknown`. The body must be 8 KB or less.
-
-Each request carries an `Idempotency-Key`: the hex SHA-256 of
-`type|referral id|purchase_ref|order_id|settlement transaction|settlement status|settlement amount|refund transaction|refund amount`,
-with an empty string for each part that is absent. The same event sent twice is recorded once, and
-the second answer has `replayed: true`. An update is a new event: `fulfilled` with a `pending`
-settlement, then `fulfilled` with the same transaction `settled`, gives two keys. The reporter
-retries network errors, 5xx and 429 answers, three times by default (`retries`, at most 10). It
-waits 500 ms before the first retry and twice as long before each next one (`backoffMs`), or longer
-when the site sends `Retry-After`, never more than 30 seconds at a time. Other errors are not
-retried. A report that fails is thrown as a `ReferralReportError` whose `code` is the site's error
-code, or `network_error`, `invalid_response`, `body_too_large` or `http_<status>`. Its message never
-contains the key or the token.
-
-## Try it with the demo seller
-
-`superstables demo-service` takes both parts from the environment. Each is off unless set.
-
-| Variable | Effect |
-| --- | --- |
-| `SUPERSTABLES_CLAIM_CHALLENGE` | Serves `/.well-known/superstables.txt` and adds `Superstables-Claim` to every answer of `/v1/market` |
-| `SUPERSTABLES_SELLER_KEY` | Verifies the referral on each paid request and reports the purchase as `fulfilled`, with its settlement, or `failed` |
-| `SUPERSTABLES_SELLER_LISTING` | This listing's id, checked against the token's `sub` |
-| `SUPERSTABLES_SELLER_ORIGIN` | This service's public origin, for example `https://api.example.com`, checked against the token's `aud` |
-| `SUPERSTABLES_SELLER_SITE` | The site to verify against and report to. Default `https://www.superstables.com` |
-
-Referrals need `SUPERSTABLES_SELLER_LISTING`, `SUPERSTABLES_SELLER_ORIGIN`, or both; with both, a token
-must match both. With a key and neither of them, the demo seller says once that it does not check
-referrals, and reports nothing. It checks a referral only once the facilitator has verified the
-payment, so a request that pays nothing never makes it read the site's keys.
+`superstables demo-service` publishes a claim challenge when `SUPERSTABLES_CLAIM_CHALLENGE` is set.
+It serves `/.well-known/superstables.txt` and adds `Superstables-Claim` to every answer of
+`/v1/market`. It is off unless set. The demo seller does not check referral headers.
 
 ```bash
-SUPERSTABLES_SELLER_KEY=sssk_… SUPERSTABLES_SELLER_ORIGIN=https://api.example.com \
-  superstables demo-service --pay-to 0xYourAddress
+SUPERSTABLES_CLAIM_CHALLENGE=ssc_… superstables demo-service --pay-to 0xYourAddress
 ```
-
-A failed report is logged with its error code only.
 
 ## What the client sends
 

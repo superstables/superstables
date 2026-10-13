@@ -1,5 +1,5 @@
 // @superstables/client/seller: what a seller needs to accept Superstables referrals. Read the referral a paid request
-// carries, verify it against the site's published keys, and report what happened to the purchase. Node built-ins only.
+// carries and verify it against the site's published keys. Node built-ins only.
 
 export {
   CLAIM_HEADER,
@@ -26,15 +26,3 @@ export type {
   ReferralVerification,
   VerifyReferralOptions,
 } from "./referral.js";
-
-export { ReferralReportError, createReferralReporter, idempotencyKey } from "./reporter.js";
-export type {
-  ReferralEvent,
-  ReferralEventType,
-  ReferralRefund,
-  ReferralReporter,
-  ReferralReporterOptions,
-  ReferralSettlement,
-  ReportAnswer,
-  ReportedPurchase,
-} from "./reporter.js";
