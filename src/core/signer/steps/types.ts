@@ -24,6 +24,8 @@ export interface StepRecord {
   x402Version: 1 | 2;
   /** EIP-3009: the nonce the payment engine chose for the authorization (core/referral-nonce.ts). */
   nonce?: Hex;
+  /** Solana and Tempo: the referral the payment engine chose for the memo (core/referral-memo.mjs). */
+  referralId?: string;
   expiresAt: number;
   /** The account the page connected, once it has. */
   account?: string;

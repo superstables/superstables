@@ -9,21 +9,14 @@
 
 import { randomBytes } from "node:crypto";
 import type { Hex } from "viem";
+import { referralIdBytes } from "./referral-memo.mjs";
+
+export { referralIdBytes };
 
 export const REFERRAL_NONCE_MARKER = Buffer.from("SSRF", "ascii");
 
-const REFERRAL_ID = /^ref_([A-Za-z0-9_-]{22})$/;
 const ID_BYTES = 16;
 const RANDOM_BYTES = 32 - REFERRAL_NONCE_MARKER.length - ID_BYTES;
-
-/** The 16 bytes a referral id names. Undefined unless it is `ref_` and the canonical base64url of exactly 16 bytes. */
-export function referralIdBytes(id: string): Buffer | undefined {
-  const encoded = REFERRAL_ID.exec(id)?.[1];
-  if (!encoded) return undefined;
-  const bytes = Buffer.from(encoded, "base64url");
-  // 22 characters hold 132 bits; only the encoding whose last 4 bits are zero names these 16 bytes and no others.
-  return bytes.length === ID_BYTES && bytes.toString("base64url") === encoded ? bytes : undefined;
-}
 
 /** The nonce for one EIP-3009 authorization: marked with the referral when its id is well formed, random otherwise. */
 export function referralNonce(id?: string, random: (size: number) => Buffer = randomBytes): Hex {

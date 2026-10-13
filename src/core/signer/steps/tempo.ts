@@ -21,6 +21,7 @@ import { getAddress } from "viem";
 import { TEMPO_MODERATO, isAddress } from "../../chain.js";
 import type { MppChallenge } from "../../mpp.js";
 import { TEMPO_SEND_MARGIN_MS, mppMemo, transferCall } from "../../rails/tempo.js";
+import { tempoClientId } from "../../referral-memo.mjs";
 import type { StepAnswer, StepContext, StepRecord, WalletStep } from "./types.js";
 
 interface Prepared {
@@ -129,7 +130,7 @@ export const tempoStep: WalletStep = {
 
   async prepare(record: StepRecord, account: string): Promise<StepAnswer> {
     const challenge = challengeOf(record);
-    const memo = mppMemo(challenge.id, challenge.realm);
+    const memo = mppMemo(challenge.id, challenge.realm, tempoClientId(record.referralId));
     const call = transferCall({ from: account, recipient: record.verified.recipient, amountAtomic: record.verified.amountAtomic, memo });
     record.prepared = { call, memo } satisfies Prepared;
     return {

@@ -176,17 +176,19 @@ export function settlementOf(
 export const TRANSFER_WITH_MEMO_TOPIC = keccak256(toBytes('TransferWithMemo(address,address,uint256,bytes32)'))
 
 /**
- * The memo mppx puts on a tempo.charge payment (Attribution.encode, no clientId): 4-byte "mpp" tag,
- * version 1, 10-byte fingerprint of the realm, 10 zero bytes, 7-byte nonce of the challenge id. It is
- * known before anything is signed, and it is an indexed topic of the TransferWithMemo event, so the
- * chain can be searched for one specific purchase without knowing its transaction hash (a sponsored
- * transaction's final hash is fixed only when the seller adds the fee payer's signature).
+ * The memo mppx puts on a tempo.charge payment (Attribution.encode): 4-byte "mpp" tag, version 1, 10-byte
+ * fingerprint of the realm, 10-byte fingerprint of the client id (zero bytes without one), 7-byte nonce of
+ * the challenge id. It is known before anything is signed, and it is an indexed topic of the
+ * TransferWithMemo event, so the chain can be searched for one specific purchase without knowing its
+ * transaction hash (a sponsored transaction's final hash is fixed only when the seller adds the fee
+ * payer's signature).
  */
-export function mppMemo(challengeId: string, realm: string): Hex {
+export function mppMemo(challengeId: string, realm: string, clientId?: string): Hex {
   const buf = new Uint8Array(32)
   buf.set(toBytes(keccak256(toBytes('mpp'))).slice(0, 4), 0)
   buf[4] = 1
   buf.set(toBytes(keccak256(toBytes(realm))).slice(0, 10), 5)
+  if (clientId) buf.set(toBytes(keccak256(toBytes(clientId))).slice(0, 10), 15)
   buf.set(toBytes(keccak256(toBytes(challengeId))).slice(0, 7), 25)
   return ('0x' + Buffer.from(buf).toString('hex')) as Hex
 }

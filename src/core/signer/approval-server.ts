@@ -60,6 +60,8 @@ export interface ApprovalRequestInput {
   x402Version: 1 | 2;
   /** EIP-3009: the nonce the payment engine chose for the authorization. */
   nonce?: Hex;
+  /** Solana and Tempo: the referral the payment engine chose for the memo. */
+  referralId?: string;
   /** How long the person has to decide. */
   timeoutMs: number;
   /** When the approval must end at the latest, if sooner than timeoutMs (a seller's challenge that expires sooner). */
@@ -255,6 +257,7 @@ export class ApprovalServer {
       requirement: input.requirement,
       x402Version: input.x402Version,
       ...(input.nonce ? { nonce: input.nonce } : {}),
+      ...(input.referralId ? { referralId: input.referralId } : {}),
       timeoutMs: input.timeoutMs,
       beforeWalletSends: input.beforeWalletSends,
       status: "pending",

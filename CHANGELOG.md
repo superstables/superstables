@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - When a listing from the Superstables index carries a referral, `pay` sends it to that seller with the paid request, with the attempt id as `Superstables-Purchase-Ref`. Receipts record `discoveredVia` and the referral's id, listing and terms, never the token. `SUPERSTABLES_REFERRALS=off` turns this off.
 - On EVM chains, a referred payment carries its referral in the EIP-3009 nonce: the marker `SSRF`, the 16 bytes of the referral id, then 12 random bytes. The token is sent only when the signed nonce names the same referral. See `docs/seller-referrals.md`.
 - `superstables budget buy` on an EVM chain sends the seller's referral too, and marks its nonce the same way. The operation keeps its referral and nonce for every run under the same `--op`.
+- On Solana devnet, a referred payment carries its referral in the memo: `ss1`, the 22 characters of the referral id and 7 random characters for a single purchase, and `rb:<op>;ss1` and the id for a budget buy. A memo the seller fixes is sent unchanged, with no token. See `docs/seller-referrals.md`.
+- On Tempo Moderato, a referred payment's MPP client id is `superstables:<referral id>`, so its memo holds the referral's fingerprint in bytes 15 to 24.
+- `superstables budget buy` on Solana and Tempo sends the seller's referral, and marks the payment the same way. The operation keeps its referral for every run under the same `--op`.
 - `superstables demo-service` can publish a claim challenge (`SUPERSTABLES_CLAIM_CHALLENGE`). It is off unless set.
 
 ## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana

@@ -9,6 +9,11 @@ import { decodeFunctionData, keccak256, toBytes, type Hex } from "viem";
 import { Challenge, Credential } from "mppx";
 import { readBody, sendJson, startServer, type TestServer } from "./servers.js";
 
+// mppx's own memo check, which its server's tempo.charge runs (assertChallengeBoundMemo): the tag, the realm's
+// fingerprint and the challenge binding. Not exported by the package, so loaded by path.
+const Attribution: { verifyServer(memo: string, serverId: string): boolean; verifyChallengeBinding(memo: string, challengeId: string): boolean } =
+  await import(new URL("../../node_modules/mppx/dist/tempo/Attribution.js", import.meta.url).href);
+
 export const PATH_USD = "0x20C0000000000000000000000000000000000000";
 const TRANSFER_TOPIC = keccak256(toBytes("Transfer(address,address,uint256)"));
 const TRANSFER_WITH_MEMO_TOPIC = keccak256(toBytes("TransferWithMemo(address,address,uint256,bytes32)"));
@@ -122,16 +127,6 @@ export async function startFakeTempoPay(): Promise<FakeTempoPay> {
   return Object.assign(chain, server);
 }
 
-/** The memo mppx's own client puts on a payment for this challenge (Attribution.encode, no client id). */
-export function memoFor(challengeId: string, realm: string): Hex {
-  const buf = new Uint8Array(32);
-  buf.set(toBytes(keccak256(toBytes("mpp"))).slice(0, 4), 0);
-  buf[4] = 1;
-  buf.set(toBytes(keccak256(toBytes(realm))).slice(0, 10), 5);
-  buf.set(toBytes(keccak256(toBytes(challengeId))).slice(0, 7), 25);
-  return `0x${Buffer.from(buf).toString("hex")}` as Hex;
-}
-
 export interface MppSellerOptions {
   /** pathUSD atomic units. */
   amount?: string;
@@ -184,7 +179,8 @@ export async function startFakeMppSeller(chain: FakeTempoPay, options: MppSeller
         payload.type === "hash" &&
         transfer &&
         !transfer.reverted &&
-        transfer.memo.toLowerCase() === memoFor(issued.id, issued.realm).toLowerCase() &&
+        Attribution.verifyServer(transfer.memo, issued.realm) &&
+        Attribution.verifyChallengeBinding(transfer.memo, issued.id) &&
         transfer.amount === BigInt(amount) &&
         transfer.to.toLowerCase() === options.recipient.toLowerCase() &&
         transfer.token.toLowerCase() === PATH_USD.toLowerCase() &&

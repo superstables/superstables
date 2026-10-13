@@ -24,6 +24,9 @@ import type { SignResult, Signer } from "../../src/core/signer/types.js";
 import { MINT, randomAddress, signAsOwner, solanaKey, startFakeDevnet, startSolanaSeller, type FakeSolanaDevnet, type SolanaSeller, type SolanaSellerBehaviour } from "../helpers/fake-solana-pay.js";
 import bs58 from "bs58";
 import { randomBytes } from "node:crypto";
+import { VersionedTransaction } from "@solana/web3.js";
+import { rememberReferrals } from "../../src/core/referrals.js";
+import { referralKey, signReferral } from "../helpers/referrals.js";
 
 /** A pid no process has: a runner that is gone. */
 const GONE = { ...(await import("../../src/core/lock.js")).thisProcess(), pid: 2 ** 30 + 7, start: "linux:gone:1" };
@@ -98,6 +101,78 @@ async function pay(s: Awaited<ReturnType<typeof stack>>): Promise<Attempt> {
   await approveOnPage(await link);
   return s.engine.waitForAttempt(started.id, 15_000);
 }
+
+/** The seller's listing in the index carries a referral with this id: remembered as `find` remembers it. */
+function referred(s: Awaited<ReturnType<typeof stack>>, id: string): string {
+  const origin = new URL(s.seller.resource).origin;
+  const { token } = signReferral(referralKey(), { jti: id, aud: origin });
+  rememberReferrals([{
+    id: new URL(origin).host, name: "listed", description: "", endpoint: `${origin}/paid`, method: "GET", params: [],
+    payment: { rail: "x402", scheme: "exact", network: SOLANA_DEVNET.caip2, networkLabel: "Solana devnet", asset: "USDC" },
+    source: "superstables-index", testnet: true, actionable: false,
+    referral: { token, expiresAt: new Date(Date.now() + 3600_000).toISOString(), terms: "terms-1" },
+  }], s.records.dir);
+  return token;
+}
+
+/** The memo of the transaction the seller was sent. */
+function sentMemo(s: Awaited<ReturnType<typeof stack>>): string {
+  const tx = VersionedTransaction.deserialize(Buffer.from(String((s.seller.lastPayment!.payload as { transaction: string }).transaction), "base64"));
+  const keys = tx.message.staticAccountKeys.map((k) => k.toBase58());
+  const memo = tx.message.compiledInstructions.find((ix) => keys[ix.programIdIndex] === "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")!;
+  return Buffer.from(memo.data).toString("utf8");
+}
+
+describe("a referred Single purchase on Solana devnet", () => {
+  const ID = "ref_AAECAwQFBgcICQoLDA0ODw";
+
+  it("carries ss1 and the referral id in its 32-character memo, and sends the same referral's token", async () => {
+    const s = await stack();
+    const token = referred(s, ID);
+    const final = await pay(s);
+    expect(final.state, final.reason).toBe("settled");
+    const memo = sentMemo(s);
+    expect(memo).toMatch(/^ss1AAECAwQFBgcICQoLDA0ODw[A-Za-z0-9_-]{7}$/);
+    expect(s.seller.lastPaidHeaders?.["superstables-referral"]).toBe(token);
+    expect(s.seller.lastPaidHeaders?.["superstables-purchase-ref"]).toBe(final.id);
+    expect(final).toMatchObject({ discoveredVia: "superstables", referral: { id: ID, listingId: new URL(s.seller.resource).host, terms: "terms-1" } });
+  });
+
+  it("sends a seller's fixed memo unchanged, with no marker and no token", async () => {
+    const s = await stack();
+    referred(s, ID);
+    s.seller.accept.extra = { feePayer: s.seller.feePayer, memo: "order-42" };
+    const final = await pay(s);
+    expect(final.state, final.reason).toBe("settled");
+    expect(sentMemo(s)).toBe("order-42");
+    expect(s.seller.lastPaidHeaders?.["superstables-referral"]).toBeUndefined();
+    expect(s.seller.lastPaidHeaders?.["superstables-purchase-ref"]).toBeUndefined();
+    expect(final.referral).toBeUndefined();
+  });
+
+  it("keeps 32 random hex characters without a referral, with a malformed id, or with referrals off", async () => {
+    const plain = await stack();
+    expect((await pay(plain)).state).toBe("settled");
+    expect(sentMemo(plain)).toMatch(/^[0-9a-f]{32}$/);
+
+    const malformed = await stack();
+    referred(malformed, "ref_not-a-16-byte-id");
+    expect((await pay(malformed)).state).toBe("settled");
+    expect(sentMemo(malformed)).toMatch(/^[0-9a-f]{32}$/);
+    expect(malformed.seller.lastPaidHeaders?.["superstables-referral"]).toBeUndefined();
+
+    const off = await stack();
+    referred(off, ID);
+    process.env.SUPERSTABLES_REFERRALS = "off";
+    try {
+      expect((await pay(off)).state).toBe("settled");
+    } finally {
+      delete process.env.SUPERSTABLES_REFERRALS;
+    }
+    expect(sentMemo(off)).toMatch(/^[0-9a-f]{32}$/);
+    expect(off.seller.lastPaidHeaders?.["superstables-referral"]).toBeUndefined();
+  });
+});
 
 describe("a Single purchase on Solana devnet", () => {
   it("settles: the owner signs once, the seller's facilitator lands it, and the chain shows this payment", async () => {

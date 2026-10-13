@@ -7,16 +7,27 @@
 // It is the only place the token is kept: a quote records which referral it found, and the paid request reads the
 // token from here. Expired entries are dropped whenever it is written, and each write goes to a file of its own that
 // is then renamed into place, so two processes writing at once never leave a torn file (the later write wins).
-// SUPERSTABLES_REFERRALS=off neither remembers nor sends.
+// Every read goes through ./referral-store.mjs, which the budget scripts share. SUPERSTABLES_REFERRALS=off neither
+// remembers nor sends.
 
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { decodeReferral, isReferralToken } from "../seller/referral.js";
+import {
+  REFERRALS_FILE,
+  isReferralToken,
+  live,
+  originOf,
+  readReferrals,
+  referralFor as rememberedFor,
+  referralId,
+  referralsEnabled,
+  tokenPayload,
+} from "./referral-store.mjs";
 import { ensureDir, recordsDir } from "./home.js";
 import type { ServiceListing } from "./types.js";
 
-export const REFERRALS_FILE = "referrals.json";
+export { REFERRALS_FILE, referralId, referralsEnabled };
 
 export interface RememberedReferral {
   listingId: string;
@@ -35,68 +46,17 @@ export interface ActiveReferral {
   expiresAt: string;
 }
 
-/** Is remembering and sending referrals switched on? On unless SUPERSTABLES_REFERRALS is off (or 0, false, no). */
-export function referralsEnabled(): boolean {
-  const raw = (process.env.SUPERSTABLES_REFERRALS ?? "").trim().toLowerCase();
-  return !(raw === "off" || raw === "0" || raw === "false" || raw === "no");
-}
-
-/** The referral id of a token, read without verifying it. Undefined when it has none. */
-export function referralId(token: string): string | undefined {
-  const jti = decodeReferral(token)?.payload.jti;
-  return typeof jti === "string" && jti.length > 0 && jti.length <= 200 ? jti : undefined;
-}
-
 /**
  * When a referral stops being sent: the index's expires_at, but never later than the token's own `exp` (read without
  * verifying it). Undefined for a token without an `exp`, which no seller would accept.
  */
 function expiryOf(token: string, expiresAt: string): string | undefined {
-  const exp = decodeReferral(token)?.payload.exp;
+  const exp = tokenPayload(token)?.exp;
   if (typeof exp !== "number" || !Number.isFinite(exp)) return undefined;
   const listed = Date.parse(expiresAt);
   const until = new Date(Number.isFinite(listed) ? Math.min(listed, exp * 1000) : exp * 1000);
   // An exp past the range of a Date has no ISO form; such a token is skipped, not the whole batch.
   return Number.isFinite(until.getTime()) ? until.toISOString() : undefined;
-}
-
-function originOf(url: string): string | undefined {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.origin : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function live(entry: RememberedReferral, now: Date): boolean {
-  return Date.parse(entry.expiresAt) > now.getTime();
-}
-
-function read(dir: string): Record<string, RememberedReferral> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(join(dir, REFERRALS_FILE), "utf8"));
-  } catch {
-    return {};
-  }
-  const out: Record<string, RememberedReferral> = {};
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return out;
-  for (const [origin, value] of Object.entries(parsed as Record<string, unknown>)) {
-    const e = value as Partial<RememberedReferral> | null;
-    if (
-      e &&
-      typeof e.listingId === "string" &&
-      isReferralToken(e.token) &&
-      typeof e.expiresAt === "string" &&
-      Number.isFinite(Date.parse(e.expiresAt)) &&
-      typeof e.terms === "string" &&
-      typeof e.seenAt === "string"
-    ) {
-      out[origin] = e as RememberedReferral;
-    }
-  }
-  return out;
 }
 
 /**
@@ -111,7 +71,7 @@ export function rememberReferrals(listings: readonly ServiceListing[], dir: stri
   );
   if (fresh.length === 0) return;
   try {
-    const kept = Object.fromEntries(Object.entries(read(dir)).filter(([, entry]) => live(entry, now)));
+    const kept: Record<string, RememberedReferral> = Object.fromEntries(Object.entries(readReferrals(dir)).filter(([, entry]) => live(entry, now)));
     for (const listing of fresh) {
       try {
         const expiresAt = expiryOf(listing.referral!.token, listing.referral!.expiresAt);
@@ -153,12 +113,5 @@ export function rememberReferrals(listings: readonly ServiceListing[], dir: stri
  * sent to this one).
  */
 export function referralFor(url: string, dir: string = recordsDir(), now: Date = new Date()): ActiveReferral | undefined {
-  if (!referralsEnabled()) return undefined;
-  const origin = originOf(url);
-  const entry = origin ? read(dir)[origin] : undefined;
-  if (!entry || !live(entry, now)) return undefined;
-  const payload = decodeReferral(entry.token)?.payload;
-  const id = referralId(entry.token);
-  if (!id || payload?.aud !== origin) return undefined;
-  return { id, token: entry.token, listingId: entry.listingId, terms: entry.terms, expiresAt: entry.expiresAt };
+  return rememberedFor(url, dir, now);
 }

@@ -15,6 +15,7 @@ import { inclusion } from "../finality.js";
 import { encodeFunctionData, getAddress, keccak256, toBytes, toHex, type Hex } from "viem";
 import { TEMPO_MODERATO, fromAtomic, isAddress, isTransactionId, mainnetName } from "../chain.js";
 import { hashCredential, type MppChallenge } from "../mpp.js";
+import { tempoClientId } from "../referral-memo.mjs";
 import { chainRpc, rpcCall } from "../rpc.js";
 import type { ChainCheck } from "../settlement.js";
 import { untrustedText } from "../text.js";
@@ -48,15 +49,17 @@ const TRANSFER_WITH_MEMO_ABI = [
 ] as const;
 
 /**
- * The memo mppx puts on a tempo.charge payment (its Attribution.encode, no client id): a 4-byte "mpp" tag, version 1,
- * a 10-byte fingerprint of the realm, 10 zero bytes and a 7-byte nonce of the challenge id. The seller accepts a
- * transfer only with this memo, so the payment for one challenge can be found on chain.
+ * The memo mppx puts on a tempo.charge payment (its Attribution.encode): a 4-byte "mpp" tag, version 1, a 10-byte
+ * fingerprint of the realm, a 10-byte fingerprint of the client id (zero bytes without one) and a 7-byte nonce of the
+ * challenge id. The seller checks the tag, the realm and the nonce, so the payment for one challenge can be found on
+ * chain; a referred payment's client id names its referral (core/referral-memo.mjs).
  */
-export function mppMemo(challengeId: string, realm: string): Hex {
+export function mppMemo(challengeId: string, realm: string, clientId?: string): Hex {
   const buf = new Uint8Array(32);
   buf.set(toBytes(keccak256(toBytes("mpp"))).slice(0, 4), 0);
   buf[4] = 1;
   buf.set(toBytes(keccak256(toBytes(realm))).slice(0, 10), 5);
+  if (clientId) buf.set(toBytes(keccak256(toBytes(clientId))).slice(0, 10), 15);
   buf.set(toBytes(keccak256(toBytes(challengeId))).slice(0, 7), 25);
   return toHex(buf);
 }
@@ -314,8 +317,8 @@ export const tempoRail: PushRail = {
 
   judgeChallenge: judgeTempoCharge,
 
-  signRequest(offer, _x402Version, context) {
-    return { kind: "tempo-transfer", challenge: offer.requirement as MppChallenge, context };
+  signRequest(offer, _x402Version, context, referralId) {
+    return { kind: "tempo-transfer", challenge: offer.requirement as MppChallenge, ...(referralId ? { referralId } : {}), context };
   },
 
   signedFacts(signed: SignResult): SignedFacts {
@@ -327,9 +330,9 @@ export const tempoRail: PushRail = {
     return { Authorization: hashCredential(offer.requirement as MppChallenge, signed.hash, { address: getAddress(signed.signer), chainId: TEMPO_MODERATO.chainId }) };
   },
 
-  paymentMemo(offer: Offer): string {
+  paymentMemo(offer: Offer, referralId?: string): string {
     const challenge = offer.requirement as MppChallenge;
-    return mppMemo(challenge.id, challenge.realm);
+    return mppMemo(challenge.id, challenge.realm, tempoClientId(referralId));
   },
 
   isTransaction(value: unknown): value is string {

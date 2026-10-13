@@ -184,8 +184,11 @@ describe("the approval page for a Solana payment", () => {
       lastValidBlockHeight: chain.height + 150,
       // the slot devnet had reached when the transaction was built: a search for it starts there
       searchFromSlot: chain.height + 10,
+      // no referral and no memo from the seller: 32 random hex characters, as the transaction carries them
+      memo: expect.stringMatching(/^[0-9a-f]{32}$/),
       signer: owner.address,
     });
+    expect(Buffer.from(signed, "base64").toString("latin1")).toContain(result.memo);
     // one signature per approval: a second one is not taken
     expect(await post(`${link}/signed`, { address: owner.address, signedTransaction: signed })).toMatchObject({ status: 409 });
   });

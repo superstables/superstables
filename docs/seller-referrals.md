@@ -132,9 +132,28 @@ A payment without a referral, or with a referral id in another format, has a non
 bytes. The client sends the token only when the signed nonce carries the same referral, so a
 Permit2 payment, whose nonce the x402 SDK chooses, carries neither.
 
-`superstables budget buy` on an EVM chain does the same, with the operation id as
-`Superstables-Purchase-Ref`. The operation records its referral and nonce when it starts, and a
-later run under the same `--op` uses them again.
+On Solana devnet, the payment's memo carries the referral:
+
+| Payment | Memo |
+| --- | --- |
+| A single purchase | `ss1`, the 22 characters of the referral id after `ref_`, then 7 random base64url characters: 32 characters |
+| A budget buy | `rb:<op>;ss1` and the 22 characters of the referral id |
+
+A single purchase without a referral, or with a referral id in another format, has a memo of 32
+random hex characters, and a budget buy has `rb:<op>`. When the seller's offer fixes the memo
+(`extra.memo`), the client sends that memo unchanged, so the payment carries no referral and the
+client sends no token.
+
+On Tempo Moderato, the payment's MPP client id is `superstables:<referral id>`. Bytes 15 to 24 of
+the 32-byte memo then hold the first 10 bytes of `keccak256` of the client id. Without a referral
+they are zero. An MPP seller checks only the memo's tag, its own realm and the challenge, so it
+accepts the memo as before.
+
+The client sends the token only when the payment carries the same referral.
+
+`superstables budget buy` does the same on every chain, with the operation id as
+`Superstables-Purchase-Ref`. The operation records its referral, with its nonce or memo, when it
+starts, and a later run under the same `--op` uses them again.
 
 `superstables find --json` shows a listing's `referral` as `{ expiresAt, terms }`, without the token.
 The receipt records `discoveredVia: "superstables"` and `referral: { id, listingId, terms }`.

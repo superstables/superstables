@@ -130,8 +130,11 @@ export interface PushRail extends RailCommon {
   judgeChallenge(challenge: MppChallenge, now?: number): Judged;
   /** The headers that carry the credential naming the owner's transaction to the seller. */
   credentialHeaders(offer: Offer, signed: SignResult): Record<string, string>;
-  /** The memo the owner's transfer for this offer carries: what finds it on chain, decided by the seller's challenge. */
-  paymentMemo(offer: Offer): string;
+  /**
+   * The memo the owner's transfer for this offer carries: what finds it on chain, decided by the seller's challenge and
+   * the referral the paid request carries, if any.
+   */
+  paymentMemo(offer: Offer, referralId?: string): string;
   /** How long to wait for the owner's transaction to show on chain before the seller is called. */
   readonly confirmWaitMs: number;
 }

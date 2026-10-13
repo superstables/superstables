@@ -11,9 +11,10 @@
 //   3. Fetch the seller's challenge (an unpaid request) and run the pre-signing checks: price <= --max
 //      (required), token is pathUSD on Moderato, whole base units, recipient == --pay-to when given.
 //      A refusal exits 3 with RESULT state refused_precheck. Nothing has been signed.
-//   4. Write the operation journal (state quoted, with the purchase memo), then sign. In pull mode (the
-//      default for an access key) the signed payment is a bearer transaction that expires in 25 s. The
-//      memo mppx puts on it is known before signing and is an indexed topic of the on-chain
+//   4. Write the operation journal (state quoted, with the purchase memo and the seller's referral, which
+//      the memo names through MPP's client id), then sign. In pull mode (the default for an access key)
+//      the signed payment is a bearer transaction that expires in 25 s. The memo mppx puts on it is known
+//      before signing and is an indexed topic of the on-chain
 //      TransferWithMemo event, so this one purchase can be found on chain even if its transaction hash
 //      is never learned (a sponsored transaction's final hash exists only after the seller adds the
 //      fee payer's signature). The journal is set to `submitted` BEFORE the payment is sent.
@@ -34,6 +35,7 @@
 //   npx tsx budget/tempo/buy.ts --url <seller> --max 0.2 --agent 2 --op my-op-1
 
 import { createHash } from 'node:crypto'
+import { join } from 'node:path'
 import { requireRecordLock } from '../op-lock.mjs'
 import { Mppx, tempo } from 'mppx/client'
 import { Credential, Receipt } from 'mppx'
@@ -57,7 +59,10 @@ import {
 } from './lib/common.ts'
 import { chainHead, getTxSigner, mppMemo, readKey, readScope } from './lib/chain.ts'
 import { judge, waitForOutcome } from './lib/resolve.ts'
-import { BLOCKING, OPS_DIR, newOpId, printResult, readOp, writeOp, type Op, type OpState } from './lib/ops.ts'
+import { BLOCKING, OPS_DIR, newOpId, printResult, readOp, writeOp, type JournalReferral, type Op, type OpState } from './lib/ops.ts'
+import { HOME } from '../paths.mjs'
+import { tempoClientId } from '../../src/core/referral-memo.mjs'
+import { operationReferral, paidReferralHeaders } from '../../src/core/referral-store.mjs'
 import { readCapped, saveResponse } from '../response.mjs'
 import { budgetShortfall, precheckCharge, recipientsOutsideScope } from './lib/precheck.ts'
 import { CHALLENGE_OPTIONS, sellerInit } from './lib/seller.ts'
@@ -147,6 +152,12 @@ async function main() {
     process.exit(3)
   }
 
+  // The seller's referral, frozen in the journal from the operation's first run: a later run under the same --op pays
+  // under the same one. Its MPP client id names it in the payment's memo.
+  const referral = operationReferral(existing, url, join(HOME, 'records'))
+  const clientId = tempoClientId(referral?.id)
+  const attribution = { referral, clientId }
+
   // 2. Agent file only.
   const env = loadAgentEnv()
   const agent = agentAccessKeyAccount(env, agentLabel)
@@ -154,10 +165,11 @@ async function main() {
   const agentKey = agent.accessKeyAddress as Address
   console.log(`op ${opId}`)
   console.log(`Agent access key ${agentKey} buying from ${url} (owner ${ownerAddress} funds it, chain ${CHAIN_ID}, max ${args.max} ${TOKEN_LABEL})`)
+  if (referral) console.log(`Referral ${referral.id} for listing ${oneLine(referral.listingId, 200)}`)
 
   // tempo.charge only: a seller that offers a session (a deposit of its choosing) is never selected.
   const mppx = Mppx.create({
-    methods: [tempo.charge({ account: agent, getClient: () => createClient({ chain: tempoModerato, transport: http(RPC_URL) }), expectedChainId: CHAIN_ID, ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
+    methods: [tempo.charge({ account: agent, getClient: () => createClient({ chain: tempoModerato, transport: http(RPC_URL) }), expectedChainId: CHAIN_ID, ...(clientId ? { clientId } : {}), ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
     polyfill: false,
   })
   // no redirects on either request to the seller (lib/seller.ts says why)
@@ -170,7 +182,7 @@ async function main() {
   } catch (err) {
     const msg = oneLine((err as Error)?.message ?? err)
     console.log(`\nREFUSED before signing: could not get a usable ${TOKEN_LABEL} tempo.charge challenge: ${msg}`)
-    op = baseOp({ amount: '0', amountDecimal: '0', recipient: '', chainId: CHAIN_ID }, ownerAddress, agentKey)
+    op = baseOp({ amount: '0', amountDecimal: '0', recipient: '', chainId: CHAIN_ID }, ownerAddress, agentKey, attribution)
     finish('refused_precheck', { reason: `no_usable_challenge: ${msg}`, next: 'check the seller URL; nothing was signed' })
   }
   const payment = prepared.payment!
@@ -198,6 +210,7 @@ async function main() {
     },
     ownerAddress,
     agentKey,
+    attribution,
   )
   if (!check.ok) {
     console.log(`\nREFUSED before signing (${check.code}): ${oneLine(check.reason, 1000)}`)
@@ -321,7 +334,10 @@ async function main() {
   let bodyText = ''
   let sendError: string | undefined
   try {
-    const res = await mppx.rawFetch(url, payment.setCredential({ ...reqInit(), signal: AbortSignal.timeout(60_000) }, credential))
+    // Only the paid request carries the referral's token, and only when the memo's client id names that referral.
+    const init = reqInit()
+    const headers = { ...(init.headers as Record<string, string> | undefined), ...paidReferralHeaders(referral, opId, clientId ? referral?.id : undefined) }
+    const res = await mppx.rawFetch(url, payment.setCredential({ ...init, headers, signal: AbortSignal.timeout(60_000) }, credential))
     httpStatus = res.status
     console.log(`\nHTTP status: ${res.status}`)
     try {
@@ -376,6 +392,7 @@ function baseOp(
   q: { amount: string; amountDecimal: string; recipient: string; chainId: number; challengeId?: string; realm?: string; splits?: { recipient: string; amount: string }[] },
   owner: string,
   agent: string,
+  attribution: { referral: JournalReferral | null; clientId?: string },
 ): Op {
   const previous = readOp(opId)
   return {
@@ -401,7 +418,8 @@ function baseOp(
       ...(q.realm ? { realm: q.realm } : {}),
       maxDecimal: args.max as string,
     },
-    ...(q.challengeId && q.realm ? { memo: mppMemo(q.challengeId, q.realm) } : {}),
+    referral: attribution.referral,
+    ...(q.challengeId && q.realm ? { memo: mppMemo(q.challengeId, q.realm, attribution.clientId) } : {}),
     history: previous?.history ?? [],
   }
 }
