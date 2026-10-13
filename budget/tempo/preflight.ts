@@ -34,7 +34,7 @@ function result(state: 'ok' | 'failed', o: Record<string, unknown>): never {
 async function main() {
   let res: Response
   try {
-    res = await fetch(url, { method, ...(body !== undefined ? { body, headers: { 'content-type': 'application/json' } } : {}), redirect: 'follow', signal: AbortSignal.timeout(30_000) })
+    res = await fetch(url, { method, ...(body !== undefined ? { body, headers: { 'content-type': 'application/json' } } : {}), redirect: 'error', signal: AbortSignal.timeout(30_000) })
   } catch (err) {
     result('failed', { reason: `seller unreachable: ${oneLine((err as Error)?.message ?? err, 200)}`, next: 'check the seller URL' })
   }

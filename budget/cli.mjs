@@ -40,6 +40,7 @@ import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs"
 import { DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin } from "./site.mjs";
 import { customRpc, refusedRpcEnv } from "./rpc.mjs";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
+import { sellerUrlProblem } from "../src/core/seller-url.mjs";
 import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, unshownNext, waitOnce } from "./once.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -761,8 +762,7 @@ function parse(argv) {
   };
   amount("amount"); amount("max");
   if (f.url !== undefined) {
-    let u; try { u = new URL(f.url); } catch { u = null; }
-    if (!u || !/^https?:$/.test(u.protocol)) badInput(ctx, "--url must be an http(s) URL");
+    const problem = sellerUrlProblem(f.url); if (problem) badInput(ctx, `--url ${problem}`);
   }
   if (f.op !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(f.op)) badInput(ctx, "--op must be 1 to 64 characters: letters, digits, '.', '_' or '-'");
   if (f["pay-to"] !== undefined && !rail.addr.test(f["pay-to"])) badInput(ctx, `--pay-to is not a valid ${f.rail} address`);

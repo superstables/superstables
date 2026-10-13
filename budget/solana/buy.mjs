@@ -66,6 +66,7 @@ import {
 import { readCapped, saveResponse } from "../response.mjs";
 import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, assessOp } from "./ops.mjs";
 import { lockNext } from "../op-lock.mjs";
+import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
@@ -101,11 +102,8 @@ if (!checkOnly && flags.max === undefined) usageError("missing required flag --m
 const maxBase = parseAmountFlag(flags, "max", USAGE);
 const payToFlag = parsePubkeyFlag(flags, "pay-to", USAGE);
 const ownerFlag = parsePubkeyFlag(flags, "owner", USAGE);
-try {
-  new URL(flags.url);
-} catch {
-  usageError("--url is not a valid URL", USAGE);
-}
+const urlProblem = sellerUrlProblem(flags.url);
+if (urlProblem) usageError(`--url ${urlProblem}`, USAGE);
 const url = flags.url;
 const method = (flags.method ?? "GET").toUpperCase();
 if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) usageError(`unsupported --method ${method}`, USAGE);

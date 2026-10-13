@@ -13,6 +13,7 @@ import { SYM, CFG, GAS, emit, oneLine, USDC, NETWORK, usdc, gasFmt, publicClient
 import { checkAccept } from "./purchase.ts";
 import { EVM_CHAINS } from "./chains.mjs";
 import { isAddress } from "viem";
+import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 
 let bad = 0, good = 0;
 const ok = (c: boolean, m: string) => { console.log(`${c ? "PASS" : "FAIL"} -- ${oneLine(m, 2000)}`); if (c) good++; else bad++; };
@@ -21,6 +22,8 @@ const max = arg("max") ? toUsdc(arg("max")!) : undefined;
 const payTo = arg("pay-to");
 if (payTo && !isAddress(payTo)) usageError(`--pay-to "${payTo}" is not an address`);
 const url = arg("url");
+const urlProblem = url === undefined ? undefined : sellerUrlProblem(url);
+if (urlProblem) usageError(`--url ${urlProblem}`);
 
 console.log(`chain ${CFG.key}: ${CFG.label}, rpc ${CFG.rpc}, ${SYM} ${USDC}`);
 const id = await publicClient.request({ method: "eth_chainId" });
@@ -55,7 +58,7 @@ let offer: Offer | null = null;
 let offered: string[] = [];
 if (url) {
   let r: Response | null = null;
-  try { r = await fetch(url, { signal: AbortSignal.timeout(20_000) }); } catch (e: any) { ok(false, `GET ${url}: ${String(e?.message ?? e).split("\n")[0]}`); }
+  try { r = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(20_000) }); } catch (e: any) { ok(false, `GET ${url}: ${String(e?.message ?? e).split("\n")[0]}`); }
   let pr: any = null;
   if (r) {
     console.log(`GET ${url} -> HTTP ${r.status}`);
