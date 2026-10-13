@@ -437,6 +437,8 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
         // this page decides money, so it is not framed and not embedded
         "x-frame-options": "DENY",
         "content-security-policy": "frame-ancestors 'none'",
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
       });
       res.end(walletPage());
       return;

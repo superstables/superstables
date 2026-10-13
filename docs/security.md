@@ -87,6 +87,8 @@ That id is deliberately narrow. Holding it lets someone see *one* payment and si
 - a decision is final: a second POST to a request that is no longer pending gets 409;
 - the client binds `127.0.0.1`, so another machine cannot reach the page directly; port
   forwarding can make it reachable elsewhere;
+- the page cannot be framed by another site (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), sends
+  no `Referer` (its link is the capability), and is served with `nosniff`;
 - it answers only to the Host it is bound to, `127.0.0.1:PORT` (or `localhost:PORT`), so a web
   page under a DNS name that resolves to `127.0.0.1` cannot reach it;
 - `/account`, `/signature` and `/reject` accept only a JSON body sent from the page's own origin,

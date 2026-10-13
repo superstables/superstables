@@ -45,7 +45,8 @@ import { getAddress, isAddress, recoverMessageAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { OwnerActionOutcome, OwnerTerms, OwnerVerdict } from "../src/core/signer/owner-approval-server.ts";
 import { isProof } from "../src/core/proofs.mjs";
-import { BUDGET_API, accountRefusalNext, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteText, siteWord } from "./site.mjs";
+import { readCapped } from "./response.mjs";
+import { BUDGET_API, SITE_MAX_BYTES, accountRefusalNext, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteText, siteWord } from "./site.mjs";
 
 export { scrub, siteFailedWords, siteWord };
 
@@ -561,10 +562,18 @@ export class HostedApprovals {
       }
     }
     if (!res) throw new HostedRefusal(`could not reach ${this.s.site} (${network}); nothing was sent. If an attempt did reach it, that request cannot be approved without its approval link and expires by itself in 10 minutes`, `check the network and ${this.s.site}, then run the same command again`);
-    let json: any = null;
-    try {
-      json = await res.json();
-    } catch {}
+    // the site's answer, read up to the cap: one cut off or longer is no answer to act on, and never a body that reads as empty.
+    // Whether the site created the request is then unknown, and its link and token were in that answer: the same as an answer that never came.
+    const answer = async (r: Response): Promise<any> => {
+      const { bytes, truncated } = await readCapped(r, SITE_MAX_BYTES);
+      if (truncated) throw new HostedRefusal(`the answer from ${this.s.site} was cut off or longer than ${SITE_MAX_BYTES} bytes, so it was not read; nothing was sent. If it created the request, that request cannot be approved without its approval link and expires by itself in 10 minutes`, `check the network and ${this.s.site}, then run the same command again`);
+      try {
+        return JSON.parse(bytes.toString("utf8"));
+      } catch {
+        return null;
+      }
+    };
+    let json: any = await answer(res);
     if (retried && res.status === 401 && proofReason(json) === "replayed") {
       headers = (await agentProof(this.s.agentKey, this.s.site, "POST", path, raw)).headers;
       try {
@@ -572,10 +581,7 @@ export class HostedApprovals {
       } catch (err) {
         throw new HostedRefusal(`could not reach ${this.s.site} (${siteText((err as { cause?: { code?: string } }).cause?.code ?? (err as Error).message)}); nothing was sent. If an attempt did reach it, that request cannot be approved without its approval link and expires by itself in 10 minutes`, `check the network and ${this.s.site}, then run the same command again`);
       }
-      json = null;
-      try {
-        json = await res.json();
-      } catch {}
+      json = await answer(res);
     }
     const code = typeof json?.reason_code === "string" ? json.reason_code : typeof json?.code === "string" ? json.code : typeof json?.error?.code === "string" ? json.error.code : "";
     if (res.status === 409 && (code === "duplicate_request" || code === "proof_reused")) {

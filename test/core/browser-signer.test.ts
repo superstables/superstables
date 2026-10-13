@@ -153,6 +153,14 @@ function firstApprovalUrl(engine: PaymentEngine): Promise<string> {
 
 // ── The tests ────────────────────────────────────────────────────────────────────────────
 
+/** The headers a page that decides money is served with: not framed, no referrer (its link is the capability), no sniffing. */
+function expectPageHeaders(page: Response): void {
+  expect(page.headers.get("x-frame-options")).toBe("DENY");
+  expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+  expect(page.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(page.headers.get("x-content-type-options")).toBe("nosniff");
+}
+
 describe("the approval page a browser wallet signs on", () => {
   it("shows what the server verified, and keeps what the agent claimed apart from it", async () => {
     const signer = newSigner();
@@ -168,6 +176,7 @@ describe("the approval page a browser wallet signs on", () => {
 
     const page = await fetch(link);
     expect(page.status).toBe(200);
+    expectPageHeaders(page);
     const html = await page.text();
 
     // The facts the server derived, in the words a person reads them in.
@@ -190,6 +199,7 @@ describe("the approval page a browser wallet signs on", () => {
     await signer.start();
     const page = await fetch(`${signer.url}/approve/${"0".repeat(32)}`);
     expect(page.status).toBe(404);
+    expectPageHeaders(page);
     expect(await page.text()).toContain("This approval link is unavailable");
     const state = await getJson(`${signer.url}/approve/${"0".repeat(32)}/state`);
     expect(state.status).toBe(404);
@@ -746,7 +756,9 @@ describe("the owner approval page", () => {
   it("shows the command's terms and asks the wallet for exactly the transaction the command built", async () => {
     const server = await ownerServer();
     const handle = server.request(ownerAction());
-    const html = await (await fetch(handle.url)).text();
+    const page = await fetch(handle.url);
+    expectPageHeaders(page);
+    const html = await page.text();
     expect(html).toContain("give your agent a budget");
     expect(html).toContain("0.01");
     expect(html).toContain(AGENT);
