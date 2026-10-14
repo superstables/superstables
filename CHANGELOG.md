@@ -7,9 +7,46 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Testnet only.
+
+### Upgrade and recovery
+
+Seller URLs must be `https`, or `http` on this machine (`127.0.0.1`, `localhost` or `[::1]`). `quote`, `pay`, `budget buy` and `budget preflight` refuse anything else, including a URL with a user name or password. `pay` also refuses a quote recorded earlier for such a URL: quote the `https` URL again. `SUPERSTABLES_INDEX_URL`, `SUPERSTABLES_CATALOGUE_URL` and `SUPERSTABLES_DEMO_SERVICE_URL` follow the same rule.
+
+Run `superstables policy show` to check your `policy.yaml`. A file with an unknown key, a `kill_switch` other than `true` or `false`, a single value where a list belongs or an unreadable amount now stops `quote` and `pay` until it is fixed; the error names the key. An empty file, or a cap the file leaves out, now means the default cap (0.05 USDC per payment, 1 USDC per day), not no cap.
+
+Your own `~/.superstables/policy.yaml` now applies as well when `SUPERSTABLES_POLICY`, `SUPERSTABLES_HOME` or `--home` selects another policy: a payment must pass both. If that file exists but can't be read, payments stop.
+
+For scripts: a budget approval on superstables.com whose cancellation the site doesn't clearly confirm is now reported as `unknown` (exit 5) rather than cancelled. Read the chain before trying again.
+
+`budget revoke --rail evm` now always asks the owner to sign and send a transaction, even when the allowance already reads 0, so the owner's wallet needs gas.
+
+On Solana, `SUPERSTABLES_SOLANA_RPC` must point at Solana devnet. Otherwise `fund-agent`, `grant`, `revoke`, `buy`, and `setup` when it funds, grants or replaces a recorded owner, refuse (exit 3), and `status` reports that the budget could not be read.
+
+On Tempo, `SUPERSTABLES_TEMPO_RPC` must point at Tempo Moderato. `budget buy` checks the RPC's chain id and otherwise refuses before signing, and `budget reconcile` keeps an undecided purchase `unknown`.
+
+This upgrade doesn't repair Tempo purchase journals that earlier versions wrote when the client sent the payment itself. Without a recorded expiry, such a purchase may stay `unknown`; don't pay again on that basis.
+
 ### Changed
 
 - `attempts --json` and SDK attempts from `Records` and `PaymentEngine` no longer include the `runner` field. The `Attempt` type no longer includes it either. Attempt records on disk are unchanged.
+
+### Security
+
+- On Solana, budget commands now check that the RPC is on Solana devnet before they fetch a blockhash, offer a transaction to the owner's wallet, sign or send. An RPC on another cluster, or one whose cluster can't be read, is refused with nothing sent. Before, a SOL transfer meant for devnet could be built and sent on another cluster, such as mainnet, through a replacement RPC.
+- A budget approval on superstables.com counts as cancelled with nothing sent only when the site's answer confirms that request was cancelled, including its documented answer for a request already cancelled, and no answer, then or earlier, showed a wallet request, a transaction or money that may have moved. An empty, unreadable or contradictory answer, or none, is `unknown`. Before, any successful answer without a state counted as cancelled.
+- `budget find` builds the command it suggests only from the client's own chain table, and quotes each word. Before, a crafted chain name in a listing could add a shell command to the suggestion.
+- Seller URLs outside this machine must be `https`: on plain `http`, anyone on the path can change the price and recipient and read the signed payment. `budget preflight` and discovery reads of the index and catalogue no longer follow redirects, and discovery answers are capped at 2 MB.
+- The spend policy is read strictly: a file that can't be read as written stops payments instead of counting as no rule, and another home or policy path no longer lifts a rule in your own `~/.superstables/policy.yaml`. Host rules now match names with a trailing dot and in any letter case. The policy is still a check in this software: an agent running as you can edit the file.
+- `budget revoke --rail evm` always sends `approve(agent, 0)` and reports `revoked` only after that transaction and a read of 0. Before, a single read of 0 reported the budget revoked with nothing sent.
+- Budget purchases refuse payment terms whose recipient is the zero address, the token contract, the agent or the owner. On EVM chains they also refuse an authorization lifetime that is missing, not a whole number of seconds, or outside 30 to 3600 seconds, and sign only the exact payment option that passed these checks.
+- `quote` and `pay` refuse an EVM payment request whose amount is zero, not a whole number of base units in canonical form, or 2^256 or more, or whose recipient is the zero address or the token contract.
+- The `pay` approval page on your machine can no longer be framed by another site. It, the budget approval page and the local wallet's page send no referrer and are served with `nosniff`. Budget commands cap answers from superstables.com at 1 MB, and the chain reads that confirm a single purchase on superstables.com at 4 MB; a longer or cut-off answer counts as a failed read.
+- Tempo budget purchases check the seller's terms and the RPC before anything is signed. Malformed payment splits, splits that add up to the price or more, a split of 0, more than 10 splits, or a split memo that is not 32 bytes of hex are refused, and so is an RPC that does not answer Tempo Moderato's chain id. `budget reconcile` on Tempo no longer judges a purchase from an RPC on another chain; the purchase stays `unknown`.
+- On Tempo, when the client sends the payment itself, the purchase journal records the signed transaction's hash and expiry before the broadcast begins. A purchase ends `failed` with nothing sent only when no broadcast began; after that, an error leaves it `unknown`, and `budget reconcile` can decide it from the recorded expiry and the chain. Before, such a purchase could stay `unknown` for good.
+- A purchase journal that exists but can't be read, including through a symlink loop or a directory the command can't enter, or that isn't valid JSON, now answers `unknown` (exit 5) in `budget buy`, `budget reconcile` and EVM `budget recover --op`, before anything is sent, and the file is kept. Before, it could crash the command or count as no journal. `budget recover` without `--op` still skips unreadable journals when it scans; check them before running it.
+- Approval records are written through a randomly named temporary file opened exclusively, so a symlink planted at the old, predictable temporary name can no longer redirect the write.
+- The approval page on your machine and the local wallet answer 404, not 500, to a request id with a malformed percent-escape.
 
 ## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana
 
