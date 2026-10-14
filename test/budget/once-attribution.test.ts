@@ -236,35 +236,69 @@ describe("hosted purchase payment identity", () => {
     expect(await settleOnce(original.record)).toMatchObject({ code: 0, result: { paid: true } });
   });
 
+  // An fsync of settleOnce is the claim's (budget/once.mjs claimAttribution) or an approval record's (journal.mjs writeJournalFile,
+  // two per write: the temp file, then the directory after the rename). The script fails the Nth fsync of one phase and lists the
+  // events of the claim and the records, so a record write that is added or removed ahead of the claim breaks these expectations
+  // loudly instead of shifting which fsync a count points at.
+  const fsyncScript = `
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const events = { claim: [], record: [] };
+    const sync = fs.fsyncSync;
+    const link = fs.linkSync;
+    const count = { claim: 0, record: 0 };
+    fs.fsyncSync = (fd) => {
+      const stack = new Error().stack;
+      const phase = stack.includes("claimAttribution") ? "claim" : stack.includes("writeJournalFile") ? "record" : null;
+      if (phase) events[phase].push(fs.fstatSync(fd).isDirectory() ? "directory" : "file");
+      if (phase === process.argv[2] && ++count[phase] === Number(process.argv[3])) throw new Error("forced fsync failure");
+      return sync(fd);
+    };
+    fs.linkSync = (...args) => { if (args[1].includes("/once/attributed-")) events.claim.push("link"); return link(...args); };
+    syncBuiltinESMExports();
+    const { settleOnce } = await import("./budget/once.mjs");
+    const { readApproval } = await import("./budget/approvals.mjs");
+    let error = null;
+    try { await settleOnce(readApproval(process.argv[1])); } catch (e) { error = e.message; }
+    console.log(JSON.stringify({ error, events }));`;
+  const fsyncOutput = z.object({ error: z.string().nullable(), events: z.object({ claim: z.array(z.string()), record: z.array(z.string()) }) });
+
   for (const failAt of [1, 2, 3]) {
     it(`a failure at claim fsync ${failAt} cannot commit paid and keeps the purchase retriable`, async () => {
       const { p, record } = await purchase(rails[0]);
       site.settle(p, "ok", { transaction: TX, payer: PAYER });
-      const script = `
-        import fs from "node:fs";
-        import { syncBuiltinESMExports } from "node:module";
-        const events = [];
-        const sync = fs.fsyncSync;
-        const link = fs.linkSync;
-        let calls = 0;
-        fs.fsyncSync = (fd) => {
-          events.push(fs.fstatSync(fd).isDirectory() ? "directory" : "file");
-          if (++calls === Number(process.argv[2])) throw new Error("forced fsync failure");
-          return sync(fd);
-        };
-        fs.linkSync = (...args) => { if (args[1].includes("/once/attributed-")) events.push("link"); return link(...args); };
-        syncBuiltinESMExports();
-        const { settleOnce } = await import("./budget/once.mjs");
-        const { readApproval } = await import("./budget/approvals.mjs");
-        let error = null;
-        try { await settleOnce(readApproval(process.argv[1])); } catch (e) { error = e.message; }
-        console.log(JSON.stringify({ error, events }));`;
-      const output = z.object({ error: z.string().nullable(), events: z.array(z.string()) }).parse(JSON.parse(await runNode(script, [record.id, String(failAt)])));
+      const output = fsyncOutput.parse(JSON.parse(await runNode(fsyncScript, [record.id, "claim", String(failAt)])));
       expect(output.error).toBe("forced fsync failure");
-      expect(output.events.slice(0, failAt === 3 ? 4 : failAt)).toEqual(failAt === 1 ? ["file"] : failAt === 2 ? ["file", "directory"] : ["file", "directory", "link", "directory"]);
+      expect(output.events.claim.slice(0, failAt === 3 ? 4 : failAt)).toEqual(failAt === 1 ? ["file"] : failAt === 2 ? ["file", "directory"] : ["file", "directory", "link", "directory"]);
       expect(existsSync(claimFile(rails[0]))).toBe(failAt === 3);
       expect(approvals.readApproval(record.id).final).toBeUndefined();
       expect(approvals.readApproval(record.id).hosted.token).toBe(p.token);
+      expect(await settleOnce(record)).toMatchObject({ code: 0, result: { paid: true } });
+    });
+  }
+
+  // settleOnce writes the record three times: two evidence saves ahead of the claim (1-4), then the paid record (5-6). The
+  // claim is durable before the paid record is written, so a failure of either of its fsyncs can never leave paid without it.
+  for (const failAt of [1, 2, 3, 4, 5, 6]) {
+    it(`a failure at record fsync ${failAt} cannot commit paid without its claim and keeps the purchase retriable`, async () => {
+      const { p, record } = await purchase(rails[0]);
+      site.settle(p, "ok", { transaction: TX, payer: PAYER });
+      const output = fsyncOutput.parse(JSON.parse(await runNode(fsyncScript, [record.id, "record", String(failAt)])));
+      expect(output.error).toBe("forced fsync failure");
+      expect(output.events.record).toEqual(["file", "directory", "file", "directory", "file", "directory"].slice(0, failAt));
+      // the claim's own four fsyncs (file, directory, link, directory) have all run exactly when a failure comes after it
+      expect(output.events.claim.slice(0, 4)).toEqual(failAt >= 5 ? ["file", "directory", "link", "directory"] : []);
+      expect(existsSync(claimFile(rails[0]))).toBe(failAt >= 5);
+      const stored = approvals.readApproval(record.id);
+      if (failAt < 6) {
+        // the rename did not happen, or only an evidence save was renamed: never final, and the token is kept
+        expect(stored.final).toBeUndefined();
+        expect(stored.hosted.token).toBe(p.token);
+      } else if (stored.final) {
+        // the paid record was renamed before its directory fsync failed: it is the claimed purchase's own, token already dropped
+        expect(stored.final.result).toMatchObject({ paid: true });
+        expect(stored.hosted.token).toBeUndefined();
+      } else expect(stored.hosted.token).toBe(p.token);
       expect(await settleOnce(record)).toMatchObject({ code: 0, result: { paid: true } });
     });
   }
