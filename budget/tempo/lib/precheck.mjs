@@ -66,6 +66,18 @@ export function precheckCharge(request, opts) {
   if (details.memo !== undefined && details.memo !== null) {
     return refuse('seller_memo', `the seller requires a payment memo of its own (${String(details.memo).slice(0, 20)}...) in its challenge; this client does not support that, so nothing was signed`)
   }
+  // The splits as mppx pays them. Its client throws (getTransfers) when they add up to the price or more, or are not a list;
+  // an mppx seller's charge schema refuses a split of 0, more than 10, or a split memo that is not 32 bytes of hex (viem
+  // would pad a shorter one and pay it). mppx finds the first two only while it creates the payment, so they are refused here.
+  if (details.splits != null && !Array.isArray(details.splits)) return refuse('bad_split', "the challenge's payment splits are not a list")
+  if (splits.length > 10) return refuse('bad_split', `the challenge splits the price ${splits.length} ways; at most 10 are allowed`)
+  let splitTotal = 0n
+  for (const s of splits) {
+    if (BigInt(s.amount) === 0n) return refuse('bad_split', `the payment split to ${s.recipient} is 0`)
+    if (s.memo != null && !/^0x[0-9a-fA-F]{64}$/.test(String(s.memo))) return refuse('bad_split', `the payment split to ${s.recipient} names a memo that is not 32 bytes of hex`)
+    splitTotal += BigInt(s.amount)
+  }
+  if (splitTotal >= amount) return refuse('bad_split', `the payment splits add up to ${fromBase(splitTotal)} ${TOKEN_LABEL}, not less than the price ${fromBase(amount)} ${TOKEN_LABEL}`)
   if (opts.payTo) {
     if (request.recipient.toLowerCase() !== opts.payTo.toLowerCase()) {
       return refuse('recipient_mismatch', `recipient ${request.recipient} is not the expected --pay-to ${opts.payTo}`)

@@ -30,9 +30,10 @@
 // Nothing here kills a process group it did not start. `--replace` first asks the running page to cancel
 // (POST /cancel): only a page that confirms the wallet was never asked is stopped.
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
+import { writeJournalFile } from "./journal.mjs";
 import { spawnIdentified } from './child-identity.mjs';
 import { createIdentitySource, inspectProcess, visiblePid } from '../src/core/process-identity.mjs';
 import { clearFileLock, inspectLockText, recoveryResult, paymentBusy } from '../src/core/owner-recovery.mjs';
@@ -228,9 +229,8 @@ function withRecordLock(id, fn) {
 function writeApproval(id, record) {
   ensureDir();
   const out = record.final && record.hosted?.token ? { ...record, hosted: { ...record.hosted, token: undefined } } : record;
-  const tmp = `${recordFile(id)}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(out, null, 2) + "\n", { mode: 0o600 });
-  renameSync(tmp, recordFile(id));
+  // a temp file with a random name, opened exclusively so a planted symlink is never followed, synced, then renamed (journal.mjs)
+  writeJournalFile(recordFile(id), JSON.stringify(out, null, 2) + "\n");
   return JSON.parse(JSON.stringify(out));
 }
 
@@ -438,7 +438,7 @@ export function claim(rail, chain, id, { pid = process.pid } = {}) {
   ensureDir();
   const path = activeFile(rail, chain);
   const mine = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(mine, JSON.stringify({ id, pid, ...startOf(pid), createdAt: Date.now() }), { mode: 0o600 });
+  writeFileSync(mine, JSON.stringify({ id, pid, ...startOf(pid), createdAt: Date.now() }), { mode: 0o600, flag: "wx" });
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {

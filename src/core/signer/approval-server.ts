@@ -402,7 +402,10 @@ export class ApprovalServer {
       this.sendJson(res, 404, { error: "no such route" });
       return;
     }
-    const record = this.records.get(decodeURIComponent(match[1]));
+    // A malformed escape in the id (%E0%A4%A) names no approval: the same 404 as any unknown id, never a 500.
+    let id = "";
+    try { id = decodeURIComponent(match[1]); } catch {}
+    const record = this.records.get(id);
     const leaf = match[2];
 
     if (!record) {
