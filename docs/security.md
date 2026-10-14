@@ -67,6 +67,13 @@ cannot misreport the amount, the asset, the chain or the recipient, so `caps.per
 `caps.per_day`, `stablecoins` and `kill_switch` are all judged on verified facts. Treat host
 rules as a convenience, not as a boundary.
 
+The facts are verified; the policy file is not. The process that runs `quote` and `pay` is the agent's, and its
+environment chooses which `policy.yaml` is read: `SUPERSTABLES_POLICY`, `SUPERSTABLES_HOME` or `--home`. Your
+own `~/.superstables/policy.yaml`, in the home directory your system account records, applies as well whenever it
+exists, so no such setting can lift a rule written there. An agent that can edit files as you can still change
+that file, and a different home starts its own daily count. Treat the policy as a guard against mistakes, not as a
+boundary against a hostile agent. The amount in your wallet's prompt is the boundary.
+
 ## The approval link is the capability
 
 This section, and the three after it, describe the page `superstables pay` serves on `127.0.0.1`.
@@ -87,6 +94,8 @@ That id is deliberately narrow. Holding it lets someone see *one* payment and si
 - a decision is final: a second POST to a request that is no longer pending gets 409;
 - the client binds `127.0.0.1`, so another machine cannot reach the page directly; port
   forwarding can make it reachable elsewhere;
+- the page cannot be framed by another site (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), sends
+  no `Referer` (its link is the capability), and is served with `nosniff`;
 - it answers only to the Host it is bound to, `127.0.0.1:PORT` (or `localhost:PORT`), so a web
   page under a DNS name that resolves to `127.0.0.1` cannot reach it;
 - `/account`, `/signature` and `/reject` accept only a JSON body sent from the page's own origin,
@@ -185,10 +194,16 @@ authoritative, at the gate, before an approval is created at all. A payment the 
 never becomes an approval link, so there is nothing to open and nobody is asked.
 
 Nothing in the policy is enforced by the blockchain, and nothing in it is enforced by the wallet.
-A cap of 0.05 USDC per payment means this software will not ask you to sign more than that; it
-does not mean your account cannot sign more. The only limits that survive a compromised machine
-are the ones inside what you sign — the amount and the recipient in the authorization — and the
-balance of the account, which is why this release is testnet only.
+A cap of 0.05 USDC per payment means this software will not ask you to sign more than that while it
+runs with your policy. An agent that runs as you can edit or delete your policy file, or run its own
+code, so it is not a promise against a hostile agent, and it never means your account cannot sign
+more. Your own `~/.superstables/policy.yaml` applies whichever policy file or home the environment
+names, but its daily count and the file itself are only as safe as your account's files. An empty
+policy file means the defaults. A file with a misspelled key, a `kill_switch` that is not `true` or
+`false`, a scalar where a list belongs or an unreadable amount stops every payment until it is
+fixed. The only limits that survive a compromised machine are the ones inside what you sign —
+the amount and the recipient in the authorization — and the balance of the account, which is why
+this release is testnet only.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
 including pending, in-flight and uncertain payments; the local wallet counts the authorizations in
@@ -316,9 +331,14 @@ control or invisible characters.
 
 **Where the signed payment goes.** `pay` sends the signed authorization only to the URL it quoted:
 it refuses a redirect, and the attempt then ends `uncertain`, because the client cannot tell whether
-the seller acted on it. A listing from the index or the catalogue is payable only when its endpoint
-is `https`, or `http` on this machine. Reading a seller's 402 challenge has a deadline and a size
-limit and follows no redirect.
+the seller acted on it. Every seller URL must be `https`, or `http` on this machine (127.0.0.1,
+localhost, [::1]). That covers a URL given to `quote`, a listing's endpoint, and every `budget buy`
+and `preflight` URL. Anything else is refused before the first request, because on plain http
+anyone on the way can change the recipient and read the signed payment. Reading a seller's 402
+challenge has a deadline and a size limit and follows no redirect, and `budget preflight` follows
+none either. Discovery reads of the index and the catalogue follow no redirect and are cut at 2 MB.
+`SUPERSTABLES_INDEX_URL`, `SUPERSTABLES_CATALOGUE_URL` and `SUPERSTABLES_DEMO_SERVICE_URL` follow the
+same https rule.
 
 ## The local wallet mode
 
@@ -418,7 +438,9 @@ undo an owner signature or a transaction already sent through setup on superstab
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds
   already transferred. On `evm`, a purchase whose price was already pulled can still settle, and
   `recover` returns the USDC it can, leaving up to 2 USDC of gas on Arc Testnet. On `tempo`, it does
-  not close payment sessions the key opened elsewhere.
+  not close payment sessions the key opened elsewhere. On `evm`, `revoke` sends `approve(agent, 0)`
+  every time it is asked, even when the allowance already reads 0: one RPC's read is not proof that
+  nothing is live, and it reports `revoked` only after its own transaction and a read of 0.
 
 Per rail, with what each revoke does not cover:
 [Budget rails and chains](../budget/README.md#safety-model).
@@ -490,7 +512,18 @@ is not trusted to say who the owner is or what was paid.
   the request is final; it is never logged or printed.
 - **An unclear outcome is unknown.** Once the site reports that the owner's wallet was asked, or
   reports a transaction, an unfinished request ends as `unknown` (exit 5), never as "nothing was
-  sent". Read the chain before trying again.
+  sent". Read the chain before trying again. A cancel counts as "nothing was sent" only when the
+  site answers `200` with that request, `cancelled` and final, or, to a second cancel, `409
+  not_open` with state `cancelled`, no wallet request and no transaction (that answer has no id
+  and is not marked final; it is never accepted with another request's id). Either way the
+  answer, its `error` and their steps must show no wallet request, transaction, send-implying
+  state or money that may have moved, and no earlier answer, from the creation on, may have shown
+  one (an error answer to a read counts too: `error.money_moved` on a 429 says the wallet was
+  asked): what an answer showed is never taken back by a later, cleaner one. For a link with steps, a step
+  is "nothing was sent" only when an answer about this request shows it ended without being asked,
+  or the site confirmed an unapproved link withdrawn, and no answer showed evidence no step
+  accounts for; otherwise it is unknown and the link's result says to read the chain. An empty, unreadable or
+  contradictory answer, or none at all, is unknown (exit 5) for anything that can move funds.
 - **`recover` stays local.** On a chain with approvals on superstables.com, `grant`, `revoke` and `fund-agent` go through the
   site; the owner's part of `recover` still uses the page on this machine.
 - **A revoke on superstables.com needs the agent key.** The agent key signs every request to the site. On
@@ -503,6 +536,10 @@ is not trusted to say who the owner is or what was paid.
   replacement in use is named in the `RESULT` (`rpc`). Approval pages on your machine do not
   pass replacement RPC URLs to the owner's wallet, including URLs that carry access keys.
   When asking the wallet to add a chain, they offer the chain's public RPC.
+  On `solana`, `fund-agent`, `grant`, `revoke`, `buy`, and `setup` when it replaces a recorded owner
+  or asks for `--fund` or `--grant`, first check that the RPC answers Solana devnet's genesis hash. On
+  another cluster, or when the hash can't be read, they refuse (exit 3) before a blockhash is fetched
+  or anything is signed or sent. `status` then says the budget could not be read (exit 1).
 
 What a compatible site must serve, with both proofs spelled out:
 [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).

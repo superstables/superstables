@@ -121,6 +121,8 @@ export interface FakeSite extends TestServer {
   linked?: Record<string, string>;
   /** Answer a cancel with this status and body instead (a site whose answer carries anything at all). */
   cancelAnswer?: (r: FakeRequest) => { status: number; body: unknown } | undefined;
+  /** Change what a read of a request answers (given the normal answer): a status and body of its own, or undefined to keep it. */
+  readAnswer?: (r: FakeRequest, view: any) => { status: number; body: unknown } | undefined;
   /** Answer every cancel with a 503, as a site that can't be reached at that moment. */
   cancelFails?: boolean;
   /** The approval URL the site answers with, instead of its own /approve/budget/<id>#<token>. */
@@ -191,7 +193,8 @@ export async function startFakeSite(): Promise<FakeSite> {
     if (r.steps) {
       const { state, final } = bundleState(r);
       const hashes = r.steps.map((s) => s.tx_hash).filter(Boolean);
-      return { id: r.id, kind: r.kind, state, final, owner: r.owner, ...(await proofOf(r)), tx_hash: null, reason: r.reason ?? null, reason_code: r.reason_code ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) } };
+      // like the site: the request's wallet_asked is the link's own or any step's
+      return { id: r.id, kind: r.kind, state, final, owner: r.owner, ...(await proofOf(r)), tx_hash: null, wallet_asked: r.wallet_asked === true || r.steps.some((st) => st.wallet_asked === true), reason: r.reason ?? null, reason_code: r.reason_code ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) } };
     }
     return { id: r.id, kind: r.kind, state: r.state, final: r.final ?? FINAL.has(r.state), owner: r.owner, ...(r.state === "linked" ? await proofOf(r) : {}), tx_hash: r.tx_hash, reason: r.reason ?? null, reason_code: r.reason_code ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" } };
   };
@@ -261,13 +264,19 @@ export async function startFakeSite(): Promise<FakeSite> {
           }
           return json(res, 200, await view(r));
         }
-        if (r.state !== "awaiting_owner" || r.wallet_asked) return json(res, 409, { error: "the wallet was asked", state: r.state, wallet_asked: r.wallet_asked === true });
+        if (r.state !== "awaiting_owner" || r.wallet_asked) return json(res, 409, { error: { code: r.wallet_asked ? "wallet_asked" : "not_open", message: "the request cannot be cancelled now", state: r.state, wallet_asked: r.wallet_asked === true, tx_hash: r.tx_hash ?? null, money_moved: r.wallet_asked ? "unknown" : false } });
         r.state = "cancelled";
+        r.reason_code = "agent_cancelled";
+        // a link with steps that was never linked ends with its steps, never asked for, skipped (as on expiry above)
+        for (const st of r.steps ?? []) if (st.state === "queued") Object.assign(st, { state: "skipped", reason: "the agent cancelled this request before the owner added this agent", reason_code: "link_not_done" });
         return json(res, 200, await view(r));
       }
       r.polls++;
       site.onPoll?.(r);
-      return json(res, 200, await view(r));
+      const normal = await view(r);
+      const custom = site.readAnswer?.(r, normal);
+      if (custom) return json(res, custom.status, custom.body);
+      return json(res, 200, normal);
     }
     if (url.pathname === "/api/v1/budget/services" && site.services !== undefined) return json(res, 200, site.services);
     json(res, 404, { error: "not found" });

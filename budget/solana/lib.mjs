@@ -13,6 +13,7 @@ import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret-file.mjs";
 import { DEFAULT_RPC, rpcFromEnv } from "../rpc.mjs";
 import { markSend } from "../proof.mjs";
+import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import {
   Connection,
   Keypair,
@@ -61,6 +62,27 @@ export const OPS_DIR = opsDir("solana", "devnet");
 export function connection() {
   // a broadcast prints SENDING before it leaves (../proof.mjs)
   return new Connection(RPC_URL, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (url, init) => { markSend(init?.body); return fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }); } });
+}
+
+/** The RPC's host, for words: a replacement's path or query can carry an access key, so never the whole URL. */
+export const RPC_HOST = (() => { try { return new URL(RPC_URL).host; } catch { return "the Solana RPC"; } })();
+/** What to do when the RPC is on another cluster. */
+export const CLUSTER_NEXT = "unset SUPERSTABLES_SOLANA_RPC, or set it to a Solana devnet RPC, then run the command again";
+/**
+ * Why `conn` must not be used for a budget transaction, in words, or "" when its RPC answers Solana devnet's genesis
+ * hash. Asked before a blockhash is fetched, a transaction is offered to a wallet, signed or sent, and before a read
+ * that decides one: a SOL transfer names no cluster, so one built on another cluster's blockhash moves SOL there. A
+ * genesis that cannot be read is a reason too.
+ */
+export async function clusterProblem(conn) {
+  let genesis;
+  try {
+    genesis = await retryRead(() => conn.getGenesisHash());
+  } catch (err) {
+    return `could not read which Solana cluster ${RPC_HOST} is on (${oneLine(err?.message ?? err, 160)})`;
+  }
+  if (genesis === SOLANA_DEVNET_GENESIS) return "";
+  return `the Solana RPC ${RPC_HOST} is not on Solana devnet (its genesis hash is ${oneLine(genesis, 60)})`;
 }
 
 // Exact decimal parse. Throws on anything that is not a plain non-negative

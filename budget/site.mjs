@@ -1,5 +1,5 @@
 // superstables.com for `superstables budget`: which site, and the requests that need no agent signature. Plain JavaScript with
-// Node built-ins only, so the dispatcher (cli.mjs), approvals.mjs and the rail scripts share it.
+// Node built-ins only (and response.mjs, which has the same), so the dispatcher (cli.mjs), approvals.mjs and the rail scripts share it.
 //
 // Hosted approvals (`setup --hosted`, every rail) record APPROVALS=hosted and SITE=<origin> in the chain's public file. Every
 // later owner command on that chain then asks the owner through the site instead of the page on 127.0.0.1. The site API is
@@ -11,6 +11,8 @@
 //
 // The bearer token is the agent's access to one request. It is kept only in that approval's record (approvals.mjs, mode
 // 600) and in memory; nothing here logs it.
+
+import { readCapped } from "./response.mjs";
 
 export const DEFAULT_SITE = "https://www.superstables.com";
 export const BUDGET_API = "/api/v1/budget";
@@ -251,6 +253,8 @@ export const isSiteRequestId = (id) => typeof id === "string" && /^b[la]_[A-Za-z
 /** An agent access token: ssbt_... */
 export const isSiteToken = (t) => typeof t === "string" && /^ssbt_[A-Za-z0-9_-]{8,256}$/.test(t);
 
+export const SITE_MAX_BYTES = 1_000_000;
+
 export async function call(url, init, timeoutMs, fetchImpl = fetch) {
   let res;
   try {
@@ -258,14 +262,17 @@ export async function call(url, init, timeoutMs, fetchImpl = fetch) {
   } catch (err) {
     return { ok: false, status: 0, body: null, network: siteText(err?.cause?.code ?? err?.cause?.message ?? err?.message ?? err) };
   }
+  const { bytes, truncated } = await readCapped(res, SITE_MAX_BYTES);
+  // an answer cut off or longer than the cap is no answer to act on: never parsed, never ok
+  if (truncated) return { ok: false, status: res.status, body: null, network: `the answer from ${siteText(new URL(url).host, 80)} was cut off or longer than ${SITE_MAX_BYTES} bytes` };
   let body = null;
-  try { body = await res.json(); } catch {}
+  try { body = JSON.parse(bytes.toString("utf8")); } catch {}
   return { ok: res.ok, status: res.status, body };
 }
 
 /**
  * One read of a request: GET /api/v1/budget/requests/{id}?wait=N. { ok: true, view } or { ok: false, status, reason }.
- * status 0: the site did not answer. The view is the site's JSON: id, kind, state, final, owner, tx_hash, reason, next_action.
+ * status 0: the site did not answer. `asked`: the failed answer itself shows the wallet was asked. The view is the site's JSON: id, kind, state, final, owner, tx_hash, reason, next_action.
  */
 /** @param {{ site: string, id: string, token: string, wait?: number, fetchImpl?: typeof fetch }} args */
 export async function readSiteRequest({ site, id, token, wait = 0, fetchImpl }) {
@@ -275,26 +282,64 @@ export async function readSiteRequest({ site, id, token, wait = 0, fetchImpl }) 
   if (r.ok && r.body && typeof r.body === "object" && typeof r.body.state === "string") return { ok: true, view: r.body };
   const code = r.body?.error?.code ?? r.body?.code ?? r.body?.reason_code;
   const next = accountRefusalNext(code);
-  return { ok: false, status: r.status, code: siteWord("code", code), reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : `${siteFailure(r.status, r.body)}${next ? `; ${next}` : ""}` };
+  // an error answer can show the wallet was asked (`error.money_moved`, even on a 429): the caller keeps that
+  return { ok: false, status: r.status, code: siteWord("code", code), asked: viewEvidence(r.body), reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : `${siteFailure(r.status, r.body)}${next ? `; ${next}` : ""}` };
 }
+
+/** Site states that say the owner's wallet was asked, or a transaction exists. */
+export const WALLET_STATES = new Set(["sending", "sent", "confirmed", "failed", "unknown"]);
+/**
+ * Whether one object of the site's answer (a request, a step, an error) shows that the wallet was asked: wallet_asked, a
+ * transaction, a state that may have sent, or money that may have moved (`money_moved` anything but false or absent).
+ */
+export const sentEvidence = (v) =>
+  !!v && typeof v === "object" && (v.wallet_asked === true || (typeof v.tx_hash === "string" && v.tx_hash !== "") || WALLET_STATES.has(v.state) || (v.money_moved !== undefined && v.money_moved !== null && v.money_moved !== false));
+
+/**
+ * Whether an answer about a request shows that the wallet was asked, anywhere in it: the answer, its `error`, and the steps
+ * of either. The one predicate for the first read, every poll and the answer to a cancel.
+ */
+export const viewEvidence = (v) => {
+  if (!v || typeof v !== "object") return false;
+  const inner = v.error && typeof v.error === "object" ? v.error : undefined;
+  return [v, inner].some((x) => sentEvidence(x) || (Array.isArray(x?.steps) && x.steps.some(sentEvidence)));
+};
 
 /**
  * POST /api/v1/budget/requests/{id}/cancel. The site cancels only while the owner's wallet has not been asked.
- * { cancelled: true } when it did, { cancelled: false, walletAsked, state, reason } when it refused, null when it did not answer.
+ * { cancelled: true } only when the answer is an explicit cancellation of this request with no evidence that the wallet
+ * was asked: `200` with this id, state `cancelled` and `final: true`, or `409 { error: { code: "not_open", state: "cancelled",
+ * wallet_asked: false, tx_hash: null } }` (the site's answer to a second cancel; a refusal carries its fields under `error`);
+ * and no wallet_asked, tx_hash, money_moved or sending/sent/confirmed/failed/unknown state on the request, the refusal or
+ * any of their steps, and no request id other than this one. A 409 not_open has neither an id nor `final`, so it is
+ * accepted without them, but never with an id that is another request's. Anything else, an empty, unreadable or contradictory answer included,
+ * is { cancelled: false, walletAsked, state, reason }: the caller reads it as unknown. null when the site did not answer.
  */
 /** @param {{ site: string, id: string, token: string, fetchImpl?: typeof fetch }} args */
 export async function cancelSiteRequest({ site, id, token, fetchImpl }) {
   if (!isSiteRequestId(id)) return null;
   const r = await call(`${site}${BUDGET_API}/requests/${id}/cancel`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" }, body: "{}" }, 15_000, fetchImpl);
   if (r.status === 0) return null;
+  const b = r.body && typeof r.body === "object" && !Array.isArray(r.body) ? r.body : {};
+  // a refusal carries its fields under `error`; an answer with the request has them at the top
+  const inner = b.error && typeof b.error === "object" && !Array.isArray(b.error) ? b.error : undefined;
+  const e = !r.ok && inner ? inner : b;
   // a documented state, or "unexpected": the site's text is never repeated
-  const state = typeof r.body?.state === "string" ? siteWord("state", r.body.state) : null;
+  const state = typeof e.state === "string" ? siteWord("state", e.state) : null;
   // a link with steps that is linked answers with the request as it stands, steps included: `view`
-  const view = r.ok && Array.isArray(r.body?.steps) ? r.body : undefined;
-  if (r.ok && (state === null || state === "cancelled")) return { cancelled: true, state: "cancelled", view };
-  // refused (the wallet may have been asked, or the request already ended), or steps the wallet was already asked for
-  const walletAsked = r.body?.wallet_asked === true || typeof r.body?.tx_hash === "string";
-  return { cancelled: false, state, walletAsked, reason: siteFailure(r.status, r.body), view };
+  const view = r.ok && Array.isArray(b.steps) ? b : undefined;
+  // the wallet may have been asked: this request, its error or any of their steps says so, or names a transaction
+  const walletAsked = viewEvidence(b);
+  // an id the answer names (itself or in its error) is this request's, or the answer is about another request
+  const ownId = [b.id, inner?.id].every((x) => x === undefined || x === null || x === id);
+  // an answer with the request, about this request: its states can be taken as the site's word on it
+  const same = r.ok && ownId && b.id === id;
+  if (!walletAsked && ownId) {
+    if (r.ok && b.id === id && b.state === "cancelled" && b.final === true) return { cancelled: true, state: "cancelled", view };
+    if (r.status === 409 && e.code === "not_open" && e.state === "cancelled" && e.wallet_asked === false && (e.tx_hash ?? null) === null) return { cancelled: true, state: "cancelled", view };
+  }
+  const reason = r.ok ? "the site's answer to the cancel does not confirm this request was cancelled before the wallet was asked" : siteFailure(r.status, r.body);
+  return { cancelled: false, state, walletAsked, reason, view, same, body: b };
 }
 
 // ---- find: GET /api/v1/budget/services ------------------------------------------------------------------------------
@@ -326,8 +371,11 @@ function serviceOf(s, chainByNetwork) {
   const amount = p && typeof p === "object" ? str(p.amount ?? p.value) : str(p ?? s.amount);
   const asset = p && typeof p === "object" ? str(p.asset ?? p.currency ?? p.symbol) : str(s.asset ?? s.currency) ?? "USDC";
   const network = str(s.network ?? s.chain_id ?? s.chainId);
-  const chain = str(s.chain) ?? (network ? chainByNetwork[network] ?? null : null);
-  return { name: str(s.name ?? s.title) ?? new URL(url).host, price: amount ? `${amount}${asset ? ` ${asset}` : ""}` : null, chain, network, rail: str(s.rail) ?? railOf(network), simulated: simulatedOf(s), url };
+  // the client's own key for a network it knows; the listing's own chain and rail words only for one it does not (data)
+  const known = network && Object.hasOwn(chainByNetwork, network) ? chainByNetwork[network] : undefined;
+  const chain = known ?? str(s.chain);
+  const rail = known ? railOf(network) : str(s.rail) ?? railOf(network);
+  return { name: str(s.name ?? s.title) ?? new URL(url).host, price: amount ? `${amount}${asset ? ` ${asset}` : ""}` : null, chain, network, rail, simulated: simulatedOf(s), url };
 }
 
 /**

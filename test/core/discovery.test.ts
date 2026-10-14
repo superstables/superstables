@@ -150,6 +150,7 @@ afterEach(() => {
   clearHostedCatalogueCache();
   delete process.env.SUPERSTABLES_DEMO_SERVICE_URL;
   delete process.env.SUPERSTABLES_CATALOGUE_URL;
+  delete process.env.SUPERSTABLES_INDEX_URL;
   delete process.env.SUPERSTABLES_DEMO_SERVICES;
 });
 
@@ -489,6 +490,9 @@ describe("the hosted catalogue", () => {
       actionable: false,
       notActionableReason: "the endpoint is not https, so a payment credential would travel in the clear",
     });
+    // `pay` is off for it, as for an index row: the field the CLI gates a payment on.
+    expect(listings.find((s) => s.id === "hosted-plain-http")?.routes?.pay).toBe(false);
+    expect(listings.find((s) => s.id === "hosted-local-http")?.routes?.pay).toBe(true);
     expect(listings.find((s) => s.id === "hosted-local-http")?.actionable).toBe(true);
     // No operator is invented for a row that names none.
     expect(listings.find((s) => s.id === "hosted-no-operator")?.operator).toBeUndefined();
@@ -677,5 +681,102 @@ describe("the third-party listing", () => {
     const request = resolveRequest(catalogue()[1], { symbol: "BTC" });
     expect(request.url).toBe("https://x402-coin-api.vercel.app/api/price?symbol=BTC");
     expect(() => resolveRequest(catalogue()[1], {})).toThrow(/symbol/);
+  });
+});
+
+describe("seller URLs in discovery", () => {
+  it("does not read an index or a catalogue whose address is plain http elsewhere, and names the variable", async () => {
+    process.env.SUPERSTABLES_INDEX_URL = "http://example.com/";
+    process.env.SUPERSTABLES_CATALOGUE_URL = "http://example.com/";
+    const fetchMock = stubIndex({ services: [] });
+    const { warnings } = await findServices({ demoServices: true });
+    expect(warnings.some((w) => w.startsWith("The Superstables index could not be read (SUPERSTABLES_INDEX_URL is plain http"))).toBe(true);
+    expect(warnings.some((w) => w.startsWith("The service catalogue could not be read (SUPERSTABLES_CATALOGUE_URL is plain http"))).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not read an address that carries a user name or is not http(s)", async () => {
+    process.env.SUPERSTABLES_INDEX_URL = "http://user:pw@127.0.0.1:9/";
+    process.env.SUPERSTABLES_CATALOGUE_URL = "ftp://127.0.0.1/";
+    const fetchMock = stubIndex({ services: [] });
+    const { warnings } = await findServices({ demoServices: true });
+    expect(warnings.join("\n")).toMatch(/SUPERSTABLES_INDEX_URL carries a user name or password/);
+    expect(warnings.join("\n")).toMatch(/SUPERSTABLES_CATALOGUE_URL is not an https URL/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("lists the demo service as not payable when its address override is plain http elsewhere", () => {
+    process.env.SUPERSTABLES_DEMO_SERVICE_URL = "http://example.com/v1/market";
+    const demo = demoService();
+    expect(demo.actionable).toBe(false);
+    expect(demo.notActionableReason).toMatch(/^SUPERSTABLES_DEMO_SERVICE_URL is plain http/);
+    expect(demo.routes?.pay).toBe(false);
+  });
+
+  it("does not probe a demo service that is not payable, not even for its status", async () => {
+    process.env.SUPERSTABLES_DEMO_SERVICE_URL = "http://example.com/v1/market";
+    const fetchMock = vi.fn(async () => new Response("", { status: 402 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = await getService(DEMO_SERVICE_ID, { includeIndex: false, probe: true });
+    expect(service?.live).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a catalogue that answers with a redirect, and does not follow it", async () => {
+    const reached: string[] = [];
+    const target = await startServer((req, res) => {
+      reached.push(String(req.url));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(CATALOGUE_FIXTURE));
+    });
+    const redirecting = await startServer((_req, res) => {
+      res.writeHead(302, { location: `${target.url}/elsewhere` });
+      res.end();
+    });
+    try {
+      await expect(fetchHostedCatalogue(`${redirecting.url}/catalogue`)).rejects.toThrow();
+      expect(reached).toEqual([]);
+    } finally {
+      await redirecting.close();
+      await target.close();
+    }
+  });
+
+  it("refuses an index that answers with a redirect, and does not follow it", async () => {
+    const reached: string[] = [];
+    const target = await startServer((req, res) => {
+      reached.push(String(req.url));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(INDEX_FIXTURE));
+    });
+    const redirecting = await startServer((_req, res) => {
+      res.writeHead(302, { location: `${target.url}/elsewhere` });
+      res.end();
+    });
+    process.env.SUPERSTABLES_INDEX_URL = `${redirecting.url}/services`;
+    try {
+      const { warnings } = await findServices({ includeIndex: true, demoServices: false });
+      expect(warnings.some((w) => w.startsWith("The Superstables index could not be read"))).toBe(true);
+      expect(reached).toEqual([]);
+    } finally {
+      await redirecting.close();
+      await target.close();
+    }
+  });
+
+  it("refuses a catalogue or an index answer of more than 2 MB", async () => {
+    const big = JSON.stringify({ services: [], pad: "x".repeat(2_100_000) });
+    const server = await startServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(big);
+    });
+    try {
+      await expect(fetchHostedCatalogue(`${server.url}/catalogue`)).rejects.toThrow(/more than 2 MB/);
+      process.env.SUPERSTABLES_INDEX_URL = `${server.url}/services`;
+      const { warnings } = await findServices({ includeIndex: true, demoServices: false });
+      expect(warnings.join("\n")).toMatch(/more than 2 MB/);
+    } finally {
+      await server.close();
+    }
   });
 });

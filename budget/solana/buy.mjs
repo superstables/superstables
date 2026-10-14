@@ -45,6 +45,8 @@ import {
 } from "./token.mjs";
 import bs58 from "bs58";
 import {
+  CLUSTER_NEXT,
+  clusterProblem,
   connection,
   loadAgent,
   readPublic,
@@ -66,6 +68,7 @@ import {
 import { readCapped, saveResponse } from "../response.mjs";
 import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, assessOp } from "./ops.mjs";
 import { lockNext } from "../op-lock.mjs";
+import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
@@ -101,11 +104,8 @@ if (!checkOnly && flags.max === undefined) usageError("missing required flag --m
 const maxBase = parseAmountFlag(flags, "max", USAGE);
 const payToFlag = parsePubkeyFlag(flags, "pay-to", USAGE);
 const ownerFlag = parsePubkeyFlag(flags, "owner", USAGE);
-try {
-  new URL(flags.url);
-} catch {
-  usageError("--url is not a valid URL", USAGE);
-}
+const urlProblem = sellerUrlProblem(flags.url);
+if (urlProblem) usageError(`--url ${urlProblem}`, USAGE);
 const url = flags.url;
 const method = (flags.method ?? "GET").toUpperCase();
 if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) usageError(`unsupported --method ${method}`, USAGE);
@@ -196,7 +196,8 @@ for (const a of accepts) {
 
 // --- 3. prechecks: before any key is opened or anything is signed ---------------------------------
 const requirement = selectRequirement(accepts);
-const check = checkOffer(requirement, { maxBase, payTo: payToFlag });
+const recorded = readPublic();
+const check = checkOffer(requirement, { maxBase, payTo: payToFlag, agent: recorded.agent, owner: ownerFlag ?? recorded.owner });
 if (!check.ok) {
   if (!checkOnly) updateOp(opId, {
     rail: "solana", kind: "buy", state: "refused_precheck", url, method, reasons: check.reasons,
@@ -222,6 +223,11 @@ if (checkOnly) {
 
 // --- 4. the agent key, chain reads, intent journal ------------------------------------------------
 const conn = connection();
+const cluster = await clusterProblem(conn);
+if (cluster) {
+  updateOp(opId, { state: "refused_precheck", reasons: [cluster] });
+  refuse(cluster, { next: `${CLUSTER_NEXT}; nothing was signed or paid` });
+}
 const agentInfo = loadAgent();
 const agent = agentInfo.keypair;
 const pub = readPublic();
@@ -229,6 +235,12 @@ const ownerPk = ownerFlag ?? pub.owner ?? agentInfo.owner;
 if (!ownerPk) {
   updateOp(opId, { state: "refused_precheck", reasons: ["owner address unknown"] });
   refuse("owner address unknown: pass --owner or run superstables budget setup --rail solana");
+}
+// the step 3 check used the owner and agent the public file records; these are the ones this purchase really runs with
+const sameKey = payToPk.equals(ownerPk) ? "the owner's wallet, which funds this budget" : payToPk.equals(agent.publicKey) ? "this agent's own key" : null;
+if (sameKey) {
+  updateOp(opId, { state: "refused_precheck", reasons: [`recipient is ${sameKey}`] });
+  refuse(`recipient is ${sameKey}`);
 }
 console.log(`Owner (source of funds): ${ownerPk.toBase58()}`);
 console.log(`Agent (delegate authority, signs the payment): ${agent.publicKey.toBase58()}`);

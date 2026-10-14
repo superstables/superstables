@@ -20,9 +20,11 @@ import { OPS_DIR, SYM, cmd, oneLine, arg, flag, agentCtx, toUsdc, usdc, usdcBala
 import { purchase, MAX_RESPONSE_BYTES } from "./purchase.ts";
 import { checkOpId, newOpId, resultLine, type ResponseInfo } from "./ops.ts";
 import { refusedChainWords } from "../next-steps.mjs";
+import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 
 const url = arg("url")!;
-try { new URL(url); } catch { usageError(`--url "${url}" is not a URL`); }
+const urlProblem = sellerUrlProblem(url);
+if (urlProblem) usageError(`--url ${urlProblem}`);
 const maxStr = arg("max");
 if (!maxStr) usageError("--max <usdc> is required (no default)");
 const max = toUsdc(maxStr!);

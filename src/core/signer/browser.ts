@@ -13,8 +13,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_NETWORK, networkFor, usdcBalance, type Rail } from "../chain.js";
-import { browserWalletPath, ensureDir, homeDir, policyPath, recordsDir } from "../home.js";
-import { evaluatePolicy, formatMoney, loadPolicy, type Policy } from "../policy.js";
+import { browserWalletPath, ensureDir, homeDir, recordsDir } from "../home.js";
+import { evaluatePolicy, formatMoney, loadPaymentPolicy, type Policy } from "../policy.js";
 import { Records } from "../records.js";
 import { judgeSignRequest } from "../rails/index.js";
 import type { VerifiedTerms, WalletStatus } from "../types.js";
@@ -127,6 +127,14 @@ export class BrowserWalletSigner implements Signer {
   /** What this signer says about itself. It never throws: there is nothing here to be down. */
   async status(): Promise<WalletStatus> {
     const policy = this.policy();
+    const shown = (p: Policy): WalletStatus["policy"] => ({
+      perCall: formatMoney(p.perCall),
+      perDay: formatMoney(p.perDay),
+      allow: p.allow,
+      deny: p.deny,
+      stablecoins: p.stablecoins,
+      killSwitch: p.killSwitch,
+    });
     const address = this.rememberedOn("evm") || undefined;
     return {
       mode: "browser",
@@ -137,14 +145,8 @@ export class BrowserWalletSigner implements Signer {
       balanceDecimal: address ? await this.balanceOf(address) : undefined,
       approvalMode: APPROVAL_MODE,
       pending: this.server.pending,
-      policy: {
-        perCall: formatMoney(policy.perCall),
-        perDay: formatMoney(policy.perDay),
-        allow: policy.allow,
-        deny: policy.deny,
-        stablecoins: policy.stablecoins,
-        killSwitch: policy.killSwitch,
-      },
+      policy: shown(policy),
+      ...(policy.also ? { also: { file: policy.also.file, policy: shown(policy.also.policy) } } : {}),
     };
   }
 
@@ -215,7 +217,7 @@ export class BrowserWalletSigner implements Signer {
 
   /** Read late: the owner may have edited their policy since this signer was built. */
   private policy(): Policy {
-    return this.options.policy ?? loadPolicy(policyPath());
+    return this.options.policy ?? loadPaymentPolicy();
   }
 
   private async balanceOf(address: string): Promise<number | undefined> {

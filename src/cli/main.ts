@@ -28,7 +28,7 @@ import {
   walletDir,
 } from "../core/home.js";
 import { PaymentEngine, QuoteUsedError, SERVICE_BODY_LIMIT, paymentOutput, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
-import { POLICY_EXAMPLE, loadPolicy, type Policy } from "../core/policy.js";
+import { POLICY_EXAMPLE, loadPaymentPolicy, loadPolicy, type Policy } from "../core/policy.js";
 import { QUOTE_TTL_MS, getQuote, quote as takeQuote } from "../core/quote.js";
 import { Records } from "../core/records.js";
 import { describeBudgetRoutes } from "../core/routes.js";
@@ -54,6 +54,7 @@ import {
   inclusionRemoved,
   isFinalAttempt,
   nextFor,
+  policyFileFor,
   requoteCommand,
   usedQuoteMessage,
 } from "./outcome.js";
@@ -272,13 +273,19 @@ explain(
       console.log(field("balance", status.balanceDecimal === undefined ? "unknown" : money(status.balanceDecimal, status.asset)));
       console.log(field("approval", status.approvalMode));
       console.log(field("pending", status.pending));
-      const caps = [
-        status.policy.perCall ? `up to ${status.policy.perCall} per payment` : undefined,
-        status.policy.perDay ? `${status.policy.perDay} per day` : undefined,
-        status.policy.allow.length ? `only ${status.policy.allow.join(", ")}` : undefined,
-        status.policy.deny.length ? `never ${status.policy.deny.join(", ")}` : undefined,
-      ].filter(Boolean);
-      console.log(field("policy", status.policy.killSwitch ? "kill switch on: every payment is refused" : caps.join(", ") || "no caps set"));
+      const summary = (p: WalletStatus["policy"]) =>
+        p.killSwitch
+          ? "kill switch on: every payment is refused"
+          : [
+              p.perCall ? `up to ${p.perCall} per payment` : undefined,
+              p.perDay ? `${p.perDay} per day` : undefined,
+              p.allow.length ? `only ${p.allow.join(", ")}` : undefined,
+              p.deny.length ? `never ${p.deny.join(", ")}` : undefined,
+            ]
+              .filter(Boolean)
+              .join(", ") || "no caps set";
+      console.log(field("policy", summary(status.policy)));
+      if (status.also) console.log(field("also applies", `${status.also.file}: ${summary(status.also.policy)}`));
     }),
   {
     money: "no.",
@@ -478,7 +485,9 @@ explain(
       }
       console.log(field("recipient", taken.terms.recipient));
       console.log(field("expires", `${taken.expiresAt} (${QUOTE_TTL_MS / 60_000} minutes; one quote starts at most one payment)`));
-      const where = existsSync(policyPath()) ? policyPath() : "the built-in defaults (no policy file)";
+      const where =
+        (existsSync(policyPath()) ? policyPath() : "the built-in defaults (no policy file)") +
+        (policy.also ? ` and ${policy.also.file}` : "");
       console.log(
         field("policy", taken.policy.allowed ? `allowed by ${where}` : `refused by ${where}: ${taken.policy.reason}`),
       );
@@ -491,7 +500,7 @@ explain(
           ? `Nothing has been paid. Next: \`${next}\` asks the wallet's owner to approve it; ` +
               "the owner's wallet checks the policy again."
           : `Nothing has been paid, and the spend policy refuses this payment. \`${next}\` prints the rules; ` +
-              `the owner edits ${policyPath()} if they are wrong.`,
+              `the owner edits ${policyFileFor(taken.policy.reason)} if they are wrong.`,
       );
     }),
   {
@@ -995,7 +1004,7 @@ explain(
     .description("print the policy in force")
     .option("--json", "print the parsed policy")
     .action((options: { json?: boolean }) => {
-      const parsed = loadPolicy(policyPath());
+      const parsed = loadPaymentPolicy();
       if (options.json) {
         console.log(json(parsed));
         return;
@@ -1006,12 +1015,19 @@ explain(
         console.log("");
         console.log(readFileSync(policyPath(), "utf8").trimEnd());
       }
+      if (parsed.also) {
+        console.log("");
+        console.log(field("also applies", parsed.also.file));
+        console.log(field("in force", policySummary(parsed.also.policy)));
+        console.log("");
+        console.log(readFileSync(parsed.also.file, "utf8").trimEnd());
+      }
     }),
   {
     money: "no.",
     who: "the agent or the owner.",
     examples: ["superstables policy show"],
-    prints: "the file, a one-line summary and the file's text. With --json, the parsed policy.",
+    prints: "the file (and ~/.superstables/policy.yaml when it applies as well), a one-line summary and the text. With --json, the parsed policy.",
     exits: "0 printed, 1 the file could not be parsed",
   },
 );
@@ -1049,7 +1065,7 @@ function context(): {
   signer: Signer & { status(): Promise<WalletStatus> };
 } {
   const records = new Records(recordsDir());
-  const parsed = loadPolicy(policyPath());
+  const parsed = loadPaymentPolicy();
   const signer = signerFor();
   return { records, policy: parsed, engine: new PaymentEngine({ records, policy: parsed, signer }), signer };
 }

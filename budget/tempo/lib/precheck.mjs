@@ -10,12 +10,23 @@ const fromBase = (n) => {
 const refuse = (code, reason) => ({ ok: false, code, reason })
 const isAddr = (v) => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v)
 
+/** The words to refuse a recipient that a purchase must never pay, or null. `who` is "the recipient" or "a split recipient". */
+function badRecipient(who, to, opts) {
+  const a = to.toLowerCase()
+  if (/^0x0{40}$/.test(a)) return `${who} is the zero address`
+  if (a === TOKEN_ADDRESS.toLowerCase()) return `${who} is the ${TOKEN_LABEL} token contract itself`
+  if (opts.agent && a === opts.agent.toLowerCase()) return `${who} is this agent's own key`
+  if (opts.owner && a === opts.owner.toLowerCase()) return `${who} is the owner's wallet, which funds this budget`
+  return null
+}
+
 /**
  * The seller's tempo.charge challenge request must be: pathUSD on Moderato, whole base units (no more
- * precision than the token has), at most `maxBase`, paid to `payTo` when one is given. `request.amount`
+ * precision than the token has), at most `maxBase`, paid to `payTo` when one is given, and never to the zero address,
+ * the token itself, the agent or the owner (the same for each split). `request.amount`
  * is in base units on the wire; any `decimals` field must match the token.
  * @param {Record<string, any>} request
- * @param {{ maxBase: bigint, payTo?: string }} opts
+ * @param {{ maxBase: bigint, payTo?: string, agent?: string, owner?: string }} opts
  * @returns {{ ok: true, amount: bigint, recipient: string, splits: { recipient: string, amount: string }[] } | { ok: false, code: string, reason: string }}
  */
 export function precheckCharge(request, opts) {
@@ -41,9 +52,13 @@ export function precheckCharge(request, opts) {
     return refuse('wrong_chain', `chainId ${details.chainId} is not Tempo Moderato (${CHAIN_ID})`)
   }
   if (!isAddr(request.recipient)) return refuse('bad_challenge', 'the challenge has no valid recipient address')
+  const badTo = badRecipient('the recipient', request.recipient, opts)
+  if (badTo) return refuse('bad_recipient', badTo)
   const splits = Array.isArray(details.splits) ? details.splits : []
   for (const s of splits) {
     if (!isAddr(s?.recipient) || !/^\d+$/.test(String(s?.amount))) return refuse('bad_challenge', 'a payment split is malformed')
+    const badSplit = badRecipient('a split recipient', s.recipient, opts)
+    if (badSplit) return refuse('bad_recipient', badSplit)
   }
   // A seller that names its own payment memo runs an MPP server from before challenge-bound memos: current clients (mppx)
   // always send the memo bound to the challenge, so such a seller answers "Transfer memo does not match the challenge memo"
@@ -51,6 +66,18 @@ export function precheckCharge(request, opts) {
   if (details.memo !== undefined && details.memo !== null) {
     return refuse('seller_memo', `the seller requires a payment memo of its own (${String(details.memo).slice(0, 20)}...) in its challenge; this client does not support that, so nothing was signed`)
   }
+  // The splits as mppx pays them. Its client throws (getTransfers) when they add up to the price or more, or are not a list;
+  // an mppx seller's charge schema refuses a split of 0, more than 10, or a split memo that is not 32 bytes of hex (viem
+  // would pad a shorter one and pay it). mppx finds the first two only while it creates the payment, so they are refused here.
+  if (details.splits != null && !Array.isArray(details.splits)) return refuse('bad_split', "the challenge's payment splits are not a list")
+  if (splits.length > 10) return refuse('bad_split', `the challenge splits the price ${splits.length} ways; at most 10 are allowed`)
+  let splitTotal = 0n
+  for (const s of splits) {
+    if (BigInt(s.amount) === 0n) return refuse('bad_split', `the payment split to ${s.recipient} is 0`)
+    if (s.memo != null && !/^0x[0-9a-fA-F]{64}$/.test(String(s.memo))) return refuse('bad_split', `the payment split to ${s.recipient} names a memo that is not 32 bytes of hex`)
+    splitTotal += BigInt(s.amount)
+  }
+  if (splitTotal >= amount) return refuse('bad_split', `the payment splits add up to ${fromBase(splitTotal)} ${TOKEN_LABEL}, not less than the price ${fromBase(amount)} ${TOKEN_LABEL}`)
   if (opts.payTo) {
     if (request.recipient.toLowerCase() !== opts.payTo.toLowerCase()) {
       return refuse('recipient_mismatch', `recipient ${request.recipient} is not the expected --pay-to ${opts.payTo}`)

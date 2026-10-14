@@ -20,6 +20,7 @@ import { isAddressOn, isTransactionId, networkFor, shortLabel, txUrl, type Netwo
 import { getQuote } from "./quote.js";
 import { MAX_CHALLENGE_BYTES, NotPaidEndpointError, readBody, readCapped, readSellerChallenge, sameTerms, type SellerChallenge } from "./x402.js";
 import { readMppReceipt } from "./mpp.js";
+import { sellerUrlProblem } from "./seller-url.mjs";
 import { untrustedText } from "./text.js";
 import type { ChainCheck } from "./settlement.js";
 import { Records, attemptRunner, type AttemptRunner } from "./records.js";
@@ -121,6 +122,9 @@ export class PaymentEngine {
       throw new Error("The seller changed its terms after this quote was taken; quote again before paying");
     }
     if (quote.status === "expired") throw new Error("This quote has expired; quote again before paying");
+    // Old quotes too: a quote taken before this rule, or written by hand, is not claimed and the owner is never asked.
+    const urlProblem = sellerUrlProblem(quote.url);
+    if (urlProblem) throw new Error(`This quote's seller URL ${urlProblem}; nothing was started. Quote an https URL`);
 
     const at = new Date().toISOString();
     const attempt: Attempt = {
@@ -526,6 +530,15 @@ export class PaymentEngine {
       });
       return;
     }
+    // The credential goes to this URL and nowhere else: refused here as well, so the rule is local to the send.
+    const sendProblem = sellerUrlProblem(quote.url);
+    if (sendProblem) {
+      this.settleState(attempt, "failed", {
+        payer: signed.signer,
+        reason: `the owner signed, but the payment was not sent: the seller URL ${sendProblem}. Nothing was submitted`,
+      });
+      return;
+    }
     this.transition(attempt, "submitting");
     // Checked again right before the credential leaves: only an attempt this run still carries is ever submitted.
     if (attempt.state !== "submitting") return;
@@ -801,6 +814,8 @@ export class PaymentEngine {
    * fetch so a test (or a future proxy) can stand in for the network.
    */
   private async challengeFor(url: string): Promise<SellerChallenge> {
+    const problem = sellerUrlProblem(url);
+    if (problem) throw new Error(`the seller URL ${problem}`);
     const deadline = Date.now() + this.timeoutMs;
     const res = await this.fetchImpl(url, {
       method: "GET",

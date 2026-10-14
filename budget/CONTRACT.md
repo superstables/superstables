@@ -36,9 +36,13 @@ The README says which owner action stops the agent even if the agent key is stol
 - the price exceeds `--max <amount>` (required; no default);
 - the token is not the rail's expected token (the chain's USDC, Tempo pathUSD, the Solana devnet USDC mint) or decimals don't match;
 - the recipient is not the one in `--pay-to <address>`, when given;
+- the recipient is the zero address, the token contract, the agent or the owner;
+- (evm) the authorization lifetime is missing, not a whole number of seconds, or outside 30 to 3600;
 - the amount has more precision than the token allows.
 
 Refusal exits with code 3 and a `RESULT` line with `state: "refused_precheck"` and the reason.
+
+On `tempo`, `buy` also refuses payment splits that add up to the price or more, a split of 0, more than 10 splits or a split memo that is not 32 bytes, and an RPC that does not answer Tempo Moderato's chain id.
 
 ## 5. Every purchase has an operation ID and can be reconciled
 
@@ -46,6 +50,7 @@ Refusal exits with code 3 and a `RESULT` line with `state: "refused_precheck"` a
 - If an operation with that ID is already `submitted` or `unknown`, `buy` refuses and says to run `reconcile --op <id>`.
 - `reconcile --op <id>` reads the chain and sets `settled`, `failed` or `not_found`. It never pays.
 - A purchase is `settled` only when its own transaction succeeded on chain. Seller HTTP status is recorded separately as `delivered: true|false` (`null` when the process died before the response). Delivery failure never triggers a new payment.
+- An existing operation journal that cannot be read or parsed stops its journal read with `unknown` (exit 5), preserving the file. This applies to purchase and reconciliation reads and to EVM `recover --op ID`, before any send. Recovery without `--op` still skips unreadable journals during its scan; inspect them before running recovery.
 - Final output line: `RESULT {"rail","op","state","tx","debit","remaining","delivered","next"}` where `state` is one of `quoted`, `submitted`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `not_found` (reconcile only), `unknown`.
 
 ## 6. Help and bad input never sign

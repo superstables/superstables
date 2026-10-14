@@ -350,4 +350,6 @@ export interface WalletStatus {
   approvalMode: "ask-every-payment";
   pending: number;
   policy: { perCall?: string; perDay?: string; allow: string[]; deny: string[]; stablecoins: string[]; killSwitch: boolean };
+  /** The account's own policy file, when it applies as well as the one above: both must allow a payment. */
+  also?: { file: string; policy: WalletStatus["policy"] };
 }

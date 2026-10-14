@@ -607,7 +607,7 @@ describe("hosted approvals", () => {
 
   it("no owner named, and the site will not cancel because the wallet was asked: unknown (sending), never nothing sent", async () => {
     site.owner = null;
-    site.cancelAnswer = () => ({ status: 409, body: { error: { code: "wallet_asked" }, state: "sending", wallet_asked: true } });
+    site.cancelAnswer = () => ({ status: 409, body: { error: { code: "wallet_asked", state: "sending", wallet_asked: true, money_moved: "unknown" } } });
     const err = await grant(client()).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
     expect(err.sending).toBe(true);
@@ -616,13 +616,13 @@ describe("hosted approvals", () => {
     expect(err.next).toMatch(/read whether anything landed/);
   });
 
-  it("no owner named, and the cancel gets no clear answer: no claim that nothing was sent", async () => {
+  it("no owner named, and the cancel gets no clear answer: unknown (sending), no claim that nothing was sent", async () => {
     site.owner = null;
     site.cancelFails = true;
     const err = await grant(client()).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
-    expect(err.sending).toBe(false);
-    expect(err.message).toMatch(/This command did not show an approval link\. Check wallet activity before retrying$/);
+    expect(err.sending).toBe(true);
+    expect(err.message).toMatch(/The site did not confirm the request was cancelled before the owner's wallet was asked, so whether anything was sent is unknown; read the chain before retrying$/);
     expect(err.message).not.toMatch(/nothing was sent/);
   });
 
@@ -835,7 +835,8 @@ describe("hosted approvals", () => {
       expect(JSON.stringify(o)).not.toMatch(/untrusted|ssbt_/);
       if (kind === "bundle") expect((await h.bundle!).steps).toMatchObject([{ state: "skipped", walletAsked: false }]);
       expect(reads).toBe(kind === "transaction" ? 2 : 1);
-      expect(site.requests[0]).toMatchObject({ state: "awaiting_owner", cancels: 0 });
+      // an unapproved link with steps is withdrawn on the site first: only a confirmed withdrawal makes its steps "nothing sent"
+      expect(site.requests[0]).toMatchObject(kind === "bundle" ? { state: "cancelled", cancels: 1 } : { state: "awaiting_owner", cancels: 0 });
       await c.close();
     });
   }
@@ -1110,6 +1111,8 @@ describe("find: the site's list of services", () => {
         { name: "Bad\nname", price: "0.01", chain: "arc-testnet", url: "https://arc.example/x" },
         { name: "Briefing", price: "0.003", network: "eip155:84532", sample: true, url: "https://seller.example/briefing" },
         { name: "Market", price: "0.01", network: "eip155:84532", simulated: false, sample: "yes", url: "https://seller.example/market" },
+        { name: "Mislabelled", price: "0.01", network: "eip155:84532", chain: "arc-testnet", url: "https://seller.example/mislabelled" },
+        { name: "Proto", price: "0.01", network: "constructor", chain: "arc-testnet", url: "https://seller.example/proto" },
       ] };
       const r = await listSiteServices({ site: site.url, chainByNetwork: { "eip155:84532": "base-sepolia" } });
       // simulated: the site's simulated, mock or sample flag when it is true or false; null when it gives none
@@ -1118,6 +1121,10 @@ describe("find: the site's list of services", () => {
         { name: "Bad name", price: "0.01 USDC", chain: "arc-testnet", network: null, rail: null, simulated: null, url: "https://arc.example/x" },
         { name: "Briefing", price: "0.003 USDC", chain: "base-sepolia", network: "eip155:84532", rail: "evm", simulated: true, url: "https://seller.example/briefing" },
         { name: "Market", price: "0.01 USDC", chain: "base-sepolia", network: "eip155:84532", rail: "evm", simulated: false, url: "https://seller.example/market" },
+        // the network is one the client knows: its own chain and rail win over the listing's words
+        { name: "Mislabelled", price: "0.01 USDC", chain: "base-sepolia", network: "eip155:84532", rail: "evm", simulated: null, url: "https://seller.example/mislabelled" },
+        // a network named like an inherited property is not one the client knows: the listing's words stay data
+        { name: "Proto", price: "0.01 USDC", chain: "arc-testnet", network: "constructor", rail: null, simulated: null, url: "https://seller.example/proto" },
       ] });
     } finally {
       await site.close();

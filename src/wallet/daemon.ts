@@ -437,6 +437,8 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
         // this page decides money, so it is not framed and not embedded
         "x-frame-options": "DENY",
         "content-security-policy": "frame-ancestors 'none'",
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
       });
       res.end(walletPage());
       return;
@@ -494,9 +496,11 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       return;
     }
 
+    /** The id in a path, decoded; "" (no request) when its escapes are malformed. */
+    const idOf = (raw: string): string => { try { return decodeURIComponent(raw); } catch { return ""; } };
     const single = /^\/requests\/([^/]+)$/.exec(path);
     if (method === "GET" && single) {
-      const record = requests.get(decodeURIComponent(single[1]));
+      const record = requests.get(idOf(single[1]));
       if (!record) {
         send(res, 404, { error: "no such request" });
         return;
@@ -507,7 +511,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
 
     const decision = /^\/owner\/requests\/([^/]+)\/(approve|deny)$/.exec(path);
     if (method === "POST" && decision) {
-      const record = requests.get(decodeURIComponent(decision[1]));
+      const record = requests.get(idOf(decision[1]));
       if (!record) {
         send(res, 404, { error: "no such request" });
         return;

@@ -342,6 +342,8 @@ describe("wallet credentials", () => {
     const own = await fetch(wallet.url + "/");
     expect(own.headers.get("x-frame-options")).toBe("DENY");
     expect(own.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(own.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(own.headers.get("x-content-type-options")).toBe("nosniff");
   });
 });
 
@@ -497,7 +499,7 @@ describe("requests the wallet rejects before the owner sees them", () => {
         amount: "0.01",
         payTo: PAYEE,
       },
-      reason: /amount is missing or malformed/i,
+      reason: /amount is missing, zero, not a canonical whole number/i,
     },
     {
       name: "a malformed recipient",

@@ -17,6 +17,8 @@
 //     examples: ['npx tsx budget/tempo/buy.ts --url https://mpp.dev/api/ping/paid --max 0.2'],
 //   })
 
+import { sellerUrlProblem } from '../../../src/core/seller-url.mjs'
+
 /**
  * @typedef {{ type: 'string' | 'boolean', required?: boolean, desc?: string, choices?: string[],
  *   check?: (v: string) => string | undefined, metavar?: string }} FlagSpec
@@ -147,13 +149,6 @@ export const LABEL = '[A-Za-z0-9_]{1,40}'
 export const LABEL_WORDS = '1 to 40 letters, digits or underscores'
 export const labelCheck = (v) => (new RegExp(`^${LABEL}$`).test(v) ? undefined : `label must be ${LABEL_WORDS}`)
 
-export const urlCheck = (v) => {
-  try {
-    const u = new URL(v)
-    return u.protocol === 'https:' || u.protocol === 'http:' ? undefined : 'must be an http(s) URL'
-  } catch {
-    return 'not a valid URL'
-  }
-}
+export const urlCheck = (v) => sellerUrlProblem(v)
 
 export const hashCheck = (v) => (/^0x[0-9a-fA-F]{64}$/.test(v) ? undefined : 'must be a 0x transaction hash (64 hex characters)')

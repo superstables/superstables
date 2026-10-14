@@ -549,6 +549,7 @@ superstables budget revoke --rail evm|tempo|solana [--chain C] [--agent LABEL] [
 Ends the budget on chain: from the block it lands in, the agent can spend nothing more (evm: the allowance becomes 0;
 tempo: the access key is revoked for good; solana: the delegate is cleared). Prints the plan first. It does not bring
 back what was already spent; on evm, superstables budget recover returns stranded funds.
+On evm it always sends approve(agent, 0), even when the allowance already reads 0.
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on
 stdout and in words on stderr. The owner opens it in the browser that has their wallet, and approves or rejects there.

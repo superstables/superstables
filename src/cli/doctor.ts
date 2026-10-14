@@ -16,12 +16,13 @@
 
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DEFAULT_NETWORK } from "../core/chain.js";
 import { HOSTED_DEMO_SERVICE_URL, indexUrl } from "../core/discovery.js";
 import { FACILITATORS } from "../core/facilitator.js";
 import {
   DEFAULT_APPROVE_PORT,
+  accountPolicyPath,
   approvePortFromEnvironment,
   browserWalletPath,
   ensureDir,
@@ -30,7 +31,7 @@ import {
   walletDir,
   walletUrl,
 } from "../core/home.js";
-import { loadPolicy } from "../core/policy.js";
+import { loadOptionalPolicy, loadPolicy } from "../core/policy.js";
 import { clientVersion } from "../core/version.js";
 import { walletStatus } from "../core/signer/wallet.js";
 import { policySummary } from "../wallet/daemon.js";
@@ -71,8 +72,8 @@ export async function runDoctor(mode: WalletMode = walletModeFromEnvironment()):
   const offline = doctorIsOffline();
   const checks: Check[] =
     mode === "browser"
-      ? [homeCheck(), policyCheck(), browserWalletCheck(), await approvalPageCheck()]
-      : [homeCheck(), policyCheck(), keyCheck(), await walletCheck()];
+      ? [homeCheck(), policyCheck(), ...accountPolicyCheck(), browserWalletCheck(), await approvalPageCheck()]
+      : [homeCheck(), policyCheck(), ...accountPolicyCheck(), keyCheck(), await walletCheck()];
 
   if (offline) {
     for (const name of ["demo service", "Superstables index", ...FACILITATORS.map(hostOf)]) {
@@ -137,7 +138,21 @@ function policyCheck(): Check {
     const where = existsSync(path) ? path : `${path} (missing, built-in defaults apply)`;
     return { name: "spend policy", ok: true, detail: `${where}: ${policySummary(policy)}`, essential: true };
   } catch (err) {
-    return { name: "spend policy", ok: false, detail: `${path} could not be read: ${messageOf(err)}`, essential: true };
+    return { name: "spend policy", ok: false, detail: messageOf(err), essential: true };
+  }
+}
+
+/** The account's own ~/.superstables/policy.yaml, which applies as well when it is another file that is there. */
+function accountPolicyCheck(): Check[] {
+  const path = accountPolicyPath();
+  if (resolve(path) === resolve(policyPath())) return [];
+  try {
+    const policy = loadOptionalPolicy(path);
+    if (!policy) return [];
+    return [{ name: "account spend policy", ok: true, detail: `${path} (applies as well): ${policySummary(policy)}`, essential: true }];
+  } catch (err) {
+    // Not only a malformed file: one that cannot be opened (a directory above it closed to this user) refuses payments too.
+    return [{ name: "account spend policy", ok: false, detail: messageOf(err), essential: true }];
   }
 }
 

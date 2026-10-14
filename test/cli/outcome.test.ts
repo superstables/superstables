@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { SOLANA_DEVNET, TEMPO_MODERATO } from "../../src/core/chain.js";
+import { accountPolicyPath, policyPath } from "../../src/core/home.js";
 import { exitCodeFor, nextFor, requoteCommand } from "../../src/cli/outcome.js";
 import type { Attempt, AttemptState } from "../../src/core/types.js";
 
@@ -66,6 +67,15 @@ describe("nextFor", () => {
   });
 });
 
+describe("nextFor after a spend policy refusal", () => {
+  it("names the account's policy file when that file refused, else the one the environment names", () => {
+    const account = accountPolicyPath();
+    const refused = (reason: string) => nextFor(attempt("failed", { refusal: "policy", reason }));
+    expect(refused(`the local spend policy refuses this payment: kill_switch is on (in ${account})`)).toContain(`the owner edits ${account} if they are wrong`);
+    expect(refused("the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)")).toContain(`the owner edits ${policyPath()} if they are wrong`);
+  });
+});
+
 describe("requoteCommand", () => {
   const terms = attempt("denied", {}, "eip155:46630").terms;
   const base = { url: "https://seller.example/x", terms };
@@ -75,6 +85,19 @@ describe("requoteCommand", () => {
     expect(requoteCommand({ ...base, serviceId: "svc", request: { method: "GET", url: "https://seller.example/x?a=1", params: { a: "1" } }, otherChains: ["base-sepolia"] })).toBe(
       "superstables quote --service svc --param a=1 --chain robinhood-testnet",
     );
+  });
+  it("quotes a seller's https address again, never the plain http one the client would itself refuse", () => {
+    expect(requoteCommand({ ...base, url: "http://seller.example/x?a=1" })).toBe("superstables quote 'https://seller.example/x?a=1'");
+    expect(requoteCommand({ ...base, url: "HTTP://seller.example/x" })).toBe("superstables quote https://seller.example/x");
+    for (const local of ["http://127.0.0.1:3000/x", "http://localhost/x", "http://[::1]:3000/x"]) {
+      expect(requoteCommand({ ...base, url: local }), local).toContain(local);
+    }
+    // An explicit :80 goes with the scheme; another port stays; credentials in the address are not carried over.
+    expect(requoteCommand({ ...base, url: "http://seller.example:80/x" })).toBe("superstables quote https://seller.example/x");
+    expect(requoteCommand({ ...base, url: "http://seller.example:8080/x" })).toBe("superstables quote https://seller.example:8080/x");
+    expect(requoteCommand({ ...base, url: "http://user:secret@seller.example/x" })).not.toContain("https:");
+    expect(requoteCommand({ ...base, url: "http://user@seller.example/x" })).not.toContain("https:");
+    expect(requoteCommand({ ...base, url: "not a url" })).toContain("not a url");
   });
   it("adds no chain for a seller on one chain", () => {
     expect(requoteCommand(base)).toBe("superstables quote https://seller.example/x");
