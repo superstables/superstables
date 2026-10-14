@@ -40,12 +40,15 @@ The README says which owner action stops the agent even if the agent key is stol
 
 Refusal exits with code 3 and a `RESULT` line with `state: "refused_precheck"` and the reason.
 
+On `tempo`, `buy` also refuses payment splits that add up to the price or more, a split of 0, more than 10 splits or a split memo that is not 32 bytes, and an RPC that does not answer Tempo Moderato's chain id.
+
 ## 5. Every purchase has an operation ID and can be reconciled
 
 - `buy --op <id>` (generated and printed if absent). A journal file per operation lives outside the code folder: `$SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/<id>.json`, written **before** submission (intent: seller URL, amount, recipient, token) and updated after (tx ids, state).
 - If an operation with that ID is already `submitted` or `unknown`, `buy` refuses and says to run `reconcile --op <id>`.
 - `reconcile --op <id>` reads the chain and sets `settled`, `failed` or `not_found`. It never pays.
 - A purchase is `settled` only when its own transaction succeeded on chain. Seller HTTP status is recorded separately as `delivered: true|false` (`null` when the process died before the response). Delivery failure never triggers a new payment.
+- An existing operation journal that cannot be read or parsed stops its journal read with `unknown` (exit 5), preserving the file. This applies to purchase and reconciliation reads and to EVM `recover --op ID`, before any send. Recovery without `--op` still skips unreadable journals during its scan; inspect them before running recovery.
 - Final output line: `RESULT {"rail","op","state","tx","debit","remaining","delivered","next"}` where `state` is one of `quoted`, `submitted`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `not_found` (reconcile only), `unknown`.
 
 ## 6. Help and bad input never sign

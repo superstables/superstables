@@ -14,7 +14,7 @@
 // A purchase has two transactions that matter: the pull (agent) and the settlement (the seller's facilitator).
 import { finalityFor } from "../../src/core/finality-policy.js";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { writeJournalFile } from "../journal.mjs";
+import { readJournalFile, writeJournalFile } from "../journal.mjs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, BlockNotFoundError, TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
@@ -99,9 +99,8 @@ export function checkOpId(id: string): string {
 }
 export const journalPath = (op: string) => join(OPS_DIR, `${op}.json`);
 export function readJournal(op: string): Journal | null {
-  const p = journalPath(op);
-  if (!existsSync(p)) return null;
-  const j = JSON.parse(readFileSync(p, "utf8"));
+  const j = readJournalFile(journalPath(op), op);
+  if (!j) return null;
   if (j.path !== "approve") {
     console.error(`error: operation ${op} is not an evm budget purchase; reconcile it on the rail that made it`);
     process.exit(2);

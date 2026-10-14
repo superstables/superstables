@@ -24,7 +24,7 @@
 import { afterPurchase, ownerCheck } from "./next-steps.mjs";
 import { SENDING_LINE, afterSend } from "./proof.mjs";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readFileSync, writeSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1113,7 +1113,14 @@ async function readBudget(f) {
 }
 
 const journal = (f) => join(opsDir(f.rail, f.chain), `${f.op}.json`);
-const readJournal = (f) => { const p = journal(f); try { return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null; } catch { return null; } };
+/** The journal as a non-array object, else null (missing, unparsable, or a root such as 7 or []: the rail's reader refuses those too). */
+const readJournal = (f) => { const p = journal(f); try { const j = existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null; return j && typeof j === "object" && !Array.isArray(j) ? j : null; } catch { return null; } };
+/**
+ * Whether this op may have a journal: false only when the path is plainly missing (ENOENT). A read that fails for any other
+ * reason (EACCES, ELOOP, ...) hides a file that may be there, so it counts as present: an op is never called unused, or
+ * "no journal", because its journal could not be reached. The rail's reader (journal.mjs readJournalFile) then answers unknown.
+ */
+const journalPresent = (f) => { try { statSync(journal(f)); return true; } catch (err) { return err?.code !== "ENOENT"; } };
 const newOp = () => { const d = new Date().toISOString().replace(/\D/g, "").slice(0, 14); return `rb-${d}-${Math.random().toString(16).slice(2, 6)}`; };
 const txOf = (text) => [...text.matchAll(/(?:tx hash|signature):\s*(\S+)|\/tx\/(0x[0-9a-fA-F]{64})/gi)].map((m) => m[1] ?? m[2]).pop();
 
@@ -1302,7 +1309,7 @@ const noBudgetWords = (f, gaps) => `no budget has been set up here for ${f.rail}
  */
 function journalAnswer(f, ctx) {
   const j = readJournal(f);
-  const pending = j ? ["submitted", "unknown"].includes(j.state) || (f.rail === "solana" && j.state === "refused_chain") : existsSync(journal(f));
+  const pending = j ? ["submitted", "unknown"].includes(j.state) || (f.rail === "solana" && j.state === "refused_chain") : journalPresent(f);
   if (!pending && j?.state !== "settled") return undefined;
   const state = j?.state ?? "unreadable";
   log(`superstables budget: operation ${f.op} is already ${state}. Not paying again.`);
@@ -1339,7 +1346,7 @@ async function buy({ f, ctx }) {
   // read again under the lock: a buy that ran meanwhile may have written it
   const now = journalAnswer(f, ctx);
   if (now) return now();
-  const journalBefore = existsSync(journal(f));
+  const journalBefore = journalPresent(f);
   const running = run(railCommand("buy", f));
   try { lock.holdAlso(currentChild); }
   catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }
@@ -1347,7 +1354,7 @@ async function buy({ f, ctx }) {
   // Stopped (by a signal or on its own) before its rail ever wrote this op's journal: every rail writes the journal
   // before it signs or sends anything, the rail has exited, and this process holds the op's lock, so nothing was signed.
   // A refusal with the op still unused, not an unknown that sends the caller to a reconcile with no journal to read.
-  if (!journalBefore && !existsSync(journal(f)) && (r.signal || interrupted)) {
+  if (!journalBefore && !journalPresent(f) && (r.signal || interrupted)) {
     const reason = `the buy was stopped by a signal${r.signal ? ` (${r.signal})` : ""} before it recorded a purchase. Nothing was signed or paid`;
     log(`superstables budget: ${reason}.`);
     return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: "this --op is still unused and nothing was signed. Buy again only if the purchase is still wanted", reason });
@@ -1361,7 +1368,7 @@ async function buy({ f, ctx }) {
   const rr = railResult(r.stdout, { last: true });
   // Ended on its own without a RESULT and without ever writing this op's journal: every rail writes the journal before it
   // signs or sends anything, and this process holds the op's lock, so nothing was signed. A refusal, not an unknown.
-  if (!rr && r.code !== 2 && !journalBefore && !existsSync(journal(f))) {
+  if (!rr && r.code !== 2 && !journalBefore && !journalPresent(f)) {
     const reason = `the ${f.rail} buy stopped before it recorded a purchase${r.error ? `: ${r.error}` : ` (exit ${r.code})`}. Nothing was signed or paid`;
     log(`superstables budget: refused: ${reason}.`);
     return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: `fix what reason names (superstables budget doctor --rail ${f.rail}${chainFlag(f)} checks keys, RPC and balances), then buy again; this --op is still unused`, reason });
@@ -1380,7 +1387,7 @@ async function unlock({ f, ctx }) {
   const dir = opsDir(f.rail, f.chain);
   const hasLocks = () => ['buy.lock', 'json.lock'].some(suffix => existsSync(join(dir, `${f.op}.${suffix}`)) || existsSync(join(dir, `${f.op}.${suffix}.break`)));
   const notFound = () => emit(3, { ...ctx, op: f.op, state: 'refused_precheck', reason: 'op_not_found', next: 'check the original rail, chain and op; no journal or operation locks exist' });
-  if (!existsSync(journal(f)) && !hasLocks()) return notFound();
+  if (!journalPresent(f) && !hasLocks()) return notFound();
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
   const mismatch = () => { log("Confirmation did not match. No locks were cleared."); return refuse("owner_confirmation_mismatch"); };
   try {
@@ -1397,7 +1404,7 @@ async function unlock({ f, ctx }) {
   } catch { return mismatch(); }
   finally { terminal.close(); }
   const hadLocks = hasLocks();
-  if (!existsSync(journal(f)) && !hadLocks) return notFound();
+  if (!journalPresent(f) && !hadLocks) return notFound();
   let noticed = false;
   const options = { confirmUnverifiable: Boolean(f.unverified), confirmPossiblyAlive: Boolean(f.unverified), onOverride: () => { if (!noticed) { noticed = true; log(`Clearing the lock for operation ${f.op} without proof that its process has stopped. You confirmed that all work on this operation has stopped.`); } } };
   const blocked = lock => {
@@ -1462,7 +1469,7 @@ async function unlockPayment({ f, ctx }) {
 async function reconcile({ f, ctx }) {
   const lock = lockOp(opsDir(f.rail, f.chain), f.op);
   if (!lock.ok) return emit(5, { ...ctx, op: f.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f.op, f.rail, f.chain), reason: "op_in_progress" });
-  if (!readJournal(f)) return badInput(ctx, `no journal for op ${f.op} under ${opsDir(f.rail, f.chain)}`);
+  if (!journalPresent(f)) return badInput(ctx, `no journal for op ${f.op} under ${opsDir(f.rail, f.chain)}`);
   const running = run(railCommand("reconcile", f)); // none of the rail scripts signs or sends
   try { lock.holdAlso(currentChild); }
   catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }

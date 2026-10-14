@@ -20,7 +20,7 @@ import type { Address } from 'viem'
 import { requireRecordLock } from '../op-lock.mjs'
 import { hashCheck, intCheck, opIdCheck, parseCli } from './lib/args.mjs'
 import { explorerTx, fromBaseUnits, toBaseUnits, oneLine } from './lib/common.ts'
-import { readKey } from './lib/chain.ts'
+import { RPC_CHAIN_NEXT, readKey, rpcChainProblem } from './lib/chain.ts'
 import { judge, lookupOnce, waitForOutcome } from './lib/resolve.ts'
 import { OPS_DIR, printResult, readOp, writeOp, type OpState } from './lib/ops.ts'
 
@@ -83,6 +83,14 @@ async function main() {
   if (op.state === 'quoted') {
     console.log('The operation never got past the quote: nothing was signed or sent.')
     return done('not_found', { debit: 0n, reason: 'never signed: interrupted before the payment was created', next: 'no funds moved; safe to retry with a new op id', exit: 1 })
+  }
+
+  // every verdict below is read from RPC_URL: on another chain "nothing for its memo, past validBefore" proves nothing
+  const wrongChain = await rpcChainProblem()
+  if (wrongChain) {
+    console.log(`UNKNOWN: ${wrongChain}. Nothing was read for this purchase; the journal is unchanged.`)
+    printResult({ op: opId, state: 'unknown', tx: op.tx ?? null, debit: null, remaining: null, delivered: op.delivered ?? null, next: `${RPC_CHAIN_NEXT}, then run superstables budget reconcile --rail tempo --op ${opId} again; never pay again for this op`, reason: `wrong_rpc_chain: ${wrongChain}` })
+    process.exit(5)
   }
 
   const extra = typeof args.tx === 'string' ? [args.tx as string] : []

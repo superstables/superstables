@@ -3,7 +3,7 @@
 import { finalityFor } from "../../../src/core/finality-policy.js";
 import { keccak256, toBytes, type Address, type Hex } from 'viem'
 import { Abis, Addresses } from 'viem/tempo'
-import { RPC_URL, TOKEN_ADDRESS, fromBaseUnits, makeClient } from './common.ts'
+import { CHAIN_ID, RPC_URL, TOKEN_ADDRESS, fromBaseUnits, makeClient, oneLine } from './common.ts'
 
 export const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -38,6 +38,21 @@ export async function rpcRead(method: string, params: unknown[]): Promise<any> {
     await sleep(400 * 2 ** attempt)
   }
   throw last instanceof Error ? last : new Error(String(last))
+}
+
+/** The RPC's host, for words: a replacement's path or query can carry an access key, so never the whole URL. */
+const RPC_HOST = (() => { try { return new URL(RPC_URL).host } catch { return 'the Tempo RPC' } })()
+/** What to do when the RPC is on another chain. */
+export const RPC_CHAIN_NEXT = 'unset SUPERSTABLES_TEMPO_RPC, or set it to a Tempo Moderato RPC'
+/**
+ * Why RPC_URL must not be used for a purchase, in words, or '' when it answers Tempo Moderato's chain id. A payment is signed
+ * for Moderato whatever the RPC is: viem and mppx never ask the RPC its chain before a push-mode broadcast, so one on another
+ * chain would be handed the signed payment, and every outcome read there would be another chain's. Unreadable is a reason too.
+ */
+export async function rpcChainProblem(): Promise<string> {
+  const id = await rpcRead('eth_chainId', []).catch((err: Error) => err)
+  if (id instanceof Error) return `could not read which chain the Tempo RPC ${RPC_HOST} is on (${oneLine(id.message, 160)})`
+  return Number(id) === CHAIN_ID ? '' : `the Tempo RPC ${RPC_HOST} is not on Tempo Moderato (its chain id is ${oneLine(String(id), 40)}, expected ${CHAIN_ID})`
 }
 
 export type ChainReceipt = {
