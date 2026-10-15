@@ -4,6 +4,7 @@
 // against a third-party seller.
 //
 //   viem       name of the chain preset exported by viem/chains (its fee formatters; the rpc below replaces the preset's)
+//   testnet    true for a testnet. Any entry without it is refused by every budget script (src/core/chain-gate.js).
 //   token      the budget token: its ERC-20 address, symbol, decimals and EIP-712 domain (name, version). The x402 client
 //              signs with the seller's extra.name / extra.version; buy refuses a seller whose domain differs from this one,
 //              and preflight checks it against the chain (DOMAIN_SEPARATOR()).
@@ -33,7 +34,7 @@ export const FIAT_TOKEN_GAS = { pull: 85000, cancel: 85000, return: 55000, selfR
 export const DOCTOR_SPIKE = 2;
 export const EVM_CHAINS = {
   "base-sepolia": {
-    label: "Base Sepolia", chainId: 84532, viem: "baseSepolia",
+    label: "Base Sepolia", chainId: 84532, viem: "baseSepolia", testnet: true,
     rpc: "https://sepolia.base.org", explorer: "https://sepolia.basescan.org",
     token: { address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
     // sepolia.base.org refuses eth_getLogs over more than 200 blocks (error -32614, 14 Oct 2026).
@@ -46,7 +47,7 @@ export const EVM_CHAINS = {
   // USDC transfer (value in 18 decimals, no data).
   // Gas: a pull used 55,514 (0x2a19bdf7); the other limits are FiatToken's (not measured here).
   "arc-testnet": {
-    label: "Arc Testnet", chainId: 5042002, viem: "arcTestnet",
+    label: "Arc Testnet", chainId: 5042002, viem: "arcTestnet", testnet: true,
     rpc: "https://rpc.testnet.arc.network", explorer: "https://explorer.testnet.arc.io",
     token: { address: "0x3600000000000000000000000000000000000000", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
     legacy: [], blockSeconds: 0.5,
@@ -57,7 +58,7 @@ export const EVM_CHAINS = {
   // L1 (0xdcb34619), selfRevoke 46,056 with 5,176 (0x477114b5), return 44,658 with 4,411 (0x3364e1f0), approve 55,459
   // (0xe8ab5e08). FiatToken's limits plus 30,000 for the L1 part; gas here costs about 0.03 gwei.
   "arbitrum-sepolia": {
-    label: "Arbitrum Sepolia", chainId: 421614, viem: "arbitrumSepolia",
+    label: "Arbitrum Sepolia", chainId: 421614, viem: "arbitrumSepolia", testnet: true,
     rpc: "https://sepolia-rollup.arbitrum.io/rpc", explorer: "https://sepolia.arbiscan.io",
     token: { address: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", symbol: "USDC", decimals: 6, domain: { name: "USD Coin", version: "2" } },
     legacy: [], blockSeconds: 0.25,
@@ -70,7 +71,7 @@ export const EVM_CHAINS = {
   // purchase and its cleanup (280,000 gas) cost about 0.1 POL. The minimums below cover about 180 gwei; doctor and buy read the
   // current fee on top.
   "polygon-amoy": {
-    label: "Polygon Amoy", chainId: 80002, viem: "polygonAmoy",
+    label: "Polygon Amoy", chainId: 80002, viem: "polygonAmoy", testnet: true,
     rpc: "https://polygon-amoy-bor-rpc.publicnode.com", explorer: "https://amoy.polygonscan.com",
     token: { address: "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
     legacy: ["polygon-amoy"], logRange: 10000, blockSeconds: 2,
@@ -79,7 +80,7 @@ export const EVM_CHAINS = {
   },
   // SKALE's bridged USDC: pull 67,780 (0xc7fbef04), return 29,347 (0x3702dd07), approve 47,525 (0x74ee7ce5). FiatToken's limits cover it.
   "skale-base-sepolia": {
-    label: "SKALE Base Sepolia", chainId: 324705682, viem: "skaleBaseSepoliaTestnet",
+    label: "SKALE Base Sepolia", chainId: 324705682, viem: "skaleBaseSepoliaTestnet", testnet: true,
     rpc: "https://base-sepolia-testnet.skalenodes.com/v1/jubilant-horrible-ancha", explorer: "https://base-sepolia-testnet-explorer.skalenodes.com",
     token: { address: "0x2e08028E3C4c2356572E096d8EF835cD5C6030bD", symbol: "USDC", decimals: 6, domain: { name: "Bridged USDC (SKALE Bridge)", version: "2" } },
     legacy: ["skale-base-sepolia"], logRange: 2000, blockSeconds: 1,
@@ -90,7 +91,7 @@ export const EVM_CHAINS = {
   // purchase that fails after the pull costs three agent transactions (pull + cancel + return, 176,884 gas, 0.00023 ETH at 1.3 gwei).
   // minAgent covers those three at their limits (225,000 gas) up to about 2.2 gwei; doctor's minimum covers about 4.4 gwei.
   "ethereum-sepolia": {
-    label: "Ethereum Sepolia", chainId: 11155111, viem: "sepolia",
+    label: "Ethereum Sepolia", chainId: 11155111, viem: "sepolia", testnet: true,
     rpc: "https://ethereum-sepolia-rpc.publicnode.com", explorer: "https://sepolia.etherscan.io",
     token: { address: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
     legacy: ["sepolia"], logRange: 50000, blockSeconds: 12,
@@ -106,7 +107,7 @@ export const EVM_CHAINS = {
   // transferWithAuthorization 80,991 to 102,879 (0x551439e0, 0x61203353). Not sent here yet, from eth_estimateGas:
   // cancelAuthorization 68,968, a transfer to a new holder 66,196. The limits are those plus about 20%.
   "robinhood-testnet": {
-    label: "Robinhood Chain Testnet", chainId: 46630, viem: "robinhoodTestnet",
+    label: "Robinhood Chain Testnet", chainId: 46630, viem: "robinhoodTestnet", testnet: true,
     rpc: "https://rpc.testnet.chain.robinhood.com", explorer: "https://explorer.testnet.chain.robinhood.com",
     token: { address: "0x7E955252E15c84f5768B83c41a71F9eba181802F", symbol: "USDG", decimals: 6, domain: { name: "Global Dollar", version: "1" } },
     legacy: [], logRange: 500000, blockSeconds: 0.15,

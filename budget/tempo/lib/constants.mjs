@@ -11,6 +11,8 @@ export const RPC_URL = (() => {
   return r.url
 })()
 export const CHAIN_ID = 42431
+/** Tempo Moderato is a testnet. The chain gate (../../../src/core/chain-gate.js) signs on nothing else in this build. */
+export const TESTNET = true
 // pathUSD: Tempo's protocol-level reference USD stablecoin, a fixed address, 6 decimals.
 export const TOKEN_ADDRESS = '0x20C0000000000000000000000000000000000000'
 export const TOKEN_DECIMALS = 6

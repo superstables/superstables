@@ -54,7 +54,8 @@ describe("the EVM chain table", () => {
       expect(network.v1Name, network.key).toBe(b.legacy[0] ?? "");
       expect(network.wallet.nativeCurrency.symbol, network.key).toBe(b.gas.symbol);
       expect(network.wallet.nativeCurrency.decimals, network.key).toBe(b.gas.decimals);
-      expect(network.testnet).toBe(true);
+      expect(network.testnet, network.key).toBe(true);
+      expect(b.testnet, network.key).toBe(network.testnet);
     }
   });
 

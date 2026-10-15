@@ -8,6 +8,7 @@
 import { ExactEvmScheme } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import type { PrivateKeyAccount } from "viem/accounts";
+import { chainGate, chainGateSettings } from "../chain-gate.js";
 import { evmNetworkFor, networkFor } from "../chain.js";
 import { x402RailFor } from "../rails/index.js";
 import { untrustedText } from "../text.js";
@@ -43,6 +44,7 @@ export class LocalKeySigner implements Signer {
     // it again rather than sign over a domain the client does not know.
     const network = evmNetworkFor(String(req.requirements.network ?? ""));
     if (!network || !x402RailFor(network)) throw new SignRefused("invalid", `this wallet does not sign on ${untrustedText(req.requirements.network ?? "an unnamed chain", 60)}`);
+    const gate = chainGate({ rail: network.rail, key: network.key, testnet: network.testnet }, chainGateSettings()); if (gate) throw new SignRefused("invalid", gate);
     const requirements = {
       ...req.requirements,
       // The x402 v1 SDK knows a chain by its v1 name only; a v1 offer that names the chain by CAIP-2 is signed under it.

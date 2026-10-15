@@ -5,6 +5,7 @@ import { defineConfig } from "vitest/config";
 // (the release gate, and nightly) run everything. A new test file is fast until it is listed here.
 const SLOW = [
   "test/budget/approvals-token.test.ts",
+  "test/budget/chain-gate.test.ts",
   "test/budget/chain-guard.test.ts",
   "test/budget/cli-hosted-rails.test.ts",
   "test/budget/cli-hosted.test.ts",

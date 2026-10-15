@@ -58,6 +58,7 @@ import {
   loadAgentEnv,
   makeClient,
   oneLine,
+  tempoGate,
   toBaseUnits,
 } from './lib/common.ts'
 import { RPC_CHAIN_NEXT, chainHead, getTxSigner, mppMemo, readKey, readScope, rpcChainProblem } from './lib/chain.ts'
@@ -242,6 +243,14 @@ async function main() {
   if (wrongChain) {
     console.log(`\nREFUSED before signing: ${wrongChain}. Nothing was signed or sent.`)
     finish('refused_precheck', { reason: `wrong_rpc_chain: ${wrongChain}`, next: `${RPC_CHAIN_NEXT}; nothing was signed` })
+  }
+
+  // The chain gate. This script signs through mppx's own client, not makeClient, so it asks for itself before anything is signed.
+  // Today the load-time gate in lib/common.ts stops the script first; this call is a backstop.
+  const gate = tempoGate()
+  if (gate) {
+    console.log(`\nREFUSED before signing: ${gate}. Nothing was signed or sent.`)
+    finish('refused_precheck', { reason: `chain_gate: ${gate}`, next: 'nothing was signed or sent; this build signs on Tempo Moderato only' })
   }
 
   // 4. Journal the intent before signing.

@@ -17,6 +17,7 @@ import { EVM_RPC_MAX_BYTES, cappedRpcFetch } from "../rpc.mjs";
 import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
+import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 
 export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
@@ -339,6 +340,11 @@ export async function agentGasFor(from: Address, to: Address, data: Hex, op: Gas
 /** Refuse to sign anything when the RPC does not answer for the chain in chains.ts (a mainnet RPC behind a testnet name, a wrong URL). Read once. */
 let rpcChecked = false;
 export async function assertRpcChain() {
+  const gate = chainGate({ rail: "evm", key: CFG.key, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet }, chainGateSettings());
+  if (gate) {
+    console.error(`REFUSED: ${gate}. Nothing was signed or sent.`);
+    process.exit(3);
+  }
   if (rpcChecked) return;
   const id = Number(await retry(() => publicClient.request({ method: "eth_chainId" })));
   if (id !== CFG.chainId) {

@@ -218,7 +218,12 @@ Sepolia and Solana devnet, x402 `exact` with test USDG on Robinhood Chain Testne
 `tempo.charge` with test pathUSD on Tempo Moderato. On the EVM
 chains the token's EIP-712 signing domain is pinned too, so a seller cannot make the wallet show a
 signing name of its choosing. A requirement naming anything else, every mainnet included, is
-refused before anyone is asked. There is no configuration that turns on mainnet.
+refused before anyone is asked. There is no configuration that turns on mainnet. A mainnet added
+to the chain tables would still be refused by a separate check: before anything is signed, offered
+to a wallet or sent, `quote`, `pay`, the approval page, the local wallet and every
+`superstables budget` command ask it, and it refuses any chain whose table entry is not marked as
+a testnet, because mainnet signing is off in this build. `quote` and `pay` then refuse the offer;
+a budget command exits 3 before it reads a key file or the chain.
 
 On Tempo the owner's wallet sends the payment itself, so the order is different. MPP sellers that
 split a price between recipients, set a memo of their own, accept only payments they submit
