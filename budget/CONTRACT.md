@@ -46,7 +46,7 @@ The README says which owner action stops the agent even if the agent key is stol
 
 Refusal exits with code 3 and a `RESULT` line with `state: "refused_precheck"` and the reason.
 
-On `tempo`, `buy` also refuses payment splits that add up to the price or more, a split of 0, more than 10 splits or a split memo that is not 32 bytes, and an RPC that does not answer Tempo Moderato's chain id.
+On `tempo`, `buy` also refuses payment splits that add up to the price or more, a split of 0, more than 10 splits or a split memo that is not 32 bytes, an RPC that does not answer Tempo Moderato's chain id, a challenge that turns on mppx's machine-token route, names no realm, stays open more than 600 seconds or was already used by another operation, and a signed payment that is not exactly the quoted transfers or is valid for more than 600 seconds.
 
 ## 5. Every purchase has an operation ID and can be reconciled
 

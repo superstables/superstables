@@ -60,6 +60,12 @@ export function precheckCharge(request, opts) {
     const badSplit = badRecipient('a split recipient', s.recipient, opts)
     if (badSplit) return refuse('bad_recipient', badSplit)
   }
+  // mppx's machine-token route (methodDetails.machineTokenEnabled) pays through a swap contract, not a plain pathUSD
+  // transfer: the owner's machine token is approved to the swapper and swapped into the price. mppx takes it on its own when
+  // the owner holds enough of that token. Nothing in this client checks that route, so a challenge that asks for it is refused.
+  if (details.machineTokenEnabled != null && details.machineTokenEnabled !== false) {
+    return refuse('machine_token', "the seller's challenge turns on mppx's machine-token route, which pays through a swap contract instead of a plain " + TOKEN_LABEL + ' transfer; this client pays only by plain transfer')
+  }
   // A seller that names its own payment memo runs an MPP server from before challenge-bound memos: current clients (mppx)
   // always send the memo bound to the challenge, so such a seller answers "Transfer memo does not match the challenge memo"
   // after the payment was signed. Refuse before signing.
@@ -89,6 +95,30 @@ export function precheckCharge(request, opts) {
     return refuse('price_exceeds_max', `price ${fromBase(amount)} ${TOKEN_LABEL} is above --max ${fromBase(opts.maxBase)}`)
   }
   return { ok: true, amount, recipient: request.recipient, splits }
+}
+
+/** The longest a seller's challenge may stay open, in seconds. mppx sellers default to 300. */
+export const MAX_CHALLENGE_LIFETIME_S = 600
+
+/**
+ * The challenge around the request: a realm (the payment memo is built from it and the challenge id, so without one a payment
+ * cannot be found on chain as this purchase's) and an expiry at most MAX_CHALLENGE_LIFETIME_S away. A challenge with no expiry
+ * is accepted: the payment mppx signs expires on its own (checked after signing). Pure.
+ * @param {{ id?: unknown, realm?: unknown, expires?: unknown }} challenge
+ * @param {number} [nowMs]
+ * @returns {{ ok: true } | { ok: false, code: string, reason: string }}
+ */
+export function precheckChallenge(challenge, nowMs = Date.now()) {
+  if (!challenge || typeof challenge !== 'object') return refuse('bad_challenge', 'there is no challenge')
+  if (typeof challenge.id !== 'string' || challenge.id === '') return refuse('bad_challenge', 'the challenge has no id')
+  if (typeof challenge.realm !== 'string' || challenge.realm === '') return refuse('bad_challenge', 'the challenge names no realm, so its payment could not be found on chain as this purchase')
+  if (challenge.expires !== undefined && challenge.expires !== null) {
+    const at = typeof challenge.expires === 'string' ? Date.parse(challenge.expires) : NaN
+    if (!Number.isFinite(at)) return refuse('bad_challenge', 'the challenge has an expiry that is not a date')
+    const open = Math.ceil((at - nowMs) / 1000)
+    if (open > MAX_CHALLENGE_LIFETIME_S) return refuse('challenge_too_long', `the challenge stays open for ${open} s; this client accepts at most ${MAX_CHALLENGE_LIFETIME_S} s`)
+  }
+  return { ok: true }
 }
 
 /**

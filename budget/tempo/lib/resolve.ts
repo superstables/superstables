@@ -50,7 +50,7 @@ export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lo
         const again = await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock ?? 0), op.validBefore === undefined ? undefined : op.validBefore + EXPIRY_SLACK_S, true).catch(() => null)
         if (again === null) return { kind: 'pending' } // could not read: never claim "expired" on a failed read
         if (again.length) return { kind: 'pending' } // inclusion remains unreadable; the next reconciliation checks again
-      }
+      } else if (!op.expectedTx) return { kind: 'pending' } // no memo and no hash: nothing to search the chain by, so never "expired"
       return { kind: 'expired' }
     }
   }
