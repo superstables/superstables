@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { NO_PROC_SANDBOX, runsNoProcSandbox } from '../helpers/namespace-probes.js';
 import { createIdentitySource, inspectProcess } from '../../src/core/process-identity.mjs';
 import { once } from 'node:events';
 import { withFileLock } from '../../src/core/lock.js';
@@ -129,8 +130,8 @@ it('unlock help gives the exact owner-only flag description', () => {
   expect(help.stdout).toContain('--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.');
 });
 
-const noProc = ['--die-with-parent', '--new-session', '--unshare-pid', '--unshare-user', '--dev-bind', '/', '/', '--tmpfs', '/proc'];
-it.runIf(process.platform === 'linux')('a real no-proc sandbox refuses a live host holder without changing its locks', () => {
+const noProc = NO_PROC_SANDBOX;
+it.runIf(runsNoProcSandbox)('a real no-proc sandbox refuses a live host holder without changing its locks', () => {
   const b = box(), holder = lockFile(b.path);
   expect(holder.ok).toBe(true);
   const original = readFileSync(b.path, 'utf8');
@@ -142,7 +143,7 @@ it.runIf(process.platform === 'linux')('a real no-proc sandbox refuses a live ho
     expect(readFileSync(b.path, 'utf8')).toBe(original);
   } finally { if (holder.ok) holder.release(); }
 });
-it.runIf(process.platform === 'linux')('a real no-proc sandbox cannot take a live host core cap lock', async () => {
+it.runIf(runsNoProcSandbox)('a real no-proc sandbox cannot take a live host core cap lock', async () => {
   const b = box(), cap = join(b.home, 'cap.lock');
   await withFileLock(cap, async () => {
     const original = readFileSync(cap, 'utf8');
@@ -153,7 +154,7 @@ it.runIf(process.platform === 'linux')('a real no-proc sandbox cannot take a liv
     expect(readFileSync(cap, 'utf8')).toBe(original);
   });
 });
-it.runIf(process.platform === 'linux')('a dead real no-proc holder requires the explicit owner override', () => {
+it.runIf(runsNoProcSandbox)('a dead real no-proc holder requires the explicit owner override', () => {
   const b = box(), journal = b.path.replace('.buy.lock', '.json'); writeFileSync(journal, '{"state":"submitted"}');
   const written = spawnSync('bwrap', [...noProc, process.execPath, '--input-type=module', '-e', `const { lockFile } = await import(${JSON.stringify(join(root, 'budget/op-lock.mjs'))}); const a = lockFile(${JSON.stringify(b.path)}); if (!a.ok) process.exit(1); process.kill(process.pid, 'SIGKILL');`], { encoding: 'utf8' });
   expect(existsSync(b.path), written.stderr).toBe(true);
