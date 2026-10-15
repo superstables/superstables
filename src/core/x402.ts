@@ -201,7 +201,7 @@ export function termsFor(accept: RawAccept, version: 1 | 2): Supported | Unsuppo
   return { supported: true, terms: judged.offer.terms, requirement: judged.offer.requirement as PaymentRequirements };
 }
 
-/** Two requirements name the same payment when amount, asset, recipient and network agree. */
+/** Two requirements name the same payment when amount, asset, recipient, network, scheme and the seller's authorization window agree. */
 export function sameTerms(a: PaymentTerms, b: PaymentTerms): boolean {
   const network = toCaip2(a.network);
   return (
@@ -209,6 +209,8 @@ export function sameTerms(a: PaymentTerms, b: PaymentTerms): boolean {
     network === toCaip2(b.network) &&
     sameAddressOn(network, a.assetAddress, b.assetAddress) &&
     sameAddressOn(network, a.recipient, b.recipient) &&
-    (a.scheme ?? "exact") === (b.scheme ?? "exact")
+    (a.scheme ?? "exact") === (b.scheme ?? "exact") &&
+    // How long a signature can move money. A quote recorded before this was kept has none, and is quoted again.
+    a.maxTimeoutSeconds === b.maxTimeoutSeconds
   );
 }

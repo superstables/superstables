@@ -42,11 +42,14 @@ payment core uses, and shown as fact:
 | Amount (0.01 USDC, and the atomic `10000`) | `amount` in the requirement, divided by the asset's decimals |
 | Asset | the requirement's `asset` address, which must be the chain's USDC contract |
 | Chain | the requirement's `network`, which must be a supported one (`eip155:84532`) |
-| Recipient | the requirement's `payTo`, which must be a well-formed address |
+| Recipient | the requirement's `payTo`, which must be a well-formed address, and not the zero address or the token contract (on Solana, the all-zero key or the mint) |
 | Scheme | the requirement's `scheme`, which must be `exact` |
-| Payer | the account the page reports as connected; that the account controls it is checked when its signature arrives |
+| Payer | the account the page reports as connected, which must not be the recipient; that the account controls it is checked when its signature arrives |
 
-A payment requirement that fails these checks is refused before an approval link exists. The
+A payment requirement that fails these checks is refused before an approval link exists. So is an
+EVM offer that asks for a transfer method other than EIP-3009 (`extra.assetTransferMethod`), or
+whose `extra` holds anything but the token's signing domain, its decimals and that method; and a
+Tempo challenge that enables the machine-token route (`methodDetails.machineTokenEnabled`). The
 payer's signature is checked later, as described below.
 
 **Reported — what the agent says the payment is for**, stored under `reported` and labelled
@@ -58,7 +61,8 @@ unverified wherever it is shown:
 
 None of it changes what gets signed. The typed data the wallet is asked to sign is built from the
 verified requirement, field by field: `to` is the requirement's `payTo`, `value` is its
-`amount`, `verifyingContract` is its asset.
+`amount`, `verifyingContract` is its asset, and `validBefore` is now plus the seller's
+`maxTimeoutSeconds`, at most 600 seconds.
 
 There is one place where reported context has an effect: the policy takes the hostname for its
 `allow`/`deny` rules from `reported.target`, because the requirement does not carry the URL that
@@ -159,13 +163,16 @@ but it would not have to ask for the connection again.
 ## Expiry
 
 - A **quote** is good for 10 minutes. Paying re-reads the seller's challenge and refuses if the
-  terms moved.
+  terms moved, the seller's authorization window included.
 - A **browser approval request** expires five minutes after it is created, by default, checked on a
   timer and on every request. Local-wallet requests expire after 120 seconds by default
   (`wallet serve --approval-timeout`).
 - The **EIP-3009 authorization** carries its own on-chain window: `validBefore` is set to now
-  plus the seller's `maxTimeoutSeconds` (300 seconds unless the seller asks for something else).
-  After that, it cannot succeed on chain.
+  plus the seller's `maxTimeoutSeconds` (300 seconds unless the seller asks for something else), and
+  never more than 600 seconds: a seller may allow up to an hour, and its requirement is sent back
+  as offered, but what `pay` signs lasts ten minutes at most. After that, it cannot succeed on
+  chain. A request a program sends to the local wallet directly, not through `pay`, is still signed
+  for the window it names, up to an hour.
 - Closing the client marks pending approval requests `abandoned`, which is not a rejection, and a
   signature that arrives afterwards is never sent. A payment already being sent can end
   `uncertain` instead. If the process is killed, the log may have no final line; pending requests

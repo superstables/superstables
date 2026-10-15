@@ -6,7 +6,8 @@ import { randomBytes } from "node:crypto";
 import type { PaymentRequirements } from "@x402/core/types";
 import { authorizationTypes } from "@x402/evm";
 import { getAddress, toHex, verifyTypedData } from "viem";
-import { isAddress, shortLabel } from "../../chain.js";
+import { isAddress, isSameAddress, shortLabel } from "../../chain.js";
+import { signedLifetime } from "../../rails/evm.js";
 import type { StepAnswer, StepRecord, WalletStep } from "./types.js";
 
 /** The EIP-712 payload, in the JSON-safe shape a browser wallet's signTypedData_v4 expects. */
@@ -36,13 +37,14 @@ const EIP712_DOMAIN_TYPE = [
  * reported. The values match what the SDK's own client produces field for field, because the
  * facilitator that settles this credential checks all of them: a v1 requirement backdates
  * validAfter by ten minutes and carries its amount as maxAmountRequired, a v2 one does not.
+ * validBefore is now plus the seller's window, at most ten minutes (rails/evm.ts).
  */
 export function buildTypedData(record: StepRecord, payer: string): ApprovalTypedData {
   const network = record.network;
   if (network.rail !== "evm") throw new Error(`${network.label} is not an x402 EVM chain`);
   const requirement = record.requirement as PaymentRequirements & { maxAmountRequired?: string };
   const now = Math.floor(Date.now() / 1000);
-  const timeout = Number(requirement.maxTimeoutSeconds ?? 300);
+  const timeout = signedLifetime(requirement.maxTimeoutSeconds);
   return {
     domain: {
       // USDC's own domain, never the seller's `extra`: the wallet shows the domain name as the signing application,
@@ -82,6 +84,10 @@ export const eip3009Step: WalletStep = {
   },
 
   async prepare(record: StepRecord, account: string): Promise<StepAnswer> {
+    // The recipient is never the account paying: the transfer would move nothing, yet the payment would count as paid.
+    if (isSameAddress(String((record.requirement as PaymentRequirements).payTo), account)) {
+      return { http: 409, body: { error: "the recipient is the account paying, so this payment was not prepared; nothing was signed. Connect another account, or reject" } };
+    }
     // A person may switch accounts before signing, so this rebuilds rather than refusing.
     const typedData = buildTypedData(record, account);
     record.prepared = typedData;

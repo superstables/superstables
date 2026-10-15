@@ -304,6 +304,9 @@ export const solanaStep: WalletStep = {
     if (feePayer === account) {
       return { http: 409, body: { error: "the seller's fee payer is your own address, so this payment cannot be built; nothing was signed. Connect another account, or reject" } };
     }
+    if (account === record.verified.recipient) {
+      return { http: 409, body: { error: "the recipient is the account paying, so this payment cannot be built; nothing was signed. Connect another account, or reject" } };
+    }
     return {
       http: 200,
       body: { summary: `${record.verified.amountDecimal} ${record.verified.asset} to ${record.verified.recipient} on ${record.verified.networkLabel}` },

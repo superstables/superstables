@@ -3,7 +3,7 @@ import { inclusion } from "../finality.js";
 // The MPP tempo.charge rail on Tempo Moderato, push mode: the owner's own wallet sends one pathUSD transferWithMemo,
 // with the memo bound to the seller's challenge, and the seller is then shown the transaction's hash. Pinned in code:
 // Tempo Moderato and its pathUSD. A challenge that asks for anything else is refused before the owner is asked: another
-// chain or token, a split between several recipients, a memo of the seller's own, a seller that will not take a payment
+// chain or token, a split between several recipients, the zero address or the token as recipient, the machine-token route, a memo of the seller's own, a seller that will not take a payment
 // the owner's wallet sends (pull only), a credential in a header of the seller's choosing, or an expiry that leaves no
 // time to approve.
 //
@@ -102,8 +102,15 @@ export function judgeTempoCharge(challenge: MppChallenge, now: number = Date.now
   const amount = typeof request.amount === "string" ? request.amount : "";
   if (!/^[1-9]\d{0,17}$/.test(amount)) return { supported: false, reason: "the amount is missing or malformed" };
   if (typeof request.recipient !== "string" || !isAddress(request.recipient)) return { supported: false, reason: "the recipient is missing or malformed" };
+  if (/^0x0{40}$/i.test(request.recipient)) return { supported: false, reason: "the recipient is the zero address" };
+  if (request.recipient.toLowerCase() === TEMPO_MODERATO.token.address.toLowerCase()) return { supported: false, reason: `the recipient is the ${TEMPO_MODERATO.token.symbol} contract itself` };
   if (details.splits !== undefined && !(Array.isArray(details.splits) && details.splits.length === 0)) {
     return { supported: false, reason: "a payment split between several recipients is not supported" };
+  }
+  // mppx's machine-token route settles through a swap contract this client has not verified on chain; the owner's wallet
+  // sends a plain pathUSD transfer. Anything but absent or false is refused.
+  if (details.machineTokenEnabled !== undefined && details.machineTokenEnabled !== false) {
+    return { supported: false, reason: "the seller routes payment through the machine-token swap, which this client does not use" };
   }
   // Any memo field at all, null included: the memo is the client's, bound to the challenge (as on superstables.com).
   if (details.memo !== undefined) return { supported: false, reason: "a memo chosen by the seller is not supported" };

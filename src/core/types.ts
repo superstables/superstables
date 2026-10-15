@@ -105,6 +105,11 @@ export interface PaymentTerms {
   scheme: string;
   /** The x402 wire version. Absent for MPP, which has none. */
   x402Version?: 1 | 2;
+  /**
+   * x402 on EVM: the seller's authorization window (maxTimeoutSeconds) as offered, in seconds. What `pay` signs lasts at
+   * most ten minutes of it (rails/evm.ts). Absent on other rails, and on quotes recorded before it was kept.
+   */
+  maxTimeoutSeconds?: number;
 }
 
 /** One rule of the spend policy, as it applied to one payment. */
