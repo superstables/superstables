@@ -40,7 +40,7 @@ import { clientVersion } from "../core/version.js";
 import { startDemoService } from "../demo-service/server.js";
 import { policySummary, startWallet } from "../wallet/daemon.js";
 import { initKey, keyExists, keyPath, loadAccount, readSecretFile } from "../wallet/keystore.js";
-import { SellerTextError, UNTRUSTED_LABEL, untrustedText } from "../core/text.js";
+import { SellerTextError, UNTRUSTED_LABEL, untrustedJson, untrustedText, untrustedUrl } from "../core/text.js";
 import { formatReport, runDoctor } from "./doctor.js";
 import { field, json, money, table, yesNo } from "./format.js";
 import { MAIN_HELP, explain } from "./help.js";
@@ -340,12 +340,12 @@ explain(
                 const commands = listingCommands(s);
                 // mock is always present: true (marked as sample output), false (marked as not sample output), or null
                 // when the listing does not say, so an agent never has to guess from a missing key.
-                return { ...s, mock: s.mock ?? null, next: commands[0]?.run[0] ?? null, commands };
+                return { ...outsideJson(s), mock: s.mock ?? null, next: commands[0]?.run[0] ?? null, commands };
               }),
-              warnings: found.warnings,
+              warnings: found.warnings.map((w) => untrustedText(w, 500)),
             }),
           );
-          for (const warning of found.warnings) console.error(`note: ${warning}`);
+          for (const warning of found.warnings) console.error(`note: ${untrustedText(warning, 500)}`);
           return;
         }
         if (services.length === 0) {
@@ -378,12 +378,12 @@ explain(
           for (const service of services) {
             const commands = listingCommands(service);
             budget ||= commands.some((way) => way.way === "budget");
-            console.log(`  ${service.id}`);
+            console.log(`  ${untrustedText(service.id, 200)}`);
             for (const line of formatListingCommands(service, commands)) console.log(`    ${line}`);
           }
           if (budget) console.log(`A budget buy needs the owner's grant on that rail and chain first. ${BUDGET_PLACEHOLDERS}`);
         }
-        for (const warning of found.warnings) console.log(`note: ${warning}`);
+        for (const warning of found.warnings) console.log(`note: ${untrustedText(warning, 500)}`);
       },
     ),
   {
@@ -472,7 +472,7 @@ explain(
         : "superstables policy show";
       if (!taken.policy.allowed) process.exitCode = EXIT.refused;
       if (options.json) {
-        console.log(json({ ...taken, next }));
+        console.log(json(outsideJson({ ...taken, ...(taken.description !== undefined ? { description: untrustedText(taken.description, 500) } : {}), next })));
         return;
       }
       console.log(field("quote", taken.id));
@@ -775,7 +775,7 @@ explain(
       const all = context().records.listReceipts();
       const receipts = all.slice(0, options.limit);
       if (options.json) {
-        console.log(json(receipts.map(shownReceipt)));
+        console.log(json(receipts.map((r) => outsideJson(shownReceipt(r)))));
         return;
       }
       // whether any receipt exists is read from all of them, never from the --limit window
@@ -834,7 +834,7 @@ explain(
     .action((options: { limit: number; json?: boolean }) => {
       const attempts = context().records.listAttempts(options.limit);
       if (options.json) {
-        console.log(json(attempts.map(shownAttempt)));
+        console.log(json(attempts.map((a) => outsideJson(shownAttempt(a)))));
         return;
       }
       if (attempts.length === 0) {
@@ -1076,8 +1076,9 @@ function attemptJson(records: Records, attempt: Attempt): Record<string, unknown
   // A link to an attempt that has ended opens nothing useful; only a live one is worth showing.
   const { history, approval_url, ...rest } = view;
   if (!isFinalAttempt(attempt) && approval_url) rest.approval_url = approval_url;
-  return {
+  return outsideJson({
     ...rest,
+    ...(typeof rest.service_reason === "string" ? { service_reason: untrustedText(rest.service_reason, 300) } : {}),
     final: isFinalAttempt(attempt),
     chain_final: paymentOutput(attempt).chain_final,
     exit_code: exitCodeFor(attempt),
@@ -1091,7 +1092,22 @@ function attemptJson(records: Records, attempt: Attempt): Record<string, unknown
     },
     recipient: attempt.terms.recipient,
     history,
-  };
+  });
+}
+
+/**
+ * What --json prints of a listing, a quote, an attempt or a receipt. Each holds somebody else's words (a listing's fields,
+ * a seller's requirement, answer and reasons), so every string in it goes through untrustedJson, and its own `url` and
+ * `endpoint` through untrustedUrl. A string without control or invisible characters (every address, hash, amount, id and
+ * time this client checked or wrote) is printed byte for byte. The records on disk are not changed.
+ */
+function outsideJson<T extends object>(value: T): T {
+  const clean = untrustedJson(value) as Record<string, unknown>;
+  for (const key of ["url", "endpoint"]) {
+    const raw = (value as Record<string, unknown>)[key];
+    if (typeof raw === "string") clean[key] = untrustedUrl(raw);
+  }
+  return clean as T;
 }
 
 /** The outcome in words, the receipt, the service's answer and the next command. */
@@ -1164,7 +1180,7 @@ function payable(service: ServiceListing): string {
 function lastNote(attempt: Attempt): string {
   const last = attempt.history[attempt.history.length - 1];
   const note = last?.note ?? attempt.reason;
-  return note ? `: ${note}` : "";
+  return note ? `: ${untrustedText(note, 1_000)}` : "";
 }
 
 function parseParams(pairs: string[]): Record<string, string> {

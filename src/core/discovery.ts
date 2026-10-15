@@ -520,7 +520,7 @@ export async function fetchHostedCatalogue(url?: string): Promise<ServiceListing
     if (problem) throw new Error(`${process.env.SUPERSTABLES_CATALOGUE_URL !== undefined ? "SUPERSTABLES_CATALOGUE_URL" : "the catalogue URL"} ${problem}`);
     const res = await fetch(target, { headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(CATALOGUE_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const parsed = HostedCatalogueSchema.safeParse(await readDiscoveryJson(res, CATALOGUE_TIMEOUT_MS));
+    const parsed = HostedCatalogueSchema.safeParse(await readDiscoveryJson(res, CATALOGUE_TIMEOUT_MS, "catalogue"));
     if (!parsed.success) throw new Error("the response is not a catalogue");
     const listings: ServiceListing[] = [];
     for (const row of parsed.data.services) {
@@ -539,12 +539,17 @@ export async function fetchHostedCatalogue(url?: string): Promise<ServiceListing
 }
 
 /** An answer of the index or the catalogue as JSON, read under a cap and a deadline; throws when it is cut or broken. */
-async function readDiscoveryJson(res: Response, ms: number): Promise<unknown> {
+async function readDiscoveryJson(res: Response, ms: number, what: "index" | "catalogue"): Promise<unknown> {
   const { text, end } = await readBody(res, DISCOVERY_MAX_BYTES, ms, DISCOVERY_MAX_BYTES + 1);
   if (end === "cap") throw new Error("answered with more than 2 MB");
   if (end === "deadline") throw new Error("did not finish answering in time");
   if (end === "error") throw new Error("the answer broke off");
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    // JSON.parse quotes the bytes it stopped at, and they are the server's: say what went wrong in the client's own words
+    throw new Error(`the ${what} answer is not valid JSON`);
+  }
 }
 
 function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing | undefined {
@@ -644,7 +649,7 @@ async function fetchIndex(query: string, limit: number): Promise<ServiceListing[
     signal: AbortSignal.timeout(INDEX_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const body = (await readDiscoveryJson(res, INDEX_TIMEOUT_MS)) as { services?: IndexRow[] } | IndexRow[];
+  const body = (await readDiscoveryJson(res, INDEX_TIMEOUT_MS, "index")) as { services?: IndexRow[] } | IndexRow[];
   const rows = Array.isArray(body) ? body : (body.services ?? []);
   return rows.filter((row) => row && row.id && row.endpoint).map(fromIndexRow);
 }

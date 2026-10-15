@@ -13,7 +13,7 @@
 
 import type { BudgetRoute, ServiceListing } from "../core/types.js";
 import { shellWord } from "./outcome.js";
-import { LISTING_IDENTIFIER } from "../core/text.js";
+import { LISTING_IDENTIFIER, untrustedText } from "../core/text.js";
 
 /** One way to pay a listing: the commands to run, in order. */
 export interface ListingCommands {
@@ -74,7 +74,9 @@ export function listingCommands(service: ServiceListing): ListingCommands[] {
     });
   }
 
-  const price = service.payment.price?.display;
+  // the listing's own price text, as data inside the client's note: one bounded line without invisible characters
+  const listed = service.payment.price?.display;
+  const price = listed === undefined ? undefined : untrustedText(listed, 60) || undefined;
   for (const route of service.routes?.budget ?? []) {
     const url = shellWord(requestUrl(service));
     const on = `--rail ${route.rail} --chain ${route.chain}`;

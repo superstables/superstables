@@ -246,11 +246,12 @@ export function replaceKeyFile(path, text) {
   replaceSecretFile(path, text);
 }
 
-// Seller text (its 402, its answer, its headers, its errors) on one log line: control characters, newlines included, and
-// the Unicode line separators become spaces. A seller must not be able to start a line of its own on stdout, where the
-// dispatcher reads APPROVE and RESULT lines. The same rule as evm's oneLine.
+// Seller text (its 402, its answer, its headers, its errors) on one log line, at most `max` characters: control characters,
+// newlines included, become spaces; format, bidi and Unicode tag characters are removed. A seller must not be able to start a
+// line of its own on stdout, where the dispatcher reads APPROVE and RESULT lines. The same rule as untrustedText
+// (src/core/text.ts).
 export function oneLine(s, max = 300) {
-  return String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim().slice(0, max);
+  return String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, "").trim().slice(0, max);
 }
 
 // ---------------------------------------------------------------------------

@@ -157,6 +157,21 @@ export async function detectPayment(url: string, init: RequestInit = {}, options
   return readSellerChallenge(await fetch402(url, init, options));
 }
 
+/**
+ * A seller that answered with a redirect. This client follows none (a payment or a credential could be carried to a host
+ * nobody chose); fetch with `redirect: "error"` then rejects with a TypeError, "fetch failed", whose cause says
+ * "unexpected redirect" (undici). True for that rejection only.
+ */
+export function isRedirectRefusal(err: unknown): boolean {
+  const cause = err instanceof TypeError ? (err as { cause?: unknown }).cause : undefined;
+  return cause instanceof Error && /redirect/i.test(cause.message);
+}
+/** A redirect refused on a request that carried no payment: the quote's read, or pay's read before anything is signed. */
+export const SELLER_REDIRECTED = "the seller redirected, and this client follows no redirect; nothing was sent";
+/** A redirect refused on the request that carried the signed payment: the seller received it. */
+export const REDIRECTED_AFTER_SEND =
+  "the seller answered the request that carried the signed payment with a redirect, which this client does not follow; the seller received the payment and may still settle it, so whether it was paid is unknown until the chain shows it";
+
 async function fetch402(
   url: string,
   init: RequestInit,
@@ -181,6 +196,7 @@ async function fetch402(
   } catch (err) {
     // An abort from our own deadline reads as what it is, not as an AbortError.
     if (controller.signal.aborted && controller.signal.reason instanceof DeadlineError) throw controller.signal.reason;
+    if (isRedirectRefusal(err)) throw new Error(SELLER_REDIRECTED);
     throw err;
   } finally {
     clearTimeout(timer);
