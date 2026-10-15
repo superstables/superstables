@@ -4,11 +4,12 @@
 // and the whole history stays readable with `tail`. The files hold no key and no secret,
 // but they do say what was bought and for how much, so they are created 0600.
 
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { networkFor } from "./chain.js";
-import { ensureDir, recordsDir } from "./home.js";
+import { homeDir, recordsDir } from "./home.js";
+import { ensurePrivateDir, syncDirectory } from "./private-dir.mjs";
 import { CAP_DECIMALS, capUnit, capUnits, policyAmount } from "./policy.js";
 import type { thisProcess } from "./lock.js";
 import type { Attempt, Quote, Receipt } from "./types.js";
@@ -82,6 +83,9 @@ function txKey(network: string, transaction: string): string {
 /** 0600: only the owner of the machine reads their own payment history. */
 const FILE_MODE = 0o600;
 
+/** The three files the records live in, for the count of lines that could not be read. */
+const RECORD_FILES = ["quotes.jsonl", "attempts.jsonl", "receipts.jsonl"] as const;
+
 interface Identified {
   id: string;
 }
@@ -151,13 +155,24 @@ export class Records {
    */
   claimQuote(quoteId: string, attemptId: string): string | undefined {
     const dir = join(this.dir, "claims");
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    privateDir(dir);
     const path = join(dir, claimName(quoteId));
+    let fd: number | undefined;
     try {
-      writeFileSync(path, attemptId, { flag: "wx", mode: FILE_MODE });
-      return undefined;
+      fd = openSync(path, "wx", FILE_MODE);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+    if (fd !== undefined) {
+      // on disk, name included, before anything is signed for this quote
+      try {
+        writeAllSync(fd, attemptId);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      syncDirectory(dir);
+      return undefined;
     }
     try {
       return readFileSync(path, "utf8").trim();
@@ -224,11 +239,18 @@ export class Records {
    */
   savePendingAnswer(receipt: Receipt): void {
     const dir = join(this.dir, "pending-answers");
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    privateDir(dir);
     const path = join(dir, `${claimName(receipt.id)}.json`);
     const temporary = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-    writeFileSync(temporary, JSON.stringify(receipt), { flag: "wx", mode: FILE_MODE });
+    const fd = openSync(temporary, "wx", FILE_MODE);
+    try {
+      writeAllSync(fd, JSON.stringify(receipt));
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     renameSync(temporary, path);
+    syncDirectory(dir);
   }
 
   /** The seller's answer waiting to be recorded for an attempt, if there is one. */
@@ -349,12 +371,21 @@ export class Records {
   }
 
   private append(file: string, row: Identified): void {
-    ensureDir(this.dir);
+    privateDir(this.dir);
     const path = this.path(file);
     // If the last write was cut short (a crash, a full disk), start a new line rather than
     // gluing this record onto the broken one — then only the torn line is ever lost.
     const prefix = endsWithNewline(path) ? "" : "\n";
-    appendFileSync(path, `${prefix}${JSON.stringify(row)}\n`, { mode: FILE_MODE });
+    const created = !existsSync(path);
+    const fd = openSync(path, "a", FILE_MODE);
+    // the line is on disk before the caller goes on: a payment's `submitting` line before its credential leaves
+    try {
+      writeAllSync(fd, `${prefix}${JSON.stringify(row)}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    if (created) syncDirectory(this.dir);
   }
 
   /** Latest row per id. Attempts and receipts read without a runner (see attemptRunner), and chainFinal null if unset. */
@@ -368,19 +399,25 @@ export class Records {
     }
     return rows;
   }
+
+  /** Lines in the record files that could not be read, per file. Reading skips them; `superstables doctor` reports them. */
+  skippedLines(): { file: string; lines: number }[] {
+    return RECORD_FILES.map((file) => ({ file, lines: readRows(this.path(file)).skipped })).filter((f) => f.lines > 0);
+  }
 }
 
 /**
  * Reads a file into "latest row per id". A half-written last line (a crash mid-append,
- * a truncated copy) is skipped rather than allowed to hide every record behind it.
+ * a truncated copy) is skipped rather than allowed to hide every record behind it, and counted (skippedLines).
  */
-function rowsById<T extends Identified>(path: string): Map<string, T> {
+function readRows<T extends Identified>(path: string): { rows: Map<string, T>; skipped: number } {
   const rows = new Map<string, T>();
+  let skipped = 0;
   let text: string;
   try {
     text = readFileSync(path, "utf8");
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return rows;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { rows, skipped };
     throw err;
   }
   for (const line of text.split("\n")) {
@@ -389,11 +426,17 @@ function rowsById<T extends Identified>(path: string): Map<string, T> {
     try {
       row = JSON.parse(line) as T;
     } catch {
-      continue; // a torn line: skip it, keep reading
+      skipped++; // a torn line: skip it, keep reading
+      continue;
     }
     if (row && typeof row.id === "string") rows.set(row.id, row);
+    else skipped++;
   }
-  return rows;
+  return { rows, skipped };
+}
+
+function rowsById<T extends Identified>(path: string): Map<string, T> {
+  return readRows<T>(path).rows;
 }
 
 /** A claim's file name: a hash of the quote id, so no id can name a path. */
@@ -422,4 +465,19 @@ function endsWithNewline(path: string): boolean {
 function newestFirst<T>(rows: Map<string, T>, at: (row: T) => string | undefined, limit?: number): T[] {
   const all = [...rows.values()].sort((a, b) => (at(b) ?? "").localeCompare(at(a) ?? ""));
   return limit === undefined ? all : all.slice(0, Math.max(0, limit));
+}
+
+/** Makes a records folder private; a folder created now is flushed into its parent. */
+function privateDir(path: string): void {
+  for (const made of ensurePrivateDir(path, { root: homeDir() })) syncDirectory(dirname(made));
+}
+
+/** writeSync may write less than asked; keep going, and throw when no progress is made. */
+function writeAllSync(fd: number, text: string): void {
+  const bytes = Buffer.from(text, "utf8");
+  for (let at = 0; at < bytes.length; ) {
+    const n = writeSync(fd, bytes, at, bytes.length - at);
+    if (!(n > 0)) throw new Error(`short write: ${at} of ${bytes.length} bytes`);
+    at += n;
+  }
 }

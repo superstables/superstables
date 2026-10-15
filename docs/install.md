@@ -125,7 +125,7 @@ superstables setup
 superstables doctor
 ```
 
-`doctor` checks the machine, one line per item: that the home directory and policy are in place,
+`doctor` checks the machine, one line per item: that the home directory, the payment records and the policy are in place,
 which account last connected, that the approval port is free, and that the demo service, the
 index and the facilitators answer:
 
@@ -134,6 +134,7 @@ index and the facilitators answer:
   home                     /home/you/.superstables
 
 ✓ home directory           /home/you/.superstables (writable)
+✓ payment records          /home/you/.superstables/records: every line reads
 ✓ spend policy             /home/you/.superstables/policy.yaml: up to 0.05 USDC per payment, 1 USDC per day
 ✓ browser wallet           no account connected yet: MetaMask connects when the first approval link opens
 ✓ approval page            http://127.0.0.1:4412 is free; the agent serves the page itself

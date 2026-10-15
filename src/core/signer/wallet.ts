@@ -3,13 +3,13 @@
 // Every outcome that is not a signature is a refusal with a reason, never an exception the
 // caller has to guess at — "the owner said no" is an answer, and the agent should say it.
 
-import { readFileSync } from "node:fs";
 import { agentTokenPath, walletUrl } from "../home.js";
 import { readBody } from "../http.js";
 import { untrustedText } from "../text.js";
 import { evmNetworkFor, networkFor } from "../chain.js";
 import type { WalletRequestView, WalletStatus } from "../types.js";
 import { LOCAL_WALLET_EVM_ONLY, SignRefused, type Eip3009SignResult, type SignHooks, type SignRequest, type Signer } from "./types.js";
+import { readSecretFile } from "../../wallet/keystore.js";
 
 export interface WalletSignerOptions {
   /** Where the wallet is listening. Loopback only in this release. */
@@ -52,10 +52,13 @@ function wireFor(options: WalletSignerOptions): WalletWire {
       if (options.agentToken !== undefined) return options.agentToken;
       const fromEnv = process.env.SUPERSTABLES_WALLET_AGENT_TOKEN;
       if (fromEnv) return fromEnv;
+      // One open, checked on what it opened: a regular file only this user can read. A FIFO would stop every command for
+      // good, and a token other users can read is not sent.
       try {
-        return readFileSync(agentTokenPath(), "utf8").trim();
-      } catch {
-        return "";
+        return readSecretFile(agentTokenPath(), "the wallet's agent token").trim();
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+        throw new SignRefused("unavailable", `${(err as Error).message}; the token was not sent`);
       }
     },
     fetchImpl,
@@ -78,7 +81,8 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof SignRefused) throw err;
     throw new SignRefused("unavailable", WALLET_DOWN);
   }
   if (res.status === 401 || res.status === 403 || res.status >= 500) {

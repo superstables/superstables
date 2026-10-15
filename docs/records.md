@@ -47,8 +47,13 @@ grep -o '"state":"[^"]*"' ~/.superstables/records/attempts.jsonl | tail -5
 With `jq` installed, `jq -c '{id, state, reason}'` over the same file reads better. Neither is
 required: these are lines of JSON, and `tail` is a perfectly good reader.
 
+Each line is flushed to disk before the client goes on, so a payment's `submitting` line, and the claim on
+its quote, are on disk before the signed payment leaves this machine.
+
 Two consequences worth knowing. A line torn by a crash or a full disk is skipped on read
-rather than hiding every record behind it, so a damaged file still answers. And the files
+rather than hiding every record behind it, so a damaged file still answers. `superstables doctor`
+counts the lines it could not read and names the file (`payment records  1 unreadable line …`): a
+payment on such a line is not shown and does not count toward the daily cap. And the files
 contain no key and no signature, but they do say what was bought and for how much, which is
 why they are 0600.
 

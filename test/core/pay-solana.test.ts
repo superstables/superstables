@@ -641,7 +641,7 @@ describe("a Single purchase on Solana devnet", () => {
     let locked!: () => void;
     const holding = new Promise<void>((resolve) => (locked = resolve));
     // Another process holds the lock for longer than the run waits for it.
-    mkdirSync(s.records.dir, { recursive: true });
+    mkdirSync(s.records.dir, { recursive: true, mode: 0o700 });
     const holder = withFileLock(join(s.records.dir, "reconcile.lock"), async () => {
       locked();
       await release;

@@ -25,6 +25,15 @@ In the default `pay` flow, the owner's signing key stays in their browser wallet
 does not generate, read or store it. That does not mean the machine holds no keys: the browser
 wallet keeps its own, and the local wallet mode and budgets store separate keys.
 
+The client's own folders are private. Before it writes to its home folder (`~/.superstables`, or
+`SUPERSTABLES_HOME`), its payment records (`records/`) or the local wallet's folder (`wallet/`), it
+checks that each is a folder you own that no other user can write to, and creates a missing one with
+mode 0700. A folder under the home that is a symbolic link, belongs to someone else or that others
+can write to is refused with the reason, and a folder others can only read is set back to 0700. The
+home folder itself may be a link to such a folder. Budget folders (`keys/budget/`, `budget/`) are
+created with mode 0700 but not yet checked this way. The client reads the local wallet's agent token
+only from a regular file that only you can read.
+
 Before the owner signs, the client builds an authorization and serves a page that shows its terms.
 After it checks the signature it gets back, it sends the authorization to the seller, which has a
 facilitator settle it.

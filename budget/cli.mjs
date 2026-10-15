@@ -1145,7 +1145,8 @@ const readJournal = (f) => { const p = journal(f); try { const j = existsSync(p)
  * "no journal", because its journal could not be reached. The rail's reader (journal.mjs readJournalFile) then answers unknown.
  */
 const journalPresent = (f) => { try { statSync(journal(f)); return true; } catch (err) { return err?.code !== "ENOENT"; } };
-const newOp = () => { const d = new Date().toISOString().replace(/\D/g, "").slice(0, 14); return `rb-${d}-${Math.random().toString(16).slice(2, 6)}`; };
+// 64 random bits: an op id names a journal and its locks, and must neither collide nor be guessed
+const newOp = () => { const d = new Date().toISOString().replace(/\D/g, "").slice(0, 14); return `rb-${d}-${Buffer.from(globalThis.crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`; };
 const txOf = (text) => [...text.matchAll(/(?:tx hash|signature):\s*(\S+)|\/tx\/(0x[0-9a-fA-F]{64})/gi)].map((m) => m[1] ?? m[2]).pop();
 
 // ---- state -> exit code (from the rail's RESULT state, never from the rail's own exit code) ---------
