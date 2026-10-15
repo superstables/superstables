@@ -14,6 +14,7 @@ const SLOW = [
   "test/budget/hosted-cancel.test.ts",
   "test/budget/hosted.test.ts",
   "test/budget/journal-durability.test.ts",
+  "test/budget/journal-shape.test.ts",
   "test/budget/journal-unreadable.test.ts",
   "test/budget/link-gate.test.ts",
   "test/budget/lock-macos-side-effects.test.ts",
