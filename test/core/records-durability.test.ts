@@ -126,4 +126,3 @@ describe("a seller's answer kept for later", () => {
     expect(folder).toBeGreaterThan(file);
   });
 });
-
