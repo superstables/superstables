@@ -437,7 +437,7 @@ if (own && own.err && own.final === false) {
 }
 if (own && own.err && own.final !== false) {
   updateOp(opId, { state: "failed", tx: own.sig, error: own.err, delivered: false }, "own transaction failed on chain");
-  console.log(`\n=> Our transfer FAILED on chain: ${JSON.stringify(own.err)}  ${explorerTx(own.sig)}`);
+  console.log(`\n=> Our transfer FAILED on chain: ${oneLine(JSON.stringify(own.err), 300)}  ${explorerTx(own.sig)}`);
   finish("failed", EXIT.FAILED, { tx: own.sig, delivered: false, next: "nothing moved; fix the cause, then buy again with a new --op" });
 }
 
@@ -451,7 +451,7 @@ if (!deliveredHttp && !readError) {
 }
 if (sim?.value?.err && !String(sim.value.err).startsWith("simulation unavailable")) {
   const failLine = (sim.value.logs ?? []).filter((l) => /failed|error|insufficient/i.test(l)).slice(-1)[0] ?? null;
-  console.log(`\n=> The chain refuses this payment now: ${JSON.stringify(sim.value.err)}${failLine ? ` | ${oneLine(failLine, 300)}` : ""}`);
+  console.log(`\n=> The chain refuses this payment now: ${oneLine(JSON.stringify(sim.value.err), 300)}${failLine ? ` | ${oneLine(failLine, 300)}` : ""}`);
   console.log("   Our transaction was not found on chain.");
   // refused for good only once the signed transaction can no longer land (refusalIsFinal); until then it is unknown
   const assessment = await assessOp(conn, rec).catch(() => ({ verdict: "pending" }));
@@ -461,7 +461,7 @@ if (sim?.value?.err && !String(sim.value.err).startsWith("simulation unavailable
   }
   if (assessment.verdict === "failed") {
     updateOp(opId, { state: "failed", tx: assessment.tx, error: assessment.err, delivered: false }, "own transaction landed and failed");
-    finish("failed", EXIT.FAILED, { tx: assessment.tx, delivered: false, reason: JSON.stringify(assessment.err), next: "nothing moved; fix the cause, then buy again with a new --op" });
+    finish("failed", EXIT.FAILED, { tx: assessment.tx, delivered: false, reason: oneLine(JSON.stringify(assessment.err), 300), next: "nothing moved; fix the cause, then buy again with a new --op" });
   }
   if (assessment.verdict === "not_found") {
     updateOp(opId, { state: "refused_chain", chainError: sim.value.err, chainLog: failLine, delivered: false }, "chain refuses the transaction (simulation), and its blockhash has expired");

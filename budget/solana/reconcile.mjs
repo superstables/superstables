@@ -97,8 +97,8 @@ if (a.verdict === "no_tx") {
   emit(result("settled", { tx: a.tx, debit, chain_final: alreadyFinal ? rec.final ?? null : a.final !== false, next: a.final === false ? `the payment landed, but is not final on chain yet. Run superstables budget reconcile --rail solana --op ${opId} later. Do not pay again.${rec.delivered === false ? " Contact the seller." : ""}` : rec.delivered === false ? `settled but not delivered: do not pay again; contact the seller with tx ${a.tx}` : "none" }), EXIT.OK);
 } else if (a.verdict === "failed") {
   updateOp(opId, { state: "failed", tx: a.tx, error: a.err }, "reconcile: own transaction failed on chain");
-  console.log(`Failed on chain: ${JSON.stringify(a.err)}. Nothing moved.`);
-  emit(result("failed", { tx: a.tx, delivered: false, reason: JSON.stringify(a.err), next: "nothing moved; buy again with a new --op" }), EXIT.OK);
+  console.log(`Failed on chain: ${oneLine(JSON.stringify(a.err), 300)}. Nothing moved.`);
+  emit(result("failed", { tx: a.tx, delivered: false, reason: oneLine(JSON.stringify(a.err), 300), next: "nothing moved; buy again with a new --op" }), EXIT.OK);
 } else if (a.verdict === "not_found" && !rec.inclusionObserved) {
   updateOp(opId, { state: "not_found" }, `reconcile: no transaction and the blockhash expired (height ${a.blockHeight} > ${a.lastValidBlockHeight})`);
   console.log(`Not found: finalized block height ${a.blockHeight} is past ${a.lastValidBlockHeight}, and final history proves no transaction landed. Nothing was paid.`);
