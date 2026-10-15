@@ -5,7 +5,7 @@
 //
 // Pinned in code (src/core/chain.ts): Solana devnet (its CAIP-2 id, and the RPC's genesis hash before anything is built)
 // and Circle's devnet USDC mint. Refused before the owner is asked: another cluster or a mainnet, another token, an x402
-// version other than 2, an offer whose seller does not pay the network fee, a malformed amount, recipient or fee payer.
+// version other than 2, an offer whose seller does not pay the network fee, a malformed amount, recipient or fee payer, the all-zero address or the mint as recipient.
 //
 // What ties a transaction on chain to this payment is the owner's signature: it is over the exact message that was built,
 // so a transaction that carries it is this transfer. A settlement the seller names is checked for it, and for the
@@ -29,6 +29,8 @@ const NETWORKS = [SOLANA_DEVNET] as const;
 const MINT = SOLANA_DEVNET.token.address;
 const DECIMALS = SOLANA_DEVNET.token.decimals;
 const MAX_MEMO_BYTES = 256;
+/** The all-zero public key (the system program's id): nobody holds its key, so a transfer to it is burnt. */
+const ALL_ZERO = "11111111111111111111111111111111";
 const MAX_TIMEOUT_SECONDS = 3_600;
 const MAX_OFFER_CHARS = 4_000;
 /** An uncertain payment is looked for among the owner's token account's transactions, this many to a page... */
@@ -90,6 +92,8 @@ export const solanaRail: X402Rail = {
     const amountAtomic = typeof accept.amount === "string" ? accept.amount : "";
     if (!/^[1-9]\d{0,17}$/.test(amountAtomic)) return refuse("the offered amount is missing or malformed");
     if (!isSolanaAddress(accept.payTo)) return refuse("the recipient (payTo) is missing or malformed");
+    if (accept.payTo === ALL_ZERO) return refuse("the recipient is the all-zero address");
+    if (accept.payTo === MINT) return refuse("the recipient is the USDC mint itself");
     const timeout = accept.maxTimeoutSeconds ?? 300;
     if (!Number.isInteger(timeout) || timeout <= 0 || timeout > MAX_TIMEOUT_SECONDS) {
       return refuse(`the offer's payment window is outside what is signed (at most ${MAX_TIMEOUT_SECONDS} seconds)`);

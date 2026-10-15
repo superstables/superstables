@@ -18,7 +18,7 @@
 
 import type { Hex } from "viem";
 import { getAddress } from "viem";
-import { TEMPO_MODERATO, isAddress } from "../../chain.js";
+import { TEMPO_MODERATO, isAddress, isSameAddress } from "../../chain.js";
 import type { MppChallenge } from "../../mpp.js";
 import { TEMPO_SEND_MARGIN_MS, mppMemo, transferCall } from "../../rails/tempo.js";
 import type { StepAnswer, StepContext, StepRecord, WalletStep } from "./types.js";
@@ -128,6 +128,9 @@ export const tempoStep: WalletStep = {
   },
 
   async prepare(record: StepRecord, account: string): Promise<StepAnswer> {
+    if (isSameAddress(record.verified.recipient, account)) {
+      return { http: 409, body: { error: "the recipient is the account paying, so nothing was prepared for your wallet to send. Connect another account, or reject" } };
+    }
     const challenge = challengeOf(record);
     const memo = mppMemo(challenge.id, challenge.realm);
     const call = transferCall({ from: account, recipient: record.verified.recipient, amountAtomic: record.verified.amountAtomic, memo });
