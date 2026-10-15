@@ -9,8 +9,9 @@
 //   cli/main.mjs               src/cli/main.ts; `superstables budget` runs ../budget/cli.mjs, as dist/cli/main.js does
 //   budget/cli.mjs, evm/...    the budget dispatcher and rail scripts, laid out as in dist/budget/
 //   lib/                       shared code
-//   VERSION.json               the version, commit and build time; budget/VERSION.json is a copy for `budget --version`
+//   VERSION.json               the version, commit and the commit's time; budget/VERSION.json is a copy for `budget --version`
 //   THIRD_PARTY_NOTICES.txt    every bundled package with its version, licence and full licence text
+//   sbom.cdx.json              a CycloneDX SBOM of the bundled packages (everything the skill runs is bundled)
 //
 // node scripts/cli-build.mjs [--outdir <dir>] [--version <version>]   default build/cli/
 
@@ -18,6 +19,7 @@ import { writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { budgetEntryPoints, buildStandalone, checkSelfContained } from "./budget-build.mjs";
+import { writeSbom } from "./sbom.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -45,6 +47,8 @@ export async function buildCli(outdir = join(root, "build", "cli"), version) {
     versionFiles: ["VERSION.json", "budget/VERSION.json"],
   });
   writeFileSync(join(outdir, "superstables.mjs"), ENTRY);
+  // Everything the skill runs is bundled: its SBOM lists the bundle and nothing installed.
+  writeSbom(join(outdir, "sbom.cdx.json"), { root, stamp: built.version, installed: [], bundled: built.packages });
   checkSelfContained(outdir);
   console.log(`cli: ${built.summary}`);
   return built;
