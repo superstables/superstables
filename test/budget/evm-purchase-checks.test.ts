@@ -2,7 +2,7 @@
 // agent key take turns; on Arc a price left in the agent key is not gas reserve. Each case runs the real `budget` CLI against an
 // in-memory chain (test/helpers/fake-evm.ts) and a seller on this computer.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { authorizationTypes } from "@x402/evm";
@@ -375,6 +375,12 @@ describe("the key lock", () => {
     for (let i = 0; i < 1200 && !/waiting for a purchase on this agent key/.test(pending.out()); i++) await new Promise((res) => setTimeout(res, 50));
     lock.release();
     const r = await pending;
+    // recover runs on in the background to the owner's page and waits there: stop it, so no process outlives the test
+    const approvals = join(s.home.home, "budget", "approvals");
+    for (const f of existsSync(approvals) ? readdirSync(approvals).filter((n) => n.endsWith(".json")) : []) {
+      const rec = JSON.parse(readFileSync(join(approvals, f), "utf8")) as { pid?: number; railPgid?: number };
+      for (const group of [rec.railPgid, rec.pid]) if (group) try { process.kill(-group, "SIGKILL"); } catch {}
+    }
     expect(r.stdout + r.stderr).toContain("waiting for a purchase on this agent key to finish before recover sends anything");
     expect(r.stdout).not.toContain("agent_key_busy");
   }, 90_000);
