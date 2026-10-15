@@ -361,7 +361,10 @@ with the holder, lock path and owner recovery guidance in next. Never buy again 
       usage: "superstables budget recover --rail evm [--chain C] [--op ID] [--timeout S] [--no-open] [--detach|--wait]",
       about: `evm only. Stops the allowance first, then returns stranded USDC (a seller refund, or a purchase that pulled but did not
 settle) from the agent key to the owner. Prints the plan, then runs it: the agent key signs its own steps; the owner
-approves in their wallet only what the agent cannot do (the rest of the allowance, gas for the agent).
+approves in their wallet approve(agent, 0), unless the agent's own revoke brought the allowance to 0 in this run, and gas
+for the agent when it has too little. A purchase's price goes back only once its authorization can no longer settle at a
+final block. Without --op it sweeps nothing while a journal cannot be read or an operation can still move money (unknown,
+exit 5).
 tempo and solana have nothing to recover: the agent never holds the budget.
 
 ${RECOVER_OWNER_HELP}`,
