@@ -228,12 +228,12 @@ including pending, in-flight and uncertain payments; the local wallet counts the
 its own `wallet/audit.jsonl`. Both add up whole token units (millionths of a dollar for the dollar
 stablecoins), never floating-point decimals. On the browser signer's path, from the payment records
 to the policy check, totals and comparisons with the cap are exact, so a cap is reached exactly.
-The local wallet daemon is not exact end to end: it converts its whole-unit total to a decimal
-number before the policy check, and a total beyond about nine billion dollars can lose a unit in that
-conversion. That limitation remains for the local wallet. For the browser signer, a
-record whose amount cannot be read makes today's total unknown, and the daily cap then refuses every
-payment until the record is fixed. Neither reads chain history: delete those records and the count
-starts again.
+The local wallet daemon is not exact end to end: it passes its whole-unit total, and the payment's
+amount, to the policy check as decimal numbers, and from about 8.6 billion dollars upward that
+conversion can be off by a unit or more in either direction. That limitation remains for the local
+wallet. For the browser signer, a record whose amount cannot be read makes today's total unknown,
+and the daily cap then refuses every payment until the record is fixed. Neither reads chain
+history: delete those records and the count starts again.
 
 ## Testnet only
 
@@ -438,10 +438,11 @@ undo an owner signature or a transaction already sent through setup on superstab
   purchase per `--op`. On `evm`, before the pull, it has the x402 client build the payment it would
   send and checks it against the option those checks passed, including the token's EIP-712 domain
   name and version; it then signs once, for at most ten minutes, and purchases that share an agent
-  key take turns. That check of the built payment allows its validity window to run up to five
-  seconds (a clock tolerance) beyond the seller's offered window. On Arc Testnet, a price an earlier purchase left in the agent key is not counted
-  as gas reserve. A stolen agent key skips all of these and can spend what is left of the
-  budget, on `evm` and `solana` to any address. Keep budgets small.
+  key take turns. That check of the built payment lets it expire up to five seconds (a clock
+  tolerance) later than the seller's offered timeout allows. On Arc Testnet, a price an earlier
+  purchase left in the agent key is not counted as gas reserve. A stolen agent key skips all of
+  these and can spend what is left of the budget, on `evm` and `solana` to any address. Keep
+  budgets small.
 - **Setup is a trusted step.** Whoever holds setup's approval link, the agent included, can complete it
   with a key of their own: the page's origin check stops other websites, not local programs. So the
   owner runs it, and checks the owner address that setup prints and every owner page shows. Under
@@ -493,8 +494,9 @@ undo an owner signature or a transaction already sent through setup on superstab
   simulation it cannot read is unknown (exit 5). When it sends a transaction, it reports `revoked`
   only after its own transaction and a read that shows it. The exception is the `tempo` case just
   described: the key reads revoked, and the keychain refuses the owner's simulated `revokeKey` with
-  a structured already-revoked or not-found error. The command then reports `state: "ok"`,
-  `revoked: true` and `tx: {}`, with nothing sent. That is the command's own result. `budget status`
+  `KeyAlreadyRevoked` or `KeyNotFound`, decoded from the revert data or, without it, named in the
+  RPC's error text. The command then reports `state: "ok"`, `revoked: true` and `tx: {}`, with
+  nothing sent. That is the command's own result. `budget status`
   says `revoked: true` only for a revoke this machine recorded that the chain still shows (on
   `tempo`, the keychain's revoked flag): an allowance or delegate that reads 0 is reported as
   `remaining: "0"`, because spent, never granted, revoked elsewhere and a wrong read all look the
