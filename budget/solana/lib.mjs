@@ -14,6 +14,7 @@ import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret
 import { DEFAULT_RPC, rpcFromEnv } from "../rpc.mjs";
 import { markSend } from "../proof.mjs";
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
+import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 import {
   Connection,
   Keypair,
@@ -49,6 +50,18 @@ export const RPC_URL = (() => {
   return r.url;
 })();
 export const EXPLORER_CLUSTER = "?cluster=devnet";
+/** Solana devnet is a testnet. The chain gate (../../src/core/chain-gate.js) signs on nothing else in this build. */
+export const TESTNET = true;
+/** The chain gate for this rail's one chain: "" when this build may sign, ask the owner's wallet or send on it, else why not. */
+const solanaGate = () => chainGate({ rail: "solana", key: "solana-devnet", testnet: TESTNET }, chainGateSettings());
+// No Solana budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a
+// key file or asks an RPC anything.
+if (solanaGate()) {
+  const command = String(process.argv[1] ?? "").split(/[\\/]/).pop().replace(/\.(?:ts|mjs)$/, "") || "solana";
+  console.error(`REFUSED: ${solanaGate()}. Nothing was signed or sent.`);
+  console.log(`RESULT ${JSON.stringify({ ok: false, command, rail: "solana", chain: "devnet", state: "refused_precheck", reason: solanaGate(), next: "nothing was signed or sent; this build signs on Solana devnet only" })}`);
+  process.exit(3);
+}
 export const USDC_MINT = new PublicKey(
   "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 );
@@ -75,6 +88,8 @@ export const CLUSTER_NEXT = "unset SUPERSTABLES_SOLANA_RPC, or set it to a Solan
  * genesis that cannot be read is a reason too.
  */
 export async function clusterProblem(conn) {
+  const gate = solanaGate();
+  if (gate) return gate;
   let genesis;
   try {
     genesis = await retryRead(() => conn.getGenesisHash());

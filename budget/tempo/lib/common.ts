@@ -11,10 +11,11 @@ import { Account, Addresses, createClient, http } from 'viem/tempo'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 
-import { CHAIN_ID as CHAIN_ID_, RPC_URL as RPC_URL_, TOKEN_DECIMALS as TOKEN_DECIMALS_, TOKEN_LABEL as TOKEN_LABEL_ } from './constants.mjs'
+import { CHAIN_ID as CHAIN_ID_, RPC_URL as RPC_URL_, TESTNET, TOKEN_DECIMALS as TOKEN_DECIMALS_, TOKEN_LABEL as TOKEN_LABEL_ } from './constants.mjs'
 import { agentKeyFile, ownerKeyFile, publicFile } from '../../paths.mjs'
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from '../../secret-file.mjs'
 import { markSend } from '../../proof.mjs'
+import { chainGate, chainGateSettings } from '../../../src/core/chain-gate.js'
 
 export const RPC_URL: string = RPC_URL_
 export const EXPLORER_BASE = 'https://explore.testnet.tempo.xyz'
@@ -209,7 +210,22 @@ export function accessKeyAccountForOwner(ownerAddress: Address, privateKey: Hex)
   return Account.fromSecp256k1(privateKey, { access: ownerAddress })
 }
 
+/** The chain gate for this rail's one chain: '' when this build may sign, ask the owner's wallet or send on it, else why not. */
+export function tempoGate(): string {
+  return chainGate({ rail: 'tempo', key: 'tempo-moderato', testnet: TESTNET }, chainGateSettings())
+}
+// No Tempo budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a key
+// file or asks an RPC anything.
+if (tempoGate()) {
+  const command = String(process.argv[1] ?? '').split(/[\\/]/).pop()!.replace(/\.(?:ts|mjs)$/, '') || 'tempo'
+  console.error(`REFUSED: ${tempoGate()}. Nothing was signed or sent.`)
+  console.log(`RESULT ${JSON.stringify({ ok: false, command, rail: 'tempo', chain: 'moderato', state: 'refused_precheck', reason: tempoGate(), next: 'nothing was signed or sent; this build signs on Tempo Moderato only' })}`)
+  process.exit(3)
+}
+
 export function makeClient(account?: ReturnType<typeof ownerAccount> | ReturnType<typeof agentAccessKeyAccount>) {
+  const gate = tempoGate()
+  if (gate) throw new Error(`${gate}; nothing was signed or sent`)
   return createClient({
     account,
     testnet: true,

@@ -83,6 +83,8 @@ function evm(input: {
   key: string;
   chainId: number;
   label: string;
+  /** Whether the chain is a testnet. Stated by each entry: the chain gate (./chain-gate.js) signs on testnets only. */
+  testnet: boolean;
   v1Name?: string;
   rpc: string;
   defaultRpc?: string;
@@ -104,7 +106,7 @@ function evm(input: {
     v1Name: input.v1Name ?? "",
     chainId: input.chainId,
     label: input.label,
-    testnet: true,
+    testnet: input.testnet,
     explorer: input.explorer,
     rpc: input.rpc,
     defaultRpc: input.defaultRpc ?? input.rpc,
@@ -122,6 +124,7 @@ export const BASE_SEPOLIA: EvmNetwork = evm({
   key: "base-sepolia",
   chainId: 84532,
   label: "Base Sepolia (testnet)",
+  testnet: true,
   v1Name: "base-sepolia",
   rpc: process.env.SUPERSTABLES_RPC_URL ?? "https://sepolia.base.org",
   defaultRpc: "https://sepolia.base.org",
@@ -140,6 +143,7 @@ export const ARC_TESTNET: EvmNetwork = evm({
   key: "arc-testnet",
   chainId: 5042002,
   label: "Arc Testnet",
+  testnet: true,
   rpc: "https://rpc.testnet.arc.network",
   explorer: "https://explorer.testnet.arc.io",
   usdc: "0x3600000000000000000000000000000000000000",
@@ -153,6 +157,7 @@ export const ARBITRUM_SEPOLIA: EvmNetwork = evm({
   key: "arbitrum-sepolia",
   chainId: 421614,
   label: "Arbitrum Sepolia (testnet)",
+  testnet: true,
   rpc: "https://sepolia-rollup.arbitrum.io/rpc",
   explorer: "https://sepolia.arbiscan.io",
   usdc: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
@@ -166,6 +171,7 @@ export const POLYGON_AMOY: EvmNetwork = evm({
   key: "polygon-amoy",
   chainId: 80002,
   label: "Polygon Amoy (testnet)",
+  testnet: true,
   v1Name: "polygon-amoy",
   rpc: "https://polygon-amoy-bor-rpc.publicnode.com",
   explorer: "https://amoy.polygonscan.com",
@@ -181,6 +187,7 @@ export const SKALE_BASE_SEPOLIA: EvmNetwork = evm({
   key: "skale-base-sepolia",
   chainId: 324705682,
   label: "SKALE Base Sepolia (testnet)",
+  testnet: true,
   v1Name: "skale-base-sepolia",
   rpc: "https://base-sepolia-testnet.skalenodes.com/v1/jubilant-horrible-ancha",
   explorer: "https://base-sepolia-testnet-explorer.skalenodes.com",
@@ -197,6 +204,7 @@ export const ETHEREUM_SEPOLIA: EvmNetwork = evm({
   key: "ethereum-sepolia",
   chainId: 11155111,
   label: "Ethereum Sepolia (testnet)",
+  testnet: true,
   v1Name: "sepolia",
   rpc: "https://ethereum-sepolia-rpc.publicnode.com",
   explorer: "https://sepolia.etherscan.io",
@@ -213,6 +221,7 @@ export const ROBINHOOD_TESTNET: EvmNetwork = evm({
   key: "robinhood-testnet",
   chainId: 46630,
   label: "Robinhood Chain Testnet",
+  testnet: true,
   rpc: "https://rpc.testnet.chain.robinhood.com",
   explorer: "https://explorer.testnet.chain.robinhood.com",
   usdc: "0x7E955252E15c84f5768B83c41a71F9eba181802F",
