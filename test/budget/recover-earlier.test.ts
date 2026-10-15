@@ -179,7 +179,7 @@ describe("recover.ts hands the completed revoke to the later owner steps", () =>
       readUntil: async <T,>(read: () => Promise<T>) => read(),
       writePublic: () => {},
     }));
-    vi.doMock("../../budget/evm/ops.js", async (importOriginal) => ({ ...((await importOriginal()) as object), pendingJournalsFor: () => [] }));
+    vi.doMock("../../budget/evm/ops.js", async (importOriginal) => ({ ...((await importOriginal()) as object), pendingJournalsFor: () => [], scanJournals: () => ({ journals: [], unreadable: [] }), sweepBlockers: async () => ({ unreadable: [], undecided: [] }) }));
     vi.doMock("../../budget/evm/owner.js", async (importOriginal) => ({
       ...((await importOriginal()) as object),
       revokeInWallet: async (...a: unknown[]) => { revokeCalls.push(a); return REVOKE_TX; },

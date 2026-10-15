@@ -433,6 +433,15 @@ undo an owner signature or a transaction already sent through setup on superstab
   client never sees it before it is sent; it reads it from the chain afterwards and reports any
   difference from the plan, like on `evm` (see
   [Budget approvals and Single purchase on superstables.com](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
+- **`recover` acts only on what is final.** On `evm`, a purchase's price goes back to the owner (after a
+  failed `buy`, or from `recover`) only once its payment authorization can no longer settle at a final
+  block: never signed, cancelled in a final block, or expired by a final block's time. A cancellation
+  that is mined but not final leaves the price in the agent key and the outcome unknown (exit 5);
+  `recover --op ID` returns it once the cancellation is final. `recover` asks the owner for
+  `approve(agent, 0)` unless the agent's own revoke in that run brought the allowance to 0 and a later
+  read shows 0. Without `--op` it sweeps the rest of the agent key only when every journal of that
+  chain can be read and no operation of the agent can still move money; otherwise it names them,
+  sweeps nothing and answers unknown (exit 5). Its amounts are exact token units, never floating point.
 - **Revoke ends the permission once it is confirmed on chain.** The owner approves it in their
   wallet: `approve(agent, 0)` on `evm`, `revokeKey` on `tempo`, the SPL `Revoke` on `solana`. It
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds

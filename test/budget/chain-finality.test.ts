@@ -51,7 +51,7 @@ beforeEach(() => {
   rpc.getTransaction.mockRejectedValue(new Error("not found"));
   rpc.getLogs.mockImplementation(async ({ event }) => event.name === "AuthorizationUsed" ? [used()] : []);
   rpc.getTransactionReceipt.mockResolvedValue(receipt());
-  vi.doMock("../../budget/evm/lib.js", async (original) => ({ ...await original<object>(), OPS_DIR: dir, publicClient: rpc, sendJournaled, usdcBalance, allowanceOf: async () => 10000n, USDC: TOKEN, sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f() }));
+  vi.doMock("../../budget/evm/lib.js", async (original) => ({ ...await original<object>(), OPS_DIR: dir, publicClient: rpc, sendJournaled, usdcBalance, allowanceOf: async () => 10000n, USDC: TOKEN, sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), readUntil: async <T,>(read: () => Promise<T>) => read() }));
 });
 afterEach(() => { vi.doUnmock("../../budget/evm/lib.js"); rmSync(dir, { recursive: true, force: true }); });
 const ops = () => import(new URL("../../budget/evm/ops.ts", import.meta.url).href);
@@ -452,7 +452,7 @@ describe("round 2: EVM landed results and recovery", () => {
     rpc.getTransactionReceipt.mockResolvedValue(receipt([used("AuthorizationCanceled")]));
     expect(await (await ops()).readSettlement(journal())).toMatchObject({ kind: "canceled", final: false, used: false });
   });
-  it("returns the pulled price after the agent's own cancellation lands before finality", async () => {
+  it("keeps the pulled price while the agent's own cancellation is mined but not final", async () => {
     const module = await ops();
     const cancel: Hex = `0x${"13".repeat(32)}`;
     const returned: Hex = `0x${"14".repeat(32)}`;
@@ -470,9 +470,12 @@ describe("round 2: EVM landed results and recovery", () => {
     const account = privateKeyToAccount(`0x${"01".repeat(32)}`);
     const wallet = { account, client: createWalletClient({ account, transport: http("http://127.0.0.1:1") }) };
     const result = await module.makeSafe(journal(), wallet, { log: () => {} });
-    expect(sendJournaled).toHaveBeenCalledTimes(2);
-    expect(result.returned).toBe("0.01");
-    expect(result.state).toBe("unknown"); // only permanence waits for finality
+    expect(sendJournaled).toHaveBeenCalledTimes(1); // the cancel; the price is not returned while the cancel can be reorganised away
+    expect(sendJournaled.mock.calls[0]![3]).toMatch(/cancel/);
+    expect(result.returned).toBeUndefined();
+    expect(result.returnTx).toBeUndefined();
+    expect(result).toMatchObject({ state: "unknown", reason: "the cancellation landed, but is not final on chain yet" });
+    expect(result.notes).toContain("makeSafe: the cancel is not final yet; nothing is returned");
   });
   it("identifies a replaced pull from event logs without querying pruned account state", async () => {
     const replacement: Hex = `0x${"15".repeat(32)}`;
