@@ -13,6 +13,7 @@ import {
   USDC_MINT,
   formatUnits,
   fromBaseUnits,
+  parseEnvFile,
   parseStrict,
   parsePubkeyFlag,
   clusterProblem,
@@ -40,6 +41,9 @@ if (!ownerPk) {
   console.error(`Owner address unknown: pass --owner <address> or create ${PUBLIC_PATH} (superstables budget setup --rail solana writes it).`);
   process.exit(1);
 }
+// A revoke this machine recorded (revokeBudget writes REVOKED_AT in the public file), for the owner that file records only.
+const pubEnv = parseEnvFile(PUBLIC_PATH);
+const revokedAt = pubEnv.SOLANA_OWNER_ADDRESS === ownerPk.toBase58() && /^\d+$/.test(pubEnv.REVOKED_AT ?? "") ? Number(pubEnv.REVOKED_AT) : undefined;
 const ownerAta = getAssociatedTokenAddressSync(USDC_MINT, ownerPk);
 let acc;
 try {
@@ -55,13 +59,15 @@ if (!acc) {
   console.log("  maximum the delegate can still move: 0 USDC");
   process.exit(0);
 }
-const revoked = acc.delegate === null;
+// revoked only for a revoke recorded here that the chain still shows: no delegate also reads once a delegation is spent
+// (SPL Token clears the delegate when the delegated amount reaches 0), and when none was ever granted.
+const revoked = acc.delegate === null && revokedAt !== undefined;
 const effective = acc.delegatedAmount < acc.amount ? acc.delegatedAmount : acc.amount;
 console.log("On-chain (owner USDC token account):");
 console.log(`  owner: ${ownerPk.toBase58()}`);
 console.log(`  delegate: ${acc.delegate?.toBase58() ?? "none"}`);
 console.log(`  delegatedAmount (remaining): ${fromBaseUnits(acc.delegatedAmount)} USDC`);
-console.log(`  revoked: ${revoked}`);
+console.log(`  revoked: ${revoked}${revoked ? ` (this machine recorded a revoke at ${new Date(revokedAt * 1000).toISOString()})` : acc.delegate === null ? " (no delegate reads: spent, never granted, or revoked without a record on this machine)" : ""}`);
 console.log(`  owner token balance (informational, not the budget): ${fromBaseUnits(acc.amount)} USDC`);
 console.log(`  maximum the delegate can still move: ${formatUnits(effective)} USDC (the smaller of the two above)`);
 console.log("\nNo expiry and no seller list exist on this rail. The budget lasts until it is spent or revoked.");

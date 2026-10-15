@@ -16,7 +16,7 @@
 // fee, the owner rejected or the link expired, the chain shows another delegate or amount), 5 unknown (read the chain).
 import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
+import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, usageError, readPublic, retryRead, sleep, PUBLIC_PATH, parseEnvFile, writePublic } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, grantTerms, sol, transactionPort } from "./owner.ts";
@@ -82,6 +82,8 @@ console.log(`ApproveChecked: delegate ${agent.toBase58()}, ${formatUnits(cap)} U
 const ix = () => [createApproveCheckedInstruction(ata, USDC_MINT, agent, owner, cap, USDC_DECIMALS)];
 let sig: string;
 let finish: ((v: OwnerVerdict) => void) | null = null;
+// A grant from here on may land: a revoke recorded on this machine no longer describes the owner's account (readBudget.mjs).
+if (parseEnvFile(PUBLIC_PATH).REVOKED_AT !== undefined) writePublic({}, ["REVOKED_AT"]);
 if (OWNER_KEY_FILE) {
   checkOwnerKeyFile(OWNER_KEY_FILE);
   const kp = loadOwner(OWNER_KEY_FILE).keypair;

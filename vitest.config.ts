@@ -19,6 +19,7 @@ const SLOW = [
   "test/budget/lock-macos-side-effects.test.ts",
   "test/budget/lock-recovery.test.ts",
   "test/budget/operation-races.test.ts",
+  "test/budget/revoke-always.test.ts",
   "test/budget/setup-owner.test.ts",
   "test/budget/tempo-push.test.ts",
   "test/budget/tempo-rpc.test.ts",

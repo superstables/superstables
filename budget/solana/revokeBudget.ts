@@ -9,12 +9,18 @@
 // transaction (no error, signed by the owner) and the token account (no delegate, delegated amount 0). With --owner-key-file
 // <path> it signs with that key file instead (tests and automation only).
 //
+// It always sends Revoke when the owner's USDC account exists, even when no delegate reads: one RPC's read is not proof
+// that no delegate is live (Revoke succeeds on an account without one). Only an owner with no USDC account is sent
+// nothing, because a Revoke there fails on chain; that answer rests on one read, so it says revoked: null, not revoked.
+// A confirmed revoke is recorded in the public file (REVOKED_AT): status reports revoked only while the chain still
+// shows no delegate.
+//
 // npx tsx budget/solana/revokeBudget.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
-// Exit codes: 0 revoked (or nothing to revoke), 1 failed on chain, never landed, or a delegate still reads, 3 refused (the
+// Exit codes: 0 revoked (or the owner has no USDC account: nothing sent, revoked null), 1 failed on chain, never landed, or a delegate still reads, 3 refused (the
 // owner rejected or the link expired, no SOL for the fee), 5 unknown (read the chain).
 import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { AGENT_KEY_PATH, CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseEnvText, parseStrict, readPublic, retryRead, sleep } from "./lib.mjs";
+import { AGENT_KEY_PATH, CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseEnvText, parseStrict, readPublic, retryRead, sleep, writePublic } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { readRegularFile } from "../secret-file.mjs";
@@ -46,7 +52,7 @@ const pub = readPublic();
 if (!pub.owner) refuse("the public file names no owner", "superstables budget setup --rail solana");
 const owner: PublicKey = pub.owner;
 // The agent key file also records the owner. While it names another, this command (which acts for the public file's
-// owner) says nothing about either: "nothing to revoke" for one could hide the other's live budget. Read for that one
+// owner) says nothing about either: an answer for one could hide the other's live budget. Read for that one
 // public line only, through the bounded reader that never waits on a FIFO; an agent key file it cannot read (missing, not
 // a regular file, too large) never stops the revoke.
 {
@@ -65,10 +71,13 @@ try {
   process.exit(result(5, { state: "unknown", tx: null, reason, next: "superstables budget status --rail solana, then run revoke again" }));
 }
 console.log(`Before: ${before ? `delegate=${before.delegate?.toBase58() ?? "none"} remaining=${formatUnits(before.delegatedAmount)} USDC` : "the owner has no USDC account (the chain says it does not exist)"}`);
-if (!before || !before.delegate) {
-  console.log(`${before ? "There is no delegate on the owner's USDC account" : "The owner has no USDC account"}: nothing to revoke. Nothing was sent.`);
-  process.exit(result(0, { state: "revoked", tx: null, remaining: "0", reason: before ? "no delegate is set; nothing to send" : "the owner has no USDC account; nothing to send", next: "none" }));
+if (!before) {
+  // No token account: there is no delegate to clear, and a Revoke would fail on chain, so nothing is sent. Until the RPC
+  // endpoints are agreed this rests on one read, so it is not reported as revoked.
+  console.log("The owner has no USDC account (the chain says it does not exist): there is no delegate to clear. Nothing was sent.");
+  process.exit(result(0, { state: "ok", evidence: "no_token_account", revoked: null, tx: null, remaining: "0", reason: "the owner has no USDC account on Solana devnet, so there is no delegate to clear; nothing was sent", next: "none" }));
 }
+if (!before.delegate) console.log("No delegate reads on the owner's USDC account; sending Revoke anyway: one read is not proof that no delegate is live.");
 const lamports = BigInt(await retryRead(() => conn.getBalance(owner, "confirmed")));
 if (lamports < MIN_FEE_LAMPORTS) refuse(`the owner holds ${sol(lamports)} SOL, too little for the network fee`, "get devnet SOL (faucet.solana.com), then revoke again");
 
@@ -85,7 +94,7 @@ if (OWNER_KEY_FILE) {
   // hosted: the site builds the Revoke when the owner is ready and sends what their wallet signed
   const hosted = approvalSite() !== null;
   const startSlot = hosted ? await retryRead(() => conn.getSlot("confirmed")) : 0;
-  const terms = revokeTerms({ owner: owner.toBase58(), agent: before.delegate.toBase58(), ata: ata.toBase58(), remaining: before.delegatedAmount });
+  const terms = revokeTerms({ owner: owner.toBase58(), agent: before.delegate?.toBase58() ?? null, ata: ata.toBase58(), remaining: before.delegatedAmount });
   const local = hosted ? null : transactionPort(conn, owner, ix);
   const { handle, outcome } = local
     ? await askSolanaTransaction("revoke", owner.toBase58(), local.port, terms)
@@ -131,6 +140,8 @@ if (after.delegate || after.delegatedAmount !== 0n) {
   await closeOwnerPage();
   process.exit(result(1, { state: "not_revoked", tx: sig, remaining: formatUnits(after.delegatedAmount), reason: "a delegate still reads on chain", next: "run revoke again" }));
 }
+// recorded: status reports this budget as revoked only while the chain still shows no delegate (readBudget.mjs)
+writePublic({ REVOKED_AT: String(Math.floor(Date.now() / 1000)) });
 console.log("This delegation is cleared. Transactions that still require it will fail. Previously transferred funds are not recovered.");
 finish?.({ outcome: "confirmed", message: "Confirmed. Your USDC account has no delegate. This does not recover tokens already transferred. You can close this page.", hash: sig });
 await closeOwnerPage();
