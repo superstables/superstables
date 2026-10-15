@@ -226,7 +226,11 @@ authorization — and the balance of the account, which is why this release is t
 The browser signer counts the daily cap from receipts and attempt records in this directory,
 including pending, in-flight and uncertain payments; the local wallet counts the authorizations in
 its own `wallet/audit.jsonl`. Both add up whole token units (millionths of a dollar for the dollar
-stablecoins), never floating-point decimals, so a cap is reached exactly. For the browser signer, a
+stablecoins), never floating-point decimals. On the browser signer's path, from the payment records
+to the policy check, totals and comparisons with the cap are exact, so a cap is reached exactly.
+The local wallet daemon is not exact end to end: it converts its whole-unit total to a decimal
+number before the policy check, and a total beyond about nine billion dollars can lose a unit in that
+conversion. That limitation remains for the local wallet. For the browser signer, a
 record whose amount cannot be read makes today's total unknown, and the daily cap then refuses every
 payment until the record is fixed. Neither reads chain history: delete those records and the count
 starts again.
