@@ -51,7 +51,7 @@ interface NetworkCommon {
 export interface EvmNetwork extends NetworkCommon {
   rail: "evm";
   usdc: { address: `0x${string}`; decimals: number; eip712: { name: string; version: string } };
-  /** About how many seconds pass between blocks: where a search for a block by its time starts. Never relied on. */
+  /** About how many seconds pass between blocks: where a search for a block by its time starts, and how many blocks a log search reads (a day's worth). A wrong value costs a search time or reach, never a wrong answer. */
   blockSeconds: number;
   /** The most blocks one eth_getLogs asks the public RPC for (the budget's logRange where it names one). */
   logRange: number;
@@ -132,7 +132,8 @@ export const BASE_SEPOLIA: EvmNetwork = evm({
   chainName: "Base Sepolia",
   nativeCurrency: ETHER,
   blockSeconds: 2,
-  logRange: 1_000,
+  // sepolia.base.org refuses eth_getLogs over more than 200 blocks (error -32614, 14 Oct 2026).
+  logRange: 200,
 });
 
 /** Circle's Arc Testnet: USDC is also the gas token there, with 18 decimals natively (the ERC-20 interface has 6). */

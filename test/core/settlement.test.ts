@@ -175,8 +175,10 @@ describe("findAuthorization", () => {
       const call = JSON.parse(String(init?.body)) as { id: number; method: string; params: unknown[] };
       const answer = await fetch(input, init);
       if (done || !when(call)) return answer;
-      done = true;
       const body = (await answer.json()) as { result: unknown };
+      // A log search reads several windows: the first one that holds a log is the read this test means.
+      if (Array.isArray(body.result) && body.result.length === 0) return new Response(JSON.stringify(body));
+      done = true;
       then();
       return new Response(JSON.stringify({ ...body, result: rewrite ? rewrite(body.result) : body.result }));
     }) as typeof fetch;
@@ -234,7 +236,9 @@ describe("findAuthorization", () => {
     chain.finalizedLag = 0;
     // The final block is read before the logs: a cancellation that only became final after them is not taken as final.
     chain.finalizedLag = 30;
-    const finalLater = await find({}, after((c) => c.method === "eth_getLogs", () => (chain!.finalizedLag = 0)));
+    let fired = false;
+    const finalLater = await find({}, after((c) => c.method === "eth_getLogs", () => { fired = true; chain!.finalizedLag = 0; }));
+    expect(fired).toBe(true);
     expect(finalLater).not.toHaveProperty("never");
     // As it is: final.
     expect(await find()).toMatchObject({ found: false, never: true, reason: "the chain shows the owner's authorization was cancelled, in a final block, so it can never be used" });

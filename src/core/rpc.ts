@@ -9,6 +9,7 @@
 
 import type { NetworkInfo } from "./chain.js";
 import { readCapped } from "./http.js";
+import { rangeRefusal } from "./log-windows.mjs";
 
 const CHECK_TIMEOUT_MS = 10_000;
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
@@ -46,6 +47,8 @@ export class RpcError extends Error {
     readonly status?: number,
     readonly code?: number,
     readonly retryAfterMs?: number,
+    /** The RPC refused the block range asked for (log-windows.mjs, rangeRefusal). Its own words are not kept. */
+    readonly rangeRefused?: boolean,
   ) {
     super(message);
     this.name = "RpcError";
@@ -72,7 +75,10 @@ export async function rpcCall<T>(url: string, method: string, params: unknown[],
     throw new RpcError(`HTTP ${res.status}`, res.status, undefined, retryAfter && /^\d{1,4}$/.test(retryAfter) ? Number(retryAfter) * 1000 : undefined);
   }
   const text = await readCapped(res, options.maxBytes ?? 2_000_000, timeoutMs, url);
-  const answer = JSON.parse(text) as { result?: T; error?: { code?: unknown } };
-  if (answer.error !== undefined) throw new RpcError("the RPC answered with an error", undefined, typeof answer.error?.code === "number" ? answer.error.code : undefined);
+  const answer = JSON.parse(text) as { result?: T; error?: { code?: unknown; message?: unknown } };
+  if (answer.error !== undefined) {
+    const code = typeof answer.error?.code === "number" ? answer.error.code : undefined;
+    throw new RpcError("the RPC answered with an error", undefined, code, undefined, rangeRefusal(code, answer.error?.message));
+  }
   return answer.result as T;
 }

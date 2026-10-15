@@ -32,6 +32,7 @@ export type ChainCfg = {
   domain: { name: string; version: string };
   gas: { symbol: string; decimals: number; isUsdc: boolean; limits: GasLimits; minAgent: bigint; topUp: bigint; reserveMax?: bigint };
   logRange?: number; // the RPC's eth_getLogs block-range cap, when it has one
+  blockSeconds: number; // about how many seconds pass between blocks: how many blocks a day of log search reads
 };
 
 function build(key: string, rpcOverride?: string): ChainCfg {
@@ -48,7 +49,7 @@ function build(key: string, rpcOverride?: string): ChainCfg {
   return {
     key, label: t.label, rail: key, chain, chainId: t.chainId, rpc: t.rpc, explorer: t.explorer,
     usdc: t.token.address, symbol: t.token.symbol, decimals: t.token.decimals, network: `eip155:${t.chainId}`,
-    legacyNetworks: t.legacy, domain: t.token.domain, ...(t.logRange ? { logRange: t.logRange } : {}),
+    legacyNetworks: t.legacy, domain: t.token.domain, ...(t.logRange ? { logRange: t.logRange } : {}), blockSeconds: t.blockSeconds,
     gas: {
       symbol: g.symbol, decimals: g.decimals, isUsdc: g.isToken,
       limits: Object.fromEntries(Object.entries(g.limits).map(([k, v]) => [k, BigInt(v as number)])) as GasLimits,
