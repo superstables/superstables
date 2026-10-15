@@ -114,10 +114,12 @@ export function classify(report, paths) {
   return { shipped, devOnly };
 }
 
-// npm run and the calling shell hand down npm_* settings (omit, production, offline ...) that change what an audit
-// covers. Only the ones that say where the registry is, how to reach it and where npm keeps its files pass through.
-const KEEP = /^npm_config_(?:registry|(?:https_|http_)?proxy|noproxy|cafile|ca|strict_ssl|cache|userconfig|globalconfig|fetch_\w+)$/;
-const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^npm_/.test(k) || KEEP.test(k)));
+// npm run and the calling shell hand down npm_* variables and npm settings (omit, production, offline ...), which npm
+// reads in any case (NPM_CONFIG_*), that change what an audit covers. Only the settings that say where the registry is,
+// how to reach it and where npm keeps its files pass through, and NPM_TOKEN, for an .npmrc that names it.
+const KEEP = /^npm_config_(?:registry|(?:https_|http_)?proxy|noproxy|cafile|ca|strict_ssl|cache|userconfig|globalconfig|fetch_\w+)$/i;
+const isNpmVariable = (k) => /^npm_config_/i.test(k) || /^npm_/.test(k);
+const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !isNpmVariable(k) || KEEP.test(k)));
 
 function main() {
   const args = process.argv.slice(2);

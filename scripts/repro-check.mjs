@@ -6,8 +6,8 @@
 // does the same). The two builds differ in everything a build must not depend on: the folder
 // (<tmp>/one/superstables, <tmp>/two/superstables), the time zone (UTC, Pacific/Kiritimati), the locale (en_US.UTF-8,
 // lt_LT.UTF-8), the umask (022, 002: the two common defaults, both of which pack files as 0644) and the moment they run.
-// SOURCE_DATE_EPOCH and every npm_* variable are removed, because the release sets
-// none of them.
+// SOURCE_DATE_EPOCH, every npm_* variable and npm's settings in any case (NPM_CONFIG_*) are removed, because the release
+// sets none of them. NPM_TOKEN passes through, for an .npmrc that names it.
 //
 // The umask is varied because it is part of the tarball: file modes come from it, and node-tar only clears the group and
 // other write bits, so a build under umask 077 packs -rw------- files and gives another tarball. That is left as it is: a
@@ -57,7 +57,9 @@ const sha = git("rev-parse", "--short=10", "HEAD");
 if (git("status", "--porcelain", "--untracked-files=no")) console.log("repro-check: this tree has uncommitted changes; it builds HEAD, which does not include them");
 
 const env = {
-  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^npm_/.test(k) && k !== "SOURCE_DATE_EPOCH")),
+  ...Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => !/^npm_config_/i.test(k) && !/^npm_/.test(k) && k !== "SOURCE_DATE_EPOCH"),
+  ),
   SUPERSTABLES_SKILL_FROM_ARCHIVE: "1",
   SUPERSTABLES_BUILD_COMMIT: sha,
 };
