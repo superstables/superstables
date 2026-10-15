@@ -293,7 +293,7 @@ async function main() {
     // affects the limit has not been verified yet; the chain still checks the limit either way.
     else overBudget = budgetShortfall(k, amount) ?? undefined
   } catch (err) {
-    console.log(`  (could not read the key state: ${String((err as Error).message).slice(0, 120)})`)
+    console.log(`  (could not read the key state: ${oneLine((err as Error).message, 120)})`)
   }
 
   // A key granted with a seller list may pay only those recipients (the chain answers CallNotAllowed otherwise). A read
@@ -303,7 +303,7 @@ async function main() {
     try {
       outsideScope = recipientsOutsideScope(await readScope(ownerAddress, agentKey), recipients)
     } catch (err) {
-      console.log(`  (could not read the key's seller list: ${String((err as Error).message).slice(0, 120)})`)
+      console.log(`  (could not read the key's seller list: ${oneLine((err as Error).message, 120)})`)
     }
   }
 

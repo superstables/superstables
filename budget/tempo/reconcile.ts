@@ -123,6 +123,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('reconcile failed:', String(err?.message ?? err).slice(0, 300))
+  console.error('reconcile failed:', oneLine(err?.message ?? err, 300))
   process.exit(1)
 })

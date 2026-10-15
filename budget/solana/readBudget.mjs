@@ -17,6 +17,7 @@ import {
   parseStrict,
   parsePubkeyFlag,
   clusterProblem,
+  oneLine,
 } from "./lib.mjs";
 
 const USAGE = `Usage: node budget/solana/readBudget.mjs [--owner <address>]
@@ -50,7 +51,7 @@ try {
   acc = await getAccountOrNull(conn, ownerAta);
 } catch (e) {
   // could not read is not "no budget": fail, so status says it could not read the budget
-  console.error(`Could not read the owner's USDC account ${ownerAta.toBase58()}: ${e?.message ?? e}`);
+  console.error(`Could not read the owner's USDC account ${ownerAta.toBase58()}: ${oneLine(e?.message ?? e, 300)}`);
   process.exit(1);
 }
 if (!acc) {

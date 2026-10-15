@@ -512,7 +512,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
     r = await pay(url);
   } catch (e: any) {
     const st = stop as Stop | null;
-    res.error = String(e.message ?? e).split("\n")[0];
+    res.error = oneLine(e.message ?? e, 300);
     if (st?.kind === "quote") { log(st.reason); return finish("quoted", st.reason, "buy again without --quote-only to purchase"); }
     if (st?.kind === "precheck" && !j.pullTx) { log(st.reason); return finish("refused_precheck", st.reason, st.next ?? "nothing was signed or sent"); }
     if (st?.kind === "chain") { log(st.reason); return finish("refused_chain", st.reason, refusedChainWords(j.pullTx).next); }

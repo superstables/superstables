@@ -35,7 +35,7 @@ import { dirname } from 'node:path'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 import { LABEL, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
+import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, oneLine, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { UNSAFE_SECRET_FILE } from '../secret-file.mjs'
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from '../hosted.ts'
@@ -73,7 +73,7 @@ const usage = (message: string): never => {
 
 async function fundAddress(address: string): Promise<string[]> {
   // one request, never retried, read through the capped reader every Tempo RPC read uses (lib/chain.ts)
-  const hashes = await rpcWrite('tempo_fundAddress', [address]).catch((err: Error) => { throw new Error(`tempo_fundAddress failed for ${address}: ${err.message}`) })
+  const hashes = await rpcWrite('tempo_fundAddress', [address]).catch((err: Error) => { throw new Error(`tempo_fundAddress failed for ${address}: ${oneLine(err.message, 300)}`) })
   // faucet() prints these: transaction hashes only, never the faucet's other text
   if (!Array.isArray(hashes) || !hashes.every((h) => typeof h === 'string' && /^0x[0-9a-fA-F]{64}$/.test(h))) throw new Error(`tempo_fundAddress failed for ${address}: its answer is not a list of transaction hashes`)
   return hashes
@@ -335,7 +335,7 @@ async function main() {
       }
       head = await chainHead()
     } catch (e) {
-      const reason = `could not read Tempo Moderato before asking (${String((e as Error).message).split('\n')[0]}); the grant could not be checked afterwards`
+      const reason = `could not read Tempo Moderato before asking (${oneLine((e as Error).message, 300)}); the grant could not be checked afterwards`
       console.log(`REFUSED: ${reason}. Nothing was requested.`)
       process.exit(result(3, { state: 'refused_precheck', reason, next: 'superstables budget doctor --rail tempo checks the RPC; then run the same command again' }))
     }
@@ -448,7 +448,7 @@ async function main() {
         held = await tokenBalance(TOKEN_ADDRESS, owner).catch(() => held)
       }
     } catch (e) {
-      console.log(`the faucet did not answer (${(e as Error).message}); fund the owner later with: superstables budget setup --rail tempo --fund-only`)
+      console.log(`the faucet did not answer (${oneLine((e as Error).message, 300)}); fund the owner later with: superstables budget setup --rail tempo --fund-only`)
     }
   }
   console.log(`owner ${owner}: pathUSD ${held === null ? 'unknown' : fromBaseUnits(held)}. The agent needs no funds.`)
@@ -513,6 +513,6 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
 }
 
 main().catch((err) => {
-  console.error('setup failed:', err?.message ?? err)
+  console.error('setup failed:', oneLine(err?.message ?? err, 1000))
   return exitAfterError()
 })

@@ -14,7 +14,7 @@ import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile } from "./secret-file.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
 import { DEFAULT_RPC, jsonRpc, rpcFromEnv } from "./rpc.mjs";
-import { siteOrigin } from "./site.mjs";
+import { siteOrigin, siteText } from "./site.mjs";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
 
@@ -213,7 +213,7 @@ export async function runDoctor(f) {
   }
 
   let rpcOk = false;
-  try { line(true, "RPC answers", await r.rpc()); rpcOk = true; } catch (e) { line(false, "RPC answers", e.message); }
+  try { line(true, "RPC answers", await r.rpc()); rpcOk = true; } catch (e) { line(false, "RPC answers", siteText(e.message, 300)); }
   if (rpcOk && ownerAddress && agentAddress) {
     try {
       for (const b of await r.balances(ownerAddress, agentAddress)) {
@@ -221,7 +221,7 @@ export async function runDoctor(f) {
         line(ok, `${b.who} ${b.token} balance`, `${b.have} at ${b.addr} (need at least ${b.need}${b.note ? `; ${b.note}` : ""})`);
         if (!ok) topUps.push(`top up ${b.token} at ${b.addr}: have ${b.have}, need at least ${b.need} (${b.hint})`);
       }
-    } catch (e) { line(false, "balances", e.message); }
+    } catch (e) { line(false, "balances", siteText(e.message, 300)); }
   } else if (rpcOk) line(false, "balances", "no owner or agent address to read");
   for (const t of topUps) process.stderr.write(`  ${t}\n`);
   return failed;

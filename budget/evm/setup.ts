@@ -32,7 +32,7 @@ import { dirname } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 import { EVM_CHAINS } from "./chains.mjs";
-import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, toUsdc, usageError, assertRpcChain, publicClient, tx } from "./lib.ts";
+import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, toUsdc, usageError, assertRpcChain, publicClient, tx, oneLine } from "./lib.ts";
 import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, fundingTx, fundValue, DEFAULT_FUND_AMOUNT, grantTx, grantEnforced, GRANT_NOT_ENFORCED, approveRow, capWords, checkFundSent, checkGrantSent, REVOKE_HINT, type SentCheck } from "./owner.ts";
 import { NEW_OWNER } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
@@ -149,7 +149,7 @@ if (BUNDLE) {
     await assertRpcChain();
     startBlock = await publicClient.getBlockNumber();
   } catch (e) {
-    const reason = `could not read ${CFG.label} before asking (${(e as Error).message.split("\n")[0]}); the transactions could not be checked afterwards`;
+    const reason = `could not read ${CFG.label} before asking (${oneLine((e as Error).message, 300)}); the transactions could not be checked afterwards`;
     console.log(`REFUSED: ${reason}. Nothing was requested.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: `superstables budget doctor --rail evm${chainFlag} checks the RPC; then run the same command again` }));
   }
@@ -284,7 +284,7 @@ try {
   console.log(`owner ${ownerAddr}: ${SYM} ${usdc(oTok)}, ${GAS.symbol} ${gasFmt(oGas)}`);
   console.log(`agent ${agentAddr}: ${GAS.symbol} ${gasFmt(aGas)}`);
 } catch (e) {
-  console.log(`could not read the balances (${(e as Error).message}); superstables budget doctor --rail evm${chainFlag} checks them`);
+  console.log(`could not read the balances (${oneLine((e as Error).message, 300)}); superstables budget doctor --rail evm${chainFlag} checks them`);
 }
 
 if (BUNDLE) await finishBundle();

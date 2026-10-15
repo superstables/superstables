@@ -14,7 +14,7 @@
 //
 // Exit: 0 when the chain gave an answer (settled, failed or not_found; read the RESULT state),
 // 1 for a missing journal, 2 bad flags, 4 unknown (still pending).
-import { connection, parseStrict, formatUnits, retryRead, EXIT, OPS_DIR } from "./lib.mjs";
+import { connection, parseStrict, formatUnits, retryRead, EXIT, OPS_DIR, oneLine } from "./lib.mjs";
 import { getAssociatedTokenAddressSync, getAccount } from "./token.mjs";
 import { PublicKey } from "@solana/web3.js";
 import { OP_ID_RE, readOp, updateOp, assessOp, readTransfer } from "./ops.mjs";
@@ -70,15 +70,15 @@ try {
 } catch (e) {
   // A failed read changes no payment evidence already observed.
   if (rec.state === "settled" && rec.inclusionObserved) {
-    console.log(`Could not read the chain: ${e?.message ?? e}. Keeping the earlier payment inclusion.`);
+    console.log(`Could not read the chain: ${oneLine(e?.message ?? e, 300)}. Keeping the earlier payment inclusion.`);
     emit(result("settled", { debit: rec.debit ?? rec.amountUsdc ?? "0", chain_final: false, next: `Run superstables budget reconcile --rail solana --op ${opId} later to check finality. Do not pay again.${rec.delivered === false ? " Contact the seller." : ""}` }), EXIT.OK);
   }
   if (["failed", "not_found", "refused_chain"].includes(rec.state)) {
-    console.log(`Could not read the chain: ${e?.message ?? e}. Keeping the recorded state: ${rec.state}.`);
+    console.log(`Could not read the chain: ${oneLine(e?.message ?? e, 300)}. Keeping the recorded state: ${rec.state}.`);
     emit(result(rec.state, { reason: rec.reason, next: `Run superstables budget reconcile --rail solana --op ${opId} again later.` }), EXIT.OK);
   }
-  console.log(`Could not read the chain: ${e?.message ?? e}. Do not pay again.`);
-  emit(result("unknown", { reason: `could not read the chain: ${String(e?.message ?? e).slice(0, 160)}`, next: `superstables budget reconcile --rail solana --op ${opId}. Do not pay again.` }), EXIT.UNCERTAIN);
+  console.log(`Could not read the chain: ${oneLine(e?.message ?? e, 300)}. Do not pay again.`);
+  emit(result("unknown", { reason: `could not read the chain: ${oneLine(e?.message ?? e, 160)}`, next: `superstables budget reconcile --rail solana --op ${opId}. Do not pay again.` }), EXIT.UNCERTAIN);
 }
 console.log(`Chain read: ${a.verdict}${a.tx ? ` ${explorerTx(a.tx)}` : ""}`);
 if (a.totalBlocks) console.log(`Checked ${a.checkedBlocks} of ${a.totalBlocks} finalized landing blocks. Run superstables budget reconcile --rail solana --op ${opId} again to continue. Do not pay again.`);

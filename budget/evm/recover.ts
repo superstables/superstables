@@ -154,7 +154,7 @@ try {
   // an error here (an RPC read, the wallet page) must not lose the revoke that already landed. A gas transfer the chain shows
   // reverted (sendNative names its hash) is a failure; anything else may or may not have sent the gas, so it is unknown.
   const reverted = (e as { txHash?: Hex }).txHash;
-  const reason = `recover stopped at the gas step: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300);
+  const reason = `recover stopped at the gas step: ${oneLine(e instanceof Error ? e.message : String(e), 300)}`.slice(0, 300);
   console.log(`${reverted ? "FAILED" : "UNKNOWN"}: ${reason}`);
   const doctor = `superstables budget doctor --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}`;
   process.exit(emit("recover", reverted ? 1 : 5, { state: reverted ? "failed" : "unknown", ...(reverted ? { proof: "reverted" } : {}), op: opId ?? null, ...revoked, gasTx: reverted ?? gasTx, reason, next: `${revokedWords}. ${doctor}: read the agent's gas and the allowance, then run recover again` }));

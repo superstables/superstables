@@ -162,7 +162,7 @@ let initial;
 try {
   initial = await fetchOnce(url, method, bodyText);
 } catch (e) {
-  refuse(`seller unreachable: ${e?.message ?? e}`);
+  refuse(`seller unreachable: ${oneLine(e?.message ?? e, 300)}`);
 }
 console.log(`\nInitial request: HTTP ${initial.res.status}`);
 if (initial.res.status !== 402) {
@@ -258,7 +258,7 @@ try {
   ownerAtaBefore = await retryRead(() => getAccount(conn, ownerAta));
 } catch (e) {
   if (!(e instanceof TokenAccountNotFoundError)) {
-    const why = `could not read the owner's USDC account ${ownerAta.toBase58()}: ${e?.message ?? e}`;
+    const why = `could not read the owner's USDC account ${ownerAta.toBase58()}: ${oneLine(e?.message ?? e, 300)}`;
     updateOp(opId, { state: "refused_precheck", reasons: [why] });
     refuse(why, { next: "retry later; nothing was signed or paid" });
   }
@@ -408,7 +408,7 @@ for (let i = 0; i < attempts && !own; i++) {
     own = await findOwnTx(conn, rec);
     readError = null;
   } catch (e) {
-    readError = e?.message ?? String(e);
+    readError = oneLine(e?.message ?? e, 300) || "the chain read failed";
     console.log(`chain read failed (${String(readError).slice(0, 160)}); trying again`);
   }
   if (!own) await sleep(3000);
@@ -447,11 +447,11 @@ let sim = null;
 if (!deliveredHttp && !readError) {
   sim = await conn
     .simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true })
-    .catch((e) => ({ value: { err: `simulation unavailable: ${e?.message ?? e}`, logs: [] } }));
+    .catch((e) => ({ value: { err: `simulation unavailable: ${oneLine(e?.message ?? e, 300)}`, logs: [] } }));
 }
 if (sim?.value?.err && !String(sim.value.err).startsWith("simulation unavailable")) {
   const failLine = (sim.value.logs ?? []).filter((l) => /failed|error|insufficient/i.test(l)).slice(-1)[0] ?? null;
-  console.log(`\n=> The chain refuses this payment now: ${JSON.stringify(sim.value.err)}${failLine ? ` | ${failLine}` : ""}`);
+  console.log(`\n=> The chain refuses this payment now: ${JSON.stringify(sim.value.err)}${failLine ? ` | ${oneLine(failLine, 300)}` : ""}`);
   console.log("   Our transaction was not found on chain.");
   // refused for good only once the signed transaction can no longer land (refusalIsFinal); until then it is unknown
   const assessment = await assessOp(conn, rec).catch(() => ({ verdict: "pending" }));

@@ -214,7 +214,9 @@ export function chainReason(e: any): string {
     for (const k of ["reason", "shortMessage", "details"]) if (typeof cur?.[k] === "string" && !parts.includes(cur[k])) parts.push(cur[k]);
   }
   const m = parts.join(" | ") || String(e?.message ?? e);
-  return m.replace(/\s+/g, " ").slice(0, 400);
+  // the revert reason an RPC sent as ABI data is decoded into viem's `reason` and message: outside text, on one line and
+  // without hidden characters like any other (oneLine). The structured data (`revertData`) is not touched.
+  return oneLine(m.replace(/\s+/g, " "), 400);
 }
 
 // ---- gas the agent can pay ----

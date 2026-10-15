@@ -143,12 +143,15 @@ export const accountWaitingWords = (code) => (ACCOUNT_WAITING.has(code) ? `${ACC
 /** Anything shaped like an access token (ssbt_, ssba_, sspt_, sspa_) taken out of a text this client prints or stores. */
 export const scrub = (text) => String(text ?? "").replace(/ss[bp][ta]_[A-Za-z0-9_-]*/g, "[token]");
 /**
- * Text the dispatcher prints, without control characters: newline and tab stay, every other C0 and C1 character goes, and
- * the Unicode line and paragraph separators become spaces. A rail's log can quote an RPC's or a library's error text
- * (viem and @solana/web3.js put the RPC's words, revert reasons and program logs in their errors), which must not move
- * the cursor, retitle the terminal or erase what was printed.
+ * Text the dispatcher prints, without control characters: newline and tab stay (the dispatcher's own layout), every other C0
+ * and C1 character goes, and the Unicode line and paragraph separators become spaces. The characters that hide or reorder
+ * text go too, as in siteText: format characters (zero-width, bidi marks and overrides, the soft hyphen, U+2060-2064) and the
+ * tag block U+E0000-E007F. A rail's log can quote an RPC's or a library's error text (viem and @solana/web3.js put the RPC's
+ * words, revert reasons and program logs in their errors), which must not move the cursor, retitle the terminal, erase what
+ * was printed or reorder it. A newline inside such text is flattened where the rail prints the error (oneLine), not here:
+ * the dispatcher's own output has lines.
  */
-export const terminalText = (text) => String(text ?? "").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "").replace(/[\u2028\u2029]/g, " ");
+export const terminalText = (text) => String(text ?? "").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "").replace(/[\u2028\u2029]/g, " ").replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, "");
 /**
  * The agent's access tokens (ssbt_, sspt_) taken out of a line the dispatcher prints, after terminalText. An owner's
  * approval link carries its own token (ssba_, sspa_) after # on purpose, so those stay.

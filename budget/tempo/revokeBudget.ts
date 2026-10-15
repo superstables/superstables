@@ -185,7 +185,7 @@ async function main() {
       // the SDK raises on a reverted receipt: that transaction was mined and did nothing
       reverted = revertedReceiptOf(err)?.transactionHash ?? null
       // Any other error does not mean the revoke failed: the transaction may have landed. Read the chain.
-      if (!reverted) console.log(`\nThe send raised an error (${String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 160)}). Reading the chain to see whether the revoke landed.`)
+      if (!reverted) console.log(`\nThe send raised an error (${oneLine((err as any)?.shortMessage ?? (err as Error)?.message ?? err, 160)}). Reading the chain to see whether the revoke landed.`)
     }
     if (reverted) await revertedRevoke(reverted, [])
   } else {
@@ -193,7 +193,7 @@ async function main() {
     try {
       feeToken = await feeTokenOf(owner)
     } catch (err) {
-      const reason = `could not read the owner's fee token from the FeeManager (${String((err as Error)?.message ?? err).slice(0, 120)})`
+      const reason = `could not read the owner's fee token from the FeeManager (${oneLine((err as Error)?.message ?? err, 120)})`
       console.log(`REFUSED: ${reason}. Nothing was sent.`)
       process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: 'check the Moderato RPC (superstables budget doctor --rail tempo), then revoke again' }))
     }
@@ -246,7 +246,7 @@ async function main() {
   try {
     unclosed = (await residualScan(owner, agentAddress, fromBlock, grace, 'Open payment sessions of this key (report only)')).unclosed
   } catch (err) {
-    console.log(`\nSession scan FAILED (${String((err as Error).message).slice(0, 160)}). Residual exposure from payment sessions is UNKNOWN.`)
+    console.log(`\nSession scan FAILED (${oneLine((err as Error).message, 160)}). Residual exposure from payment sessions is UNKNOWN.`)
     scanFailed = true
   }
   if (after.revoked && unclosed) console.log('\nThis revoke does not stop those sessions. Close them with the tool that opened them.')
@@ -261,6 +261,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('revokeBudget failed:', String(err?.shortMessage ?? err?.message ?? err).slice(0, 400))
+  console.error('revokeBudget failed:', oneLine(err?.shortMessage ?? err?.message ?? err, 400))
   return exitAfterError()
 })

@@ -27,16 +27,17 @@ import bs58 from "bs58";
 // callers of these scripts should see for a refused payment or an
 // unfunded fee payer, not a raw JS crash.
 process.on("unhandledRejection", async (err) => {
-  console.error("\nFailed:", err?.message ?? err);
+  // the RPC's words and a program's logs are outside text: one line each, no hidden characters (oneLine, below)
+  console.error("\nFailed:", oneLine(err?.message ?? err, 1000));
   if (typeof err?.getLogs === "function") {
     try {
       const logs = await err.getLogs();
-      if (logs?.length) console.error("Logs:\n" + logs.join("\n"));
+      if (logs?.length) console.error("Logs:\n" + logs.map((l) => oneLine(l, 500)).join("\n"));
     } catch {
       // ignore, we already printed the message
     }
   } else if (err?.logs?.length) {
-    console.error("Logs:\n" + err.logs.join("\n"));
+    console.error("Logs:\n" + err.logs.map((l) => oneLine(l, 500)).join("\n"));
   }
   process.exit(1);
 });

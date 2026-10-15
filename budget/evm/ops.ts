@@ -22,7 +22,7 @@ import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, BlockNotF
 import {
   SYM,
   OPS_DIR, USDC, CFG, RAIL, cmd, erc20Abi, publicClient, usdc, sleep, tx, retry, allowanceOf, usdcBalance, readUntil, feeOf, sendJournaled, receiptOf,
-  GasShort, gasWords,
+  GasShort, gasWords, oneLine,
   type Wallet,
 } from "./lib.ts";
 import { searchLogs } from "../../src/core/log-windows.mjs";
@@ -637,7 +637,7 @@ export async function makeSafe(j: Journal, w: Wallet, o: { log?: (s: string) => 
     } catch (e: any) {
       if (e?.txHash) { j.cancelStatus = "reverted"; if (e.feeWei) addFee(j, e.feeWei); }
       if (e instanceof GasShort) log(`cancelAuthorization not sent: ${gasShortNote(e, "the cancel and the return after it")}`);
-      j.notes.push(e instanceof GasShort ? `cancelAuthorization not sent: ${gasShortNote(e, "the cancel and the return after it")}` : `cancelAuthorization did not land: ${String(e?.shortMessage ?? e?.message ?? e).split("\n")[0]}`);
+      j.notes.push(e instanceof GasShort ? `cancelAuthorization not sent: ${gasShortNote(e, "the cancel and the return after it")}` : `cancelAuthorization did not land: ${oneLine(e?.shortMessage ?? e?.message ?? e, 300)}`);
       writeJournal(j);
       // the seller may have settled first: the chain decides
       s = await readSettlement(j);
@@ -699,7 +699,7 @@ export async function makeSafe(j: Journal, w: Wallet, o: { log?: (s: string) => 
   } catch (e: any) {
     if (e?.txHash) { j.returnStatus = "reverted"; if (e.feeWei) addFee(j, e.feeWei); }
     if (e instanceof GasShort) log(`return not sent: ${gasShortNote(e, "the return")}`);
-    j.notes.push(e instanceof GasShort ? `return not sent: ${gasShortNote(e, "the return")}` : `return transfer failed: ${String(e?.shortMessage ?? e?.message ?? e).split("\n")[0]}`);
+    j.notes.push(e instanceof GasShort ? `return not sent: ${gasShortNote(e, "the return")}` : `return transfer failed: ${oneLine(e?.shortMessage ?? e?.message ?? e, 300)}`);
     writeJournal(j);
   }
   return (await reconcileJournal(j, { quiet: true })).j;

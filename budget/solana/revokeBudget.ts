@@ -20,7 +20,7 @@
 // owner rejected or the link expired, no SOL for the fee), 5 unknown (read the chain).
 import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { AGENT_KEY_PATH, CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseEnvText, parseStrict, readPublic, retryRead, sleep, writePublic } from "./lib.mjs";
+import { AGENT_KEY_PATH, CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, formatUnits, oneLine, parseEnvText, parseStrict, readPublic, retryRead, sleep, writePublic } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { readRegularFile } from "../secret-file.mjs";
@@ -66,7 +66,7 @@ try {
   before = await retryRead(() => getAccountOrNull(conn, ata));
 } catch (err) {
   // could not read is not "no delegate": whether a budget is live is unknown
-  const reason = `could not read the owner's USDC account ${ata.toBase58()} (${String((err as Error)?.message ?? err).slice(0, 160)}); whether a delegate is live is unknown`;
+  const reason = `could not read the owner's USDC account ${ata.toBase58()} (${oneLine((err as Error)?.message ?? err, 160)}); whether a delegate is live is unknown`;
   console.log(`UNKNOWN: ${reason}. Nothing was sent.`);
   process.exit(result(5, { state: "unknown", tx: null, reason, next: "superstables budget status --rail solana, then run revoke again" }));
 }
