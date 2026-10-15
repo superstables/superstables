@@ -66,7 +66,7 @@ const sentKinds = (chain: FakeEvm) => chain.sentRaw.map((t) => t.data.slice(0, 1
 const TRANSFER_FROM = "0x23b872dd", CANCEL = "0x5a049a70";
 
 describe("the signer checks the whole payment before the pull", () => {
-  it.concurrent("T1a: a library that signs over another domain version is refused before anything is pulled", async () => {
+  it.concurrent("a library that signs over another domain version is refused before anything is pulled", async () => {
     const s = await setup(), sel = await seller(s);
     const r = await buy(s, sel.url, "t1a", {}, preload("x402-domain-version.mjs"));
     expect(r.code, r.stdout + r.stderr).toBe(3);
@@ -77,7 +77,7 @@ describe("the signer checks the whole payment before the pull", () => {
     expect(s.chain.nativeOf(AGENT.address)).toBe(10n ** 17n);
   }, 90_000);
 
-  it.concurrent("T1b: a seller that names another domain version is refused before the pull (regression guard)", async () => {
+  it.concurrent("a seller that names another domain version is refused before the pull (regression guard)", async () => {
     const s = await setup(), sel = await seller(s, { mutate: (req) => ({ ...req, extra: { name: "USDC", version: "1" } }) });
     const r = await buy(s, sel.url, "t1b");
     expect(r.code, r.stdout + r.stderr).toBe(3);
@@ -85,7 +85,7 @@ describe("the signer checks the whole payment before the pull", () => {
     expect(sel.creds).toEqual([]);
   }, 90_000);
 
-  it.concurrent("T3: a second payment signature is refused; the first authorization stands", async () => {
+  it.concurrent("a second payment signature is refused; the first authorization stands", async () => {
     const s = await setup(), sel = await seller(s);
     const r = await buy(s, sel.url, "t3", {}, preload("x402-payment-retry.mjs"));
     const journal = JSON.parse(readFileSync(join(s.home.opsDir, "t3.json"), "utf8"));
@@ -100,7 +100,7 @@ describe("the signer checks the whole payment before the pull", () => {
 });
 
 describe("the authorization lifetime is 600 seconds at most", () => {
-  it.concurrent("T2a: a seller asking for 900 seconds is refused before anything is signed", async () => {
+  it.concurrent("a seller asking for 900 seconds is refused before anything is signed", async () => {
     const s = await setup(), sel = await seller(s, { mutate: (req) => ({ ...req, maxTimeoutSeconds: 900 }) });
     const r = await buy(s, sel.url, "t2a");
     expect(r.code, r.stdout + r.stderr).toBe(3);
@@ -109,7 +109,7 @@ describe("the authorization lifetime is 600 seconds at most", () => {
     expect(sel.creds).toEqual([]);
   }, 90_000);
 
-  it.concurrent("T2b: 600 seconds is accepted and signs a window of 600", async () => {
+  it.concurrent("600 seconds is accepted and signs a window of 600", async () => {
     const s = await setup(), sel = await seller(s, { mutate: (req) => ({ ...req, maxTimeoutSeconds: 600 }) });
     const before = Math.floor(Date.now() / 1000);
     const r = await buy(s, sel.url, "t2b");
@@ -122,7 +122,7 @@ describe("the authorization lifetime is 600 seconds at most", () => {
     expect(validBefore).toBeGreaterThanOrEqual(before + 600 - 1);
   }, 90_000);
 
-  it.concurrent("T2c: preflight skips the 900 s option and says what buy accepts", async () => {
+  it.concurrent("preflight skips the 900 s option and says what buy accepts", async () => {
     const s = await setup(), sel = await seller(s, { mutate: (req) => ({ ...req, maxTimeoutSeconds: 900 }) });
     // async: the seller lives in this process, so the event loop must stay free while preflight runs
     const out = await run(["--url", sel.url, "--max", "0.05"], { SUPERSTABLES_HOME: s.home.home, B4_RPC: s.chain.url }, "", join(ROOT, "budget/evm/preflight.ts"));
@@ -131,7 +131,7 @@ describe("the authorization lifetime is 600 seconds at most", () => {
     expect(out.stdout).not.toContain("USABLE");
   }, 90_000);
 
-  it("T7: checkAccept takes 30, 60 and 600 and refuses 29, 601, 900 and 3600", () => {
+  it("checkAccept takes 30, 60 and 600 and refuses 29, 601, 900 and 3600", () => {
     expect([MIN_AUTH_LIFETIME_S, MAX_AUTH_LIFETIME_S]).toEqual([30, 600]);
     const option = (t: number) => ({ asset: lib.USDC, amount: "1000", payTo: "0xFD24114C3981Aba78aE2441991B1BdB89329c556", maxTimeoutSeconds: t, extra: { name: lib.CFG.domain.name, version: lib.CFG.domain.version } });
     for (const t of [30, 60, 600]) expect(checkAccept(option(t), { max: 10n ** 6n }), String(t)).toBeNull();
@@ -225,7 +225,7 @@ describe("Arc: a stranded price is not gas reserve", () => {
     }, null, 2), { mode: 0o600 });
   };
 
-  it.concurrent("T4a: a journaled price still in the agent key is refused at any amount", async () => {
+  it.concurrent("a journaled price still in the agent key is refused at any amount", async () => {
     const s = await setup({ arc: true, allow: "5" }), sel = await seller(s);
     s.chain.setUsdc(AGENT.address, usdc("1.6")); // 0.1 reserve + 1.5 an earlier purchase pulled
     strandedJournal(s);
@@ -235,7 +235,7 @@ describe("Arc: a stranded price is not gas reserve", () => {
     expect(s.chain.sentRaw).toEqual([]);
   }, 90_000);
 
-  it.concurrent("T4c: a journal that cannot be read is not gas reserve either", async () => {
+  it.concurrent("a journal that cannot be read is not gas reserve either", async () => {
     const s = await setup({ arc: true, allow: "5" }), sel = await seller(s);
     s.chain.setUsdc(AGENT.address, usdc("0.1"));
     mkdirSync(s.home.opsDir, { recursive: true, mode: 0o700 });
@@ -247,7 +247,7 @@ describe("Arc: a stranded price is not gas reserve", () => {
     expect(s.chain.sentRaw).toEqual([]);
   }, 90_000);
 
-  it.concurrent("T4a': the same balance with no journal is still tolerated up to the reserve", async () => {
+  it.concurrent("the same balance with no journal is still tolerated up to the reserve", async () => {
     const s = await setup({ arc: true, allow: "5" }), sel = await seller(s);
     s.chain.setUsdc(AGENT.address, usdc("1.6"));
     const r = await buy(s, sel.url, "arc-plain");
@@ -255,7 +255,7 @@ describe("Arc: a stranded price is not gas reserve", () => {
     expect(sentKinds(s.chain)).toEqual([TRANSFER_FROM]);
   }, 90_000);
 
-  it.concurrent("T4b: money that arrives during a purchase is reported, not counted as reserve", async () => {
+  it.concurrent("money that arrives during a purchase is reported, not counted as reserve", async () => {
     const s = await setup({ arc: true, allow: "5" }), sel = await seller(s, { refund: 500_000n });
     s.chain.setUsdc(AGENT.address, usdc("0.1"));
     const r = await buy(s, sel.url, "arc-refund");
@@ -267,7 +267,7 @@ describe("Arc: a stranded price is not gas reserve", () => {
 });
 
 describe("purchases on one agent key take turns", () => {
-  it("T5: a second buy waits for the first instead of signing its nonce", async () => {
+  it("a second buy waits for the first instead of signing its nonce", async () => {
     const s = await setup(), a = await seller(s, { price: "10000" }), b = await seller(s, { price: "20000" });
     let open!: () => void;
     s.chain.gate = new Promise<void>((res) => (open = res));
@@ -291,7 +291,7 @@ describe("the key lock", () => {
   const address = AGENT.address;
   const lockPath = (dir: string) => keyLockFile(dir, address);
 
-  it("T6a: a second taker gets the lock as soon as the holder releases it", async () => {
+  it("a second taker gets the lock as soon as the holder releases it", async () => {
     const dir = opsDir();
     const held = lockFile(lockPath(dir));
     expect(held.ok).toBe(true);
@@ -303,7 +303,7 @@ describe("the key lock", () => {
     got.release();
   });
 
-  it("T6b: a holder that never releases ends the wait with a busy answer", async () => {
+  it("a holder that never releases ends the wait with a busy answer", async () => {
     const dir = opsDir();
     const held = lockFile(lockPath(dir));
     const got = await requireKeyLock(dir, address, { waitMs: 300, pollMs: 50 });
@@ -312,7 +312,7 @@ describe("the key lock", () => {
     held.release();
   });
 
-  it("T6c: a dead holder's lock is taken over at once", async () => {
+  it("a dead holder's lock is taken over at once", async () => {
     const dir = opsDir();
     const source = createIdentitySource();
     writeFileSync(lockPath(dir), JSON.stringify({ ...source.record(), pid: 2147483647, ...source.starts?.(2147483647) }));
@@ -325,7 +325,7 @@ describe("the key lock", () => {
     await expect(requireKeyLock(opsDir(), "../../etc/passwd")).rejects.toThrow("not an EVM address");
   });
 
-  it("T6d: an unverifiable holder is waited for, kept, and cleared only by the owner's typed override", () => {
+  it("an unverifiable holder is waited for, kept, and cleared only by the owner's typed override", () => {
     const s = makeHome(); cleanups.push(s.cleanup);
     mkdirSync(s.opsDir, { recursive: true });
     const path = lockPath(s.opsDir);

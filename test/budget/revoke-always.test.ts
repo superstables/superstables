@@ -125,7 +125,7 @@ const tempoKeyId = `${OWNER.toLowerCase()}:${TEMPO_AGENT.toLowerCase()}`;
 const REVOKED_KEY = { expiry: 0n, limit: 0n, period: 0n, periodEnd: 0n, revoked: true, scoped: false };
 
 describe("solana: revoke sends, status needs a record", () => {
-  it("S1: hosted, no delegate reads: the revoke goes to the site and is recorded; status then says revoked", async () => {
+  it("hosted, no delegate reads: the revoke goes to the site and is recorded; status then says revoked", async () => {
     solanaChain();
     site.owner = SOL_OWNER;
     site.onPoll = ownerSends("solana");
@@ -139,13 +139,13 @@ describe("solana: revoke sends, status needs a record", () => {
     expect(s.result).toMatchObject({ revoked: true, remaining: "0" });
   }, 120_000);
 
-  it("S2: on this computer, no delegate reads: the owner page is still offered", async () => {
+  it("on this computer, no delegate reads: the owner page is still offered", async () => {
     solanaChain(false);
     const r = await untilApproveOrEnd(["revoke", "--rail", "solana", "--wait", "--no-open"]);
     expect(r.approved, r.stdout).toBe(true);
   }, 60_000);
 
-  it("S3: owner key file, no delegate reads: the Revoke is sent (never 'already revoked'); with no USDC account nothing is sent and revoked is null", async () => {
+  it("owner key file, no delegate reads: the Revoke is sent (never 'already revoked'); with no USDC account nothing is sent and revoked is null", async () => {
     solanaChain(false);
     const key = ownerKeyFile("A");
     const r = await budget(["revoke", "--rail", "solana", "--owner-key-file", key, "--yes"]);
@@ -163,21 +163,21 @@ describe("solana: revoke sends, status needs a record", () => {
     expect(solana.calls).not.toContain("sendTransaction");
   }, 120_000);
 
-  it("S5: status, no delegate and no record: remaining 0, not revoked", async () => {
+  it("status, no delegate and no record: remaining 0, not revoked", async () => {
     solanaChain(false);
     const s = await budget(["status", "--rail", "solana"]);
     expect(s.result).toMatchObject({ state: "ok", revoked: false, remaining: "0" });
     expect(s.result.next).toMatch(/spent, never granted, or revoked/);
   }, 60_000);
 
-  it("S6: status, no delegate and a recorded revoke: revoked", async () => {
+  it("status, no delegate and a recorded revoke: revoked", async () => {
     solanaChain(false);
     appendFileSync(file("budget", "public", "solana-devnet.env"), REVOKED_AT);
     const s = await budget(["status", "--rail", "solana"]);
     expect(s.result).toMatchObject({ state: "ok", revoked: true, remaining: "0" });
   }, 60_000);
 
-  it("S7: status, a live delegate and a stale record: not revoked", async () => {
+  it("status, a live delegate and a stale record: not revoked", async () => {
     solanaChain(false);
     appendFileSync(file("budget", "public", "solana-devnet.env"), REVOKED_AT);
     solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: SOL_AGENT, delegated: 50_000n });
@@ -185,7 +185,7 @@ describe("solana: revoke sends, status needs a record", () => {
     expect(s.result).toMatchObject({ revoked: false, remaining: "0.05" });
   }, 60_000);
 
-  it("S8: a hosted grant drops a recorded revoke", async () => {
+  it("a hosted grant drops a recorded revoke", async () => {
     solanaChain();
     appendFileSync(file("budget", "public", "solana-devnet.env"), REVOKED_AT);
     site.owner = SOL_OWNER;
@@ -195,7 +195,7 @@ describe("solana: revoke sends, status needs a record", () => {
     expect(publicOf("solana")).not.toMatch(/REVOKED_AT/);
   }, 120_000);
 
-  it("S9: setup --new-owner drops a recorded revoke", async () => {
+  it("setup --new-owner drops a recorded revoke", async () => {
     solanaChain(false);
     appendFileSync(file("budget", "public", "solana-devnet.env"), REVOKED_AT);
     solana.usdc.set(SOL_OTHER, { amount: 5_000_000n, delegate: null, delegated: 0n });
@@ -210,7 +210,7 @@ describe("solana: revoke sends, status needs a record", () => {
 describe("tempo: a revoke is skipped only when the keychain refuses it", () => {
   const revokeArgs = ["revoke", "--rail", "tempo", "--wait", "--no-open"];
 
-  it("T1: the key reads revoked and the keychain refuses a simulated revoke: revoked, nothing sent", async () => {
+  it("the key reads revoked and the keychain refuses a simulated revoke: revoked, nothing sent", async () => {
     hostedTempo();
     site.owner = OWNER;
     tempo.keys.set(tempoKeyId, REVOKED_KEY);
@@ -224,7 +224,7 @@ describe("tempo: a revoke is skipped only when the keychain refuses it", () => {
     expect(site.requests).toHaveLength(0);
   }, 90_000);
 
-  it("T2: the same without --wait (an agent's call)", async () => {
+  it("the same without --wait (an agent's call)", async () => {
     hostedTempo();
     site.owner = OWNER;
     tempo.keys.set(tempoKeyId, REVOKED_KEY);
@@ -235,7 +235,7 @@ describe("tempo: a revoke is skipped only when the keychain refuses it", () => {
     expect(site.requests).toHaveLength(0);
   }, 90_000);
 
-  it("T3: the key reads revoked but the keychain would take a revoke (a lying read): the revoke is sent", async () => {
+  it("the key reads revoked but the keychain would take a revoke (a lying read): the revoke is sent", async () => {
     hostedTempo();
     site.owner = OWNER;
     tempo.keys.set(tempoKeyId, REVOKED_KEY);
@@ -248,7 +248,7 @@ describe("tempo: a revoke is skipped only when the keychain refuses it", () => {
     expect(site.requests[0].body.transaction.data).toMatch(/^0x5ae7ab32/);
   }, 90_000);
 
-  it("T4: the key reads revoked and the keychain answers KeyNotFound: also already done", async () => {
+  it("the key reads revoked and the keychain answers KeyNotFound: also already done", async () => {
     hostedTempo();
     site.owner = OWNER;
     tempo.keys.set(tempoKeyId, REVOKED_KEY);
@@ -261,7 +261,7 @@ describe("tempo: a revoke is skipped only when the keychain refuses it", () => {
     expect(site.requests).toHaveLength(0);
   }, 90_000);
 
-  it("T4b: the simulation cannot be read: unknown (exit 5), nothing sent", async () => {
+  it("the simulation cannot be read: unknown (exit 5), nothing sent", async () => {
     hostedTempo();
     site.owner = OWNER;
     tempo.keys.set(tempoKeyId, REVOKED_KEY);
@@ -273,7 +273,7 @@ describe("tempo: a revoke is skipped only when the keychain refuses it", () => {
     expect(site.requests).toHaveLength(0);
   }, 90_000);
 
-  it("T4c: with the owner key file, a simulation that cannot be read is unknown too: nothing sent, never revoked", async () => {
+  it("with the owner key file, a simulation that cannot be read is unknown too: nothing sent, never revoked", async () => {
     write(file("keys", "budget", "tempo-agent.env"), `AGENT_PRIVATE_KEY=${TEMPO_KEY}\nAGENT_ADDRESS=${TEMPO_AGENT}\nOWNER_ADDRESS=${OWNER}\n`);
     write(file("budget", "public", "tempo-moderato.env"), `OWNER_ADDRESS=${OWNER}\nAGENT_ADDRESS=${TEMPO_AGENT}\n`, 0o644);
     write(file("owner.env"), `OWNER_PRIVATE_KEY=0x${"22".repeat(32)}\n`);
@@ -286,7 +286,7 @@ describe("tempo: a revoke is skipped only when the keychain refuses it", () => {
     expect(r.stdout).not.toMatch(/^SENDING /m);
   }, 90_000);
 
-  it("T5: the key reads never authorized but the keychain would take a revoke: the revoke is sent", async () => {
+  it("the key reads never authorized but the keychain would take a revoke: the revoke is sent", async () => {
     hostedTempo();
     site.owner = OWNER;
     tempo.revokeSimulation = () => "ok";
@@ -301,7 +301,7 @@ describe("tempo: a revoke is skipped only when the keychain refuses it", () => {
     expect(site.requests).toHaveLength(1);
   }, 90_000);
 
-  it("T6: the key reads never authorized and the keychain says KeyNotFound: refused", async () => {
+  it("the key reads never authorized and the keychain says KeyNotFound: refused", async () => {
     hostedTempo();
     site.owner = OWNER;
     const r = await budget(revokeArgs);
@@ -310,7 +310,7 @@ describe("tempo: a revoke is skipped only when the keychain refuses it", () => {
     expect(tempo.simulations).toHaveLength(1);
   }, 90_000);
 
-  it("T7: the key reads never authorized and the keychain says KeyAlreadyRevoked: the reads disagree, unknown", async () => {
+  it("the key reads never authorized and the keychain says KeyAlreadyRevoked: the reads disagree, unknown", async () => {
     hostedTempo();
     site.owner = OWNER;
     tempo.revokeSimulation = () => "KeyAlreadyRevoked";
@@ -328,7 +328,7 @@ describe("evm: status needs a record", () => {
     write(file("budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${EVM_AGENT}\n${extra}`, 0o644);
   };
 
-  it("E1: allowance 0 and no recorded revoke: remaining 0, not revoked", async () => {
+  it("allowance 0 and no recorded revoke: remaining 0, not revoked", async () => {
     await evmChain();
     const s = await budget(["status", "--rail", "evm"]);
     expect(s.code, s.stdout + s.stderr).toBe(0);
@@ -336,13 +336,13 @@ describe("evm: status needs a record", () => {
     expect(s.result.next).toMatch(/spent, never granted, or revoked/);
   }, 60_000);
 
-  it("E2: allowance 0 and a recorded revoke: revoked", async () => {
+  it("allowance 0 and a recorded revoke: revoked", async () => {
     await evmChain("B4_REVOKED_AT=1760000000\n");
     const s = await budget(["status", "--rail", "evm"]);
     expect(s.result).toMatchObject({ state: "ok", revoked: true, remaining: "0" });
   }, 60_000);
 
-  it("E3: a live allowance and a stale record: not revoked", async () => {
+  it("a live allowance and a stale record: not revoked", async () => {
     await evmChain("B4_REVOKED_AT=1760000000\n", (m, p) => m === "eth_call" && String(p[0]?.data).startsWith("0xdd62ed3e") ? `0x${(10000n).toString(16).padStart(64, "0")}` : undefined);
     const s = await budget(["status", "--rail", "evm"]);
     expect(s.result).toMatchObject({ revoked: false, remaining: "0.01" });

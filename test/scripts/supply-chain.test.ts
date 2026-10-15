@@ -38,7 +38,7 @@ const sha256 = (file: string) => createHash("sha256").update(readFileSync(file))
 const files = (dir: string) => readdirSync(dir, { recursive: true }).map(String).filter((f) => statSync(join(dir, f)).isFile()).sort();
 
 describe("pins", () => {
-  it("T1: every runtime dependency is an exact version, and it is the version the lockfile resolved", () => {
+  it("every runtime dependency is an exact version, and it is the version the lockfile resolved", () => {
     expect(Object.keys(pkg.dependencies).length).toBeGreaterThan(0);
     for (const [name, spec] of Object.entries<string>(pkg.dependencies)) {
       expect(spec, name).toMatch(EXACT);
@@ -47,7 +47,7 @@ describe("pins", () => {
     expect(lock[""].dependencies).toEqual(pkg.dependencies);
   });
 
-  it("T2: the bundled packages and the build tools are exact too, and so is the override", async () => {
+  it("the bundled packages and the build tools are exact too, and so is the override", async () => {
     const { BUDGET_ONLY_DEPENDENCIES } = await import("../../scripts/budget-build.mjs");
     for (const name of [...BUDGET_ONLY_DEPENDENCIES, "esbuild", "fflate", "typescript"]) {
       const spec = pkg.devDependencies[name];
@@ -58,7 +58,7 @@ describe("pins", () => {
     expect(lock[""].devDependencies).toEqual(pkg.devDependencies);
   });
 
-  it("T3: the packages no exact spec reaches are exactly the four that are known", () => {
+  it("the packages no exact spec reaches are exactly the four that are known", () => {
     const production = Object.entries<any>(lock).filter(([key, v]) => key && !v.dev && !v.optional && !v.devOptional);
     const pinned = new Set<string>();
     for (const deps of [lock[""].dependencies, ...production.map(([, v]) => v.dependencies)]) {
@@ -71,7 +71,7 @@ describe("pins", () => {
 });
 
 describe("buildTime", () => {
-  it("T5: takes SOURCE_DATE_EPOCH, then the commit's time, then the export's, and the clock last", async () => {
+  it("takes SOURCE_DATE_EPOCH, then the commit's time, then the export's, and the clock last", async () => {
     const { buildTime } = await import("../../scripts/budget-build.mjs");
     expect(buildTime(root, { SOURCE_DATE_EPOCH: "1700000000" })).toBe("2023-11-14T22:13:20Z");
     expect(() => buildTime(root, { SOURCE_DATE_EPOCH: "soon" })).toThrow(/SOURCE_DATE_EPOCH/);
@@ -109,7 +109,7 @@ function twoBuilds() {
 }
 
 describe("two builds of one commit", () => {
-  it("T6: write the same bytes, a second later and under another locale", () => {
+  it("write the same bytes, a second later and under another locale", () => {
     const { a, b, sbomA, sbomB } = twoBuilds();
     expect(JSON.parse(readFileSync(join(a, "VERSION.json"), "utf8")).builtAt).toBe("2023-11-14T22:13:20Z");
     expect(files(b)).toEqual(files(a));
@@ -119,7 +119,7 @@ describe("two builds of one commit", () => {
 }, 60_000);
 
 describe("the order of the bundled packages", () => {
-  it("T6b: is the same in every locale, though a bare localeCompare is not", () => {
+  it("is the same in every locale, though a bare localeCompare is not", () => {
     // Lithuanian puts y with i, Czech puts ch after h. None of today's package names shows it, so the comparator is tested on names that do.
     const sorted = (locale: string) => {
       const code = `
@@ -142,7 +142,7 @@ describe("the order of the bundled packages", () => {
 });
 
 describe("the SBOM", () => {
-  it("T7: is CycloneDX 1.5, lists what is installed and what is bundled, and holds nothing from this machine", () => {
+  it("is CycloneDX 1.5, lists what is installed and what is bundled, and holds nothing from this machine", () => {
     const bom = JSON.parse(readFileSync(twoBuilds().sbomA, "utf8"));
     expect(bom.bomFormat).toBe("CycloneDX");
     expect(bom.specVersion).toBe("1.5");
@@ -176,7 +176,7 @@ describe("the SBOM", () => {
 }, 60_000);
 
 describe("source maps", () => {
-  it("T8: tsc no longer writes them, and the budget bundle has none", () => {
+  it("tsc no longer writes them, and the budget bundle has none", () => {
     const { compilerOptions } = read("tsconfig.build.json");
     expect(compilerOptions.sourceMap).toBe(false);
     expect(compilerOptions.inlineSourceMap).toBeUndefined();
@@ -195,7 +195,7 @@ describe("the audit of shipped packages", () => {
     ],
   };
 
-  it("T9: calls an advisory shipped when its node is a shipped path, and dev-only otherwise", async () => {
+  it("calls an advisory shipped when its node is a shipped path, and dev-only otherwise", async () => {
     const { shippedPaths, classify } = await import("../../scripts/bundle-audit.mjs");
     const { paths, packages } = shippedPaths([bom]);
     expect([...paths].sort()).toEqual(["node_modules/@solana/web3.js/node_modules/bs58", "node_modules/viem"]);
@@ -212,7 +212,7 @@ describe("the audit of shipped packages", () => {
     expect(devOnly.map((s: any) => s.name)).toEqual(["tinypool"]);
   });
 
-  it("T9b: refuses an SBOM whose paths are not locations in the lockfile, or are for another version", async () => {
+  it("refuses an SBOM whose paths are not locations in the lockfile, or are for another version", async () => {
     const { checkPaths } = await import("../../scripts/bundle-audit.mjs");
     const comp = (name: string, version: string, path: string) => ({ name, version, properties: [{ name: "superstables:path", value: path }] });
     const packages = { "node_modules/a": { version: "1.0.0" }, "node_modules/a/node_modules/b": { version: "2.0.0" } };
@@ -223,7 +223,7 @@ describe("the audit of shipped packages", () => {
     expect(checkPaths([{ components: [comp("toString", "1.0.0", "toString")] }], packages)).toHaveLength(1);
   });
 
-  it("T10: never reads an answer that did not come from the registry as clean", async () => {
+  it("never reads an answer that did not come from the registry as clean", async () => {
     const { auditVerdict } = await import("../../scripts/bundle-audit.mjs");
     const clean = JSON.stringify({ auditReportVersion: 2, vulnerabilities: {} });
     const asked = "npm http fetch POST 200 https://registry.npmjs.org/-/npm/v1/security/advisories/bulk 212ms\n";
@@ -237,7 +237,7 @@ describe("the audit of shipped packages", () => {
     expect(ok.report?.vulnerabilities).toEqual({});
   });
 
-  it("T11: exits 2 when it cannot audit: a missing SBOM, or a registry that is not there", () => {
+  it("exits 2 when it cannot audit: a missing SBOM, or a registry that is not there", () => {
     const script = join(root, "scripts", "bundle-audit.mjs");
     const missing = spawnSync(process.execPath, [script, "--sbom", "/nonexistent/sbom.cdx.json"], { cwd: root, env: process.env, encoding: "utf8" });
     expect(missing.status).toBe(2);

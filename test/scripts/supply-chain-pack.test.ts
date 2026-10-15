@@ -33,7 +33,7 @@ afterAll(() => {
 });
 
 describe("the npm package", () => {
-  it("T12: holds no source map, and holds the SBOM", () => {
+  it("holds no source map, and holds the SBOM", () => {
     const r = spawnSync("npm", ["pack", "--dry-run", "--json"], { cwd: copy, env: cleanEnv, encoding: "utf8", timeout: 120_000 });
     expect(r.status, r.stderr).toBe(0);
     // npm 10 prints prepack's own output to stdout before the JSON
@@ -48,7 +48,7 @@ describe("the npm package", () => {
 });
 
 describe("the skill zip", () => {
-  it("T13: is the same bytes in another time zone and locale, and carries its SBOM", async () => {
+  it("is the same bytes in another time zone and locale, and carries its SBOM", async () => {
     const sha = execFileSync("git", ["rev-parse", "--short=10", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
     const build = (extra: Record<string, string>) => {
       const r = spawnSync(process.execPath, [join(copy, "scripts", "skill.mjs")], {
