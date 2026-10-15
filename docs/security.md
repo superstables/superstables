@@ -489,11 +489,15 @@ undo an owner signature or a transaction already sent through setup on superstab
   is asked, even when the budget already reads empty or revoked: one RPC's read is not proof that
   nothing is live. On `solana` it sends nothing only when the owner has no USDC account, and on
   `tempo` only when the keychain refuses a simulated `revokeKey` from the owner as already done; a
-  simulation it cannot read is unknown (exit 5). It reports `revoked` only after its own
-  transaction and a read that shows it. `budget status` says `revoked: true` only for a revoke this
-  machine recorded that the chain still shows (on `tempo`, the keychain's revoked flag): an
-  allowance or delegate that reads 0 is reported as `remaining: "0"`, because spent, never granted,
-  revoked elsewhere and a wrong read all look the same.
+  simulation it cannot read is unknown (exit 5). When it sends a transaction, it reports `revoked`
+  only after its own transaction and a read that shows it. The exception is the `tempo` case just
+  described: the key reads revoked, and the keychain refuses the owner's simulated `revokeKey` with
+  a structured already-revoked or not-found error. The command then reports `state: "ok"`,
+  `revoked: true` and `tx: {}`, with nothing sent. That is the command's own result. `budget status`
+  says `revoked: true` only for a revoke this machine recorded that the chain still shows (on
+  `tempo`, the keychain's revoked flag): an allowance or delegate that reads 0 is reported as
+  `remaining: "0"`, because spent, never granted, revoked elsewhere and a wrong read all look the
+  same.
 
 Per rail, with what each revoke does not cover:
 [Budget rails and chains](../budget/README.md#safety-model).
