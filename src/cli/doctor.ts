@@ -20,6 +20,7 @@ import { join, resolve } from "node:path";
 import { DEFAULT_NETWORK } from "../core/chain.js";
 import { HOSTED_DEMO_SERVICE_URL, indexUrl } from "../core/discovery.js";
 import { FACILITATORS } from "../core/facilitator.js";
+import { readBody } from "../core/http.js";
 import {
   DEFAULT_APPROVE_PORT,
   accountPolicyPath,
@@ -293,16 +294,22 @@ function facilitatorChecks(): Promise<Check[]> {
   return Promise.all(FACILITATORS.map(facilitatorCheck));
 }
 
+/** The most read of a facilitator's /supported answer: the networks and schemes it settles, a few KB. */
+const SUPPORTED_MAX_BYTES = 256 * 1024;
+
 async function facilitatorCheck(url: string): Promise<Check> {
   const name = hostOf(url);
   try {
     const res = await timedFetch(`${url}/supported`, { headers: { accept: "application/json" } });
     if (!res.ok) return { name, ok: false, detail: `answered HTTP ${res.status} on /supported`, essential: false };
-    const body = (await res.json()) as { kinds?: { network?: string; scheme?: string }[] };
-    const kinds = body.kinds ?? [];
-    const supported = kinds.some(
-      (kind) => kind.network === DEFAULT_NETWORK.caip2 || kind.network === DEFAULT_NETWORK.v1Name,
-    );
+    // read up to the cap, within the same five seconds: a longer answer is not a capability list this check reads
+    const { text, end } = await readBody(res, SUPPORTED_MAX_BYTES, CHECK_TIMEOUT_MS, SUPPORTED_MAX_BYTES + 1);
+    if (end === "cap") return { name, ok: false, detail: `answered /supported with more than ${SUPPORTED_MAX_BYTES / 1024} KB`, essential: false };
+    if (end !== "eof") return { name, ok: false, detail: "did not finish answering /supported", essential: false };
+    let body: { kinds?: unknown } | null;
+    try { body = JSON.parse(text); } catch { return { name, ok: false, detail: "answered /supported, but not with JSON", essential: false }; }
+    const kinds = Array.isArray(body?.kinds) ? (body.kinds as { network?: unknown }[]) : [];
+    const supported = kinds.some((kind) => kind?.network === DEFAULT_NETWORK.caip2 || kind?.network === DEFAULT_NETWORK.v1Name);
     return supported
       ? { name, ok: true, detail: `settles exact payments on ${DEFAULT_NETWORK.label}`, essential: false }
       : { name, ok: false, detail: `answered, but does not list ${DEFAULT_NETWORK.caip2}`, essential: false };

@@ -35,13 +35,13 @@ import { dirname } from 'node:path'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 import { LABEL, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
+import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { UNSAFE_SECRET_FILE } from '../secret-file.mjs'
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from '../hosted.ts'
 import { chosenSite, isSiteRequestId, siteOrigin } from '../site.mjs'
 import { KEYCHAIN, approvalSite, askConnect, checkGrantSent, closeOwnerPage, emit, endUnapproved, grantCalldata, iso, tokenBalance, useApprovalSite, useHostedAgent, type GrantPlan, type SentCheck } from './owner.ts'
-import { chainHead, readKey } from './lib/chain.ts'
+import { chainHead, readKey, rpcWrite } from './lib/chain.ts'
 import type { OwnerVerdict } from '../../src/core/signer/owner-approval-server.ts'
 
 const { values: args } = parseCli({
@@ -72,15 +72,11 @@ const usage = (message: string): never => {
 }
 
 async function fundAddress(address: string): Promise<string[]> {
-  const res = await fetch(RPC_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tempo_fundAddress', params: [address] }),
-    signal: AbortSignal.timeout(30_000),
-  })
-  const json = await res.json()
-  if (json.error) throw new Error(`tempo_fundAddress failed for ${address}: ${JSON.stringify(json.error)}`)
-  return json.result as string[]
+  // one request, never retried, read through the capped reader every Tempo RPC read uses (lib/chain.ts)
+  const hashes = await rpcWrite('tempo_fundAddress', [address]).catch((err: Error) => { throw new Error(`tempo_fundAddress failed for ${address}: ${err.message}`) })
+  // faucet() prints these: transaction hashes only, never the faucet's other text
+  if (!Array.isArray(hashes) || !hashes.every((h) => typeof h === 'string' && /^0x[0-9a-fA-F]{64}$/.test(h))) throw new Error(`tempo_fundAddress failed for ${address}: its answer is not a list of transaction hashes`)
+  return hashes
 }
 
 async function faucet(owner: string) {

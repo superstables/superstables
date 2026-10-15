@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret-file.mjs";
-import { DEFAULT_RPC, rpcFromEnv } from "../rpc.mjs";
+import { DEFAULT_RPC, SOLANA_RPC_MAX_BYTES, cappedRpcFetch, rpcFromEnv } from "../rpc.mjs";
 import { markSend } from "../proof.mjs";
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import {
@@ -59,9 +59,10 @@ export const AGENT_KEY_PATH = agentKeyFile("solana");
 export const PUBLIC_PATH = publicFile("solana", "devnet");
 export const OPS_DIR = opsDir("solana", "devnet");
 
+const rpcFetch = cappedRpcFetch(SOLANA_RPC_MAX_BYTES);
 export function connection() {
-  // a broadcast prints SENDING before it leaves (../proof.mjs)
-  return new Connection(RPC_URL, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (url, init) => { markSend(init?.body); return fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }); } });
+  // a broadcast prints SENDING before it leaves (../proof.mjs); every answer is read through cappedRpcFetch (../rpc.mjs)
+  return new Connection(RPC_URL, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (url, init) => { markSend(init?.body); return rpcFetch(url, { ...init, signal: AbortSignal.timeout(10_000) }); } });
 }
 
 /** The RPC's host, for words: a replacement's path or query can carry an access key, so never the whole URL. */
