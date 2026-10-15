@@ -13,6 +13,7 @@ import {
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { CFG, type GasOp } from "./chains.ts";
 import { EVM_CHAINS } from "./chains.mjs";
+import { EVM_RPC_MAX_BYTES, cappedRpcFetch } from "../rpc.mjs";
 import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
@@ -158,8 +159,10 @@ export function writePublic(updates: Record<string, string>, drop: string[] = []
 export const newKey = () => generatePrivateKey();
 
 // ---- clients ----
-// every request passes markSend: a broadcast prints SENDING before it leaves (../proof.mjs)
-const transport = () => http(RPC, { retryCount: 5, retryDelay: 400, onFetchRequest: (_request, init) => markSend(init.body) });
+// every request passes markSend: a broadcast prints SENDING before it leaves (../proof.mjs). Every answer is read through
+// cappedRpcFetch (../rpc.mjs): at most EVM_RPC_MAX_BYTES, RPC error text as one short line, a non-JSON answer named so.
+const rpcFetch = cappedRpcFetch(EVM_RPC_MAX_BYTES);
+const transport = () => http(RPC, { retryCount: 5, retryDelay: 400, onFetchRequest: (_request, init) => markSend(init.body), fetchFn: rpcFetch, maxResponseBodySize: EVM_RPC_MAX_BYTES });
 export const publicClient = createPublicClient({ chain, transport: transport() });
 export const walletFor = (key: Hex, opts?: { nonceManager?: NonceManager }) => {
   const account = privateKeyToAccount(key, opts?.nonceManager ? { nonceManager: opts.nonceManager } : undefined);

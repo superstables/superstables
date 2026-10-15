@@ -143,10 +143,17 @@ export const accountWaitingWords = (code) => (ACCOUNT_WAITING.has(code) ? `${ACC
 /** Anything shaped like an access token (ssbt_, ssba_, sspt_, sspa_) taken out of a text this client prints or stores. */
 export const scrub = (text) => String(text ?? "").replace(/ss[bp][ta]_[A-Za-z0-9_-]*/g, "[token]");
 /**
- * The agent's access tokens (ssbt_, sspt_) taken out of a line the dispatcher prints. An owner's approval link carries
- * its own token (ssba_, sspa_) after # on purpose, so those stay.
+ * Text the dispatcher prints, without control characters: newline and tab stay, every other C0 and C1 character goes, and
+ * the Unicode line and paragraph separators become spaces. A rail's log can quote an RPC's or a library's error text
+ * (viem and @solana/web3.js put the RPC's words, revert reasons and program logs in their errors), which must not move
+ * the cursor, retitle the terminal or erase what was printed.
  */
-export const scrubAgentTokens = (text) => String(text ?? "").replace(/ss[bp]t_[A-Za-z0-9_-]*/g, "[token]");
+export const terminalText = (text) => String(text ?? "").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "").replace(/[\u2028\u2029]/g, " ");
+/**
+ * The agent's access tokens (ssbt_, sspt_) taken out of a line the dispatcher prints, after terminalText. An owner's
+ * approval link carries its own token (ssba_, sspa_) after # on purpose, so those stay.
+ */
+export const scrubAgentTokens = (text) => terminalText(text).replace(/ss[bp]t_[A-Za-z0-9_-]*/g, "[token]");
 
 /** The longest run of token characters held back between two chunks; a longer run is a token and is dropped whole. */
 const TOKEN_HOLD_MAX = 512;
@@ -160,7 +167,7 @@ export function agentTokenScrubber() {
   let inToken = false;
   return {
     push(text) {
-      let s = String(text ?? "");
+      let s = terminalText(text);
       if (inToken) {
         // the rest of a token already replaced by [token]
         const m = /^[A-Za-z0-9_-]*/.exec(s);

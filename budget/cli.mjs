@@ -1003,7 +1003,7 @@ function run(spec) {
     const passErr = (out) => {
       if (!out) return;
       process.stderr.write(out);
-      stderrTail = (stderrTail + out).slice(-4000);
+      stderrTail = (stderrTail + out).slice(-65_536);
       if (APPROVAL_ID) (gate ??= linkGate(APPROVAL_ID)).shown(out);
     };
     p.stderr.on("data", (d) => passErr(errScrub.push(String(d))));
@@ -1020,11 +1020,20 @@ function run(spec) {
 }
 // railResult (buy-guard.mjs): the rail's RESULT line; for purchases only the last line of stdout counts.
 
-/** The rail's last error line on stderr ("error: ...", or its last line), for a reason when it printed no RESULT. */
+/**
+ * The rail's error, for a reason when it printed no RESULT: its last "error: ..." line on stderr, or its last line. A rail
+ * that crashed ends with Node's "Node.js vNN" line after the error's message, stack and properties: its reason is then
+ * the "Details:" line viem writes under the error's first line, or that first line. Never Node's banner.
+ */
 function lastError(text) {
   const lines = String(text).split("\n").map((l) => l.trim()).filter(Boolean);
-  const line = [...lines].reverse().find((l) => /^error:|Error:/.test(l)) ?? lines.at(-1);
-  return line ? clean(line.replace(/^(?:\w*Error|error):\s*/, "")).slice(0, 200) : undefined;
+  let line;
+  if (/^Node\.js v\d+\./.test(lines.at(-1) ?? "")) {
+    let top = -1;
+    for (let i = lines.length - 1; i >= 0; i--) if (/^\w*Error: /.test(lines[i])) { top = i; break; }
+    if (top >= 0) line = lines.slice(top).find((l) => /^Details: /.test(l)) ?? lines[top];
+  } else line = [...lines].reverse().find((l) => /^error:|Error:/.test(l)) ?? lines.at(-1);
+  return line ? clean(line.replace(/^(?:Details|\w*Error|error):\s*/, "")).slice(0, 200) : undefined;
 }
 
 // ---- helpers for amounts and reads ------------------------------------------------------------------

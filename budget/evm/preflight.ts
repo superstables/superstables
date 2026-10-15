@@ -12,6 +12,7 @@ import { domainSeparator, parseAbi, formatUnits, type Address } from "viem";
 import { SYM, CFG, GAS, emit, oneLine, USDC, NETWORK, usdc, gasFmt, publicClient, nativeBalance, usdcBalance, arg, toUsdc, publicEnv, usageError, cmd } from "./lib.ts";
 import { checkAccept } from "./purchase.ts";
 import { EVM_CHAINS } from "./chains.mjs";
+import { readCapped } from "../response.mjs";
 import { isAddress } from "viem";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 
@@ -66,9 +67,9 @@ if (url) {
     if (h) {
       try { pr = JSON.parse(Buffer.from(h, "base64").toString()); } catch {}
     } else if (r.status === 402) {
-      // x402 v1: the requirements are the JSON body. Read at most 64 KB of it.
-      const text = (await r.text().catch(() => "")).slice(0, 65_536);
-      try { const b = JSON.parse(text); if (b?.x402Version === 1) pr = b; } catch {}
+      // x402 v1: the requirements are the JSON body. Read at most 64 KB of it; a longer body is not read further and is no offer.
+      const body = await readCapped(r, 65_536);
+      if (!body.truncated) try { const b = JSON.parse(body.bytes.toString("utf8")); if (b?.x402Version === 1) pr = b; } catch {}
     }
     ok(r.status === 402 && !!pr && Array.isArray(pr.accepts), "seller answers 402 with x402 payment requirements (v2: payment-required header, v1: JSON body)");
   }

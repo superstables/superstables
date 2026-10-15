@@ -5,6 +5,8 @@
 
 import { readFileSync } from "node:fs";
 import { agentTokenPath, walletUrl } from "../home.js";
+import { readBody } from "../http.js";
+import { untrustedText } from "../text.js";
 import { evmNetworkFor, networkFor } from "../chain.js";
 import type { WalletRequestView, WalletStatus } from "../types.js";
 import { LOCAL_WALLET_EVM_ONLY, SignRefused, type Eip3009SignResult, type SignHooks, type SignRequest, type Signer } from "./types.js";
@@ -31,6 +33,8 @@ const DEFAULT_POLL_MS = 500;
 const DEFAULT_TIMEOUT_MS = 130_000;
 /** Per-request timeout: the wallet is local, so a slow answer means something is wrong. */
 const HTTP_TIMEOUT_MS = 10_000;
+/** The most read of one answer from the wallet: its views and status are a few KB. */
+const WALLET_MAX_BYTES = 256 * 1024;
 
 /** Everything needed to talk to the wallet, resolved once per signer. */
 interface WalletWire {
@@ -81,11 +85,15 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
     throw new SignRefused("unavailable", WALLET_DOWN);
   }
   if (!res.ok) {
-    const text = (await res.text().catch(() => "")).slice(0, 200);
-    throw new SignRefused("invalid", `the wallet refused the request (HTTP ${res.status})${text ? `: ${text}` : ""}`);
+    const { text } = await readBody(res, 200, HTTP_TIMEOUT_MS);
+    const said = untrustedText(text, 200);
+    throw new SignRefused("invalid", `the wallet refused the request (HTTP ${res.status})${said ? `: ${said}` : ""}`);
   }
+  // more than the cap, cut off, or late: not an answer from this wallet
+  const { text, end } = await readBody(res, WALLET_MAX_BYTES, HTTP_TIMEOUT_MS, WALLET_MAX_BYTES + 1);
+  if (end !== "eof") throw new SignRefused("unavailable", WALLET_DOWN);
   try {
-    return (await res.json()) as T;
+    return JSON.parse(text) as T;
   } catch {
     throw new SignRefused("unavailable", WALLET_DOWN);
   }

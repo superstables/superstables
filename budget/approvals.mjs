@@ -38,7 +38,8 @@ import { spawnIdentified } from './child-identity.mjs';
 import { createIdentitySource, inspectProcess, visiblePid } from '../src/core/process-identity.mjs';
 import { clearFileLock, inspectLockText, recoveryResult, paymentBusy } from '../src/core/owner-recovery.mjs';
 import { groupAlive as groupOf, sameProcess } from "./procs.mjs";
-import { accountWaitingWords, cancelSiteRequest, readSiteRequest, siteWord } from "./site.mjs";
+import { accountWaitingWords, cancelSiteRequest, readSiteRequest, siteText, siteWord } from "./site.mjs";
+import { readCapped } from "./response.mjs";
 
 /** A lock younger than this is never taken over, whatever its processes look like (startup: the record is being written). */
 export const STARTUP_GRACE_MS = 30_000;
@@ -721,12 +722,21 @@ export async function pageStateOf(record) {
   return pageState(record?.url);
 }
 
+/** The most read of one answer from an owner page on this computer: its /state and /cancel answers are a few hundred bytes. */
+const PAGE_MAX_BYTES = 65_536;
+/** An owner page's JSON answer, read up to PAGE_MAX_BYTES; null when it is longer, cut off or not JSON. */
+async function pageJson(res) {
+  const { bytes, truncated } = await readCapped(res, PAGE_MAX_BYTES);
+  if (truncated) return null;
+  try { return JSON.parse(bytes.toString("utf8")); } catch { return null; }
+}
+
 /** The owner page's own view (loopback), or null. Only for words; nothing is decided from it except --replace. */
 export async function pageState(url) {
   if (!url) return null;
   try {
     const res = await fetch(`${url}/state`, { signal: AbortSignal.timeout(1500) });
-    return res.ok ? await res.json() : null;
+    return res.ok ? await pageJson(res) : null;
   } catch {
     return null;
   }
@@ -886,8 +896,10 @@ export async function cancelPage(url, byId) {
       body: JSON.stringify({ replacedBy: byId }),
       signal: AbortSignal.timeout(3000),
     });
-    const body = await res.json().catch(() => ({}));
-    return { cancelled: res.ok && body.cancelled === true, status: body.status ?? null, sending: body.sending === true };
+    const body = await pageJson(res);
+    // an answer longer than a page's, cut off or not JSON is no answer: the pending approval is not replaced
+    if (!body || typeof body !== "object") return null;
+    return { cancelled: res.ok && body.cancelled === true, status: typeof body.status === "string" ? siteText(body.status, 40) : null, sending: body.sending === true };
   } catch {
     return null;
   }

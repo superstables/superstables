@@ -4,36 +4,54 @@ import { finalityFor } from "../../../src/core/finality-policy.js";
 import { keccak256, toBytes, type Address, type Hex } from 'viem'
 import { Abis, Addresses } from 'viem/tempo'
 import { CHAIN_ID, RPC_URL, TOKEN_ADDRESS, fromBaseUnits, makeClient, oneLine } from './common.ts'
+import { readRpcAnswer } from '../../rpc.mjs'
 
 export const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 export const topicOf = (a: string) => ('0x' + a.toLowerCase().replace('0x', '').padStart(64, '0')) as Hex
+
+/**
+ * One JSON-RPC exchange with RPC_URL, its answer read through readRpcAnswer (../../rpc.mjs): at most RPC_MAX_BYTES, and
+ * the RPC's error text only as one short line. An HTTP error status, or an answer longer than the cap, cut off, or not
+ * JSON, throws an error marked `answer` in this client's words (`overCap` when it was longer than the cap).
+ */
+async function exchange(method: string, params: unknown[], timeoutMs: number): Promise<{ result?: any; error?: { message: string; reverted: boolean } }> {
+  const res = await fetch(RPC_URL, {
+    method: 'POST',
+    redirect: 'error',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  if (!res.ok) {
+    res.body?.cancel().catch(() => {})
+    throw Object.assign(new Error(`HTTP ${res.status}`), { answer: true })
+  }
+  try {
+    return await readRpcAnswer(res)
+  } catch (e) {
+    throw Object.assign(e as Error, { answer: true })
+  }
+}
 
 /** JSON-RPC read with up to 4 attempts. Throws on transport errors and on JSON-RPC errors. */
 export async function rpcRead(method: string, params: unknown[]): Promise<any> {
   let last: unknown
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      const res = await fetch(RPC_URL, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-        signal: AbortSignal.timeout(15_000),
-      })
-      if (!res.ok) throw new Error(`${method}: HTTP ${res.status}`)
-      const json = (await res.json()) as { result?: any; error?: { message: string } }
-      if (json.error) {
-        const err = new Error(`${method}: ${json.error.message}`) as Error & { rpcError?: boolean }
-        err.rpcError = true
-        // a revert is a definite answer from the chain: do not retry it. Anything else (lag, gateway) is retried.
-        if (/revert/i.test(json.error.message)) throw err
-        last = err
-      } else {
-        return json.result
-      }
+      const answer = await exchange(method, params, 15_000)
+      if (!answer.error) return answer.result
+      const err = new Error(`${method}: ${answer.error.message}`) as Error & { rpcError?: boolean }
+      err.rpcError = true
+      // a revert is a definite answer from the chain: do not retry it. Anything else (lag, gateway) is retried.
+      if (answer.error.reverted) throw err
+      last = err
     } catch (e) {
       if ((e as any)?.rpcError) throw e
-      last = e
+      const named = (e as any)?.answer ? new Error(`${method}: ${(e as Error).message}`) : e
+      // an answer longer than the cap would be read in full again: refuse it at once
+      if ((e as any)?.overCap) throw named
+      last = named
     }
     await sleep(400 * 2 ** attempt)
   }
@@ -206,45 +224,53 @@ export function mppMemo(challengeId: string, realm: string): Hex {
   return ('0x' + Buffer.from(buf).toString('hex')) as Hex
 }
 
-/** Transactions with a pathUSD TransferWithMemo owner -> recipient carrying `memo`, from `fromBlock` to head (indexed, cheap). */
-export async function findByMemo(owner: Address, recipient: Address, memo: Hex, fromBlock: bigint): Promise<Hex[]> {
-  const head = (await chainHead()).number
-  const hashes: Hex[] = []
-  const RANGE = 100_000n
-  for (let from = fromBlock; from <= head; from += RANGE) {
-    const to = from + RANGE - 1n > head ? head : from + RANGE - 1n
-    const logs = (await rpcRead('eth_getLogs', [
-      { address: TOKEN_ADDRESS, fromBlock: '0x' + from.toString(16), toBlock: '0x' + to.toString(16), topics: [TRANSFER_WITH_MEMO_TOPIC, topicOf(owner), topicOf(recipient), memo] },
-    ])) as { transactionHash: Hex }[]
-    for (const l of logs) if (!hashes.includes(l.transactionHash)) hashes.push(l.transactionHash)
+/** One search covers at most LOG_WINDOWS windows of LOG_WINDOW blocks from its first block: 2,000,000 blocks. */
+export const LOG_WINDOW = 100_000n
+export const LOG_WINDOWS = 20n
+const hex = (n: bigint) => '0x' + n.toString(16)
+
+/**
+ * pathUSD logs matching `topics` from `fromBlock` on, in windows of LOG_WINDOW blocks, at most LOG_WINDOWS of them. When
+ * the head is further, the search is complete only if the last block it covers is later than `until` (unix seconds after
+ * which nothing searched for can land, such as a signed payment's validBefore); otherwise it throws "not searched past
+ * block N" before any log call, which callers treat as a failed read, never as "not found".
+ * `reachUntil`: the caller will conclude "nothing found" from an empty answer, so a search that ends at the head must end at
+ * a head later than `until` too (a load-balanced RPC can answer from a node that is behind); otherwise it throws the same way.
+ */
+async function searchLogs(topics: Hex[], fromBlock: bigint, until?: number, reachUntil = false): Promise<{ transactionHash: Hex }[]> {
+  const { number: head, timestamp } = await chainHead()
+  let last = head
+  if (head >= fromBlock + LOG_WINDOW * LOG_WINDOWS) {
+    last = fromBlock + LOG_WINDOW * LOG_WINDOWS - 1n
+    const edge = await rpcRead('eth_getBlockByNumber', [hex(last), false])
+    const at = typeof edge?.timestamp === 'string' && /^0x[0-9a-fA-F]+$/.test(edge.timestamp) ? parseInt(edge.timestamp, 16) : NaN
+    if (until === undefined || !(at > until)) throw new Error(`not searched past block ${last}`)
+  } else if (reachUntil && (until === undefined || !(timestamp > until))) throw new Error(`not searched past block ${head}`)
+  const logs: { transactionHash: Hex }[] = []
+  for (let from = fromBlock; from <= last; from += LOG_WINDOW) {
+    const to = from + LOG_WINDOW - 1n > last ? last : from + LOG_WINDOW - 1n
+    const got = await rpcRead('eth_getLogs', [{ address: TOKEN_ADDRESS, fromBlock: hex(from), toBlock: hex(to), topics }])
+    if (!Array.isArray(got)) throw new Error('eth_getLogs: the RPC answer is not a list of logs')
+    logs.push(...got)
   }
+  return logs
+}
+
+/**
+ * Transactions with a pathUSD TransferWithMemo owner -> recipient carrying `memo`, from `fromBlock` on (indexed, cheap).
+ * `until`: the payment's validBefore plus slack, when it has one. `reachUntil`: true when the caller will treat an empty answer as
+ * "not found" (searchLogs).
+ */
+export async function findByMemo(owner: Address, recipient: Address, memo: Hex, fromBlock: bigint, until?: number, reachUntil = false): Promise<Hex[]> {
+  const hashes: Hex[] = []
+  for (const l of await searchLogs([TRANSFER_WITH_MEMO_TOPIC, topicOf(owner), topicOf(recipient), memo], fromBlock, until, reachUntil))
+    if (!hashes.includes(l.transactionHash)) hashes.push(l.transactionHash)
   return hashes
 }
 
-/** Plain Transfer logs owner -> recipient of exactly `amount` (a bare transfer has no memo), from `fromBlock` to head. */
-export async function findTransfers(owner: Address, recipient: Address, amount: bigint, fromBlock: bigint): Promise<Hex[]> {
-  const head = (await chainHead()).number
-  const hashes: Hex[] = []
-  const RANGE = 100_000n
-  for (let from = fromBlock; from <= head; from += RANGE) {
-    const to = from + RANGE - 1n > head ? head : from + RANGE - 1n
-    const logs = (await rpcRead('eth_getLogs', [
-      { address: TOKEN_ADDRESS, fromBlock: '0x' + from.toString(16), toBlock: '0x' + to.toString(16), topics: [TRANSFER_TOPIC, topicOf(owner), topicOf(recipient)] },
-    ])) as { transactionHash: Hex; data: Hex }[]
-    for (const l of logs) if (BigInt(l.data.slice(0, 66)) === amount && !hashes.includes(l.transactionHash)) hashes.push(l.transactionHash)
-  }
-  return hashes
-}
-
-/** JSON-RPC write (eth_sendRawTransaction). NEVER retried: a resend could pay twice. */
+/** JSON-RPC write (eth_sendRawTransaction, the faucet's tempo_fundAddress). NEVER retried: a resend could pay twice. */
 export async function rpcWrite(method: string, params: unknown[]): Promise<any> {
-  const res = await fetch(RPC_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    signal: AbortSignal.timeout(30_000),
-  })
-  const json = (await res.json()) as { result?: any; error?: { message: string; data?: unknown } }
-  if (json.error) throw new Error(`${json.error.message}${json.error.data ? ' ' + JSON.stringify(json.error.data) : ''}`)
-  return json.result
+  const answer = await exchange(method, params, 30_000)
+  if (answer.error) throw new Error(answer.error.message)
+  return answer.result
 }
