@@ -438,7 +438,8 @@ undo an owner signature or a transaction already sent through setup on superstab
   purchase per `--op`. On `evm`, before the pull, it has the x402 client build the payment it would
   send and checks it against the option those checks passed, including the token's EIP-712 domain
   name and version; it then signs once, for at most ten minutes, and purchases that share an agent
-  key take turns. On Arc Testnet, a price an earlier purchase left in the agent key is not counted
+  key take turns. That check of the built payment allows its validity window to run up to five
+  seconds (a clock tolerance) beyond the seller's offered window. On Arc Testnet, a price an earlier purchase left in the agent key is not counted
   as gas reserve. A stolen agent key skips all of these and can spend what is left of the
   budget, on `evm` and `solana` to any address. Keep budgets small.
 - **Setup is a trusted step.** Whoever holds setup's approval link, the agent included, can complete it
