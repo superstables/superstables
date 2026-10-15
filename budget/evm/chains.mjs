@@ -15,8 +15,9 @@
 //              failure would need (a pull also needs cancel + return). Doctor sizes its minimums from the same limits.
 //              minAgent: a floor under that check (it covers what the limits leave out, such as Base's L1 data fee).
 //              topUp: the least recover sends an agent that cannot pay for its steps.
-//   logRange   optional: the RPC's eth_getLogs block-range cap, where known (reconcile searches in windows of this size; it also
-//              shrinks a window the RPC refuses, so a missing value only costs extra calls).
+//   logRange   optional: the most blocks one eth_getLogs asks this chain's RPC for (1,000 when absent). Every log search
+//              (src/core/log-windows.mjs) starts there and halves a window the RPC refuses, so a stale value costs calls.
+//   blockSeconds  about how many seconds pass between blocks (as in src/core/chain.ts): a log search reads a day's worth.
 //   doctor     minimum balances for one grant, a few purchases and a revoke, and where to get them (decimal strings). The
 //              token minimum always applies. For gas, doctor asks for DOCTOR_SPIKE times what the steps cost at the current fee,
 //              and at least minAgentGas for the agent, which buys alone; minOwnerGas only when it cannot read the fee.
@@ -35,7 +36,8 @@ export const EVM_CHAINS = {
     label: "Base Sepolia", chainId: 84532, viem: "baseSepolia",
     rpc: "https://sepolia.base.org", explorer: "https://sepolia.basescan.org",
     token: { address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
-    legacy: ["base-sepolia"], logRange: 1000,
+    // sepolia.base.org refuses eth_getLogs over more than 200 blocks (error -32614, 14 Oct 2026).
+    legacy: ["base-sepolia"], logRange: 200, blockSeconds: 2,
     gas: { symbol: "ETH", decimals: 18, isToken: false, limits: FIAT_TOKEN_GAS, minAgent: "0.000002", topUp: "0.00003" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.circle.com, Base Sepolia", gasFaucet: "a Base Sepolia ETH faucet" },
   },
@@ -47,7 +49,7 @@ export const EVM_CHAINS = {
     label: "Arc Testnet", chainId: 5042002, viem: "arcTestnet",
     rpc: "https://rpc.testnet.arc.network", explorer: "https://explorer.testnet.arc.io",
     token: { address: "0x3600000000000000000000000000000000000000", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
-    legacy: [],
+    legacy: [], blockSeconds: 0.5,
     gas: { symbol: "USDC", decimals: 18, isToken: true, limits: FIAT_TOKEN_GAS, minAgent: "0.01", topUp: "0.1", reserveMax: "2" },
     doctor: { minOwnerToken: "0.2", minOwnerGas: null, minAgentGas: "0.01", fundAgent: "0.1", tokenFaucet: "faucet.circle.com, Arc Testnet", gasFaucet: "faucet.circle.com, Arc Testnet" },
   },
@@ -58,7 +60,7 @@ export const EVM_CHAINS = {
     label: "Arbitrum Sepolia", chainId: 421614, viem: "arbitrumSepolia",
     rpc: "https://sepolia-rollup.arbitrum.io/rpc", explorer: "https://sepolia.arbiscan.io",
     token: { address: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", symbol: "USDC", decimals: 6, domain: { name: "USD Coin", version: "2" } },
-    legacy: [],
+    legacy: [], blockSeconds: 0.25,
     gas: { symbol: "ETH", decimals: 18, isToken: false, limits: { pull: 115000, cancel: 115000, return: 85000, selfRevoke: 85000, approve: 100000, revoke: 75000 }, minAgent: "0.000005", topUp: "0.00003" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.circle.com, Arbitrum Sepolia", gasFaucet: "an Arbitrum Sepolia ETH faucet" },
   },
@@ -71,7 +73,7 @@ export const EVM_CHAINS = {
     label: "Polygon Amoy", chainId: 80002, viem: "polygonAmoy",
     rpc: "https://polygon-amoy-bor-rpc.publicnode.com", explorer: "https://amoy.polygonscan.com",
     token: { address: "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
-    legacy: ["polygon-amoy"], logRange: 10000,
+    legacy: ["polygon-amoy"], logRange: 10000, blockSeconds: 2,
     gas: { symbol: "POL", decimals: 18, isToken: false, limits: { pull: 105000, cancel: 105000, return: 70000, selfRevoke: 75000, approve: 80000, revoke: 55000 }, minAgent: "0.01", topUp: "0.05" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.03", minAgentGas: "0.05", fundAgent: "0.05", tokenFaucet: "faucet.circle.com, Polygon PoS Amoy", gasFaucet: "a Polygon Amoy POL faucet" },
   },
@@ -80,7 +82,7 @@ export const EVM_CHAINS = {
     label: "SKALE Base Sepolia", chainId: 324705682, viem: "skaleBaseSepoliaTestnet",
     rpc: "https://base-sepolia-testnet.skalenodes.com/v1/jubilant-horrible-ancha", explorer: "https://base-sepolia-testnet-explorer.skalenodes.com",
     token: { address: "0x2e08028E3C4c2356572E096d8EF835cD5C6030bD", symbol: "USDC", decimals: 6, domain: { name: "Bridged USDC (SKALE Bridge)", version: "2" } },
-    legacy: ["skale-base-sepolia"], logRange: 2000,
+    legacy: ["skale-base-sepolia"], logRange: 2000, blockSeconds: 1,
     gas: { symbol: "CREDIT", decimals: 18, isToken: false, limits: FIAT_TOKEN_GAS, minAgent: "0.0001", topUp: "0.001" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.001", minAgentGas: "0.001", fundAgent: "0.002", tokenFaucet: "Base Sepolia USDC over the SKALE bridge", gasFaucet: "base-sepolia-faucet.skale.space" },
   },
@@ -91,7 +93,7 @@ export const EVM_CHAINS = {
     label: "Ethereum Sepolia", chainId: 11155111, viem: "sepolia",
     rpc: "https://ethereum-sepolia-rpc.publicnode.com", explorer: "https://sepolia.etherscan.io",
     token: { address: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
-    legacy: ["sepolia"], logRange: 50000,
+    legacy: ["sepolia"], logRange: 50000, blockSeconds: 12,
     gas: { symbol: "ETH", decimals: 18, isToken: false, limits: FIAT_TOKEN_GAS, minAgent: "0.0005", topUp: "0.001" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.0005", minAgentGas: "0.001", fundAgent: "0.002", tokenFaucet: "faucet.circle.com, Ethereum Sepolia", gasFaucet: "a Sepolia ETH faucet" },
   },
@@ -107,7 +109,7 @@ export const EVM_CHAINS = {
     label: "Robinhood Chain Testnet", chainId: 46630, viem: "robinhoodTestnet",
     rpc: "https://rpc.testnet.chain.robinhood.com", explorer: "https://explorer.testnet.chain.robinhood.com",
     token: { address: "0x7E955252E15c84f5768B83c41a71F9eba181802F", symbol: "USDG", decimals: 6, domain: { name: "Global Dollar", version: "1" } },
-    legacy: [], logRange: 500000,
+    legacy: [], logRange: 500000, blockSeconds: 0.15,
     gas: { symbol: "ETH", decimals: 18, isToken: false, limits: { pull: 90000, cancel: 85000, return: 80000, selfRevoke: 55000, approve: 70000, revoke: 45000 }, minAgent: "0.000005", topUp: "0.00003" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.paxos.com, USDG on Robinhood Chain", gasFaucet: "faucet.testnet.chain.robinhood.com" },
   },

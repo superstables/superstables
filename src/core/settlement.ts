@@ -22,6 +22,7 @@
 import { decodeFunctionResult, encodeFunctionData, keccak256, toBytes } from "viem";
 import { BASE_SEPOLIA, evmNetworkFor, isAddress, type EvmNetwork } from "./chain.js";
 import { chainRpc, rpcCall, type RpcOptions } from "./rpc.js";
+import { searchLogs, type LogSearchOptions } from "./log-windows.mjs";
 import { inclusion } from "./finality.js";
 import type { ChainMismatch } from "./types.js";
 import type { FoundPayment } from "./rails/types.js";
@@ -140,9 +141,8 @@ const AUTHORIZATION_STATE_ABI = [
 ] as const;
 
 
-/** A log search starts this long before the attempt began (clocks differ), and reads at most this many windows. */
+/** A log search starts this long before the attempt began (clocks differ). How far it reads: src/core/log-windows.mjs. */
 const SEARCH_MARGIN_S = 600;
-const MAX_LOG_WINDOWS = 100;
 
 export interface AuthorizationToFind {
   network: string;
@@ -182,7 +182,7 @@ interface Block {
  *
  * Never throws: a chain that cannot be read is `unreadable`, and decides nothing.
  */
-export async function findAuthorization(input: AuthorizationToFind, options: { rpcUrl?: string } & RpcOptions = {}): Promise<FoundPayment> {
+export async function findAuthorization(input: AuthorizationToFind, options: { rpcUrl?: string; logSearch?: LogSearchOptions } & RpcOptions = {}): Promise<FoundPayment> {
   const network = evmNetworkFor(input.network);
   if (!network || !input.nonce || !/^0x[0-9a-fA-F]{64}$/.test(input.nonce) || !isAddress(input.payer) || !isAddress(input.recipient)) {
     return { found: false, reason: "this payment's signed authorization was not recorded, so it cannot be looked for" };
@@ -245,32 +245,47 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
     };
     const since = Date.parse(input.since ?? "") / 1000;
     const start = Number.isFinite(since) ? await firstBlockFrom(rpc.url, since - SEARCH_MARGIN_S, head, network, options) : 0n;
-    const window = BigInt(network.logRange);
-    for (let from = start, i = 0; from <= head.number && i < MAX_LOG_WINDOWS; i += 1) {
-      const to = from + window - 1n > head.number ? head.number : from + window - 1n;
-      const logs = await rpcCall<{ topics?: string[]; transactionHash?: string; blockNumber?: string; blockHash?: string; removed?: boolean }[]>(
-        rpc.url,
-        "eth_getLogs",
-        [{ address: network.usdc.address, fromBlock: hex(from), toBlock: hex(to), topics: [[AUTHORIZATION_USED_TOPIC, AUTHORIZATION_CANCELED_TOPIC], topicOf(input.payer), input.nonce.toLowerCase()] }],
-        options,
-      );
-      for (const log of Array.isArray(logs) ? logs : []) {
-        if (!same(log.topics?.[2], input.nonce) || !same(log.topics?.[1], topicOf(input.payer))) continue;
-        if (same(log.topics?.[0], AUTHORIZATION_CANCELED_TOPIC)) {
-          if (await finalCancellation(log)) {
-            return { found: false, never: true, reason: "the chain shows the owner's authorization was cancelled, in a final block, so it can never be used" };
+    const nonce = input.nonce;
+    type Log = { topics?: string[]; transactionHash?: string; blockNumber?: string; blockHash?: string; removed?: boolean };
+    const search = await searchLogs<Log, FoundPayment>(
+      async (from, to) => {
+        const logs = await rpcCall<Log[]>(
+          rpc.url,
+          "eth_getLogs",
+          [{ address: network.usdc.address, fromBlock: hex(from), toBlock: hex(to), topics: [[AUTHORIZATION_USED_TOPIC, AUTHORIZATION_CANCELED_TOPIC], topicOf(input.payer), nonce.toLowerCase()] }],
+          options,
+        );
+        return Array.isArray(logs) ? logs : [];
+      },
+      { from: start, to: head.number, window: network.logRange, blockSeconds: network.blockSeconds },
+      async (logs) => {
+        for (const log of logs) {
+          if (!same(log.topics?.[2], nonce) || !same(log.topics?.[1], topicOf(input.payer))) continue;
+          if (same(log.topics?.[0], AUTHORIZATION_CANCELED_TOPIC)) {
+            if (await finalCancellation(log)) {
+              return { found: false, never: true, reason: "the chain shows the owner's authorization was cancelled, in a final block, so it can never be used" };
+            }
+            return { found: false, reason: "the chain shows the owner's authorization cancelled, but the client could not confirm that the cancellation is final" };
           }
-          return { found: false, reason: "the chain shows the owner's authorization cancelled, but the client could not confirm that the cancellation is final" };
+          if (!same(log.topics?.[0], AUTHORIZATION_USED_TOPIC) || !isHash(log.transactionHash)) continue;
+          const check = await checkSettlement({ ...input, network: network.caip2, transaction: log.transactionHash }, options);
+          if (check.chain === "verified") return { found: true, transaction: log.transactionHash };
+          if (check.included) return { found: true, transaction: log.transactionHash, final: false, paymentBlock: check.paymentBlock };
+          if (check.chain === "unchecked") return { ...unreadable, authorizationUsed: true };
         }
-        if (!same(log.topics?.[0], AUTHORIZATION_USED_TOPIC) || !isHash(log.transactionHash)) continue;
-        const check = await checkSettlement({ ...input, network: network.caip2, transaction: log.transactionHash }, options);
-        if (check.chain === "verified") return { found: true, transaction: log.transactionHash };
-        if (check.included) return { found: true, transaction: log.transactionHash, final: false, paymentBlock: check.paymentBlock };
-        if (check.chain === "unchecked") return { ...unreadable, authorizationUsed: true };
-      }
-      from = to + 1n;
-    }
-    return { found: false, unreadable: true, authorizationUsed: true, reason: "the chain shows the owner's authorization was used, but its transaction was not found in the blocks searched" };
+        return undefined;
+      },
+      options.logSearch,
+    );
+    if (search.found) return search.found;
+    return {
+      found: false,
+      unreadable: true,
+      authorizationUsed: true,
+      reason: search.covered
+        ? "the chain shows the owner's authorization was used, but its transaction was not found in the blocks searched"
+        : `the chain shows the owner's authorization was used, but its logs could not be searched past block ${search.searchedTo}`,
+    };
   } catch {
     return authorizationUsed ? { ...unreadable, authorizationUsed: true } : unreadable;
   }

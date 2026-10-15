@@ -24,6 +24,7 @@ import {
   GasShort, gasWords,
   type Wallet,
 } from "./lib.ts";
+import { searchLogs } from "../../src/core/log-windows.mjs";
 
 export type OpState = "quoted" | "submitted" | "settled" | "failed" | "refused_precheck" | "refused_chain" | "unknown" | "not_found"; // not_found: reconcile only
 
@@ -302,21 +303,18 @@ async function differentFinalNonceTransaction(j: Journal): Promise<Hex | undefin
       (fromBlock: bigint, toBlock: bigint) => publicClient.getLogs({ address: USDC, event: transfer, args: { to: j.agent }, fromBlock, toBlock }),
       (fromBlock: bigint, toBlock: bigint) => publicClient.getLogs({ address: USDC, event: used, args: { authorizer: j.agent, ...(j.auth ? { nonce: j.auth.nonce } : {}) }, fromBlock, toBlock }),
     ];
+    const top = head.number;
     for (const filter of filters) {
-      let step = BigInt(CFG.logRange ?? 1000);
-      const logStart = CFG.key === "ethereum-sepolia" && head.number > 9000n && start < head.number - 9000n ? head.number - 9000n : start;
-      for (let from = logStart, pages = 0; from <= head.number && pages < 50; pages++) {
-        const to = from + step - 1n < head.number ? from + step - 1n : head.number;
-        let logs;
-        try { logs = await filter(from, to); }
-        catch (e) { if (step <= 100n) throw e; step /= 10n; continue; }
+      const logStart = CFG.key === "ethereum-sepolia" && top > 9000n && start < top - 9000n ? top - 9000n : start;
+      const search = await searchLogs<{ removed: boolean; transactionHash: Hex | null; blockNumber: bigint | null }, Hex>(filter, { from: logStart, to: top, window: CFG.logRange ?? 1000, blockSeconds: CFG.blockSeconds }, async (logs) => {
         for (const log of logs) {
-          if (log.removed || !log.transactionHash || log.blockNumber === null || log.blockNumber > head.number) continue;
+          if (log.removed || !log.transactionHash || log.blockNumber === null || log.blockNumber > top) continue;
           const identified = await candidate(log.transactionHash);
           if (identified) return identified;
         }
-        from = to + 1n;
-      }
+        return undefined;
+      });
+      if (search.found) return search.found;
     }
     // A replacement can be a native transfer with no token logs. Resume a bounded block scan for that case.
     const from = j.replacementSearchTo ? BigInt(j.replacementSearchTo) + 1n : start;
@@ -422,26 +420,25 @@ export async function readSettlement(j: Journal): Promise<Settlement> {
       if (found) return found;
     }
     const fromBlock = j.pullBlock ? BigInt(j.pullBlock) : latest.number > 3000n ? latest.number - 3000n : 0n;
+    const top = latest.number;
+    let covered = true;
     for (const event of events) {
-      let step = BigInt(CFG.logRange ?? 10_000);
-      for (let from = fromBlock; from <= latest.number;) {
-        const to = from + step - 1n < latest.number ? from + step - 1n : latest.number;
-        let logs;
-        try {
-          logs = await publicClient.getLogs({ address: USDC, event, args: { authorizer: j.agent, nonce: auth.nonce }, fromBlock: from, toBlock: to });
-        } catch (e) {
-          if (step <= 100n) throw e;
-          step /= 10n;
-          continue;
-        }
-        for (const log of logs) {
-          if (log.removed || log.blockNumber === null || log.blockNumber > latest.number || !log.blockHash || !log.transactionHash) continue;
-          const found = await inspect(log.transactionHash);
-          if (found) return found;
-        }
-        from = to + 1n;
-      }
+      const search = await searchLogs(
+        (from: bigint, to: bigint) => publicClient.getLogs({ address: USDC, event, args: { authorizer: j.agent, nonce: auth.nonce }, fromBlock: from, toBlock: to }),
+        { from: fromBlock, to: top, window: CFG.logRange ?? 1000, blockSeconds: CFG.blockSeconds },
+        async (logs) => {
+          for (const log of logs) {
+            if (log.removed || log.blockNumber === null || log.blockNumber > top || !log.blockHash || !log.transactionHash) continue;
+            const found = await inspect(log.transactionHash);
+            if (found) return found;
+          }
+          return undefined;
+        },
+      );
+      if (search.found) return search.found;
+      if (!search.covered) covered = false;
     }
+    if (!covered) return { kind: "unread", used: false, canceled: false, reason: "the payment or cancellation could not be read from the chain: the token's logs could not all be searched" };
     return { kind: "pending", used: false, canceled: false, reason: "the nonce is used, but its payment or cancellation could not be identified" };
   } catch {
     return { kind: "unread", used: false, canceled: false, reason: "the payment or cancellation could not be read from the chain" };

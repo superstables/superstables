@@ -166,7 +166,10 @@ again:
    says how far it got. It also searches the chain for the payment, by what ties it to this attempt
    alone, never by a transaction the seller named:
    - on the EVM chains, the authorization the owner signed: the token says whether its nonce was
-     used, and its `AuthorizationUsed` log names the transaction;
+     used, and its `AuthorizationUsed` log names the transaction. The log is searched from shortly
+     before the attempt began, over at most a day of blocks, in block ranges the chain's RPC accepts
+     (narrower ones when it refuses a range). A search that could not read all of them says the
+     chain could not be read, never that nothing was paid;
    - on Tempo Moderato, the transfer with this payment's memo, in a block after the one the chain
      was at when the wallet was asked;
    - on Solana devnet, a transaction carrying the owner's signature among the owner's token

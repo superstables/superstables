@@ -10,6 +10,7 @@ import { CHAINS } from "./chains.ts";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { ownerEvidence, plannedCall, type EvidenceReads } from "./delegation.ts";
+import { searchLogs } from "../../src/core/log-windows.mjs";
 import { CFG, GAS, SYM, USDC, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need } from "./lib.ts";
 
 export { closeOwnerPage };
@@ -153,18 +154,26 @@ export function grantMismatchSteps(logs: any[], owner: Address, agent: Address, 
 
 /**
  * A wallet's "speed up" or "cancel" replaces the transaction under a new hash, so the reported hash may never land.
- * Find the latest Approval(owner, spender) since `fromBlock` instead (searched in the RPC's log-range windows).
+ * Find the latest Approval(owner, spender) since `fromBlock` instead (searched in windows the RPC accepts; a search that
+ * could not read every block takes none).
  */
 export async function findApproval(owner: Address, spender: Address, fromBlock: bigint): Promise<{ hash: Hex; value: bigint } | null> {
   const head = await retry(() => publicClient.getBlockNumber());
-  const step = BigInt(CFG.logRange ?? 1000);
-  let found: { hash: Hex; value: bigint } | null = null;
-  for (let from = fromBlock + 1n; from <= head; from += step) {
-    const to = from + step - 1n < head ? from + step - 1n : head;
-    const logs = (await retry(() => publicClient.getLogs({ address: USDC, event: erc20Abi.find((x: any) => x.name === "Approval") as any, args: { owner, spender } as any, fromBlock: from, toBlock: to }))) as any[];
-    for (const l of logs) found = { hash: l.transactionHash, value: l.args.value };
+  const approval = erc20Abi.find((x: any) => x.name === "Approval") as any;
+  const seen: { hash: Hex; value: bigint }[] = [];
+  const search = await searchLogs(
+    (from, to) => publicClient.getLogs({ address: USDC, event: approval, args: { owner, spender } as any, fromBlock: from, toBlock: to }) as Promise<any[]>,
+    { from: fromBlock + 1n, to: head, window: CFG.logRange ?? 1000, blockSeconds: CFG.blockSeconds },
+    async (logs) => {
+      for (const l of logs) seen.push({ hash: l.transactionHash, value: l.args.value });
+      return undefined;
+    },
+  );
+  if (!search.covered) {
+    console.log(`the approvals since block ${fromBlock + 1n} could not all be read (read to block ${search.searchedTo} of ${head}), so no replacement is taken`);
+    return null;
   }
-  return found;
+  return seen[seen.length - 1] ?? null;
 }
 
 // ---- the grant and the gas, shared by grant (setBudget.ts), fund-agent (fundAgent.ts) and setup --hosted --grant --fund ----
