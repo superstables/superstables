@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_NETWORK, networkFor, usdcBalance, type Rail } from "../chain.js";
 import { browserWalletPath, ensureDir, homeDir, recordsDir } from "../home.js";
-import { evaluatePolicy, formatMoney, loadPaymentPolicy, type Policy } from "../policy.js";
+import { evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Policy } from "../policy.js";
 import { Records } from "../records.js";
 import { judgeSignRequest } from "../rails/index.js";
 import type { VerifiedTerms, WalletStatus } from "../types.js";
@@ -169,12 +169,12 @@ export class BrowserWalletSigner implements Signer {
     const policy = this.policy();
     const verdict = evaluatePolicy(policy, {
       domain: policyDomain(req.context?.target),
-      amountDecimal: terms.amountDecimal,
       asset: terms.asset,
+      ...policyAmount(terms),
       // What this machine has already paid today, from its own receipts: the per-day cap is
       // checked again here, at the gate, and not only when the quote was taken.
       // The attempt being signed has already reserved its amount (pay.ts): it is left out, so it does not count twice.
-      spentTodayDecimal: this.records.spentToday(terms.asset, new Date(), { exclude: req.context?.attemptId }),
+      spentTodayAtomic: this.records.spentTodayAtomic(terms.asset, new Date(), { exclude: req.context?.attemptId }),
     });
     // A payment the owner's policy refuses never becomes an approval: nobody is asked, and
     // there is no link to open.

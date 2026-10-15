@@ -10,7 +10,7 @@ import { judgeOffers } from "./rails/index.js";
 import type { Offer } from "./rails/types.js";
 import { SellerTextError } from "./text.js";
 import { chainName, payNetworkFor } from "./routes.js";
-import { evaluatePolicy, policyChecks, type Policy } from "./policy.js";
+import { evaluatePolicy, policyAmount, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
 import { Records } from "./records.js";
 import type { Quote, ResolvedRequest, ServiceListing } from "./types.js";
@@ -45,9 +45,9 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
   const payment = {
     // The host we chose to call, never the one the seller claims in its challenge.
     domain: hostOf(url),
-    amountDecimal: chosen.terms.amountDecimal,
     asset,
-    spentTodayDecimal: deps.records.spentToday(asset),
+    ...policyAmount(chosen.terms),
+    spentTodayAtomic: deps.records.spentTodayAtomic(asset),
   };
   const verdict = evaluatePolicy(deps.policy, payment);
 
