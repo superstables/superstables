@@ -20,6 +20,7 @@ const SLOW = [
   "test/budget/lock-recovery.test.ts",
   "test/budget/operation-races.test.ts",
   "test/budget/setup-owner.test.ts",
+  "test/budget/tempo-challenges.test.ts",
   "test/budget/tempo-push.test.ts",
   "test/budget/tempo-rpc.test.ts",
   "test/cli/cli.test.ts",

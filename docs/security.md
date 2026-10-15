@@ -235,6 +235,8 @@ leaves the attempt `uncertain`: a page's report is not proof that nothing was se
 holding the approval link can post it. `superstables status` then searches the chain for the memo,
 in blocks after the one recorded, and never takes a transfer already recorded as another payment.
 
+Budget purchases on Tempo (`superstables budget buy --rail tempo`) are signed by the agent's access key through mppx, and the client checks the seller's challenge first. It refuses a challenge that turns on mppx's machine-token route (`machineTokenEnabled`), which would pay through a swap contract instead of a plain pathUSD transfer; one that names no realm, since its payment could then not be found on chain as this purchase's; and one that stays open for more than ten minutes. Before anything is signed, the purchase claims the challenge on this machine, in a file named by its payment memo, so a seller that hands the same challenge to two purchases cannot settle both against one payment. The signed payment is read back before it leaves the process, to the seller or to the RPC: it must make exactly the quoted pathUSD transfers and stay valid for at most ten minutes. mppx signs it for 25 seconds.
+
 For x402 payments, public facilitators submit the transfer and pay the gas. A facilitator sees
 the signed authorization or transaction, so it learns who paid whom and how much; it cannot
 alter the amount or the recipient, because those are inside what was signed. The client's facilitator helper tries the next facilitator when one cannot be
