@@ -18,7 +18,7 @@ import { decodePaymentResponseHeader } from "@x402/core/http";
 import type { SettleResponse } from "@x402/core/types";
 import { isAddressOn, isTransactionId, networkFor, shortLabel, txUrl, type NetworkInfo } from "./chain.js";
 import { getQuote } from "./quote.js";
-import { MAX_CHALLENGE_BYTES, NotPaidEndpointError, readBody, readCapped, readSellerChallenge, sameTerms, type SellerChallenge } from "./x402.js";
+import { MAX_CHALLENGE_BYTES, NotPaidEndpointError, REDIRECTED_AFTER_SEND, SELLER_REDIRECTED, isRedirectRefusal, readBody, readCapped, readSellerChallenge, sameTerms, type SellerChallenge } from "./x402.js";
 import { readMppReceipt } from "./mpp.js";
 import { sellerUrlProblem } from "./seller-url.mjs";
 import { untrustedText } from "./text.js";
@@ -558,11 +558,11 @@ export class PaymentEngine {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
-      // A redirect is refused rather than followed, so this is also where a seller that answers with one lands:
-      // the credential may never have left. Say that, and stay `uncertain`, because nothing here can tell.
+      // A redirect is refused, never followed. The request that drew it carried the signed payment, so the seller has it
+      // and may settle it: uncertain.
       this.settleState(attempt, "uncertain", {
         payer: signed.signer,
-        reason: `the payment could not be completed with this service: ${message(err)}`,
+        reason: isRedirectRefusal(err) ? REDIRECTED_AFTER_SEND : `the payment could not be completed with this service: ${message(err)}`,
       });
       return;
     }
@@ -751,7 +751,7 @@ export class PaymentEngine {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
-      failure = message(err);
+      failure = isRedirectRefusal(err) ? "it answered with a redirect, which this client does not follow" : message(err);
     }
     const read = res ? await readBody(res, SERVICE_BODY_LIMIT * 4, deadline - Date.now(), PAID_ANSWER_DRAIN) : undefined;
     const delivered = read?.end === "eof";
@@ -822,6 +822,8 @@ export class PaymentEngine {
       redirect: "error",
       headers: { accept: "application/json, */*" },
       signal: AbortSignal.timeout(this.timeoutMs),
+    }).catch((err: unknown) => {
+      throw isRedirectRefusal(err) ? new Error(SELLER_REDIRECTED) : err;
     });
     const body = await readCapped(res, MAX_CHALLENGE_BYTES, deadline - Date.now(), url);
     if (res.status !== 402) throw new NotPaidEndpointError(url, res.status, body.slice(0, 300));

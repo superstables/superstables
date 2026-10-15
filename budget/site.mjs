@@ -92,10 +92,10 @@ export function chosenSite(flag) {
 }
 
 /**
- * Text from the site on one line, without control characters and without the invisible characters that reorder or hide
- * text (zero-width, bidi embeddings and isolates), at most `max` characters. It is data, never a command.
+ * Text from the site on one line, at most `max` characters: control characters become spaces; format, bidi and Unicode tag
+ * characters are removed. The same rule as untrustedText (src/core/text.ts). It is data, never a command.
  */
-export const siteText = (s, max = 300) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "").trim().slice(0, max);
+export const siteText = (s, max = 300) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, "").trim().slice(0, max);
 
 /**
  * The words the site's budget API documents, by kind. The site's own sentences (an error message, a reason) are never

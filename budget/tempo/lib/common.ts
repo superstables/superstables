@@ -29,11 +29,11 @@ export const TOKEN_DECIMALS: number = TOKEN_DECIMALS_
 export const TOKEN_LABEL: string = TOKEN_LABEL_
 
 /**
- * Seller text (its challenge, its answer, its errors) on one log line: control characters, newlines included, and the Unicode
- * line separators become spaces. A seller must not be able to start a line of its own on stdout, where the dispatcher reads
- * APPROVE and RESULT lines. The same rule as evm's oneLine.
+ * Seller text (its challenge, its answer, its errors) on one log line, at most `max` characters: control characters, newlines
+ * included, become spaces; format, bidi and Unicode tag characters are removed. A seller must not be able to start a line of
+ * its own on stdout, where the dispatcher reads APPROVE and RESULT lines. The same rule as untrustedText (src/core/text.ts).
  */
-export const oneLine = (s: unknown, max = 300): string => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim().slice(0, max)
+export const oneLine = (s: unknown, max = 300): string => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, '').trim().slice(0, max)
 
 // Key files (contract rule 1). Owner and agent keys never share a file.
 //   the owner's wallet  holds the owner key. setup, grant and revoke ask it on the owner page.

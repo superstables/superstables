@@ -1,6 +1,6 @@
 # Security model
 
-Superstables client 0.3.0 makes testnet payments only. This page says what each way to pay protects
+Superstables client 0.4.0 makes testnet payments only. This page says what each way to pay protects
 and what it does not.
 
 These payment flows have different boundaries:
@@ -326,8 +326,10 @@ default `stablecoins` list is `[USDC, pathUSD, USDG]`, and a policy that lists U
 reserves the amount under a lock shared by the processes on this machine before the owner is
 asked.
 
-Text from sellers and listings reaches the agent as data. The CLI prints it on one line, without
-control or invisible characters.
+Text from sellers, listings and RPCs reaches the agent as data. The CLI prints it, on the terminal and
+in `--json` output, on one line and without control characters or invisible formatting characters
+(zero-width, bidi and Unicode tag characters). A command the CLI suggests carries a seller's payee
+only when it is a valid address for that rail.
 
 **Where the signed payment goes.** `pay` sends the signed authorization only to the URL it quoted:
 it refuses a redirect, and the attempt then ends `uncertain`, because the client cannot tell whether
@@ -546,8 +548,8 @@ What a compatible site must serve, with both proofs spelled out:
 
 ## What you install
 
-For 0.3.0, use the agent skill zip built from that released commit, once it is available on
-[GitHub Releases](https://github.com/superstables/superstables/releases);
+For 0.4.0, use the agent skill zip attached to the 0.4.0 release on
+[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-0.4.0.zip`;
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with

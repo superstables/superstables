@@ -747,16 +747,19 @@ describe("find", () => {
 
   it("next never carries listing text", async () => {
     const hostile = { name: "Weather", price: "0.001", url: "https://seller.example/w" };
+    // the client's own key list is in the placeholder; nothing the listing said is
+    const PLACEHOLDER_NEXT =
+      "check the price with superstables budget preflight --rail R --chain C --url U before you buy. C is a row's chain (the chain column; chain with --json) when it is one this client knows, and R the rail named after it: base-sepolia, arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet (evm); moderato (tempo); devnet (solana). A row on any other chain cannot be bought with a budget";
     const cases: { rows: object[]; next: string; chain?: string; rail?: string }[] = [
       // an unknown network: the listing's chain and rail are data, so the command stays a placeholder
-      { rows: [{ ...hostile, network: "eip155:999999", rail: "evm", chain: "base-sepolia;touch${IFS}/tmp/x;#" }], next: "superstables budget preflight --rail R --chain C --url U, with R and C from the listing" },
+      { rows: [{ ...hostile, network: "eip155:999999", rail: "evm", chain: "base-sepolia;touch${IFS}/tmp/x;#" }], next: PLACEHOLDER_NEXT },
       // a known network under another chain's name: the client's table wins
-      { rows: [{ ...hostile, network: "eip155:84532", chain: "arc-testnet;id", rail: "tempo" }], next: "superstables budget preflight --rail evm --chain base-sepolia --url U", chain: "base-sepolia", rail: "evm" },
+      { rows: [{ ...hostile, network: "eip155:84532", chain: "arc-testnet;id", rail: "tempo" }], next: "check the price with superstables budget preflight --rail evm --chain base-sepolia --url U before you buy", chain: "base-sepolia", rail: "evm" },
       // a network no rail pays
-      { rows: [{ ...hostile, network: "cosmos:1", rail: "evm;id" }], next: "superstables budget preflight --rail R --chain C --url U, with R and C from the listing" },
-      { rows: [1, 2, 3].map(() => ({ ...hostile, network: "eip155:999999", rail: "evm", chain: "base-sepolia;touch${IFS}/tmp/x;#" })), next: "superstables budget preflight --rail R --chain C --url U, with R and C from the listing" },
+      { rows: [{ ...hostile, network: "cosmos:1", rail: "evm;id" }], next: PLACEHOLDER_NEXT },
+      { rows: [1, 2, 3].map(() => ({ ...hostile, network: "eip155:999999", rail: "evm", chain: "base-sepolia;touch${IFS}/tmp/x;#" })), next: PLACEHOLDER_NEXT },
       // a network named like an inherited property is not a known one
-      ...["constructor", "__proto__", "toString"].map((network) => ({ rows: [{ ...hostile, network, chain: "arc-testnet" }], next: "superstables budget preflight --rail R --chain C --url U, with R and C from the listing" })),
+      ...["constructor", "__proto__", "toString"].map((network) => ({ rows: [{ ...hostile, network, chain: "arc-testnet" }], next: PLACEHOLDER_NEXT })),
     ];
     for (const c of cases) {
       site.services = c.rows;
@@ -764,8 +767,9 @@ describe("find", () => {
         const r = await budget(args);
         expect(r.code, r.stderr).toBe(0);
         const out = args.includes("--json") ? JSON.parse(r.stdout) : r.result;
-        expect(out.next).toBe(`check the price with ${c.next} before you buy`);
-        for (const bad of [";", "$", "`", "|", "&", "tmp", "id", "cosmos", "arc-testnet", "tempo"]) expect(out.next).not.toContain(bad);
+        expect(out.next).toBe(c.next);
+        // only strings the listing alone could have contributed (the client's own key list now has ";", "arc-testnet" and "tempo")
+        for (const bad of ["touch", "${IFS}", "/tmp/x", ";#", "$", "`", "|", "&", "cosmos", "evm;id", "arc-testnet;id", "from the listing"]) expect(out.next).not.toContain(bad);
         if (c.chain) expect(out.services[0]).toMatchObject({ chain: c.chain, rail: c.rail });
       }
     }
@@ -824,7 +828,8 @@ describe("find", () => {
       expect(r.stdout).toMatch(/Market data on Solana\s+0\.01 USDC\s+devnet\s+no\s+/);
       expect(r.stdout).toMatch(/simulated: yes when the listing marks the output as prepared sample output, no when it marks it as not sample output \(this does not verify that the data is real\)/);
       // several rails: next leaves the rail and chain to the listing
-      expect(r.result.next).toMatch(/--rail R --chain C --url U, with R and C from the listing/);
+      expect(r.result.next).toContain("--rail R --chain C --url U before you buy. C is a row's chain");
+      expect(r.result.next).not.toContain("from the listing");
     }, 30_000);
 
     it("refuses an unknown chain and names every key the budget commands take", async () => {

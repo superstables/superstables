@@ -37,7 +37,7 @@ import { lockOp, railResult } from "./buy-guard.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
-import { DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin } from "./site.mjs";
+import { DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
 import { customRpc, refusedRpcEnv } from "./rpc.mjs";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
@@ -608,7 +608,7 @@ const JSON_OUT = process.argv.slice(3).includes("--json");
 const writeResult = (out) => writeSync(1, scrubAgentTokens((JSON_OUT ? "" : "RESULT ") + JSON.stringify(resultFacts(out)) + "\n"));
 /** An APPROVE line: stdout, or stderr under --json (its link is also in the RESULT's url once the command returns). */
 const writeApprove = (line) => writeSync(JSON_OUT ? 2 : 1, scrubAgentTokens(line + "\n"));
-const clean = (s) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "").trim().slice(0, 300);
+const clean = (s) => siteText(s, 300);
 const log = (...a) => process.stderr.write(scrubAgentTokens(a.join(" ") + "\n"));
 /** A human-readable line or table on stdout (find's tables), scrubbed like every other output. */
 const print = (text) => writeSync(1, scrubAgentTokens(text));
@@ -1234,18 +1234,23 @@ async function preflight({ f, ctx }) {
   const rr = r.signal || interrupted ? null : railResult(r.stdout, { last: true });
   if (!rr) return emit(r.code === 2 ? 2 : 1, { ...ctx, state: "failed", url: f.url, next: "read the output above", reason: `the preflight script exited ${r.code} without a RESULT line` });
   // evm prints state ok; solana's buy --check prints quoted (nothing signed, no key opened)
-  const ok = r.code === 0 && (rr.state === "ok" || rr.state === "quoted") && !!rr.price;
+  // the seller's price, through the rail: a decimal number or nothing. next repeats it.
+  const price = /^\d+(\.\d+)?$/.test(String(rr.price ?? "")) ? String(rr.price) : null;
+  const ok = r.code === 0 && (rr.state === "ok" || rr.state === "quoted") && price !== null;
   const o = rr.offer ?? {};
   const token = f.rail === "evm" ? EVM_CHAINS[f.chain].token.symbol : f.rail === "tempo" ? "pathUSD" : "USDC";
   const offer = ok ? (f.rail === "evm" ? { price: rr.price, token: o.token, payTo: rr.payTo, network: o.network, scheme: o.scheme, x402Version: o.x402Version } : { price: rr.price, token, payTo: rr.payTo, network: o.network ?? `${f.rail}-${f.chain}`, ...(o.feePayer !== undefined ? { feePayer: o.feePayer } : {}) }) : undefined;
   // --max stays the caller's own ceiling: the seller's price is shown, never filled in as --max
   const q = (v) => `'${String(v).replace(/'/g, "'\\''")}'`;
   const req = f.rail === "evm" ? "" : `${f.method ? ` --method ${f.method.toUpperCase()}` : ""}${f.body !== undefined ? ` --body ${q(f.body)}` : ""}`;
-  const buy = `superstables budget buy --rail ${f.rail} --chain ${f.chain} --url ${q(f.url)}${req} --max <your ceiling> --pay-to ${rr.payTo} --op <new id>${agentFlag(f)}`;
-  const failed = rr.reason ?? `${rr.checks?.failed ?? "some"} preflight check(s) failed`;
+  // the seller's payee enters the command only when it is an address on this rail (buy checks --pay-to the same way);
+  // anything else a rail let through stays a placeholder
+  const payTo = RAILS[f.rail].addr.test(String(rr.payTo ?? "")) ? rr.payTo : "<payTo from preflight>";
+  const buy = `superstables budget buy --rail ${f.rail} --chain ${f.chain} --url ${q(f.url)}${req} --max <your ceiling> --pay-to ${payTo} --op <new id>${agentFlag(f)}`;
+  const failed = rr.reason ?? (r.code === 0 && (rr.state === "ok" || rr.state === "quoted") && price === null ? "the rail's answer gives no price as a number" : `${rr.checks?.failed ?? "some"} preflight check(s) failed`);
   emit(ok ? 0 : r.code === 2 ? 2 : 1, {
     ...ctx, state: ok ? "ok" : "failed", amount: ok ? rr.price : null, payTo: ok ? rr.payTo : null, offer, url: f.url,
-    next: ok ? `the seller asks ${rr.price} ${token}. Buy only if that is within what the owner accepts: ${buy}` : rr.next && rr.next !== "none" && !/^node budget\//.test(rr.next) ? rr.next : "read the failed checks above",
+    next: ok ? `the seller asks ${price} ${token}. Buy only if that is within what the owner accepts: ${buy}` : rr.next && rr.next !== "none" && !/^node budget\//.test(rr.next) ? rr.next : "read the failed checks above",
     reason: ok ? undefined : failed,
   });
 }
@@ -1937,8 +1942,10 @@ async function find({ f, ctx }) {
   const keyOf = (s) => { const k = Object.hasOwn(chainByNetwork, s.network) ? chainByNetwork[s.network] : null; return k && RAIL_OF_CHAIN[k] ? k : null; };
   const key = services.length ? keyOf(services[0]) : null;
   const one = key && services.every((s) => keyOf(s) === key) ? key : null;
-  const preflight = one ? `superstables budget preflight --rail ${shellWord(RAIL_OF_CHAIN[one])} --chain ${shellWord(one)} --url U` : "superstables budget preflight --rail R --chain C --url U, with R and C from the listing";
-  emit(0, { ...ctx, state: "ok", site: site.origin, services, next: services.length ? `check the price with ${preflight} before you buy` : f.rail ? `nothing listed${where}; run superstables budget find without --rail and --chain for every chain, or ${any}` : any });
+  const preflight = one
+    ? `superstables budget preflight --rail ${shellWord(RAIL_OF_CHAIN[one])} --chain ${shellWord(one)} --url U before you buy`
+    : `superstables budget preflight --rail R --chain C --url U before you buy. C is a row's chain (the chain column; chain with --json) when it is one this client knows, and R the rail named after it: ${FIND_CHAINS_LINE}. A row on any other chain cannot be bought with a budget`;
+  emit(0, { ...ctx, state: "ok", site: site.origin, services, next: services.length ? `check the price with ${preflight}` : f.rail ? `nothing listed${where}; run superstables budget find without --rail and --chain for every chain, or ${any}` : any });
 }
 
 // ---- main -------------------------------------------------------------------------------------------
