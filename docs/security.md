@@ -554,6 +554,16 @@ from the same site, it is not an independent check of a compromised site. Instal
 a full commit hash builds the client on your machine and runs the repository's build scripts
 there; without a hash, npm installs whatever the default branch holds.
 
+The npm package pins its runtime dependencies to the exact versions its tests ran on, and viem pins
+the packages that sign and hash. Four packages further down (`@noble/ciphers`, `@scure/base`,
+`@adraffy/ens-normalize`, and zod 3 under `@x402/core` and `@x402/evm`) may still resolve to a
+newer compatible version; the project's nightly install check fails when an install no longer
+matches the tested set. `dist/sbom.cdx.json` in the package and `scripts/sbom.cdx.json` in the skill
+zip list every package the client installs or bundles, including the bundled Solana and Tempo
+libraries that `npm audit` on your machine cannot see. Two builds of one commit are identical
+([checking a build](install.md#checking-a-build-against-its-commit)). The package is not published
+with npm provenance, so nothing on the registry ties it to a commit: rebuilding it is the check.
+
 ## Replacing a key
 
 What the client can do today when a key or secret may have been seen by someone else. Where it

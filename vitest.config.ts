@@ -1,8 +1,8 @@
 import { defineConfig } from "vitest/config";
 
 // Test files that start the CLI or other processes and take ten seconds or more on the CI runner.
-// `npm run test:fast` (CI on every push to main) skips them; `npm test` and the CI full workflow
-// (the release gate, and nightly) run everything. A new test file is fast until it is listed here.
+// `npm run test:fast` (the CI workflow, on every push to main, and the release gate) skips them; `npm test` and the
+// CI full workflow (nightly and on demand) run everything. A new test file is fast until it is listed here.
 const SLOW = [
   "test/budget/approvals-token.test.ts",
   "test/budget/chain-guard.test.ts",
@@ -25,6 +25,7 @@ const SLOW = [
   "test/cli/cli.test.ts",
   "test/core/browser-signer.test.ts",
   "test/core/wallet-public-rpc.test.ts",
+  "test/scripts/supply-chain-pack.test.ts",
 ];
 
 export default defineConfig({

@@ -1,6 +1,6 @@
-# The whole suite, the build, the skill zip and the five install routes, on main. The release
-# script requires a successful run of this workflow on the exact commit it releases, and starts one
-# when there is none. It also runs every night, so a slow test that breaks shows within a day.
+# The whole suite, the build, the skill zip, an audit of every package the client ships, a check that two builds of
+# the commit are identical, and the five install routes, on main, every night and on demand. It is not the release
+# gate: superstables-release requires the CI workflow (ci.yml) on the exact commit it releases.
 # It runs only in the private repo; the public copy of this file never starts a job.
 #
 # The tests never reach the network (they stand up their own servers on loopback), so CI needs
@@ -69,6 +69,36 @@ jobs:
       # hosted catalogue, the one step here that needs the network.
       - name: Skill zip
         run: npm run skill && npm run skill:check
+        env:
+          TMPDIR: ${{ runner.temp }}
+
+      # Every package the client installs or bundles (the SBOMs the build and the skill wrote), against the registry's
+      # advisories. It fails on an advisory for any of them, and when the registry can't be reached.
+      - name: Audit the shipped packages
+        run: node scripts/bundle-audit.mjs --sbom dist/sbom.cdx.json --sbom build/skill/superstables-payments/scripts/sbom.cdx.json
+
+  reproducible:
+    if: github.event.repository.private && github.ref == 'refs/heads/main'
+    name: Two builds are identical, Node ${{ matrix.node }}
+    runs-on: [self-hosted, Linux, X64, superstables-ci]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # This commit built twice the way the release builds it (git archive, npm ci, npm run skill, npm pack), in two
+      # folders, time zones and locales: the npm tarball and the skill zip must be byte for byte the same.
+      - name: Build twice and compare
+        run: node scripts/repro-check.mjs
         env:
           TMPDIR: ${{ runner.temp }}
 

@@ -18,7 +18,7 @@
 // node scripts/install-check.mjs [checkout] [tarball] [global] [omit-dev] [git] [--keep]   (no route named: all five)
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -98,6 +98,32 @@ function exercise(route, superstables, { version, cwd }) {
   check(route, "superstables budget doctor --rail evm", (r.status === 0 || r.status === 1) && result?.command === "doctor", `exit ${r.status ?? r.signal}, ${result ? `RESULT state ${result.state}` : "no RESULT line"}`);
 }
 
+// name@version of every package under a node_modules folder, nested ones included; the client itself left out.
+function installedVersions(nodeModules) {
+  const found = new Set();
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".") || !(entry.isDirectory() || entry.isSymbolicLink())) continue;
+      const folders = entry.name.startsWith("@") ? readdirSync(join(dir, entry.name)).map((n) => join(dir, entry.name, n)) : [join(dir, entry.name)];
+      for (const folder of folders) {
+        let pkg;
+        try { pkg = JSON.parse(readFileSync(join(folder, "package.json"), "utf8")); } catch { continue; }
+        if (pkg.name !== "@superstables/client") found.add(`${pkg.name}@${pkg.version}`);
+        if (existsSync(join(folder, "node_modules"))) walk(join(folder, "node_modules"));
+      }
+    }
+  };
+  walk(nodeModules);
+  return found;
+}
+
+// What package-lock.json says an install of the client gets: its production entries (no dev, no optional peers).
+const tested = new Set(
+  Object.entries(JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8")).packages)
+    .filter(([k, v]) => k && !v.dev && !v.optional && !v.devOptional)
+    .map(([k, v]) => `${k.slice(k.lastIndexOf("node_modules/") + "node_modules/".length)}@${v.version}`),
+);
+
 /**
  * Checks an installed @superstables/client: dist/budget with its notices, no budget-only packages. `nodeModules` is the
  * node_modules it was installed into; a global install puts the package's own dependencies in its own node_modules.
@@ -109,6 +135,12 @@ function checkInstalled(route, nodeModules) {
   check(route, "the package has no budget/ sources", !existsSync(join(pkg, "budget")));
   const present = BUDGET_ONLY.filter((p) => existsSync(join(nodeModules, p)) || existsSync(join(pkg, "node_modules", p)));
   check(route, "no budget-only package installed", present.length === 0, present.join(", "));
+  // A dependency range somewhere down the tree that a newer release now satisfies shows here, as a package that the
+  // lockfile (the tested set) does not name.
+  const got = installedVersions(nodeModules);
+  const extra = [...got].filter((p) => !tested.has(p));
+  const missing = [...tested].filter((p) => !got.has(p));
+  check(route, "installs exactly the versions package-lock.json resolved", !extra.length && !missing.length, [...extra.map((p) => `+${p}`), ...missing.map((p) => `-${p}`)].join(" "));
 }
 
 // ---- the checkout copy: the files git knows about or would add, as they are on disk now ----------------------------
