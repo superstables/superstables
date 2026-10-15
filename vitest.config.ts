@@ -11,6 +11,7 @@ const SLOW = [
   "test/budget/cli-hosted.test.ts",
   "test/budget/cli-once.test.ts",
   "test/budget/cli.test.ts",
+  "test/budget/evm-purchase-checks.test.ts",
   "test/budget/guidance.test.ts",
   "test/budget/hosted-cancel.test.ts",
   "test/budget/hosted.test.ts",

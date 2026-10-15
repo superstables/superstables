@@ -1,5 +1,5 @@
 import "./cli-guard.mjs";
-import { requireRecordLock } from "../op-lock.mjs";
+import { requireRecordLock, requireKeyLock } from "../op-lock.mjs";
 // recover (B4): stop the agent's authority and get stranded USDC back to the owner.
 // The agent-side steps are signed by the agent key file (it is on this machine). The owner's steps go through the owner's
 // own wallet (owner page, owner.ts), each as its own approval, and only when needed. No owner key file is used unless
@@ -84,6 +84,11 @@ if (plan) {
   console.log(opId ? "  3. sweep: skipped (--op)" : !sweepPlanned ? `  3. sweep: skipped: ${scan.unreadable.length} journal file(s) cannot be read` : `  3. sweep: whatever the agent key holds above ${usdc(KEEP)} ${SYM} after step 2 goes to the owner, once every journal of this agent is read again and none can still move money (agent key; now ${usdc(held)} ${SYM})`);
   process.exit(emit("recover", 0, { state: "planned", op: opId ?? null, plan: { gasTopUp: plannedGas && !plannedGas.ok ? gasFmt(topUpFor(plannedGas)) : null, ownerRevoke: allowance === 0n || !agentHasGas, unreadable: scan.unreadable, allowance: usdc(allowance), pendingOps: pending.map((j) => ({ op: j.op, state: j.state, pulled: j.pulled ?? null, returned: j.returned ?? "0" })), agentHolds: usdc(held), sweep: sweepPlanned }, next: `run superstables budget recover --rail evm --chain ${CFG.key}${opId ? ` --op ${opId}` : ""} to send these steps` }));
 }
+
+// One process at a time sends from this agent key on this chain: a purchase holds the key lock to its end, and recover takes it
+// (after the operation locks above, as buy does) before it sends anything. The exit listener releases it.
+const keyLock = await requireKeyLock(OPS_DIR, pub.agent, { waitMs: 120_000, onWait: () => console.log("waiting for a purchase on this agent key to finish before recover sends anything") });
+if (!keyLock.ok) process.exit(emit("recover", 3, { state: "refused_precheck", op: opId ?? null, reason: "agent_key_busy", next: `a purchase on this agent key is still running (${keyLock.details}); wait for its RESULT, then run recover again. Nothing was sent` }));
 
 await assertRpcChain();
 // The agent's own key signs the agent-side steps. Only without an agent file here, an escrowed copy in the owner key file.

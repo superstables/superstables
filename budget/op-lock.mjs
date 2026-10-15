@@ -264,3 +264,24 @@ export function requireRecordLock(dir, op) {
   }
   return lock;
 }
+
+/** The agent key's lock file for one chain: `dir` is that chain's operation directory (one agent key serves every evm chain; nonces are per chain). */
+export const keyLockFile = (dir, address) => join(dir, `agent-${String(address).toLowerCase()}.key.lock`);
+/**
+ * One process at a time sends from one agent key on one chain (buy from its balance checks to its end; recover before its first
+ * agent transaction). Take it AFTER the operation's own locks and release it BEFORE them. A live holder is waited for, up to
+ * `waitMs`; a dead one is taken over as for operation locks; an unverifiable one is waited for and then reported. Never exits.
+ * @returns {Promise<ReturnType<typeof lockFile>>} the lock, or the last busy answer once `waitMs` has passed
+ */
+export async function requireKeyLock(dir, address, { waitMs = 600_000, pollMs = 1_000, onWait, ...options } = {}) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(address))) throw new Error('requireKeyLock: not an EVM address');
+  durableDirectory(dir);
+  const path = keyLockFile(dir, address);
+  const until = Date.now() + waitMs;
+  for (let first = true; ; first = false) {
+    const lock = lockFile(path, options);
+    if (lock.ok || Date.now() >= until) return lock;
+    if (first) onWait?.(lock);
+    await new Promise(r => setTimeout(r, Math.max(0, Math.min(pollMs, until - Date.now()))));
+  }
+}
