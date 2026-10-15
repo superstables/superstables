@@ -26,7 +26,10 @@ import bs58 from "bs58";
 // if any) without a full stack trace, then exit non-zero. This is what
 // callers of these scripts should see for a refused payment or an
 // unfunded fee payer, not a raw JS crash.
-process.on("unhandledRejection", async (err) => {
+// A failed top-level await in an ES module raises uncaughtException (as do synchronous throws and unhandled rejections).
+// The owner page's handler (owner-page.ts), once installed, prints and exits itself.
+process.on("uncaughtException", async (err) => {
+  if (process.listenerCount("uncaughtException") > 1) return;
   // the RPC's words and a program's logs are outside text: one line each, no hidden characters (oneLine, below)
   console.error("\nFailed:", oneLine(err?.message ?? err, 1000));
   if (typeof err?.getLogs === "function") {

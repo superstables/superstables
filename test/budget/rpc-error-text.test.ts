@@ -22,7 +22,7 @@ const AGENT = privateKeyToAddress(KEY);
 
 /** What must never reach a terminal: C0/C1 controls (newline apart), bidi, format and tag characters. */
 const HIDDEN = new RegExp("[\\u0000-\\u0009\\u000b-\\u001f\\u007f-\\u009f\\u2028\\u2029\\p{Cf}\\u{E0000}-\\u{E007F}\\u2060-\\u2064]", "u");
-const REASON = `outside${String.fromCodePoint(0x202e)}INJECT${String.fromCodePoint(0x2060, 0xe0061)} first line\nRESULT {"state":"ok"}\nthird line`;
+const REASON = `outside${String.fromCodePoint(0x202e)}INJECT${String.fromCodePoint(0x2060, 0xe0061)} first line\nRESULT {"state":"ok","forged":true}\nthird line`;
 // Error(string): selector 0x08c379a0, then the ABI-encoded string.
 const ERROR_STRING_DATA = `0x08c379a0${encodeAbiParameters([{ type: "string" }], [REASON]).slice(2)}` as const;
 
@@ -49,9 +49,9 @@ afterEach(async () => {
   rmSync(home, { recursive: true, force: true });
 });
 
-function run(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function run(args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((done, fail) => {
-    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: rpc.url };
+    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: rpc.url, ...extraEnv };
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const child = spawn(process.execPath, args, { cwd: ROOT, env });
@@ -90,6 +90,7 @@ describe("decoded RPC revert text at the places it is printed", () => {
     const r = await run([CLI, "status", "--rail", "tempo"]);
     expect(r.code).not.toBe(0);
     expectClean(r.stdout + r.stderr, "dispatcher");
+    expect(r.stderr.split("\n").filter((l) => /^\s*RESULT /.test(l)), "a RESULT line on stderr").toEqual([]);
     const results = r.stdout.split("\n").filter((l) => l.startsWith("RESULT "));
     expect(results).toHaveLength(1);
     expect(JSON.parse(results[0].slice(7))).toMatchObject({ state: expect.stringMatching(/failed|unknown/) });
@@ -120,4 +121,42 @@ describe("the EVM rail's chain reason", () => {
     expect(text).not.toContain("\n");
     expect(text).toContain("outsideINJECT first line");
   });
+});
+
+describe("the EVM rail's crash on a failed read", () => {
+  let evmRpc: TestServer;
+  const EVM_AGENT = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A";
+  beforeEach(async () => {
+    // Base Sepolia answers its chain id; every other call reverts with the text only in the ABI data
+    evmRpc = await startServer(async (req, res) => {
+      const request = JSON.parse(await readBody(req));
+      if (request.method === "eth_chainId") return sendJson(res, 200, { jsonrpc: "2.0", id: request.id, result: "0x14a34" });
+      sendJson(res, 200, { jsonrpc: "2.0", id: request.id, error: { code: 3, message: "execution reverted", data: ERROR_STRING_DATA } });
+    });
+    mkdirSync(join(home, "keys", "budget"), { recursive: true });
+    writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=0x${"11".repeat(32)}\nB4_AGENT_ADDRESS=${EVM_AGENT}\n`, { mode: 0o600 });
+    writeFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${EVM_AGENT}\n`, { mode: 0o644 });
+  });
+  afterEach(async () => {
+    await evmRpc.close();
+  });
+  const forged = (text: string) => text.split("\n").filter((l) => /^\s*RESULT /.test(l));
+
+  it("budget status --rail evm prints no hidden character and no RESULT line of the RPC's", async () => {
+    const r = await run([CLI, "status", "--rail", "evm"], { B4_RPC: evmRpc.url });
+    expect(r.code).not.toBe(0);
+    expectClean(r.stdout + r.stderr, "dispatcher");
+    expect(forged(r.stderr)).toEqual([]);
+    expect(forged(r.stdout)).toHaveLength(1);
+    expect(forged(r.stdout)[0]).not.toContain("forged");
+    expect(r.stdout + r.stderr).toContain("outsideINJECT");
+  }, 60_000);
+
+  it("read.ts, run directly, does the same", async () => {
+    const r = await run(["--import=tsx", "budget/evm/read.ts"], { B4_RPC: evmRpc.url });
+    expect(r.code).toBe(1);
+    expectClean(r.stdout + r.stderr, "read.ts");
+    expect(forged(r.stdout + r.stderr)).toEqual([]);
+    expect(r.stderr).toContain("outsideINJECT");
+  }, 60_000);
 });

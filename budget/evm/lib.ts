@@ -219,6 +219,25 @@ export function chainReason(e: any): string {
   return oneLine(m.replace(/\s+/g, " "), 400);
 }
 
+// A crash prints the library's error, which can carry an RPC's words (viem decodes revert data into its message and
+// reason): one line, no hidden characters, like any outside text. The owner page's handler (owner-page.ts), once
+// installed, prints and exits itself.
+// The RPC's own words ("details") come first: they are what names the failure (the answer was not JSON, the call reverted),
+// and the dispatcher takes the first words after "error:" as the command's reason.
+function crashText(err: any): string {
+  const parts: string[] = [];
+  let cur = err;
+  for (let i = 0; i < 8 && cur; i++, cur = cur.cause) {
+    for (const k of ["details", "reason", "shortMessage"]) if (typeof cur?.[k] === "string" && !parts.includes(cur[k])) parts.push(cur[k]);
+  }
+  return oneLine((parts.join(" | ") || String(err?.message ?? err)).replace(/\s+/g, " "), 400);
+}
+process.on("uncaughtException", (err) => {
+  if (process.listenerCount("uncaughtException") > 1) return;
+  process.stderr.write(`error: ${crashText(err)}\n`);
+  process.exit(1);
+});
+
 // ---- gas the agent can pay ----
 // Before the agent signs anything (pull, cancel, return, selfRevoke) it checks it can pay: the chain's gas limit for that
 // transaction (chains.mjs `gas.limits`) plus the limits of what a failure would need next, times the current fee cap. A node
