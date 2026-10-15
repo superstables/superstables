@@ -438,9 +438,15 @@ undo an owner signature or a transaction already sent through setup on superstab
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds
   already transferred. On `evm`, a purchase whose price was already pulled can still settle, and
   `recover` returns the USDC it can, leaving up to 2 USDC of gas on Arc Testnet. On `tempo`, it does
-  not close payment sessions the key opened elsewhere. On `evm`, `revoke` sends `approve(agent, 0)`
-  every time it is asked, even when the allowance already reads 0: one RPC's read is not proof that
-  nothing is live, and it reports `revoked` only after its own transaction and a read of 0.
+  not close payment sessions the key opened elsewhere. `revoke` sends its transaction every time it
+  is asked, even when the budget already reads empty or revoked: one RPC's read is not proof that
+  nothing is live. On `solana` it sends nothing only when the owner has no USDC account, and on
+  `tempo` only when the keychain refuses a simulated `revokeKey` from the owner as already done; a
+  simulation it cannot read is unknown (exit 5). It reports `revoked` only after its own
+  transaction and a read that shows it. `budget status` says `revoked: true` only for a revoke this
+  machine recorded that the chain still shows (on `tempo`, the keychain's revoked flag): an
+  allowance or delegate that reads 0 is reported as `remaining: "0"`, because spent, never granted,
+  revoked elsewhere and a wrong read all look the same.
 
 Per rail, with what each revoke does not cover:
 [Budget rails and chains](../budget/README.md#safety-model).

@@ -4,7 +4,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
-import { decodeFunctionData, encodeFunctionResult, type Hex } from "viem";
+import { decodeFunctionData, encodeErrorResult, encodeFunctionResult, type Hex } from "viem";
 import { Abis, Addresses } from "viem/tempo";
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import { readBody, startServer, type TestServer } from "./servers.js";
@@ -30,12 +30,17 @@ export interface FakeTempo extends TestServer {
    * `reverted`: it reverted on chain, so the keychain is left as it was.
    */
   mine(from: string, data: Hex, opts?: { reverted?: boolean }): Hex;
+  /** Every revokeKey the client simulated with eth_call, in order. */
+  simulations: { from: string; key: string }[];
+  /** A simulated revokeKey's answer; default: the keychain's own (no key: KeyNotFound; revoked: KeyAlreadyRevoked; else "ok"). */
+  revokeSimulation?: (from: string, key: string) => "ok" | "KeyAlreadyRevoked" | "KeyNotFound" | "unreadable";
 }
 
 export async function startFakeTempo(): Promise<FakeTempo> {
   const chain = {} as FakeTempo;
   chain.head = { number: 1000n, timestamp: Math.floor(Date.now() / 1000) };
   chain.keys = new Map();
+  chain.simulations = [];
   const txs = new Map<string, { from: string; input: Hex; block: bigint; reverted: boolean }>();
   const id = (owner: string, key: string) => `${owner.toLowerCase()}:${key.toLowerCase()}`;
   chain.mine = (from, data, opts = {}) => {
@@ -56,9 +61,17 @@ export async function startFakeTempo(): Promise<FakeTempo> {
     }
     return hash;
   };
-  const keychain = (data: Hex): Hex => {
+  const keychain = (data: Hex, from = ""): Hex => {
     const call = decodeFunctionData({ abi: Abis.accountKeychain, data });
     const a = call.args as unknown as any[];
+    if (call.functionName === "revokeKey") {
+      chain.simulations.push({ from, key: String(a[0]) });
+      const k = chain.keys.get(id(from, a[0]));
+      const v = chain.revokeSimulation?.(from, a[0]) ?? (!k ? "KeyNotFound" : k.revoked ? "KeyAlreadyRevoked" : "ok");
+      if (v === "ok") return "0x";
+      if (v === "unreadable") throw new Error("fake tempo: eth_call failed");
+      throw Object.assign(new Error("execution reverted"), { rpc: { code: 3, message: "execution reverted", data: encodeErrorResult({ abi: Abis.accountKeychain, errorName: v }) } });
+    }
     const k = chain.keys.get(id(a[0], a[1]));
     const out = (result: unknown) => encodeFunctionResult({ abi: Abis.accountKeychain, functionName: call.functionName as any, result: result as any });
     switch (call.functionName) {
@@ -79,8 +92,8 @@ export async function startFakeTempo(): Promise<FakeTempo> {
         return { number: hex(n), timestamp: hex(chain.head.timestamp - Number(chain.head.number - n)), hash: `0x${"ab".repeat(32)}`, transactions: [] };
       }
       case "eth_call": {
-        const { to, data } = params[0];
-        if (String(to).toLowerCase() === KEYCHAIN.toLowerCase()) return keychain(data);
+        const { to, data, from } = params[0];
+        if (String(to).toLowerCase() === KEYCHAIN.toLowerCase()) return keychain(data, from);
         if (String(data).startsWith("0xed498fa8")) return `0x${"0".repeat(64)}`; // FeeManager: no fee token preference
         if (String(data).startsWith("0x70a08231")) return `0x${(1000n * 10n ** 6n).toString(16).padStart(64, "0")}`; // 1000 pathUSD
         return `0x${"0".repeat(64)}`;
@@ -103,7 +116,7 @@ export async function startFakeTempo(): Promise<FakeTempo> {
       try {
         return { jsonrpc: "2.0", id: c.id, result: answer(c.method, c.params ?? []) };
       } catch (e) {
-        return { jsonrpc: "2.0", id: c.id, error: { code: -32000, message: String((e as Error).message) } };
+        return { jsonrpc: "2.0", id: c.id, error: (e as any).rpc ?? { code: -32000, message: String((e as Error).message) } };
       }
     };
     json(res, Array.isArray(body) ? body.map(one) : one(body));

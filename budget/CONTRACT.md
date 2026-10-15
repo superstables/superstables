@@ -30,6 +30,8 @@ Every rail's main path follows these rules.
 
 The README says which owner action stops the agent even if the agent key is stolen, and what exposure remains after it. Tested on testnet, not only read from source.
 
+`revoke` never skips its transaction on one read: on `evm` and `solana` it always sends (on `solana` unless the owner has no USDC account, where the transaction would fail), and on `tempo` it skips only when the keychain refuses a simulated `revokeKey` from the owner. `status` reports `revoked: true` only for a revoke this machine recorded that the chain still shows (on `tempo`, the keychain's revoked flag).
+
 ## 4. Every purchase is checked before anything is signed
 
 `buy` must refuse, before any signature, pull or transaction, when:
