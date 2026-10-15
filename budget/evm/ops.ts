@@ -17,6 +17,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { readJournalFile, writeJournalFile } from "../journal.mjs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { evmJournalProblem } from "../journal.mjs";
 import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, BlockNotFoundError, TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
 import {
   SYM,
@@ -98,14 +99,9 @@ export function checkOpId(id: string): string {
   return id;
 }
 export const journalPath = (op: string) => join(OPS_DIR, `${op}.json`);
+/** This op's purchase journal, or null when there is none. Anything else in its place stops the command: unknown, exit 5 (journal.mjs). */
 export function readJournal(op: string): Journal | null {
-  const j = readJournalFile(journalPath(op), op);
-  if (!j) return null;
-  if (j.path !== "approve") {
-    console.error(`error: operation ${op} is not an evm budget purchase; reconcile it on the rail that made it`);
-    process.exit(2);
-  }
-  return j as Journal;
+  return readJournalFile(journalPath(op), op, evmJournalProblem) as Journal | null;
 }
 export function writeJournal(j: Journal) {
   j.updatedAt = new Date().toISOString();

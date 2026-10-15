@@ -15,7 +15,7 @@
 //   not_found         the blockhash expired and no transaction was ever found (safe to retry)
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import { createHash, randomBytes } from "node:crypto";
-import { readJournalFile, writeJournalFile } from "../journal.mjs";
+import { readJournalFile, solanaOpProblem, writeJournalFile } from "../journal.mjs";
 import { join } from "node:path";
 import { PublicKey } from "@solana/web3.js";
 import { OPS_DIR, retryRead, sleep, formatUnits } from "./lib.mjs";
@@ -39,7 +39,7 @@ export function opIdentity(op) {
 const opPath = (op) => join(OPS_DIR, `${op}.json`);
 
 export function readOp(op) {
-  return readJournalFile(opPath(op), op);
+  return readJournalFile(opPath(op), op, solanaOpProblem);
 }
 
 export function writeOp(op, record) {

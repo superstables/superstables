@@ -50,7 +50,7 @@ On `tempo`, `buy` also refuses payment splits that add up to the price or more, 
 - If an operation with that ID is already `submitted` or `unknown`, `buy` refuses and says to run `reconcile --op <id>`.
 - `reconcile --op <id>` reads the chain and sets `settled`, `failed` or `not_found`. It never pays.
 - A purchase is `settled` only when its own transaction succeeded on chain. Seller HTTP status is recorded separately as `delivered: true|false` (`null` when the process died before the response). Delivery failure never triggers a new payment.
-- An existing operation journal that cannot be read or parsed stops its journal read with `unknown` (exit 5), preserving the file. This applies to purchase and reconciliation reads and to EVM `recover --op ID`, before any send. Recovery without `--op` still skips unreadable journals during its scan; inspect them before running recovery.
+- An existing operation journal that cannot be read or parsed stops its journal read with `unknown` (exit 5), preserving the file. A file that parses but is not a journal of that operation on its rail (it names another operation, or lacks a field every journal of that rail has from its first write) counts as one that cannot be read. This applies to purchase and reconciliation reads and to EVM `recover --op ID`, before any send. Recovery without `--op` names unreadable journals and skips its sweep (below).
 - Final output line: `RESULT {"rail","op","state","tx","debit","remaining","delivered","next"}` where `state` is one of `quoted`, `submitted`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `not_found` (reconcile only), `unknown`.
 
 ## 6. Help and bad input never sign

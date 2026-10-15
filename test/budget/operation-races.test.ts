@@ -114,7 +114,7 @@ describe.runIf(['linux', 'darwin'].includes(process.platform))('operation writer
       it(`${rail}: a stalled unsigned reconcile cannot overwrite newer ${state} evidence`, async () => {
         const box = sandbox(rail);
         const path = join(box.dir, `${op}.json`);
-        writeFileSync(path, JSON.stringify({ op, rail, kind: 'buy', state: 'quoted', history: [],
+        writeFileSync(path, JSON.stringify({ op, rail, kind: 'buy', state: rail === 'solana' ? 'intent' : 'quoted', history: [],
           createdAt: new Date().toISOString(), path: 'approve', notes: [], signed: false,
           owner: `0x${'22'.repeat(20)}`, agent: `0x${'33'.repeat(20)}`, delivered: null,
           intent: { amount: '1000', amountDecimal: '0.001',

@@ -34,6 +34,7 @@ import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, reco
 import { abandonedBreaker, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
+import { journalProblem } from "./journal.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
@@ -1114,8 +1115,13 @@ async function readBudget(f) {
 }
 
 const journal = (f) => join(opsDir(f.rail, f.chain), `${f.op}.json`);
-/** The journal as a non-array object, else null (missing, unparsable, or a root such as 7 or []: the rail's reader refuses those too). */
-const readJournal = (f) => { const p = journal(f); try { const j = existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null; return j && typeof j === "object" && !Array.isArray(j) ? j : null; } catch { return null; } };
+/**
+ * The journal, when the file is this op's journal on its rail (journal.mjs journalProblem: the same check the rail's reader
+ * makes), else null: missing, unparsable, not an object, another op's, or without the fields its rail always writes.
+ * journalPresent tells a missing file from one that is there but unusable; journalAnswer treats the second as a purchase
+ * that may have paid.
+ */
+const readJournal = (f) => { const p = journal(f); try { const j = existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null; return j && typeof j === "object" && !Array.isArray(j) && journalProblem(f.rail, j, f.op) === "" ? j : null; } catch { return null; } };
 /**
  * Whether this op may have a journal: false only when the path is plainly missing (ENOENT). A read that fails for any other
  * reason (EACCES, ELOOP, ...) hides a file that may be there, so it counts as present: an op is never called unused, or
@@ -1304,9 +1310,10 @@ const statusCommand = (f) => `superstables budget status --rail ${f.rail}${chain
 const noBudgetWords = (f, gaps) => `no budget has been set up here for ${f.rail} on ${f.chain}: ${gaps.missing.join("; ")}`;
 
 /**
- * The answer for an op whose journal says it may have paid (submitted or unknown; a journal that cannot be read; on solana
- * also a chain refusal, which its rail treats as pending), or undefined. Every rail writes the journal before it signs, so
- * this is read before any other refusal: a later setup or lock problem never makes such an op look unpaid.
+ * The answer for an op whose journal says it may have paid (submitted or unknown; a journal that cannot be read, or that is not
+ * this op's journal on its rail (journal.mjs); on solana also a chain refusal, which its rail treats as pending), or
+ * undefined. Every rail writes the journal before it signs, so this is read before any other refusal: a later setup or
+ * lock problem never makes such an op look unpaid.
  */
 function journalAnswer(f, ctx) {
   const j = readJournal(f);

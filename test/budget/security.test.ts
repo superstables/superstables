@@ -177,7 +177,7 @@ describe("a buy stopped by a signal", () => {
     // an earlier attempt of this op that ended before it paid: the journal exists, so this run may have signed
     const ops = join(home, "budget", "ops", "solana-devnet");
     mkdirSync(ops, { recursive: true, mode: 0o700 });
-    writeFileSync(join(ops, "stopped-buy.json"), JSON.stringify({ op: "stopped-buy", state: "failed" }), { mode: 0o600 });
+    writeFileSync(join(ops, "stopped-buy.json"), JSON.stringify({ op: "stopped-buy", state: "failed", history: [] }), { mode: 0o600 });
     const r = await stoppedBuy("stopped-buy");
     expect(r.code).toBe(5);
     expect(r.result).toMatchObject({ command: "buy", state: "unknown", paid: null, op: "stopped-buy" });

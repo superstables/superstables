@@ -225,7 +225,7 @@ describe("budget Solana finality and absence", () => {
     const exit = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("test exit"); });
     try {
       const module = await import(new URL("../../budget/solana/ops.mjs", import.meta.url).href);
-      const rec = { op: "outage-order", ...solRec, state, inclusionObserved: true, delivered: true, final: false, debit: "0.01" };
+      const rec = { op: "outage-order", ...solRec, state, inclusionObserved: true, delivered: true, final: false, debit: "0.01", history: [] };
       module.writeOp(rec.op, rec);
       await expect(import(new URL("../../budget/solana/reconcile.mjs", import.meta.url).href)).rejects.toThrow("test exit");
       expect(module.readOp(rec.op)).toEqual(rec);
