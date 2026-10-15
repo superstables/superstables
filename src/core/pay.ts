@@ -25,7 +25,7 @@ import { untrustedText } from "./text.js";
 import type { ChainCheck } from "./settlement.js";
 import { Records, attemptRunner, type AttemptRunner } from "./records.js";
 import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
-import { evaluatePolicy, type Policy } from "./policy.js";
+import { evaluatePolicy, policyAmount, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
 import { firstPayable, railFor } from "./rails/index.js";
 import type { ChainReadOptions, Offer, PaymentFacts, PushRail, RailAdapter, X402Rail } from "./rails/types.js";
@@ -215,9 +215,9 @@ export class PaymentEngine {
     const now = this.now();
     const judged = evaluatePolicy(this.policy, {
       domain: hostOf(quote.url),
-      amountDecimal: quote.terms.amountDecimal,
       asset: quote.terms.asset,
-      spentTodayDecimal: this.records.spentToday(quote.terms.asset, new Date(now), { exclude: attempt.id }),
+      ...policyAmount(quote.terms),
+      spentTodayAtomic: this.records.spentTodayAtomic(quote.terms.asset, new Date(now), { exclude: attempt.id }),
     });
     if (judged.allowed) {
       attempt.reservedAt = new Date(now).toISOString();
@@ -296,9 +296,9 @@ export class PaymentEngine {
 
     const currentPolicy = evaluatePolicy(this.policy, {
       domain: hostOf(quote.url),
-      amountDecimal: quote.terms.amountDecimal,
       asset: quote.terms.asset,
-      spentTodayDecimal: this.records.spentToday(quote.terms.asset, new Date(this.now()), { exclude: attempt.id }),
+      ...policyAmount(quote.terms),
+      spentTodayAtomic: this.records.spentTodayAtomic(quote.terms.asset, new Date(this.now()), { exclude: attempt.id }),
     });
     if (!currentPolicy.allowed) {
       this.settleState(attempt, "failed", {

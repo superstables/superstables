@@ -9,7 +9,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { networkFor } from "./chain.js";
 import { ensureDir, recordsDir } from "./home.js";
-import { capUnit, round6 } from "./policy.js";
+import { CAP_DECIMALS, capUnit, capUnits, policyAmount } from "./policy.js";
 import type { thisProcess } from "./lock.js";
 import type { Attempt, Quote, Receipt } from "./types.js";
 
@@ -267,7 +267,7 @@ export class Records {
   }
 
   /**
-   * What counts toward the daily cap on the UTC day of `now`, in one asset's unit: the US dollar stablecoins (USDC on
+   * What counts toward the daily cap on the UTC day of `now`, in millionths of one asset's cap unit (CAP_DECIMALS): the US dollar stablecoins (USDC on
    * every chain, pathUSD on Tempo) count together, one for one, whatever the rail. One line: a payment counts on the day it
    * ended (a receipt's day, or the day it became uncertain), and on every day while it can still move money (signed or
    * sent and not resolved, or waiting for the owner within its approval window).
@@ -289,20 +289,31 @@ export class Records {
    * settles between the two reads is still counted, once. `exclude` leaves out one attempt: the one being checked
    * against the cap. This is the number the per-day cap is checked against; it is a local figure, not a chain balance,
    * and it says so wherever it is shown.
+   *
+   * Each amount is the record's `terms.amountAtomic`, a whole number, read at its chain's token decimals (capUnits);
+   * nothing is added as a decimal. Undefined when a record that counts has no whole-number amountAtomic: a total that
+   * cannot be read is not zero, and the daily cap then refuses (evaluatePolicy).
    */
-  spentToday(asset: string, now: Date = new Date(), options: { exclude?: string } = {}): number {
+  spentTodayAtomic(asset: string, now: Date = new Date(), options: { exclude?: string } = {}): bigint | undefined {
     const day = now.toISOString().slice(0, 10);
     const wanted = capUnit(asset);
     // Attempts first, then receipts: see above.
     const attempts = this.byId<Attempt>("attempts.jsonl");
     const receipts = this.byId<Receipt>("receipts.jsonl");
-    let total = 0;
+    let total = 0n;
+    /** Adds one record's amount; false when it has none that can be read. */
+    const add = (terms: Receipt["terms"] | undefined): boolean => {
+      const { amountAtomic, decimals } = policyAmount(terms ?? {});
+      if (amountAtomic === undefined) return false;
+      total += capUnits(amountAtomic, decimals ?? CAP_DECIMALS);
+      return true;
+    };
     for (const receipt of receipts.values()) {
       if (!receipt.at?.startsWith(day)) continue;
       // The chain showed the seller's report was wrong: nothing was paid, and nothing can be.
       if (receipt.chain === "unpaid") continue;
       if (capUnit(receipt.terms?.asset ?? "") !== wanted) continue;
-      total += receipt.terms.amountDecimal;
+      if (!add(receipt.terms)) return undefined;
     }
     for (const attempt of attempts.values()) {
       if (attempt.id === options.exclude) continue;
@@ -314,12 +325,21 @@ export class Records {
         // can still move money, as an unresolved attempt without a receipt would. An attempt with matching inclusion is paid on its recorded day,
         // whatever an older receipt line says.
         if (receipt.at?.startsWith(day) || attempt.chain === "verified" || receipt.chain === "verified" || attempt.chainFinal === true || receipt.chainFinal === true || receipt.chain === "unpaid") continue;
-        if (attempt.state !== "failed" && mayStillMove(attempt, now) === true) total += attempt.terms.amountDecimal;
+        if (attempt.state !== "failed" && mayStillMove(attempt, now) === true && !add(attempt.terms)) return undefined;
         continue;
       }
-      if (countsOn(attempt, now, day)) total += attempt.terms.amountDecimal;
+      if (countsOn(attempt, now, day) && !add(attempt.terms)) return undefined;
     }
-    return round6(total);
+    return total;
+  }
+
+  /**
+   * spentTodayAtomic as a decimal number, for display (NaN when the total cannot be read). No cap compares it: quote, pay
+   * and the browser signer pass spentTodayAtomic.
+   */
+  spentToday(asset: string, now: Date = new Date(), options: { exclude?: string } = {}): number {
+    const total = this.spentTodayAtomic(asset, now, options);
+    return total === undefined ? NaN : Number(total) / 10 ** CAP_DECIMALS;
   }
 
   // ── The append-only file itself ──────────────────────────────────────────────────────

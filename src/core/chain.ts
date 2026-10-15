@@ -371,12 +371,40 @@ export function addressUrl(network: string, address: string): string {
   return known ? `${known.explorer}/address/${address}${known.explorerQuery ?? ""}` : address;
 }
 
+/** Rounds through floating point: for display and the demo seller's price only. Limits use toAtomicExact. */
 export function toAtomic(amountDecimal: number, decimals = 6): string {
   return String(Math.round(amountDecimal * 10 ** decimals));
 }
 
+/** Rounds through floating point: for display and the demo seller's price only. Limits use toAtomicExact. */
 export function fromAtomic(amountAtomic: string, decimals = 6): number {
   return Number(amountAtomic) / 10 ** decimals;
+}
+
+/**
+ * A decimal amount as written ("0.05", "12", "0.000001") as a whole number of the token's smallest units, exactly.
+ * Throws on anything else: a sign, an exponent, a hex or octal spelling, a missing digit before or after the point,
+ * whitespace, or more fractional digits than the token has. Never rounds.
+ */
+export function toAtomicExact(amount: string, decimals: number): bigint {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 77) throw new Error("not a number of decimals");
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(amount);
+  if (!match) throw new Error("not a decimal amount");
+  const fraction = match[2] ?? "";
+  if (fraction.length > decimals) throw new Error(`more than ${decimals} decimal places`);
+  return BigInt(match[1]) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, "0") || "0");
+}
+
+/** A whole number of smallest units as the shortest decimal: 100000n at 6 decimals is "0.1", 0n is "0". Never a float. */
+export function fromAtomicString(atomic: bigint | string, decimals: number): string {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 77) throw new Error("not a number of decimals");
+  if (typeof atomic === "string" && !/^\d+$/.test(atomic)) throw new Error("not a whole number of base units");
+  const units = BigInt(atomic);
+  if (units < 0n) throw new Error("not a whole number of base units");
+  const digits = units.toString().padStart(decimals + 1, "0");
+  const whole = digits.slice(0, digits.length - decimals);
+  const fraction = digits.slice(digits.length - decimals).replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole;
 }
 
 const ERC20_BALANCE_OF = [

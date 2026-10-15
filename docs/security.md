@@ -201,14 +201,19 @@ more. Your own `~/.superstables/policy.yaml` applies whichever policy file or ho
 names, but its daily count and the file itself are only as safe as your account's files. An empty
 policy file means the defaults. A file with a misspelled key, a `kill_switch` that is not `true` or
 `false`, a scalar where a list belongs or an unreadable amount stops every payment until it is
-fixed. The only limits that survive a compromised machine are the ones inside what you sign —
-the amount and the recipient in the authorization — and the balance of the account, which is why
-this release is testnet only.
+fixed. Amounts are read as you wrote them, in plain decimal with at most six decimals: `0.05`,
+`1` or `0.05 USDC`. YAML would read `0x10` as 16 and `1e3` as 1000, so those spellings, and `.5`,
+`+1` or `-1`, stop payments in the same way, with the key named. The only limits that survive a
+compromised machine are the ones inside what you sign — the amount and the recipient in the
+authorization — and the balance of the account, which is why this release is testnet only.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
 including pending, in-flight and uncertain payments; the local wallet counts the authorizations in
-its own `wallet/audit.jsonl`. Neither reads chain history: delete
-those records and the count starts again.
+its own `wallet/audit.jsonl`. Both add up whole token units (millionths of a dollar for the dollar
+stablecoins), never floating-point decimals, so a cap is reached exactly. For the browser signer, a
+record whose amount cannot be read makes today's total unknown, and the daily cap then refuses every
+payment until the record is fixed. Neither reads chain history: delete those records and the count
+starts again.
 
 ## Testnet only
 
