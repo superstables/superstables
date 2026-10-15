@@ -52,22 +52,36 @@ export function shippedPaths(boms) {
  * against the SBOMs, so a path that is not a location in this checkout's lockfile, or whose version differs, would let a
  * shipped advisory pass as development-only. An SBOM built with a linked node_modules, or from another lockfile, does that.
  *
+ * An SBOM with no component list, an empty one, or a component without a `superstables:path` has no location to match an
+ * advisory against, so it is a problem too: it must not classify every advisory as development-only.
+ *
  * @param {object[]} boms parsed CycloneDX documents
  * @param {Record<string, { version: string }>} lockPackages the `packages` of package-lock.json
  * @returns {string[]} one line per problem; empty when every path is a lock key with the component's version
  */
 export function checkPaths(boms, lockPackages) {
   const problems = [];
-  for (const bom of boms) {
-    for (const c of bom.components ?? []) {
-      for (const p of c.properties ?? []) {
-        if (p.name !== "superstables:path") continue;
+  boms.forEach((bom, index) => {
+    const label = `SBOM ${index + 1}`;
+    if (typeof bom !== "object" || bom === null || !Array.isArray(bom.components) || bom.components.length === 0) {
+      problems.push(`${label} has no list of components, or an empty one`);
+      return;
+    }
+    for (const c of bom.components) {
+      const name = typeof c === "object" && c !== null ? `${c.name}@${c.version}` : String(c);
+      const properties = typeof c === "object" && c !== null && Array.isArray(c.properties) ? c.properties : [];
+      const located = properties.filter((p) => p?.name === "superstables:path");
+      if (!located.length || located.some((p) => typeof p.value !== "string" || p.value === "")) {
+        problems.push(`${label}: ${name} has no superstables:path`);
+        continue;
+      }
+      for (const p of located) {
         const entry = Object.hasOwn(lockPackages, p.value) ? lockPackages[p.value] : undefined;
         if (!entry) problems.push(`${c.name}@${c.version}: ${p.value} is not a location in package-lock.json`);
         else if (entry.version !== c.version) problems.push(`${c.name}@${c.version}: ${p.value} is ${entry.version} in package-lock.json`);
       }
     }
-  }
+  });
   return problems;
 }
 
@@ -141,7 +155,7 @@ function main() {
   const boms = files.map((f) => JSON.parse(readFileSync(f, "utf8")));
   const problems = checkPaths(boms, JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8")).packages ?? {});
   if (problems.length) {
-    console.error(`bundle-audit: the SBOM does not match this checkout's package-lock.json, so its packages cannot be matched to npm's advisories. Rebuild with npm ci, npm run build and npm run skill:\n  ${problems.slice(0, 10).join("\n  ")}${problems.length > 10 ? `\n  ... and ${problems.length - 10} more` : ""}`);
+    console.error(`bundle-audit: the SBOM is incomplete or does not match this checkout's package-lock.json, so its packages cannot be matched to npm's advisories. Rebuild with npm ci, npm run build and npm run skill:\n  ${problems.slice(0, 10).join("\n  ")}${problems.length > 10 ? `\n  ... and ${problems.length - 10} more` : ""}`);
     return 2;
   }
   const { paths, packages } = shippedPaths(boms);

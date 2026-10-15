@@ -223,6 +223,32 @@ describe("the audit of shipped packages", () => {
     expect(checkPaths([{ components: [comp("toString", "1.0.0", "toString")] }], packages)).toHaveLength(1);
   });
 
+  it("refuses an SBOM with no components, an empty list, or a component without a path", async () => {
+    const { checkPaths } = await import("../../scripts/bundle-audit.mjs");
+    const packages = { "node_modules/a": { version: "1.0.0" } };
+    const ok = { components: [{ name: "a", version: "1.0.0", properties: [{ name: "superstables:path", value: "node_modules/a" }] }] };
+    expect(checkPaths([ok], packages)).toEqual([]);
+    expect(checkPaths([{}], packages)).toEqual([expect.stringContaining("SBOM 1 has no list of components")]);
+    expect(checkPaths([{ components: [] }], packages)).toEqual([expect.stringContaining("SBOM 1 has no list of components")]);
+    expect(checkPaths([{ components: "a" }, null] as any[], packages)).toHaveLength(2);
+    // the second of two SBOMs is the broken one
+    expect(checkPaths([ok, {}], packages)).toEqual([expect.stringContaining("SBOM 2 has no list of components")]);
+    expect(checkPaths([{ components: [{ name: "a", version: "1.0.0" }] }], packages)).toEqual([expect.stringContaining("SBOM 1: a@1.0.0 has no superstables:path")]);
+    expect(checkPaths([{ components: [{ name: "a", version: "1.0.0", properties: [{ name: "superstables:delivery", value: "bundled" }] }] }], packages)).toHaveLength(1);
+    expect(checkPaths([{ components: [{ name: "a", version: "1.0.0", properties: [{ name: "superstables:path", value: "" }] }] }], packages)).toHaveLength(1);
+  });
+
+  it("does not classify an advisory as development-only when the SBOM lists nothing", async () => {
+    const { checkPaths, shippedPaths, classify } = await import("../../scripts/bundle-audit.mjs");
+    const report = { vulnerabilities: { viem: { severity: "high", range: "<1", nodes: ["node_modules/viem"], via: [] } } };
+    const lock = { "node_modules/viem": { version: "2.0.0" } };
+    for (const bom of [{}, { components: [] }, { components: [{ name: "viem", version: "2.0.0" }] }]) {
+      // what the classifier alone would say, and why that must never be reached: the check refuses the SBOM first
+      expect(classify(report, shippedPaths([bom]).paths).devOnly.map((d: any) => d.name)).toEqual(["viem"]);
+      expect(checkPaths([bom], lock), JSON.stringify(bom)).not.toEqual([]);
+    }
+  });
+
   it("never reads an answer that did not come from the registry as clean", async () => {
     const { auditVerdict } = await import("../../scripts/bundle-audit.mjs");
     const clean = JSON.stringify({ auditReportVersion: 2, vulnerabilities: {} });
