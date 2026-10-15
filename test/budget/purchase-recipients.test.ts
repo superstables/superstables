@@ -1,6 +1,6 @@
 // The prechecks every rail runs on a seller's payment terms before anything is signed or pulled (contract rule 4):
 // a recipient that is the zero address, the token itself, the agent or the owner, and, on evm, an authorization
-// lifetime that is missing, not a whole number of seconds, or outside 30 to 3600. Pure: no chain, no key.
+// lifetime that is missing, not a whole number of seconds, or outside 30 to 600. Pure: no chain, no key.
 
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
@@ -34,8 +34,8 @@ describe("evm: the terms of one payment option", () => {
   });
   const opts = { max: MAX, agent: AGENT, owner: OWNER };
 
-  it("accepts a seller with a lifetime from 30 to 3600 seconds", () => {
-    for (const t of [30, 60, 3600]) expect(checkAccept(option({ maxTimeoutSeconds: t }), opts), String(t)).toBeNull();
+  it("accepts a seller with a lifetime from 30 to 600 seconds", () => {
+    for (const t of [30, 60, 600]) expect(checkAccept(option({ maxTimeoutSeconds: t }), opts), String(t)).toBeNull();
   });
 
   it("refuses a recipient that is the zero address, the token, the agent or the owner, in any letter case", () => {
@@ -48,12 +48,12 @@ describe("evm: the terms of one payment option", () => {
     expect(checkAccept(option({ payTo: OWNER.toLowerCase() }), opts)).toBe("recipient is the owner's wallet, which funds this budget");
   });
 
-  it("refuses a lifetime that is missing, not a whole number, or outside 30 to 3600", () => {
+  it("refuses a lifetime that is missing, not a whole number, or outside 30 to 600", () => {
     const missing = option();
     delete (missing as any).maxTimeoutSeconds;
-    expect(checkAccept(missing, opts)).toContain("is not a whole number of seconds from 30 to 3600");
-    for (const t of [null, Number.NaN, -1, 0, 29, 3601, "60", 60.5]) {
-      expect(checkAccept(option({ maxTimeoutSeconds: JSON.parse(JSON.stringify(t)) }), opts), String(t)).toContain("is not a whole number of seconds from 30 to 3600");
+    expect(checkAccept(missing, opts)).toContain("is not a whole number of seconds from 30 to 600");
+    for (const t of [null, Number.NaN, -1, 0, 29, 601, 900, 3600, 3601, "60", 60.5]) {
+      expect(checkAccept(option({ maxTimeoutSeconds: JSON.parse(JSON.stringify(t)) }), opts), String(t)).toContain("is not a whole number of seconds from 30 to 600");
     }
   });
 });
@@ -81,7 +81,7 @@ describe("evm: two options that differ only in their lifetime are two options", 
   it("the x402 client, given a seller that lists a 1 s option first and a 60 s one second, can only select the one that passed the prechecks", () => {
     const accepts = [option(1), option(60)];
     // the prechecks refuse the first and pick the second
-    expect(checkAccept(accepts[0], { max: MAX })).toContain("is not a whole number of seconds from 30 to 3600");
+    expect(checkAccept(accepts[0], { max: MAX })).toContain("is not a whole number of seconds from 30 to 600");
     expect(checkAccept(accepts[1], { max: MAX })).toBeNull();
     const clientFor = () => {
       const c = new x402Client().register(lib.NETWORK, { scheme: "exact", createPaymentPayload: async () => ({ x402Version: 2, payload: {} }) } as any);

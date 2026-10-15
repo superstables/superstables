@@ -401,7 +401,11 @@ undo an owner signature or a transaction already sent through setup on superstab
   amount. On `tempo`, the access key's total or per-period limit, its expiry, and its seller list
   when one was granted. No rail enforces a per-payment maximum on chain.
 - **This CLI checks the rest**, before it signs: `--max`, the expected token, `--pay-to` and one
-  purchase per `--op`. A stolen agent key skips all of these and can spend what is left of the
+  purchase per `--op`. On `evm`, before the pull, it has the x402 client build the payment it would
+  send and checks it against the option those checks passed, including the token's EIP-712 domain
+  name and version; it then signs once, for at most ten minutes, and purchases that share an agent
+  key take turns. On Arc Testnet, a price an earlier purchase left in the agent key is not counted
+  as gas reserve. A stolen agent key skips all of these and can spend what is left of the
   budget, on `evm` and `solana` to any address. Keep budgets small.
 - **Setup is a trusted step.** Whoever holds setup's approval link, the agent included, can complete it
   with a key of their own: the page's origin check stops other websites, not local programs. So the

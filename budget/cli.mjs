@@ -24,14 +24,14 @@
 import { afterPurchase, ownerCheck } from "./next-steps.mjs";
 import { SENDING_LINE, afterSend } from "./proof.mjs";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync, writeSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
 import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, recordMayHaveSent, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
-import { abandonedBreaker, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
+import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
@@ -346,10 +346,10 @@ with the holder, lock path and owner recovery guidance in next. Never buy again 
     }),
   },
   unlock: {
-    flags: { op: "v", cap: "b", "buy-once": "b", approvals: "b", approval: "v", attempt: "v", confirm: "b", unverified: "b" }, required: [],
+    flags: { op: "v", cap: "b", "buy-once": "b", approvals: "b", approval: "v", attempt: "v", "agent-key": "b", confirm: "b", unverified: "b" }, required: [],
     help: helpText({
-      usage: "superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --attempt ID | --buy-once) --confirm [--unverified]",
-      about: "Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.\n\n--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.\n\n--cap: Recover the core payment lock. --approvals: Recover approval locks on this rail and chain. --approval ID: Also recover the record lock for this approval. --attempt ID: Release an attempt runner for read-only reconciliation. Stop all payment work across processes, containers and hosts first. Payment-lock recovery uses the exact confirmation payment-lock, or payment-lock unverified with --unverified. Preserves payment evidence. Run status for the original attempt or wait for the original approval next.\n\nA holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.\n\n--buy-once: Recover the start lock for a single purchase. Preserves the purchase record and payment evidence.\n  superstables budget unlock --buy-once --confirm [--unverified]",
+      usage: "superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --rail evm --agent-key [--chain C] | --attempt ID | --buy-once) --confirm [--unverified]",
+      about: "Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.\n\n--unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.\n\n--cap: Recover the core payment lock. --approvals: Recover approval locks on this rail and chain. --approval ID: Also recover the record lock for this approval. --attempt ID: Release an attempt runner for read-only reconciliation. Stop all payment work across processes, containers and hosts first. Payment-lock recovery uses the exact confirmation payment-lock, or payment-lock unverified with --unverified. Preserves payment evidence. Run status for the original attempt or wait for the original approval next.\n\n--agent-key: Recover the lock that makes evm purchases on one agent key and chain take turns, after stopping every buy and recover on that key. Uses the exact confirmation agent-key, or agent-key unverified with --unverified. Preserves journals.\n\nA holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.\n\n--buy-once: Recover the start lock for a single purchase. Preserves the purchase record and payment evidence.\n  superstables budget unlock --buy-once --confirm [--unverified]",
       money: "no. It never signs or sends.", who: "the owner or operator, after stopping the processes.",
       example: "superstables budget unlock --rail solana --op order-001 --confirm",
       prints: "one RESULT with state, reason and next, plus the operation or attempt ID when selected. Without --confirm, a terminal or matching typed confirmation: exit 3. Missing operation, attempt or approval: exit 3. Busy: exit 5. Cleared or no lock: exit 0.",
@@ -697,7 +697,8 @@ function parse(argv) {
     else f[name] = v;
   }
   if (cmd === "unlock") {
-    if ([f.op !== undefined, Boolean(f.cap), Boolean(f["buy-once"]), Boolean(f.approvals), f.approval !== undefined, f.attempt !== undefined].filter(Boolean).length !== 1) return badInput({ command: cmd }, "choose exactly one unlock target: --op, --cap, --approvals, --approval, --attempt or --buy-once");
+    if ([f.op !== undefined, Boolean(f.cap), Boolean(f["buy-once"]), Boolean(f.approvals), f.approval !== undefined, f.attempt !== undefined, Boolean(f["agent-key"])].filter(Boolean).length !== 1) return badInput({ command: cmd }, "choose exactly one unlock target: --op, --cap, --approvals, --approval, --attempt, --agent-key or --buy-once");
+    if (f["agent-key"] && f.rail !== "evm") return badInput({ command: cmd }, "--agent-key needs --rail evm");
     if (f.approval !== undefined && !isApprovalId(f.approval)) return badInput({ command: cmd }, "--approval must be an approval ID");
     if (f.attempt !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(f.attempt)) return badInput({ command: cmd }, "--attempt must be a record ID");
     if (f["buy-once"]) {
@@ -1382,6 +1383,7 @@ async function buy({ f, ctx }) {
 }
 
 async function unlock({ f, ctx }) {
+  if (f["agent-key"]) return unlockAgentKey({ f, ctx });
   if (!f.op) return unlockPayment({ f, ctx });
   const next = `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`;
   const ownerNext = operationBusy(f.op);
@@ -1430,6 +1432,45 @@ async function unlock({ f, ctx }) {
     log(`superstables budget: ${hadLocks ? 'abandoned locks cleared' : 'no lock'} for operation ${f.op}; journal preserved. Reconcile before doing anything else.`);
     return emit(0, { ...ctx, op: f.op, state: "ok", next, reason: hadLocks ? "locks_cleared" : "no_lock" });
   } finally { for (const lock of locks) lock.release(); }
+}
+
+/** Owner recovery for the lock that makes evm purchases on one agent key and chain take turns (budget/evm/purchase.ts, recover.ts). */
+async function unlockAgentKey({ f, ctx }) {
+  const next = "check with reconcile --op for each recent buy on this chain, then buy again";
+  const refuse = reason => emit(3, { ...ctx, state: "refused_precheck", reason, next: "run it in your own terminal, with --confirm, after stopping every buy and recover on this agent key" });
+  if (!f.confirm) return refuse("confirmation_required");
+  if (!process.stdin.isTTY) return refuse("owner_terminal_required");
+  const dir = opsDir(f.rail, f.chain);
+  const terminal = createInterface({ input: process.stdin, output: process.stderr });
+  const mismatch = () => { log("Confirmation did not match. No locks were cleared."); return refuse("owner_confirmation_mismatch"); };
+  try {
+    const lines = terminal[Symbol.asyncIterator]();
+    log("A holder still working or unlock paused before unlinking can remove a new holder's lock and allow two purchases to sign the same nonce.");
+    if (f.unverified) {
+      log("Superstables cannot confirm that every buy and recover on this agent key has stopped. Clearing the lock while one can still run may make two purchases sign the same nonce. Stop all of them across processes, containers and hosts, and keep them stopped until unlock finishes.");
+      log("To clear the lock without that proof, type agent-key unverified exactly:");
+    } else log("After stopping every buy and recover on this agent key, type agent-key to confirm:");
+    const answer = await lines.next();
+    if (answer.done || answer.value !== (f.unverified ? "agent-key unverified" : "agent-key")) return mismatch();
+  } catch { return mismatch(); }
+  finally { terminal.close(); }
+  let noticed = false;
+  const options = { confirmUnverifiable: Boolean(f.unverified), confirmPossiblyAlive: Boolean(f.unverified), onOverride: () => { if (!noticed) { noticed = true; log("Clearing the agent key lock without proof that its process has stopped. You confirmed that every buy and recover on this agent key has stopped."); } } };
+  const paths = existsSync(dir) ? readdirSync(dir).filter(name => /^agent-0x[0-9a-f]{40}\.key\.lock$/.test(name)).map(name => join(dir, name)) : [];
+  let cleared = false;
+  for (const path of paths) {
+    const lock = lockFile(path, options);
+    if (!lock.ok) {
+      if (lock.possiblyAlive && !f.unverified) log("Cannot clear the agent key lock because Superstables cannot confirm that its process has stopped. Run the command in your own terminal, outside any agent's sandbox. If the check still fails, stop every buy and recover on this agent key across all containers and hosts, then rerun the same command with --confirm --unverified.");
+      return emit(5, { ...ctx, state: "unknown", reason: "agent_key_in_use", next: `${lock.details}. A buy or recover may still be using this agent key; wait for its RESULT, or stop it, then run this again` });
+    }
+    const blocker = abandonedBreaker(path, options);
+    lock.release();
+    if (blocker) return emit(5, { ...ctx, state: "unknown", reason: "agent_key_in_use", next: `${blocker.details}. A buy or recover may still be using this agent key; wait for its RESULT, or stop it, then run this again` });
+    cleared = true;
+  }
+  log(`superstables budget: ${cleared ? "agent key lock cleared" : "no agent key lock"} on ${f.chain}; journals preserved.`);
+  return emit(0, { ...ctx, state: "ok", next, reason: cleared ? "locks_cleared" : "no_lock" });
 }
 
 async function unlockPayment({ f, ctx }) {
