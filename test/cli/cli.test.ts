@@ -568,7 +568,7 @@ describe("the account's own spend policy", () => {
     account = join(home, "account");
     other = join(home, "other");
     mkdirSync(join(account, ".superstables"), { recursive: true });
-    mkdirSync(other);
+    mkdirSync(other, { mode: 0o700 });
   });
 
   const accountPolicy = (text: string) => writeFileSync(join(account, ".superstables", "policy.yaml"), text);

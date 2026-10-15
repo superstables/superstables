@@ -56,7 +56,8 @@ export type Op = {
   history: { at: string; state: OpState; note?: string }[]
 }
 
-export const newOpId = () => `tempo-${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}-${randomBytes(3).toString('hex')}`
+// 64 random bits: an op id names a journal and its locks, and must neither collide nor be guessed
+export const newOpId = () => `tempo-${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}-${randomBytes(8).toString('hex')}`
 
 const pathFor = (id: string) => {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new Error(`bad operation id ${JSON.stringify(id)}`)

@@ -88,7 +88,8 @@ export const PENDING: OpState[] = ["submitted", "unknown"];
 export const REUSABLE: OpState[] = ["quoted", "refused_precheck"];
 
 export function newOpId(): string {
-  return `b4-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(2).toString("hex")}`;
+  // 64 random bits: an op id names a journal and its locks, and must neither collide nor be guessed
+  return `b4-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(8).toString("hex")}`;
 }
 export function checkOpId(id: string): string {
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(id)) {

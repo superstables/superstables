@@ -168,7 +168,11 @@ export async function runDoctor(f) {
   if (unsafe.has(r.pub)) line(false, `public file ${r.pub}`, unsafe.get(r.pub));
   const files = [["agent key file", agentKeyFile(f.rail), agent, r.agentVars]];
   if (r.ownerVars) files.unshift(["owner key file", ownerKeyFile(f.rail), owner, r.ownerVars]);
-  else if (existsSync(ownerKeyFile(f.rail))) process.stderr.write(`  note  an owner key file is on this machine (${ownerKeyFile(f.rail)}). The ${f.rail} rail never reads it unless you pass --owner-key-file: the owner approves in their own wallet. Keep owner keys off the agent's machine.\n`);
+  else if (existsSync(ownerKeyFile(f.rail))) {
+    const path = ownerKeyFile(f.rail);
+    if ((statSync(path).mode & 0o077) !== 0) line(false, `owner key file ${path}`, `mode is ${mode(path)}: other users on this machine can read it. Nothing reads it unless you pass --owner-key-file; delete it, or chmod 600 ${path}`);
+    process.stderr.write(`  note  an owner key file is on this machine (${ownerKeyFile(f.rail)}). The ${f.rail} rail never reads it unless you pass --owner-key-file: the owner approves in their own wallet. Keep owner keys off the agent's machine.\n`);
+  }
   for (const [label, path, env, vars] of files) {
     if (!existsSync(path)) { line(false, label, `${path} does not exist${r.ownerVars ? "" : ` (run ${r.setup})`}`); continue; }
     if (unsafe.has(path)) { line(false, `${label} ${path}`, unsafe.get(path)); continue; }
