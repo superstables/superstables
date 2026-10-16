@@ -1,7 +1,8 @@
 // The RPC each rail reads, and the environment variables that replace it. Plain JavaScript with Node built-ins only (and
 // response.mjs and site.mjs, which have the same), so the dispatcher (cli.mjs), doctor, buy-once and the rail scripts share it.
 //
-//   B4_RPC                    evm: the selected chain's RPC (buy-once: Base Sepolia's)
+//   B4_RPC_<CHAIN>            evm: that chain's RPC (B4_RPC_BASE_SEPOLIA, B4_RPC_ARC_TESTNET, ...); wins over B4_RPC
+//   B4_RPC                    evm: the selected chain's RPC, whichever it is (buy-once: Base Sepolia's); older, prefer the above
 //   SUPERSTABLES_TEMPO_RPC    tempo: Moderato's
 //   SUPERSTABLES_SOLANA_RPC   solana: devnet's
 //
@@ -10,6 +11,7 @@
 // refuses a command when one of them is set to anything else (exit 2), and every RESULT names a replacement in use (`rpc`).
 
 import { readCapped } from "./response.mjs";
+import { endpointSet } from "../src/core/rpc-endpoints.mjs";
 import { siteText } from "./site.mjs";
 
 /** The most read of one answer by jsonRpc and the Tempo rail: far more than a receipt, a block without its transactions or a filtered log search returns. */
@@ -50,22 +52,68 @@ export function rpcFromEnv(name, fallback) {
   return { url: v, custom: true };
 }
 
-/** The first RPC variable that is set to something refused, as { name, error }, or null. Only the rail's own when given. */
-export function refusedRpcEnv(rail) {
+/** The environment variable that replaces one EVM chain's RPC: base-sepolia is B4_RPC_BASE_SEPOLIA. */
+export function evmRpcEnvName(chainKey) {
+  return `B4_RPC_${String(chainKey).toUpperCase().replace(/-/g, "_")}`;
+}
+
+/**
+ * One EVM chain's replacement RPC from the environment: B4_RPC_<CHAIN> first, then B4_RPC. { url, custom, name } when one is set
+ * and usable (`name` is the variable); { url: fallback, custom: false } when neither is set; { ..., error } with the first
+ * variable set to something refused. The one lookup chains.ts (every rail script) and doctor share.
+ */
+export function evmRpcFromEnv(chainKey, fallback) {
+  for (const name of [evmRpcEnvName(chainKey), RPC_ENV.evm]) {
+    const r = rpcFromEnv(name, fallback);
+    if (r.error || r.custom) return { ...r, name };
+  }
+  return { url: fallback, custom: false };
+}
+
+/**
+ * The first RPC variable that is set to something refused, as { name, error }, or null. Only the rail's own when given;
+ * for evm with a `chain`, that chain's own variable and B4_RPC. Without a chain every B4_RPC_<CHAIN> is checked too.
+ */
+export function refusedRpcEnv(rail, chain) {
   for (const [r, name] of Object.entries(RPC_ENV)) {
     if (rail && r !== rail) continue;
-    const e = rpcFromEnv(name, "").error;
-    if (e) return { name, error: e };
+    const names = [name];
+    if (r === "evm") {
+      if (chain) names.unshift(evmRpcEnvName(chain));
+      else if (!rail || rail === "evm") names.unshift(...Object.keys(process.env).filter((k) => /^B4_RPC_[A-Z0-9_]+$/.test(k)).sort());
+    }
+    for (const n of names) {
+      const e = rpcFromEnv(n, "").error;
+      if (e) return { name: n, error: e };
+    }
   }
   return null;
 }
 
-/** The replacement RPC this rail uses, for the RESULT (`rpc`), or undefined on the default one. */
-export function customRpc(rail) {
+/** The replacement RPC this rail uses, for the RESULT (`rpc`), or undefined on the default one. For evm, the chain's own variable first. */
+export function customRpc(rail, chain) {
   const name = RPC_ENV[rail];
   if (!name) return undefined;
+  if (rail === "evm" && chain) {
+    const own = rpcFromEnv(evmRpcEnvName(chain), "");
+    if (own.custom) return own.url;
+  }
   const r = rpcFromEnv(name, "");
   return r.custom ? r.url : undefined;
+}
+
+/**
+ * The endpoints that decide a budget EVM verdict (allowance 0, a pull that reverted, nothing found, an authorization
+ * that can no longer settle). Every budget chain is a testnet in this build, and the chain gate refuses any other.
+ * The environment URL is the primary only: it joins the confirming set when it is one of the built-in endpoints.
+ */
+export function budgetVerdictSet(chainKey, envUrl) {
+  return endpointSet(chainKey, "verdict", { envUrl, envName: evmRpcEnvName(chainKey), testnet: true });
+}
+
+/** The reader the agreement engine calls: one JSON-RPC call, answers capped (jsonRpc). */
+export function budgetCall(url, method, params) {
+  return jsonRpc(url, method, params);
 }
 
 /**

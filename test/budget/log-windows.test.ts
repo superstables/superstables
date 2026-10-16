@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RpcRequestError, encodeEventTopics, parseAbi, type Hex } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { agreedFromClient } from "../helpers/agree-from-client.js";
 
 const OWNER = "0x1111111111111111111111111111111111111111";
 const AGENT = "0x2222222222222222222222222222222222222222";
@@ -53,7 +54,7 @@ beforeEach(() => {
   // Tests below replace these two; mockReset puts back the implementations given to vi.fn above.
   rpc.getTransactionReceipt.mockReset();
   rpc.getTransaction.mockReset();
-  vi.doMock("../../budget/evm/lib.js", async (original) => ({ ...await original<object>(), OPS_DIR: dir, publicClient: rpc, USDC: TOKEN, sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f() }));
+  vi.doMock("../../budget/evm/lib.js", async (original) => ({ ...await original<object>(), OPS_DIR: dir, publicClient: rpc, ...agreedFromClient(rpc, TOKEN), USDC: TOKEN, sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f() }));
 });
 afterEach(() => { vi.doUnmock("../../budget/evm/lib.js"); rmSync(dir, { recursive: true, force: true }); });
 const ops = () => import(new URL("../../budget/evm/ops.ts", import.meta.url).href);

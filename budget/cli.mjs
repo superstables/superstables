@@ -557,8 +557,9 @@ budget status.
 --site URL is accepted by every command. Where a site is recorded (setup --hosted) and it differs, the command refuses
 (exit 2); where it does not matter, it is ignored. A site is superstables.com, one of its subdomains or 127.0.0.1;
 another origin only when the owner sets SUPERSTABLES_ALLOW_SITE to it in their own environment (an agent never does).
-B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
-http on this machine only; RESULT names one in use as rpc. A wallet adding the chain through an approval page
+B4_RPC_<CHAIN> (B4_RPC_BASE_SEPOLIA, ...) replaces one evm chain's RPC and wins over B4_RPC, which replaces the selected evm
+chain's; SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
+http on this machine only; every evm read checks the chain id the RPC answers first; RESULT names one in use as rpc. A wallet adding the chain through an approval page
 on this machine is offered the chain's public RPC.
 
 Output: logs go to stderr. stdout ends with one line
@@ -644,7 +645,7 @@ function emit(code, fields) {
   if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
   fields = resultFacts(fields);
   // an RPC other than the rail's default (B4_RPC, SUPERSTABLES_TEMPO_RPC, SUPERSTABLES_SOLANA_RPC) is named in every RESULT
-  if (fields.rpc === undefined && fields.rail) fields.rpc = customRpc(fields.rail);
+  if (fields.rpc === undefined && fields.rail) fields.rpc = customRpc(fields.rail, fields.chain);
   const out = { ok: code === 0 };
   for (const k of order) if (fields[k] !== undefined) out[k] = k === "reason" ? clean(fields[k]) : fields[k];
   if (APPROVAL_ID) recordFinal(APPROVAL_ID, code, out); // frees the chain
@@ -752,7 +753,7 @@ function parse(argv) {
   f.chain ??= rail.chain;
   ctx.chain = f.chain;
   // a replacement RPC must be https, or http on this computer: every check reads the chain through it
-  const badRpc = refusedRpcEnv(f.rail);
+  const badRpc = refusedRpcEnv(f.rail, f.chain);
   if (badRpc) return badInput(ctx, `${badRpc.error}. Unset it, or point it at an https RPC (or one on 127.0.0.1)`);
   for (const r of spec.required) if (f[r] === undefined) return badInput(ctx, `missing required flag --${r}`);
   if (f.site !== undefined && !f.hosted) {
@@ -942,7 +943,7 @@ function evmCommand(verb, f, extra = {}) {
     case "fund-agent": return E("fundAgent", [...opt("amount", f.amount), ...ownerOpts(f)]);
   }
 }
-const evmReadFromResult = (r) => ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null });
+const evmReadFromResult = (r) => r.state !== "ok" ? { ok: false, code: 1 } : ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null });
 // ---- end of EVM section -----------------------------------------------------------------------------
 
 // ---- running a rail script --------------------------------------------------------------------------

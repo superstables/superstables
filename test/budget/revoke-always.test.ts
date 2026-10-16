@@ -13,6 +13,7 @@ import { privateKeyToAddress } from "viem/accounts";
 import { evmOwner, startFakeRpc, startFakeSite, type FakeRequest, type FakeSite } from "../helpers/fake-site.js";
 import { startFakeSolana, startFakeTempo, type FakeSolana, type FakeTempo } from "../helpers/fake-chains.js";
 import type { TestServer } from "../helpers/servers.js";
+import { agreeingCopy, removeAgreeingCopy } from "../helpers/agreeing-copy.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
@@ -42,6 +43,7 @@ beforeEach(async () => {
   extraEnv = {};
 });
 afterEach(async () => {
+  removeAgreeingCopy();
   await site.close();
   await tempo.close();
   await solana.close();
@@ -56,7 +58,7 @@ function budget(args: string[]): Promise<Out> {
     const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url, ...extraEnv };
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+    const child = spawn(process.execPath, [env.B4_RPC ? agreeingCopy(env.B4_RPC) : CLI, ...args], { cwd: ROOT, env }); // a fake evm RPC: a copy whose table names it twice, as two operators
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -322,7 +324,9 @@ describe("tempo: a revoke is skipped only when the keychain refuses it", () => {
 
 describe("evm: status needs a record", () => {
   const evmChain = async (extra = "", rpcExtra?: (m: string, p: any[]) => unknown) => {
-    evmRpc = await startFakeRpc(84532, rpcExtra);
+    // the chain has a final block, at time 2000, for the endpoints to agree on
+    const block = (m: string, p: any[]) => m === "eth_getBlockByNumber" ? { number: "0x64", hash: `0x${"ef".repeat(32)}`, timestamp: "0x7d0", transactions: [] } : rpcExtra?.(m, p);
+    evmRpc = await startFakeRpc(84532, block);
     extraEnv = { B4_RPC: evmRpc.url };
     write(file("keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=0x${"11".repeat(32)}\nB4_AGENT_ADDRESS=${EVM_AGENT}\n`);
     write(file("budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${EVM_AGENT}\n${extra}`, 0o644);
@@ -337,9 +341,15 @@ describe("evm: status needs a record", () => {
   }, 60_000);
 
   it("allowance 0 and a recorded revoke: revoked", async () => {
-    await evmChain("B4_REVOKED_AT=1760000000\n");
+    await evmChain("B4_REVOKED_AT=1000\n"); // before the fake chain's final block (time 2000)
     const s = await budget(["status", "--rail", "evm"]);
     expect(s.result).toMatchObject({ state: "ok", revoked: true, remaining: "0" });
+  }, 60_000);
+
+  it("allowance 0 and a revoke recorded after the final block: not revoked yet", async () => {
+    await evmChain("B4_REVOKED_AT=1760000000\n");
+    const s = await budget(["status", "--rail", "evm"]);
+    expect(s.result).toMatchObject({ state: "ok", revoked: false, remaining: "0" });
   }, 60_000);
 
   it("a live allowance and a stale record: not revoked", async () => {

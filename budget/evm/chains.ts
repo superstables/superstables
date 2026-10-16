@@ -10,7 +10,7 @@
 import { defineChain, parseUnits, type Address, type Chain } from "viem";
 import * as viemChains from "viem/chains";
 import { EVM_CHAINS, EVM_DEFAULT_CHAIN } from "./chains.mjs";
-import { rpcFromEnv } from "../rpc.mjs";
+import { evmRpcFromEnv } from "../rpc.mjs";
 
 /** Gas limit of each transaction on this chain (chains.mjs `gas.limits`): the agent's pull, cancel, return and selfRevoke, the owner's approve and revoke. */
 export type GasOp = "pull" | "cancel" | "return" | "selfRevoke" | "approve" | "revoke";
@@ -72,19 +72,20 @@ export function selectedChainKey(): string {
   }
   return key;
 }
+const KEY = selectedChainKey();
 /**
- * B4_RPC replaces the selected chain's RPC URL (tests point it at a local fake; you can point it at your own node): https, or
- * http on this computer only (../rpc.mjs). Every script that signs still checks the chain id it answers with first (lib.ts
- * assertRpcChain).
+ * B4_RPC_<CHAIN> (B4_RPC_BASE_SEPOLIA, ...) replaces that chain's RPC URL, and B4_RPC, older, replaces the selected chain's whichever
+ * it is; the chain's own variable wins. https, or http on this computer only (../rpc.mjs). Every script that reads or signs checks
+ * the chain id it answers with first (lib.ts assertRpcChain, assertReadChain). The environment names the RPC that is read; the
+ * endpoints that decide a verdict follow the owner settings, with the environment's URL joining only when it is a built-in one.
  */
 function rpcOverride(): string | undefined {
-  const r = rpcFromEnv("B4_RPC", "");
+  const r = evmRpcFromEnv(KEY, "");
   if (r.error) {
     console.error(`error: ${r.error}`);
     process.exit(2);
   }
   return r.custom ? r.url : undefined;
 }
-const KEY = selectedChainKey();
 const OVERRIDE = rpcOverride();
 export const CFG: ChainCfg = OVERRIDE ? build(KEY, OVERRIDE) : CHAINS[KEY];

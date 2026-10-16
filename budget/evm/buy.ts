@@ -16,7 +16,7 @@ import "./cli-guard.mjs";
 import { isAddress } from "viem";
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { OPS_DIR, SYM, cmd, oneLine, arg, flag, agentCtx, toUsdc, usdc, usdcBalance, nativeBalance, gasFmt, tx, usageError, posInt, CFG, GAS } from "./lib.ts";
+import { OPS_DIR, SYM, cmd, oneLine, arg, flag, agentCtx, toUsdc, usdc, usdcBalance, nativeBalance, gasFmt, tx, usageError, posInt, CFG, GAS, assertReadChain } from "./lib.ts";
 import { purchase, MAX_RESPONSE_BYTES } from "./purchase.ts";
 import { checkOpId, newOpId, resultLine, type ResponseInfo } from "./ops.ts";
 import { refusedChainWords } from "../next-steps.mjs";
@@ -37,6 +37,7 @@ const sym = GAS.symbol;
 const c = await agentCtx();
 console.log(`chain: ${CFG.label} (${CFG.chainId}), ${SYM} ${CFG.usdc}`);
 const bal = async () => ({ owner: await usdcBalance(c.owner), agent: await usdcBalance(c.agent), agentEth: await nativeBalance(c.agent) });
+await assertReadChain("buy"); // a wrong chain is refused before the first balance read
 const before = await bal();
 console.log(`operation: ${op}`);
 console.log(`before: owner ${usdc(before.owner)} ${SYM}, agent ${usdc(before.agent)} ${SYM}, agent native ${GAS.symbol} ${gasFmt(before.agentEth)}`);

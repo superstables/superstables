@@ -13,7 +13,7 @@ import { existsSync, statSync } from "node:fs";
 import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile } from "./secret-file.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
-import { DEFAULT_RPC, jsonRpc, rpcFromEnv } from "./rpc.mjs";
+import { DEFAULT_RPC, evmRpcFromEnv, jsonRpc, rpcFromEnv } from "./rpc.mjs";
 import { siteOrigin, siteText } from "./site.mjs";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
@@ -60,8 +60,8 @@ const splBalance = async (addr) => {
 // from a key-shaped value, how to check the RPC, and the balances to check.
 const RAILS = {
   evm: ({ chain }) => {
-    // B4_RPC replaces the chain's RPC, as it does for the rail scripts (evm/chains.ts)
-    const c = { ...EVM_CHAINS[chain], rpc: rpcFromEnv("B4_RPC", EVM_CHAINS[chain].rpc).url }, d = c.doctor, tok = c.token, g = c.gas, L = g.limits;
+    // B4_RPC_<CHAIN>, then B4_RPC, replaces the chain's RPC, as it does for the rail scripts (budget/rpc.mjs evmRpcFromEnv)
+    const c = { ...EVM_CHAINS[chain], rpc: evmRpcFromEnv(chain, EVM_CHAINS[chain].rpc).url }, d = c.doctor, tok = c.token, g = c.gas, L = g.limits;
     const flag = ` --chain ${chain}`;
     return {
       ownerVars: null, agentVars: ["B4_AGENT_KEY"], ownerSecrets: ["B4_OWNER_KEY"], agentKeyVar: "B4_AGENT_KEY",

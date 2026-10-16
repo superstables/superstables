@@ -13,11 +13,13 @@ import {
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { CFG, type GasOp } from "./chains.ts";
 import { EVM_CHAINS } from "./chains.mjs";
-import { EVM_RPC_MAX_BYTES, cappedRpcFetch } from "../rpc.mjs";
+import { EVM_RPC_MAX_BYTES, cappedRpcFetch, budgetCall, budgetVerdictSet, customRpc } from "../rpc.mjs";
 import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
+import { agreeAtFinalEvm, agreementWords } from "../../src/core/rpc-quorum.mjs";
+import { finalityFor } from "../../src/core/finality-policy.js";
 
 export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
@@ -382,6 +384,92 @@ export async function assertRpcChain() {
     process.exit(3);
   }
   rpcChecked = true;
+}
+
+/**
+ * The chain-id check of a command that only reads (read, reconcile): the same as assertRpcChain without the chain gate, which the
+ * load-time gate already ran. A wrong chain exits 3 with nothing read from it.
+ */
+let readChainChecked = false;
+export async function assertReadChain(command: string) {
+  if (readChainChecked || rpcChecked) return;
+  // One attempt, no retries: an RPC that does not answer is not a wrong chain. The command goes on and fails or stays unknown on its
+  // own reads, and no verdict rests on this endpoint without the engine's own identity check.
+  let raw: unknown;
+  try { raw = await budgetCall(RPC, "eth_chainId", []); } catch { return; }
+  // Only a 0x quantity equal to the pinned id passes. Anything else that answered ("zz", "0x", a decimal string) is not this chain.
+  const id = typeof raw === "string" && /^0x[0-9a-f]+$/i.test(raw) ? Number(BigInt(raw)) : NaN;
+  if (id !== CFG.chainId) {
+    let host = "(unreadable URL)";
+    try { host = new URL(RPC).host; } catch {}
+    const shown = Number.isNaN(id) ? "an unreadable chain id" : `chain id ${id}`;
+    const reason = `the RPC ${host} answers ${shown}, not ${CFG.chainId} (${CFG.label}). Nothing was read from another chain`;
+    console.error(`REFUSED: ${reason}.`);
+    process.exit(emit(command, 3, { state: "refused_precheck", reason, next: `check B4_RPC_${CFG.key.toUpperCase().replace(/-/g, "_")} and B4_RPC, or unset them` }));
+  }
+  readChainChecked = true;
+}
+
+// ---- verdicts that need agreement ----
+// A verdict that lets the agent pay again or reads as "revoked" is believed only when the configured endpoints, run by different
+// operators, show the same final block and the same value there (src/core/rpc-quorum.mjs). Every read below is bound to the
+// compared block by its hash, and none of them throws: a failure is the engine's { agreed: false } with the reason in words.
+export { agreementWords };
+/** The endpoints that decide a verdict on this chain. */
+export const verdictSet = () => budgetVerdictSet(CFG.key, customRpc("evm", CFG.key));
+type Agreed<T> = Awaited<ReturnType<typeof agreeAtFinalEvm>> & { value?: T };
+const agree = (read: (url: string, hexF: string, hash: string) => Promise<unknown>, atLeast?: bigint) =>
+  agreeAtFinalEvm({ set: verdictSet(), call: budgetCall, chainId: CFG.chainId, finality: finalityFor("evm", CFG.key), read, atLeast });
+const callAt = (data: Hex) => (url: string, _hexF: string, hash: string) => budgetCall(url, "eth_call", [{ to: USDC, data }, { blockHash: hash }]);
+
+/** allowance(owner, spender) at an agreed final block. `atLeast`: the block an allowance of 0 has to be proven at or after. */
+export async function allowanceAgreed(owner: Address, spender: Address, atLeast?: bigint): Promise<Agreed<bigint>> {
+  const data = encodeFunctionData({ abi: erc20Abi, functionName: "allowance", args: [owner, spender] });
+  return agree(async (...a) => BigInt(String(await callAt(data)(...a))), atLeast);
+}
+/** authorizationState(authorizer, nonce) at an agreed final block (true: used or cancelled). `atLeast` for an "unused". */
+export async function authorizationStateAgreed(authorizer: Address, nonce: Hex, atLeast?: bigint): Promise<Agreed<boolean>> {
+  const data = encodeFunctionData({ abi: erc20Abi, functionName: "authorizationState", args: [authorizer, nonce] });
+  return agree(async (...a) => BigInt(String(await callAt(data)(...a))) !== 0n, atLeast);
+}
+
+const isHash = (v: unknown) => typeof v === "string" && /^0x[0-9a-fA-F]{64}$/.test(v);
+/** What one endpoint says about the block a transaction is in, as plain data: null (not mined), pending, later than F, or off the chain. */
+async function placed(url: string, number: unknown, hash: unknown, hexF: string): Promise<"ok" | { state: "pending" | "later" | "off-chain" }> {
+  if (number === null || number === undefined || hash === null || hash === undefined) return { state: "pending" };
+  if (typeof number !== "string" || !/^0x[0-9a-fA-F]+$/.test(number) || !isHash(hash)) throw new Error("not a placement");
+  if (BigInt(number) > BigInt(hexF)) return { state: "later" };
+  const b: any = await budgetCall(url, "eth_getBlockByNumber", [number, false]);
+  if (!b || typeof b.hash !== "string" || b.hash.toLowerCase() !== String(hash).toLowerCase()) return { state: "off-chain" };
+  return "ok";
+}
+
+/**
+ * A transaction receipt at an agreed final block: null when no endpoint has one, { state } when it is pending, later than the
+ * agreed block or in a block that is not the chain's, else { status, blockNumber, blockHash, from, to, logs } with the token's
+ * own logs. `atLeast` for a "no receipt" verdict.
+ */
+export async function receiptAgreed(hash: Hex, atLeast?: bigint): Promise<Agreed<any>> {
+  return agree(async (url, hexF) => {
+    const r: any = await budgetCall(url, "eth_getTransactionReceipt", [hash]);
+    if (r === null || r === undefined) return null;
+    if (typeof r !== "object" || typeof r.transactionHash !== "string" || r.transactionHash.toLowerCase() !== hash.toLowerCase()) throw new Error("not this receipt");
+    const where = await placed(url, r.blockNumber, r.blockHash, hexF);
+    if (where !== "ok") return where;
+    const logs = (Array.isArray(r.logs) ? r.logs : []).filter((l: any) => typeof l?.address === "string" && l.address.toLowerCase() === USDC.toLowerCase()).map((l: any) => ({ topics: l.topics, data: l.data }));
+    return { status: r.status, blockNumber: r.blockNumber, blockHash: r.blockHash, from: r.from, to: r.to, logs };
+  }, atLeast);
+}
+/** A transaction (its sender and nonce) at an agreed final block: null, { state } as for a receipt, or { from, nonce, blockNumber, blockHash }. */
+export async function txAgreed(hash: Hex, atLeast?: bigint): Promise<Agreed<any>> {
+  return agree(async (url, hexF) => {
+    const t: any = await budgetCall(url, "eth_getTransactionByHash", [hash]);
+    if (t === null || t === undefined) return null;
+    if (typeof t !== "object" || typeof t.hash !== "string" || t.hash.toLowerCase() !== hash.toLowerCase()) throw new Error("not this transaction");
+    const where = await placed(url, t.blockNumber, t.blockHash, hexF);
+    if (where !== "ok") return where;
+    return { from: t.from, nonce: t.nonce, blockNumber: t.blockNumber, blockHash: t.blockHash };
+  }, atLeast);
 }
 
 /** Total fee a receipt paid: execution fee plus the L1 data fee Base adds (not in gasUsed; Arc has none). */

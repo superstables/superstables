@@ -12,6 +12,8 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { EVM_CHAINS } from "../../budget/evm/chains.mjs";
+import { evmRpcEnvName } from "../../budget/rpc.mjs";
 import { AGENT_PROOF_TITLE, OWNER_PROOF_TITLE, agentProof, agentProofText, bodyHash, ownerProofText } from "../../budget/hosted.js";
 
 const REPO = join(import.meta.dirname, "..", "..");
@@ -104,7 +106,10 @@ describe("budget/CLI.md against the help", () => {
     const isRead = (v: string) => new RegExp(`\\benv\\.${v}\\b|\\benv\\[\\s*["'\`]${v}["'\`]\\s*\\]|["'\`]${v}["'\`]`).test(code);
     const named = new Set([...contract.matchAll(/\b((?:SUPERSTABLES|B4)_[A-Z0-9_]+)\b/g)].map((m) => m[1]));
     expect(named.size).toBeGreaterThan(3);
-    expect([...named].filter((v) => !isRead(v))).toEqual([]);
+    // B4_RPC_<CHAIN> is built from the chain key (rpc.mjs evmRpcEnvName), so the family is read when the code builds the name
+    // (only the generic B4_RPC_<CHAIN> and the names of real chains: a misspelt B4_RPC_BASESEPOLIA in CLI.md is not read by anything)
+    const family = (v: string) => code.includes("`B4_RPC_${") && (v === "B4_RPC_" || Object.keys(EVM_CHAINS).some((k) => evmRpcEnvName(k) === v));
+    expect([...named].filter((v) => !isRead(v) && !family(v))).toEqual([]);
   });
 });
 

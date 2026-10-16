@@ -32,7 +32,7 @@ import { dirname } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 import { EVM_CHAINS } from "./chains.mjs";
-import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, toUsdc, usageError, assertRpcChain, publicClient, tx, oneLine } from "./lib.ts";
+import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, toUsdc, usageError, assertRpcChain, assertReadChain, publicClient, tx, oneLine } from "./lib.ts";
 import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, fundingTx, fundValue, DEFAULT_FUND_AMOUNT, grantTx, grantEnforced, GRANT_NOT_ENFORCED, approveRow, capWords, checkFundSent, checkGrantSent, REVOKE_HINT, type SentCheck } from "./owner.ts";
 import { NEW_OWNER } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
@@ -99,6 +99,7 @@ if (p.B4_AGENT_ADDRESS && !same(p.B4_AGENT_ADDRESS, agentAddr)) {
 // on record for this agent: a public file that names another agent was refused above; one that names no agent (an edit)
 // still records its owner, which only --new-owner replaces
 const recorded = p.B4_OWNER_ADDRESS && (!p.B4_AGENT_ADDRESS || same(p.B4_AGENT_ADDRESS, agentAddr)) ? (p.B4_OWNER_ADDRESS as Address) : undefined;
+if (recorded && (NEW_OWNER || (BUNDLE && CAP !== undefined))) await assertReadChain("setup"); // before the first allowance or balance read
 if (NEW_OWNER && recorded) {
   // never move the owner while the agent can still spend from the old one
   const live = await allowanceOf(recorded, agentAddr).catch(() => null);
