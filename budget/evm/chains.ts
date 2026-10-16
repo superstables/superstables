@@ -75,17 +75,18 @@ export function selectedChainKey(): string {
 const KEY = selectedChainKey();
 /**
  * B4_RPC_<CHAIN> (B4_RPC_BASE_SEPOLIA, ...) replaces that chain's RPC URL, and B4_RPC, older, replaces the selected chain's whichever
- * it is; the chain's own variable wins. https, or http on this computer only (../rpc.mjs). Every script that reads or signs checks
+ * it is; the chain's own variable wins, then B4_RPC, then the RPC the owner set for the chain (superstables owner settings rpc), then
+ * the built-in one (../rpc.mjs evmRpcFromEnv). https, or http on this computer only. Every script that reads or signs checks
  * the chain id it answers with first (lib.ts assertRpcChain, assertReadChain). The environment names the RPC that is read; the
  * endpoints that decide a verdict follow the owner settings, with the environment's URL joining only when it is a built-in one.
  */
-function rpcOverride(): string | undefined {
-  const r = evmRpcFromEnv(KEY, "");
+function rpcOverride(key: string): string | undefined {
+  const r = evmRpcFromEnv(key, "");
   if (r.error) {
     console.error(`error: ${r.error}`);
     process.exit(2);
   }
   return r.custom ? r.url : undefined;
 }
-const OVERRIDE = rpcOverride();
+const OVERRIDE = rpcOverride(KEY);
 export const CFG: ChainCfg = OVERRIDE ? build(KEY, OVERRIDE) : CHAINS[KEY];

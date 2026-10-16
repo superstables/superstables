@@ -48,7 +48,7 @@ let SITE: string | null = null;
 if (HOSTED) {
   if (OWNER_KEY_FILE) { console.error("error: --hosted asks the owner on the site; with --owner-key-file there is no owner to ask"); process.exit(2); }
   const s = chosenSite(arg("site"));
-  if (s.error) { console.error(`error: --site: ${s.error}`); process.exit(2); }
+  if (s.error) { console.error(`error: ${s.error}`); process.exit(2); }
   SITE = s.origin as string;
 } else if (arg("site")) { console.error("error: --site goes with --hosted"); process.exit(2); }
 // The setup command that replaces the owner. On a hosted chain it names --hosted and the exact site: without them, setup
@@ -120,7 +120,7 @@ if (NEW_OWNER && recorded) {
 }
 // The link recorded with the owner (setup --hosted), on this same site: an "already linked" answer is checked against it.
 // None with --new-owner, or when the site changes: then only a fresh link the owner signs records an owner.
-const recordedSite = p.APPROVALS === "hosted" && p.SITE ? siteOrigin(p.SITE).origin : undefined;
+const recordedSite = p.APPROVALS === "hosted" && p.SITE ? siteOrigin(p.SITE, "read").origin : undefined;
 const prior: PriorLink | null = recorded && !NEW_OWNER && SITE && recordedSite === SITE && isSiteRequestId(p.LINK_ID) && typeof p.LINK_CODE === "string" && p.LINK_CODE ? { owner: recorded, linkId: p.LINK_ID, linkCode: p.LINK_CODE } : null;
 if (HOSTED && recordedSite && recordedSite !== SITE) console.log(`this chain's approvals are hosted on ${recordedSite}; moving them to ${SITE} means adding the agent there, with a new owner proof`);
 let linked: { id: string; code: string } | undefined;

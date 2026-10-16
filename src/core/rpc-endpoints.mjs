@@ -5,11 +5,12 @@
 // core and the budget build.
 
 import { createHash } from "node:crypto";
+import { readOwnerSettings, rpcFor, sameRpcUrl } from "./owner-settings.js";
 
-/** @typedef {{ url: string, operator: string }} TableEndpoint */
+/** @typedef {{ url: string, operator: string, domains?: string[] }} TableEndpoint */
 /** @typedef {{ url: string, operator: string, source: "builtin"|"settings"|"env"|"caller", id: string }} Endpoint */
 /** @typedef {{ primary: Endpoint, verdict: Endpoint[], quorum: number,
- *    agreement: "quorum"|"owner-node"|"single"|"caller", note?: string } | { error: string }} EndpointSet */
+ *    agreement: "quorum"|"owner-node"|"single"|"caller" } | { error: string }} EndpointSet */
 /** @typedef {{ urls: string[], ownNode?: boolean, quorum?: number }} OwnerRpc */
 
 /** Index 0 of each chain is its default endpoint and stays the primary for reads. */
@@ -18,7 +19,7 @@ export const RPC_ENDPOINTS = /** @type {Record<string, TableEndpoint[]>} */ ({
     { url: "https://sepolia.base.org", operator: "base" },
     { url: "https://base-sepolia-rpc.publicnode.com", operator: "publicnode" },
   ],
-  "arc-testnet": [{ url: "https://rpc.testnet.arc.network", operator: "circle" }],
+  "arc-testnet": [{ url: "https://rpc.testnet.arc.network", operator: "circle", domains: ["arc.io"] }],
   "arbitrum-sepolia": [
     { url: "https://sepolia-rollup.arbitrum.io/rpc", operator: "offchain-labs" },
     { url: "https://arbitrum-sepolia-rpc.publicnode.com", operator: "publicnode" },
@@ -80,27 +81,20 @@ export function operatorOf(url) {
   return labels.slice(-keep).join(".");
 }
 
-/** @type {(chainKey: string) => OwnerRpc | undefined} */
-let ownerReader = () => undefined;
-
-// TODO(rebase onto T1): delete `useOwnerSettings` and `ownerReader`. Import `readOwnerSettings`, `rpcFor` and
-// `sameRpcUrl` from "./owner-settings.js" instead and read the owner's set with
-//   ownerRpcSet(k) { const s = readOwnerSettings(); return Object.hasOwn(s.rpc, k) ? s.rpc[k] : undefined; }
-// Tests then mock owner-settings.js, or use SUPERSTABLES_TEST_ACCOUNT_HOME for spawned scripts. T2b and T2c never call
-// `useOwnerSettings`.
 /**
- * The one place the owner settings reach this module. The owner-settings module installs its reader here (it returns
- * `{ urls, ownNode, quorum? }` for a chain key or undefined, and throws when the settings are unreadable).
- * @param {(chainKey: string) => OwnerRpc | undefined} reader
+ * The provider of a URL on a chain, in this order: the table entry whose URL equals it exactly; the table entry that lists
+ * its registrable domain (the entry's own URL domain, or one of its `domains` aliases); else its own registrable domain.
+ * One provider under several domains (Arc: arc.io and arc.network) is one operator, however many URLs name it.
+ * @param {string} chainKey
+ * @param {string} url
  */
-export function useOwnerSettings(reader) {
-  ownerReader = reader;
-}
-
-/** The owner's pinned endpoints for a chain, or undefined. May throw when the settings are unreadable. */
-export function ownerRpcSet(chainKey) {
-  const own = ownerReader(chainKey);
-  return own && Array.isArray(own.urls) && own.urls.length > 0 ? own : undefined;
+export function providerOf(chainKey, url) {
+  const table = RPC_ENDPOINTS[chainKey] ?? [];
+  const exact = table.find((e) => e.url === url);
+  if (exact) return exact.operator;
+  const domain = operatorOf(url);
+  const entry = table.find((e) => [operatorOf(e.url), ...(e.domains ?? [])].includes(domain));
+  return entry ? entry.operator : domain;
 }
 
 /** @returns {Endpoint} */
@@ -112,19 +106,20 @@ const distinct = (/** @type {Endpoint[]} */ list) => new Set(list.map((e) => e.o
 
 /**
  * The endpoints for a chain and purpose ("read" | "verdict" | "owner").
- *   primary  env override (read, or when it equals a member of the set or a built-in URL), else owner urls[0], else table[0]
+ *   primary  the environment URL when `rpcFor` accepts it, else owner urls[0], else table[0]
  *   verdict  owner urls when set (ownNode with quorum 1: just urls[0], "owner-node"), else the table;
- *            an env URL joins only when it equals one of them; one that is neither a member nor a built-in URL is not used,
- *            and `note` says so. An env URL equal to a built-in table URL is allowed for every purpose: built-in URLs
- *            are already trusted.
+ *            the environment URL joins only as a member it equals (source "env"), or, when the owner allows this computer's
+ *            RPCs for the variable, as one more ordinary endpoint in a quorum set whose own operators already reach the
+ *            quorum; never in an owner-node or single set, so it never lowers the quorum, changes the label or decides alone.
+ *            It is the primary in every case.
  *   quorum   2 distinct operators (the owner's `quorum` when higher); the owner's `quorum` (default 1) when ownNode;
  *            1 ("single") only for the chain's own table, on a testnet whose table has one operator. Pinned owner URLs
  *            never take the single branch: pinning cannot lower the quorum.
+ * The environment URL is judged by `rpcFor` (owner-settings.js): trimming, trailing slashes, host case, loopback and syntax
+ * apply. A URL it refuses for "owner" or "verdict" gives { error } (ignoring it would send the owner's transaction through
+ * another RPC than the one the agent believes is used). A URL equal to a built-in URL is allowed for every purpose.
  * `testnet` is required (the caller states it; it fails closed to an error, never to "single").
- * Throws nothing: a malformed settings file gives { error }.
- * TODO(rebase onto T1): judge `envUrl` with T1's `rpcFor(chainKey, purpose, envUrl, { fallback, envName })` instead of
- * string equality (trailing slash, blank values, loopback, and a refusal as { error } for "owner" and "verdict");
- * `envName` is for its words and is unused until then.
+ * Throws nothing: an unreadable settings file gives { error }.
  * @param {string} chainKey
  * @param {"read"|"verdict"|"owner"} purpose
  * @param {{ envUrl?: string, envName?: string, testnet: boolean }} o
@@ -134,33 +129,43 @@ export function endpointSet(chainKey, purpose, o) {
   const table = RPC_ENDPOINTS[chainKey];
   if (!table) return { error: `no RPC endpoints are known for ${chainKey}` };
   if (typeof o?.testnet !== "boolean") return { error: `it was not stated whether ${chainKey} is a testnet` };
-  let owner;
+  let settings;
   try {
-    owner = ownerRpcSet(chainKey);
+    settings = readOwnerSettings();
   } catch (err) {
-    return { error: `the owner settings could not be read: ${err instanceof Error ? err.message : String(err)}` };
+    const words = err instanceof Error ? err.message : String(err);
+    return { error: /** @type {any} */ (err)?.code === "OWNER_SETTINGS_UNREADABLE" ? words : `the owner settings could not be read: ${words}` };
   }
+  const owner = settings && Object.hasOwn(settings.rpc, chainKey) ? settings.rpc[chainKey] : undefined;
   const testnet = o.testnet;
-  const pinned = owner ? owner.urls.map((u) => endpoint(u, operatorOf(u), "settings")) : table.map((e) => endpoint(e.url, e.operator, "builtin"));
+  const pinned = owner ? owner.urls.map((u) => endpoint(u, providerOf(chainKey, u), "settings")) : table.map((e) => endpoint(e.url, e.operator, "builtin"));
   const ownerQuorum = Number.isInteger(owner?.quorum) && /** @type {number} */ (owner?.quorum) >= 1 ? /** @type {number} */ (owner?.quorum) : undefined;
   const ownNode = owner?.ownNode === true && (ownerQuorum ?? 1) === 1;
   const verdict = ownNode ? [pinned[0]] : pinned;
-  const env = typeof o.envUrl === "string" && o.envUrl.trim() !== "" ? o.envUrl.trim() : undefined;
-  const envMatch = env ? verdict.find((e) => e.url === env) : undefined;
-  const builtin = env ? table.find((e) => e.url === env) : undefined;
-  let note;
-  if (env && !envMatch && !builtin && purpose !== "read") note = "the RPC set in the environment is not one of the confirming endpoints, so it was not used to confirm";
-  const primary = envMatch
-    ? { ...envMatch, source: /** @type {const} */ ("env") }
-    : env && (purpose === "read" || builtin)
-      ? endpoint(env, builtin ? builtin.operator : operatorOf(env), "env")
-      : pinned[0];
   let quorum;
   let agreement;
   if (ownNode) [quorum, agreement] = [1, "owner-node"];
   else if (!owner && testnet && distinct(verdict) < 2) [quorum, agreement] = [1, "single"];
   else [quorum, agreement] = [Math.max(owner?.ownNode === true ? 1 : 2, ownerQuorum ?? 2), "quorum"];
-  return { primary, verdict, quorum, agreement: /** @type {any} */ (agreement), ...(note ? { note } : {}) };
+  let primary = pinned[0];
+  const members = [...verdict];
+  const env = typeof o.envUrl === "string" && o.envUrl.trim() !== "" ? o.envUrl.trim() : undefined;
+  if (env) {
+    const chosen = rpcFor(chainKey, purpose, env, { fallback: table[0].url, builtin: table.map((e) => e.url), envName: o.envName, settings });
+    if ("error" in chosen) return { error: chosen.error };
+    const member = members.find((e) => sameRpcUrl(e.url, env));
+    const builtin = table.find((e) => sameRpcUrl(e.url, env));
+    const ownerUrl = owner?.urls.find((u) => sameRpcUrl(u, env));
+    if (member) primary = { ...member, source: "env" };
+    else if (builtin) primary = endpoint(builtin.url, builtin.operator, "env");
+    else if (ownerUrl) primary = endpoint(ownerUrl, providerOf(chainKey, ownerUrl), "env");
+    else {
+      primary = endpoint(env, providerOf(chainKey, env), "env");
+      // a loopback variable is one more endpoint only where it cannot stand in for the decider (distinct is counted before the push)
+      if (chosen.allowedBy === "loopback" && purpose !== "read" && agreement === "quorum" && distinct(members) >= quorum) members.push(primary);
+    }
+  }
+  return { primary, verdict: members, quorum, agreement: /** @type {any} */ (agreement) };
 }
 
 /** A caller-pinned set (SDK rpcUrl, tests): one endpoint, quorum 1, "caller". */

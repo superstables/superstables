@@ -1,5 +1,5 @@
 // The RPC each rail reads, and the environment variables that replace it. Plain JavaScript with Node built-ins only (and
-// response.mjs and site.mjs, which have the same), so the dispatcher (cli.mjs), doctor, buy-once and the rail scripts share it.
+// response.mjs, site.mjs and ../src/core/owner-settings.js, which have the same), so the dispatcher (cli.mjs), doctor, buy-once and the rail scripts share it.
 //
 //   B4_RPC_<CHAIN>            evm: that chain's RPC (B4_RPC_BASE_SEPOLIA, B4_RPC_ARC_TESTNET, ...); wins over B4_RPC
 //   B4_RPC                    evm: the selected chain's RPC, whichever it is (buy-once: Base Sepolia's); older, prefer the above
@@ -10,6 +10,8 @@
 // be read or answered by anyone on the way, and every check the commands make reads the chain through it. The dispatcher
 // refuses a command when one of them is set to anything else (exit 2), and every RESULT names a replacement in use (`rpc`).
 
+import { SETTINGS_COMMAND, budgetChainKey, rpcFor } from "../src/core/owner-settings.js";
+import { EVM_CHAINS } from "./evm/chains.mjs";
 import { readCapped } from "./response.mjs";
 import { endpointSet } from "../src/core/rpc-endpoints.mjs";
 import { siteText } from "./site.mjs";
@@ -43,13 +45,25 @@ export function rpcUrlProblem(value) {
 /**
  * The RPC named by environment variable `name`, else `fallback`. { url, custom } when usable; { url: fallback, custom: false,
  * error } when the variable is set to something refused (the caller decides whether to stop or warn).
+ *
+ * With `chainKey` (the owner settings' key for the chain, budgetChainKey) the owner's settings count too
+ * (src/core/owner-settings.js rpcFor): for "read" the variable as given, else the owner's first URL for the chain, else
+ * `fallback`; for "owner" and "verdict" a variable only when it names one of the owner's URLs. { url, custom, source }, where
+ * custom is true for anything but the built-in `fallback`. Without `chainKey` only "read" works, as the variable alone.
  */
-export function rpcFromEnv(name, fallback) {
+export function rpcFromEnv(name, fallback, purpose = "read", chainKey) {
   const v = process.env[name]?.trim();
-  if (!v) return { url: fallback, custom: false };
-  const problem = rpcUrlProblem(v);
-  if (problem) return { url: fallback, custom: false, error: `${name} is refused: ${problem} (got "${v.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").slice(0, 120)}")` };
-  return { url: v, custom: true };
+  if (v) {
+    const problem = rpcUrlProblem(v);
+    if (problem) return { url: fallback, custom: false, error: `${name} is refused: ${problem} (got "${v.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").slice(0, 120)}")` };
+  }
+  if (chainKey === undefined) {
+    if (purpose !== "read") throw new TypeError(`rpcFromEnv: purpose "${purpose}" needs the chain key`);
+    return v ? { url: v, custom: true } : { url: fallback, custom: false };
+  }
+  const r = rpcFor(chainKey, purpose, v, { fallback, envName: name });
+  if (r.error) return { url: fallback, custom: false, error: r.error };
+  return { url: r.url, custom: r.source !== "default", source: r.source };
 }
 
 /** The environment variable that replaces one EVM chain's RPC: base-sepolia is B4_RPC_BASE_SEPOLIA. */
@@ -68,6 +82,22 @@ export function evmRpcFromEnv(chainKey, fallback) {
     if (r.error || r.custom) return { ...r, name };
   }
   return { url: fallback, custom: false };
+}
+
+/**
+ * Why an RPC variable stops an owner action on this rail and chain, in words, or "" when none does: the variable is set to
+ * something other than one of the owner's RPCs for the chain (or one on this computer while the owner allows that). The
+ * dispatcher checks it before an owner command starts, and each rail's owner.ts before its script does anything.
+ */
+export function ownerRpcProblem(rail, chain) {
+  const name = RPC_ENV[rail];
+  if (!name) return "";
+  const builtin = rail === "evm" ? EVM_CHAINS[chain]?.rpc : DEFAULT_RPC[rail];
+  return rpcFor(budgetChainKey(rail, chain), "owner", process.env[name], { envName: name, fallback: builtin }).error ?? "";
+}
+/** What to do about it. */
+export function ownerRpcNext(rail, chain) {
+  return `unset ${RPC_ENV[rail]}, or ask the owner to run ${SETTINGS_COMMAND} rpc ${budgetChainKey(rail, chain)} <url> in their own terminal; nothing was asked or sent`;
 }
 
 /**

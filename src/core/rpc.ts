@@ -1,7 +1,7 @@
 // Reading a chain. Every chain read `pay` makes (a settlement, a recheck) goes through one JSON-RPC call here: one
 // request, under a short deadline, never redirected, its answer read no further than a cap. The RPC is the chain's
-// public one (src/core/chain.ts), or the one its environment variable names when that is https, or http on this
-// machine, without credentials:
+// public one (src/core/chain.ts), the owner's own RPC for the chain when they set one (src/core/owner-settings.js), or the one
+// its environment variable names when that is https, or http on this machine, without credentials:
 //
 //   SUPERSTABLES_RPC_URL      Base Sepolia
 //   SUPERSTABLES_TEMPO_RPC    Tempo Moderato (the budget's tempo rail reads it too)
@@ -10,24 +10,34 @@
 import type { NetworkInfo } from "./chain.js";
 import { readCapped } from "./http.js";
 import { rangeRefusal } from "./log-windows.mjs";
+import { rpcFor } from "./owner-settings.js";
 
 const CHECK_TIMEOUT_MS = 10_000;
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
-/** The RPC a chain is read through, or the reason the configured one is refused. */
-export function chainRpc(network: Pick<NetworkInfo, "defaultRpc" | "rpcEnv">, env: NodeJS.ProcessEnv = process.env): { url: string } | { error: string } {
+export type RpcPurpose = "owner" | "verdict" | "read";
+
+/**
+ * The RPC a chain is read through, or the reason the configured one is refused. `purpose` is "read" unless the call decides an
+ * owner action or a verdict (never paid, allowance 0, revoked): then an environment variable counts only when it names one of
+ * the owner's RPCs (src/core/owner-settings.js rpcFor).
+ */
+export function chainRpc(network: Pick<NetworkInfo, "key" | "defaultRpc" | "rpcEnv">, env: NodeJS.ProcessEnv = process.env, purpose: RpcPurpose = "read"): { url: string; source: "env" | "settings" | "default" } | { error: string } {
   const name = network.rpcEnv;
   const value = name ? env[name]?.trim() : undefined;
-  if (!name || !value) return { url: network.defaultRpc };
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return { error: `${name} is not a URL` };
+  if (name && value) {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      return { error: `${name} is not a URL` };
+    }
+    if (url.username || url.password) return { error: `${name} carries a user name or password` };
+    if (!(url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK.has(url.hostname)))) return { error: `${name} must use HTTPS, or HTTP on this machine` };
   }
-  if (url.username || url.password) return { error: `${name} carries a user name or password` };
-  if (url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK.has(url.hostname))) return { url: value };
-  return { error: `${name} must use HTTPS, or HTTP on this machine` };
+  const chosen = rpcFor(network.key, purpose, value, { fallback: network.defaultRpc, envName: name });
+  if ("error" in chosen) return { error: chosen.error };
+  return { url: chosen.url ?? network.defaultRpc, source: chosen.source };
 }
 
 export interface RpcOptions {
