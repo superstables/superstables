@@ -11,9 +11,10 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret-file.mjs";
-import { DEFAULT_RPC, rpcFromEnv } from "../rpc.mjs";
+import { DEFAULT_RPC, SOLANA_RPC_MAX_BYTES, cappedRpcFetch, rpcFromEnv } from "../rpc.mjs";
 import { markSend } from "../proof.mjs";
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
+import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 import {
   Connection,
   Keypair,
@@ -25,20 +26,33 @@ import bs58 from "bs58";
 // if any) without a full stack trace, then exit non-zero. This is what
 // callers of these scripts should see for a refused payment or an
 // unfunded fee payer, not a raw JS crash.
-process.on("unhandledRejection", async (err) => {
-  console.error("\nFailed:", err?.message ?? err);
+// A failed top-level await in an ES module raises uncaughtException (as do synchronous throws and unhandled rejections).
+// The owner page's handler (owner-page.ts), once installed, prints and exits itself.
+// Every rail's crash handler carries this mark (the EVM library's too). A handler steps aside for any listener that is not
+// marked (the owner page's) and, when several marked ones are loaded in one process, for all but the first.
+const RAIL_CRASH_HANDLER = Symbol.for("superstables.railCrashHandler");
+// A program log is a program's words, never a line of the client's: each entry follows fixed client text, so one that starts
+// with RESULT or APPROVE cannot stand at the start of a line.
+const logLine = (l) => `RPC log: ${oneLine(l, 500)}`;
+const crashHandler = async (err) => {
+  const listeners = process.listeners("uncaughtException");
+  if (listeners.some((l) => !l[RAIL_CRASH_HANDLER]) || listeners.find((l) => l[RAIL_CRASH_HANDLER]) !== crashHandler) return;
+  // the RPC's words and a program's logs are outside text: one line each, no hidden characters (oneLine, below)
+  console.error("\nFailed:", oneLine(err?.message ?? err, 1000));
   if (typeof err?.getLogs === "function") {
     try {
       const logs = await err.getLogs();
-      if (logs?.length) console.error("Logs:\n" + logs.join("\n"));
+      if (logs?.length) console.error("Logs:\n" + logs.map(logLine).join("\n"));
     } catch {
       // ignore, we already printed the message
     }
   } else if (err?.logs?.length) {
-    console.error("Logs:\n" + err.logs.join("\n"));
+    console.error("Logs:\n" + err.logs.map(logLine).join("\n"));
   }
   process.exit(1);
-});
+};
+crashHandler[RAIL_CRASH_HANDLER] = true;
+process.on("uncaughtException", crashHandler);
 
 // SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL (tests point it at a local fake; you can point it at your own node).
 // https, or http on this computer only (../rpc.mjs): anything else is ignored here with a warning, and the dispatcher refuses
@@ -49,6 +63,18 @@ export const RPC_URL = (() => {
   return r.url;
 })();
 export const EXPLORER_CLUSTER = "?cluster=devnet";
+/** Solana devnet is a testnet. The chain gate (../../src/core/chain-gate.js) signs on nothing else in this build. */
+export const TESTNET = true;
+/** The chain gate for this rail's one chain: "" when this build may sign, ask the owner's wallet or send on it, else why not. */
+const solanaGate = () => chainGate({ rail: "solana", key: "solana-devnet", testnet: TESTNET }, chainGateSettings());
+// No Solana budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a
+// key file or asks an RPC anything.
+if (solanaGate()) {
+  const command = String(process.argv[1] ?? "").split(/[\\/]/).pop().replace(/\.(?:ts|mjs)$/, "") || "solana";
+  console.error(`REFUSED: ${solanaGate()}. Nothing was signed or sent.`);
+  console.log(`RESULT ${JSON.stringify({ ok: false, command, rail: "solana", chain: "devnet", state: "refused_precheck", reason: solanaGate(), next: "nothing was signed or sent; this build signs on Solana devnet only" })}`);
+  process.exit(3);
+}
 export const USDC_MINT = new PublicKey(
   "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 );
@@ -59,9 +85,10 @@ export const AGENT_KEY_PATH = agentKeyFile("solana");
 export const PUBLIC_PATH = publicFile("solana", "devnet");
 export const OPS_DIR = opsDir("solana", "devnet");
 
+const rpcFetch = cappedRpcFetch(SOLANA_RPC_MAX_BYTES);
 export function connection() {
-  // a broadcast prints SENDING before it leaves (../proof.mjs)
-  return new Connection(RPC_URL, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (url, init) => { markSend(init?.body); return fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }); } });
+  // a broadcast prints SENDING before it leaves (../proof.mjs); every answer is read through cappedRpcFetch (../rpc.mjs)
+  return new Connection(RPC_URL, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (url, init) => { markSend(init?.body); return rpcFetch(url, { ...init, signal: AbortSignal.timeout(10_000) }); } });
 }
 
 /** The RPC's host, for words: a replacement's path or query can carry an access key, so never the whole URL. */
@@ -75,6 +102,8 @@ export const CLUSTER_NEXT = "unset SUPERSTABLES_SOLANA_RPC, or set it to a Solan
  * genesis that cannot be read is a reason too.
  */
 export async function clusterProblem(conn) {
+  const gate = solanaGate();
+  if (gate) return gate;
   let genesis;
   try {
     genesis = await retryRead(() => conn.getGenesisHash());
@@ -230,11 +259,12 @@ export function replaceKeyFile(path, text) {
   replaceSecretFile(path, text);
 }
 
-// Seller text (its 402, its answer, its headers, its errors) on one log line: control characters, newlines included, and
-// the Unicode line separators become spaces. A seller must not be able to start a line of its own on stdout, where the
-// dispatcher reads APPROVE and RESULT lines. The same rule as evm's oneLine.
+// Seller text (its 402, its answer, its headers, its errors) on one log line, at most `max` characters: control characters,
+// newlines included, become spaces; format, bidi and Unicode tag characters are removed. A seller must not be able to start a
+// line of its own on stdout, where the dispatcher reads APPROVE and RESULT lines. The same rule as untrustedText
+// (src/core/text.ts).
 export function oneLine(s, max = 300) {
-  return String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim().slice(0, max);
+  return String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, "").trim().slice(0, max);
 }
 
 // ---------------------------------------------------------------------------

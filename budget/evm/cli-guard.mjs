@@ -8,6 +8,8 @@
 //   --help / -h          print usage, exit 0
 //   --mainnet, or --chain / B4_CHAIN naming a mainnet (name or chain id)
 //                        exit 3 with RESULT state refused_precheck: refused before anything is signed
+//   a chain whose chains.mjs entry is not marked testnet: true (src/core/chain-gate.js)
+//                        exit 3 with RESULT state refused_precheck, before a key file, an RPC or a seller is touched
 //   unknown flag         exit 2
 //   missing value        exit 2
 //   missing required     exit 2
@@ -15,9 +17,10 @@
 //   unknown chain name   exit 2 (chains.ts, also before any secret is read)
 //
 // The table is the single list of runnable scripts. A script that is not in it exits 2 (fail closed).
-// Only Node built-ins and the plain chain table (chains.mjs, no imports) are used here.
+// Only Node built-ins, the plain chain table (chains.mjs, no imports) and the chain gate (no imports) are used here.
 import { dirname, basename, resolve } from "node:path";
-import { EVM_CHAIN_KEYS } from "./chains.mjs";
+import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./chains.mjs";
+import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 
 // v = flags that take a value, b = boolean flags, r = required flags (value or boolean), pos = positional arguments
 // (name list; all required), keys = which secret files the script may open (documentation, printed in --help).
@@ -75,6 +78,17 @@ if (argv.includes("--mainnet") || (chainValue && !String(chainValue).startsWith(
   const shown = argv.includes("--mainnet") ? "--mainnet" : String(chainValue);
   process.stderr.write(`REFUSED: "${shown}" is a mainnet. superstables budget is testnet only (--chain ${EVM_CHAIN_KEYS.join(", ")}). Nothing was signed or sent.\n`);
   process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: shown, state: "refused_precheck", reason: "mainnet is refused: testnet only", next: `use --chain ${EVM_CHAIN_KEYS.join(" or --chain ")}` })}\n`);
+  process.exit(3);
+}
+
+// The chain gate (src/core/chain-gate.js): no EVM script runs on a chain this build does not sign on. It refuses here,
+// before a key file, an RPC or a seller is touched.
+const gateKey = chainValue && !String(chainValue).startsWith("--") ? String(chainValue) : EVM_DEFAULT_CHAIN;
+const gateEntry = Object.hasOwn(EVM_CHAINS, gateKey) ? EVM_CHAINS[gateKey] : undefined;
+const gate = gateEntry ? chainGate({ rail: "evm", key: gateKey, testnet: gateEntry.testnet }, chainGateSettings()) : "";
+if (gate) {
+  process.stderr.write(`REFUSED: ${gate}. Nothing was signed or sent.\n`);
+  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: gateKey, state: "refused_precheck", reason: gate, next: "nothing was signed or sent; use a testnet chain" })}\n`);
   process.exit(3);
 }
 

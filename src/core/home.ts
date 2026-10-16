@@ -8,10 +8,12 @@
 //
 // The agent side reads wallet/agent-token and nothing else under wallet/. The owner secret
 // and the key are the wallet process's alone; no code outside src/wallet opens them.
+//
+// Every folder the client writes here is checked first (ensureDir): see private-dir.mjs.
 
-import { mkdirSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
+import { ensurePrivateDir } from "./private-dir.mjs";
 
 /**
  * SUPERSTABLES_HOME as an agent's host may hand it over: possibly blank, possibly with a `~`,
@@ -125,7 +127,12 @@ export function walletUrl(): string {
   return configured;
 }
 
+/**
+ * Makes `path` a private folder (src/core/private-dir.mjs): the home and every folder from it down to `path` are real
+ * folders owned by this user that no other user can write to; missing ones are created 0700. Throws a sentence naming
+ * what is wrong otherwise.
+ */
 export function ensureDir(path: string): string {
-  mkdirSync(path, { recursive: true, mode: 0o700 });
+  ensurePrivateDir(path, { root: homeDir() });
   return path;
 }

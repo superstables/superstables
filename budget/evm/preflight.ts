@@ -10,8 +10,9 @@ import "./cli-guard.mjs";
 // npx tsx budget/evm/preflight.ts --chain <name> [--url <seller url>] [--max <usdc>] [--pay-to <address>]
 import { domainSeparator, parseAbi, formatUnits, type Address } from "viem";
 import { SYM, CFG, GAS, emit, oneLine, USDC, NETWORK, usdc, gasFmt, publicClient, nativeBalance, usdcBalance, arg, toUsdc, publicEnv, usageError, cmd } from "./lib.ts";
-import { checkAccept } from "./purchase.ts";
+import { checkAccept, MIN_AUTH_LIFETIME_S, MAX_AUTH_LIFETIME_S } from "./purchase.ts";
 import { EVM_CHAINS } from "./chains.mjs";
+import { readCapped } from "../response.mjs";
 import { isAddress } from "viem";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 
@@ -66,9 +67,9 @@ if (url) {
     if (h) {
       try { pr = JSON.parse(Buffer.from(h, "base64").toString()); } catch {}
     } else if (r.status === 402) {
-      // x402 v1: the requirements are the JSON body. Read at most 64 KB of it.
-      const text = (await r.text().catch(() => "")).slice(0, 65_536);
-      try { const b = JSON.parse(text); if (b?.x402Version === 1) pr = b; } catch {}
+      // x402 v1: the requirements are the JSON body. Read at most 64 KB of it; a longer body is not read further and is no offer.
+      const body = await readCapped(r, 65_536);
+      if (!body.truncated) try { const b = JSON.parse(body.bytes.toString("utf8")); if (b?.x402Version === 1) pr = b; } catch {}
     }
     ok(r.status === 402 && !!pr && Array.isArray(pr.accepts), "seller answers 402 with x402 payment requirements (v2: payment-required header, v1: JSON body)");
   }
@@ -80,16 +81,17 @@ if (url) {
     // the same filter as buy: this chain's names, scheme exact
     const mine = all.filter((x) => (x.network === NETWORK || CFG.legacyNetworks.includes(x.network)) && x.scheme === "exact");
     console.log(`${mine.length} exact option(s) on ${CFG.label} (${[NETWORK, ...CFG.legacyNetworks].join(", ")}); the rest are other networks or schemes and are ignored`);
+    console.log(`buy accepts an authorization lifetime (maxTimeoutSeconds) of ${MIN_AUTH_LIFETIME_S} to ${MAX_AUTH_LIFETIME_S} seconds`);
     let picked: any = null;
     for (const x of mine) {
-      const why = checkAccept(x, { max: max ?? 10n ** 12n, payTo });
-      console.log("  " + oneLine(`${x.scheme} price ${priceOf(x)} ${SYM} asset ${x.asset} payTo ${x.payTo} timeout ${x.maxTimeoutSeconds}s extra ${JSON.stringify(x.extra)} -> ${why ? `SKIP: ${why}` : "USABLE"}`, 2000));
+      const why = checkAccept(x, { max: max ?? 10n ** 12n, payTo, agent: p.B4_AGENT_ADDRESS, owner: p.B4_OWNER_ADDRESS });
+      console.log("  " + oneLine(`${x.scheme} price ${priceOf(x)} ${SYM} asset ${x.asset} payTo ${x.payTo} lifetime ${x.maxTimeoutSeconds}s extra ${JSON.stringify(x.extra)} -> ${why ? `SKIP: ${why}` : "USABLE"}`, 2000));
       if (!why && !picked) picked = x;
     }
     ok(!!picked, `a usable ${CFG.label} ${SYM} exact option exists`);
     if (picked) {
       offer = { price: usdc(BigInt(amountOf(picked))), token: picked.asset, payTo: picked.payTo, network: picked.network, scheme: picked.scheme, x402Version: version };
-      console.log(oneLine(`offer: ${offer.price} ${SYM} (token ${offer.token}) to ${offer.payTo}, network ${offer.network}, scheme ${offer.scheme}, x402 v${version}, EIP-712 domain ${picked.extra.name}/${picked.extra.version} (from the 402, checked against the token), method ${picked.extra.assetTransferMethod ?? "eip3009 (default)"}`, 2000));
+      console.log(oneLine(`offer: ${offer.price} ${SYM} (token ${offer.token}) to ${offer.payTo}, network ${offer.network}, scheme ${offer.scheme}, x402 v${version}, EIP-712 domain ${picked.extra.name}/${picked.extra.version} (from the 402, checked against the token), method ${picked.extra.assetTransferMethod ?? "eip3009 (default)"}, authorization lifetime ${picked.maxTimeoutSeconds}s`, 2000));
       if (max !== undefined) ok(BigInt(amountOf(picked)) <= max, `price ${offer.price} <= --max ${usdc(max)}`);
       if (payTo) ok(picked.payTo.toLowerCase() === payTo.toLowerCase(), `payTo equals --pay-to ${payTo}`);
     }

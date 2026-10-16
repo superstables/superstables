@@ -30,6 +30,8 @@ Every rail's main path follows these rules.
 
 The README says which owner action stops the agent even if the agent key is stolen, and what exposure remains after it. Tested on testnet, not only read from source.
 
+`revoke` never skips its transaction on one read: on `evm` and `solana` it always sends (on `solana` unless the owner has no USDC account, where the transaction would fail), and on `tempo` it skips only when the keychain refuses a simulated `revokeKey` from the owner. `status` reports `revoked: true` only for a revoke this machine recorded that the chain still shows (on `tempo`, the keychain's revoked flag).
+
 ## 4. Every purchase is checked before anything is signed
 
 `buy` must refuse, before any signature, pull or transaction, when:
@@ -37,12 +39,14 @@ The README says which owner action stops the agent even if the agent key is stol
 - the token is not the rail's expected token (the chain's USDC, Tempo pathUSD, the Solana devnet USDC mint) or decimals don't match;
 - the recipient is not the one in `--pay-to <address>`, when given;
 - the recipient is the zero address, the token contract, the agent or the owner;
-- (evm) the authorization lifetime is missing, not a whole number of seconds, or outside 30 to 3600;
+- (evm) the authorization lifetime is missing, not a whole number of seconds, or outside 30 to 600;
+- (evm) the payment the x402 client would sign differs from the checked option (its expiry, `validBefore`, may be up to 5 seconds later than the offered timeout allows, a clock tolerance), or its EIP-712 domain (name, version, chain id, token) is not the token's;
+- (evm, where gas is paid in the budget token) an earlier purchase's price is still in the agent key;
 - the amount has more precision than the token allows.
 
 Refusal exits with code 3 and a `RESULT` line with `state: "refused_precheck"` and the reason.
 
-On `tempo`, `buy` also refuses payment splits that add up to the price or more, a split of 0, more than 10 splits or a split memo that is not 32 bytes, and an RPC that does not answer Tempo Moderato's chain id.
+On `tempo`, `buy` also refuses payment splits that add up to the price or more, a split of 0, more than 10 splits or a split memo that is not 32 bytes, an RPC that does not answer Tempo Moderato's chain id, a challenge that turns on mppx's machine-token route, names no realm, stays open more than 600 seconds or was already used by another operation, and a signed payment that is not exactly the quoted transfers or is valid for more than 600 seconds.
 
 ## 5. Every purchase has an operation ID and can be reconciled
 
@@ -50,8 +54,9 @@ On `tempo`, `buy` also refuses payment splits that add up to the price or more, 
 - If an operation with that ID is already `submitted` or `unknown`, `buy` refuses and says to run `reconcile --op <id>`.
 - `reconcile --op <id>` reads the chain and sets `settled`, `failed` or `not_found`. It never pays.
 - A purchase is `settled` only when its own transaction succeeded on chain. Seller HTTP status is recorded separately as `delivered: true|false` (`null` when the process died before the response). Delivery failure never triggers a new payment.
-- An existing operation journal that cannot be read or parsed stops its journal read with `unknown` (exit 5), preserving the file. This applies to purchase and reconciliation reads and to EVM `recover --op ID`, before any send. Recovery without `--op` still skips unreadable journals during its scan; inspect them before running recovery.
+- An existing operation journal that cannot be read or parsed stops its journal read with `unknown` (exit 5), preserving the file. A file that parses but is not a journal of that operation on its rail (it names another operation, or lacks a field every journal of that rail has from its first write) counts as one that cannot be read. This applies to purchase and reconciliation reads and to EVM `recover --op ID`, before any send. Recovery without `--op` names unreadable journals and skips its sweep (below).
 - Final output line: `RESULT {"rail","op","state","tx","debit","remaining","delivered","next"}` where `state` is one of `quoted`, `submitted`, `settled`, `failed`, `refused_precheck`, `refused_chain`, `not_found` (reconcile only), `unknown`.
+- EVM `recover` returns a purchase's price only once its authorization can no longer settle at a final block (never signed, cancelled in a final block, or expired by a final block's time), and ends its first step with the owner's `approve(agent, 0)` unless the agent's own revoke in that run brought the allowance to 0 and a later read shows 0. Without `--op` it reads every journal file of the chain and sweeps the agent key only when all can be read and no operation of this agent is still being sent, not final, or holds an authorization that can still settle; otherwise it names them and ends `unknown` (exit 5). Its amounts are exact token units, never floating point.
 
 ## 6. Help and bad input never sign
 

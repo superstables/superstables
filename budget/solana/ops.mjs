@@ -15,7 +15,7 @@
 //   not_found         the blockhash expired and no transaction was ever found (safe to retry)
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import { createHash, randomBytes } from "node:crypto";
-import { readJournalFile, writeJournalFile } from "../journal.mjs";
+import { readJournalFile, solanaOpProblem, writeJournalFile } from "../journal.mjs";
 import { join } from "node:path";
 import { PublicKey } from "@solana/web3.js";
 import { OPS_DIR, retryRead, sleep, formatUnits } from "./lib.mjs";
@@ -24,7 +24,8 @@ import { lockRecord } from "../op-lock.mjs";
 export const OP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export function newOpId() {
-  return `sol-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(3).toString("hex")}`;
+  // 64 random bits: an op id names a journal and its locks, and must neither collide nor be guessed
+  return `sol-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(8).toString("hex")}`;
 }
 
 // Deterministic per-operation transaction identity. Two different operations get different
@@ -39,7 +40,7 @@ export function opIdentity(op) {
 const opPath = (op) => join(OPS_DIR, `${op}.json`);
 
 export function readOp(op) {
-  return readJournalFile(opPath(op), op);
+  return readJournalFile(opPath(op), op, solanaOpProblem);
 }
 
 export function writeOp(op, record) {

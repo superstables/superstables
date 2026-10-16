@@ -92,10 +92,10 @@ export function chosenSite(flag) {
 }
 
 /**
- * Text from the site on one line, without control characters and without the invisible characters that reorder or hide
- * text (zero-width, bidi embeddings and isolates), at most `max` characters. It is data, never a command.
+ * Text from the site on one line, at most `max` characters: control characters become spaces; format, bidi and Unicode tag
+ * characters are removed. The same rule as untrustedText (src/core/text.ts). It is data, never a command.
  */
-export const siteText = (s, max = 300) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "").trim().slice(0, max);
+export const siteText = (s, max = 300) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, "").trim().slice(0, max);
 
 /**
  * The words the site's budget API documents, by kind. The site's own sentences (an error message, a reason) are never
@@ -143,10 +143,20 @@ export const accountWaitingWords = (code) => (ACCOUNT_WAITING.has(code) ? `${ACC
 /** Anything shaped like an access token (ssbt_, ssba_, sspt_, sspa_) taken out of a text this client prints or stores. */
 export const scrub = (text) => String(text ?? "").replace(/ss[bp][ta]_[A-Za-z0-9_-]*/g, "[token]");
 /**
- * The agent's access tokens (ssbt_, sspt_) taken out of a line the dispatcher prints. An owner's approval link carries
- * its own token (ssba_, sspa_) after # on purpose, so those stay.
+ * Text the dispatcher prints, without control characters: newline and tab stay (the dispatcher's own layout), every other C0
+ * and C1 character goes, and the Unicode line and paragraph separators become spaces. The characters that hide or reorder
+ * text go too, as in siteText: format characters (zero-width, bidi marks and overrides, the soft hyphen, U+2060-2064) and the
+ * tag block U+E0000-E007F. A rail's log can quote an RPC's or a library's error text (viem and @solana/web3.js put the RPC's
+ * words, revert reasons and program logs in their errors), which must not move the cursor, retitle the terminal, erase what
+ * was printed or reorder it. A newline inside such text is flattened where the rail prints the error (oneLine), not here:
+ * the dispatcher's own output has lines.
  */
-export const scrubAgentTokens = (text) => String(text ?? "").replace(/ss[bp]t_[A-Za-z0-9_-]*/g, "[token]");
+export const terminalText = (text) => String(text ?? "").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "").replace(/[\u2028\u2029]/g, " ").replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, "");
+/**
+ * The agent's access tokens (ssbt_, sspt_) taken out of a line the dispatcher prints, after terminalText. An owner's
+ * approval link carries its own token (ssba_, sspa_) after # on purpose, so those stay.
+ */
+export const scrubAgentTokens = (text) => terminalText(text).replace(/ss[bp]t_[A-Za-z0-9_-]*/g, "[token]");
 
 /** The longest run of token characters held back between two chunks; a longer run is a token and is dropped whole. */
 const TOKEN_HOLD_MAX = 512;
@@ -160,7 +170,7 @@ export function agentTokenScrubber() {
   let inToken = false;
   return {
     push(text) {
-      let s = String(text ?? "");
+      let s = terminalText(text);
       if (inToken) {
         // the rest of a token already replaced by [token]
         const m = /^[A-Za-z0-9_-]*/.exec(s);

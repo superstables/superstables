@@ -4,12 +4,13 @@
 // and the whole history stays readable with `tail`. The files hold no key and no secret,
 // but they do say what was bought and for how much, so they are created 0600.
 
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { networkFor } from "./chain.js";
-import { ensureDir, recordsDir } from "./home.js";
-import { capUnit, round6 } from "./policy.js";
+import { homeDir, recordsDir } from "./home.js";
+import { ensurePrivateDir, syncDirectory } from "./private-dir.mjs";
+import { CAP_DECIMALS, capUnit, capUnits, policyAmount } from "./policy.js";
 import type { thisProcess } from "./lock.js";
 import type { Attempt, Quote, Receipt } from "./types.js";
 
@@ -82,6 +83,9 @@ function txKey(network: string, transaction: string): string {
 /** 0600: only the owner of the machine reads their own payment history. */
 const FILE_MODE = 0o600;
 
+/** The three files the records live in, for the count of lines that could not be read. */
+const RECORD_FILES = ["quotes.jsonl", "attempts.jsonl", "receipts.jsonl"] as const;
+
 interface Identified {
   id: string;
 }
@@ -151,13 +155,24 @@ export class Records {
    */
   claimQuote(quoteId: string, attemptId: string): string | undefined {
     const dir = join(this.dir, "claims");
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    privateDir(dir);
     const path = join(dir, claimName(quoteId));
+    let fd: number | undefined;
     try {
-      writeFileSync(path, attemptId, { flag: "wx", mode: FILE_MODE });
-      return undefined;
+      fd = openSync(path, "wx", FILE_MODE);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+    if (fd !== undefined) {
+      // on disk, name included, before anything is signed for this quote
+      try {
+        writeAllSync(fd, attemptId);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      syncDirectory(dir);
+      return undefined;
     }
     try {
       return readFileSync(path, "utf8").trim();
@@ -224,11 +239,18 @@ export class Records {
    */
   savePendingAnswer(receipt: Receipt): void {
     const dir = join(this.dir, "pending-answers");
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    privateDir(dir);
     const path = join(dir, `${claimName(receipt.id)}.json`);
     const temporary = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-    writeFileSync(temporary, JSON.stringify(receipt), { flag: "wx", mode: FILE_MODE });
+    const fd = openSync(temporary, "wx", FILE_MODE);
+    try {
+      writeAllSync(fd, JSON.stringify(receipt));
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     renameSync(temporary, path);
+    syncDirectory(dir);
   }
 
   /** The seller's answer waiting to be recorded for an attempt, if there is one. */
@@ -267,7 +289,7 @@ export class Records {
   }
 
   /**
-   * What counts toward the daily cap on the UTC day of `now`, in one asset's unit: the US dollar stablecoins (USDC on
+   * What counts toward the daily cap on the UTC day of `now`, in millionths of one asset's cap unit (CAP_DECIMALS): the US dollar stablecoins (USDC on
    * every chain, pathUSD on Tempo) count together, one for one, whatever the rail. One line: a payment counts on the day it
    * ended (a receipt's day, or the day it became uncertain), and on every day while it can still move money (signed or
    * sent and not resolved, or waiting for the owner within its approval window).
@@ -289,20 +311,31 @@ export class Records {
    * settles between the two reads is still counted, once. `exclude` leaves out one attempt: the one being checked
    * against the cap. This is the number the per-day cap is checked against; it is a local figure, not a chain balance,
    * and it says so wherever it is shown.
+   *
+   * Each amount is the record's `terms.amountAtomic`, a whole number, read at its chain's token decimals (capUnits);
+   * nothing is added as a decimal. Undefined when a record that counts has no whole-number amountAtomic: a total that
+   * cannot be read is not zero, and the daily cap then refuses (evaluatePolicy).
    */
-  spentToday(asset: string, now: Date = new Date(), options: { exclude?: string } = {}): number {
+  spentTodayAtomic(asset: string, now: Date = new Date(), options: { exclude?: string } = {}): bigint | undefined {
     const day = now.toISOString().slice(0, 10);
     const wanted = capUnit(asset);
     // Attempts first, then receipts: see above.
     const attempts = this.byId<Attempt>("attempts.jsonl");
     const receipts = this.byId<Receipt>("receipts.jsonl");
-    let total = 0;
+    let total = 0n;
+    /** Adds one record's amount; false when it has none that can be read. */
+    const add = (terms: Receipt["terms"] | undefined): boolean => {
+      const { amountAtomic, decimals } = policyAmount(terms ?? {});
+      if (amountAtomic === undefined) return false;
+      total += capUnits(amountAtomic, decimals ?? CAP_DECIMALS);
+      return true;
+    };
     for (const receipt of receipts.values()) {
       if (!receipt.at?.startsWith(day)) continue;
       // The chain showed the seller's report was wrong: nothing was paid, and nothing can be.
       if (receipt.chain === "unpaid") continue;
       if (capUnit(receipt.terms?.asset ?? "") !== wanted) continue;
-      total += receipt.terms.amountDecimal;
+      if (!add(receipt.terms)) return undefined;
     }
     for (const attempt of attempts.values()) {
       if (attempt.id === options.exclude) continue;
@@ -314,12 +347,21 @@ export class Records {
         // can still move money, as an unresolved attempt without a receipt would. An attempt with matching inclusion is paid on its recorded day,
         // whatever an older receipt line says.
         if (receipt.at?.startsWith(day) || attempt.chain === "verified" || receipt.chain === "verified" || attempt.chainFinal === true || receipt.chainFinal === true || receipt.chain === "unpaid") continue;
-        if (attempt.state !== "failed" && mayStillMove(attempt, now) === true) total += attempt.terms.amountDecimal;
+        if (attempt.state !== "failed" && mayStillMove(attempt, now) === true && !add(attempt.terms)) return undefined;
         continue;
       }
-      if (countsOn(attempt, now, day)) total += attempt.terms.amountDecimal;
+      if (countsOn(attempt, now, day) && !add(attempt.terms)) return undefined;
     }
-    return round6(total);
+    return total;
+  }
+
+  /**
+   * spentTodayAtomic as a decimal number, for display (NaN when the total cannot be read). No cap compares it: quote, pay
+   * and the browser signer pass spentTodayAtomic.
+   */
+  spentToday(asset: string, now: Date = new Date(), options: { exclude?: string } = {}): number {
+    const total = this.spentTodayAtomic(asset, now, options);
+    return total === undefined ? NaN : Number(total) / 10 ** CAP_DECIMALS;
   }
 
   // ── The append-only file itself ──────────────────────────────────────────────────────
@@ -329,12 +371,21 @@ export class Records {
   }
 
   private append(file: string, row: Identified): void {
-    ensureDir(this.dir);
+    privateDir(this.dir);
     const path = this.path(file);
     // If the last write was cut short (a crash, a full disk), start a new line rather than
     // gluing this record onto the broken one — then only the torn line is ever lost.
     const prefix = endsWithNewline(path) ? "" : "\n";
-    appendFileSync(path, `${prefix}${JSON.stringify(row)}\n`, { mode: FILE_MODE });
+    const created = !existsSync(path);
+    const fd = openSync(path, "a", FILE_MODE);
+    // the line is on disk before the caller goes on: a payment's `submitting` line before its credential leaves
+    try {
+      writeAllSync(fd, `${prefix}${JSON.stringify(row)}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    if (created) syncDirectory(this.dir);
   }
 
   /** Latest row per id. Attempts and receipts read without a runner (see attemptRunner), and chainFinal null if unset. */
@@ -348,19 +399,25 @@ export class Records {
     }
     return rows;
   }
+
+  /** Lines in the record files that could not be read, per file. Reading skips them; `superstables doctor` reports them. */
+  skippedLines(): { file: string; lines: number }[] {
+    return RECORD_FILES.map((file) => ({ file, lines: readRows(this.path(file)).skipped })).filter((f) => f.lines > 0);
+  }
 }
 
 /**
  * Reads a file into "latest row per id". A half-written last line (a crash mid-append,
- * a truncated copy) is skipped rather than allowed to hide every record behind it.
+ * a truncated copy) is skipped rather than allowed to hide every record behind it, and counted (skippedLines).
  */
-function rowsById<T extends Identified>(path: string): Map<string, T> {
+function readRows<T extends Identified>(path: string): { rows: Map<string, T>; skipped: number } {
   const rows = new Map<string, T>();
+  let skipped = 0;
   let text: string;
   try {
     text = readFileSync(path, "utf8");
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return rows;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { rows, skipped };
     throw err;
   }
   for (const line of text.split("\n")) {
@@ -369,11 +426,17 @@ function rowsById<T extends Identified>(path: string): Map<string, T> {
     try {
       row = JSON.parse(line) as T;
     } catch {
-      continue; // a torn line: skip it, keep reading
+      skipped++; // a torn line: skip it, keep reading
+      continue;
     }
     if (row && typeof row.id === "string") rows.set(row.id, row);
+    else skipped++;
   }
-  return rows;
+  return { rows, skipped };
+}
+
+function rowsById<T extends Identified>(path: string): Map<string, T> {
+  return readRows<T>(path).rows;
 }
 
 /** A claim's file name: a hash of the quote id, so no id can name a path. */
@@ -402,4 +465,19 @@ function endsWithNewline(path: string): boolean {
 function newestFirst<T>(rows: Map<string, T>, at: (row: T) => string | undefined, limit?: number): T[] {
   const all = [...rows.values()].sort((a, b) => (at(b) ?? "").localeCompare(at(a) ?? ""));
   return limit === undefined ? all : all.slice(0, Math.max(0, limit));
+}
+
+/** Makes a records folder private; a folder created now is flushed into its parent. */
+function privateDir(path: string): void {
+  for (const made of ensurePrivateDir(path, { root: homeDir() })) syncDirectory(dirname(made));
+}
+
+/** writeSync may write less than asked; keep going, and throw when no progress is made. */
+function writeAllSync(fd: number, text: string): void {
+  const bytes = Buffer.from(text, "utf8");
+  for (let at = 0; at < bytes.length; ) {
+    const n = writeSync(fd, bytes, at, bytes.length - at);
+    if (!(n > 0)) throw new Error(`short write: ${at} of ${bytes.length} bytes`);
+    at += n;
+  }
 }

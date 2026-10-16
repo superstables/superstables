@@ -16,7 +16,7 @@
 // fee, the owner rejected or the link expired, the chain shows another delegate or amount), 5 unknown (read the chain).
 import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
+import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, oneLine, usageError, readPublic, retryRead, sleep, PUBLIC_PATH, parseEnvFile, writePublic } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, grantTerms, sol, transactionPort } from "./owner.ts";
@@ -63,7 +63,7 @@ const owner: PublicKey = pub.owner;
 const agent: PublicKey = pub.agent;
 const ata = getAssociatedTokenAddressSync(USDC_MINT, owner);
 const before = await retryRead(() => getAccountOrNull(conn, ata)).catch((err) =>
-  refuse(`could not read the owner's USDC account ${ata.toBase58()} (${String(err?.message ?? err).slice(0, 160)})`, "check the devnet RPC (superstables budget doctor --rail solana), then grant again"),
+  refuse(`could not read the owner's USDC account ${ata.toBase58()} (${oneLine(err?.message ?? err, 160)})`, "check the devnet RPC (superstables budget doctor --rail solana), then grant again"),
 );
 if (!before) refuse(`the owner ${owner.toBase58()} has no devnet USDC account yet`, "get devnet USDC from faucet.circle.com (Solana devnet), then grant again");
 if (before.amount === 0n) refuse(`the owner's USDC account ${ata.toBase58()} holds no USDC`, "get devnet USDC from faucet.circle.com (Solana devnet), then grant again");
@@ -82,6 +82,8 @@ console.log(`ApproveChecked: delegate ${agent.toBase58()}, ${formatUnits(cap)} U
 const ix = () => [createApproveCheckedInstruction(ata, USDC_MINT, agent, owner, cap, USDC_DECIMALS)];
 let sig: string;
 let finish: ((v: OwnerVerdict) => void) | null = null;
+// A grant from here on may land: a revoke recorded on this machine no longer describes the owner's account (readBudget.mjs).
+if (parseEnvFile(PUBLIC_PATH).REVOKED_AT !== undefined) writePublic({}, ["REVOKED_AT"]);
 if (OWNER_KEY_FILE) {
   checkOwnerKeyFile(OWNER_KEY_FILE);
   const kp = loadOwner(OWNER_KEY_FILE).keypair;
@@ -111,7 +113,7 @@ if (OWNER_KEY_FILE) {
     process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget status --rail solana: read the delegate before granting again" }));
   }
   if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) {
-    const why = c.status === "expired" ? "it was sent but never landed before its blockhash expired; nothing changed" : `it failed on chain (${JSON.stringify(c.err)}); nothing changed`;
+    const why = c.status === "expired" ? "it was sent but never landed before its blockhash expired; nothing changed" : `it failed on chain (${oneLine(JSON.stringify(c.err), 300)}); nothing changed`;
     const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
     handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The grant is not confirmed. A failed on-chain transaction may still charge a fee.`, hash: sig });
     await closeOwnerPage();

@@ -403,6 +403,8 @@ Whether a budget is set up here, and if so what is left of it: remaining, expiry
 first, names the home it checked (SUPERSTABLES_HOME, default ~/.superstables; home in the RESULT) and the owner's next
 command. If the budget is elsewhere, ask the user for the path: do not point SUPERSTABLES_HOME at another home yourself.
 remaining 0 means there is nothing to spend: the owner grants one.
+revoked is true only for a revoke this machine recorded that the chain still shows (tempo: the key reads revoked); an
+allowance or delegate that reads 0 without that record is remaining 0 and revoked false.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
@@ -516,13 +518,15 @@ Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 
 ## superstables budget unlock
 
 ```text
-superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --attempt ID | --buy-once) --confirm [--unverified]
+superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --rail evm --agent-key [--chain C] | --attempt ID | --buy-once) --confirm [--unverified]
 
 Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.
 
 --unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.
 
 --cap: Recover the core payment lock. --approvals: Recover approval locks on this rail and chain. --approval ID: Also recover the record lock for this approval. --attempt ID: Release an attempt runner for read-only reconciliation. Stop all payment work across processes, containers and hosts first. Payment-lock recovery uses the exact confirmation payment-lock, or payment-lock unverified with --unverified. Preserves payment evidence. Run status for the original attempt or wait for the original approval next.
+
+--agent-key: Recover the lock that makes evm purchases on one agent key and chain take turns, after stopping every buy and recover on that key. Uses the exact confirmation agent-key, or agent-key unverified with --unverified. Preserves journals.
 
 A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.
 
@@ -549,7 +553,9 @@ superstables budget revoke --rail evm|tempo|solana [--chain C] [--agent LABEL] [
 Ends the budget on chain: from the block it lands in, the agent can spend nothing more (evm: the allowance becomes 0;
 tempo: the access key is revoked for good; solana: the delegate is cleared). Prints the plan first. It does not bring
 back what was already spent; on evm, superstables budget recover returns stranded funds.
-On evm it always sends approve(agent, 0), even when the allowance already reads 0.
+It always sends the revoke, even when the budget already reads empty or revoked: one read is not proof that nothing is
+live. It sends nothing only where the chain would refuse the transaction: on solana when the owner has no USDC account
+(revoked null), and on tempo when a simulated revokeKey from the owner is refused as already done (revoked true, tx {}).
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on
 stdout and in words on stderr. The owner opens it in the browser that has their wallet, and approves or rejects there.
@@ -600,7 +606,10 @@ superstables budget recover --rail evm [--chain C] [--op ID] [--timeout S] [--no
 
 evm only. Stops the allowance first, then returns stranded USDC (a seller refund, or a purchase that pulled but did not
 settle) from the agent key to the owner. Prints the plan, then runs it: the agent key signs its own steps; the owner
-approves in their wallet only what the agent cannot do (the rest of the allowance, gas for the agent).
+approves in their wallet approve(agent, 0), unless the agent's own revoke brought the allowance to 0 in this run, and gas
+for the agent when it has too little. A purchase's price goes back only once its authorization can no longer settle at a
+final block. Without --op it sweeps nothing while a journal cannot be read or an operation can still move money (unknown,
+exit 5).
 tempo and solana have nothing to recover: the agent never holds the budget.
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on

@@ -9,8 +9,10 @@
 // dependency is bundled in, so dist/budget imports only node: built-ins and its own files; checkSelfContained proves it.
 //
 // It also writes:
-//   dist/budget/VERSION.json            the client version, the commit and the build time (`superstables budget --version`)
+//   dist/budget/VERSION.json            the client version, the commit and the commit's time (`superstables budget --version`)
 //   dist/budget/THIRD_PARTY_NOTICES.txt every bundled package with its version, licence and full licence text
+//   dist/sbom.cdx.json                  a CycloneDX SBOM of every package an install of the client adds or the bundle carries
+//                                       (scripts/sbom.mjs); with --outdir, only when --sbom names a file
 //
 // The npm package ships dist/budget (the client's `superstables budget` runs it when there is no checkout). A checkout
 // runs its sources, and dist/budget only when its dev packages are not installed (see the top of budget/cli.mjs).
@@ -23,7 +25,7 @@
 // buildStandalone is the part the whole-CLI build (scripts/cli-build.mjs) shares: the esbuild call, VERSION.json, the
 // notices with their licence checks, and checkSelfContained.
 //
-// node scripts/budget-build.mjs [--outdir <dir>]
+// node scripts/budget-build.mjs [--outdir <dir>] [--sbom <file>]
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -31,6 +33,8 @@ import { builtinModules } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { revisionOf } from "./dev-version.mjs";
+import { isOwnGitCheckout } from "./package-root.mjs";
+import { installedFromLock, writeSbom } from "./sbom.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const src = join(root, "budget");
@@ -184,6 +188,20 @@ function repoUrl(pkg) {
   return r.replace(/^git\+/, "").replace(/\.git$/, "").replace(/^(?:ssh:\/\/)?git@([^:/]+)[:/]/, "https://$1/").replace(/^git:\/\//, "https://").replace(/^github:/, "https://github.com/").replace(/^(?!https?:)([\w-]+\/[\w.-]+)$/, "https://github.com/$1");
 }
 
+/**
+ * Where package-lock.json and npm audit know a package folder: the path from its first node_modules/, such as
+ * node_modules/@solana/web3.js. When node_modules is a link to another folder (a worktree, a scratch copy) the folder's own
+ * path relative to the root starts with ../ and names this machine; this is the same package under the name the lockfile uses.
+ */
+export function lockLocation(dir) {
+  const r = relative(root, dir).split(sep).join("/");
+  const i = r.indexOf("node_modules/");
+  return i < 0 ? r : r.slice(i);
+}
+
+/** The order of the bundled packages in the notices and the SBOM: by name, then version, the same in every locale. */
+export const byNameVersion = (a, b) => a.name.localeCompare(b.name, "en") || a.version.localeCompare(b.version, "en");
+
 function writeNotices(outdir, metafile, version, { title, builtBy, rebuild }) {
   const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8")).packages ?? {};
   const packages = new Map(); // name@version -> { name, version, dir, pkg }
@@ -196,10 +214,11 @@ function writeNotices(outdir, metafile, version, { title, builtBy, rebuild }) {
       pkgByInput.set(input, found);
       if (bytesInOutput === 0) continue; // parsed but tree-shaken away: none of its code ships
       const key = `${found.pkg.name}@${found.pkg.version}`;
-      if (!packages.has(key)) packages.set(key, { name: found.pkg.name, version: found.pkg.version, ...found });
+      if (!packages.has(key)) packages.set(key, { name: found.pkg.name, version: found.pkg.version, ...found, paths: new Set() });
+      packages.get(key).paths.add(lockLocation(found.dir));
     }
   }
-  const list = [...packages.values()].sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
+  const list = [...packages.values()].sort(byNameVersion);
 
   const refused = [];
   for (const p of list) {
@@ -209,8 +228,10 @@ function writeNotices(outdir, metafile, version, { title, builtBy, rebuild }) {
     p.copyleft = p.licence ? copyleftIn(p.licence) : [];
     p.files = readdirSync(p.dir).filter((f) => /^(licen[cs]e|copying|notice|unlicense)([.-]|$)/i.test(f)).sort();
     p.source = repoUrl(p.pkg);
-    const rel = relative(root, p.dir).split(sep).join("/");
+    const rel = lockLocation(p.dir);
     p.tarball = lock[rel]?.resolved ?? null;
+    p.integrity = lock[rel]?.integrity ?? null;
+    p.paths = [...p.paths].sort();
     // who pulls it in: the packages whose bundled files import this one
     p.via = new Set();
     for (const [input, info] of Object.entries(metafile.inputs)) {
@@ -288,6 +309,31 @@ function gitDirty() {
 }
 
 /**
+ * builtAt for VERSION.json: the time of the commit the build comes from, never the clock, so two builds of one commit
+ * write the same bytes. In order:
+ *   1. SOURCE_DATE_EPOCH, when set (reproducible-builds.org); a value that is not whole seconds fails the build;
+ *   2. in the package's own git checkout, the commit's time (`git log -1 --format=%ct`), uncommitted changes or not;
+ *   3. in a `git archive` export (SUPERSTABLES_SKILL_FROM_ARCHIVE=1, the release's promise, see package-root.mjs), the
+ *      modification time of package.json: git archive dates every file with the commit's time, and tar keeps it;
+ *   4. anywhere else, the clock, as before: such a build is not reproducible.
+ */
+export function buildTime(dir = root, env = process.env) {
+  const iso = (seconds) => new Date(seconds * 1000).toISOString().replace(/\.\d+Z$/, "Z");
+  if (env.SOURCE_DATE_EPOCH) { // an empty value counts as unset
+    if (!/^\d{1,12}$/.test(env.SOURCE_DATE_EPOCH)) throw new Error(`SOURCE_DATE_EPOCH must be whole seconds since 1970 (got "${env.SOURCE_DATE_EPOCH}")`);
+    return iso(Number(env.SOURCE_DATE_EPOCH));
+  }
+  if (isOwnGitCheckout(dir)) {
+    try {
+      const ct = execFileSync("git", ["log", "-1", "--format=%ct", "HEAD"], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      if (/^\d+$/.test(ct)) return iso(Number(ct));
+    } catch {}
+  }
+  if (env.SUPERSTABLES_SKILL_FROM_ARCHIVE === "1") return iso(Math.floor(statSync(join(dir, "package.json")).mtimeMs / 1000));
+  return iso(Math.floor(Date.now() / 1000));
+}
+
+/**
  * Bundles entryPoints ({ "budget/cli": file, ... }, keyed by the output path without .mjs) into outdir with esbuild so
  * that it runs with node alone, then writes VERSION.json (at each path in versionFiles) and THIRD_PARTY_NOTICES.txt and
  * checks that the result is self-contained. `version` replaces package.json's (a --dev stamp). esbuild also writes it
@@ -300,7 +346,7 @@ export async function buildStandalone({ outdir, entryPoints, name, title, builtB
   // A release builds from `git archive`, which has no .git: the release script names the commit instead.
   const pinned = process.env.SUPERSTABLES_BUILD_COMMIT;
   if (pinned !== undefined && !/^[0-9a-f]{7,40}$/.test(pinned)) throw new Error(`SUPERSTABLES_BUILD_COMMIT must be a commit hash (got "${pinned}")`);
-  const version = { name, version: stamped ?? pkg.version, commit: pinned ? pinned.slice(0, 7) : rev.sha ?? null, commits: rev.count === undefined ? null : Number(rev.count), dirty: rev.sha ? gitDirty() : null, builtAt: new Date().toISOString().replace(/\.\d+Z$/, "Z") };
+  const version = { name, version: stamped ?? pkg.version, commit: pinned ? pinned.slice(0, 7) : rev.sha ?? null, commits: rev.count === undefined ? null : Number(rev.count), dirty: rev.sha ? gitDirty() : null, builtAt: buildTime(root) };
   rmSync(outdir, { recursive: true, force: true });
   const result = await build({
     absWorkingDir: root,
@@ -371,10 +417,16 @@ export async function buildBudget(outdir = join(root, "dist", "budget")) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const i = process.argv.indexOf("--outdir");
-  const outdir = i > 0 ? resolve(process.argv[i + 1]) : undefined;
+  const arg = (name) => {
+    const i = process.argv.indexOf(name);
+    return i > 0 ? resolve(process.argv[i + 1]) : undefined;
+  };
+  const outdir = arg("--outdir");
   if (outdir) mkdirSync(dirname(outdir), { recursive: true });
-  await buildBudget(outdir);
+  const built = await buildBudget(outdir);
   // `npm run build` has just compiled the rest of dist/ with tsc
   if (!outdir) console.log(`budget: no budget-only package in the client's ${checkClientImports()} files in dist/`);
+  // The npm package's SBOM: what an install of it adds, and what dist/budget carries bundled.
+  const sbom = arg("--sbom") ?? (outdir ? undefined : join(root, "dist", "sbom.cdx.json"));
+  if (sbom) writeSbom(sbom, { root, stamp: built.version, installed: installedFromLock(root), bundled: built.packages });
 }

@@ -24,7 +24,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import bs58 from "bs58";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
@@ -188,7 +188,7 @@ if (CAP !== undefined || LAMPORTS !== undefined) {
     startSlot = await retryRead(() => connection().getSlot("confirmed"));
     agentHad = BigInt(await retryRead(() => connection().getBalance(new PublicKey(agent), "confirmed")));
   } catch (e) {
-    const reason = `could not read Solana devnet before asking (${String((e as Error).message).split("\n")[0]}); the transactions could not be checked afterwards`;
+    const reason = `could not read Solana devnet before asking (${oneLine((e as Error).message, 300)}); the transactions could not be checked afterwards`;
     console.log(`REFUSED: ${reason}. Nothing was requested.`);
     process.exit(result(3, { state: "refused_precheck", reason, next: "superstables budget doctor --rail solana checks the RPC; then run the same command again" }));
   }
@@ -296,7 +296,7 @@ const asked = !OWNER_KEY_FILE && !(publicOwner && !newOwner && !HOSTED);
 if (HOSTED && !linked) throw new Error("an add-agent request without its id and code");
 // hosted: APPROVALS, SITE, and the link the owner signed (LINK_ID, LINK_CODE: a later "already linked" answer is checked
 // against them)
-writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : []);
+writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, [...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : []), ...(replaced || CAP !== undefined ? ["REVOKED_AT"] : [])]);
 console.log(`wrote ${PUBLIC_PATH} (no secret) and the owner's address into ${AGENT_KEY_PATH}.${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ""}`);
 
 const conn = connection();
@@ -344,7 +344,7 @@ async function finishBundle(): Promise<never> {
       console.log(`transaction: ${c.status}${c.slot ? `, slot ${c.slot}` : ""}${c.signer ? `, signer ${c.signer}` : ""}`);
       const report = (state: Report["state"], reason?: string, extra: Pick<Report, "proof"> = {}) => reports.push({ kind: s.kind, state, ...extra, tx: s.hash!, txUrl: explorerTx(s.hash!), amount, reason });
       if (c.status === "unknown") { report("unknown", "the site reported a signature the chain does not show yet"); continue; }
-      if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) { report("failed", `it failed on chain (${JSON.stringify(c.err)})`, { proof: "reverted" }); continue; }
+      if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) { report("failed", `it failed on chain (${oneLine(JSON.stringify(c.err), 300)})`, { proof: "reverted" }); continue; }
       if (c.problems.length) { report("mismatch", mismatchReason(c.problems, c.siteFailed, s.hash)); continue; }
       if (s.kind === "fund_agent") {
         const i = c.accountKeys?.indexOf(agent) ?? -1;

@@ -33,3 +33,7 @@ export const opsDir = (rail, chain) => join(STATE_DIR, "ops", `${rail}-${chain}`
 export const ownerApprovalsLog = () => join(STATE_DIR, "owner-approvals.jsonl");
 export const approvalsDir = () => join(STATE_DIR, "approvals");
 export const onceDir = () => join(STATE_DIR, "once");
+
+// Private folders (src/core/private-dir.mjs): one rule for both builds. Nothing in this release calls it from the budget
+// yet; the budget's own folders move to it with the key-storage work.
+export { ensurePrivateDir, privateDirProblem } from "../src/core/private-dir.mjs";

@@ -179,12 +179,14 @@ describe("recover.ts hands the completed revoke to the later owner steps", () =>
       readUntil: async <T,>(read: () => Promise<T>) => read(),
       writePublic: () => {},
     }));
-    vi.doMock("../../budget/evm/ops.js", async (importOriginal) => ({ ...((await importOriginal()) as object), pendingJournalsFor: () => [] }));
+    vi.doMock("../../budget/evm/ops.js", async (importOriginal) => ({ ...((await importOriginal()) as object), pendingJournalsFor: () => [], scanJournals: () => ({ journals: [], unreadable: [] }), sweepBlockers: async () => ({ unreadable: [], undecided: [] }) }));
     vi.doMock("../../budget/evm/owner.js", async (importOriginal) => ({
       ...((await importOriginal()) as object),
       revokeInWallet: async (...a: unknown[]) => { revokeCalls.push(a); return REVOKE_TX; },
       fundInWallet: async (...a: unknown[]) => { fundCalls.push(a); process.exit(3); },
     }));
+    // recover.ts is imported more than once in this process and its exit listener never runs: no key lock to wait for
+    vi.doMock("../../budget/op-lock.mjs", async (importOriginal) => ({ ...((await importOriginal()) as object), requireKeyLock: async () => ({ ok: true, release() {} }) }));
     const argv = process.argv;
     process.argv = [argv[0]!, new URL("../../budget/evm/recover.ts", import.meta.url).pathname];
     try {

@@ -1,6 +1,7 @@
 # Superstables spend policy (software policy: enforced by this client and by the wallet,
 # not by the chain). Evaluation order, first refusal wins:
 #   kill_switch → deny → allow → stablecoins → per_call → per_day
+# Amounts are plain decimals with at most 6 decimals, like 0.05 or 0.05 USDC (not 0x10, 1e3 or .5).
 caps:
   per_call: 0.05 USDC   # the most one payment may be
   per_day: 1 USDC       # the most all payments may add up to in one UTC day

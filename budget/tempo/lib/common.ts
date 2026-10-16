@@ -11,10 +11,12 @@ import { Account, Addresses, createClient, http } from 'viem/tempo'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 
-import { CHAIN_ID as CHAIN_ID_, RPC_URL as RPC_URL_, TOKEN_DECIMALS as TOKEN_DECIMALS_, TOKEN_LABEL as TOKEN_LABEL_ } from './constants.mjs'
+import { CHAIN_ID as CHAIN_ID_, RPC_URL as RPC_URL_, TESTNET, TOKEN_DECIMALS as TOKEN_DECIMALS_, TOKEN_LABEL as TOKEN_LABEL_ } from './constants.mjs'
 import { agentKeyFile, ownerKeyFile, publicFile } from '../../paths.mjs'
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from '../../secret-file.mjs'
+import { RPC_MAX_BYTES, cappedRpcFetch } from '../../rpc.mjs'
 import { markSend } from '../../proof.mjs'
+import { chainGate, chainGateSettings } from '../../../src/core/chain-gate.js'
 
 export const RPC_URL: string = RPC_URL_
 export const EXPLORER_BASE = 'https://explore.testnet.tempo.xyz'
@@ -29,11 +31,11 @@ export const TOKEN_DECIMALS: number = TOKEN_DECIMALS_
 export const TOKEN_LABEL: string = TOKEN_LABEL_
 
 /**
- * Seller text (its challenge, its answer, its errors) on one log line: control characters, newlines included, and the Unicode
- * line separators become spaces. A seller must not be able to start a line of its own on stdout, where the dispatcher reads
- * APPROVE and RESULT lines. The same rule as evm's oneLine.
+ * Seller text (its challenge, its answer, its errors) on one log line, at most `max` characters: control characters, newlines
+ * included, become spaces; format, bidi and Unicode tag characters are removed. A seller must not be able to start a line of
+ * its own on stdout, where the dispatcher reads APPROVE and RESULT lines. The same rule as untrustedText (src/core/text.ts).
  */
-export const oneLine = (s: unknown, max = 300): string => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim().slice(0, max)
+export const oneLine = (s: unknown, max = 300): string => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, '').trim().slice(0, max)
 
 // Key files (contract rule 1). Owner and agent keys never share a file.
 //   the owner's wallet  holds the owner key. setup, grant and revoke ask it on the owner page.
@@ -209,12 +211,27 @@ export function accessKeyAccountForOwner(ownerAddress: Address, privateKey: Hex)
   return Account.fromSecp256k1(privateKey, { access: ownerAddress })
 }
 
+/** The chain gate for this rail's one chain: '' when this build may sign, ask the owner's wallet or send on it, else why not. */
+export function tempoGate(): string {
+  return chainGate({ rail: 'tempo', key: 'tempo-moderato', testnet: TESTNET }, chainGateSettings())
+}
+// No Tempo budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a key
+// file or asks an RPC anything.
+if (tempoGate()) {
+  const command = String(process.argv[1] ?? '').split(/[\\/]/).pop()!.replace(/\.(?:ts|mjs)$/, '') || 'tempo'
+  console.error(`REFUSED: ${tempoGate()}. Nothing was signed or sent.`)
+  console.log(`RESULT ${JSON.stringify({ ok: false, command, rail: 'tempo', chain: 'moderato', state: 'refused_precheck', reason: tempoGate(), next: 'nothing was signed or sent; this build signs on Tempo Moderato only' })}`)
+  process.exit(3)
+}
+
 export function makeClient(account?: ReturnType<typeof ownerAccount> | ReturnType<typeof agentAccessKeyAccount>) {
+  const gate = tempoGate()
+  if (gate) throw new Error(`${gate}; nothing was signed or sent`)
   return createClient({
     account,
     testnet: true,
     // a broadcast prints SENDING before it leaves (../../proof.mjs)
-    transport: http(RPC_URL, { onFetchRequest: (_request, init) => markSend(init.body) }),
+    transport: http(RPC_URL, { onFetchRequest: (_request, init) => markSend(init.body), fetchFn: cappedRpcFetch(RPC_MAX_BYTES), maxResponseBodySize: RPC_MAX_BYTES }),
     feeToken: TOKEN_ADDRESS,
   })
 }

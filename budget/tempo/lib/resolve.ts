@@ -22,7 +22,7 @@ export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lo
   const hashes = new Set<string>([...extraHashes, op.tx, op.expectedTx].filter(Boolean) as string[])
   // our own signed hash (push mode) is bound by itself; anything else must carry the memo
   if (op.memo) {
-    const memoHits = await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock ?? 0)).catch(() => { unreadable = true; return [] })
+    const memoHits = await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock ?? 0), op.validBefore === undefined ? undefined : op.validBefore + EXPIRY_SLACK_S).catch(() => { unreadable = true; return [] })
     for (const h of memoHits) hashes.add(h)
   }
   // Prefer, in order: a successful payment bound to this operation, any bound one, then anything found (judge calls an
@@ -47,10 +47,10 @@ export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lo
     if (head && head.timestamp > op.validBefore + EXPIRY_SLACK_S) {
       // last read: a payment mined in the final blocks must not be called expired
       if (op.memo) {
-        const again = await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock ?? 0)).catch(() => null)
+        const again = await findByMemo(op.intent.owner as Address, op.intent.recipient as Address, op.memo as Hex, BigInt(op.startBlock ?? 0), op.validBefore === undefined ? undefined : op.validBefore + EXPIRY_SLACK_S, true).catch(() => null)
         if (again === null) return { kind: 'pending' } // could not read: never claim "expired" on a failed read
         if (again.length) return { kind: 'pending' } // inclusion remains unreadable; the next reconciliation checks again
-      }
+      } else if (!op.expectedTx) return { kind: 'pending' } // no memo and no hash: nothing to search the chain by, so never "expired"
       return { kind: 'expired' }
     }
   }

@@ -14,7 +14,7 @@
 import { Abis, Addresses } from 'viem/tempo'
 import type { Address } from 'viem'
 import { addressCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { TOKEN_ADDRESS, TOKEN_LABEL, explorerAddress, fromBaseUnits, loadPublicEnv, makeClient } from './lib/common.ts'
+import { TOKEN_ADDRESS, TOKEN_LABEL, explorerAddress, fromBaseUnits, loadPublicEnv, makeClient, oneLine } from './lib/common.ts'
 
 const { values: args } = parseCli({
   name: 'readBudget.ts',
@@ -83,6 +83,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('readBudget failed:', err?.message ?? err)
+  // viem puts the revert reason an RPC sent as ABI data into its message: the same one-line, no-hidden-characters rule as any outside text
+  console.error('readBudget failed:', oneLine(err?.message ?? err, 1000))
   process.exit(1)
 })

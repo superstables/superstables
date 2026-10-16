@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { runsInHostNamespace } from '../helpers/namespace-probes.js';
 
 const root = resolve(process.env.BUDGET_RACE_ROOT ?? join(import.meta.dirname, '../..'));
 const { createIdentitySource, inspectProcess } = await import(join(root, 'src/core/process-identity.mjs'));
@@ -39,8 +40,9 @@ it('buy-once start lock after reboot requires exact owner recovery and preserves
   const claim = spawnSync(process.execPath, ['--input-type=module', '-e', `const a=await import(${JSON.stringify(join(root, 'budget/approvals.mjs'))});const id=a.newApprovalId();const c=a.claim('once','purchase',id);console.log(c.ok);if(c.ok)a.release('once','purchase',id);`], { env: { ...process.env, SUPERSTABLES_HOME: b.home }, encoding: 'utf8' });
   expect(claim.status, claim.stderr).toBe(0); expect(claim.stdout.trim()).toBe('true');
 });
+// Proving a holder alive needs the host's PID namespace (process-identity.mjs refuses from a nested one); those cases skip elsewhere.
 for (const shape of ['core', 'chain', 'createdAt-only', 'operation', 'approval-worker', 'pid-only']) {
-  it.runIf(process.platform === 'linux')(`legacy ${shape} live proof and cap-only death proof`, () => {
+  it.runIf(shape === 'pid-only' || shape === 'createdAt-only' ? process.platform === 'linux' : runsInHostNamespace)(`legacy ${shape} live proof and cap-only death proof`, () => {
     const me = createIdentitySource().record();
     const record = { pid: me.pid, ...(shape === 'pid-only' || shape === 'createdAt-only' ? {} : { pidStart: me.pidStart }), ...(shape === 'core' ? { owner: 'released-owner' } : { createdAt: Date.now() }), ...(shape === 'chain' || shape === 'approval-worker' ? { id, rail: 'solana', chain: 'devnet' } : {}) };
     const check = inspectLockText(JSON.stringify(record));
@@ -52,7 +54,7 @@ for (const shape of ['core', 'chain', 'createdAt-only', 'operation', 'approval-w
   });
 }
 for (const target of ['reconcile', 'chain', 'record', 'operation', 'buy-once', 'rail-child']) {
-  it.runIf(process.platform === 'linux')(`verified-live legacy ${target} refuses both owner recovery modes`, () => {
+  it.runIf(runsInHostNamespace)(`verified-live legacy ${target} refuses both owner recovery modes`, () => {
     const b = box(), me = createIdentitySource().record(), legacy = { pid: me.pid, pidStart: me.pidStart, createdAt: Date.now() };
     let path: string, args: string[], token = 'payment-lock';
     if (target === 'reconcile') {

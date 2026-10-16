@@ -1,6 +1,6 @@
 # Security model
 
-Superstables client 0.3.0 makes testnet payments only. This page says what each way to pay protects
+Superstables client 0.4.0 makes testnet payments only. This page says what each way to pay protects
 and what it does not.
 
 These payment flows have different boundaries:
@@ -25,6 +25,15 @@ In the default `pay` flow, the owner's signing key stays in their browser wallet
 does not generate, read or store it. That does not mean the machine holds no keys: the browser
 wallet keeps its own, and the local wallet mode and budgets store separate keys.
 
+The client's own folders are private. Before it writes to its home folder (`~/.superstables`, or
+`SUPERSTABLES_HOME`), its payment records (`records/`) or the local wallet's folder (`wallet/`), it
+checks that each is a folder you own that no other user can write to, and creates a missing one with
+mode 0700. A folder under the home that is a symbolic link, belongs to someone else or that others
+can write to is refused with the reason, and a folder others can only read is set back to 0700. The
+home folder itself may be a link to such a folder. Budget folders (`keys/budget/`, `budget/`) are
+created with mode 0700 but not yet checked this way. The client reads the local wallet's agent token
+only from a regular file that only you can read.
+
 Before the owner signs, the client builds an authorization and serves a page that shows its terms.
 After it checks the signature it gets back, it sends the authorization to the seller, which has a
 facilitator settle it.
@@ -42,11 +51,14 @@ payment core uses, and shown as fact:
 | Amount (0.01 USDC, and the atomic `10000`) | `amount` in the requirement, divided by the asset's decimals |
 | Asset | the requirement's `asset` address, which must be the chain's USDC contract |
 | Chain | the requirement's `network`, which must be a supported one (`eip155:84532`) |
-| Recipient | the requirement's `payTo`, which must be a well-formed address |
+| Recipient | the requirement's `payTo`, which must be a well-formed address, and not the zero address or the token contract (on Solana, the all-zero key or the mint) |
 | Scheme | the requirement's `scheme`, which must be `exact` |
-| Payer | the account the page reports as connected; that the account controls it is checked when its signature arrives |
+| Payer | the account the page reports as connected, which must not be the recipient; that the account controls it is checked when its signature arrives |
 
-A payment requirement that fails these checks is refused before an approval link exists. The
+A payment requirement that fails these checks is refused before an approval link exists. So is an
+EVM offer that asks for a transfer method other than EIP-3009 (`extra.assetTransferMethod`), or
+whose `extra` holds anything but the token's signing domain, its decimals and that method; and a
+Tempo challenge that enables the machine-token route (`methodDetails.machineTokenEnabled`). The
 payer's signature is checked later, as described below.
 
 **Reported — what the agent says the payment is for**, stored under `reported` and labelled
@@ -58,7 +70,8 @@ unverified wherever it is shown:
 
 None of it changes what gets signed. The typed data the wallet is asked to sign is built from the
 verified requirement, field by field: `to` is the requirement's `payTo`, `value` is its
-`amount`, `verifyingContract` is its asset.
+`amount`, `verifyingContract` is its asset, and `validBefore` is now plus the seller's
+`maxTimeoutSeconds`, at most 600 seconds.
 
 There is one place where reported context has an effect: the policy takes the hostname for its
 `allow`/`deny` rules from `reported.target`, because the requirement does not carry the URL that
@@ -159,13 +172,16 @@ but it would not have to ask for the connection again.
 ## Expiry
 
 - A **quote** is good for 10 minutes. Paying re-reads the seller's challenge and refuses if the
-  terms moved.
+  terms moved, the seller's authorization window included.
 - A **browser approval request** expires five minutes after it is created, by default, checked on a
   timer and on every request. Local-wallet requests expire after 120 seconds by default
   (`wallet serve --approval-timeout`).
 - The **EIP-3009 authorization** carries its own on-chain window: `validBefore` is set to now
-  plus the seller's `maxTimeoutSeconds` (300 seconds unless the seller asks for something else).
-  After that, it cannot succeed on chain.
+  plus the seller's `maxTimeoutSeconds` (300 seconds unless the seller asks for something else), and
+  never more than 600 seconds: a seller may allow up to an hour, and its requirement is sent back
+  as offered, but what `pay` signs lasts ten minutes at most. After that, it cannot succeed on
+  chain. A request a program sends to the local wallet directly, not through `pay`, is still signed
+  for the window it names, up to an hour.
 - Closing the client marks pending approval requests `abandoned`, which is not a rejection, and a
   signature that arrives afterwards is never sent. A payment already being sent can end
   `uncertain` instead. If the process is killed, the log may have no final line; pending requests
@@ -201,14 +217,23 @@ more. Your own `~/.superstables/policy.yaml` applies whichever policy file or ho
 names, but its daily count and the file itself are only as safe as your account's files. An empty
 policy file means the defaults. A file with a misspelled key, a `kill_switch` that is not `true` or
 `false`, a scalar where a list belongs or an unreadable amount stops every payment until it is
-fixed. The only limits that survive a compromised machine are the ones inside what you sign —
-the amount and the recipient in the authorization — and the balance of the account, which is why
-this release is testnet only.
+fixed. Amounts are read as you wrote them, in plain decimal with at most six decimals: `0.05`,
+`1` or `0.05 USDC`. YAML would read `0x10` as 16 and `1e3` as 1000, so those spellings, and `.5`,
+`+1` or `-1`, stop payments in the same way, with the key named. The only limits that survive a
+compromised machine are the ones inside what you sign — the amount and the recipient in the
+authorization — and the balance of the account, which is why this release is testnet only.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
 including pending, in-flight and uncertain payments; the local wallet counts the authorizations in
-its own `wallet/audit.jsonl`. Neither reads chain history: delete
-those records and the count starts again.
+its own `wallet/audit.jsonl`. Both add up whole token units (millionths of a dollar for the dollar
+stablecoins), never floating-point decimals. On the browser signer's path, from the payment records
+to the policy check, totals and comparisons with the cap are exact, so a cap is reached exactly.
+The local wallet daemon is not exact end to end: it passes its whole-unit total, and the payment's
+amount, to the policy check as decimal numbers, and from about 8.6 billion dollars upward that
+conversion can be off by a unit or more in either direction. That limitation remains for the local
+wallet. For the browser signer, a record whose amount cannot be read makes today's total unknown,
+and the daily cap then refuses every payment until the record is fixed. Neither reads chain
+history: delete those records and the count starts again.
 
 ## Testnet only
 
@@ -218,7 +243,12 @@ Sepolia and Solana devnet, x402 `exact` with test USDG on Robinhood Chain Testne
 `tempo.charge` with test pathUSD on Tempo Moderato. On the EVM
 chains the token's EIP-712 signing domain is pinned too, so a seller cannot make the wallet show a
 signing name of its choosing. A requirement naming anything else, every mainnet included, is
-refused before anyone is asked. There is no configuration that turns on mainnet.
+refused before anyone is asked. There is no configuration that turns on mainnet. A mainnet added
+to the chain tables would still be refused by a separate check: before anything is signed, offered
+to a wallet or sent, `quote`, `pay`, the approval page, the local wallet and every
+`superstables budget` command ask it, and it refuses any chain whose table entry is not marked as
+a testnet, because mainnet signing is off in this build. `quote` and `pay` then refuse the offer;
+a budget command exits 3 before it reads a key file or the chain.
 
 On Tempo the owner's wallet sends the payment itself, so the order is different. MPP sellers that
 split a price between recipients, set a memo of their own, accept only payments they submit
@@ -234,6 +264,8 @@ wallet was asked. A wallet that was asked and did not answer, or whose rejection
 leaves the attempt `uncertain`: a page's report is not proof that nothing was sent, since anything
 holding the approval link can post it. `superstables status` then searches the chain for the memo,
 in blocks after the one recorded, and never takes a transfer already recorded as another payment.
+
+Budget purchases on Tempo (`superstables budget buy --rail tempo`) are signed by the agent's access key through mppx, and the client checks the seller's challenge first. It refuses a challenge that turns on mppx's machine-token route (`machineTokenEnabled`), which would pay through a swap contract instead of a plain pathUSD transfer; one that names no realm, since its payment could then not be found on chain as this purchase's; and one that stays open for more than ten minutes. Before anything is signed, the purchase claims the challenge on this machine, in a file named by its payment memo, so a seller that hands the same challenge to two purchases cannot settle both against one payment. The signed payment is read back before it leaves the process, to the seller or to the RPC: it must make exactly the quoted pathUSD transfers and stay valid for at most ten minutes. mppx signs it for 25 seconds.
 
 For x402 payments, public facilitators submit the transfer and pay the gas. A facilitator sees
 the signed authorization or transaction, so it learns who paid whom and how much; it cannot
@@ -326,8 +358,10 @@ default `stablecoins` list is `[USDC, pathUSD, USDG]`, and a policy that lists U
 reserves the amount under a lock shared by the processes on this machine before the owner is
 asked.
 
-Text from sellers and listings reaches the agent as data. The CLI prints it on one line, without
-control or invisible characters.
+Text from sellers, listings and RPCs reaches the agent as data. The CLI prints it, on the terminal and
+in `--json` output, on one line and without control characters or invisible formatting characters
+(zero-width, bidi and Unicode tag characters). A command the CLI suggests carries a seller's payee
+only when it is a valid address for that rail.
 
 **Where the signed payment goes.** `pay` sends the signed authorization only to the URL it quoted:
 it refuses a redirect, and the attempt then ends `uncertain`, because the client cannot tell whether
@@ -401,8 +435,14 @@ undo an owner signature or a transaction already sent through setup on superstab
   amount. On `tempo`, the access key's total or per-period limit, its expiry, and its seller list
   when one was granted. No rail enforces a per-payment maximum on chain.
 - **This CLI checks the rest**, before it signs: `--max`, the expected token, `--pay-to` and one
-  purchase per `--op`. A stolen agent key skips all of these and can spend what is left of the
-  budget, on `evm` and `solana` to any address. Keep budgets small.
+  purchase per `--op`. On `evm`, before the pull, it has the x402 client build the payment it would
+  send and checks it against the option those checks passed, including the token's EIP-712 domain
+  name and version; it then signs once, for at most ten minutes, and purchases that share an agent
+  key take turns. That check of the built payment lets it expire up to five seconds (a clock
+  tolerance) later than the seller's offered timeout allows. On Arc Testnet, a price an earlier
+  purchase left in the agent key is not counted as gas reserve. A stolen agent key skips all of
+  these and can spend what is left of the budget, on `evm` and `solana` to any address. Keep
+  budgets small.
 - **Setup is a trusted step.** Whoever holds setup's approval link, the agent included, can complete it
   with a key of their own: the page's origin check stops other websites, not local programs. So the
   owner runs it, and checks the owner address that setup prints and every owner page shows. Under
@@ -433,14 +473,33 @@ undo an owner signature or a transaction already sent through setup on superstab
   client never sees it before it is sent; it reads it from the chain afterwards and reports any
   difference from the plan, like on `evm` (see
   [Budget approvals and Single purchase on superstables.com](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
+- **`recover` acts only on what is final.** On `evm`, a purchase's price goes back to the owner (after a
+  failed `buy`, or from `recover`) only once its payment authorization can no longer settle at a final
+  block: never signed, cancelled in a final block, or expired by a final block's time. A cancellation
+  that is mined but not final leaves the price in the agent key and the outcome unknown (exit 5);
+  `recover --op ID` returns it once the cancellation is final. `recover` asks the owner for
+  `approve(agent, 0)` unless the agent's own revoke in that run brought the allowance to 0 and a later
+  read shows 0. Without `--op` it sweeps the rest of the agent key only when every journal of that
+  chain can be read and no operation of the agent can still move money; otherwise it names them,
+  sweeps nothing and answers unknown (exit 5). Its amounts are exact token units, never floating point.
 - **Revoke ends the permission once it is confirmed on chain.** The owner approves it in their
   wallet: `approve(agent, 0)` on `evm`, `revokeKey` on `tempo`, the SPL `Revoke` on `solana`. It
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds
   already transferred. On `evm`, a purchase whose price was already pulled can still settle, and
   `recover` returns the USDC it can, leaving up to 2 USDC of gas on Arc Testnet. On `tempo`, it does
-  not close payment sessions the key opened elsewhere. On `evm`, `revoke` sends `approve(agent, 0)`
-  every time it is asked, even when the allowance already reads 0: one RPC's read is not proof that
-  nothing is live, and it reports `revoked` only after its own transaction and a read of 0.
+  not close payment sessions the key opened elsewhere. `revoke` sends its transaction every time it
+  is asked, even when the budget already reads empty or revoked: one RPC's read is not proof that
+  nothing is live. On `solana` it sends nothing only when the owner has no USDC account, and on
+  `tempo` only when the keychain refuses a simulated `revokeKey` from the owner as already done; a
+  simulation it cannot read is unknown (exit 5). When it sends a transaction, it reports `revoked`
+  only after its own transaction and a read that shows it. The exception is the `tempo` case just
+  described: the key reads revoked, and the keychain refuses the owner's simulated `revokeKey` with
+  `KeyAlreadyRevoked` or `KeyNotFound`, decoded from the revert data or, without it, named in the
+  RPC's error text. The command then reports `state: "ok"`, `revoked: true` and `tx: {}`, with
+  nothing sent. That is the command's own result. `budget status` says `revoked: true` only for a
+  revoke this machine recorded that the chain still shows (on `tempo`, the keychain's revoked flag):
+  an allowance or delegate that reads 0 is reported as `remaining: "0"`, because spent, never
+  granted, revoked elsewhere and a wrong read all look the same.
 
 Per rail, with what each revoke does not cover:
 [Budget rails and chains](../budget/README.md#safety-model).
@@ -546,13 +605,23 @@ What a compatible site must serve, with both proofs spelled out:
 
 ## What you install
 
-For 0.3.0, use the agent skill zip built from that released commit, once it is available on
-[GitHub Releases](https://github.com/superstables/superstables/releases);
+For 0.4.0, use the agent skill zip attached to the 0.4.0 release on
+[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-0.4.0.zip`;
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with
 a full commit hash builds the client on your machine and runs the repository's build scripts
 there; without a hash, npm installs whatever the default branch holds.
+
+The npm package pins its runtime dependencies to the exact versions its tests ran on, and viem pins
+the packages that sign and hash. Four packages further down (`@noble/ciphers`, `@scure/base`,
+`@adraffy/ens-normalize`, and zod 3 under `@x402/core` and `@x402/evm`) may still resolve to a
+newer compatible version; the project's nightly install check fails when an install no longer
+matches the tested set. `dist/sbom.cdx.json` in the package and `scripts/sbom.cdx.json` in the skill
+zip list every package the client installs or bundles, including the bundled Solana and Tempo
+libraries that `npm audit` on your machine cannot see. Two builds of one commit are identical
+([checking a build](install.md#checking-a-build-against-its-commit)). The package is not published
+with npm provenance, so nothing on the registry ties it to a commit: rebuilding it is the check.
 
 ## Replacing a key
 

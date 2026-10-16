@@ -13,9 +13,11 @@ import {
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { CFG, type GasOp } from "./chains.ts";
 import { EVM_CHAINS } from "./chains.mjs";
+import { EVM_RPC_MAX_BYTES, cappedRpcFetch } from "../rpc.mjs";
 import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
+import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 
 export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
@@ -41,10 +43,11 @@ export function emit(command: string, exit: number, o: Record<string, unknown>):
   return exit;
 }
 /**
- * Seller text (its 402, its answer, its errors) on one log line: control characters, newlines included, become spaces. A seller
- * must not be able to start a line of its own on stdout, where the dispatcher reads APPROVE and RESULT lines.
+ * Seller text (its 402, its answer, its errors) on one log line, at most `max` characters: control characters, newlines
+ * included, become spaces; format, bidi and Unicode tag characters are removed. A seller must not be able to start a line of
+ * its own on stdout, where the dispatcher reads APPROVE and RESULT lines. The same rule as untrustedText (src/core/text.ts).
  */
-export const oneLine = (s: unknown, max = 300): string => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim().slice(0, max);
+export const oneLine = (s: unknown, max = 300): string => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, "").trim().slice(0, max);
 /** A command line for a next step, with this chain selected. */
 export const cmd = (script: string, rest = "") => `superstables budget ${script.replace(/\.ts$/, "")} --rail evm --chain ${CFG.key}${rest ? ` ${rest}` : ""}`;
 
@@ -158,8 +161,10 @@ export function writePublic(updates: Record<string, string>, drop: string[] = []
 export const newKey = () => generatePrivateKey();
 
 // ---- clients ----
-// every request passes markSend: a broadcast prints SENDING before it leaves (../proof.mjs)
-const transport = () => http(RPC, { retryCount: 5, retryDelay: 400, onFetchRequest: (_request, init) => markSend(init.body) });
+// every request passes markSend: a broadcast prints SENDING before it leaves (../proof.mjs). Every answer is read through
+// cappedRpcFetch (../rpc.mjs): at most EVM_RPC_MAX_BYTES, RPC error text as one short line, a non-JSON answer named so.
+const rpcFetch = cappedRpcFetch(EVM_RPC_MAX_BYTES);
+const transport = () => http(RPC, { retryCount: 5, retryDelay: 400, onFetchRequest: (_request, init) => markSend(init.body), fetchFn: rpcFetch, maxResponseBodySize: EVM_RPC_MAX_BYTES });
 export const publicClient = createPublicClient({ chain, transport: transport() });
 export const walletFor = (key: Hex, opts?: { nonceManager?: NonceManager }) => {
   const account = privateKeyToAccount(key, opts?.nonceManager ? { nonceManager: opts.nonceManager } : undefined);
@@ -209,8 +214,37 @@ export function chainReason(e: any): string {
     for (const k of ["reason", "shortMessage", "details"]) if (typeof cur?.[k] === "string" && !parts.includes(cur[k])) parts.push(cur[k]);
   }
   const m = parts.join(" | ") || String(e?.message ?? e);
-  return m.replace(/\s+/g, " ").slice(0, 400);
+  // the revert reason an RPC sent as ABI data is decoded into viem's `reason` and message: outside text, on one line and
+  // without hidden characters like any other (oneLine). The structured data (`revertData`) is not touched.
+  return oneLine(m.replace(/\s+/g, " "), 400);
 }
+
+// A crash prints the library's error, which can carry an RPC's words (viem decodes revert data into its message and
+// reason): one line, no hidden characters, like any outside text. The owner page's handler (owner-page.ts), once
+// installed, prints and exits itself.
+// The RPC's own words ("details") come first: they are what names the failure (the answer was not JSON, the call reverted),
+// and the dispatcher takes the first words after "error:" as the command's reason.
+function crashText(err: any): string {
+  const parts: string[] = [];
+  let cur = err;
+  for (let i = 0; i < 8 && cur; i++, cur = cur.cause) {
+    for (const k of ["details", "reason", "shortMessage"]) if (typeof cur?.[k] === "string" && !parts.includes(cur[k])) parts.push(cur[k]);
+  }
+  return oneLine((parts.join(" | ") || String(err?.message ?? err)).replace(/\s+/g, " "), 400);
+}
+// Every rail's crash handler carries this mark (the Solana library's too). A handler steps aside for any listener that is
+// not marked (the owner page's) and, when several marked ones are loaded in one process, for all but the first.
+const RAIL_CRASH_HANDLER = Symbol.for("superstables.railCrashHandler");
+const crashHandler = Object.assign(
+  (err: unknown) => {
+    const listeners = process.listeners("uncaughtException") as ((...a: unknown[]) => unknown)[];
+    if (listeners.some((l) => !(l as any)[RAIL_CRASH_HANDLER]) || listeners.find((l) => (l as any)[RAIL_CRASH_HANDLER]) !== crashHandler) return;
+    process.stderr.write(`error: ${crashText(err)}\n`);
+    process.exit(1);
+  },
+  { [RAIL_CRASH_HANDLER]: true },
+);
+process.on("uncaughtException", crashHandler);
 
 // ---- gas the agent can pay ----
 // Before the agent signs anything (pull, cancel, return, selfRevoke) it checks it can pay: the chain's gas limit for that
@@ -336,6 +370,11 @@ export async function agentGasFor(from: Address, to: Address, data: Hex, op: Gas
 /** Refuse to sign anything when the RPC does not answer for the chain in chains.ts (a mainnet RPC behind a testnet name, a wrong URL). Read once. */
 let rpcChecked = false;
 export async function assertRpcChain() {
+  const gate = chainGate({ rail: "evm", key: CFG.key, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet }, chainGateSettings());
+  if (gate) {
+    console.error(`REFUSED: ${gate}. Nothing was signed or sent.`);
+    process.exit(3);
+  }
   if (rpcChecked) return;
   const id = Number(await retry(() => publicClient.request({ method: "eth_chainId" })));
   if (id !== CFG.chainId) {

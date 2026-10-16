@@ -39,6 +39,7 @@ import {
   type OwnerPageFacts,
   type OwnerTerms,
 } from "./owner-approval-page.js";
+import { untrustedText } from "../text.js";
 
 export type { OwnerChain, OwnerTerms, OwnerTermRow } from "./owner-approval-page.js";
 
@@ -231,8 +232,10 @@ export class OwnerApprovalServer {
     if (this.server) return;
     const server = createServer((req, res) => {
       void this.handle(req, res).catch((err: Error) => {
+        // the detail goes to the command's error output, not to the page: it can name files and internal state
+        process.stderr.write(`owner page: a request failed: ${untrustedText(err?.message ?? err, 300)}\n`);
         if (res.headersSent) return void res.end();
-        this.json(res, 500, { error: `the owner page could not handle that: ${err.message}` });
+        this.json(res, 500, { error: "the owner page could not handle that request; the command's error output says why" });
       });
     });
     await new Promise<void>((resolve, reject) => {

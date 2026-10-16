@@ -8,6 +8,7 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import { finalityFor } from "../src/core/finality-policy.js";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { DEFAULT_RPC, jsonRpc, rpcFromEnv } from "./rpc.mjs";
+import { siteText } from "./site.mjs";
 
 /** topic0 of ERC-20 and TIP-20 Transfer(address indexed from, address indexed to, uint256 value). */
 export const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
@@ -96,7 +97,7 @@ export async function readSettlement({ rail, chain, tx, payer, payTo, asset, amo
   } catch (e) {
     // a call cut short by the deadline is said as such, not as an RPC error
     if (deadline !== undefined && Date.now() >= deadline - 50) return { state: "unread", reason: "the chain did not answer before this command's deadline" };
-    return { state: "unread", reason: `the chain could not be read (${String(e?.message ?? e).split("\n")[0].slice(0, 160)})` };
+    return { state: "unread", reason: `the chain could not be read (${siteText(e?.message ?? e, 160)})` };
   }
 }
 

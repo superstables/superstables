@@ -22,7 +22,7 @@ import { verifyEd25519 } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { DEFAULT_SITE } from "../site.mjs";
 import { DEFAULT_RPC } from "../rpc.mjs";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, clusterProblem, formatUnits, parseEnvFile, retryRead, sleep } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, clusterProblem, formatUnits, oneLine, parseEnvFile, retryRead, sleep } from "./lib.mjs";
 
 export { closeOwnerPage };
 
@@ -318,8 +318,8 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
       } catch (err) {
         // any error, the RPC's own refusal included, leaves it tracked: once it left this machine only the chain says
         // whether it landed
-        const text = String((err as Error)?.message ?? err);
-        log(`the send answered with an error (${text.slice(0, 160)}); it may have gone out, the command reads the chain`);
+        const text = oneLine((err as Error)?.message ?? err, 160);
+        log(`the send answered with an error (${text}); it may have gone out, the command reads the chain`);
       }
       return { status: "sent", hash: sig };
     },

@@ -66,9 +66,12 @@ describe("evaluatePolicy", () => {
     expect(verdict.reason).toContain("caps.per_day");
   });
 
-  it("does not guess at the daily total when it is unknown", () => {
+  it("refuses when today's spending is unknown", () => {
     const p = policy({ perDay: { amount: 0.001, asset: "USDC" } });
-    expect(evaluatePolicy(p, { domain: "x.example.com", amountDecimal: 0.01, asset: "USDC" }).allowed).toBe(true);
+    expect(evaluatePolicy(p, { domain: "x.example.com", amountDecimal: 0.01, asset: "USDC" })).toEqual({
+      allowed: false,
+      reason: "today's spending is unknown, so caps.per_day (0.001 USDC) cannot be checked",
+    });
   });
 });
 
@@ -105,8 +108,8 @@ describe("the assets pay pays in", () => {
 describe("parsePolicy", () => {
   it("reads the documented file", () => {
     const p = parsePolicy(`caps:\n  per_call: 0.02 USDC\n  per_day: 0.5 USDC\ndeny: ["*.example.net"]\n`);
-    expect(p.perCall).toEqual({ amount: 0.02, asset: "USDC" });
-    expect(p.perDay).toEqual({ amount: 0.5, asset: "USDC" });
+    expect(p.perCall).toEqual({ amount: 0.02, asset: "USDC", atomic: "20000" });
+    expect(p.perDay).toEqual({ amount: 0.5, asset: "USDC", atomic: "500000" });
     expect(p.deny).toEqual(["*.example.net"]);
     expect(p.approval).toBe("ask-every-payment");
   });
@@ -116,8 +119,8 @@ describe("parsePolicy", () => {
   });
 
   it("reads an amount with or without an asset", () => {
-    expect(parseMoney("0.25")).toEqual({ amount: 0.25, asset: "USDC" });
-    expect(parseMoney("1 EURC")).toEqual({ amount: 1, asset: "EURC" });
+    expect(parseMoney("0.25")).toEqual({ amount: 0.25, asset: "USDC", atomic: "250000" });
+    expect(parseMoney("1 EURC")).toEqual({ amount: 1, asset: "EURC", atomic: "1000000" });
     expect(() => parseMoney("free")).toThrow();
   });
 });
@@ -136,7 +139,7 @@ describe("parsePolicy, strictly", () => {
 
   it("fills a cap the file does not set from the defaults", () => {
     const p = parsePolicy("caps:\n  per_call: 0.02\n");
-    expect(p.perCall).toEqual({ amount: 0.02, asset: "USDC" });
+    expect(p.perCall).toEqual({ amount: 0.02, asset: "USDC", atomic: "20000" });
     expect(p.perDay).toEqual(DEFAULT_POLICY.perDay);
     expect(parsePolicy("caps:\n  per_day: 5 USDC\n").perCall).toEqual(DEFAULT_POLICY.perCall);
     expect(parsePolicy("caps:\n  per_call:\n  per_day:\n").perDay).toEqual(DEFAULT_POLICY.perDay);
@@ -177,8 +180,8 @@ describe("parsePolicy, strictly", () => {
   });
 
   it("keeps the amounts it always read", () => {
-    expect(parsePolicy("caps:\n  per_call: 0,02 USDC\n").perCall).toEqual({ amount: 0.02, asset: "USDC" });
-    expect(parsePolicy("caps:\n  per_call: 0\n").perCall).toEqual({ amount: 0, asset: "USDC" });
+    expect(parsePolicy("caps:\n  per_call: 0,02 USDC\n").perCall).toEqual({ amount: 0.02, asset: "USDC", atomic: "20000" });
+    expect(parsePolicy("caps:\n  per_call: 0\n").perCall).toEqual({ amount: 0, asset: "USDC", atomic: "0" });
     expect(parsePolicy("kill_switch: true\n").killSwitch).toBe(true);
     expect(parsePolicy("kill_switch: false\n").killSwitch).toBe(false);
   });

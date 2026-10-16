@@ -1745,7 +1745,7 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/solana/buy.mjs", has: '"own transaction failed on chain"', why: SOLANA_PURCHASE },
   { file: "budget/solana/buy.mjs", has: "{ tx: own.sig, delivered: false, next:", why: SOLANA_PURCHASE },
   { file: "budget/solana/buy.mjs", has: '"own transaction landed and failed"', why: SOLANA_PURCHASE },
-  { file: "budget/solana/buy.mjs", has: "reason: JSON.stringify(assessment.err)", why: SOLANA_PURCHASE },
+  { file: "budget/solana/buy.mjs", has: "reason: oneLine(JSON.stringify(assessment.err), 300)", why: SOLANA_PURCHASE },
   { file: "budget/solana/reconcile.mjs", has: "reconcile: own transaction failed on chain", why: SOLANA_PURCHASE },
   { file: "budget/solana/reconcile.mjs", has: 'emit(result("failed"', why: SOLANA_PURCHASE },
   { file: "budget/solana/revokeBudget.ts", has: "The chain still shows delegate", why: AFTER_SEND_UNPROVEN },

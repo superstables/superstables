@@ -262,8 +262,9 @@ Choosing a compatible site is an advanced API option; `--hosted` does not deploy
 
 Run by an agent (stdout is not a terminal), an owner command that needs the wallet does not wait
 for the owner. It returns in seconds with an `APPROVE` line and a `RESULT` whose `state` is
-`waiting_owner` and `final` is `false`, exit 0. A command that needs no wallet, such as a revoke on `tempo` or `solana`
-with nothing to revoke, returns its final result at once. `--wait` makes it block instead:
+`waiting_owner` and `final` is `false`, exit 0. A command that ends before the wallet is needed, such as a revoke on
+`tempo` of a key the keychain confirms is already revoked, or on `solana` when the owner has no USDC account, returns
+its final result at once. `--wait` makes it block instead:
 
 ```
 RESULT {"ok":true,"command":"grant",...,"state":"waiting_owner","final":false,"chain_final":null,"id":"oa-20261001231446-3c6ea55b","url":"http://127.0.0.1:33847/owner/013825489bc9de0494cd76603c7ff9e6","expires":"2026-10-01T23:15:10.110Z","terms":{...},"next":"show the owner the exact url and terms; ..."}

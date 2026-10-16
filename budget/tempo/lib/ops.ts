@@ -1,7 +1,7 @@
 // Operation journal (contract rule 5). One JSON file per operation under
 // $SUPERSTABLES_HOME/budget/ops/tempo-moderato/<id>.json (../../paths.mjs), outside the code folder. It is written
 // BEFORE anything is signed or submitted (intent) and updated after (tx, state). It holds no key.
-import { readJournalFile, writeJournalFile } from '../../journal.mjs'
+import { readJournalFile, tempoOpProblem, writeJournalFile } from '../../journal.mjs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { opsDir } from '../../paths.mjs'
@@ -56,7 +56,8 @@ export type Op = {
   history: { at: string; state: OpState; note?: string }[]
 }
 
-export const newOpId = () => `tempo-${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}-${randomBytes(3).toString('hex')}`
+// 64 random bits: an op id names a journal and its locks, and must neither collide nor be guessed
+export const newOpId = () => `tempo-${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}-${randomBytes(8).toString('hex')}`
 
 const pathFor = (id: string) => {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new Error(`bad operation id ${JSON.stringify(id)}`)
@@ -64,7 +65,7 @@ const pathFor = (id: string) => {
 }
 
 export function readOp(id: string): Op | undefined {
-  return (readJournalFile(pathFor(id), id) ?? undefined) as Op | undefined
+  return (readJournalFile(pathFor(id), id, tempoOpProblem) ?? undefined) as Op | undefined
 }
 
 export function writeOp(op: Op, note?: string): Op {

@@ -51,7 +51,7 @@ interface NetworkCommon {
 export interface EvmNetwork extends NetworkCommon {
   rail: "evm";
   usdc: { address: `0x${string}`; decimals: number; eip712: { name: string; version: string } };
-  /** About how many seconds pass between blocks: where a search for a block by its time starts. Never relied on. */
+  /** About how many seconds pass between blocks: where a search for a block by its time starts, and how many blocks a log search reads (a day's worth). A wrong value costs a search time or reach, never a wrong answer. */
   blockSeconds: number;
   /** The most blocks one eth_getLogs asks the public RPC for (the budget's logRange where it names one). */
   logRange: number;
@@ -83,6 +83,8 @@ function evm(input: {
   key: string;
   chainId: number;
   label: string;
+  /** Whether the chain is a testnet. Stated by each entry: the chain gate (./chain-gate.js) signs on testnets only. */
+  testnet: boolean;
   v1Name?: string;
   rpc: string;
   defaultRpc?: string;
@@ -104,7 +106,7 @@ function evm(input: {
     v1Name: input.v1Name ?? "",
     chainId: input.chainId,
     label: input.label,
-    testnet: true,
+    testnet: input.testnet,
     explorer: input.explorer,
     rpc: input.rpc,
     defaultRpc: input.defaultRpc ?? input.rpc,
@@ -122,6 +124,7 @@ export const BASE_SEPOLIA: EvmNetwork = evm({
   key: "base-sepolia",
   chainId: 84532,
   label: "Base Sepolia (testnet)",
+  testnet: true,
   v1Name: "base-sepolia",
   rpc: process.env.SUPERSTABLES_RPC_URL ?? "https://sepolia.base.org",
   defaultRpc: "https://sepolia.base.org",
@@ -132,7 +135,8 @@ export const BASE_SEPOLIA: EvmNetwork = evm({
   chainName: "Base Sepolia",
   nativeCurrency: ETHER,
   blockSeconds: 2,
-  logRange: 1_000,
+  // sepolia.base.org refuses eth_getLogs over more than 200 blocks (error -32614, 14 Oct 2026).
+  logRange: 200,
 });
 
 /** Circle's Arc Testnet: USDC is also the gas token there, with 18 decimals natively (the ERC-20 interface has 6). */
@@ -140,6 +144,7 @@ export const ARC_TESTNET: EvmNetwork = evm({
   key: "arc-testnet",
   chainId: 5042002,
   label: "Arc Testnet",
+  testnet: true,
   rpc: "https://rpc.testnet.arc.network",
   explorer: "https://explorer.testnet.arc.io",
   usdc: "0x3600000000000000000000000000000000000000",
@@ -153,6 +158,7 @@ export const ARBITRUM_SEPOLIA: EvmNetwork = evm({
   key: "arbitrum-sepolia",
   chainId: 421614,
   label: "Arbitrum Sepolia (testnet)",
+  testnet: true,
   rpc: "https://sepolia-rollup.arbitrum.io/rpc",
   explorer: "https://sepolia.arbiscan.io",
   usdc: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
@@ -166,6 +172,7 @@ export const POLYGON_AMOY: EvmNetwork = evm({
   key: "polygon-amoy",
   chainId: 80002,
   label: "Polygon Amoy (testnet)",
+  testnet: true,
   v1Name: "polygon-amoy",
   rpc: "https://polygon-amoy-bor-rpc.publicnode.com",
   explorer: "https://amoy.polygonscan.com",
@@ -181,6 +188,7 @@ export const SKALE_BASE_SEPOLIA: EvmNetwork = evm({
   key: "skale-base-sepolia",
   chainId: 324705682,
   label: "SKALE Base Sepolia (testnet)",
+  testnet: true,
   v1Name: "skale-base-sepolia",
   rpc: "https://base-sepolia-testnet.skalenodes.com/v1/jubilant-horrible-ancha",
   explorer: "https://base-sepolia-testnet-explorer.skalenodes.com",
@@ -197,6 +205,7 @@ export const ETHEREUM_SEPOLIA: EvmNetwork = evm({
   key: "ethereum-sepolia",
   chainId: 11155111,
   label: "Ethereum Sepolia (testnet)",
+  testnet: true,
   v1Name: "sepolia",
   rpc: "https://ethereum-sepolia-rpc.publicnode.com",
   explorer: "https://sepolia.etherscan.io",
@@ -213,6 +222,7 @@ export const ROBINHOOD_TESTNET: EvmNetwork = evm({
   key: "robinhood-testnet",
   chainId: 46630,
   label: "Robinhood Chain Testnet",
+  testnet: true,
   rpc: "https://rpc.testnet.chain.robinhood.com",
   explorer: "https://explorer.testnet.chain.robinhood.com",
   usdc: "0x7E955252E15c84f5768B83c41a71F9eba181802F",
@@ -371,12 +381,40 @@ export function addressUrl(network: string, address: string): string {
   return known ? `${known.explorer}/address/${address}${known.explorerQuery ?? ""}` : address;
 }
 
+/** Rounds through floating point: for display and the demo seller's price only. Limits use toAtomicExact. */
 export function toAtomic(amountDecimal: number, decimals = 6): string {
   return String(Math.round(amountDecimal * 10 ** decimals));
 }
 
+/** Rounds through floating point: for display and the demo seller's price only. Limits use toAtomicExact. */
 export function fromAtomic(amountAtomic: string, decimals = 6): number {
   return Number(amountAtomic) / 10 ** decimals;
+}
+
+/**
+ * A decimal amount as written ("0.05", "12", "0.000001") as a whole number of the token's smallest units, exactly.
+ * Throws on anything else: a sign, an exponent, a hex or octal spelling, a missing digit before or after the point,
+ * whitespace, or more fractional digits than the token has. Never rounds.
+ */
+export function toAtomicExact(amount: string, decimals: number): bigint {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 77) throw new Error("not a number of decimals");
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(amount);
+  if (!match) throw new Error("not a decimal amount");
+  const fraction = match[2] ?? "";
+  if (fraction.length > decimals) throw new Error(`more than ${decimals} decimal places`);
+  return BigInt(match[1]) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, "0") || "0");
+}
+
+/** A whole number of smallest units as the shortest decimal: 100000n at 6 decimals is "0.1", 0n is "0". Never a float. */
+export function fromAtomicString(atomic: bigint | string, decimals: number): string {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 77) throw new Error("not a number of decimals");
+  if (typeof atomic === "string" && !/^\d+$/.test(atomic)) throw new Error("not a whole number of base units");
+  const units = BigInt(atomic);
+  if (units < 0n) throw new Error("not a whole number of base units");
+  const digits = units.toString().padStart(decimals + 1, "0");
+  const whole = digits.slice(0, digits.length - decimals);
+  const fraction = digits.slice(digits.length - decimals).replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole;
 }
 
 const ERC20_BALANCE_OF = [

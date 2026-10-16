@@ -113,6 +113,38 @@ the bundled packages and their licences.
 
 `superstables --version` names the build that is running.
 
+### Checking a build against its commit
+
+The npm package and the skill zip each carry a CycloneDX 1.5 software bill of materials:
+`dist/sbom.cdx.json` in the package, `scripts/sbom.cdx.json` in the skill. It lists every third-party
+package the client installs or bundles, with its version, licence, the npm tarball it came from and
+that tarball's SHA-512. Most of the budget's Solana and Tempo code is bundled, so `npm audit` in a
+project that installs the client does not see it; give the SBOM to a scanner that reads CycloneDX to
+check those packages too.
+
+A build is dated with its commit's time, not the time it ran, and ships no source maps, so two
+builds of the same commit give the same files. To check a release against its source, build its
+commit the way the release does:
+
+```bash
+git clone https://github.com/superstables/superstables.git
+cd superstables
+git checkout --detach <commit>
+node scripts/repro-check.mjs
+```
+
+It builds the commit twice from `git archive` exports, with `npm ci`, `npm run skill` and
+`npm pack`, and prints the SHA-256 of the skill zip, the npm tarball and the tarball's uncompressed
+contents. Compare the zip's checksum with `sha256sum` of the zip from GitHub Releases. For npm,
+download the published tarball with `npm pack @superstables/client@<version>` and compare
+`gzip -dc <file>.tgz | sha256sum` with the uncompressed figure: different npm versions compress the
+same files differently.
+
+The tarball records file modes, and they follow the umask of the shell that builds it: under the
+common defaults (`022` and `002`) every file is packed as `0644`, but under `077` the same commit
+gives a different tarball. `repro-check` sets its own umask for its builds. If you build the
+release yourself some other way, do it under `umask 022`.
+
 ## Set up
 
 For `pay`, the owner runs `setup` once; Single purchase on superstables.com and budgets don't need it. It creates `~/.superstables`, writes a starting spend
@@ -125,7 +157,7 @@ superstables setup
 superstables doctor
 ```
 
-`doctor` checks the machine, one line per item: that the home directory and policy are in place,
+`doctor` checks the machine, one line per item: that the home directory, the payment records and the policy are in place,
 which account last connected, that the approval port is free, and that the demo service, the
 index and the facilitators answer:
 
@@ -134,6 +166,7 @@ index and the facilitators answer:
   home                     /home/you/.superstables
 
 ✓ home directory           /home/you/.superstables (writable)
+✓ payment records          /home/you/.superstables/records: every line reads
 ✓ spend policy             /home/you/.superstables/policy.yaml: up to 0.05 USDC per payment, 1 USDC per day
 ✓ browser wallet           no account connected yet: MetaMask connects when the first approval link opens
 ✓ approval page            http://127.0.0.1:4412 is free; the agent serves the page itself

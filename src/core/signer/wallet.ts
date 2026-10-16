@@ -3,11 +3,13 @@
 // Every outcome that is not a signature is a refusal with a reason, never an exception the
 // caller has to guess at — "the owner said no" is an answer, and the agent should say it.
 
-import { readFileSync } from "node:fs";
 import { agentTokenPath, walletUrl } from "../home.js";
+import { readBody } from "../http.js";
+import { untrustedText } from "../text.js";
 import { evmNetworkFor, networkFor } from "../chain.js";
 import type { WalletRequestView, WalletStatus } from "../types.js";
 import { LOCAL_WALLET_EVM_ONLY, SignRefused, type Eip3009SignResult, type SignHooks, type SignRequest, type Signer } from "./types.js";
+import { readSecretFile } from "../../wallet/keystore.js";
 
 export interface WalletSignerOptions {
   /** Where the wallet is listening. Loopback only in this release. */
@@ -31,6 +33,8 @@ const DEFAULT_POLL_MS = 500;
 const DEFAULT_TIMEOUT_MS = 130_000;
 /** Per-request timeout: the wallet is local, so a slow answer means something is wrong. */
 const HTTP_TIMEOUT_MS = 10_000;
+/** The most read of one answer from the wallet: its views and status are a few KB. */
+const WALLET_MAX_BYTES = 256 * 1024;
 
 /** Everything needed to talk to the wallet, resolved once per signer. */
 interface WalletWire {
@@ -48,10 +52,13 @@ function wireFor(options: WalletSignerOptions): WalletWire {
       if (options.agentToken !== undefined) return options.agentToken;
       const fromEnv = process.env.SUPERSTABLES_WALLET_AGENT_TOKEN;
       if (fromEnv) return fromEnv;
+      // One open, checked on what it opened: a regular file only this user can read. A FIFO would stop every command for
+      // good, and a token other users can read is not sent.
       try {
-        return readFileSync(agentTokenPath(), "utf8").trim();
-      } catch {
-        return "";
+        return readSecretFile(agentTokenPath(), "the wallet's agent token").trim();
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+        throw new SignRefused("unavailable", `${(err as Error).message}; the token was not sent`);
       }
     },
     fetchImpl,
@@ -74,18 +81,23 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof SignRefused) throw err;
     throw new SignRefused("unavailable", WALLET_DOWN);
   }
   if (res.status === 401 || res.status === 403 || res.status >= 500) {
     throw new SignRefused("unavailable", WALLET_DOWN);
   }
   if (!res.ok) {
-    const text = (await res.text().catch(() => "")).slice(0, 200);
-    throw new SignRefused("invalid", `the wallet refused the request (HTTP ${res.status})${text ? `: ${text}` : ""}`);
+    const { text } = await readBody(res, 200, HTTP_TIMEOUT_MS);
+    const said = untrustedText(text, 200);
+    throw new SignRefused("invalid", `the wallet refused the request (HTTP ${res.status})${said ? `: ${said}` : ""}`);
   }
+  // more than the cap, cut off, or late: not an answer from this wallet
+  const { text, end } = await readBody(res, WALLET_MAX_BYTES, HTTP_TIMEOUT_MS, WALLET_MAX_BYTES + 1);
+  if (end !== "eof") throw new SignRefused("unavailable", WALLET_DOWN);
   try {
-    return (await res.json()) as T;
+    return JSON.parse(text) as T;
   } catch {
     throw new SignRefused("unavailable", WALLET_DOWN);
   }

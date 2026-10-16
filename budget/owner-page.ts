@@ -28,7 +28,7 @@ import { ownerApprovalsLog } from "./paths.mjs";
 import { HOLDER_ENV, recordHosted } from "./approvals.mjs";
 import { sendBegan } from "./proof.mjs";
 import { HOSTED_KIND, HostedApprovals, HostedRefusal, type HostedBundleOutcome, type HostedSettings, type HostedStep, type PriorLink } from "./hosted.ts";
-import { isOtherSite, siteName, siteOrigin } from "./site.mjs";
+import { isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
 
 const argv = process.argv.slice(2);
 const argValue = (name: string) => {
@@ -122,7 +122,8 @@ export async function exitAfterError(): Promise<never> {
   process.exit(1);
 }
 const crashed = (err: unknown) => {
-  process.stderr.write(`${(err as Error)?.stack ?? String(err)}\n`);
+  // a library error carries an RPC's words (viem decodes revert data into its message): one line, no hidden characters
+  process.stderr.write(`${siteText((err as Error)?.stack ?? String(err), 4_000)}\n`);
   void exitAfterError();
 };
 

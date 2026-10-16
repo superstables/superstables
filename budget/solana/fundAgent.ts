@@ -10,7 +10,7 @@
 // Exit codes: 0 sent, 1 failed on chain or never landed, 2 bad flags, 3 refused (too little SOL, the owner rejected or the link
 // expired) or a mismatch (the transaction moved another amount), 5 unknown (read the chain).
 import { SystemProgram, Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
-import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, parseUnits, parseStrict, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
+import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, oneLine, explorerTx, parseUnits, parseStrict, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort } from "./owner.ts";
@@ -91,7 +91,7 @@ if (OWNER_KEY_FILE) {
     const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
     handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The transfer is not confirmed. Check the command result and wallet activity before retrying.`, hash: sig });
     await closeOwnerPage();
-    process.exit(result(1, { state: "failed", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget doctor --rail solana" }));
+    process.exit(result(1, { state: "failed", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${oneLine(JSON.stringify(c.err), 300)})`, next: "superstables budget doctor --rail solana" }));
   }
   if (c.problems.length) {
     const reason = mismatchReason(c.problems, c.siteFailed, sig);

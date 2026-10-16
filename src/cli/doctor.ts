@@ -20,6 +20,7 @@ import { join, resolve } from "node:path";
 import { DEFAULT_NETWORK } from "../core/chain.js";
 import { HOSTED_DEMO_SERVICE_URL, indexUrl } from "../core/discovery.js";
 import { FACILITATORS } from "../core/facilitator.js";
+import { readBody } from "../core/http.js";
 import {
   DEFAULT_APPROVE_PORT,
   accountPolicyPath,
@@ -28,11 +29,14 @@ import {
   ensureDir,
   homeDir,
   policyPath,
+  recordsDir,
   walletDir,
   walletUrl,
 } from "../core/home.js";
 import { loadOptionalPolicy, loadPolicy } from "../core/policy.js";
 import { clientVersion } from "../core/version.js";
+import { privateDirProblem } from "../core/private-dir.mjs";
+import { Records } from "../core/records.js";
 import { walletStatus } from "../core/signer/wallet.js";
 import { policySummary } from "../wallet/daemon.js";
 import { keyExists, keyPath } from "../wallet/keystore.js";
@@ -72,8 +76,8 @@ export async function runDoctor(mode: WalletMode = walletModeFromEnvironment()):
   const offline = doctorIsOffline();
   const checks: Check[] =
     mode === "browser"
-      ? [homeCheck(), policyCheck(), ...accountPolicyCheck(), browserWalletCheck(), await approvalPageCheck()]
-      : [homeCheck(), policyCheck(), ...accountPolicyCheck(), keyCheck(), await walletCheck()];
+      ? [homeCheck(), recordsCheck(), policyCheck(), ...accountPolicyCheck(), browserWalletCheck(), await approvalPageCheck()]
+      : [homeCheck(), recordsCheck(), policyCheck(), ...accountPolicyCheck(), keyCheck(), await walletCheck()];
 
   if (offline) {
     for (const name of ["demo service", "Superstables index", ...FACILITATORS.map(hostOf)]) {
@@ -128,6 +132,28 @@ function homeCheck(): Check {
     return { name: "home directory", ok: true, detail: `${dir} (writable)`, essential: true };
   } catch (err) {
     return { name: "home directory", ok: false, detail: `${dir} is not writable: ${messageOf(err)}`, essential: true };
+  }
+}
+
+/** The payment records: a private folder, every line readable. Reported, not enforced: a payment can still be made. */
+function recordsCheck(): Check {
+  const name = "payment records";
+  const dir = recordsDir();
+  const problem = privateDirProblem(dir, { root: homeDir() });
+  if (problem) return { name, ok: false, detail: problem, essential: false };
+  if (!existsSync(dir)) return { name, ok: true, detail: `${dir}: none yet`, essential: false };
+  try {
+    const skipped = new Records(dir).skippedLines();
+    if (skipped.length === 0) return { name, ok: true, detail: `${dir}: every line reads`, essential: false };
+    const n = skipped.reduce((sum, s) => sum + s.lines, 0);
+    return {
+      name,
+      ok: false,
+      essential: false,
+      detail: `${n} unreadable line${n === 1 ? "" : "s"} (${skipped.map((s) => `${s.lines} in ${s.file}`).join(", ")}) in ${dir}: they are skipped, so a payment written there is not shown and does not count toward the daily cap`,
+    };
+  } catch (err) {
+    return { name, ok: false, detail: `${dir} could not be read: ${messageOf(err)}`, essential: false };
   }
 }
 
@@ -293,16 +319,22 @@ function facilitatorChecks(): Promise<Check[]> {
   return Promise.all(FACILITATORS.map(facilitatorCheck));
 }
 
+/** The most read of a facilitator's /supported answer: the networks and schemes it settles, a few KB. */
+const SUPPORTED_MAX_BYTES = 256 * 1024;
+
 async function facilitatorCheck(url: string): Promise<Check> {
   const name = hostOf(url);
   try {
     const res = await timedFetch(`${url}/supported`, { headers: { accept: "application/json" } });
     if (!res.ok) return { name, ok: false, detail: `answered HTTP ${res.status} on /supported`, essential: false };
-    const body = (await res.json()) as { kinds?: { network?: string; scheme?: string }[] };
-    const kinds = body.kinds ?? [];
-    const supported = kinds.some(
-      (kind) => kind.network === DEFAULT_NETWORK.caip2 || kind.network === DEFAULT_NETWORK.v1Name,
-    );
+    // read up to the cap, within the same five seconds: a longer answer is not a capability list this check reads
+    const { text, end } = await readBody(res, SUPPORTED_MAX_BYTES, CHECK_TIMEOUT_MS, SUPPORTED_MAX_BYTES + 1);
+    if (end === "cap") return { name, ok: false, detail: `answered /supported with more than ${SUPPORTED_MAX_BYTES / 1024} KB`, essential: false };
+    if (end !== "eof") return { name, ok: false, detail: "did not finish answering /supported", essential: false };
+    let body: { kinds?: unknown } | null;
+    try { body = JSON.parse(text); } catch { return { name, ok: false, detail: "answered /supported, but not with JSON", essential: false }; }
+    const kinds = Array.isArray(body?.kinds) ? (body.kinds as { network?: unknown }[]) : [];
+    const supported = kinds.some((kind) => kind?.network === DEFAULT_NETWORK.caip2 || kind?.network === DEFAULT_NETWORK.v1Name);
     return supported
       ? { name, ok: true, detail: `settles exact payments on ${DEFAULT_NETWORK.label}`, essential: false }
       : { name, ok: false, detail: `answered, but does not list ${DEFAULT_NETWORK.caip2}`, essential: false };
