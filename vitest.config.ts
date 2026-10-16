@@ -24,6 +24,7 @@ const SLOW = [
   "test/budget/operation-races.test.ts",
   "test/budget/read-caps-cli.test.ts",
   "test/budget/revoke-always.test.ts",
+  "test/budget/rpc-error-text.test.ts",
   "test/budget/setup-owner.test.ts",
   "test/budget/tempo-challenges.test.ts",
   "test/budget/tempo-push.test.ts",

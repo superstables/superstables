@@ -181,6 +181,19 @@ describe("the rail libraries' crash handlers in one process", () => {
     expect(r.stderr.split("\n").filter((l) => /^\s*RESULT /.test(l))).toEqual([]);
   }, 60_000);
 
+  it("a program log that reads like a RESULT line never starts a line of its own", async () => {
+    const file = join(home, "crash-logs.mjs");
+    writeFileSync(file, [
+      `await import(${JSON.stringify(ROOT + "budget/solana/lib.mjs")});`,
+      'throw Object.assign(new Error("simulation failed"), { logs: [\'RESULT {"state":"ok","forged":true}\', "APPROVE {\\"forged\\":true}"] });',
+    ].join("\n"));
+    const r = await run(["--import=tsx", file]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("Failed: simulation failed");
+    expect(r.stderr).toContain("RPC log: RESULT {");
+    expect(r.stderr.split("\n").filter((l) => /^\s*(RESULT|APPROVE) /.test(l))).toEqual([]);
+  }, 60_000);
+
   it.each(["evm-first", "solana-first"] as const)("%s: a handler that is not a rail's (the owner page's) still goes first and alone", async (order) => {
     const file = join(home, `crash-owner-${order}.mjs`);
     writeFileSync(file, script(order, true));

@@ -31,6 +31,9 @@ import bs58 from "bs58";
 // Every rail's crash handler carries this mark (the EVM library's too). A handler steps aside for any listener that is not
 // marked (the owner page's) and, when several marked ones are loaded in one process, for all but the first.
 const RAIL_CRASH_HANDLER = Symbol.for("superstables.railCrashHandler");
+// A program log is a program's words, never a line of the client's: each entry follows fixed client text, so one that starts
+// with RESULT or APPROVE cannot stand at the start of a line.
+const logLine = (l) => `RPC log: ${oneLine(l, 500)}`;
 const crashHandler = async (err) => {
   const listeners = process.listeners("uncaughtException");
   if (listeners.some((l) => !l[RAIL_CRASH_HANDLER]) || listeners.find((l) => l[RAIL_CRASH_HANDLER]) !== crashHandler) return;
@@ -39,12 +42,12 @@ const crashHandler = async (err) => {
   if (typeof err?.getLogs === "function") {
     try {
       const logs = await err.getLogs();
-      if (logs?.length) console.error("Logs:\n" + logs.map((l) => oneLine(l, 500)).join("\n"));
+      if (logs?.length) console.error("Logs:\n" + logs.map(logLine).join("\n"));
     } catch {
       // ignore, we already printed the message
     }
   } else if (err?.logs?.length) {
-    console.error("Logs:\n" + err.logs.map((l) => oneLine(l, 500)).join("\n"));
+    console.error("Logs:\n" + err.logs.map(logLine).join("\n"));
   }
   process.exit(1);
 };
