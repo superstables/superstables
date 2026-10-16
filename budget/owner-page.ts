@@ -230,11 +230,11 @@ export function ownerPageFor(rail: OwnerRail) {
      * setup --new-owner replaces, shown on the page. Hosted: the owner adds this agent to their account instead.
      * `then` (hosted only): wallet steps on the same page after the link; `bundle` is what became of the link and each step.
      */
-    async askConnect(action: string, terms: OwnerTerms, signIn: string, replacing?: string, then?: HostedStep[], linkOpts: { prior?: PriorLink | null; newOwner?: boolean } = {}): Promise<{ handle: { finish(v: OwnerVerdict): void }; outcome: OwnerActionOutcome; bundle?: HostedBundleOutcome; link?: { id: string; code: string } }> {
+    async askConnect(action: string, terms: OwnerTerms, signIn: string, replacing?: string, then?: HostedStep[], linkOpts: { prior?: PriorLink | null; newOwner?: boolean; expectedOwner?: string } = {}): Promise<{ handle: { finish(v: OwnerVerdict): void }; outcome: OwnerActionOutcome; bundle?: HostedBundleOutcome; link?: { id: string; code: string } }> {
       const hosted = hostedSettings(action, "connect");
       if (then?.length && !hosted) throw new Error("wallet steps after adding the agent need hosted approvals");
       if (hosted) {
-        const handle = await hostedFor(hosted).request({ kind: "connect", terms, timeoutMs: OWNER_TIMEOUT_MS, then, prior: linkOpts.prior ?? null, newOwner: linkOpts.newOwner === true }).catch((e) => refusedBySite(action, e));
+        const handle = await hostedFor(hosted).request({ kind: "connect", terms, timeoutMs: OWNER_TIMEOUT_MS, then, prior: linkOpts.prior ?? null, newOwner: linkOpts.newOwner === true, expectedOwner: linkOpts.expectedOwner }).catch((e) => refusedBySite(action, e));
         // already linked on this chain, with the owner's proof over the link recorded here: no link to show, nothing to wait for
         if (handle.alreadyLinked) console.error(`\nThis agent already belongs to the account of the owner recorded on this machine, on ${hosted.site} (checked against that owner's signed proof); no approval link is needed.\n`);
         else announce(action, handle, terms, hosted.site);

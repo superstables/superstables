@@ -905,13 +905,21 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(next.result).toMatchObject({ state: "refused_pending", paid: null, amount: null, pending: { id: first.result.id, state: "unknown" } });
     expect(next.result.reason).toMatch(/has no final answer yet \(.*says paid, but the chain does not show transaction/);
     expect(site.purchases).toHaveLength(1);
-    // Inclusion releases workflow admission while permanence continues to be rechecked.
+    // Inclusion alone does not release workflow admission: a paid purchase holds the next one until its payment is final.
     site.pay(site.purchases[0]);
     const after = await once();
-    expect(after.code, after.stderr).toBe(0);
-    expect(site.purchases).toHaveLength(2);
+    expect(after.code, after.stderr).toBe(3);
+    expect(after.result).toMatchObject({ state: "refused_pending", pending: { id: first.result.id, state: "paid_not_final" } });
+    expect(site.purchases).toHaveLength(1);
     expect(recordOf(first.result.id).included).toMatchObject({ code: 0, result: { paid: true, final: true, chain_final: false } });
     expect(recordOf(first.result.id).final).toBeUndefined();
+    // once the payment is final and wait stores it, the next purchase starts
+    site.finalizedBlock = 1000;
+    await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "10"]);
+    const later = await once();
+    expect(later.code, later.stderr).toBe(0);
+    expect(site.purchases).toHaveLength(2);
+    expect(recordOf(first.result.id).final).toMatchObject({ code: 0 });
   }, 90_000);
 
   it("a purchase id that is not the site's UUID, or a link that carries the access token, is refused and the token is never shown", async () => {
@@ -1126,6 +1134,8 @@ describe("buy-once: a site that says paid is checked against the chain", () => {
     expect(r2.stdout + r2.stderr).not.toMatch(/nothing was paid/i);
     // the transaction lands: the next wait reads it from the chain and reports it paid, though the site still says not paid
     site.pay(p, { transaction: hash, payer: PAYER });
+    // the site shows the payer (and so the authorization behind it) as it does once the owner's wallet has signed
+    p.payment = { status: "not_paid", payer: PAYER };
     const r3 = await budget(["wait", "--shown", "--id", a.result.id, "--timeout", "10"]);
     expect(r3.result).toMatchObject({ state: "settled", paid: true, amount: "0.01", tx: { settle: hash } });
     expect(r3.stdout + r3.stderr).not.toMatch(/nothing was paid/i);

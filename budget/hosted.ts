@@ -34,6 +34,10 @@
 // the owner already recorded here, not with --new-owner, and only with a proof over the request id and match code stored
 // when that owner was recorded.
 //
+// A connect for an agent whose owner is recorded here names that owner (expected_owner) when the site announces the
+// feature in GET /api/v1/budget/services, and the client checks that the site repeated it. On any site, a bundle whose
+// agent the site adds to another account than the expected one is withdrawn before anything is recorded.
+//
 // Every approval checks the site's owner against the owner recorded at setup (`account`): a request the site ties to another
 // address is cancelled and refused before the link is shown, and at any later point.
 // Once the site reports that the wallet was asked (`wallet_asked`) or a transaction hash exists, an unfinished outcome
@@ -47,7 +51,7 @@ import { WALLET_STATES, sentEvidence, viewEvidence } from "./site.mjs";
 import type { OwnerActionOutcome, OwnerTerms, OwnerVerdict } from "../src/core/signer/owner-approval-server.ts";
 import { isProof } from "../src/core/proofs.mjs";
 import { readCapped } from "./response.mjs";
-import { BUDGET_API, SITE_MAX_BYTES, accountRefusalNext, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteText, siteWord } from "./site.mjs";
+import { BUDGET_API, SITE_MAX_BYTES, accountRefusalNext, call, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteText, siteWord } from "./site.mjs";
 
 export { scrub, siteFailedWords, siteWord };
 
@@ -269,6 +273,8 @@ export type HostedInput =
       prior?: PriorLink | null;
       /** setup --new-owner: an "already linked" answer is never taken; the owner signs a fresh link. */
       newOwner?: boolean;
+      /** The owner recorded on this machine for this agent, rail and chain (not with --new-owner). Sent as expected_owner where the site accepts it; a bundle for another account is withdrawn. */
+      expectedOwner?: string | null;
     }
   | { kind: "evm-transaction"; action: string; terms: OwnerTerms; timeoutMs: number; account: string; transaction: { to: string; data: string; value: string } }
   | { kind: "solana-intent"; action: string; terms: OwnerTerms; timeoutMs: number; account: string; solana: { amount_atomic?: string } };
@@ -385,6 +391,9 @@ const STEP_FINAL = new Set(["confirmed", "failed", "rejected", "expired", "unkno
 /** The rail and chain flags of a command: no --chain on a rail's default chain. */
 const railFlags = (rail: HostedRail, chain: string) => (rail === "evm" ? `--rail evm${chain === "base-sepolia" ? "" : ` --chain ${chain}`}` : `--rail ${rail}`);
 
+/** The budget API's announcement that a link may name its owner (superstables-app lib/budget/features.ts). */
+export const EXPECTED_OWNER_FEATURE = "expected_owner";
+
 export class HostedApprovals {
   private readonly s: HostedSettings;
   private stopped = false;
@@ -416,6 +425,16 @@ export class HostedApprovals {
     return siteName(this.s.site);
   }
 
+  private featureList?: Promise<Set<string>>;
+
+  /** What the site says its budget API accepts beyond the first fields: GET /api/v1/budget/services `features`. Any failure: none. */
+  private features(): Promise<Set<string>> {
+    this.featureList ??= call(`${this.s.site}${BUDGET_API}/services`, { headers: { accept: "application/json" } }, 10_000, this.s.fetchImpl)
+      .then((r: { ok: boolean; body: any }) => new Set<string>(r.ok && Array.isArray(r.body?.features) ? r.body.features.filter((x: unknown) => typeof x === "string" && /^[a-z0-9_]{1,64}$/.test(x)).slice(0, 50) : []))
+      .catch(() => new Set<string>());
+    return this.featureList;
+  }
+
   /** The facts of a link this client made (or recorded), for the owner proof. */
   private facts(owner: string, linkId: string, code: string): LinkFacts {
     return { site: this.s.site, owner, agent: agentAddressOf(this.s.agentKey), rail: this.s.rail, chain: this.s.chain, linkId, code };
@@ -427,11 +446,16 @@ export class HostedApprovals {
     let path: string;
     let body: Record<string, unknown>;
     let kind: HostedRecord["kind"];
+    let expectedOwner: string | null = null;
+    let sentOwner = false;
     const then = input.kind === "connect" && input.then?.length ? input.then : undefined;
     if (input.kind === "connect") {
       path = `${BUDGET_API}/links`;
       kind = "link";
-      body = { rail: this.s.rail, chain: this.s.chain, agent, ...(this.s.label ? { label: this.s.label.slice(0, 40) } : {}), ...(then ? { then } : {}) };
+      // the owner recorded here (not with --new-owner), named to the site only when it says it takes the field
+      expectedOwner = !input.newOwner ? this.w.owner(input.expectedOwner) : null;
+      sentOwner = Boolean(expectedOwner) && (await this.features()).has(EXPECTED_OWNER_FEATURE);
+      body = { rail: this.s.rail, chain: this.s.chain, agent, ...(this.s.label ? { label: this.s.label.slice(0, 40) } : {}), ...(sentOwner ? { expected_owner: expectedOwner } : {}), ...(then ? { then } : {}) };
     } else {
       const k = HOSTED_KIND[input.action];
       if (!k) throw new HostedRefusal(`"${input.action}" has no hosted approval`, "use the approval page on this machine");
@@ -470,6 +494,13 @@ export class HostedApprovals {
         const a = afterCancel(c, true, created.seen);
         throw new HostedRefusal(`${this.s.site} answered with steps other than the ones asked for (${problem}). ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
       }
+    }
+    if (sentOwner && !this.w.same((created.answer as any)?.expected_owner, expectedOwner)) {
+      // the site listed the feature and did not take the field: the request is not used
+      const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
+      this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: "expected owner not confirmed", sending: created.seen.asked || undefined });
+      const a = afterCancel(c, !!then, created.seen);
+      throw new HostedRefusal(`${this.s.site} did not confirm that only the owner recorded on this machine (${expectedOwner}) may add this agent; the request is not used. ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
     }
     const record: HostedRecord = { site: this.s.site, requestId: created.id, token: created.token, kind, matchCode: created.matchCode, ...(then ? { then: then.map((t) => t.kind) } : {}) };
     const expected = input.kind === "connect" ? undefined : this.w.owner(input.account) ?? input.account;
@@ -527,7 +558,7 @@ export class HostedApprovals {
       const bundle = new Promise<HostedBundleOutcome>((done) => (settle = done));
       const base = { id: created.id, token: created.token, kind, title: input.terms.title, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve };
       const kinds = then.map((t) => t.kind);
-      void this.pollBundle({ ...base, timeoutMs: input.timeoutMs, kinds, settle, answer: created.answer }).catch((err: Error) => {
+      void this.pollBundle({ ...base, expected: expectedOwner ?? undefined, timeoutMs: input.timeoutMs, kinds, settle, answer: created.answer }).catch((err: Error) => {
         this.learners.delete(created.id);
         this.cancellations.delete(created.id);
         const reason = `the command stopped reading the request: ${scrub(siteText(err.message))}`;
@@ -653,6 +684,11 @@ export class HostedApprovals {
         `${this.s.site} already has request ${isSiteRequestId(otherId) ? otherId : "(no usable id)"}${typeof json?.state === "string" ? ` (${siteWord("state", json.state)})` : ""}, created ${what} by an earlier attempt whose answer never arrived here (${siteFailure(res.status, json)}). It cannot be approved without its approval link, which only that answer carried; it expires by itself in 10 minutes, and the owner can see it on their ${this.name} account page. Nothing was sent`,
         "run the same command again after that request expires (10 minutes)",
       );
+    }
+    if (res.status === 409 && code === "expected_owner_mismatch") {
+      const owner = this.w.owner(json?.error?.owner) ?? this.w.owner(json?.owner);
+      throw new HostedRefusal(`${this.s.site} says this agent already belongs to another account${owner ? ` (${owner})` : ""}, not the owner recorded on this machine (${(body as any).expected_owner}); nothing was created or sent`,
+        `if ${owner ?? "that account"} is the right owner: superstables budget setup ${railFlags(this.s.rail, this.s.chain)} --hosted --site ${this.s.site} --new-owner (refused while a budget is live). If not, remove this agent from that account on ${this.name}`);
     }
     if (res.status === 409 && code === "already_linked") {
       // a link with steps for an agent already linked on this chain: nothing was created; gas and a budget go one by one
@@ -854,7 +890,7 @@ export class HostedApprovals {
    * the wallet was asked for gets the send grace on top. Whatever is not final then is reported as it stands, and a step
    * the wallet was asked for is never "nothing sent".
    */
-  private async pollBundle(p: Omit<Poll, "expected"> & { answer?: unknown; timeoutMs: number; kinds: HostedStep["kind"][]; settle: (b: HostedBundleOutcome) => void }) {
+  private async pollBundle(p: Omit<Poll, "expected"> & { expected?: string; answer?: unknown; timeoutMs: number; kinds: HostedStep["kind"][]; settle: (b: HostedBundleOutcome) => void }) {
     const grace = this.s.sendingGraceMs ?? 120_000;
     const steps: HostedStepOutcome[] = p.kinds.map((kind) => ({ kind, state: "queued", hash: null, reason: "", reasonCode: null, walletAsked: false }));
     let owner: string | null = null;
@@ -1055,6 +1091,15 @@ export class HostedApprovals {
       const state = String(v.state);
       const reason = siteReason(this.name, v);
       const named: string | null = owner ? null : this.w.owner(v.owner);
+      if (named && p.expected && !this.w.same(named, p.expected)) {
+        // the site added the agent to another account than the owner recorded here: its steps are withdrawn, nothing is recorded
+        refusedLink = { withdrawn: false };
+        learnCancel(await this.cancelOnce(p.id, p.token));
+        refusedLink.withdrawn = steps.every((s, i) => !s.hash && isClean(i));
+        linkState = "rejected";
+        linkReason = `${this.name} reported the agent as added to ${named}, but this machine records the owner ${p.expected}. Nothing was recorded; its wallet steps were ${refusedLink.withdrawn ? "withdrawn" : "not confirmed withdrawn"}`;
+        return finish(null);
+      }
       if (named) {
         // the owner is recorded only with their own signature over this link; without it the steps are withdrawn
         const problem = await ownerProofProblem(v.owner_proof, this.facts(named, p.id, p.matchCode));

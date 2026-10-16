@@ -231,7 +231,7 @@ if (OWNER_KEY_FILE) {
       `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on the agent's machine; ${HOST} does not receive it.`,
       ...(what.length ? ["You pay the network fee for each transaction, shown in your wallet. To end the budget at any time: superstables budget revoke --rail solana."] : [`Grants, revokes and SOL for this agent are then approved on ${HOST}, in your Solana wallet.`]),
     ],
-  }, "", newOwner ? recorded : undefined, then, { prior, newOwner });
+  }, "", newOwner ? recorded : undefined, then, { prior, newOwner, expectedOwner: newOwner ? undefined : recorded });
   bundle = r.bundle;
   linked = r.link;
   const outcome = r.outcome;

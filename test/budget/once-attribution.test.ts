@@ -189,9 +189,11 @@ describe("hosted purchase payment identity", () => {
       if (name === "signed by someone else" || name === "with an invalid payer signature") expect(result.result.reason).toContain("does not carry this payer's signature");
     });
   }
-  for (const provisional of [false, true]) it(`evm: concurrent processes can attribute a ${provisional ? "provisional" : "final"} transfer to only one purchase`, async () => {
+  // tempo's finality is instant, so only solana has a provisional state to race over
+  for (const provisional of [false, true]) it(`${provisional ? "solana" : "tempo"}: concurrent processes can attribute a ${provisional ? "provisional" : "final"} transfer to only one purchase`, async () => {
     site.finalizedBlock = provisional ? 10 : 1000;
-    const rail = rails[0];
+    site.finalizedSlot = provisional ? 10 : 1000;
+    const rail = provisional ? rails[2] : rails[1];
     const original = await purchase(rail);
     site.settle(original.p, "ok", { transaction: rail.tx, payer: rail.payer });
     const target = await purchase(rail);
@@ -201,7 +203,7 @@ describe("hosted purchase payment identity", () => {
     const barrier = new Promise<void>((resolve) => { releaseBarrier = resolve; });
     let arrived = 0;
     site.onChainRead = async (method) => {
-      if (method !== "eth_getTransactionReceipt") return;
+      if (method !== (provisional ? "getTransaction" : "eth_getTransactionReceipt")) return;
       if (++arrived === 2) releaseBarrier();
       await barrier;
     };
@@ -211,13 +213,30 @@ describe("hosted purchase payment identity", () => {
     const paid = outputs.map((output) => verdict.parse(JSON.parse(output)).paid);
     expect(paid.filter((value) => value === true)).toHaveLength(1);
     expect(paid.filter((value) => value === null)).toHaveLength(1);
-    expect(arrived).toBe(2);
+    if (provisional) expect(arrived).toBeGreaterThanOrEqual(2); else expect(arrived).toBe(2);
     const records = [original.record, target.record].map((record) => approvals.readApproval(record.id));
     expect(records.filter((record) => (provisional ? record.included : record.final)?.result?.paid === true)).toHaveLength(1);
   });
 
-  it("a transfer claim survives a failed final-record write and permits only its purchase's retry", async () => {
+  it("evm: a target that reuses the original's nonce is refused by the order check, before any chain read", async () => {
     const rail = rails[0];
+    const original = await purchase(rail);
+    site.settle(original.p, "ok", { transaction: rail.tx, payer: rail.payer });
+    const target = await purchase(rail);
+    site.settle(target.p, "ok", { transaction: rail.tx, payer: rail.payer, chain: false });
+    target.p.nonce = original.p.nonce;
+    target.p.order = original.p.order;
+    const reads: string[] = [];
+    site.onChainRead = async (method) => { reads.push(method); };
+    const result = await settleOnce(target.record);
+    unknown(result);
+    expect(result.result.reason).toContain(`commits to purchase ${original.p.id}`);
+    expect(reads).toEqual([]);
+  });
+
+  it("a transfer claim survives a failed final-record write and permits only its purchase's retry", async () => {
+    // on tempo: on EVM the order check refuses the second purchase before the claim is looked at
+    const rail = rails[1];
     const original = await purchase(rail);
     site.settle(original.p, "ok", { transaction: rail.tx, payer: rail.payer });
     onceTestHook.beforeFinal = () => {

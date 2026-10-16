@@ -776,7 +776,7 @@ describe("the owner approval page", () => {
     const handle = server.request(ownerAction());
     const stranger = privateKeyToAccount(generatePrivateKey()).address;
     const wrong = await postJson(`${handle.url}/account`, { address: stranger });
-    expect(wrong.status).toBe(403);
+    expect(wrong.status).toBe(409);
     expect(String(wrong.body.error)).toContain(OWNER.address);
     const right = await postJson(`${handle.url}/account`, { address: OWNER.address });
     expect(right.status).toBe(200);
@@ -1020,7 +1020,7 @@ describe("the owner approval page with a Solana wallet", () => {
     expect((await postJson(`${handle.url}/prepare`, { address: SOL_OWNER.address })).status).toBe(409);
     expect((await postJson(`${handle.url}/account`, { address: "not-an-address" })).status).toBe(400);
     const stranger = await postJson(`${handle.url}/account`, { address: ed25519Wallet().address });
-    expect(stranger.status).toBe(403);
+    expect(stranger.status).toBe(409);
     expect(String(stranger.body.error)).toContain(SOL_OWNER.address);
     expect(calls.prepared).toBe(0);
     expect((await postJson(`${handle.url}/account`, { address: SOL_OWNER.address })).status).toBe(200);

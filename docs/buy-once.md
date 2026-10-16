@@ -52,7 +52,8 @@ purchase also needs a Solana wallet on the owner's device to sign the payment tr
 [owner guide](https://www.superstables.com/docs/owner) covers the link/code handoff, sign-in
 and account checkpoints.
 
-A purchase is reported paid only once the command has read the payment on chain. To list the
+A purchase is reported paid only once the command has read the payment on chain, and only for the payment
+the site first showed for it. To list the
 services and buy one:
 
 ```bash
@@ -80,6 +81,9 @@ do not buy again, and run `wait` again later. The final `RESULT` reports `paid` 
 do not pay again if it was paid or its outcome is unknown. The site's side of this purchase
 is the HTTP purchase API; the endpoints the client calls, and what it checks in each answer, are in
 [budget/CLI.md](../budget/CLI.md#buy-once).
+
+A paid purchase whose payment is not final on chain yet holds the next `buy-once` until
+`wait --id <id> --shown` reads it final.
 
 For an unresolved outcome, [check the original request](records.md#check-an-unresolved-outcome).
 Single purchase requests made on superstables.com appear in the [site account](https://www.superstables.com/account);

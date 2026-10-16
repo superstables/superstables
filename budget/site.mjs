@@ -100,7 +100,7 @@ export const siteText = (s, max = 300) => String(s ?? "").replace(/[\u0000-\u001
 /**
  * The words the site's budget API documents, by kind. The site's own sentences (an error message, a reason) are never
  * repeated in a log, an audit line or a RESULT: only one of these words, or "unexpected", inside this client's sentences.
- * Taken from the website's budget API on its staging and budget-proof-v2 branches (lib/budget: errors thrown with
+ * Taken from the website's budget API on its staging at ddb493a8 (lib/budget: errors thrown with
  * budgetError, flow.ts REASONS, proof.ts ProofReason; app/api/v1/budget and app/api/budget routes), October 2026.
  */
 export const SITE_WORDS = {
@@ -109,18 +109,19 @@ export const SITE_WORDS = {
     // errors (budgetError codes)
     "agent_mismatch", "agent_not_linked", "agent_proof", "agent_proof_invalid", "agent_proof_missing", "agent_proof_stale", "allowance_live",
     "already_linked", "amount_above_limit", "amount_zero", "blockhash_expired", "body_too_large", "cap_above_limit", "cap_zero", "chain_unavailable",
-    "duplicate_request", "ethereum_account_required", "expiry_passed", "idempotency_conflict", "idempotency_key_expired", "idempotency_key_reused", "internal_error",
-    "invalid_idempotency_key", "invalid_json", "invalid_kind", "invalid_label", "invalid_solana", "invalid_solana_owner", "invalid_step",
-    "invalid_then", "invalid_transaction", "invalid_tx_hash", "linked_elsewhere", "match_code_mismatch", "missing_token", "network_refused",
-    "no_token_account", "not_a_link", "not_a_transaction", "not_awaiting_owner", "not_for_solana", "not_found", "not_linked_yet", "not_open",
-    "not_sending", "not_solana", "nothing_to_revoke", "other_account", "other_delegate", "owner_frozen", "owner_proof_invalid",
-    "owner_proof_owner_mismatch", "owner_proof_required", "proof_reused", "rate_limited", "request_open", "sign_in_required", "solana_owner_unproven", "tx_hash_used",
+    "duplicate_request", "ethereum_account_required", "expected_owner_mismatch", "expected_owner_unproven", "expiry_passed", "idempotency_conflict",
+    "idempotency_key_expired", "idempotency_key_reused", "internal_error", "invalid_expected_owner", "invalid_idempotency_key", "invalid_json", "invalid_kind",
+    "invalid_label", "invalid_request", "invalid_solana", "invalid_solana_owner", "invalid_step", "invalid_then", "invalid_transaction", "invalid_tx_hash",
+    "key_live", "linked_elsewhere", "match_code_mismatch", "missing_token", "network_refused", "no_token_account", "not_a_link", "not_a_transaction",
+    "not_awaiting_owner", "not_for_solana", "not_found", "not_linked_yet", "not_open", "not_sending", "not_solana", "nothing_to_revoke", "other_account",
+    "other_delegate", "owner_frozen", "owner_proof_invalid", "owner_proof_owner_mismatch", "owner_proof_required", "owner_unknown", "owner_wallet_removed",
+    "owner_wallet_required", "proof_reused", "rate_limited", "request_open", "sign_in_required", "solana_owner_unproven", "tx_hash_used",
     "unknown_chain", "unknown_parameter", "unlimited_refused", "unsupported_chain", "unsupported_media_type", "unsupported_rail",
     "value_not_zero", "wallet_asked", "wrong_account", "wrong_amount", "wrong_call", "wrong_recipient", "wrong_signer", "wrong_spender", "wrong_target",
     "wallet_changed_transaction",
     // reasons a request or step ended (flow.ts REASONS)
     "agent_cancelled", "agent_removed", "another_open", "approval_expired", "earlier_step", "link_not_done", "mismatch", "no_start_block",
-    "not_landed", "not_requested", "not_signed", "owner_rejected", "owner_stopped", "reverted", "stale_tx", "wallet_timeout",
+    "not_landed", "not_requested", "not_signed", "owner_rejected", "owner_stopped", "page_stopped_before_send", "reverted", "stale_tx", "wallet_timeout",
   ]),
   // agent request proof: error.reason of an agent_proof refusal (proof.ts ProofReason)
   proof: new Set(["missing", "malformed", "stale", "nonce", "replayed", "signature", "agent_mismatch"]),

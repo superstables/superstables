@@ -21,6 +21,7 @@ const SLOW = [
   "test/budget/link-gate.test.ts",
   "test/budget/lock-macos-side-effects.test.ts",
   "test/budget/lock-recovery.test.ts",
+  "test/budget/once-not-final.test.ts",
   "test/budget/operation-races.test.ts",
   "test/budget/read-caps-cli.test.ts",
   "test/budget/revoke-always.test.ts",

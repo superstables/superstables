@@ -10,7 +10,7 @@ import { createHash, createPrivateKey, createPublicKey, sign as signBytes, verif
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { getAddress, recoverMessageAddress, type Hex } from "viem";
+import { getAddress, isAddress, recoverMessageAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { readBody, startServer, type TestServer } from "./servers.js";
 
@@ -117,6 +117,10 @@ export interface FakeSite extends TestServer {
   /** Answer the next POST that checks out with this status and body instead of creating a request. */
   reply?: (path: string) => { status: number; body: unknown } | undefined;
   services?: unknown;
+  /** What GET /api/v1/budget/services announces in `features` (the answer is then { features, services }). Without it, a link takes only the original fields, as production does. */
+  features?: string[];
+  /** A site that lists expected_owner and drops the field: its answers do not repeat it. */
+  echoExpectedOwner?: false;
   /** Agents already linked, by address (lowercase), with their owner: a link with `then` for one of them is refused (409). */
   linked?: Record<string, string>;
   /** Answer a cancel with this status and body instead (a site whose answer carries anything at all). */
@@ -189,14 +193,16 @@ export async function startFakeSite(): Promise<FakeSite> {
     r.owner_proof = await signLinkProof({ site: site.origin, owner: r.owner, agent: r.body.agent, rail: r.body.rail, chain: r.body.chain, linkId: r.id, code: r.matchCode ?? "ABC-DEF" });
     return { owner_proof: r.owner_proof };
   };
+  /** The owner a link named, as the request view echoes it. */
+  const echo = (r: FakeRequest) => (r.body.expected_owner !== undefined && site.echoExpectedOwner !== false ? { expected_owner: r.body.rail === "solana" ? r.body.expected_owner : getAddress(r.body.expected_owner) } : {});
   const view = async (r: FakeRequest) => {
     if (r.steps) {
       const { state, final } = bundleState(r);
       const hashes = r.steps.map((s) => s.tx_hash).filter(Boolean);
       // like the site: the request's wallet_asked is the link's own or any step's
-      return { id: r.id, kind: r.kind, state, final, owner: r.owner, ...(await proofOf(r)), tx_hash: null, wallet_asked: r.wallet_asked === true || r.steps.some((st) => st.wallet_asked === true), reason: r.reason ?? null, reason_code: r.reason_code ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) } };
+      return { id: r.id, kind: r.kind, state, final, owner: r.owner, ...echo(r), ...(await proofOf(r)), tx_hash: null, wallet_asked: r.wallet_asked === true || r.steps.some((st) => st.wallet_asked === true), reason: r.reason ?? null, reason_code: r.reason_code ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) } };
     }
-    return { id: r.id, kind: r.kind, state: r.state, final: r.final ?? FINAL.has(r.state), owner: r.owner, ...(r.state === "linked" ? await proofOf(r) : {}), tx_hash: r.tx_hash, reason: r.reason ?? null, reason_code: r.reason_code ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" } };
+    return { id: r.id, kind: r.kind, state: r.state, final: r.final ?? FINAL.has(r.state), owner: r.owner, ...echo(r), ...(r.state === "linked" ? await proofOf(r) : {}), tx_hash: r.tx_hash, reason: r.reason ?? null, reason_code: r.reason_code ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" } };
   };
   const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -216,6 +222,18 @@ export async function startFakeSite(): Promise<FakeSite> {
       if (custom) return json(res, custom.status, custom.body);
       const body = JSON.parse(raw);
       const link = url.pathname.endsWith("/links");
+      // like both deployments: a field outside the route's own list is refused
+      const allowed = link ? ["rail", "chain", "agent", "label", "then", ...(site.features?.includes("expected_owner") ? ["expected_owner"] : [])] : ["kind", "rail", "chain", "agent", "transaction", "solana"];
+      if (Object.keys(body).some((k) => !allowed.includes(k))) return json(res, 400, { error: { code: "unknown_parameter", message: "a field this request does not take", allowed } });
+      let expectedOwner: string | undefined;
+      if (link && body.expected_owner !== undefined) {
+        const value = String(body.expected_owner);
+        const valid = body.rail === "solana" ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value) : isAddress(value) && (value === value.toLowerCase() || value === getAddress(value));
+        if (!valid) return json(res, 400, { error: { code: "invalid_expected_owner", message: "expected_owner is not an address of this rail" } });
+        expectedOwner = body.rail === "solana" ? value : getAddress(value);
+        const owner = site.linked?.[body.rail === "solana" ? String(body.agent) : String(body.agent).toLowerCase()];
+        if (owner && (body.rail === "solana" ? owner !== expectedOwner : getAddress(owner) !== expectedOwner)) return json(res, 409, { error: { code: "expected_owner_mismatch", message: "this agent belongs to another account", owner } });
+      }
       if (link && body.then !== undefined) {
         const bad = thenProblem(body.then, body.rail);
         if (bad) return json(res, 400, { error: { code: "invalid_then", message: bad.message, ...(bad.step !== undefined ? { step: bad.step } : {}) } });
@@ -237,6 +255,7 @@ export async function startFakeSite(): Promise<FakeSite> {
         approval: { url: site.approvalUrl?.(id) ?? `${server.url}/approve/budget/${id}#ssba_test_owner${n}`, match_code: "ABC-DEF", expires_at: new Date(expiresAt).toISOString() },
         message_for_owner: "Open the approval link and pick ABC-DEF.",
         next_action: { type: "wait_for_owner", poll: `/api/v1/budget/requests/${id}` },
+        ...(expectedOwner && site.echoExpectedOwner !== false ? { expected_owner: expectedOwner } : {}),
         ...(r.steps ? { steps: site.answerSteps ? site.answerSteps(r.steps.map(stepView)) : r.steps.map(stepView) } : {}),
       };
       return json(res, 201, site.answerCreated ? site.answerCreated(created) : created);
@@ -278,6 +297,7 @@ export async function startFakeSite(): Promise<FakeSite> {
       if (custom) return json(res, custom.status, custom.body);
       return json(res, 200, normal);
     }
+    if (url.pathname === "/api/v1/budget/services" && site.features !== undefined) return json(res, 200, { features: site.features, services: site.services ?? [] });
     if (url.pathname === "/api/v1/budget/services" && site.services !== undefined) return json(res, 200, site.services);
     json(res, 404, { error: "not found" });
   });
