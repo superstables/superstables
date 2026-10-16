@@ -1647,6 +1647,7 @@ const NO_ANSWER_AFTER_BOUNDARY: Record<string, string> = {
   "command demo-service": "a seller on this machine; it reports no payment of the client's",
   "command doctor": "checks what pay needs; no payment",
   "command policy": "the spend policy file; no payment",
+  "command owner": "the owner's settings file (owner settings): it refuses to run without the owner at a terminal and moves no money",
   "command budget": "a group: each of its commands is listed as budget <command>",
   "budget doctor": "keys, addresses, RPC and balances; no payment outcome",
   "budget status": "the budget's allowance, expiry and revocation; no purchase outcome",
