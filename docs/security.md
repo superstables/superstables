@@ -377,11 +377,21 @@ same https rule.
 ## The local wallet mode
 
 `--wallet local` (or `SUPERSTABLES_WALLET=local`) replaces the browser wallet with a wallet process that
-holds a key in `~/.superstables/wallet/key`, mode 0600. At startup, it refuses to load that file when other users on the machine can read it or
+holds a key in `~/.superstables/wallet/key`, mode 0600, encrypted with a passphrase the owner chose
+(scrypt, then AES-256-GCM). The address is stored in clear next to it, so `wallet address`, `setup` and
+`doctor` need no passphrase, and editing it breaks decryption. The key is decrypted only in
+`wallet serve`, after the owner types the passphrase at a terminal. `wallet init --no-passphrase` keeps the
+key unencrypted, for testnets, and `wallet serve` then says so; `wallet encrypt` converts an existing key.
+At startup, it refuses to load that file when other users on the machine can read it or
 it is not a regular file. The same checks apply when importing a key with
-`wallet init --import-key-file`. A running wallet keeps its loaded key and does not recheck
+`wallet init --import-key-file`, and to the agent token and the owner secret below. A running wallet keeps its loaded key and does not recheck
 the file's permissions before signing. `wallet init --force` writes the new key to a new 0600 file and renames
-it into place, so it is never in a file others can read.
+it into place, so it is never in a file others can read. `wallet init --force` and `wallet encrypt` first
+overwrite the old file's bytes in place, never through a symlink. Copies a file system or a disk keeps
+elsewhere (copy-on-write and journalling file systems, flash storage, backups) are not erased. When the
+old key could not be overwritten (it was a symbolic link, say), the command says so on stderr and names the file.
+Client 0.4.0 cannot read an encrypted key file and stops with "that is not a private key"; if you may go back to it,
+keep the key somewhere safe before you encrypt it.
 The client sends the agent token to `SUPERSTABLES_WALLET_URL`, so it accepts only `https`, or
 `http` on `127.0.0.1`, `localhost` or `[::1]`. The wallet daemon accepts only the Host values
 `127.0.0.1:PORT` or `localhost:PORT`, like the approval page.
@@ -413,8 +423,8 @@ byte, and every state change goes to `wallet/audit.jsonl`.
 
 The caveat is the one browser mode removes. This is credential separation inside one operating
 system account, not a hardware boundary: any process running as you can read
-`wallet/owner-secret` and `wallet/key` directly, and at that point it is you as far as the
-wallet is concerned. A hostile agent confined to the wallet's HTTP API cannot pay. Arbitrary
+`wallet/owner-secret`, and the key from the running wallet's memory, and at that point it is you as far as the
+wallet is concerned. An encrypted key file protects the key at rest, not from code running as you while the wallet runs. A hostile agent confined to the wallet's HTTP API cannot pay. Arbitrary
 code running as your user can. Run that mode with a key that holds testnet funds only.
 
 ## Budgets
@@ -673,8 +683,8 @@ says "not supported", there is no command for it yet; do not move key files by h
   budget is live (revoke first) or, on `evm`, while the agent key holds USDC (run `recover`
   first). On Arc Testnet, USDC up to the agent's gas reserve does not count, because `recover`
   leaves it there.
-- **Local wallet key.** Stop the wallet, run `superstables wallet init --force`, and start the
-  wallet again: a running wallet keeps signing with the key it loaded. The old key file is
+- **Local wallet key.** Stop the wallet, run `superstables wallet init --force` (it asks for a
+  passphrase for the new key), and start the wallet again: a running wallet keeps signing with the key it loaded. The old key file is
   replaced, and with it access to whatever its address holds; the client has no command to move
   funds off it first.
 - **Local wallet secrets.** Stop the wallet, delete `wallet/owner-secret` or `wallet/agent-token`,

@@ -39,7 +39,7 @@ import { privateDirProblem } from "../core/private-dir.mjs";
 import { Records } from "../core/records.js";
 import { walletStatus } from "../core/signer/wallet.js";
 import { policySummary } from "../wallet/daemon.js";
-import { keyExists, keyPath } from "../wallet/keystore.js";
+import { keyExists, keyPath, keyStorage } from "../wallet/keystore.js";
 import { walletModeFromEnvironment, type WalletMode } from "./signer.js";
 
 /** Long enough for a loaded public facilitator, short enough that ten checks stay bearable. */
@@ -184,9 +184,22 @@ function accountPolicyCheck(): Check[] {
 
 function keyCheck(): Check {
   const path = keyPath(walletDir());
-  return keyExists(walletDir())
-    ? { name: "wallet key", ok: true, detail: path, essential: true }
-    : { name: "wallet key", ok: false, detail: "no key yet: run `superstables wallet init`", essential: true };
+  if (!keyExists(walletDir())) return { name: "wallet key", ok: false, detail: "no key yet: run `superstables wallet init`", essential: true };
+  let storage: ReturnType<typeof keyStorage>;
+  try {
+    storage = keyStorage(walletDir());
+  } catch (err) {
+    // a key file the wallet cannot read (another user can, it is not a key) cannot sign either
+    return { name: "wallet key", ok: false, detail: messageOf(err), essential: true };
+  }
+  return storage === "encrypted"
+    ? { name: "wallet key", ok: true, detail: `${path} (encrypted)`, essential: true }
+    : {
+        name: "wallet key",
+        ok: true,
+        detail: `${path} (unencrypted: anyone who can read it can sign; \`superstables wallet encrypt\`)`,
+        essential: true,
+      };
 }
 
 /**
