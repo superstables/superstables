@@ -259,6 +259,10 @@ describe.concurrent("a Tempo purchase in push mode", () => {
     t.audit("push-sent-reconcile", { early: [early.code, early.result.state], late: [late.code, late.result.state] });
     expect(late.code, late.output).toBe(1);
     expect(late.result).toMatchObject({ state: "not_found" });
+    // a payment the chain refused still costs its network fee: nothing here may say that no funds moved
+    expect(late.result.next).toBe("the price was not paid; safe to retry with a new op id");
+    expect(late.output).toContain("The price was not paid, and the signed payment can no longer land.");
+    expect(late.output).not.toMatch(/no funds moved|seller sent/i);
     expect(t.paid).toBe(0);
     expect(t.guard()).toBe("");
   }, 120_000);

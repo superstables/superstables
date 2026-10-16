@@ -5,6 +5,7 @@ import { keccak256, toBytes, type Address, type Hex } from 'viem'
 import { Abis, Addresses } from 'viem/tempo'
 import { CHAIN_ID, RPC_URL, TOKEN_ADDRESS, fromBaseUnits, makeClient, oneLine } from './common.ts'
 import { readRpcAnswer } from '../../rpc.mjs'
+import { TRANSFER_WITH_MEMO_SELECTOR, maxFeeUnits } from './precheck.mjs'
 
 export const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -79,9 +80,19 @@ export type ChainReceipt = {
   transactionHash: Hex
   feePayer?: Address
   from?: Address
+  /** The network fee the transaction was charged, in base units: ceil(gasUsed * effectiveGasPrice / 1e12), as measured. Undefined when the receipt lacks either field. */
+  fee?: bigint
   transfers: { token: Address; from: Address; to: Address; value: bigint }[]
   /** TIP-20 TransferWithMemo events: the memo binds a payment to one purchase. */
   memos: { token: Address; from: Address; to: Address; memo: Hex }[]
+}
+
+/** The fee a receipt shows, in base units of the 6-decimal fee token (1e12 attodollars each), rounded up. Undefined when unreadable. */
+export function feeOf(r: { gasUsed?: unknown; effectiveGasPrice?: unknown }): bigint | undefined {
+  const q = (v: unknown): v is string => typeof v === 'string' && /^0x[0-9a-fA-F]+$/.test(v)
+  if (!q(r.gasUsed) || !q(r.effectiveGasPrice)) return undefined
+  const n = BigInt(r.gasUsed) * BigInt(r.effectiveGasPrice)
+  return (n + 10n ** 12n - 1n) / 10n ** 12n
 }
 
 /** Tempo has instant BFT finality. A receipt still needs canonical committed inclusion. */
@@ -101,6 +112,7 @@ export async function getReceipt(hash: string): Promise<ChainReceipt | null> {
     transactionHash: r.transactionHash,
     feePayer: r.feePayer,
     from: r.from,
+    fee: feeOf(r),
     transfers: (r.logs ?? [])
       .filter((l: any) => l.topics?.[0] === TRANSFER_TOPIC && l.topics.length === 3)
       .map((l: any) => ({
@@ -135,6 +147,25 @@ export async function chainHead(): Promise<{ number: bigint; timestamp: number }
 export async function pathUsdBalance(address: string): Promise<bigint> {
   const data = '0x70a08231' + address.toLowerCase().replace('0x', '').padStart(64, '0')
   return BigInt(await rpcRead('eth_call', [{ to: TOKEN_ADDRESS, data }, 'latest']))
+}
+
+/**
+ * The most the network fee of a payment from `owner` can be, in base units, read before signing: the gas the node
+ * estimates for each transfer, plus what mppx adds in pull mode, times the node's gas price (see maxFeeUnits). Throws when
+ * a read fails; the caller then lets the chain decide.
+ */
+export async function estimateMaxFee(owner: Address, transfers: { to: string; amount: bigint; memo?: string }[], mode: string): Promise<bigint> {
+  const word = (v: string | bigint) => (typeof v === 'bigint' ? v.toString(16) : v.toLowerCase().replace('0x', '')).padStart(64, '0')
+  let gas = mode === 'pull' ? 5000n : 0n
+  for (const t of transfers) {
+    const data = t.memo ? TRANSFER_WITH_MEMO_SELECTOR + word(t.to) + word(t.amount) + word(t.memo) : '0xa9059cbb' + word(t.to) + word(t.amount)
+    const g = await rpcRead('eth_estimateGas', [{ from: owner, to: TOKEN_ADDRESS, data }])
+    if (typeof g !== 'string' || !/^0x[0-9a-fA-F]+$/.test(g)) throw new Error('eth_estimateGas: the RPC answer is not a quantity')
+    gas += BigInt(g)
+  }
+  const price = await rpcRead('eth_gasPrice', [])
+  if (typeof price !== 'string' || !/^0x[0-9a-fA-F]+$/.test(price)) throw new Error('eth_gasPrice: the RPC answer is not a quantity')
+  return maxFeeUnits(gas, BigInt(price))
 }
 
 export type KeyState = {
