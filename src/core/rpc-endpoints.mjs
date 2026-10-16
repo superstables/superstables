@@ -6,7 +6,7 @@
 
 import { createHash } from "node:crypto";
 
-/** @typedef {{ url: string, operator: string }} TableEndpoint */
+/** @typedef {{ url: string, operator: string, domains?: string[] }} TableEndpoint */
 /** @typedef {{ url: string, operator: string, source: "builtin"|"settings"|"env"|"caller", id: string }} Endpoint */
 /** @typedef {{ primary: Endpoint, verdict: Endpoint[], quorum: number,
  *    agreement: "quorum"|"owner-node"|"single"|"caller", note?: string } | { error: string }} EndpointSet */
@@ -18,7 +18,7 @@ export const RPC_ENDPOINTS = /** @type {Record<string, TableEndpoint[]>} */ ({
     { url: "https://sepolia.base.org", operator: "base" },
     { url: "https://base-sepolia-rpc.publicnode.com", operator: "publicnode" },
   ],
-  "arc-testnet": [{ url: "https://rpc.testnet.arc.network", operator: "circle" }],
+  "arc-testnet": [{ url: "https://rpc.testnet.arc.network", operator: "circle", domains: ["arc.io"] }],
   "arbitrum-sepolia": [
     { url: "https://sepolia-rollup.arbitrum.io/rpc", operator: "offchain-labs" },
     { url: "https://arbitrum-sepolia-rpc.publicnode.com", operator: "publicnode" },
@@ -78,6 +78,22 @@ export function operatorOf(url) {
   const [tld, second] = [labels[labels.length - 1], labels[labels.length - 2]];
   const keep = tld.length === 2 && ["co", "com", "org", "net", "gov", "ac"].includes(second) ? 3 : 2;
   return labels.slice(-keep).join(".");
+}
+
+/**
+ * The provider of a URL on a chain, in this order: the table entry whose URL equals it exactly; the table entry that lists
+ * its registrable domain (the entry's own URL domain, or one of its `domains` aliases); else its own registrable domain.
+ * One provider under several domains (Arc: arc.io and arc.network) is one operator, however many URLs name it.
+ * @param {string} chainKey
+ * @param {string} url
+ */
+export function providerOf(chainKey, url) {
+  const table = RPC_ENDPOINTS[chainKey] ?? [];
+  const exact = table.find((e) => e.url === url);
+  if (exact) return exact.operator;
+  const domain = operatorOf(url);
+  const entry = table.find((e) => [operatorOf(e.url), ...(e.domains ?? [])].includes(domain));
+  return entry ? entry.operator : domain;
 }
 
 /** @type {(chainKey: string) => OwnerRpc | undefined} */
@@ -141,7 +157,7 @@ export function endpointSet(chainKey, purpose, o) {
     return { error: `the owner settings could not be read: ${err instanceof Error ? err.message : String(err)}` };
   }
   const testnet = o.testnet;
-  const pinned = owner ? owner.urls.map((u) => endpoint(u, operatorOf(u), "settings")) : table.map((e) => endpoint(e.url, e.operator, "builtin"));
+  const pinned = owner ? owner.urls.map((u) => endpoint(u, providerOf(chainKey, u), "settings")) : table.map((e) => endpoint(e.url, e.operator, "builtin"));
   const ownerQuorum = Number.isInteger(owner?.quorum) && /** @type {number} */ (owner?.quorum) >= 1 ? /** @type {number} */ (owner?.quorum) : undefined;
   const ownNode = owner?.ownNode === true && (ownerQuorum ?? 1) === 1;
   const verdict = ownNode ? [pinned[0]] : pinned;
@@ -153,7 +169,7 @@ export function endpointSet(chainKey, purpose, o) {
   const primary = envMatch
     ? { ...envMatch, source: /** @type {const} */ ("env") }
     : env && (purpose === "read" || builtin)
-      ? endpoint(env, builtin ? builtin.operator : operatorOf(env), "env")
+      ? endpoint(env, builtin ? builtin.operator : providerOf(chainKey, env), "env")
       : pinned[0];
   let quorum;
   let agreement;

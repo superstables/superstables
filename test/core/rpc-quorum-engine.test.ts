@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { KNOWN_NETWORKS } from "../../src/core/chain.js";
 import { EVM_CHAINS } from "../../budget/evm/chains.mjs";
-import { callerSet, endpointId, endpointSet, mainnetRpcReady, operatorOf, RPC_ENDPOINTS, RPC_TESTNETS, useOwnerSettings } from "../../src/core/rpc-endpoints.mjs";
+import { callerSet, endpointId, endpointSet, mainnetRpcReady, operatorOf, providerOf, RPC_ENDPOINTS, RPC_TESTNETS, useOwnerSettings } from "../../src/core/rpc-endpoints.mjs";
 import { agreeAtFinalEvm, agreeAtFinalSolana, agreementWords, canonical, checkIdentity, forgetIdentities } from "../../src/core/rpc-quorum.mjs";
 
 type Fake = { chainId?: number; finalized?: number | string; timestamp?: string; hashes?: Record<number, string>; value?: unknown; genesis?: string; slot?: number; readSlot?: number; fail?: boolean };
@@ -409,5 +409,56 @@ describe("endpoint sets, round 1 fixes", () => {
       expect(s).not.toHaveProperty("note");
       expect(s).toMatchObject({ primary: { url: builtin, source: "env", operator: "base" } });
     }
+  });
+});
+
+// Provider aliases (the website's providers.md): one provider under several domains counts once.
+describe("providers", () => {
+  afterEach(() => useOwnerSettings(() => undefined));
+  const operators = (s: ReturnType<typeof endpointSet>) => ("error" in s ? [] : s.verdict.map((e) => e.operator));
+
+  it("pins on arc.io and arc.network are one provider, so they cannot confirm each other", async () => {
+    const io = "https://rpc.testnet.arc.io", net = "https://rpc.testnet.arc.network";
+    useOwnerSettings(() => ({ urls: [io, net] }));
+    const s = endpointSet("arc-testnet", "verdict", { testnet: true });
+    expect(operators(s)).toEqual(["circle", "circle"]);
+    expect(s).toMatchObject({ quorum: 2, agreement: "quorum" });
+    const fakes = { [io]: {}, [net]: {} };
+    const { call } = transport(fakes);
+    const r = await agreeAtFinalEvm({ set: s as never, call, chainId: 84532, finality: "finalized", read: read(fakes) });
+    expect(r).toMatchObject({ agreed: false, why: "missing" });
+  });
+
+  it("a third party's host under arc.io is Circle", () => {
+    expect(providerOf("arc-testnet", "https://rpc.blockdaemon.testnet.arc.io")).toBe("circle");
+    useOwnerSettings(() => undefined);
+    const s = endpointSet("arc-testnet", "read", { envUrl: "https://rpc.blockdaemon.testnet.arc.io", testnet: true });
+    expect(s).toMatchObject({ primary: { operator: "circle", source: "env" } });
+  });
+
+  it("a pin on arbitrum.io with a trailing slash and a pin on publicnode are two providers", () => {
+    useOwnerSettings(() => ({ urls: ["https://sepolia-rollup.arbitrum.io/rpc/", "https://arbitrum-sepolia-rpc.publicnode.com"] }));
+    expect(operators(endpointSet("arbitrum-sepolia", "verdict", { testnet: true }))).toEqual(["offchain-labs", "publicnode"]);
+  });
+
+  it("resolves by exact URL, then the entry's domains, then the URL's own registrable domain", () => {
+    expect(providerOf("arc-testnet", RPC_ENDPOINTS["arc-testnet"][0].url)).toBe("circle");
+    expect(providerOf("base-sepolia", "https://other.publicnode.com/x")).toBe("publicnode");
+    expect(providerOf("polygon-amoy", "https://x.polygon.technology")).toBe("polygon-labs");
+    expect(providerOf("nowhere", "https://a.b.example.co.uk")).toBe("example.co.uk");
+    expect(providerOf("arc-testnet", "not a url ?key=SECRET")).toMatch(/^[0-9a-f]{12}$/);
+  });
+
+  it("example.org and example.co.uk stay two providers", () => {
+    useOwnerSettings(() => ({ urls: ["https://a.example.org", "https://b.example.co.uk"] }));
+    const ops = operators(endpointSet("base-sepolia", "verdict", { testnet: true }));
+    expect(ops).toEqual(["example.org", "example.co.uk"]);
+    expect(new Set(ops).size).toBe(2);
+  });
+
+  it("the table keeps its url and operator, and the env membership rule stays an exact URL", () => {
+    useOwnerSettings(() => ({ urls: ["https://rpc.testnet.arc.io", "https://x.example"] }));
+    const s = endpointSet("arc-testnet", "verdict", { envUrl: "https://rpc.testnet.arc.network/", testnet: true });
+    expect(s).toMatchObject({ note: expect.stringContaining("not used") });
   });
 });
