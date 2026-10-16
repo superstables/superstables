@@ -165,6 +165,7 @@ describe("recover.ts hands the completed revoke to the later owner steps", () =>
       sendNative: async () => { throw Object.assign(new Error(`gas top-up owner -> agent reverted on chain: ${o.ownerKeyRevert}`), { txHash: o.ownerKeyRevert, blockNumber: 102n }); },
       sleep: async () => {},
       readCtx: () => ({ owner: OWNER, agent: AGENT }),
+      ownerPlanCtx: async () => ({ owner: OWNER, agent: AGENT }),
       usdcBalance: async () => 1_000_000n, // the agent holds 1 USDC to return
       allowanceOf: async () => (allowances.length > 1 ? allowances.shift()! : allowances[0]),
       nativeBalance: async () => 0n,

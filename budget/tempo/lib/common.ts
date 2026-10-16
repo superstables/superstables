@@ -16,6 +16,7 @@ import { agentKeyFile, ownerKeyFile, publicFile } from '../../paths.mjs'
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from '../../secret-file.mjs'
 import { RPC_MAX_BYTES, cappedRpcFetch } from '../../rpc.mjs'
 import { markSend } from '../../proof.mjs'
+import { agentBinding, hostedFlags, legacyWarning } from '../../owner-binding.mjs'
 import { chainGate, chainGateSettings } from '../../../src/core/chain-gate.js'
 
 export const RPC_URL: string = RPC_URL_
@@ -303,4 +304,34 @@ export function describeError(err: unknown): string {
   }
   if (seen.size) return [...seen].join(' | ')
   return e?.message ?? String(err)
+}
+
+/**
+ * The owner and agent addresses of an owner plan (grant) for the agent key `label` ('' is the primary). Before it returns, the owner's
+ * setup signature for that label in the public file must name this agent address for the owner on record, the address must be the
+ * key on this machine when the agent file is here, and it must not be retired (../../owner-binding.mjs). Otherwise `refuse(reason, next)`
+ * ends the command (exit 3) before any page or send. A public file from before the signature was kept goes on, with one warning line.
+ */
+export async function ownerPlanCtx(label: string, refuse: (reason: string, next: string) => never): Promise<{ owner: Address; agent: Address }> {
+  const pub = loadPublicEnv()
+  const owner = pub.OWNER_ADDRESS as Address | undefined
+  const agent = pub[`AGENT${label}_ADDRESS`] as Address | undefined
+  const flag = label ? ` --agent ${label}` : ''
+  if (!owner || !agent) return refuse(`the public file names no owner or no agent${label ? ` ${label}` : ''}`, `superstables budget setup --rail tempo${flag}`)
+  const hosted = label ? '' : hostedFlags(pub)
+  const next = `check ${PUBLIC_ENV_PATH}: run superstables budget setup --rail tempo${flag}${hosted} where the agent key is, to record the owner's signature again. The owner can still end the key from any machine: superstables budget revoke --rail tempo${flag}`
+  let keyAgent: string | null = null
+  if (existsSync(AGENT_ENV_PATH)) {
+    const file = agentFileText()
+    if (file.problem !== undefined) return refuse(file.problem, next)
+    const env = parseEnvFile(file.text)
+    const key = env[`AGENT${label}_PRIVATE_KEY`]
+    if (key) {
+      try { keyAgent = privateKeyToAddress(key as Hex) } catch { return refuse(`${AGENT_ENV_PATH} holds an AGENT${label}_PRIVATE_KEY that is not a key`, next) }
+    } else if (env[`AGENT${label}_ADDRESS`]) keyAgent = env[`AGENT${label}_ADDRESS`]
+  }
+  const b = await agentBinding('tempo', { owner, agent, lines: pub }, { label, keyAgent, file: PUBLIC_ENV_PATH, testnet: TESTNET === true })
+  if (b.state === 'refused') return refuse(b.problem, next)
+  if (b.state === 'legacy') console.error(legacyWarning('tempo', PUBLIC_ENV_PATH, agent, `${flag}${hosted}`))
+  return { owner, agent }
 }

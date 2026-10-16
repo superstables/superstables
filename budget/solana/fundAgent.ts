@@ -9,8 +9,8 @@
 // npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 // Exit codes: 0 sent, 1 failed on chain or never landed, 2 bad flags, 3 refused (too little SOL, the owner rejected or the link
 // expired) or a mismatch (the transaction moved another amount), 5 unknown (read the chain).
-import { SystemProgram, Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
-import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, oneLine, explorerTx, parseUnits, parseStrict, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
+import { SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
+import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, oneLine, explorerTx, parseUnits, parseStrict, usageError, ownerPlanCtx, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort } from "./owner.ts";
@@ -47,10 +47,7 @@ function refuse(reason: string, next: string): never {
 const conn = connection();
 const cluster = await clusterProblem(conn);
 if (cluster) refuse(cluster, CLUSTER_NEXT);
-const pub = readPublic();
-if (!pub.owner || !pub.agent) refuse("the public file names no owner or no agent", "superstables budget setup --rail solana");
-const owner: PublicKey = pub.owner;
-const agent: PublicKey = pub.agent;
+const { owner, agent } = await ownerPlanCtx(refuse); // the public addresses, checked against the owner's setup signature
 const ownerHas = BigInt(await retryRead(() => conn.getBalance(owner, "confirmed")));
 const agentHas = BigInt(await retryRead(() => conn.getBalance(agent, "confirmed")));
 console.log(`owner ${owner.toBase58()} ${sol(ownerHas)} SOL, agent ${agent.toBase58()} ${sol(agentHas)} SOL`);

@@ -322,6 +322,7 @@ async function recover(o: { ops?: Record<string, string>; allowances: bigint[]; 
     },
     sleep: async () => {},
     readCtx: () => ({ owner: OWNER, agent: AGENT }),
+    ownerPlanCtx: async () => ({ owner: OWNER, agent: AGENT }),
     usdcBalance: async () => held,
     allowanceOf: async () => (allowances.length > 1 ? allowances.shift()! : allowances[0]!),
     nativeBalance: async () => 10n ** 15n,

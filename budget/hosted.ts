@@ -160,6 +160,12 @@ export async function ownerProofProblem(proof: unknown, facts: LinkFacts): Promi
   }
 }
 
+/** The message and signature of an owner proof that ownerProofProblem has already accepted, or undefined. */
+function proofOf(p: unknown): { message: string; signature: string } | undefined {
+  const { message, signature } = (p ?? {}) as { message?: unknown; signature?: unknown };
+  return typeof message === "string" && typeof signature === "string" ? { message, signature } : undefined;
+}
+
 /** A Solana agent key: the 64-byte secret (seed, then public key) and its base58 address. */
 export type SolanaAgentKey = { ed25519: Uint8Array; address: string };
 /** The key that signs the site requests: an EVM private key (evm, tempo), or a Solana key. */
@@ -458,7 +464,7 @@ export class HostedApprovals {
       const problem = await ownerProofProblem(answer.proof, this.facts(answer.owner, prior.linkId, prior.linkCode));
       if (problem) refuse(`its answer does not prove it: ${problem}`);
       this.audit({ id: answer.id, kind, title: input.terms.title, status: "linked", address: answer.owner });
-      return { id: answer.id, url: "", expiresAt: Date.now(), matchCode: "", alreadyLinked: true, link: { id: prior.linkId, code: prior.linkCode }, settled: Promise.resolve({ status: "connected", address: answer.owner }), finish: () => {} };
+      return { id: answer.id, url: "", expiresAt: Date.now(), matchCode: "", alreadyLinked: true, link: { id: prior.linkId, code: prior.linkCode }, settled: Promise.resolve({ status: "connected", address: answer.owner, proof: proofOf(answer.proof) }), finish: () => {} };
     }
     const created = answer;
     if (then) {
@@ -823,7 +829,7 @@ export class HostedApprovals {
             if (problem) return end("rejected", `${this.name} reported the agent as added to ${owner}, but ${problem}. Nothing was recorded`, false);
           }
           this.audit({ id: p.id, kind: p.kind, title: p.title, status: "connected", address: owner });
-          return done({ status: "connected", address: owner });
+          return done({ status: "connected", address: owner, proof: proofOf(v.owner_proof) });
         case "sent":
         case "confirmed":
         case "failed":
@@ -858,6 +864,7 @@ export class HostedApprovals {
     const grace = this.s.sendingGraceMs ?? 120_000;
     const steps: HostedStepOutcome[] = p.kinds.map((kind) => ({ kind, state: "queued", hash: null, reason: "", reasonCode: null, walletAsked: false }));
     let owner: string | null = null;
+    let linkProof: { message: string; signature: string } | undefined;
     let linkedAt = 0;
     let linkState = "awaiting_owner";
     let linkReason = "";
@@ -989,7 +996,7 @@ export class HostedApprovals {
       });
       const sending = unexplained || steps.some((s, i) => !isClean(i));
       const link: OwnerActionOutcome = owner
-        ? { status: "connected", address: owner }
+        ? { status: "connected", address: owner, proof: linkProof }
         : linkState === "expired" || why
           ? { status: "expired", reason: linkReason || why || `the approval link expired on ${this.name} without a completed approval`, sending }
           : { status: "rejected", reason: linkReason || (linkState === "cancelled" ? `the request was cancelled on ${this.name}; nothing was sent` : `the owner rejected the request on ${this.name}`), sending };
@@ -1067,6 +1074,7 @@ export class HostedApprovals {
           return finish(null);
         }
         owner = named;
+        linkProof = proofOf(v.owner_proof);
         linkedAt = Date.now();
       }
       if (!owner) {
