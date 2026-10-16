@@ -24,6 +24,7 @@ import { readBody } from "../core/http.js";
 import {
   DEFAULT_APPROVE_PORT,
   accountPolicyPath,
+  approvePort,
   approvePortFromEnvironment,
   browserWalletPath,
   ensureDir,
@@ -31,7 +32,9 @@ import {
   policyPath,
   recordsDir,
   walletDir,
+  walletSocketPath,
   walletUrl,
+  walletUrlFromEnvironment,
 } from "../core/home.js";
 import { loadOptionalPolicy, loadPolicy } from "../core/policy.js";
 import { clientVersion } from "../core/version.js";
@@ -216,11 +219,11 @@ function browserWalletCheck(): Check {
 /**
  * Can this machine serve the approval page? The one thing that would stop it is a port the
  * owner fixed with SUPERSTABLES_APPROVE_PORT already being taken, so the check is to bind it
- * and let it go again. The default port being taken stops nothing: pay takes a free one.
+ * and let it go again. The port this install uses being taken stops nothing: pay takes a free one.
  */
 async function approvalPageCheck(): Promise<Check> {
   const chosen = approvePortFromEnvironment();
-  const port = chosen ?? DEFAULT_APPROVE_PORT;
+  const port = chosen ?? homeApprovePort();
   const server = createServer();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -261,6 +264,26 @@ async function approvalPageCheck(): Promise<Check> {
   }
 }
 
+/** The port pay tries first in this home, or DEFAULT_APPROVE_PORT when its file cannot be used (pay falls back the same way). */
+function homeApprovePort(): number {
+  try {
+    return approvePort();
+  } catch {
+    return DEFAULT_APPROVE_PORT;
+  }
+}
+
+/** Where the agent reaches the local wallet: SUPERSTABLES_WALLET_URL when set, otherwise the wallet's socket. */
+function walletAddress(): string {
+  const url = walletUrlFromEnvironment();
+  if (url) return url;
+  try {
+    return walletSocketPath() ?? walletUrl();
+  } catch (err) {
+    return messageOf(err);
+  }
+}
+
 async function walletCheck(): Promise<Check> {
   try {
     const status = await walletStatus({ fetchImpl: timedFetch });
@@ -269,14 +292,14 @@ async function walletCheck(): Promise<Check> {
     return {
       name: "wallet",
       ok: true,
-      detail: `running at ${walletUrl()} as ${status.address} (${balance})`,
+      detail: `running at ${walletAddress()} as ${status.address} (${balance})`,
       essential: false,
     };
   } catch {
     return {
       name: "wallet",
       ok: false,
-      detail: `not answering at ${walletUrl()}: start it with \`superstables wallet serve\``,
+      detail: `not answering at ${walletAddress()}: start it with \`superstables wallet serve\``,
       essential: false,
     };
   }

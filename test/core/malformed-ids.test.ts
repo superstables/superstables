@@ -44,7 +44,7 @@ describe.each(BAD_IDS)("the id %s", (id) => {
   it("is an unknown request to the wallet", async () => {
     const dir = tmp();
     const wallet: WalletHandle = await startWallet({
-      port: 0, dir, account: privateKeyToAccount(generatePrivateKey()), policy: POLICY, quiet: true, openBrowser: false, balance: false,
+      port: 0, tcp: true, dir, account: privateKeyToAccount(generatePrivateKey()), policy: POLICY, quiet: true, openBrowser: false, balance: false,
       launcherDir: join(dir, "Superstables-wallet-open"),
     });
     closers.push(() => wallet.close());

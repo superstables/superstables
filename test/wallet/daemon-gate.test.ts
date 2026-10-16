@@ -63,6 +63,8 @@ async function start(policyText: string, overrides: Partial<StartWalletOptions> 
   const account = privateKeyToAccount(generatePrivateKey());
   const wallet = await startWallet({
     port: 0,
+    // these tests call the agent's routes over TCP; test/wallet/socket.test.ts covers the socket
+    tcp: true,
     dir,
     account,
     policyFile,

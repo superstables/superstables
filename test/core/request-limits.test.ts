@@ -101,7 +101,7 @@ describe("how long an EVM authorization signed by pay lasts", () => {
       sendJson(res, 200, { ok: true }, { "payment-response": encodePaymentResponseHeader(settled) });
     });
     const wallet: WalletHandle = await startWallet({
-      port: 0, dir: join(dir, "wallet"), account: privateKeyToAccount(generatePrivateKey()), policy: DEFAULT_POLICY,
+      port: 0, tcp: true, dir: join(dir, "wallet"), account: privateKeyToAccount(generatePrivateKey()), policy: DEFAULT_POLICY,
       quiet: true, openBrowser: false, balance: false, launcherDir: join(dir, "launcher"),
     });
     open.push(facilitator, seller, wallet);

@@ -37,6 +37,8 @@ describe.skipIf(!live || !liveHome)("Base Sepolia, for real", () => {
   beforeAll(async () => {
     wallet = await startWallet({
       port: 0,
+      // the signer below reaches the wallet at its URL
+      tcp: true,
       dir: join(liveHome!, "wallet"),
       policy: DEFAULT_POLICY,
       approvalTimeoutMs: 60_000,

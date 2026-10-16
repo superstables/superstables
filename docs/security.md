@@ -161,11 +161,18 @@ or if you cannot check them.
 
 ## The same-machine caveat
 
-Any process running as your user can serve a page on loopback, and a browser wallet's permission to
-connect is granted per origin. A hostile local process could serve its own page on
-`127.0.0.1:4412` after this one stops and inherit a connection you granted earlier. It would
-still have to get you to sign, and the wallet would still show it the real amount and recipient,
-but it would not have to ask for the connection again.
+Any process on this machine can serve a page on loopback, and a browser wallet's permission to
+connect is granted per origin. A hostile local process could serve its own page on the approval
+page's port after this one stops and inherit a connection you granted earlier. It would still have
+to get you to sign, and the wallet would still show it the real amount and recipient, but it would
+not have to ask for the connection again.
+
+So that port is not a well-known one. Each install picks its own at random in 20000-29999 the first
+time `pay` runs, and keeps it in `approve-port` in the home folder (mode 0600); when another payment
+is waiting on it, the page takes a free port instead. Another account cannot know the port in
+advance, but one that watches the machine's open ports while a payment page is open can learn it,
+and bind it between payments. `SUPERSTABLES_APPROVE_PORT=0` gives every payment a free port of its
+own, which closes that too, at the cost of a connection prompt in the wallet each time.
 
 
 
@@ -382,17 +389,24 @@ it is not a regular file. The same checks apply when importing a key with
 `wallet init --import-key-file`. A running wallet keeps its loaded key and does not recheck
 the file's permissions before signing. `wallet init --force` writes the new key to a new 0600 file and renames
 it into place, so it is never in a file others can read.
-The client sends the agent token to `SUPERSTABLES_WALLET_URL`, so it accepts only `https`, or
-`http` on `127.0.0.1`, `localhost` or `[::1]`. The wallet daemon accepts only the Host values
-`127.0.0.1:PORT` or `localhost:PORT`, like the approval page.
+The agent reaches the wallet over a socket, `wallet/agent.sock` (mode 0600, in the 0700 wallet
+folder). Before it sends the agent token, the client checks that the socket and its folder belong
+to this user and that no other user can write to the folder, so another account cannot pose as the
+wallet by taking its port. On TCP, `127.0.0.1:4411`, the wallet serves only the owner's page and
+the `/owner/…` routes; the agent token there gets 403, unless the wallet was started with
+`wallet serve --tcp`, for an agent that reaches it over SSH forwarding. Any process on this machine
+that has the agent token can then use those routes. Such an agent sets `SUPERSTABLES_WALLET_URL`,
+and the client sends the agent token there, so it accepts only `https`, or `http` on `127.0.0.1`,
+`localhost` or `[::1]`. On TCP, the wallet daemon accepts only the Host values `127.0.0.1:PORT` or
+`localhost:PORT`, like the approval page. On Windows there is no socket, and everything stays on TCP.
 It exists for a machine with no browser, and it moves the boundary.
 
 It generates two random 32-byte hex secrets at first start, in `~/.superstables/wallet/`:
 
 | Credential | File | What it can do |
 | --- | --- | --- |
-| Agent token | `wallet/agent-token` | Ask. `POST /requests`, `GET /requests/:id`, `POST /requests/:id/cancel`, `GET /status`, `GET /address` |
-| Owner secret | `wallet/owner-secret` | Decide. Everything above, plus `GET /owner/requests`, `POST /owner/requests/:id/approve`, `POST /owner/requests/:id/deny` |
+| Agent token | `wallet/agent-token` | Ask, over the private socket only, unless `wallet serve --tcp`. `POST /requests`, `GET /requests/:id`, `POST /requests/:id/cancel`, `GET /status`, `GET /address` |
+| Owner secret | `wallet/owner-secret` | Decide, on the TCP port only. Everything above, plus `GET /owner/requests`, `POST /owner/requests/:id/approve`, `POST /owner/requests/:id/deny` |
 
 Both are sent as `Authorization: Bearer …` and compared in constant time. A missing or unknown
 token gets 401; the agent token on an `/owner/…` route gets 403 — asking and approving are

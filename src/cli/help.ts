@@ -4,7 +4,7 @@
 // same sections in the same order, through explain(), so a reader learns where to look once.
 
 import type { Command } from "commander";
-import { DEFAULT_APPROVE_PORT, DEFAULT_WALLET_PORT } from "../core/home.js";
+import { DEFAULT_WALLET_PORT } from "../core/home.js";
 import { DEFAULT_INDEX_URL } from "../core/discovery.js";
 
 const WIDTH = 100;
@@ -139,8 +139,9 @@ Environment:
                                  (https, or http on this machine); wallets adding the chain get the public RPC
   SUPERSTABLES_TEMPO_RPC         the Tempo Moderato RPC for pay's chain checks (https, or http on this machine)
   SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine)
-  SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, ${DEFAULT_APPROVE_PORT} or a free one when busy
-  SUPERSTABLES_WALLET_URL        where the local wallet listens (default http://127.0.0.1:${DEFAULT_WALLET_PORT})
+  SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, this install's own port or a free one when busy
+  SUPERSTABLES_WALLET_URL        the local wallet over TCP, for one started with wallet serve --tcp (default: its private
+                                 socket in the wallet folder; its page is on http://127.0.0.1:${DEFAULT_WALLET_PORT})
   SUPERSTABLES_DOCTOR_OFFLINE    1: doctor skips the network checks
   SUPERSTABLES_DEMO_PAY_TO       where demo-service's earnings go
 

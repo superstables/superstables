@@ -43,6 +43,8 @@ async function startTestWallet(overrides: Partial<StartWalletOptions> = {}): Pro
   const privateKey = generatePrivateKey();
   const wallet = await startWallet({
     port: 0,
+    // these tests call the agent's routes over TCP; test/wallet/socket.test.ts covers the socket
+    tcp: true,
     dir,
     account: privateKeyToAccount(privateKey),
     policy: TEST_POLICY,
