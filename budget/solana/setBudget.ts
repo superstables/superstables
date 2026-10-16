@@ -54,7 +54,7 @@ function refuse(reason: string, next: string, extra: Record<string, unknown> = {
   process.exit(result(3, { state: "refused_precheck", reason, next, ...extra }));
 }
 
-const conn = connection();
+const conn = connection("owner");
 const cluster = await clusterProblem(conn);
 if (cluster) refuse(cluster, CLUSTER_NEXT);
 const pub = readPublic();

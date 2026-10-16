@@ -3,9 +3,10 @@ import { fileURLToPath } from "node:url";
 
 const guard = fileURLToPath(new URL("../network-guard.cjs", import.meta.url));
 
-export function guardedNode(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | null; output: string }> {
+export function guardedNode(args: string[], env: NodeJS.ProcessEnv, cwd?: string): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
+      cwd,
       env: { ...process.env, ...env, NODE_OPTIONS: `--require=${guard}` },
       stdio: ["ignore", "pipe", "pipe"],
     });

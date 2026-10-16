@@ -13,6 +13,7 @@ import { tempoModerato } from "viem/tempo/chains";
 import { afterAll, describe, expect, it } from "vitest";
 import { precheckCharge } from "../../budget/tempo/lib/precheck.mjs";
 import { startFakeTempo, PATH_USD } from "../helpers/fake-chains.js";
+import { endpointTree } from "../helpers/endpoint-tree.js";
 import { guardedNode } from "../helpers/guarded-process.js";
 import { readBody, sendJson, startServer } from "../helpers/servers.js";
 
@@ -102,6 +103,9 @@ async function rig(methodDetails: Record<string, unknown> = {}, knobs: Knobs = {
       }
     }
   });
+  // the client runs from a copy whose endpoint table names this wrapper RPC: the endpoints that confirm a verdict come from that table
+  const tree = endpointTree();
+  tree.set({ "tempo-moderato": [rpc.url] });
   let paid = 0;
   const seller = await startServer((req, res) => {
     if (typeof req.headers.authorization !== "string") {
@@ -116,6 +120,7 @@ async function rig(methodDetails: Record<string, unknown> = {}, knobs: Knobs = {
     await seller.close();
     await rpc.close();
     await chain.close();
+    tree.close();
     rmSync(home, { recursive: true, force: true });
   });
   const env = () => ({ HOME: home, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: rpc.url, SUPERSTABLES_NETWORK_GUARD_LOG: guardLog });
@@ -128,11 +133,11 @@ async function rig(methodDetails: Record<string, unknown> = {}, knobs: Knobs = {
     async buy(id: string, failRenames = "") {
       op = id;
       const fault = failRenames ? [`--import=${fileURLToPath(new URL("../helpers/journal-rename-fault.mjs", import.meta.url))}`] : [];
-      const child = await guardedNode(["--import=tsx", ...fault, "budget/tempo/buy.ts", "--url", seller.url, "--max", "0.01", "--op", id], { ...env(), FAULT_OP: id, FAIL_RENAMES: failRenames });
+      const child = await guardedNode(["--import=tsx", ...fault, "budget/tempo/buy.ts", "--url", seller.url, "--max", "0.01", "--op", id], { ...env(), FAULT_OP: id, FAIL_RENAMES: failRenames }, tree.root);
       return { ...child, result: resultOf(child.output) };
     },
     async reconcile(id: string) {
-      const child = await guardedNode(["--import=tsx", "budget/tempo/reconcile.ts", "--op", id], env());
+      const child = await guardedNode(["--import=tsx", "budget/tempo/reconcile.ts", "--op", id], env(), tree.root);
       return { ...child, result: resultOf(child.output) };
     },
     audit(name: string, extra: Record<string, unknown>) {

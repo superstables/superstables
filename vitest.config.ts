@@ -26,6 +26,7 @@ const SLOW = [
   "test/budget/revoke-always.test.ts",
   "test/budget/rpc-error-text.test.ts",
   "test/budget/setup-owner.test.ts",
+  "test/budget/solana-tempo-quorum.test.ts",
   "test/budget/tempo-challenges.test.ts",
   "test/budget/tempo-push.test.ts",
   "test/budget/tempo-rpc.test.ts",

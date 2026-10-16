@@ -135,14 +135,14 @@ if (bound && publicOwner && bound !== publicOwner && !newOwner) {
   process.exit(result(3, { state: "refused_precheck", reason, owner: publicOwner, next: `${newOwnerCmd(recordedSite)} records one owner again (refused while a budget is live on either)` }));
 }
 if (newOwner && recorded) {
-  const cluster = await clusterProblem(connection());
+  const cluster = await clusterProblem(connection("owner"));
   if (cluster) {
     console.log(`REFUSED: ${cluster}. Nothing was changed.`);
     process.exit(result(3, { state: "refused_precheck", reason: cluster, next: CLUSTER_NEXT }));
   }
   // never move the owner while the agent is still the delegate of a recorded owner's USDC account
   for (const was of [...new Set([publicOwner, bound].filter((o): o is string => Boolean(o)))]) {
-    const acc = await retryRead(() => getAccountOrNull(connection(), getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(was)))).then((a) => ({ ok: true as const, a }), (e) => ({ ok: false as const, e }));
+    const acc = await retryRead(() => getAccountOrNull(connection("owner"), getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(was)))).then((a) => ({ ok: true as const, a }), (e) => ({ ok: false as const, e }));
     const live = !acc.ok ? null : Boolean(acc.a?.delegate && acc.a.delegate.toBase58() === agent && acc.a.delegatedAmount > 0n);
     if (live !== false) {
       const reason = live === null ? `could not read the USDC account of the recorded owner ${was}; the owner is not replaced` : `a budget is live: the agent is the delegate of ${was}'s USDC account with ${formatUnits(acc.ok ? acc.a!.delegatedAmount : 0n)} USDC left`;
@@ -165,7 +165,7 @@ let then: HostedStep[] | undefined;
 let startSlot = 0;
 let agentHad = 0n;
 if (CAP !== undefined || LAMPORTS !== undefined) {
-  const cluster = await clusterProblem(connection());
+  const cluster = await clusterProblem(connection("owner"));
   if (cluster) {
     console.log(`REFUSED: ${cluster}. Nothing was requested.`);
     process.exit(result(3, { state: "refused_precheck", reason: cluster, next: CLUSTER_NEXT }));
@@ -175,7 +175,7 @@ if (CAP !== undefined || LAMPORTS !== undefined) {
   if (CAP !== undefined) {
     // a live delegate is never overwritten silently (grant refuses the same way)
     if (recorded && !newOwner) {
-      const acc = await retryRead(() => getAccountOrNull(connection(), getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(recorded)))).catch(() => null);
+      const acc = await retryRead(() => getAccountOrNull(connection("owner"), getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(recorded)))).catch(() => null);
       if (acc?.delegate && acc.delegatedAmount > 0n) {
         const reason = `a budget is live: the owner on record ${recorded} has delegate ${acc.delegate.toBase58()} with ${formatUnits(acc.delegatedAmount)} USDC left. A grant overwrites it, so it is not asked for here`;
         console.log(`REFUSED: ${reason}. Nothing was requested.`);
@@ -185,8 +185,8 @@ if (CAP !== undefined || LAMPORTS !== undefined) {
     then.push({ kind: "grant", solana: { amount_atomic: String(CAP) } });
   }
   try {
-    startSlot = await retryRead(() => connection().getSlot("confirmed"));
-    agentHad = BigInt(await retryRead(() => connection().getBalance(new PublicKey(agent), "confirmed")));
+    startSlot = await retryRead(() => connection("owner").getSlot("confirmed"));
+    agentHad = BigInt(await retryRead(() => connection("owner").getBalance(new PublicKey(agent), "confirmed")));
   } catch (e) {
     const reason = `could not read Solana devnet before asking (${oneLine((e as Error).message, 300)}); the transactions could not be checked afterwards`;
     console.log(`REFUSED: ${reason}. Nothing was requested.`);
@@ -299,7 +299,7 @@ if (HOSTED && !linked) throw new Error("an add-agent request without its id and 
 writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, [...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : []), ...(replaced || CAP !== undefined ? ["REVOKED_AT"] : [])]);
 console.log(`wrote ${PUBLIC_PATH} (no secret) and the owner's address into ${AGENT_KEY_PATH}.${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ""}`);
 
-const conn = connection();
+const conn = connection("owner");
 const ownerPk = new PublicKey(owner);
 const [ownerSol, agentSol] = await Promise.all([retryRead(() => conn.getBalance(ownerPk, "confirmed")), retryRead(() => conn.getBalance(new PublicKey(agent), "confirmed"))]).catch(() => [null, null]);
 const usdc = await retryRead(() => getAccount(conn, getAssociatedTokenAddressSync(USDC_MINT, ownerPk))).then((a) => a.amount, () => 0n);

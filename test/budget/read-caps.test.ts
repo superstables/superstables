@@ -304,8 +304,9 @@ describe("Tempo memo search", () => {
     return rpcStub((c) => {
       if (c.method === "eth_getBlockByNumber") {
         const latest = c.params[0] === "latest" || c.params[0] === "finalized";
-        return ok(c, latest ? { number: "0x" + head.toString(16), timestamp: "0xf423f" } : { number: c.params[0], timestamp: "0x" + edgeTime.toString(16) });
+        return ok(c, latest ? { number: "0x" + head.toString(16), timestamp: "0xf423f" } : { number: c.params[0], hash: "0x" + "ab".repeat(32), timestamp: "0x" + edgeTime.toString(16) });
       }
+      if (c.method === "eth_chainId") return ok(c, "0xa5bf"); // the endpoints that confirm an expired payment are asked which chain they are on
       if (c.method === "eth_getLogs") return ok(c, logs);
       return fail(c, "unexpected " + c.method);
     });

@@ -7,16 +7,19 @@ import type { AddressInfo } from "node:net";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { startFakeSolana, type FakeSolana } from "../helpers/fake-chains.js";
 import { startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import { MAINNET_GENESIS, randomAddress } from "../helpers/fake-solana-pay.js";
 
-const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const CLI = resolve(ROOT, "budget/cli.mjs");
+// The client runs from a copy whose endpoint table names the fake RPC: an owner command reads and sends through the owner's
+// endpoints, never an RPC that only the environment names (src/core/rpc-endpoints.mjs).
+let tree: EndpointTree;
+beforeAll(() => { tree = endpointTree(); });
+afterAll(() => tree.close());
 const USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 
 const kp = (n: number) => Keypair.fromSeed(new Uint8Array(32).fill(n));
@@ -30,6 +33,7 @@ let solana: FakeSolana;
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "ss-solana-cluster-"));
   solana = await startFakeSolana();
+  tree.set({ "solana-devnet": [solana.url] });
 });
 afterEach(async () => {
   await solana.close();
@@ -42,7 +46,7 @@ function budget(args: string[]): Promise<Out> {
     const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_SOLANA_RPC: solana.url };
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+    const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -199,8 +203,8 @@ describe("control: the same commands on devnet", () => {
   it("fund-agent with an owner key file reaches the send", async () => {
     recordOwnerA();
     // the fake has no websocket to confirm on, so the command waits there: stop it once the transfer has been sent
-    const child = spawn(process.execPath, [CLI, "fund-agent", "--rail", "solana", "--owner-key-file", ownerKey("A"), "--yes"], {
-      cwd: ROOT,
+    const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), "fund-agent", "--rail", "solana", "--owner-key-file", ownerKey("A"), "--yes"], {
+      cwd: tree.root,
       env: { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_SOLANA_RPC: solana.url },
       stdio: "ignore",
     });

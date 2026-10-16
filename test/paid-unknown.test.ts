@@ -26,6 +26,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import bs58 from "bs58";
 import { PROOFS } from "../budget/proof.mjs";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { endpointTree } from "./helpers/endpoint-tree.js";
 import { PaymentEngine } from "../src/core/pay.js";
 import { DEFAULT_POLICY } from "../src/core/policy.js";
 import { quote } from "../src/core/quote.js";
@@ -45,6 +46,10 @@ import { startFacilitator, startPaidEndpoint, startWallet, type TestServer } fro
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const MAIN = resolve(ROOT, "src/cli/main.ts");
 const BUDGET = resolve(ROOT, "budget/cli.mjs");
+// The budget commands run from a copy whose endpoint table names the fake RPCs: the endpoints that confirm a verdict, and the ones
+// an owner command uses, come from that table or the owner's settings, never from an RPC that only the environment names.
+const tree = endpointTree();
+const TREE_BUDGET = resolve(tree.root, "budget/cli.mjs");
 
 // ---- what a user or agent sees, and the one check every row's outputs go through --------------------------------------
 
@@ -209,6 +214,7 @@ afterEach(async () => {
   while (opened.length) await opened.pop()!.close();
 });
 afterAll(() => {
+  tree.close();
   for (const home of homes) rmSync(home, { recursive: true, force: true });
 });
 
@@ -231,7 +237,7 @@ const payEnv = (home: string, env: Record<string, string> = {}) => ({
 /** `superstables ...` in one process, as the installed command runs (a signal reaches the process that pays). */
 const superstables = (home: string, args: string[], env: Record<string, string> = {}) => exec(["--import", "tsx", MAIN, ...args], payEnv(home, env));
 const budgetEnv = (home: string, env: Record<string, string> = {}) => ({ SUPERSTABLES_HOME: home, SUPERSTABLES_SITE: undefined, SUPERSTABLES_BUDGET_APPROVAL_ID: undefined, ...env });
-const budget = (home: string, args: string[], env: Record<string, string> = {}, onChild?: (child: ReturnType<typeof spawn>) => void) => exec([BUDGET, ...args], budgetEnv(home, env), onChild);
+const budget = (home: string, args: string[], env: Record<string, string> = {}, onChild?: (child: ReturnType<typeof spawn>) => void) => exec([TREE_BUDGET, ...args], budgetEnv(home, env), onChild);
 const resultOf = (stdout: string) => {
   const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));
   return line ? JSON.parse(line.slice(7)) : null;
@@ -474,6 +480,7 @@ async function otherRail(rail: "tempo" | "solana", opts: { local?: boolean; fres
   const tempo = rail === "tempo" ? await startFakeTempo() : undefined;
   const solana = rail === "solana" ? await startFakeSolana() : undefined;
   opened.push(site, (tempo ?? solana)!);
+  tree.set(tempo ? { "tempo-moderato": [tempo.url] } : { "solana-devnet": [solana!.url] });
   const owner = rail === "tempo" ? OWNER : SOL_OWNER.publicKey.toBase58();
   site.owner = owner;
   const put = (path: string[], text: string, mode: number) => {

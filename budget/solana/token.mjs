@@ -40,9 +40,8 @@ async function readTokenProgramAccount(conn, address, minSize, what) {
   return Buffer.from(info.data);
 }
 
-// Same fields as spl-token's getAccount for the classic program.
-export async function getAccount(conn, address) {
-  const d = await readTokenProgramAccount(conn, address, ACCOUNT_SIZE, "token account");
+/** The fields of a classic token account's 165 bytes, as spl-token's getAccount names them. */
+export function decodeTokenAccount(d, address) {
   const state = d.readUInt8(108);
   return {
     address,
@@ -55,6 +54,12 @@ export async function getAccount(conn, address) {
     isFrozen: state === ACCOUNT_STATE.FROZEN,
     closeAuthority: d.readUInt32LE(129) ? new PublicKey(d.subarray(133, 165)) : null,
   };
+}
+
+// Same fields as spl-token's getAccount for the classic program.
+export async function getAccount(conn, address) {
+  const d = await readTokenProgramAccount(conn, address, ACCOUNT_SIZE, "token account");
+  return decodeTokenAccount(d, address);
 }
 
 /**

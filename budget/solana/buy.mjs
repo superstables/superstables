@@ -66,7 +66,7 @@ import {
   OPS_DIR,
 } from "./lib.mjs";
 import { readCapped, saveResponse } from "../response.mjs";
-import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, assessOp } from "./ops.mjs";
+import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, assessAgreed } from "./ops.mjs";
 import { lockNext } from "../op-lock.mjs";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
@@ -454,18 +454,18 @@ if (sim?.value?.err && !String(sim.value.err).startsWith("simulation unavailable
   console.log(`\n=> The chain refuses this payment now: ${oneLine(JSON.stringify(sim.value.err), 300)}${failLine ? ` | ${oneLine(failLine, 300)}` : ""}`);
   console.log("   Our transaction was not found on chain.");
   // refused for good only once the signed transaction can no longer land (refusalIsFinal); until then it is unknown
-  const assessment = await assessOp(conn, rec).catch(() => ({ verdict: "pending" }));
+  const assessment = await assessAgreed(conn, rec).catch(() => ({ verdict: "pending" }));
   if (assessment.verdict === "settled") {
     updateOp(opId, { state: "settled", final: assessment.final !== false, inclusionObserved: true, tx: assessment.tx, delivered: deliveredHttp, debit: amountUi }, "own transaction landed while checking the refusal");
     finish("settled", EXIT.OK, { tx: assessment.tx, debit: amountUi, delivered: deliveredHttp, chain_final: assessment.final !== false, next: assessment.final === false ? `superstables budget reconcile --rail solana --op ${opId} later to check finality. Do not pay again.${deliveredHttp ? "" : " Contact the seller."}` : deliveredHttp ? "none" : "paid but not delivered; do not pay again; contact the seller" });
   }
   if (assessment.verdict === "failed") {
     updateOp(opId, { state: "failed", tx: assessment.tx, error: assessment.err, delivered: false }, "own transaction landed and failed");
-    finish("failed", EXIT.FAILED, { tx: assessment.tx, delivered: false, reason: oneLine(JSON.stringify(assessment.err), 300), next: "nothing moved; fix the cause, then buy again with a new --op" });
+    finish("failed", EXIT.FAILED, { tx: assessment.tx, delivered: false, ...(assessment.agreement ? { agreement: assessment.agreement } : {}), reason: oneLine(JSON.stringify(assessment.err), 300), next: "nothing moved; fix the cause, then buy again with a new --op" });
   }
   if (assessment.verdict === "not_found") {
     updateOp(opId, { state: "refused_chain", chainError: sim.value.err, chainLog: failLine, delivered: false }, "chain refuses the transaction (simulation), and its blockhash has expired");
-    finish("refused_chain", EXIT.FAILED, { delivered: false, chainError: sim.value.err, next: `run reconcile before reusing this --op: superstables budget reconcile --rail solana --op ${opId}` });
+    finish("refused_chain", EXIT.FAILED, { delivered: false, ...(assessment.agreement ? { agreement: assessment.agreement } : {}), chainError: sim.value.err, next: `run reconcile before reusing this --op: superstables budget reconcile --rail solana --op ${opId}` });
   }
   updateOp(opId, { state: "unknown", chainError: sim.value.err, chainLog: failLine, delivered: deliveredHttp }, `chain refuses the transaction now (simulation), but it can land until block height ${lastValidBlockHeight}`);
   console.log(`   The seller holds the signed transaction, which stays valid until block height ${lastValidBlockHeight}: a later grant or deposit could still let it land. Outcome unknown. Do not pay again.`);
