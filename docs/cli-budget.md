@@ -101,9 +101,9 @@ Owner approvals: an owner command starts a page on 127.0.0.1 and prints its appr
   APPROVE {"action","url","expires","terms"}
 The owner opens it in the browser that has their wallet. The page is on this machine only: over SSH, forward its port
 first (ssh -L PORT:127.0.0.1:PORT user@this-host, PORT from the approval link). On a chain set up with --hosted (and for
-buy-once), the approval link is on superstables.com instead: it opens on any device where the owner is signed in with
-an Ethereum or Solana wallet; a Solana account supports only Solana agents, Solana budgets and Solana single purchases for now.
-With an Ethereum account, Solana actions also use a Solana wallet to sign transactions. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
+buy-once), the approval link is on superstables.com instead: it opens on any device where the owner is signed in, and
+their account must hold the wallet the chain needs (an Ethereum wallet for EVM chains and Tempo, a Solana wallet for
+Solana); an account admin adds wallets on the account page. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
 command returns at once with state waiting_owner and final false. Write the approval link, the match code and the terms
 in your reply to the owner and end your turn; when they say they've approved, run
 superstables budget wait --id ID --shown. The approval link expires after --timeout seconds (default 600): if the wallet
@@ -736,9 +736,9 @@ created.
 The command asks the site for the purchase and prints the owner's approval link and match code as an APPROVE line, the
 same as the owner commands. Write the approval link, the code and the terms in your reply to the owner, a visible
 message, not only in your reasoning or a tool call, and end your turn there. The first approval link the owner opens
-asks them to sign in with an Ethereum or Solana wallet (a message, no fee). A Solana account supports
-only Solana purchases, paid from the wallet the owner signed in with. With an Ethereum account, the owner
-connects a separate Solana wallet for Solana devnet. Purchases on EVM chains or Tempo require an Ethereum account.
+asks them to sign in, with an Ethereum or Solana wallet (a message, no fee) or an email address. The owner pays
+from a wallet their account holds: an Ethereum wallet on EVM chains and Tempo, a Solana wallet on Solana devnet.
+An account admin adds wallets on the account page.
 Not in a terminal (an agent), or with --detach: returns at
 once with state waiting_owner and an approval id; when the owner says they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: blocks until the purchase ends. One buy-once
