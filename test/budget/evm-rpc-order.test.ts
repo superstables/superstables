@@ -173,6 +173,7 @@ describe("a set that cannot be built says why, in the owner settings' words (the
     expect(r.result).toMatchObject({ allowanceZero: true, revoked: false });
     expect(r.result.agreement).toMatch(/^the RPC endpoints could not be used: B4_RPC \(http:\/\/127\.0\.0\.1:\d+\) is not an RPC the owner set for base-sepolia/);
     expect(r.stdout).toContain("revoked: no: the allowance reads 0 on this RPC, but the RPC endpoints could not be used: B4_RPC (");
+    expect(r.result.agreement).toContain("Unset it, or ask the owner to add it in the owner settings");
   }, 90_000);
 
   it("B4_RPC_BASE_SEPOLIA is the name in the words when it is the one that decided", async () => {
@@ -185,6 +186,6 @@ describe("agreementWords", () => {
   it("keeps the engine's words, and adds the refusal's own reason only for a set that could not be built", () => {
     expect(agreementWords({ agreed: false, why: "disagree" } as any)).toBe("the RPC endpoints disagree");
     expect(agreementWords({ agreed: false, why: "unreadable", left: ["a: down"] } as any)).toBe("the RPC endpoints could not be read (left out: a: down)");
-    expect(agreementWords({ agreed: false, why: "unreadable", reason: "the owner settings could not be read: broken" } as any)).toBe("the RPC endpoints could not be used: the owner settings could not be read: broken");
+    expect(agreementWords({ agreed: false, why: "unreadable", reason: "the owner settings could not be read: broken" } as any)).toBe("the RPC endpoints could not be used: the owner settings could not be read: broken. Unset it, or ask the owner to add it in the owner settings");
   });
 });

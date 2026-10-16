@@ -419,7 +419,7 @@ export async function assertReadChain(command: string) {
  * allow, an unreadable settings file) says why in the refusal's own words, which the engine keeps as `reason`.
  */
 export const agreementWords = (failed: Parameters<typeof engineWords>[0] & { reason?: string }): string =>
-  failed.why === "unreadable" && failed.reason && !failed.left?.length ? `the RPC endpoints could not be used: ${failed.reason}` : engineWords(failed);
+  failed.why === "unreadable" && failed.reason && !failed.left?.length ? `the RPC endpoints could not be used: ${failed.reason}. Unset it, or ask the owner to add it in the owner settings` : engineWords(failed);
 /** The endpoints that decide a verdict on this chain. */
 export const verdictSet = () => budgetVerdictSet(CFG.key, customRpc("evm", CFG.key));
 type Agreed<T> = Awaited<ReturnType<typeof agreeAtFinalEvm>> & { value?: T };
