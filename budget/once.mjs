@@ -25,12 +25,13 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvalsDir, onceDir } from "./paths.mjs";
+import { approvalsDir, onceDir, publicFile } from "./paths.mjs";
+import { readRegularFile } from "./secret-file.mjs";
 import { keccak256 } from "./keccak.mjs";
 import { claim, isApprovalId, newApprovalId, readApproval, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { CHAIN_ID as TEMPO_CHAIN_ID, TOKEN_ADDRESS as PATH_USD, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
-import { accountRefusalNext, accountWaitingWords, call, isOtherSite, siteName, siteText } from "./site.mjs";
+import { DEFAULT_SITE, accountRefusalNext, accountWaitingWords, call, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
 import { readSettlement } from "./settlement.mjs";
 
 /** The chain buy-once used before listings named others; the default in words when nothing else is known. */
@@ -104,14 +105,14 @@ const WORDS = {
     "agent_cancelled", "approval_expired", "authorization_cancelled", "ethereum_account_required", "match_code_mismatch", "not_landed", "not_requested", "not_settled",
     "owner_policy", "owner_proof_owner_mismatch", "owner_rejected", "seller_no_receipt", "seller_refused_payment", "seller_unreachable", "service_no_answer",
     "settlement_failed", "settlement_not_on_chain", "settlement_pending", "stale_tx", "submission_interrupted", "terms_changed", "transaction_mismatch", "wrong_account",
-    "wallet_may_have_sent", "settlement_contradicted", "service_failed",
+    "wallet_may_have_sent", "settlement_contradicted", "service_failed", "payer_mismatch",
   ]),
   error: new Set([
     "anonymous_purchases_disabled", "bad_request", "body_too_large", "chain_unavailable", "ethereum_account_required", "forbidden", "idempotency_conflict",
-    "idempotency_key_expired", "idempotency_key_reused", "internal_error", "invalid_idempotency_key", "invalid_params", "invalid_replay_secret", "invalid_request",
-    "invalid_token", "method_not_allowed", "missing_token", "not_awaiting_approval", "not_found", "owner_proof_owner_mismatch", "payment_outcome_unknown",
+    "idempotency_key_expired", "idempotency_key_reused", "internal_error", "invalid_expected_payer", "invalid_idempotency_key", "invalid_params", "invalid_replay_secret", "invalid_request",
+    "invalid_token", "method_not_allowed", "missing_token", "not_awaiting_approval", "not_found", "owner_proof_owner_mismatch", "payer_mismatch", "payment_outcome_unknown",
     "policy_refused", "price_above_max", "purchase_unresolved", "rate_limited", "replay_secret_required", "seller_error", "service_unavailable", "terms_changed",
-    "terms_mismatch", "too_many_pending", "unauthorized", "unknown_parameter", "unknown_service", "unsupported_media_type", "would_not_settle", "wrong_account",
+    "terms_mismatch", "token_expired", "too_many_pending", "unauthorized", "unknown_parameter", "unknown_service", "unsupported_media_type", "would_not_settle", "wrong_account",
   ]),
 };
 /** A listing's parameter name as the command line takes it (--param NAME=VALUE). */
@@ -387,6 +388,43 @@ export async function listOnceServices({ site, fetchImpl }) {
   return { ok: true, services: list.slice(0, 200).map(onceServiceOf).filter(Boolean) };
 }
 
+/** The purchase API's announcement that a creation may name the wallet expected to pay (superstables-app lib/purchases/features.ts). */
+export const EXPECTED_PAYER_FEATURE = "expected_payer";
+
+/**
+ * What the site says its purchase API accepts beyond the first fields: GET /api/v1/purchase/services `features`. Any failure,
+ * or anything but a list of words: none.
+ */
+export async function purchaseFeatures({ site, fetchImpl }) {
+  const r = await call(`${site}${SERVICES_API}`, { headers: { accept: "application/json" } }, 10_000, fetchImpl);
+  const list = r.ok && Array.isArray(r.body?.features) ? r.body.features : [];
+  return new Set(list.filter((x) => typeof x === "string" && /^[a-z0-9_]{1,64}$/.test(x)).slice(0, 50));
+}
+
+/** The variable that holds the owner in a rail's public file. */
+const OWNER_VAR = { evm: "B4_OWNER_ADDRESS", tempo: "OWNER_ADDRESS", solana: "SOLANA_OWNER_ADDRESS" };
+
+/**
+ * The wallet a purchase on `net` expects to pay: the hosted owner this machine recorded for that rail and chain (the public
+ * file `setup --hosted` wrote), only when its approvals are hosted on the same site as this purchase. EVM addresses are
+ * given in lowercase, which the site accepts for any address. null for no owner, another site, local approvals, or a value
+ * that is not an address of the rail. The file is the agent's to write, but a name in it can only make the check stricter.
+ */
+export function expectedPayerFor(net, site) {
+  try {
+    const text = readRegularFile(publicFile(net.rail, net.chain), "the public file");
+    if (!/^APPROVALS=hosted\s*$/m.test(text)) return null;
+    const recorded = siteOrigin(/^SITE=(.*)$/m.exec(text)?.[1]?.trim() || DEFAULT_SITE).origin;
+    const here = siteOrigin(site).origin;
+    if (!recorded || recorded !== here) return null;
+    const owner = new RegExp(`^${OWNER_VAR[net.rail]}=(.*)$`, "m").exec(text)?.[1]?.trim();
+    if (!isAddress(owner, net)) return null;
+    return net.evm ? owner.toLowerCase() : owner;
+  } catch {
+    return null;
+  }
+}
+
 /** GET /api/v1/purchase/services/{id}: { ok: true, service } or { ok: false, status, reason }. */
 async function getOnceService({ site, id, fetchImpl }) {
   const r = await call(`${site}${SERVICES_API}/${encodeURIComponent(id)}`, { headers: { accept: "application/json" } }, 15_000, fetchImpl);
@@ -547,6 +585,7 @@ export function messageForOwner(r) {
     other,
     // buy-once: who is paid and for what, in this client's words
     r.command === "buy-once" && r.hosted ? `Paid to ${shortAddress(r.hosted.payTo)} for ${r.service?.id ?? "the service"} (purchase ${r.hosted.requestId} on ${siteName(r.hosted.site)}).` : null,
+    r.command === "buy-once" && r.expectedPayer ? `Pay from ${shortAddress(r.expectedPayer)}.` : null,
     r.url,
     r.matchCode ? `Match code: ${r.matchCode} (pick it on the page)` : null,
     `${hasAmount ? `${t.amount} ${unit} on ${network}.` : `On ${network}.`} ${TESTNET_LINE}`,
@@ -850,6 +889,12 @@ const caipOf = (chain) => Object.keys(ONCE_NETWORKS).find((k) => ONCE_NETWORKS[k
 function attributionProblem(record, net, seen, hash, who) {
   const site = siteName(record.hosted?.site ?? "");
   const no = (reason) => ({ state: "mismatch", unattributed: true, reason: `${reason}. Whether this purchase was paid is unknown. Do not pay again.` });
+  // the wallet this purchase named as its payer: the one that signed it, and the one the payment was named with
+  if (record.expectedPayer) {
+    for (const named of [who, seen.payer]) {
+      if (typeof named === "string" && !sameAddress(named, record.expectedPayer, net)) return no(`transaction ${hash} was named with the payer ${named}, not ${record.expectedPayer}, the wallet this purchase expected to pay`);
+    }
+  }
   if (seen.payer === null) return no(`${site}'s answers named different payers for this purchase's payment`);
   if (typeof seen.payer === "string" && who !== seen.payer) return no(`transaction ${hash} was named with ${who ? `the payer ${who}` : "no payer"}, not ${seen.payer}, who signed this purchase's payment`);
   if (net.rail === "evm") {
@@ -973,7 +1018,9 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
         ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, purchase: h.requestId, service: record.service?.id,
         state: "unknown", final: false, paid: null, delivered: null, amount: null, tx: seenTx(record),
         status: r.status, reasonCode: r.code, reason: `the purchase cannot be read: ${r.reason}${possible ? "; a payment may have left" : ""}`,
-        next: `${next ?? "ask the owner to check the purchase on their account"}; run superstables budget wait --id ${record.id} --shown again. The payment outcome is unknown; do not start another purchase for this request`,
+        next: r.code === "token_expired"
+          ? `the site no longer answers for this purchase (its access token expired); ask the owner to check it on their account; ${ABANDON(record.id)}`
+          : `${next ?? "ask the owner to check the purchase on their account"}; run superstables budget wait --id ${record.id} --shown again. The payment outcome is unknown; do not start another purchase for this request`,
       } };
     }
     // not readable now, but an earlier answer carried payment evidence: unknown, never "waiting for the owner"
@@ -1172,7 +1219,10 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
     return { ok: false, code: 5, state: "unknown", record: readApproval(recordId), final: true, result, reason: result.reason, next: result.next };
   };
 
-  const created = await createPurchase({ site, key: randomUUID(), secret: randomBytes(32).toString("hex"), body: { service_id: service.id, params: checked.params, max_amount: max }, net, fetchImpl });
+  // the hosted owner recorded here for this chain, named to the site only when it says it takes the field
+  const payer = expectedPayerFor(net, site);
+  const sendPayer = payer !== null && (await purchaseFeatures({ site, fetchImpl })).has(EXPECTED_PAYER_FEATURE);
+  const created = await createPurchase({ site, key: randomUUID(), secret: randomBytes(32).toString("hex"), body: { service_id: service.id, params: checked.params, max_amount: max, ...(sendPayer ? { expected_payer: payer } : {}) }, net, fetchImpl });
   if (!created.ok) {
     // any answer, any retry, that carried payment evidence: never "nothing was paid"
     if (!mayBeUnpaid(created.seen)) return unknownWithoutId(created.seen, `${siteName(site)} did not confirm creation of the purchase (${created.reason})`);
@@ -1229,6 +1279,8 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
   if (!Number.isFinite(Date.parse(approval.expires_at))) return cancelAndRefuse("the purchase has no expiry");
   const wrong = mismatchOf(p, service, max);
   if (wrong) return cancelAndRefuse(`the site's purchase does not match the listing: ${wrong}`);
+  // the site listed the feature and did not take the field: the purchase is not used
+  if (sendPayer && !sameAddress(p.expected_payer, payer, net)) return cancelAndRefuse(`${siteName(site)} did not confirm the wallet expected to pay (${payer})`);
 
   const terms = termsOf(service, p, net);
   const expires = new Date(approval.expires_at).toISOString();
@@ -1236,6 +1288,7 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
   const record = saveApproval({
     id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "waiting_owner", attributionVersion: 2, createdAt: new Date().toISOString(),
     action: "buy-once", url: link.href, expires, matchCode: approval.match_code, terms, service: { id: service.id, name: service.name }, max, pid: null,
+    ...(sendPayer ? { expectedPayer: payer } : {}),
     ...(mayBeUnpaid(born) ? {} : { seen: born }),
     // the amount, recipient and token checked against the listing and --max: a payment is read from the chain against them
     hosted: { site, requestId: id, kind: "purchase", matchCode: approval.match_code, token, amount: p.terms.amount.decimal, payTo: p.terms.recipient, asset: net.asset },

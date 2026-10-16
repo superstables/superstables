@@ -31,12 +31,16 @@ export const OWNER_KEYS = new Map<string, Hex | Uint8Array>([
   ...Array.from({ length: 12 }, (_, i) => [solanaOwner(i + 1), solanaOwnerKeypair(i + 1).secretKey] as [string, Uint8Array]),
 ]);
 
-export type LinkFacts = { site: string; owner: string; agent: string; rail: string; chain: string; linkId: string; code: string };
+export type LinkFacts = { site: string; owner: string; agent: string; rail: string; chain: string; linkId: string; code: string; /** version 2: the account the agent joins */ account?: string };
 
-/** The owner proof's text, exactly as the protocol spells it. */
+/** The account id the fake site gives a signed-in owner (a UUID). */
+export const ACCOUNT_ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+/** The owner proof's text, exactly as the protocol spells it: eight lines, or on version 2 (with `account`) nine under their own title. */
 export function linkProofText(f: LinkFacts): string {
   const owner = f.rail === "solana" ? f.owner : getAddress(f.owner);
-  return `Superstables: add an agent to my account\nsite: ${f.site}\nowner: ${owner}\nagent: ${f.agent}\nrail: ${f.rail}\nchain: ${f.chain}\nrequest: ${f.linkId}\ncode: ${f.code}`;
+  const v2 = f.account !== undefined;
+  return `Superstables: add an agent to my account${v2 ? " (v2)" : ""}\nsite: ${f.site}\nowner: ${owner}\nagent: ${f.agent}\nrail: ${f.rail}\nchain: ${f.chain}\nrequest: ${f.linkId}\ncode: ${f.code}${v2 ? `\naccount: ${f.account}` : ""}`;
 }
 
 /** The owner's wallet signs the link: { scheme, message, signature }, with the owner's test key (or `key`). */
@@ -92,6 +96,12 @@ export interface FakeRequest {
    * out; anything else is sent as it is.
    */
   owner_proof?: unknown;
+  /** The owner-proof text version the link asked for (owner_proof_v2); 1 when it did not. */
+  proofVersion?: 1 | 2;
+  /** Access token renewals so far (POST .../token). */
+  renewals?: number;
+  /** The agent's access token has expired: reads with it answer 401 token_expired until it is renewed. */
+  expired?: boolean;
 }
 
 export interface FakeSite extends TestServer {
@@ -121,6 +131,24 @@ export interface FakeSite extends TestServer {
   features?: string[];
   /** A site that lists expected_owner and drops the field: its answers do not repeat it. */
   echoExpectedOwner?: false;
+  /** The account the owner is signed in to (a UUID); v2 proofs name it. Default ACCOUNT_ID. */
+  accountId?: string;
+  /** Adversarial site, v2: sign this text version whatever the link asked for. */
+  proofText?: 1 | 2;
+  /** Adversarial site, v2: the account line of the signed text (the view still says `accountId`). */
+  proofAccount?: string;
+  /** Adversarial site, v2: leave `account_id` out of the view. */
+  omitAccountId?: boolean;
+  /** Adversarial site, v2: a view with this `account_id` (the signed text still names `accountId`). */
+  viewAccountId?: string;
+  /** A site that lists owner_proof_v2 and drops the field: its answers do not repeat owner_proof_version. */
+  echoProofVersion?: false;
+  /** Token renewal: answer POST .../token with this instead of a new token. */
+  renewAnswer?: (r: FakeRequest) => { status: number; body: unknown } | undefined;
+  /** Token renewal: the renewed token is still expired (the site expires it again at once). */
+  renewKeepsExpired?: boolean;
+  /** The Authorization header of every read of a request, in order. */
+  readTokens: string[];
   /** Agents already linked, by address (lowercase), with their owner: a link with `then` for one of them is refused (409). */
   linked?: Record<string, string>;
   /** Answer a cancel with this status and body instead (a site whose answer carries anything at all). */
@@ -177,6 +205,7 @@ export async function startFakeSite(): Promise<FakeSite> {
   site.requests = [];
   site.posts = [];
   site.headers = [];
+  site.readTokens = [];
   site.owner = null;
   /**
    * Nonces seen, by agent, with the request each one created (or null): an exact resend of a request that created one is
@@ -190,19 +219,29 @@ export async function startFakeSite(): Promise<FakeSite> {
     if (r.owner_proof === null) return {};
     if (r.owner_proof !== undefined) return { owner_proof: r.owner_proof };
     if (!OWNER_KEYS.has(r.body.rail === "solana" ? r.owner : r.owner.toLowerCase())) return {};
-    r.owner_proof = await signLinkProof({ site: site.origin, owner: r.owner, agent: r.body.agent, rail: r.body.rail, chain: r.body.chain, linkId: r.id, code: r.matchCode ?? "ABC-DEF" });
+    const signed = site.proofText ?? r.proofVersion ?? 1;
+    const account = signed === 2 ? (site.proofAccount ?? site.accountId ?? ACCOUNT_ID) : undefined;
+    r.owner_proof = await signLinkProof({ site: site.origin, owner: r.owner, agent: r.body.agent, rail: r.body.rail, chain: r.body.chain, linkId: r.id, code: r.matchCode ?? "ABC-DEF", ...(account !== undefined ? { account } : {}) });
     return { owner_proof: r.owner_proof };
   };
   /** The owner a link named, as the request view echoes it. */
   const echo = (r: FakeRequest) => (r.body.expected_owner !== undefined && site.echoExpectedOwner !== false ? { expected_owner: r.body.rail === "solana" ? r.body.expected_owner : getAddress(r.body.expected_owner) } : {});
+  /** On a site that lists owner_proof_v2: which text the link asked for, and on a v2 link that is linked the account it names. */
+  const proofFields = (r: FakeRequest) => {
+    if (r.kind !== "link" || !site.features?.includes("owner_proof_v2")) return {};
+    return {
+      ...(site.echoProofVersion === false ? {} : { owner_proof_version: r.proofVersion ?? 1 }),
+      ...(r.proofVersion === 2 && r.owner && !site.omitAccountId ? { account_id: site.viewAccountId ?? site.accountId ?? ACCOUNT_ID } : {}),
+    };
+  };
   const view = async (r: FakeRequest) => {
     if (r.steps) {
       const { state, final } = bundleState(r);
       const hashes = r.steps.map((s) => s.tx_hash).filter(Boolean);
       // like the site: the request's wallet_asked is the link's own or any step's
-      return { id: r.id, kind: r.kind, state, final, owner: r.owner, ...echo(r), ...(await proofOf(r)), tx_hash: null, wallet_asked: r.wallet_asked === true || r.steps.some((st) => st.wallet_asked === true), reason: r.reason ?? null, reason_code: r.reason_code ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) } };
+      return { id: r.id, kind: r.kind, state, final, owner: r.owner, ...echo(r), ...proofFields(r), ...(await proofOf(r)), tx_hash: null, wallet_asked: r.wallet_asked === true || r.steps.some((st) => st.wallet_asked === true), reason: r.reason ?? null, reason_code: r.reason_code ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) } };
     }
-    return { id: r.id, kind: r.kind, state: r.state, final: r.final ?? FINAL.has(r.state), owner: r.owner, ...echo(r), ...(r.state === "linked" ? await proofOf(r) : {}), tx_hash: r.tx_hash, reason: r.reason ?? null, reason_code: r.reason_code ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" } };
+    return { id: r.id, kind: r.kind, state: r.state, final: r.final ?? FINAL.has(r.state), owner: r.owner, ...echo(r), ...proofFields(r), ...(r.state === "linked" ? await proofOf(r) : {}), tx_hash: r.tx_hash, reason: r.reason ?? null, reason_code: r.reason_code ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" } };
   };
   const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -223,8 +262,9 @@ export async function startFakeSite(): Promise<FakeSite> {
       const body = JSON.parse(raw);
       const link = url.pathname.endsWith("/links");
       // like both deployments: a field outside the route's own list is refused
-      const allowed = link ? ["rail", "chain", "agent", "label", "then", ...(site.features?.includes("expected_owner") ? ["expected_owner"] : [])] : ["kind", "rail", "chain", "agent", "transaction", "solana"];
+      const allowed = link ? ["rail", "chain", "agent", "label", "then", ...(site.features?.includes("expected_owner") ? ["expected_owner"] : []), ...(site.features?.includes("owner_proof_v2") ? ["owner_proof_version"] : [])] : ["kind", "rail", "chain", "agent", "transaction", "solana"];
       if (Object.keys(body).some((k) => !allowed.includes(k))) return json(res, 400, { error: { code: "unknown_parameter", message: "a field this request does not take", allowed } });
+      if (link && body.owner_proof_version !== undefined && body.owner_proof_version !== null && body.owner_proof_version !== 1 && body.owner_proof_version !== 2) return json(res, 400, { error: { code: "invalid_owner_proof_version", message: "owner_proof_version must be 1 or 2" } });
       let expectedOwner: string | undefined;
       if (link && body.expected_owner !== undefined) {
         const value = String(body.expected_owner);
@@ -242,7 +282,7 @@ export async function startFakeSite(): Promise<FakeSite> {
       }
       const id = `${link ? "bl" : "ba"}_test${String(++n).padStart(4, "0")}`;
       const expiresAt = Date.now() + (site.expiresInMs ?? 600_000);
-      const r: FakeRequest = { id, kind: link ? "link" : body.kind, token: `ssbt_test_${id}secret`, body, state: "awaiting_owner", owner: link ? null : site.owner, tx_hash: null, polls: 0, cancels: 0, matchCode: "ABC-DEF", expiresAt };
+      const r: FakeRequest = { id, kind: link ? "link" : body.kind, token: `ssbt_test_${id}secret`, body, state: "awaiting_owner", owner: link ? null : site.owner, tx_hash: null, polls: 0, cancels: 0, matchCode: "ABC-DEF", expiresAt, ...(link ? { proofVersion: body.owner_proof_version === 2 ? (2 as const) : (1 as const) } : {}) };
       if (link && Array.isArray(body.then)) r.steps = body.then.map((t: any, index: number) => ({ index, kind: t.kind, state: "queued", tx_hash: null, reason: null, reason_code: null, wallet_asked: false, ...(t.solana ? { solana: t.solana } : { transaction: t.transaction }) }));
       site.requests.push(r);
       nonces.set(`${req.headers["superstables-agent"]}:${req.headers["superstables-agent-nonce"]}`, id);
@@ -256,11 +296,34 @@ export async function startFakeSite(): Promise<FakeSite> {
         message_for_owner: "Open the approval link and pick ABC-DEF.",
         next_action: { type: "wait_for_owner", poll: `/api/v1/budget/requests/${id}` },
         ...(expectedOwner && site.echoExpectedOwner !== false ? { expected_owner: expectedOwner } : {}),
+        ...(link ? proofFields(r) : {}),
         ...(r.steps ? { steps: site.answerSteps ? site.answerSteps(r.steps.map(stepView)) : r.steps.map(stepView) } : {}),
       };
       return json(res, 201, site.answerCreated ? site.answerCreated(created) : created);
     }
-    const m = /^\/api\/v1\/budget\/requests\/([^/]+)(\/cancel)?$/.exec(url.pathname);
+    const m = /^\/api\/v1\/budget\/requests\/([^/]+)(\/cancel|\/token)?$/.exec(url.pathname);
+    if (m && m[2] === "/token" && req.method === "POST") {
+      // a fresh access token for the agent that made the request (credential expiry): the agent's proof, body { agent }
+      site.headers.push(Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, String(v)])));
+      const r = site.requests.find((x) => x.id === m[1]);
+      const proof = await checkProof(req, site.origin, url.pathname, raw, r?.body.rail);
+      const seen = proof.ok ? nonces.get(proof.nonceKey) : undefined;
+      const why = !proof.ok ? proof.reason : seen !== undefined ? "replayed" : undefined;
+      site.posts.push({ path: url.pathname, ok: !why, why });
+      if (why) return json(res, 401, { error: { code: "agent_proof", reason: why, message: `The agent proof was refused (${why}).` } });
+      if (proof.ok) nonces.set(proof.nonceKey, null);
+      const body = JSON.parse(raw);
+      const unknown = Object.keys(body).find((k) => k !== "agent");
+      if (unknown !== undefined) return json(res, 400, { error: { code: "unknown_parameter", message: `"${unknown}" is not a field of this request`, allowed: ["agent"] } });
+      if (!r) return json(res, 404, { error: { code: "not_found", message: "no such request" } });
+      if (r.body.agent !== body.agent) return json(res, 403, { error: { code: "not_your_request", message: "another agent's key made this request" } });
+      const custom = site.renewAnswer?.(r);
+      if (custom) return json(res, custom.status, custom.body);
+      r.renewals = (r.renewals ?? 0) + 1;
+      r.token = `ssbt_test_${r.id}renewed${r.renewals}`;
+      r.expired = site.renewKeepsExpired === true;
+      return json(res, 200, { id: r.id, access_token: r.token });
+    }
     if (m) {
       const r = site.requests.find((x) => x.id === m[1]);
       if (!r) return json(res, 404, { error: { code: "not_found", message: "no such request" } });
@@ -290,8 +353,10 @@ export async function startFakeSite(): Promise<FakeSite> {
         for (const st of r.steps ?? []) if (st.state === "queued") Object.assign(st, { state: "skipped", reason: "the agent cancelled this request before the owner added this agent", reason_code: "link_not_done" });
         return json(res, 200, await view(r));
       }
+      if (!m[2]) site.readTokens.push(String(req.headers.authorization ?? ""));
       r.polls++;
       site.onPoll?.(r);
+      if (r.expired && !m[2]) return json(res, 401, { error: { code: "token_expired", message: "this request ended over 30 days ago, so its access token no longer reads it" } });
       const normal = await view(r);
       const custom = site.readAnswer?.(r, normal);
       if (custom) return json(res, custom.status, custom.body);
@@ -313,7 +378,7 @@ export const agentProofV2Text = (origin: string, method: string, path: string, r
  * The site's check of an agent request (proof v2), with the site's reasons: missing, malformed, stale, signature (a wrong
  * origin shows as this too), agent_mismatch. The nonce's use is the caller's.
  */
-async function checkProof(req: IncomingMessage, origin: string, path: string, raw: string): Promise<{ ok: true; nonceKey: string } | { ok: false; reason: string }> {
+async function checkProof(req: IncomingMessage, origin: string, path: string, raw: string, rail?: string): Promise<{ ok: true; nonceKey: string } | { ok: false; reason: string }> {
   const agent = String(req.headers["superstables-agent"] ?? "");
   const tsText = String(req.headers["superstables-agent-timestamp"] ?? "");
   const nonce = String(req.headers["superstables-agent-nonce"] ?? "");
@@ -322,12 +387,12 @@ async function checkProof(req: IncomingMessage, origin: string, path: string, ra
   if (!/^\d+$/.test(tsText) || !/^[0-9a-f]{32}$/.test(nonce)) return { ok: false, reason: "malformed" };
   if (Math.abs(Number(tsText) - Date.now() / 1000) > 300) return { ok: false, reason: "stale" };
   const text = agentProofV2Text(origin, "POST", path, raw, tsText, nonce);
-  const why = await verifyAgent(agent, text, sig, raw);
+  const why = await verifyAgent(agent, text, sig, raw, rail);
   return why ? { ok: false, reason: why } : { ok: true, nonceKey: `${agent}:${nonce}` };
 }
 
-async function verifyAgent(agent: string, text: string, sig: Hex, raw: string): Promise<string | undefined> {
-  if (JSON.parse(raw).rail === "solana") {
+async function verifyAgent(agent: string, text: string, sig: Hex, raw: string, rail?: string): Promise<string | undefined> {
+  if ((rail ?? JSON.parse(raw).rail) === "solana") {
     // ed25519 over the text's UTF-8 bytes; base58 keys are case-sensitive
     if (!/^0x[0-9a-f]{128}$/i.test(sig)) return "malformed";
     let ok = false;

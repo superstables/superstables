@@ -524,7 +524,9 @@ is not trusted to say who the owner is or what was paid.
   error it sends the same proof once more on purpose.
 - **The owner signs an owner proof.** The site cannot choose the recorded owner on its own. After
   picking the match code, the owner's wallet signs the site, the owner, the agent, the rail and
-  chain, the request ID and the code. The client rebuilds that text from its own values and
+  chain, the request ID and the code. On a site that offers it, the client asks for the text that
+  also names the account the agent joins (version 2), and only that text is accepted for such a
+  request. The client rebuilds that text from its own values and
   verifies the signature for that owner before it records anyone; without a valid proof it records
   nothing. When this machine already records an owner and the site says it supports it, the
   add-agent request also names that owner (`expected_owner`), and the site refuses any other
@@ -556,6 +558,10 @@ is not trusted to say who the owner is or what was paid.
   The payer and authorization it named are fixed from that answer on, and on EVM chains the
   authorization's nonce must be the hash of an order naming this purchase and its terms; otherwise
   the result is unknown and the agent never buys again.
+- **A single purchase names its payer where the site supports it.** The wallet is the hosted owner
+  this machine records for that chain on the same site. The site refuses any other wallet before it
+  signs, the client checks that the site repeated the name, and a payment by another wallet is
+  `unknown`, never paid.
 - **Single purchase on superstables.com checks the site's reported amounts.** The site states each amount twice, as a decimal
   for display and as an integer in token units. They must agree, the token must have 6 decimals,
   and `--max` and the listing price are compared with the integer. These are checks on the site's

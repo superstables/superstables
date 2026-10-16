@@ -34,6 +34,11 @@
 // the owner already recorded here, not with --new-owner, and only with a proof over the request id and match code stored
 // when that owner was recorded.
 //
+// On a site that lists `owner_proof_v2` the link asks for the owner proof that also names the account the agent joins (nine
+// lines, ownerProofText with version 2): the site must repeat the version, and only that text counts for such a link.
+// A link that did not ask for it accepts only the eight-line text. An access token that the site expires
+// (401 token_expired) is renewed once with a fresh agent signature (POST .../requests/{id}/token).
+//
 // A connect for an agent whose owner is recorded here names that owner (expected_owner) when the site announces the
 // feature in GET /api/v1/budget/services, and the client checks that the site repeated it. On any site, a bundle whose
 // agent the site adds to another account than the expected one is withdrawn before anything is recorded.
@@ -79,6 +84,15 @@ export function agentProofText(origin: string, method: string, path: string, raw
 /** The first line of the text the owner's wallet signs to add an agent to their account. */
 export const OWNER_PROOF_TITLE = "Superstables: add an agent to my account";
 
+/** The first line of the owner proof that also names the account the agent joins (version 2). */
+export const OWNER_PROOF_TITLE_V2 = "Superstables: add an agent to my account (v2)";
+/** An account id as the site gives it in a version 2 proof: a lowercase UUID. */
+const ACCOUNT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** The owner proof's version: 1, or 2 with the account the site says the agent joins. */
+export type ProofVersion = { version?: 1 | 2; account?: string };
+/** The owner-proof version the site announces in GET /api/v1/budget/services `features`. */
+export const OWNER_PROOF_V2_FEATURE = "owner_proof_v2";
+
 /** What the owner proof is about: every value comes from this client, except the owner the site names. */
 export interface LinkFacts {
   site: string;
@@ -93,13 +107,16 @@ export interface LinkFacts {
 }
 
 /**
- * The exact text the owner's wallet signs: eight lines, `\n` separated, no trailing newline. The owner and the agent are
+ * The exact text the owner's wallet signs: eight lines, `\n` separated, no trailing newline. Version 2 has its own title and
+ * a ninth line, `account: <the account id>`. The owner and the agent are
  * checksummed (0x) on evm and tempo, base58 Solana addresses on solana.
  */
-export function ownerProofText(f: LinkFacts): string {
+export function ownerProofText(f: LinkFacts, { version = 1, account }: ProofVersion = {}): string {
   const owner = f.rail === "solana" ? f.owner : getAddress(f.owner);
   const agent = f.rail === "solana" ? f.agent : getAddress(f.agent);
-  return [OWNER_PROOF_TITLE, `site: ${f.site}`, `owner: ${owner}`, `agent: ${agent}`, `rail: ${f.rail}`, `chain: ${f.chain}`, `request: ${f.linkId}`, `code: ${f.code}`].join("\n");
+  const v2 = version === 2;
+  if (v2 && (typeof account !== "string" || !ACCOUNT_ID.test(account))) throw new Error("a version 2 owner proof names the account, a lowercase UUID");
+  return [v2 ? OWNER_PROOF_TITLE_V2 : OWNER_PROOF_TITLE, `site: ${f.site}`, `owner: ${owner}`, `agent: ${agent}`, `rail: ${f.rail}`, `chain: ${f.chain}`, `request: ${f.linkId}`, `code: ${f.code}`, ...(v2 ? [`account: ${account}`] : [])].join("\n");
 }
 
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -141,15 +158,16 @@ export function ed25519Verifies(address: string, message: string, signature: str
  * the one rebuilt here byte for byte, and the signature must verify for the owner (EIP-191 on evm and tempo, ed25519 on
  * solana).
  */
-export async function ownerProofProblem(proof: unknown, facts: LinkFacts): Promise<string> {
+export async function ownerProofProblem(proof: unknown, facts: LinkFacts, opts: ProofVersion = {}): Promise<string> {
   if (!proof || typeof proof !== "object") return "the site sent no owner proof";
   const p = proof as { scheme?: unknown; message?: unknown; signature?: unknown };
   const scheme = facts.rail === "solana" ? "ed25519" : "eip191";
   if (p.scheme !== scheme) return `the owner proof is not ${scheme}`;
   if (typeof p.message !== "string" || typeof p.signature !== "string") return "the owner proof has no message or signature";
+  if (opts.version === 2 && (typeof opts.account !== "string" || !ACCOUNT_ID.test(opts.account))) return "the site named no valid account for an owner proof that names the account";
   let want: string;
   try {
-    want = ownerProofText(facts);
+    want = ownerProofText(facts, opts);
   } catch {
     return "the owner is not an address of this rail";
   }
@@ -385,7 +403,7 @@ function railWords(rail: HostedRail) {
     isTx: (h: unknown): h is string => typeof h === "string" && (solana ? SOLANA_SIGNATURE.test(h) : /^0x[0-9a-fA-F]{64}$/.test(h)),
   };
 }
-type Poll = { /** what earlier answers showed */ seen?: Seen; id: string; token: string; kind: HostedRecord["kind"]; title: string; expected?: string; matchCode: string; localDeadline: number; siteExpiry: number; resolve: (o: OwnerActionOutcome) => void };
+type Poll = { /** what earlier answers showed */ seen?: Seen; /** a link: the owner-proof version it asked for */ proofVersion?: 1 | 2; /** what the approval record holds, so a renewed token replaces it */ record?: HostedRecord; id: string; token: string; kind: HostedRecord["kind"]; title: string; expected?: string; matchCode: string; localDeadline: number; siteExpiry: number; resolve: (o: OwnerActionOutcome) => void };
 const FINAL_STATES = new Set(["linked", "confirmed", "failed", "rejected", "expired", "cancelled", "unknown"]);
 const STEP_FINAL = new Set(["confirmed", "failed", "rejected", "expired", "unknown", "skipped", "cancelled"]);
 /** The rail and chain flags of a command: no --chain on a rail's default chain. */
@@ -448,14 +466,18 @@ export class HostedApprovals {
     let kind: HostedRecord["kind"];
     let expectedOwner: string | null = null;
     let sentOwner = false;
+    let askedV2 = false;
     const then = input.kind === "connect" && input.then?.length ? input.then : undefined;
     if (input.kind === "connect") {
       path = `${BUDGET_API}/links`;
       kind = "link";
       // the owner recorded here (not with --new-owner), named to the site only when it says it takes the field
       expectedOwner = !input.newOwner ? this.w.owner(input.expectedOwner) : null;
-      sentOwner = Boolean(expectedOwner) && (await this.features()).has(EXPECTED_OWNER_FEATURE);
-      body = { rail: this.s.rail, chain: this.s.chain, agent, ...(this.s.label ? { label: this.s.label.slice(0, 40) } : {}), ...(sentOwner ? { expected_owner: expectedOwner } : {}), ...(then ? { then } : {}) };
+      const features = await this.features();
+      sentOwner = Boolean(expectedOwner) && features.has(EXPECTED_OWNER_FEATURE);
+      // the owner proof that names the account, only where the site says it takes the field
+      askedV2 = features.has(OWNER_PROOF_V2_FEATURE);
+      body = { rail: this.s.rail, chain: this.s.chain, agent, ...(this.s.label ? { label: this.s.label.slice(0, 40) } : {}), ...(sentOwner ? { expected_owner: expectedOwner } : {}), ...(askedV2 ? { owner_proof_version: 2 } : {}), ...(then ? { then } : {}) };
     } else {
       const k = HOSTED_KIND[input.action];
       if (!k) throw new HostedRefusal(`"${input.action}" has no hosted approval`, "use the approval page on this machine");
@@ -479,7 +501,10 @@ export class HostedApprovals {
       if (input.kind === "connect" && input.newOwner) refuse("a new owner is recorded only when the owner adds the agent again and signs a new owner proof, not from an earlier one");
       if (!prior) return refuse("this machine has no record of the add-agent request that added it, so the site's word alone cannot make an owner");
       if (!this.w.same(prior.owner, answer.owner)) refuse(`this machine records the owner ${prior.owner}`);
-      const problem = await ownerProofProblem(answer.proof, this.facts(answer.owner, prior.linkId, prior.linkCode));
+      // the recorded link is this client's own earlier one: its proof is the eight-line text, or the nine-line text naming the account the answer gives
+      const facts = this.facts(answer.owner, prior.linkId, prior.linkCode);
+      let problem = await ownerProofProblem(answer.proof, facts);
+      if (problem && typeof answer.accountId === "string") problem = await ownerProofProblem(answer.proof, facts, { version: 2, account: answer.accountId }) && problem;
       if (problem) refuse(`its answer does not prove it: ${problem}`);
       this.audit({ id: answer.id, kind, title: input.terms.title, status: "linked", address: answer.owner });
       return { id: answer.id, url: "", expiresAt: Date.now(), matchCode: "", alreadyLinked: true, link: { id: prior.linkId, code: prior.linkCode }, settled: Promise.resolve({ status: "connected", address: answer.owner }), finish: () => {} };
@@ -501,6 +526,13 @@ export class HostedApprovals {
       this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: "expected owner not confirmed", sending: created.seen.asked || undefined });
       const a = afterCancel(c, !!then, created.seen);
       throw new HostedRefusal(`${this.s.site} did not confirm that only the owner recorded on this machine (${expectedOwner}) may add this agent; the request is not used. ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
+    }
+    if (askedV2 && (created.answer as any)?.owner_proof_version !== 2) {
+      // the site listed the feature and did not take the field: the request is not used
+      const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
+      this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: "owner proof version not confirmed", sending: created.seen.asked || undefined });
+      const a = afterCancel(c, !!then, created.seen);
+      throw new HostedRefusal(`${this.s.site} did not confirm the owner proof that names the account; the request is not used. ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
     }
     const record: HostedRecord = { site: this.s.site, requestId: created.id, token: created.token, kind, matchCode: created.matchCode, ...(then ? { then: then.map((t) => t.kind) } : {}) };
     const expected = input.kind === "connect" ? undefined : this.w.owner(input.account) ?? input.account;
@@ -556,7 +588,7 @@ export class HostedApprovals {
     if (then) {
       let settle!: (b: HostedBundleOutcome) => void;
       const bundle = new Promise<HostedBundleOutcome>((done) => (settle = done));
-      const base = { id: created.id, token: created.token, kind, title: input.terms.title, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve };
+      const base = { id: created.id, token: created.token, kind, title: input.terms.title, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve, record, ...(askedV2 ? { proofVersion: 2 as const } : {}) };
       const kinds = then.map((t) => t.kind);
       void this.pollBundle({ ...base, expected: expectedOwner ?? undefined, timeoutMs: input.timeoutMs, kinds, settle, answer: created.answer }).catch((err: Error) => {
         this.learners.delete(created.id);
@@ -577,7 +609,7 @@ export class HostedApprovals {
         finish: (verdict) => this.audit(verdictLine(created.id, kind, input.terms.title, verdict)),
       };
     }
-    void this.poll({ seen, id: created.id, token: created.token, kind, title: input.terms.title, expected, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve }).catch((err: Error) => {
+    void this.poll({ seen, id: created.id, token: created.token, kind, title: input.terms.title, expected, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve, record, ...(askedV2 ? { proofVersion: 2 as const } : {}) }).catch((err: Error) => {
       this.learners.delete(created.id);
       this.cancellations.delete(created.id);
       resolve({ status: "expired", reason: `the command stopped reading the request: ${scrub(siteText(err.message))}`, sending: kind !== "link" });
@@ -618,6 +650,45 @@ export class HostedApprovals {
       this.cancellations.set(id, once);
     }
     return once;
+  }
+
+  /** What a link's owner proof is checked as: the version it asked for, and for version 2 the account the site's view names. */
+  private proofOf(p: { proofVersion?: 1 | 2 }, view: any): ProofVersion {
+    return p.proofVersion === 2 ? { version: 2, account: typeof view?.account_id === "string" ? view.account_id : undefined } : {};
+  }
+
+  /**
+   * A fresh access token for a request whose token the site expired: POST .../requests/{id}/token, signed with the agent's
+   * key over the body { agent }. The token is `ssbt_...` and the id is the request's own, or there is none.
+   */
+  private async renew(p: { id: string }): Promise<string | null> {
+    const path = `${BUDGET_API}/requests/${p.id}/token`;
+    const raw = JSON.stringify({ agent: agentAddressOf(this.s.agentKey) });
+    try {
+      const { headers } = await agentProof(this.s.agentKey, this.s.site, "POST", path, raw);
+      const res = await (this.s.fetchImpl ?? fetch)(`${this.s.site}${path}`, { method: "POST", redirect: "error", headers: { ...headers, "content-type": "application/json", accept: "application/json" }, body: raw, signal: AbortSignal.timeout(20_000) });
+      const { bytes, truncated } = await readCapped(res, SITE_MAX_BYTES);
+      if (!res.ok || truncated) return null;
+      const json = JSON.parse(bytes.toString("utf8"));
+      return json && json.id === p.id && isSiteToken(json.access_token) ? (json.access_token as string) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Renew `p`'s token and take the new one in everywhere this client holds the old one: the poll, the open and held requests, the approval record. */
+  private async renewed(p: { id: string; token: string; record?: HostedRecord }): Promise<boolean> {
+    const fresh = await this.renew(p);
+    if (!fresh) return false;
+    p.token = fresh;
+    if (this.open.has(p.id)) this.open.set(p.id, { id: p.id, token: fresh });
+    const held = this.held.get(p.id);
+    if (held) held.token = fresh;
+    if (p.record) {
+      p.record = { ...p.record, token: fresh };
+      this.s.onRecord?.(p.record);
+    }
+    return true;
   }
 
   private async create(path: string, body: Record<string, unknown>, prefix: string) {
@@ -702,7 +773,7 @@ export class HostedApprovals {
       if (!isSiteRequestId(json.id) || !String(json.id).startsWith(prefix) || !owner) {
         throw new HostedRefusal(`${this.s.site} says this agent has already been added to an account, but its answer has no ${owner ? "request id" : "owner address"}; nothing was recorded or sent`, "try again later");
       }
-      return { linked: true as const, id: json.id as string, owner, proof: json.owner_proof as unknown };
+      return { linked: true as const, id: json.id as string, owner, proof: json.owner_proof as unknown, accountId: json.account_id as unknown };
     }
     const id = json?.id;
     const token = json?.access_token;
@@ -750,6 +821,7 @@ export class HostedApprovals {
     let loggedAsked = walletAsked;
     let lastContact = Date.now();
     let cancelTried = false;
+    let renewed = false;
     let readAt = 0;
     // Every cancellation of this approval (the deadline, a refused owner, close()) is the one shared call. What its answer
     // shows of the wallet is taken in, and written to the log, before the call resolves: close() may be followed by an exit.
@@ -819,6 +891,11 @@ export class HostedApprovals {
             this.audit({ id: p.id, kind: p.kind, title: p.title, status: siteWord("state", lastState), hash: hash ?? undefined, sending: true });
           }
         }
+        // an access token the site expired: one renewal with a fresh agent signature, then the same read again
+        if (r.status === 401 && r.code === "token_expired" && !renewed) {
+          renewed = true;
+          if (await this.renewed(p)) continue;
+        }
         if ([401, 403, 404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code))) return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx);
         await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
         continue;
@@ -855,7 +932,7 @@ export class HostedApprovals {
           if (!owner) return end("rejected", `${this.name} reported the agent as added without an owner address`, false);
           {
             // the owner is recorded only with their own signature over this link
-            const problem = await ownerProofProblem(v.owner_proof, this.facts(owner, p.id, p.matchCode));
+            const problem = await ownerProofProblem(v.owner_proof, this.facts(owner, p.id, p.matchCode), this.proofOf(p, v));
             if (problem) return end("rejected", `${this.name} reported the agent as added to ${owner}, but ${problem}. Nothing was recorded`, false);
           }
           this.audit({ id: p.id, kind: p.kind, title: p.title, status: "connected", address: owner });
@@ -894,6 +971,7 @@ export class HostedApprovals {
     const grace = this.s.sendingGraceMs ?? 120_000;
     const steps: HostedStepOutcome[] = p.kinds.map((kind) => ({ kind, state: "queued", hash: null, reason: "", reasonCode: null, walletAsked: false }));
     let owner: string | null = null;
+    let renewed = false;
     let linkedAt = 0;
     let linkState = "awaiting_owner";
     let linkReason = "";
@@ -1071,6 +1149,11 @@ export class HostedApprovals {
       const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, fetchImpl: this.s.fetchImpl });
       if (!r.ok) {
         if (r.asked) unexplain();
+        // an access token the site expired: one renewal with a fresh agent signature, then the same read again
+        if (r.status === 401 && r.code === "token_expired" && !renewed) {
+          renewed = true;
+          if (await this.renewed(p)) continue;
+        }
         if ([401, 403, 404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code))) {
           // withdraw it first: an answer that confirms it is the only proof the steps were never asked
           if (!cancelTried) {
@@ -1102,7 +1185,7 @@ export class HostedApprovals {
       }
       if (named) {
         // the owner is recorded only with their own signature over this link; without it the steps are withdrawn
-        const problem = await ownerProofProblem(v.owner_proof, this.facts(named, p.id, p.matchCode));
+        const problem = await ownerProofProblem(v.owner_proof, this.facts(named, p.id, p.matchCode), this.proofOf(p, v));
         if (problem) {
           refusedLink = { withdrawn: false };
           learnCancel(await this.cancelOnce(p.id, p.token));

@@ -7,7 +7,7 @@
 import { createHash, createPrivateKey, randomUUID, sign } from "node:crypto";
 import { Keypair, PublicKey, TransactionMessage } from "@solana/web3.js";
 import bs58 from "bs58";
-import { getAddress, keccak256, toBytes } from "viem";
+import { getAddress, isAddress, keccak256, toBytes } from "viem";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readBody, startServer, type TestServer } from "./servers.js";
 
@@ -24,7 +24,9 @@ export interface FakePurchase {
   id: string;
   token: string;
   key: string | undefined;
-  body: { service_id: string; params?: Record<string, string>; max_amount?: string };
+  body: { service_id: string; params?: Record<string, string>; max_amount?: string; expected_payer?: string };
+  /** The wallet the creation named as the one to pay, as the site stores it (checksummed on EVM networks). */
+  expectedPayer?: string;
   service: Service;
   state: string;
   nonce?: string;
@@ -67,6 +69,10 @@ interface Service {
 export interface FakePurchaseSite extends TestServer {
   services: Service[];
   purchases: FakePurchase[];
+  /** What GET /api/v1/purchase/services and a creation announce in `features` (nothing listed: expected_payer is refused as an unknown field, as production does). */
+  features?: string[];
+  /** A site that lists expected_payer and drops the field: its answers do not repeat it. */
+  echoExpectedPayer?: false;
   /** Called on every read of a purchase, before the answer. */
   onPoll?: (p: FakePurchase) => void;
   onChainRead?: (method: string) => Promise<void>;
@@ -216,6 +222,7 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
     request: { method: "GET", url: `https://seller.example/${p.service.id}`, params: p.body.params ?? {} },
     terms: terms(p), payment: { ...p.payment, ...(p.nonce && p.payment.payer ? { authorization: { nonce: p.nonce, ...(p.order ? { order: p.order } : {}), valid_before: (p.validBefore ??= new Date(Date.now() + 600_000).toISOString()) } } : {}) }, delivery: p.delivery,
     ...(p.state === "settled" || p.state === "paid_service_failed" ? { receipt: { id: p.id, purchase_id: p.id, transaction: (p.payment.transaction as string) ?? TX, payer: (p.payment.payer as string) ?? PAYER } } : {}),
+    ...(p.expectedPayer && site.echoExpectedPayer !== false ? { expected_payer: p.expectedPayer } : {}),
     ...(p.reason ? { reason: p.reason } : {}), ...(p.reason_code ? { reason_code: p.reason_code } : {}),
     message: `purchase ${p.state}`, next: "see state", next_action: { type: p.final ? "done" : "wait_for_owner" },
   });
@@ -292,7 +299,7 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
   const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const raw = await readBody(req);
-    if (req.method === "GET" && url.pathname === "/api/v1/purchase/services") return json(res, 200, { supported: { network: "eip155:84532" }, services: site.services.map(listing) });
+    if (req.method === "GET" && url.pathname === "/api/v1/purchase/services") return json(res, 200, { supported: { network: "eip155:84532" }, ...(site.features ? { features: site.features } : {}), services: site.services.map(listing) });
     const one = /^\/api\/v1\/purchase\/services\/([^/]+)$/.exec(url.pathname);
     if (req.method === "GET" && one) {
       const s = site.services.find((x) => x.id === one[1]);
@@ -301,6 +308,9 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
     if (req.method === "POST" && url.pathname === "/api/v1/purchases") {
       if (site.refuseCreate) return json(res, site.refuseCreate.status, { error: { ...site.refuseCreate.error, money_moved: false } });
       const body = JSON.parse(raw);
+      // like production: a field outside the route's list is refused
+      const allowed = ["service_id", "params", "max_amount", ...(site.features?.includes("expected_payer") ? ["expected_payer"] : [])];
+      if (Object.keys(body).some((k) => !allowed.includes(k))) return json(res, 400, { error: { code: "unknown_parameter", message: "a field this request does not take", money_moved: false } });
       const key = String(req.headers["idempotency-key"] ?? "");
       const secretHeader = req.headers["superstables-replay-secret"];
       // the replay secret is valid only with an Idempotency-Key, 16 to 255 visible ASCII characters
@@ -317,14 +327,23 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
       const s = site.services.find((x) => x.id === body.service_id);
       if (!s) return json(res, 404, { error: { code: "not_found", message: "no such service", money_moved: false } });
       if (body.max_amount && Number(s.amount) > Number(body.max_amount)) return json(res, 409, { error: { code: "price_above_max", message: `the service costs ${s.amount}, above max_amount ${body.max_amount}`, money_moved: false } });
+      let expectedPayer: string | undefined;
+      if (body.expected_payer !== undefined) {
+        const solana = (s.network ?? "").startsWith("solana:");
+        const v = String(body.expected_payer);
+        const valid = solana ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v) : isAddress(v, { strict: true });
+        if (!valid) return json(res, 400, { error: { code: "invalid_expected_payer", message: "expected_payer is not a wallet of this network", money_moved: false } });
+        expectedPayer = solana ? v : getAddress(v);
+      }
       const id = randomUUID();
-      const p: FakePurchase = { id, token: `sspt_test_${id.replace(/-/g, "")}`, key: String(req.headers["idempotency-key"] ?? "") || undefined, secret: String(req.headers["superstables-replay-secret"] ?? "") || undefined, body, service: s, state: "awaiting_approval", final: false, payment: { status: "awaiting_approval" }, delivery: { status: "pending" }, polls: 0, cancels: 0 };
+      const p: FakePurchase = { id, token: `sspt_test_${id.replace(/-/g, "")}`, key: String(req.headers["idempotency-key"] ?? "") || undefined, secret: String(req.headers["superstables-replay-secret"] ?? "") || undefined, body, service: s, state: "awaiting_approval", final: false, payment: { status: "awaiting_approval" }, delivery: { status: "pending" }, polls: 0, cancels: 0, ...(expectedPayer ? { expectedPayer } : {}) };
       site.tweak?.(p);
       site.purchases.push(p);
       return json(res, 201, {
         ...view(p), access_token: p.token, replayed: false,
         approval: { url: `${site.approvalBase ?? server.url}/approve/${id}#${site.approvalFragment ?? `sspa_test_owner${site.purchases.length}`}`, match_code: "KPT-RWD", expires_at: new Date(Date.now() + 600_000).toISOString() },
         message_for_owner: "Open the approval link and pick KPT-RWD.",
+        ...(site.features ? { features: site.features } : {}),
       });
     }
     const m = /^\/api\/v1\/purchases\/([^/]+)(\/cancel)?$/.exec(url.pathname);

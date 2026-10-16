@@ -65,7 +65,8 @@ superstables budget buy-once --service superstables-demo-market-data --param ass
 created. The command prints an `APPROVE` line with the approval link and a match code. Run by an agent (stdout is not
 a terminal), or with `--detach`, it then returns with `state: "waiting_owner"` and an approval `id`; in
 a terminal it waits for the purchase to end. Send the `RESULT`'s `message_for_owner` (the approval link, the
-code and the price) as a reply the owner can read, and end your turn there. The owner opens it, signs in with an Ethereum or Solana wallet the
+code and the price) as a reply the owner can read, and end your turn there. When this machine records a hosted owner for the
+chain and the site supports naming the payer, the message also says which wallet to pay from ("Pay from 0x1234...abcd."). The owner opens it, signs in with an Ethereum or Solana wallet the
 first time (a message, no fee), picks the same code on the page and approves the payment in their
 wallet. When they say they have, run:
 
