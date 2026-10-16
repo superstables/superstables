@@ -1,7 +1,9 @@
 // JSON-RPC stand-ins for Tempo Moderato and Solana devnet, for the hosted approval tests: just enough of each chain for the
 // rail scripts to read what the owner's wallet sent (a transaction, its receipt, the keychain or the token account) after the
 // site reports it. A test changes the chain by calling the helpers below, as the owner's wallet would. No network.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
 import { decodeFunctionData, encodeErrorResult, encodeFunctionResult, type Hex } from "viem";
@@ -144,14 +146,20 @@ export interface FakeSolana extends TestServer {
    * real instruction (ApproveChecked, Revoke or a SystemProgram transfer, for `amount`), then `extra` instructions (a lying
    * site), and `budget` compute-budget instruction datas first (a wallet's fee). `instructionAmount` puts another amount in
    * the instruction than the one applied. `signers` requires more signatures than the owner's; `lookupTable` makes it a
-   * version 0 transaction that loads accounts from that address lookup table.
+   * version 0 transaction that loads accounts from that address lookup table. `usdc_transfer` is a TransferChecked of `amount`
+   * from the USDC account of the wallet `owner` to the one of the wallet `agent` (a key sweeping its own tokens back).
    */
-  land(t: { kind: "grant" | "revoke" | "fund_agent"; owner: string; agent: string; amount?: bigint; signer?: string; slot?: number; extra?: { program: string; accounts: string[]; data: Buffer }[]; budget?: Buffer[]; instructionAmount?: bigint; signers?: number; lookupTable?: string; signature?: string }): string;
+  land(t: { kind: "grant" | "revoke" | "fund_agent" | "usdc_transfer"; owner: string; agent: string; amount?: bigint; signer?: string; slot?: number; extra?: { program: string; accounts: string[]; data: Buffer }[]; budget?: Buffer[]; instructionAmount?: bigint; signers?: number; lookupTable?: string; signature?: string }): string;
   /**
    * sendTransaction: a SOL transfer the command sent (the owner page on this computer) lands under its own signature;
    * any other transaction is refused. Then `afterSend` runs with that signature, before the RPC answers.
    */
   afterSend?: (signature: string) => void;
+  /**
+   * sendTransaction also lands a single Revoke or TransferChecked from the token program (an owner key file revoking, an agent
+   * key returning its tokens). Off by default: then it refuses everything but a SOL transfer, as before.
+   */
+  acceptTokenTransactions?: boolean;
   /** sendTransaction takes the transfer but does not land it until `landHeld` (a transaction still on its way). */
   hold?: boolean;
   landHeld?: () => string | undefined;
@@ -169,8 +177,14 @@ export const computeUnitPrice = (microLamports: bigint) => { const b = Buffer.al
 export const COMPUTE_BUDGET = "ComputeBudget111111111111111111111111111111";
 export const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
-export async function startFakeSolana(): Promise<FakeSolana> {
+/**
+ * `websocket`: also answer `signatureSubscribe` on the RPC port + 1, where @solana/web3.js looks for it, so
+ * `sendAndConfirmTransaction` (an owner key file's revoke) can confirm. Off by default: then nothing listens there.
+ */
+export async function startFakeSolana(opts: { websocket?: boolean } = {}): Promise<FakeSolana> {
   const chain = {} as FakeSolana;
+  /** signature -> the subscriptions waiting for it */
+  const subscribers = new Map<string, ((slot: number) => void)[]>();
   chain.slot = 5000;
   chain.balances = new Map();
   chain.usdc = new Map();
@@ -200,6 +214,14 @@ export async function startFakeSolana(): Promise<FakeSolana> {
       main = { program: SYSTEM_PROGRAM, accounts: [t.owner, t.agent], data: d };
       pre = [10n ** 9n, had];
       post = [10n ** 9n - t.amount! - 5000n, had + t.amount!];
+    } else if (t.kind === "usdc_transfer") {
+      const from = chain.usdc.get(t.owner)!;
+      const to = chain.usdc.get(t.agent)!;
+      from.amount -= t.amount!;
+      to.amount += t.amount!;
+      main = { program: TOKEN_PROGRAM.toBase58(), accounts: [ata, USDC_MINT.toBase58(), ataOf(t.agent).toBase58(), t.owner], data: Buffer.concat([Buffer.from([12]), u64(ixAmount), Buffer.from([6])]) };
+      pre = [];
+      post = [];
     } else {
       if (t.kind === "grant") Object.assign(acc, { delegate: t.agent, delegated: t.amount! });
       else Object.assign(acc, { delegate: null, delegated: 0n });
@@ -241,6 +263,8 @@ export async function startFakeSolana(): Promise<FakeSolana> {
         },
       },
     });
+    for (const notify of subscribers.get(sig) ?? []) notify(slot);
+    subscribers.delete(sig);
     return sig;
   };
   const tokenAccount = (owner: string) => {
@@ -278,9 +302,38 @@ export async function startFakeSolana(): Promise<FakeSolana> {
       case "getLatestBlockhash": return ctx({ blockhash: bs58.encode(Buffer.alloc(32, 9)), lastValidBlockHeight: chain.slot + 150 });
       case "sendTransaction": {
         const tx = Transaction.from(Buffer.from(params[0], "base64"));
+        // a node refuses a transaction whose signatures do not verify
+        if (!tx.signature || !tx.verifySignatures()) throw new Error("Transaction signature verification failure");
+        const signature = bs58.encode(tx.signature);
+        // a key signing for itself (acceptTokenTransactions): one Revoke or one TransferChecked, checked as the token program does
+        const token = chain.acceptTokenTransactions && tx.instructions.length === 1 && tx.instructions[0].programId.equals(TOKEN_PROGRAM) ? tx.instructions[0] : undefined;
+        const walletOf = (account: string) => [...chain.usdc.keys()].find((o) => ataOf(o).toBase58() === account);
+        const signs = (k: { pubkey: PublicKey; isSigner: boolean }) => k.isSigner && tx.signatures.some((s) => s.publicKey.equals(k.pubkey) && s.signature !== null);
+        if (token && token.data[0] === 5) {
+          // Revoke: [source token account, owner (signer)]
+          const owner = token.keys[1].pubkey.toBase58();
+          if (token.keys[0].pubkey.toBase58() !== ataOf(owner).toBase58() || !chain.usdc.has(owner)) throw new Error("fake solana: Revoke: the source is not the token account of its owner");
+          if (!signs(token.keys[1])) throw new Error("fake solana: Revoke: the owner has not signed");
+          chain.land({ kind: "revoke", owner, agent: "", signature });
+          chain.afterSend?.(signature);
+          return signature;
+        }
+        if (token && token.data[0] === 12) {
+          // TransferChecked: [source, mint, destination, authority (signer)], amount, decimals
+          const from = walletOf(token.keys[0].pubkey.toBase58());
+          const to = walletOf(token.keys[2].pubkey.toBase58());
+          if (!from || !to) throw new Error("fake solana: a token account that does not exist");
+          if (token.keys[1].pubkey.toBase58() !== USDC_MINT.toBase58()) throw new Error("fake solana: TransferChecked: the mint is not the USDC mint");
+          if (token.data[9] !== 6) throw new Error("fake solana: TransferChecked: the decimals are not the mint's");
+          if (token.keys[3].pubkey.toBase58() !== from || !signs(token.keys[3])) throw new Error("fake solana: TransferChecked: the authority is not the signing owner of the source");
+          const amount = token.data.readBigUInt64LE(1);
+          if (amount > chain.usdc.get(from)!.amount) throw new Error("fake solana: TransferChecked: insufficient funds");
+          chain.land({ kind: "usdc_transfer", owner: from, agent: to, amount, signature });
+          chain.afterSend?.(signature);
+          return signature;
+        }
         const transfer = tx.instructions.find((ix) => ix.programId.toBase58() === SYSTEM_PROGRAM);
         if (!transfer || tx.instructions.length !== 1) throw new Error("fake solana: sendTransaction lands one SOL transfer only");
-        const signature = bs58.encode(tx.signature!);
         const landIt = () => chain.land({ kind: "fund_agent", owner: transfer.keys[0].pubkey.toBase58(), agent: transfer.keys[1].pubkey.toBase58(), amount: transfer.data.readBigUInt64LE(4), signature });
         if (chain.hold) chain.landHeld = () => { chain.landHeld = undefined; return landIt(); };
         else landIt();
@@ -290,7 +343,7 @@ export async function startFakeSolana(): Promise<FakeSolana> {
       default: throw new Error(`fake solana: ${method}`);
     }
   };
-  const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const body = JSON.parse(await readBody(req));
     const one = (c: { id: number | string; method: string; params?: any[] }) => {
       chain.calls.push(c.method);
@@ -301,6 +354,69 @@ export async function startFakeSolana(): Promise<FakeSolana> {
       }
     };
     json(res, Array.isArray(body) ? body.map(one) : one(body));
+  };
+  const server = await startServer(handle);
+  if (!opts.websocket) return Object.assign(chain, server);
+  // the RPC port + 1 must be free: try a few RPC ports
+  for (let attempt = 0; ; attempt += 1) {
+    const rpc = attempt === 0 ? server : await startServer(handle);
+    const port = Number(new URL(rpc.url).port) + 1;
+    const ws = createServer((_, res) => res.writeHead(426).end());
+    const sockets = new Set<Duplex>();
+    ws.on("upgrade", (req, socket) => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); solanaSignatureSocket(req, socket, txs, subscribers, () => chain.slot); });
+    const ok = await new Promise<boolean>((resolve) => { ws.once("error", () => resolve(false)); ws.listen(port, "127.0.0.1", () => resolve(true)); });
+    if (ok) return Object.assign(chain, rpc, { close: async () => { for (const s of sockets) s.destroy(); await new Promise((r) => ws.close(r)); await rpc.close(); } });
+    await rpc.close();
+    if (attempt >= 20) throw new Error("fake solana: no free port pair for the websocket");
+  }
+}
+
+/**
+ * The few frames of a WebSocket that @solana/web3.js's confirmation needs: signatureSubscribe answers a subscription id, and
+ * a signatureNotification follows once the signature has landed (at once when it already has). Text frames only.
+ */
+function solanaSignatureSocket(req: IncomingMessage, socket: Duplex, txs: Map<string, any>, subscribers: Map<string, ((slot: number) => void)[]>, slot: () => number) {
+  const accept = createHash("sha1").update(`${req.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+  socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  const frame = (opcode: number, payload: Buffer) => {
+    const head = payload.length < 126 ? Buffer.from([0x80 | opcode, payload.length]) : Buffer.from([0x80 | opcode, 126, payload.length >> 8, payload.length & 255]);
+    if (!socket.destroyed) socket.write(Buffer.concat([head, payload]));
+  };
+  const send = (o: unknown) => frame(1, Buffer.from(JSON.stringify(o)));
+  let next = 1;
+  const onMessage = (text: string) => {
+    let m: any;
+    try { m = JSON.parse(text); } catch { return; }
+    if (m?.id === undefined) return; // a notification (web3.js's ping)
+    if (m.method === "signatureSubscribe") {
+      const id = next++;
+      send({ jsonrpc: "2.0", id: m.id, result: id });
+      const notify = (s: number) => send({ jsonrpc: "2.0", method: "signatureNotification", params: { result: { context: { slot: s }, value: { err: null } }, subscription: id } });
+      const sig = m.params?.[0];
+      if (txs.has(sig)) notify(slot());
+      else subscribers.set(sig, [...(subscribers.get(sig) ?? []), notify]);
+    } else if (/Unsubscribe$/.test(m.method)) send({ jsonrpc: "2.0", id: m.id, result: true });
+    else send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: `fake solana websocket: ${m.method}` } });
+  };
+  let buf = Buffer.alloc(0);
+  socket.on("data", (d: Buffer) => {
+    buf = Buffer.concat([buf, d]);
+    for (;;) {
+      if (buf.length < 2) return;
+      const opcode = buf[0] & 15;
+      let len = buf[1] & 127;
+      let at = 2;
+      if (len === 126) { if (buf.length < 4) return; len = buf.readUInt16BE(2); at = 4; } else if (len === 127) { if (buf.length < 10) return; len = Number(buf.readBigUInt64BE(2)); at = 10; }
+      const masked = (buf[1] & 128) !== 0;
+      const end = at + (masked ? 4 : 0) + len;
+      if (buf.length < end) return;
+      const payload = Buffer.from(buf.subarray(end - len, end));
+      if (masked) for (let i = 0; i < len; i += 1) payload[i] ^= buf[at + (i % 4)];
+      buf = buf.subarray(end);
+      if (opcode === 1) onMessage(payload.toString("utf8"));
+      else if (opcode === 9) frame(10, payload);
+      else if (opcode === 8) { frame(8, Buffer.alloc(0)); socket.end(); return; }
+    }
   });
-  return Object.assign(chain, server);
+  socket.on("error", () => {});
 }

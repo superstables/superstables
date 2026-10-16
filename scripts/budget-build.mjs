@@ -44,9 +44,9 @@ const src = join(root, "budget");
 // (imported by the scripts). A file in neither list fails the build: a new script would otherwise be missing from the
 // standalone copy, and a new library must be named here so nobody mistakes it for a script.
 const RUNNABLE = {
-  evm: ["setup", "fundAgent", "preflight", "setBudget", "buy", "reconcile", "revoke", "recover", "read"],
+  evm: ["setup", "fundAgent", "preflight", "setBudget", "buy", "reconcile", "revoke", "recover", "read", "rotate"],
   tempo: ["setup", "setBudget", "buy", "preflight", "reconcile", "readBudget", "revokeBudget"],
-  solana: ["setup", "fundAgent", "setBudget", "buy", "reconcile", "readBudget", "revokeBudget"],
+  solana: ["setup", "fundAgent", "setBudget", "buy", "reconcile", "readBudget", "revokeBudget", "rotate"],
 };
 const LIBRARIES = {
   evm: ["chains", "cli-guard", "delegation", "lib", "ops", "owner", "purchase"],

@@ -1646,6 +1646,7 @@ const NO_ANSWER_AFTER_BOUNDARY: Record<string, string> = {
   "budget preflight": "reads a seller's price; signs nothing",
   "budget find": "lists services; no payment",
   "budget unlock": "clears locks after the owner stopped every process; it reports lock state only, and its next for an operation is reconcile",
+  "budget rotate": "rotate runs recover, revoke, reconcile and setup as child commands; each answers for itself",
 };
 
 const REASONS: Record<string, string> = NO_ANSWER_AFTER_BOUNDARY;
