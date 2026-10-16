@@ -12,6 +12,7 @@ import { privateKeyToAddress } from "viem/accounts";
 import { Abis } from "viem/tempo";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
+import { accountHomeWith, DEV_SETTINGS } from "../helpers/owner-settings.js";
 import { endpointTree, scratchDir, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { ataOf, startFakeSolana, startFakeTempo, USDC_MINT, type FakeSolana, type FakeTempo } from "../helpers/fake-chains.js";
 import { evmOwner, startFakeSite, type FakeRequest, type FakeSite } from "../helpers/fake-site.js";
@@ -143,6 +144,38 @@ describe("solana: a second endpoint on another cluster", () => {
   }, 120_000);
 });
 
+describe("verdicts with an RPC that only the environment names", () => {
+  const needle = /is not an RPC the owner set.*unset it, or ask the owner to add it in the owner settings/;
+  it("solana: a recorded revoke both table endpoints agree on stays unknown, and the words say why and what to do", async () => {
+    const a = await solana();
+    const b = track(await a.mirror());
+    const env = track(await a.mirror());
+    tree.set({ "solana-devnet": [a.url, b.url] });
+    solanaSetup(a, { revoked: true });
+    const s = await budget(["status", "--rail", "solana"], { ...solEnv(env), SUPERSTABLES_TEST_ACCOUNT_HOME: accountHomeWith(null) });
+    expect(s.result, s.stdout + s.stderr).toMatchObject({ revoked: false, atRisk: null });
+    expect(s.result.reason).toMatch(needle);
+    expect(s.result.next).toMatch(needle);
+    expect(s.result.next).toMatch(/count it as live/);
+  }, 120_000);
+
+  it("tempo: a revoked key both table endpoints agree on stays unknown, and the words say why and what to do", async () => {
+    const a = await tempo();
+    const b = track(await a.mirror());
+    const env = track(await a.mirror());
+    tree.set({ "tempo-moderato": [a.url, b.url] });
+    tempoSetup();
+    a.keys.set(tempoKeyId, REVOKED_KEY);
+    const home2 = accountHomeWith(null);
+    const r = await script("budget/tempo/readBudget.ts", ["--owner", OWNER_EVM, "--key", TEMPO_AGENT], { ...tempoEnv(env), SUPERSTABLES_TEST_ACCOUNT_HOME: home2 });
+    expect(r.stdout).toMatch(/isRevoked:\s+unknown/);
+    expect(r.stdout).toMatch(needle);
+    const s = await budget(["status", "--rail", "tempo"], { ...tempoEnv(env), SUPERSTABLES_TEST_ACCOUNT_HOME: home2 });
+    expect(s.result, s.stdout + s.stderr).toMatchObject({ revoked: false, atRisk: null });
+    expect(s.result.reason).toMatch(needle);
+  }, 120_000);
+});
+
 describe("solana: status after a recorded revoke", () => {
   it("the primary shows no delegate and a second endpoint a live one: not revoked, and the endpoints disagree", async () => {
     const a = await solana();
@@ -264,15 +297,26 @@ describe("solana: reconcile of an expired purchase", () => {
 });
 
 describe("solana: owner commands use the owner's endpoints", () => {
-  it("an RPC set only in the environment gets nothing from fund-agent", async () => {
+  it("an RPC set only in the environment is refused by default, and gets nothing from fund-agent", async () => {
     const owners = await solana();
     const env = await solana();
     tree.set({ "solana-devnet": [owners.url] });
     solanaSetup(owners);
-    const r = await budget(["fund-agent", "--rail", "solana", "--amount", "0.01", "--owner-key-file", ownerKeyFile(), "--yes"], solEnv(env));
-    expect(env.calls, r.stdout + r.stderr).toEqual([]);
-    expect(owners.calls).toContain("getGenesisHash");
-    expect(r.stderr).toMatch(/not one of the endpoints set for owner commands/);
+    const r = await budget(["fund-agent", "--rail", "solana", "--amount", "0.01", "--owner-key-file", ownerKeyFile(), "--yes"], { ...solEnv(env), SUPERSTABLES_TEST_ACCOUNT_HOME: accountHomeWith(null) });
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.result.reason).toMatch(/is not an RPC the owner set/);
+    expect(env.calls).toEqual([]);
+    expect(owners.calls).toEqual([]);
+  }, 120_000);
+
+  it("an RPC set only in the environment is used when the owner allows this computer's RPCs", async () => {
+    const owners = await solana();
+    const env = await solana();
+    tree.set({ "solana-devnet": [owners.url] });
+    solanaSetup(owners);
+    await budget(["fund-agent", "--rail", "solana", "--amount", "0.01", "--owner-key-file", ownerKeyFile(), "--yes"], { ...solEnv(env), SUPERSTABLES_TEST_ACCOUNT_HOME: accountHomeWith(DEV_SETTINGS) });
+    expect(env.calls).toContain("getGenesisHash");
+    expect(env.calls).toContain("getBalance");
   }, 120_000);
 
   it("an RPC set in the environment that is the owner's own is used", async () => {

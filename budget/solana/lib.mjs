@@ -62,23 +62,17 @@ export const TESTNET = true;
 // SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL for reads (tests point it at a local fake; you can point it at your own node).
 // https, or http on this computer only (../rpc.mjs): anything else is ignored here with a warning, and the dispatcher refuses
 // the command before it runs a script. Owner commands and the verdicts that let an agent pay again do not take the replacement
-// on its word: they use the endpoints the owner set (src/core/rpc-endpoints.mjs), which the replacement joins only when it is
-// one of them.
+// on its word: they use the endpoints the owner set (src/core/rpc-endpoints.mjs), and a replacement that is not one of them is
+// refused there (an owner command exits 3; a verdict stays unknown, with that reason).
 const envRpc = (() => {
   const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana, "read", "solana-devnet");
   if (r.error) process.stderr.write(`warning: ${r.error}; using ${DEFAULT_RPC.solana}\n`);
   // custom is also true for the owner's own URL (source "settings"): that one is not the variable
   return r.custom && r.source !== "settings" ? r.url : undefined;
 })();
-let warnedEnv = false;
 /** The endpoints for a purpose: "read" (balances, searches, the primary), "verdict" (what lets an agent pay again) or "owner" (what an owner command reads and sends through). */
 export function solanaSet(purpose = "read") {
-  const set = endpointSet("solana-devnet", purpose, { envUrl: envRpc, envName: "SUPERSTABLES_SOLANA_RPC", testnet: TESTNET });
-  if (!("error" in set) && set.note && !warnedEnv) {
-    warnedEnv = true;
-    process.stderr.write(`warning: SUPERSTABLES_SOLANA_RPC is not one of the endpoints set for ${purpose === "owner" ? "owner commands" : "confirming"}; ${purpose === "owner" ? "the owner's endpoints are used" : "it reads, and the set confirms"}\n`);
-  }
-  return set;
+  return endpointSet("solana-devnet", purpose, { envUrl: envRpc, envName: "SUPERSTABLES_SOLANA_RPC", testnet: TESTNET });
 }
 /** The URL a connection for `purpose` talks to. Throws (in words) when the owner settings cannot be read. */
 export function rpcUrl(purpose = "read") {

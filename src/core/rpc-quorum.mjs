@@ -275,6 +275,12 @@ export function agreementWords(failed) {
   if (failed.why === "disagree") return "the RPC endpoints disagree";
   if (failed.why === "not_final_yet") return "it is not final on chain yet";
   const left = failed.left?.length ? ` (left out: ${failed.left.join("; ")})` : "";
+  // no endpoint was tried: the set itself was refused (an RPC variable that is not the owner's, or unreadable owner settings)
+  if (failed.why === "unreadable" && failed.reason && !failed.left) {
+    // the long explanation after the colon is the settings module's; the words keep what was refused and the way out
+    const refused = /is not an RPC the owner set/.test(failed.reason);
+    return `the RPC endpoints could not be read: ${refused ? `${failed.reason.replace(/: owner actions and verdicts read only.*$/, "")}; unset it, or ask the owner to add it in the owner settings` : failed.reason}`;
+  }
   if (failed.why === "unreadable") return `the RPC endpoints could not be read${left}`;
   return `a second RPC endpoint was not available to confirm it${left}`;
 }
