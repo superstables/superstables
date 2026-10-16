@@ -172,6 +172,8 @@ describe("a copy of the client whose chain tables name chains that are not testn
 };
 
 export const EVM_CHAIN_KEYS`);
+    // the owner settings name the chains an RPC can be set for: the copy names this one too
+    edit("src/core/owner-settings.js", '"robinhood-testnet",', '"robinhood-testnet", "gated-base",');
     edit("budget/solana/lib.mjs", "export const TESTNET = true;", "export const TESTNET = false;");
     edit("budget/tempo/lib/constants.mjs", "export const TESTNET = true", "export const TESTNET = false");
   }, 60_000);

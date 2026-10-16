@@ -91,7 +91,7 @@ if (HOSTED) {
   if (OWNER_KEY_FILE) usage('--hosted asks the owner on the site; with --owner-key-file there is no owner to ask')
   if (typeof args.agent === 'string') usage('--agent on a hosted chain adds the new key on the site by itself: drop --hosted')
   const s = chosenSite(typeof args.site === 'string' ? args.site : undefined)
-  if (s.error) usage(`--site: ${s.error}`)
+  if (s.error) usage(s.error)
   SITE = s.origin as string
 } else if (typeof args.site === 'string') usage('--site goes with --hosted')
 // The setup command that replaces the owner. On a hosted chain it names --hosted and the exact site: without them, setup
@@ -225,7 +225,7 @@ async function main() {
     if (boundTo && !same(boundTo, pub.OWNER_ADDRESS)) {
       const reason = `the owner files disagree: ${PUBLIC_ENV_PATH} records the owner ${pub.OWNER_ADDRESS}, and ${AGENT_ENV_PATH} is bound to ${boundTo}`
       console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)
-      const site = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE).origin : undefined
+      const site = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE, 'read').origin : undefined
       process.exit(result(3, { state: 'refused_precheck', reason, owner: pub.OWNER_ADDRESS, next: `${newOwnerCmd(site)} records one owner again (refused while a budget is live on either), then superstables budget setup --rail tempo --agent ${label}` }))
     }
     // unbound (an interrupted setup, a backup): bind it to the owner on record, so a later setup cannot replace that owner
@@ -283,7 +283,7 @@ async function main() {
   const newOwner = NEW_OWNER
   const publicOwner = pub.OWNER_ADDRESS && (!pub.AGENT_ADDRESS || same(pub.AGENT_ADDRESS, agent)) ? (pub.OWNER_ADDRESS as Address) : undefined
   const recorded = (publicOwner ?? agentOwner) as Address | undefined
-  const recordedSite = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE).origin : undefined
+  const recordedSite = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE, 'read').origin : undefined
   if (agentOwner && publicOwner && !same(agentOwner, publicOwner) && !newOwner) {
     const reason = `the owner files disagree: ${PUBLIC_ENV_PATH} records the owner ${publicOwner}, and ${AGENT_ENV_PATH} is bound to ${agentOwner}`
     console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)

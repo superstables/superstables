@@ -28,7 +28,7 @@ import { ownerApprovalsLog } from "./paths.mjs";
 import { HOLDER_ENV, recordHosted } from "./approvals.mjs";
 import { sendBegan } from "./proof.mjs";
 import { HOSTED_KIND, HostedApprovals, HostedRefusal, type HostedBundleOutcome, type HostedSettings, type HostedStep, type PriorLink } from "./hosted.ts";
-import { isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
+import { DEFAULT_SITE, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
 
 const argv = process.argv.slice(2);
 const argValue = (name: string) => {
@@ -196,10 +196,15 @@ export function ownerPageFor(rail: OwnerRail) {
   function hostedSettings(action: string, kind: "connect" | "transaction") {
     const recorded = rail.hostedSite?.();
     if (!recorded || !rail.hosted) return undefined;
-    const site = siteOrigin(recorded);
+    const site = siteOrigin(recorded, "owner");
     if (site.error) {
+      // the kill switch must work on an install whose recorded site the owner no longer allows: revoke asks on this machine
+      if (action === "revoke" && site.ownerCommand) {
+        console.error(`revoke: the site recorded for this chain (${siteText(recorded, 120)}) is not an approval site the owner allows, so this revoke asks on the page on this machine (127.0.0.1) instead. The owner allows that site with ${site.ownerCommand}.`);
+        return undefined;
+      }
       console.log(`REFUSED: the recorded site is not usable: ${site.error}`);
-      process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: `the recorded site is not usable: ${site.error}`, next: `run superstables budget setup ${rail.railFlag ?? "--rail evm"} --hosted again, with --site if you use another site` }));
+      process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: `the recorded site is not usable: ${site.error}`, next: site.ownerCommand ? `${site.ownerCommand} in the owner's own terminal, or superstables budget setup ${rail.railFlag ?? "--rail evm"} --hosted --new-owner to move this chain to ${DEFAULT_SITE}` : `run superstables budget setup ${rail.railFlag ?? "--rail evm"} --hosted again, with --site if you use another site` }));
     }
     if (kind === "transaction" && !HOSTED_KIND[action]) {
       console.error(`${action}: the owner's steps of recover use the approval page on this machine (127.0.0.1), not ${site.origin}. Hosted approvals cover setup, grant, revoke and fund-agent.`);
