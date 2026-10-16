@@ -38,6 +38,7 @@ import { NEW_OWNER } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
 import { chosenSite, isSiteRequestId, siteOrigin } from "../site.mjs";
 import { retiredProblem } from "../retired.mjs";
+import { SETUP_KEYS, agentBinding, bindingLines, signLocalBinding } from "../owner-binding.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const d = (EVM_CHAINS as Record<string, any>)[CFG.key].doctor;
@@ -167,16 +168,32 @@ if (BUNDLE) {
 let ownerAddr: Address;
 let finish: ((v: OwnerVerdict) => void) | null = null;
 let bundle: { steps: HostedStepOutcome[] } | undefined;
+// The text the owner's wallet signed, naming this agent, and the signature: kept in the public file (../owner-binding.mjs).
+let binding: { message: string; signature: string } | undefined;
+const proofOrRefuse = async (proof: { message: string; signature: string } | undefined) => {
+  if (proof) return proof;
+  await closeOwnerPage(0);
+  const reason = "the owner's signature did not come back";
+  console.log(`REFUSED: ${reason}. Nothing was changed.`);
+  return process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: "run setup again; the owner signs once" }));
+};
+// A re-run on a recorded owner asks nothing only when the public file already holds the owner's signature for this agent. A chain
+// whose approvals are hosted keeps today's behaviour: setup --hosted records the signature from the site's owner proof.
+const heldBinding = recorded && !NEW_OWNER && !HOSTED ? await agentBinding("evm", { owner: recorded, agent: agentAddr, lines: p }, { keyAgent: agentAddr, file: PUBLIC_ENV }) : null;
+const reuse = !!recorded && !NEW_OWNER && !HOSTED && (!!recordedSite || heldBinding?.state === "signed");
 if (OWNER_KEY_FILE) {
-  ownerAddr = privateKeyToAccount(need(ownerKeyEnv(), "B4_OWNER_KEY", OWNER_KEY_FILE) as Hex).address;
+  const ownerKey = need(ownerKeyEnv(), "B4_OWNER_KEY", OWNER_KEY_FILE) as Hex;
+  ownerAddr = privateKeyToAccount(ownerKey).address;
   console.log(`owner address from --owner-key-file: ${ownerAddr}`);
   if (recorded && !same(recorded, ownerAddr) && !NEW_OWNER) {
     console.log(`REFUSED: ${PUBLIC_ENV} records owner ${recorded}, not ${ownerAddr}. Nothing was changed.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason: `another owner (${recorded}) is recorded`, owner: recorded, next: `${newOwnerCmd(recordedSite)} replaces it (refused while a budget is live)` }));
   }
-} else if (recorded && !NEW_OWNER && !HOSTED) {
+  binding = await signLocalBinding("evm", ownerKey, agentAddr, `${CFG.label} (testnet)`);
+} else if (reuse) {
   ownerAddr = recorded;
   console.log(`${PUBLIC_ENV} already records owner ${ownerAddr} for this agent; not asking again. If this isn't your wallet, stop: ${newOwnerCmd(recordedSite)} replaces it`);
+  if (recordedSite && heldBinding?.state !== "signed") console.log(`no owner signature naming agent ${agentAddr} is recorded yet: superstables budget setup --rail evm${chainFlag} --hosted --site ${recordedSite} records it from the site's owner proof`);
 } else if (HOSTED && then) {
   // one link: the owner links this agent, then the same page asks their wallet for the gas and the grant, in that order
   const what = [FUND_AMT ? "send it gas" : "", CAP !== undefined ? `approve a budget of ${usdc(CAP)} test ${SYM}` : ""].filter(Boolean);
@@ -219,6 +236,7 @@ if (OWNER_KEY_FILE) {
     console.log(`REFUSED: ${reason}.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `if ${ownerAddr} is the right owner: ${newOwnerCmd(SITE)} (refused while a budget is live). If not, remove this agent from that account on ${HOST}${sent.length ? ", and check that account's wallet activity" : ""}` }));
   }
+  binding = await proofOrRefuse(outcome.proof);
 } else if (HOSTED) {
   // the owner links this agent to their account on the site; the account's address becomes the owner on record
   const r = await askConnect("setup", {
@@ -248,6 +266,7 @@ if (OWNER_KEY_FILE) {
     console.log(`REFUSED: ${reason}.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `if ${ownerAddr} is the right owner: ${newOwnerCmd(SITE)} (refused while a budget is live). If not, remove this agent from that account on ${HOST}` }));
   }
+  binding = await proofOrRefuse(outcome.proof);
 } else {
   const { handle, outcome } = await askConnect("setup", {
     title: "Connect your wallet",
@@ -255,12 +274,14 @@ if (OWNER_KEY_FILE) {
     rows: [
       { label: "Your agent", value: agentAddr, mono: true },
       { label: "Agent key", value: `on this machine only, in ${AGENT_ENV}` },
+      ...(recorded && !NEW_OWNER ? [{ label: "Owner on record", value: recorded, mono: true }] : []),
     ],
     enforced: [],
     notEnforced: [],
     notes: [
       "Signing the message proves control of this address. It grants no spending permission and has no network fee.",
       "You will review and approve any later budget grant separately.",
+      ...(recorded && !NEW_OWNER ? ["Connect this wallet. Any other wallet is refused, and nothing changes."] : []),
     ],
   }, `Superstables budget: record this wallet as the owner of agent ${agentAddr} on ${CFG.label} (testnet).`, NEW_OWNER ? recorded : undefined);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent: agentAddr });
@@ -268,6 +289,14 @@ if (OWNER_KEY_FILE) {
   ownerAddr = outcome.address as Address;
   finish = handle.finish;
   console.log(`the owner connected ${ownerAddr} and signed the sign-in message`);
+  if (recorded && !same(recorded, ownerAddr) && !NEW_OWNER) {
+    const reason = `the wallet that signed is ${ownerAddr}, but this machine records the owner ${recorded}`;
+    finish({ outcome: "failed", message: `This machine records the owner ${recorded}, not this wallet. Nothing was changed.` });
+    await closeOwnerPage();
+    console.log(`REFUSED: ${reason}. Nothing was changed.`);
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `connect ${recorded}, or ${newOwnerCmd(SITE)} replaces it (refused while a budget is live)` }));
+  }
+  binding = await proofOrRefuse(outcome.proof);
 }
 if (same(ownerAddr, agentAddr)) {
   finish?.({ outcome: "failed", message: "That is the agent's own address. Connect your own wallet instead." });
@@ -278,12 +307,13 @@ if (same(ownerAddr, agentAddr)) {
 // 3. the public file (a new owner starts with no budget terms). Hosted: APPROVALS, SITE, and the link the owner signed
 // (LINK_ID, LINK_CODE: a later "already linked" answer is checked against them). Asked on this computer: none of them.
 const replaced = recorded && !same(recorded, ownerAddr) ? recorded : undefined;
-const asked = !OWNER_KEY_FILE && !(recorded && !NEW_OWNER && !HOSTED);
+const asked = !OWNER_KEY_FILE && !reuse;
 if (HOSTED && !linked) throw new Error("an add-agent request without its id and code");
-const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_EXPIRY", "B4_REVOKED_AT"] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : [])];
-writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, drop);
+const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_EXPIRY", "B4_REVOKED_AT", ...(binding ? [] : SETUP_KEYS)] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : [])];
+writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}), ...(binding ? bindingLines(binding) : {}) }, drop);
 if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${ownerAddr}`);
 console.log(`${CFG.label}: wrote ${PUBLIC_ENV} (no secret).${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ""}`);
+if (binding) console.log(`the owner's signature naming agent ${agentAddr} is recorded in ${PUBLIC_ENV}`);
 // balances are for the next steps only: a slow or failing RPC does not undo the setup
 const within = <T,>(p: Promise<T>, ms: number) => Promise.race([p, new Promise<never>((_, no) => setTimeout(() => no(new Error(`no answer within ${ms / 1000} s`)), ms).unref())]);
 try {

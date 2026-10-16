@@ -17,6 +17,7 @@ import { EVM_RPC_MAX_BYTES, cappedRpcFetch } from "../rpc.mjs";
 import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
+import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 
 export { CFG, type GasOp };
@@ -524,4 +525,34 @@ export async function selfRevokeCore(w: Wallet, owner: Address, log: (s: string)
     state: after === 0n ? "revoked" : "partial", before, after, used: n, ownerBalance, tx: sent.hash,
     note: after === 0n ? "allowance is 0" : `owner balance covered only ${usdc(n)} ${SYM}; ${usdc(after)} ${SYM} of allowance remains. The owner revokes the rest`,
   };
+}
+
+// ---- the owner plans: grant, fund-agent, recover ----
+/**
+ * The public addresses for a command that builds an owner plan (grant, fund-agent, recover). Before it returns, the owner's setup
+ * signature in the public file must name this agent address for the owner on record, the address must be the agent key on this
+ * machine when that key file is here, and it must not be retired (../owner-binding.mjs). Otherwise the command ends here with exit 3,
+ * before any page, request or send. A public file from before the signature was kept goes on, with one warning line on stderr, on a
+ * testnet only. `retiredOk` skips the retired list: only recover sets it, because returning a retired key's funds to the signed owner is
+ * what `budget rotate` needs; the key file and signature checks still apply.
+ */
+export async function ownerPlanCtx({ retiredOk = false }: { retiredOk?: boolean } = {}): Promise<Pub> {
+  const pub = readCtx();
+  let keyAgent: string | null = null;
+  if (existsSync(AGENT_ENV)) {
+    const file = agentFileValues();
+    if (file.problem !== undefined) return refusePlan(pub, file.problem);
+    const key = file.env.B4_AGENT_KEY;
+    if (!key) return refusePlan(pub, `${AGENT_ENV} has no B4_AGENT_KEY`);
+    try { keyAgent = privateKeyToAccount(key as Hex).address; } catch { return refusePlan(pub, `${AGENT_ENV} holds a B4_AGENT_KEY that is not a key`); }
+  }
+  const b = await agentBinding("evm", { owner: pub.owner, agent: pub.agent, lines: publicEnv() }, { keyAgent, file: PUBLIC_ENV, retiredOk, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet === true });
+  if (b.state === "refused") return refusePlan(pub, b.problem);
+  if (b.state === "legacy") console.error(legacyWarning("evm", PUBLIC_ENV, pub.agent, `${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}${hostedFlags(publicEnv())}`));
+  return pub;
+}
+function refusePlan(pub: Pub, problem: string): never {
+  console.log(`REFUSED: ${problem}. Nothing was asked or sent.`);
+  const chainFlag = CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`;
+  process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 3, { state: "refused_precheck", reason: problem, agent: pub.agent, next: `check ${PUBLIC_ENV}: run superstables budget setup --rail evm${chainFlag}${hostedFlags(publicEnv())} where the agent key is, to record the owner's signature again. The owner can still end the allowance from any machine: superstables budget revoke --rail evm${chainFlag}` }));
 }

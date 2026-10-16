@@ -13,6 +13,7 @@ import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret-file.mjs";
 import { DEFAULT_RPC, SOLANA_RPC_MAX_BYTES, cappedRpcFetch, rpcFromEnv } from "../rpc.mjs";
 import { markSend } from "../proof.mjs";
+import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 import {
@@ -352,4 +353,32 @@ export async function retryRead(fn, tries = 6) {
       delay *= 1.7;
     }
   }
+}
+
+/**
+ * The owner and agent of an owner plan (grant, fund-agent), as PublicKeys. Before it returns, the owner's setup signature in the
+ * public file must name this agent address for the owner on record, the address must be the agent key on this machine when that
+ * key file is here, and it must not be retired (../owner-binding.mjs). Otherwise `refuse(reason, next)` ends the command (exit 3)
+ * before any page or send. A public file from before the signature was kept goes on, with one warning line on stderr.
+ */
+export async function ownerPlanCtx(refuse) {
+  const env = existsSync(PUBLIC_PATH) ? parseEnvFile(PUBLIC_PATH) : {};
+  const owner = pk(env, "SOLANA_OWNER_ADDRESS");
+  const agent = pk(env, "SOLANA_AGENT_ADDRESS");
+  if (!owner || !agent) return refuse("the public file names no owner or no agent", "superstables budget setup --rail solana");
+  const next = `check the public file: run superstables budget setup --rail solana${hostedFlags(env)} where the agent key is, to record the owner's signature again. The owner can still end the delegation from any machine: superstables budget revoke --rail solana`;
+  let keyAgent = null;
+  if (existsSync(AGENT_KEY_PATH)) {
+    const file = agentKeyFileValues();
+    if (file.problem !== undefined) return refuse(file.problem, next);
+    try {
+      keyAgent = Keypair.fromSecretKey(bs58.decode(file.env.SOLANA_AGENT_SECRET_BASE58 ?? "")).publicKey.toBase58();
+    } catch {
+      return refuse(`${AGENT_KEY_PATH} has no usable SOLANA_AGENT_SECRET_BASE58`, next);
+    }
+  }
+  const b = await agentBinding("solana", { owner: owner.toBase58(), agent: agent.toBase58(), lines: env }, { keyAgent, file: PUBLIC_PATH, testnet: TESTNET === true });
+  if (b.state === "refused") return refuse(b.problem, next);
+  if (b.state === "legacy") console.error(legacyWarning("solana", PUBLIC_PATH, agent.toBase58(), hostedFlags(env)));
+  return { owner, agent };
 }

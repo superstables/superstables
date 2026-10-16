@@ -14,9 +14,9 @@
 // npx tsx budget/solana/setBudget.ts --amount <usdc> [--timeout <s>] [--no-open] [--owner-key-file <path>]
 // Exit codes: 0 set, 1 failed on chain or never landed, 2 bad flags, 3 refused (live delegate, no USDC account, no SOL for the
 // fee, the owner rejected or the link expired, the chain shows another delegate or amount), 5 unknown (read the chain).
-import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
+import { Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, oneLine, usageError, readPublic, retryRead, sleep, PUBLIC_PATH, parseEnvFile, writePublic } from "./lib.mjs";
+import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, oneLine, usageError, ownerPlanCtx, retryRead, sleep, PUBLIC_PATH, parseEnvFile, writePublic } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, grantTerms, sol, transactionPort } from "./owner.ts";
@@ -57,10 +57,7 @@ function refuse(reason: string, next: string, extra: Record<string, unknown> = {
 const conn = connection();
 const cluster = await clusterProblem(conn);
 if (cluster) refuse(cluster, CLUSTER_NEXT);
-const pub = readPublic();
-if (!pub.owner || !pub.agent) refuse("the public file names no owner or no agent", "superstables budget setup --rail solana");
-const owner: PublicKey = pub.owner;
-const agent: PublicKey = pub.agent;
+const { owner, agent } = await ownerPlanCtx(refuse); // the public addresses, checked against the owner's setup signature
 const ata = getAssociatedTokenAddressSync(USDC_MINT, owner);
 const before = await retryRead(() => getAccountOrNull(conn, ata)).catch((err) =>
   refuse(`could not read the owner's USDC account ${ata.toBase58()} (${oneLine(err?.message ?? err, 160)})`, "check the devnet RPC (superstables budget doctor --rail solana), then grant again"),

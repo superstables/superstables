@@ -4,6 +4,7 @@ import { defineConfig } from "vitest/config";
 // `npm run test:fast` (the CI workflow, on every push to main, and the release gate) skips them; `npm test` and the
 // CI full workflow (nightly and on demand) run everything. A new test file is fast until it is listed here.
 const SLOW = [
+  "test/budget/agent-binding.test.ts",
   "test/budget/approvals-token.test.ts",
   "test/budget/chain-gate.test.ts",
   "test/budget/chain-guard.test.ts",

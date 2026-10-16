@@ -1,4 +1,5 @@
 import "./cli-guard.mjs";
+import { SETUP_KEYS } from "../owner-binding.mjs";
 // rotate (B4, any chain): the two small steps of `superstables budget rotate` that no other script does. It sends nothing.
 //   --clear-agent <address>  remove the retired agent from this chain's public file. The owner, the approvals mode and the site
 //                            stay, so setup connects the new key to the same owner. Refuses (exit 3) when the file names no agent
@@ -11,7 +12,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { AGENT_ENV, CFG, PUBLIC_ENV, agentFileValues, arg, emit, flag, publicEnv, usageError, writePublic } from "./lib.ts";
 
 /** What a rotated chain forgets about the old agent: its address, its budget terms and the link that named it. */
-export const CLEARED_KEYS = ["B4_AGENT_ADDRESS", "B4_CAP", "B4_SET_AT", "B4_EXPIRY", "B4_REVOKED_AT", "LINK_ID", "LINK_CODE"];
+export const CLEARED_KEYS = ["B4_AGENT_ADDRESS", "B4_CAP", "B4_SET_AT", "B4_EXPIRY", "B4_REVOKED_AT", "LINK_ID", "LINK_CODE", ...SETUP_KEYS];
 
 const clear = arg("clear-agent");
 const address = flag("address");

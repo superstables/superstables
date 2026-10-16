@@ -28,7 +28,7 @@
 import { Scopes } from 'viem/tempo'
 import type { Address, Hex } from 'viem'
 import { addressListCheck, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { TOKEN_ADDRESS, TOKEN_LABEL, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, oneLine, ownerAccount, toBaseUnits } from './lib/common.ts'
+import { TOKEN_ADDRESS, TOKEN_LABEL, explorerTx, fromBaseUnits, loadOwnerKeyFile, makeClient, oneLine, ownerAccount, ownerPlanCtx, toBaseUnits } from './lib/common.ts'
 import { chainHead, readKey, rpcRead, sleep } from './lib/chain.ts'
 import { OWNER_KEY_FILE, OWNER_TIMEOUT_MS, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import {
@@ -68,10 +68,7 @@ async function main() {
   const sellers = typeof args.sellers === 'string' ? (args.sellers.split(',').map((s) => s.trim()) as Address[]) : undefined
   const limit = toBaseUnits(amount)
 
-  const pub = loadPublicEnv()
-  const owner = pub.OWNER_ADDRESS as Address | undefined
-  const agent = pub[`AGENT${label}_ADDRESS`] as Address | undefined
-  if (!owner || !agent) refuse(`the public file names no owner or no agent${label ? ` ${label}` : ''}`, `superstables budget setup --rail tempo${agentFlag(label)}`)
+  const { owner, agent } = await ownerPlanCtx(label, refuse) // the public addresses, checked against the owner's setup signature
 
   // Refuse before anything is signed if the key is already authorized or burned.
   const before = await readKey(owner, agent)

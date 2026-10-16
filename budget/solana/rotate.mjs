@@ -12,6 +12,7 @@ import { CLUSTER_NEXT, OPS_DIR, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, clusterPr
 import { createTransferCheckedInstruction, getAssociatedTokenAddressSync, getAccountOrNull } from "./token.mjs";
 import { OP_ID_RE } from "./ops.mjs";
 import { readRegularFile } from "../secret-file.mjs";
+import { SETUP_KEYS } from "../owner-binding.mjs";
 import { solanaOpProblem } from "../journal.mjs";
 
 const USAGE = `Usage: node budget/solana/rotate.mjs (--address | --balances | --sweep | --clear-agent <address>)
@@ -25,7 +26,7 @@ Steps of superstables budget rotate. Devnet only.
   -h, --help             show this help`;
 
 /** What a rotated chain forgets about the old agent: its address, the revoke mark and the link that named it. */
-export const CLEARED_KEYS = ["SOLANA_AGENT_ADDRESS", "REVOKED_AT", "LINK_ID", "LINK_CODE"];
+export const CLEARED_KEYS = ["SOLANA_AGENT_ADDRESS", "REVOKED_AT", "LINK_ID", "LINK_CODE", ...SETUP_KEYS];
 /** A transfer by a key that signs alone: five thousand lamports a signature. */
 const FEE_LAMPORTS = 5000n;
 /** Operations in these states cannot move money any more. */

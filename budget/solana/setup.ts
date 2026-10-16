@@ -31,6 +31,7 @@ import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAcco
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
 import { chosenSite, differsFromRequest, isSiteRequestId, mismatchReason, siteOrigin } from "../site.mjs";
+import { SETUP_KEYS, agentBinding, bindingLines, signLocalBinding } from "../owner-binding.mjs";
 import { askConnect, closeOwnerPage, confirmHosted, emit, endUnapproved, sol, useApprovalSite } from "./owner.ts";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
@@ -205,13 +206,22 @@ if (CAP !== undefined || LAMPORTS !== undefined) {
 let owner: string;
 let finish: ((v: OwnerVerdict) => void) | null = null;
 let bundle: { steps: HostedStepOutcome[] } | undefined;
+// The text the owner's wallet signed, naming this agent, and the signature: kept in the public file (../owner-binding.mjs).
+let binding: { message: string; signature: string } | undefined;
+// A re-run on a recorded owner asks nothing only when the public file already holds the owner's signature for this agent. A chain
+// whose approvals are hosted keeps today's behaviour: setup --hosted records the signature from the site's owner proof.
+const heldBinding = publicOwner && !newOwner && !HOSTED ? await agentBinding("solana", { owner: publicOwner, agent, lines: rawPub }, { keyAgent: agent, file: PUBLIC_PATH }) : null;
+const reuse = !!publicOwner && !newOwner && !HOSTED && (!!recordedSite || heldBinding?.state === "signed");
 if (OWNER_KEY_FILE) {
   checkOwnerKeyFile(OWNER_KEY_FILE);
-  owner = loadOwner(OWNER_KEY_FILE).keypair.publicKey.toBase58();
+  const ownerKeypair = loadOwner(OWNER_KEY_FILE).keypair;
+  owner = ownerKeypair.publicKey.toBase58();
   console.log(`owner address from --owner-key-file: ${owner}`);
-} else if (publicOwner && !newOwner && !HOSTED) {
-  owner = publicOwner;
+  binding = await signLocalBinding("solana", ownerKeypair.secretKey, agent, "Solana devnet (testnet)");
+} else if (reuse) {
+  owner = publicOwner!;
   console.log(`${PUBLIC_PATH} already records owner ${owner} for this agent; not asking again. If this isn't your wallet, stop: ${newOwnerCmd(recordedSite)} replaces it`);
+  if (recordedSite && heldBinding?.state !== "signed") console.log(`no owner signature naming agent ${agent} is recorded yet: superstables budget setup --rail solana --hosted --site ${recordedSite} records it from the site's owner proof`);
 } else if (HOSTED) {
   // the owner links this agent on the site with their Solana wallet; that address becomes the owner on record
   const what = [LAMPORTS !== undefined ? "send it SOL for fees" : "", CAP !== undefined ? `approve a budget of ${formatUnits(CAP)} test USDC` : ""].filter(Boolean);
@@ -245,6 +255,7 @@ if (OWNER_KEY_FILE) {
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent, linked: false });
   if (outcome.status !== "connected") throw new Error(`unexpected approval outcome ${outcome.status}`);
   owner = outcome.address;
+  binding = outcome.proof;
   console.log(`Agent added to the ${HOST} account of the Solana owner ${owner}`);
   if (recorded && recorded !== owner && !newOwner) {
     await closeOwnerPage(0);
@@ -260,17 +271,20 @@ if (OWNER_KEY_FILE) {
     rows: [
       { label: "Your agent", value: agent, mono: true },
       { label: "Agent key", value: `on this machine only, in ${AGENT_KEY_PATH}` },
+      ...(recorded && !newOwner ? [{ label: "Owner on record", value: recorded, mono: true }] : []),
     ],
     enforced: [],
     notEnforced: [],
     notes: [
       "Signing the message proves control of this address. It grants no spending permission and has no network fee.",
       "You will review and approve any later budget grant separately.",
+      ...(recorded && !newOwner ? ["Connect this wallet. Any other wallet is refused, and nothing changes."] : []),
     ],
   }, `Superstables budget: record this wallet as the owner of agent ${agent} on Solana devnet (testnet).`, newOwner ? recorded : undefined);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent });
   if (outcome.status !== "connected") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   owner = outcome.address;
+  binding = outcome.proof;
   finish = handle.finish;
   console.log(`the owner connected ${owner} and signed the sign-in message`);
 }
@@ -281,6 +295,12 @@ if (owner === agent || (recorded && recorded !== owner && !newOwner)) {
   await closeOwnerPage();
   if (owner !== agent) console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this machine.`);
   process.exit(result(3, { state: "refused_precheck", reason, ...(owner === agent ? {} : { owner: recorded }), next: owner === agent ? "connect the owner's own wallet" : `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }));
+}
+if (!reuse && !binding) {
+  await closeOwnerPage(0);
+  const reason = "the owner's signature did not come back";
+  console.log(`REFUSED: ${reason}. Nothing was changed.`);
+  process.exit(result(3, { state: "refused_precheck", reason, next: "run setup again; the owner signs once" }));
 }
 const replaced = recorded && recorded !== owner ? recorded : undefined;
 if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${owner}`);
@@ -299,12 +319,13 @@ if (bound !== owner) {
   const lines = text.split("\n").filter((l) => l !== "" && !l.startsWith("SOLANA_OWNER_ADDRESS="));
   replaceKeyFile(AGENT_KEY_PATH, `${[...lines, `SOLANA_OWNER_ADDRESS=${owner}`].join("\n")}\n`); // the only copy of the agent key: never truncated in place
 }
-const asked = !OWNER_KEY_FILE && !(publicOwner && !newOwner && !HOSTED);
+const asked = !OWNER_KEY_FILE && !reuse;
 if (HOSTED && !linked) throw new Error("an add-agent request without its id and code");
 // hosted: APPROVALS, SITE, and the link the owner signed (LINK_ID, LINK_CODE: a later "already linked" answer is checked
 // against them)
-writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, [...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : []), ...(replaced || CAP !== undefined ? ["REVOKED_AT"] : [])]);
+writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}), ...(binding ? bindingLines(binding) : {}) }, [...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : []), ...(replaced || CAP !== undefined ? ["REVOKED_AT"] : []), ...(replaced && !binding ? SETUP_KEYS : [])]);
 console.log(`wrote ${PUBLIC_PATH} (no secret) and the owner's address into ${AGENT_KEY_PATH}.${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ""}`);
+if (binding) console.log(`the owner's signature naming agent ${agent} is recorded in ${PUBLIC_PATH}`);
 
 const conn = connection();
 const ownerPk = new PublicKey(owner);
