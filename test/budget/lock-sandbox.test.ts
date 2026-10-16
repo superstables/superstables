@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createIdentitySource } from '../../budget/lock-identity.mjs';
 import { lockFile } from '../../budget/op-lock.mjs';
+import { hostIdentity } from '../helpers/host-identity.js';
 
 const root = resolve(process.env.BUDGET_RACE_ROOT ?? join(import.meta.dirname, '../..'));
 const helper = join(root, 'test/helpers/budget-blocked-identity.mjs');
@@ -138,8 +139,16 @@ it('approval readers treat EPERM and unknown PID-probe failures as possibly aliv
 });
 
 it('an owner can recover a reused PID outside the sandbox after identity becomes readable', (context) => {
+  // The host is asked on its own, not through the client's identity code: only a host that gives nothing to read (a real
+  // sandbox) skips this test. A host that does give it must show up in the client's record, or the test fails.
+  const host = hostIdentity();
+  if (!host.bootId || !host.startTime || (process.platform === 'linux' && !host.namespace)) context.skip('outside-sandbox recovery requires a host with readable identity; injected identity controls still run');
   const record = createIdentitySource().record();
-  if (!record.bootId || !record.pidStart || (process.platform === 'linux' && !record.namespace)) context.skip('outside-sandbox recovery requires a host with readable identity; injected identity controls still run');
+  expect(record.bootId).toBe(host.bootId);
+  if (process.platform === 'linux') {
+    expect(record.namespace).toBe(host.namespace);
+    expect(record.pidStart).toBe(`linux:${host.bootId}:${host.startTime}`);
+  } else expect(record.pidStart).toBeTruthy();
   const b = box();
   writeFileSync(b.path, JSON.stringify({ ...record, pidStart: 'linux:old-process', ...(typeof record.pidStartUtc === 'number' ? { pidStartUtc: record.pidStartUtc + 1 } : {}) }));
   const blocked = cli(b, 'unlock'); expect(blocked.status).toBe(5); expect(blocked.result.next).toContain("outside the agent's sandbox");
