@@ -42,8 +42,8 @@ own wallet, from a device where they are signed in and have a compatible wallet.
 services the site lists: Base Sepolia (test USDC), Arc Testnet (test USDC), Robinhood Chain Testnet
 (test USDG), Tempo Moderato (test pathUSD) or Solana devnet (test USDC). It needs a superstables.com account, which you create by
 signing in with an Ethereum or Solana wallet, or a compatible deployment the owner names with `--site` or
-`SUPERSTABLES_SITE`; an origin outside superstables.com and its subdomains also needs the owner to set
-`SUPERSTABLES_ALLOW_SITE` to it (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
+`SUPERSTABLES_SITE`; a site other than www.superstables.com also needs the owner to allow it with
+`superstables owner settings` (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
 The installed CLI runs on your own machine, but the site coordinates this single purchase after
 the owner approves. This differs from a budget, whose client pays sellers directly. A Solana account supports only Solana
 purchases. The owner pays from the Solana wallet they signed in with. Purchases on EVM chains or Tempo

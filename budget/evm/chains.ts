@@ -73,12 +73,13 @@ export function selectedChainKey(): string {
   return key;
 }
 /**
- * B4_RPC replaces the selected chain's RPC URL (tests point it at a local fake; you can point it at your own node): https, or
+ * B4_RPC replaces the selected chain's RPC URL (tests point it at a local fake; you can point it at your own node); with no
+ * variable, the RPC the owner set for the chain (superstables owner settings rpc) is used. https, or
  * http on this computer only (../rpc.mjs). Every script that signs still checks the chain id it answers with first (lib.ts
  * assertRpcChain).
  */
-function rpcOverride(): string | undefined {
-  const r = rpcFromEnv("B4_RPC", "");
+function rpcOverride(key: string): string | undefined {
+  const r = rpcFromEnv("B4_RPC", "", "read", key);
   if (r.error) {
     console.error(`error: ${r.error}`);
     process.exit(2);
@@ -86,5 +87,5 @@ function rpcOverride(): string | undefined {
   return r.custom ? r.url : undefined;
 }
 const KEY = selectedChainKey();
-const OVERRIDE = rpcOverride();
+const OVERRIDE = rpcOverride(KEY);
 export const CFG: ChainCfg = OVERRIDE ? build(KEY, OVERRIDE) : CHAINS[KEY];

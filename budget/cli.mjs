@@ -38,8 +38,9 @@ import { journalProblem } from "./journal.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
-import { DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
-import { customRpc, refusedRpcEnv } from "./rpc.mjs";
+import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
+import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
+import { ownerSettingsProblem, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
 import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, unshownNext, waitOnce } from "./once.mjs";
@@ -187,7 +188,7 @@ owner-proof message), checks the owner's signature over that message, records th
 APPROVALS=hosted, SITE, LINK_ID and LINK_CODE in the public file: grant, revoke and fund-agent on this chain use it from
 then on (recover stays on this machine). solana: the owner also connects a Solana wallet there, and that address is the
 owner. Needs a superstables.com account. --site URL picks another site (default ${DEFAULT_SITE}, or SUPERSTABLES_SITE):
-a superstables.com subdomain, or another origin only when the owner set SUPERSTABLES_ALLOW_SITE to it. Without --hosted:
+only one the owner allows in their settings (superstables owner settings allow-staging, allow-loopback, site). Without --hosted:
 the page on 127.0.0.1, no account. An agent already added to an account is taken only for the owner recorded here, with
 that owner's signed proof; otherwise the owner removes the agent on the site's account page and adds it again.
 setup --new-owner without --hosted moves a chain with approvals on superstables.com back to the page on this machine.
@@ -432,7 +433,7 @@ superstables budget wait --id ID --shown. In a terminal, or with --wait: blocks 
 purchase open at a time; --replace cancels the open one, only while the owner has not signed. Paid is never the site's
 word alone: the command reads the payment from the chain (exactly the amount, to the listed recipient, in the listed
 token); one the chain does not show is unknown (exit 5).
---site: the site (default ${DEFAULT_SITE}, or SUPERSTABLES_SITE, or the SITE that setup --hosted recorded).`,
+--site: the site (default ${DEFAULT_SITE}, or SUPERSTABLES_SITE, or the SITE that setup --hosted recorded): only ${DEFAULT_SITE} unless the owner allows another in their settings (superstables owner settings).`,
       money: "yes: the service's price, at most --max, from the owner's wallet, once the owner approves it on superstables.com.",
       who: "the agent starts it; only the owner approves.",
       example: "superstables budget buy-once --service superstables-demo-market-data --param asset=BTC --max 0.01",
@@ -454,7 +455,7 @@ simulated is yes when the listing marks the output as prepared sample output (mo
 services), no when it marks it as not sample output (Superstables' market data service, which returns live prices; no
 does not verify that the data is real), and not said when the listing does not say.
 The site is --site, else SUPERSTABLES_SITE, else the SITE recorded by setup --hosted (for --rail and --chain when given,
-else the first chain that has one), else ${DEFAULT_SITE}. Any other seller URL works too:
+else the first chain that has one), else ${DEFAULT_SITE}. A listing read also accepts staging and sites on this computer. Any other seller URL works too:
 superstables budget preflight --rail R --url U reads its price.
 --once: lists the services available for Single purchase on superstables.com, with no budget
 (GET /api/v1/purchase/services): id, price, simulated, network and inputs (* marks a required one). --rail and --chain
@@ -555,8 +556,9 @@ setup --hosted with --grant or --fund, and in recover, an earlier step may alrea
 budget status.
 
 --site URL is accepted by every command. Where a site is recorded (setup --hosted) and it differs, the command refuses
-(exit 2); where it does not matter, it is ignored. A site is superstables.com, one of its subdomains or 127.0.0.1;
-another origin only when the owner sets SUPERSTABLES_ALLOW_SITE to it in their own environment (an agent never does).
+(exit 2); where it does not matter, it is ignored. For an owner action a site is
+${DEFAULT_SITE}, or one the owner allows with superstables owner settings in their own terminal (an agent never does); a read
+(find, wait) also accepts any superstables.com host and 127.0.0.1.
 B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
 http on this machine only; RESULT names one in use as rpc. A wallet adding the chain through an approval page
 on this machine is offered the chain's public RPC.
@@ -682,6 +684,15 @@ function parse(argv) {
     emit(2, { command: cmd, state: "failed", next: `run npm ci at ${REPO} (it installs the dev packages and builds), then rerun`, reason: "a checkout without dev packages needs its dist/budget build" });
   }
   if (rest.includes("--mainnet")) return refuse({ command: cmd }, "mainnet is refused: superstables budget is testnet only");
+  // SUPERSTABLES_ALLOW_SITE used to let an environment variable allow another approval site: the owner's settings do that now
+  if (process.env[ALLOW_SITE_ENV]?.trim()) log(`superstables budget: warning: ${ALLOW_SITE_ENV} is no longer read. To use another approval site, the owner runs superstables owner settings site <origin> in their own terminal.`);
+  // The owner's settings file, when there is one, must be usable by every command that depends on it. A file that exists and
+  // cannot be used never falls back to the defaults: doctor reports it, unlock and wait go on (they hold no anchor).
+  const unusable = ownerSettingsProblem();
+  if (unusable) {
+    if (cmd === "doctor") log(`superstables budget: warning: ${unusable}`);
+    else if (!["unlock", "wait"].includes(cmd)) return refuse({ command: cmd }, unusable, "the owner runs superstables owner settings show in their own terminal, and fixes or moves the file; nothing was read or sent");
+  }
 
   // --json is accepted everywhere: it changes only how the RESULT is printed (JSON_OUT). --site is accepted by every command.
   const allowed = { rail: "v", chain: "v", json: "b", site: "v", ...spec.flags };
@@ -735,7 +746,7 @@ function parse(argv) {
     if (!isApprovalId(f.id)) return badInput(ctx, `--id must be an approval id like oa-20260930120000-1a2b3c4d (got "${f.id}")`);
     if (f.timeout !== undefined && !(/^\d+$/.test(f.timeout) && Number(f.timeout) <= 300)) badInput(ctx, "--timeout must be a whole number of seconds from 0 to 300");
     if (f.site !== undefined) {
-      const site = siteOrigin(f.site);
+      const site = siteOrigin(f.site, "read");
       if (site.error) badInput(ctx, `--site: ${site.error}`);
       f.site = site.origin;
     }
@@ -754,15 +765,20 @@ function parse(argv) {
   // a replacement RPC must be https, or http on this computer: every check reads the chain through it
   const badRpc = refusedRpcEnv(f.rail);
   if (badRpc) return badInput(ctx, `${badRpc.error}. Unset it, or point it at an https RPC (or one on 127.0.0.1)`);
+  // an owner command reads and sends only through an RPC the owner set: a variable naming another stops it before any approval
+  if (OWNER_COMMANDS_LIST.includes(cmd)) {
+    const problem = ownerRpcProblem(f.rail, f.chain);
+    if (problem) return refuse(ctx, problem, ownerRpcNext(f.rail, f.chain));
+  }
   for (const r of spec.required) if (f[r] === undefined) return badInput(ctx, `missing required flag --${r}`);
   if (f.site !== undefined && !f.hosted) {
     // --site is accepted by every command. Nothing else here depends on it, so it only has to be a site, and the one this chain's
     // approvals are hosted on when there is one: another site is a mistake in the command, not a second place to ask the owner.
-    const site = siteOrigin(f.site);
+    const site = siteOrigin(f.site, OWNER_COMMANDS_LIST.includes(cmd) ? "owner" : "read");
     if (site.error) badInput(ctx, `--site: ${site.error}`);
     f.site = site.origin;
     const recorded = hostedSite(f);
-    const recordedOrigin = recorded ? siteOrigin(recorded).origin : null;
+    const recordedOrigin = recorded ? siteOrigin(recorded, "read").origin : null;
     if (recordedOrigin && recordedOrigin !== f.site) badInput(ctx, `--site ${f.site} is not the site this chain's approvals happen on (${recordedOrigin}): use --site ${recordedOrigin}, or leave --site out`);
   }
 
@@ -830,8 +846,8 @@ function parse(argv) {
   if (f.hosted) {
     if (f.agent !== undefined) badInput(ctx, "setup --agent on a chain with approvals on superstables.com adds the new key there by itself: drop --hosted");
     if (f["owner-key-file"] !== undefined) badInput(ctx, "--hosted asks the owner on superstables.com; with --owner-key-file there is no owner to ask");
-    const site = chosenSite(f.site);
-    if (site.error) badInput(ctx, `--site: ${site.error}`);
+    const site = chosenSite(f.site, "owner");
+    if (site.error) badInput(ctx, site.error);
     f.site = site.origin;
   }
   const pageOnly = ["detach", "replace"].find((k) => f[k]);
@@ -880,8 +896,8 @@ function parseBuyOnce(cmd, f) {
   // buy-once reads the payment from the chain of the listing's network: every replacement RPC must be usable
   const badRpc = refusedRpcEnv();
   if (badRpc) return badInput(ctx, `${badRpc.error}. Unset it, or point it at an https RPC (or one on 127.0.0.1)`);
-  const site = resolveSite(f.site);
-  if (site.error) return badInput(ctx, `--site: ${site.error}`);
+  const site = resolveSite(f.site, {}, "owner");
+  if (site.error) return badInput(ctx, site.error);
   f.site = site.origin;
   f.params = params;
   return { cmd, f, ctx };
@@ -1076,19 +1092,34 @@ const ownerLine = (owner) => owner ? `  owner (recorded): ${owner}. If this isn'
  * The site recorded by `setup --hosted` for --chain, or for the first chain of --rail that has one, or for the first chain
  * that has one: the evm chains in order, then tempo, then solana. An origin, or null.
  */
-function recordedSite(f) {
+function recordedSite(f, purpose = "owner") {
   const all = Object.entries(RAILS).flatMap(([rail, r]) => r.chains.map((chain) => ({ rail, chain })));
   const chains = all.filter((c) => (!f.rail || c.rail === f.rail) && (!f.chain || c.chain === f.chain));
   for (const c of chains) {
     const site = hostedSite(c);
-    if (site && !siteOrigin(site).error) return siteOrigin(site).origin;
+    if (!site) continue;
+    const checked = siteOrigin(site, purpose);
+    if (!checked.error) return checked.origin;
+    // a recorded site the owner does not allow is skipped (the public file is the agent's to write), and said once
+    if (checked.ownerCommand && !SKIPPED_SITES.has(site)) {
+      SKIPPED_SITES.add(site);
+      log(`superstables budget: the site recorded for ${c.rail} ${c.chain} (${siteText(site, 120)}) is not an approval site the owner allows; it is not used`);
+    }
   }
   return null;
 }
-/** The site for find and buy-once: --site, else SUPERSTABLES_SITE, else the site `setup --hosted` recorded, else the default. */
-function resolveSite(flag, f = {}) {
-  const recorded = flag === undefined && !process.env.SUPERSTABLES_SITE?.trim() ? recordedSite(f) : null;
-  return recorded ? { origin: recorded } : chosenSite(flag);
+const SKIPPED_SITES = new Set();
+/**
+ * The site for find and buy-once: --site, else SUPERSTABLES_SITE (each only when it is a site the owner allows for `purpose`),
+ * else the owner's own site setting, else the site `setup --hosted` recorded, else the default.
+ */
+function resolveSite(flag, f = {}, purpose = "owner") {
+  if (flag !== undefined || process.env.SUPERSTABLES_SITE?.trim()) return chosenSite(flag, purpose);
+  const own = siteFor(purpose, undefined);
+  if (own.error) return { error: own.error };
+  if (own.source === "settings") return { origin: own.origin };
+  const recorded = recordedSite(f, purpose);
+  return { origin: recorded ?? own.origin };
 }
 /** Hosted approvals recorded for this rail and chain: the site's origin, or null (the page on this computer). */
 function hostedSite(f) {
@@ -1778,7 +1809,7 @@ async function ownerGate({ cmd, f, ctx }) {
     // revoke acts for the public file's owner: while the agent key file names another, it reports on neither
     const disagree = ownerFilesDisagree(f);
     if (disagree) {
-      const site = recordedSite({ rail: f.rail, chain: f.chain });
+      const site = recordedSite({ rail: f.rail, chain: f.chain }, "read");
       return emit(3, { ...ctx, state: "refused_precheck", reason: `${disagree}. revoke would act for the first only, so it does not say whether a budget is live on either; nothing was sent`, next: `superstables budget setup --rail ${f.rail}${site ? ` --hosted --site ${site}` : ""} --new-owner checks both owners for a live budget and names the owner who must revoke it, and how; it records one owner again once neither has one` });
     }
   }
@@ -1844,7 +1875,7 @@ async function ownerGate({ cmd, f, ctx }) {
 async function wait({ f }) {
   const once = readApproval(f.id);
   // --site names the site the approval was made on: another one is a mistake, not a different request
-  const madeOn = once?.hosted?.site ? siteOrigin(once.hosted.site).origin : null;
+  const madeOn = once?.hosted?.site ? siteOrigin(once.hosted.site, "read").origin : null;
   if (f.site !== undefined && madeOn && madeOn !== f.site) return badInput({ command: "wait" }, `--site ${f.site} is not the site this approval was made on (${madeOn}): use --site ${madeOn}, or leave --site out`);
   if (f.abandon) {
     // the owner gives up a buy-once purchase the site does not end: the record stays, marked, and the payment stays unknown
@@ -1864,6 +1895,12 @@ async function wait({ f }) {
     log(`superstables budget: wait refused without reading the approval: write the approval link, the code and the terms in your reply to the owner first, then run: superstables budget wait --id ${f.id} --shown`);
     return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", ...approvalFields(once), next: unshownNext(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
   }
+  // the record is the agent's to write, and the site's "not paid" ends a purchase: a site the owner does not allow is not read
+  const madeOnAllowed = once?.command === "buy-once" && once.hosted?.site && !once.final ? siteOrigin(once.hosted.site, "verdict") : null;
+  if (madeOnAllowed?.error) return emit(5, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id,
+    id: f.id, state: "unknown", paid: null, delivered: null, final: false,
+    reason: `this purchase was made on ${siteText(once.hosted.site, 120)}, which is not an approval site the owner allows now; nothing was read from it`,
+    next: `do not buy this again. Ask the owner: ${madeOnAllowed.ownerCommand ?? "superstables owner settings show"} in their own terminal, then run superstables budget wait --id ${f.id} --shown` });
   if (once?.command === "buy-once") return waitBuyOnce(once, f);
   const r = await waitFor(f.id, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);
   if (!r) return badInput({ command: "wait" }, `no owner approval with id ${f.id} under ${approvalsDir()}`);
@@ -1963,8 +2000,8 @@ const SIMULATED_NOTE = "simulated: yes when the listing marks the output as prep
 
 /** find --once: the services that can be bought with one approval, no budget. Names and prices are the site's listing: data. */
 async function findOnce({ f, ctx }) {
-  const site = resolveSite(f.site);
-  if (site.error) return badInput(ctx, `--site: ${site.error}`);
+  const site = resolveSite(f.site, {}, "read");
+  if (site.error) return badInput(ctx, site.error);
   Object.assign(ctx, f.rail ? { rail: f.rail } : {}, f.chain ? { chain: f.chain } : {});
   const r = await listOnceServices({ site: site.origin });
   if (!r.ok) {
@@ -1990,8 +2027,8 @@ const shellWord = (w) => (/^[A-Za-z0-9_./:=@%+,-]+$/.test(w) ? w : `'${String(w)
 async function find({ f, ctx }) {
   if (f.once) return findOnce({ f, ctx });
   // --site, else SUPERSTABLES_SITE, else the site `setup --hosted` recorded (for --rail and --chain when given), else the default
-  const site = resolveSite(f.site, f);
-  if (site.error) return badInput(ctx, `--site: ${site.error}`);
+  const site = resolveSite(f.site, f, "read");
+  if (site.error) return badInput(ctx, site.error);
   Object.assign(ctx, f.rail ? { rail: f.rail } : {}, f.chain ? { chain: f.chain } : {});
   const chainByNetwork = { ...Object.fromEntries(Object.entries(EVM_CHAINS).map(([k, c]) => [`eip155:${c.chainId}`, k])), "eip155:42431": "moderato", "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1": "devnet" };
   const r = await listSiteServices({ site: site.origin, chainByNetwork });

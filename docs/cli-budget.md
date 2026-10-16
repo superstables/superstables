@@ -112,8 +112,9 @@ setup --hosted with --grant or --fund, and in recover, an earlier step may alrea
 budget status.
 
 --site URL is accepted by every command. Where a site is recorded (setup --hosted) and it differs, the command refuses
-(exit 2); where it does not matter, it is ignored. A site is superstables.com, one of its subdomains or 127.0.0.1;
-another origin only when the owner sets SUPERSTABLES_ALLOW_SITE to it in their own environment (an agent never does).
+(exit 2); where it does not matter, it is ignored. For an owner action a site is
+https://www.superstables.com, or one the owner allows with superstables owner settings in their own terminal (an agent never does); a read
+(find, wait) also accepts any superstables.com host and 127.0.0.1.
 B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
 http on this machine only; RESULT names one in use as rpc. A wallet adding the chain through an approval page
 on this machine is offered the chain's public RPC.
@@ -181,7 +182,7 @@ owner-proof message), checks the owner's signature over that message, records th
 APPROVALS=hosted, SITE, LINK_ID and LINK_CODE in the public file: grant, revoke and fund-agent on this chain use it from
 then on (recover stays on this machine). solana: the owner also connects a Solana wallet there, and that address is the
 owner. Needs a superstables.com account. --site URL picks another site (default https://www.superstables.com, or SUPERSTABLES_SITE):
-a superstables.com subdomain, or another origin only when the owner set SUPERSTABLES_ALLOW_SITE to it. Without --hosted:
+only one the owner allows in their settings (superstables owner settings allow-staging, allow-loopback, site). Without --hosted:
 the page on 127.0.0.1, no account. An agent already added to an account is taken only for the owner recorded here, with
 that owner's signed proof; otherwise the owner removes the agent on the site's account page and adds it again.
 setup --new-owner without --hosted moves a chain with approvals on superstables.com back to the page on this machine.
@@ -702,7 +703,7 @@ simulated is yes when the listing marks the output as prepared sample output (mo
 services), no when it marks it as not sample output (Superstables' market data service, which returns live prices; no
 does not verify that the data is real), and not said when the listing does not say.
 The site is --site, else SUPERSTABLES_SITE, else the SITE recorded by setup --hosted (for --rail and --chain when given,
-else the first chain that has one), else https://www.superstables.com. Any other seller URL works too:
+else the first chain that has one), else https://www.superstables.com. A listing read also accepts staging and sites on this computer. Any other seller URL works too:
 superstables budget preflight --rail R --url U reads its price.
 --once: lists the services available for Single purchase on superstables.com, with no budget
 (GET /api/v1/purchase/services): id, price, simulated, network and inputs (* marks a required one). --rail and --chain
@@ -745,7 +746,7 @@ superstables budget wait --id ID --shown. In a terminal, or with --wait: blocks 
 purchase open at a time; --replace cancels the open one, only while the owner has not signed. Paid is never the site's
 word alone: the command reads the payment from the chain (exactly the amount, to the listed recipient, in the listed
 token); one the chain does not show is unknown (exit 5).
---site: the site (default https://www.superstables.com, or SUPERSTABLES_SITE, or the SITE that setup --hosted recorded).
+--site: the site (default https://www.superstables.com, or SUPERSTABLES_SITE, or the SITE that setup --hosted recorded): only https://www.superstables.com unless the owner allows another in their settings (superstables owner settings).
 
 Moves money: yes: the service's price, at most --max, from the owner's wallet, once the owner approves it on superstables.com.
 Run by: the agent starts it; only the owner approves.

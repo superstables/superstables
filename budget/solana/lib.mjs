@@ -65,9 +65,10 @@ export const TESTNET = true;
 // on its word: they use the endpoints the owner set (src/core/rpc-endpoints.mjs), which the replacement joins only when it is
 // one of them.
 const envRpc = (() => {
-  const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana);
+  const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana, "read", "solana-devnet");
   if (r.error) process.stderr.write(`warning: ${r.error}; using ${DEFAULT_RPC.solana}\n`);
-  return r.custom ? r.url : undefined;
+  // custom is also true for the owner's own URL (source "settings"): that one is not the variable
+  return r.custom && r.source !== "settings" ? r.url : undefined;
 })();
 let warnedEnv = false;
 /** The endpoints for a purpose: "read" (balances, searches, the primary), "verdict" (what lets an agent pay again) or "owner" (what an owner command reads and sends through). */

@@ -62,7 +62,7 @@ let SITE: string | null = null;
 if (HOSTED) {
   if (OWNER_KEY_FILE) usage("--hosted asks the owner on the site; with --owner-key-file there is no owner to ask");
   const s = chosenSite(cli.site);
-  if (s.error) usage(`--site: ${s.error}`);
+  if (s.error) usage(s.error);
   SITE = s.origin as string;
 } else if (cli.site !== undefined) usage("--site goes with --hosted");
 useApprovalSite(SITE);
@@ -128,7 +128,7 @@ const bound = existing.SOLANA_OWNER_ADDRESS;
 const publicOwner = pub.owner && (!pub.agent || pub.agent.toBase58() === agent) ? pub.owner.toBase58() : undefined;
 const recorded: string | undefined = publicOwner ?? bound;
 const rawPub = parseEnvFile(PUBLIC_PATH) as Record<string, string>;
-const recordedSite = rawPub.APPROVALS === "hosted" && rawPub.SITE ? siteOrigin(rawPub.SITE).origin : undefined;
+const recordedSite = rawPub.APPROVALS === "hosted" && rawPub.SITE ? siteOrigin(rawPub.SITE, "read").origin : undefined;
 if (bound && publicOwner && bound !== publicOwner && !newOwner) {
   const reason = `the owner files disagree: ${PUBLIC_PATH} records the owner ${publicOwner}, and ${AGENT_KEY_PATH} is bound to ${bound}`;
   console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`);

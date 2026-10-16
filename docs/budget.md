@@ -252,7 +252,7 @@ read [local budget records](records.md#budget-records) for those. After requesti
 This is optional. Approvals on this machine remain the default and need no account. Approvals on superstables.com
 need a superstables.com account, or a compatible deployment the owner names with `--site`
 or `SUPERSTABLES_SITE`. An origin outside superstables.com and its subdomains also needs the owner to
-set `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own environment; an agent never sets it.
+allow it with `superstables owner settings` in their own terminal; an agent never does.
 After picking the match code, the owner signs the owner-proof message in their wallet, and the command checks that
 signature before it records anyone as the owner. Approval on superstables.com does not host your agent runtime.
 Choosing a compatible site is an advanced API option; `--hosted` does not deploy a site. The contract is in
