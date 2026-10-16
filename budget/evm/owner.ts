@@ -5,6 +5,7 @@
 import { encodeFunctionData, parseEventLogs, parseUnits, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { DEFAULT_SITE, differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
+import { ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
 import { EVM_CHAINS } from "./chains.mjs";
 import { CHAINS } from "./chains.ts";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
@@ -14,6 +15,18 @@ import { searchLogs } from "../../src/core/log-windows.mjs";
 import { CFG, GAS, SYM, USDC, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need } from "./lib.ts";
 
 export { closeOwnerPage };
+
+// An owner script reads and sends only through an RPC the owner set (or the built-in one): a variable that names another is
+// refused here, before this script reads a key, asks the owner or sends anything. The dispatcher refuses it earlier; this
+// covers a script run directly. (src/core/owner-settings.js)
+{
+  const problem = ownerRpcProblem("evm", CFG.key);
+  if (problem) {
+    const command = String(process.argv[1] ?? "").split(/[\\/]/).pop()!.replace(/\.(?:ts|mjs)$/, "") || "owner";
+    console.log(`REFUSED: ${problem}. Nothing was asked or sent.`);
+    process.exit(emit(command, 3, { state: "refused_precheck", reason: problem, next: ownerRpcNext("evm", CFG.key) }));
+  }
+}
 export const OWNER_CHAIN: OwnerChain = {
   chainId: CFG.chainId,
   chainName: CFG.label,

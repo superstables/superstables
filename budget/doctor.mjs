@@ -14,13 +14,14 @@ import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile } from "./secret-file.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
 import { DEFAULT_RPC, jsonRpc, rpcFromEnv } from "./rpc.mjs";
+import { budgetChainKey } from "../src/core/owner-settings.js";
 import { siteOrigin, siteText } from "./site.mjs";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
 
-const rpcEnv = (name, fallback) => rpcFromEnv(name, fallback).url;
-const SOLANA = { rpc: rpcEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana), usdcMint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", minOwnerSol: 0.01, minOwnerUsdc: 0.05, minAgentSol: 0.005 };
-const TEMPO = { rpc: rpcEnv("SUPERSTABLES_TEMPO_RPC", DEFAULT_RPC.tempo), chainId: 42431, pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
+const rpcEnv = (name, fallback, chainKey) => rpcFromEnv(name, fallback, "read", chainKey).url;
+const SOLANA = { rpc: rpcEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana, "solana-devnet"), usdcMint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", minOwnerSol: 0.01, minOwnerUsdc: 0.05, minAgentSol: 0.005 };
+const TEMPO = { rpc: rpcEnv("SUPERSTABLES_TEMPO_RPC", DEFAULT_RPC.tempo, "tempo-moderato"), chainId: 42431, pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
 
 const rpc = (url, method, params = []) => jsonRpc(url, method, params);
 const erc20Balance = async (url, token, addr, decimals = 6) => Number(BigInt(await rpc(url, "eth_call", [{ to: token, data: "0x70a08231" + addr.slice(2).toLowerCase().padStart(64, "0") }, "latest"]))) / 10 ** decimals;
@@ -61,7 +62,7 @@ const splBalance = async (addr) => {
 const RAILS = {
   evm: ({ chain }) => {
     // B4_RPC replaces the chain's RPC, as it does for the rail scripts (evm/chains.ts)
-    const c = { ...EVM_CHAINS[chain], rpc: rpcFromEnv("B4_RPC", EVM_CHAINS[chain].rpc).url }, d = c.doctor, tok = c.token, g = c.gas, L = g.limits;
+    const c = { ...EVM_CHAINS[chain], rpc: rpcFromEnv("B4_RPC", EVM_CHAINS[chain].rpc, "read", budgetChainKey("evm", chain)).url }, d = c.doctor, tok = c.token, g = c.gas, L = g.limits;
     const flag = ` --chain ${chain}`;
     return {
       ownerVars: null, agentVars: ["B4_AGENT_KEY"], ownerSecrets: ["B4_OWNER_KEY"], agentKeyVar: "B4_AGENT_KEY",
@@ -152,7 +153,7 @@ const mode = (path) => (statSync(path).mode & 0o777).toString(8);
  */
 function newOwnerCmd(r, f, pub) {
   const base = r.newOwner ?? `superstables budget setup --rail ${f.rail} --new-owner`;
-  const site = pub.APPROVALS === "hosted" && pub.SITE ? siteOrigin(pub.SITE) : null;
+  const site = pub.APPROVALS === "hosted" && pub.SITE ? siteOrigin(pub.SITE, "read") : null;
   return site?.origin && !site.error ? base.replace(/ --new-owner$/, ` --hosted --site ${site.origin} --new-owner`) : base;
 }
 
