@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startFakeRpc } from "../helpers/fake-site.js";
 import { makeChain, makeHome } from "../helpers/fake-evm.js";
 import { accountHomeWith } from "../helpers/owner-settings.js";
-import { agreementWords } from "../../budget/evm/lib.js";
 import { evmRpcFromEnv, ownerRpcNext, ownerRpcProblem } from "../../budget/rpc.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -183,7 +182,8 @@ describe("a set that cannot be built says why, in the owner settings' words (the
 });
 
 describe("agreementWords", () => {
-  it("keeps the engine's words, and adds the refusal's own reason only for a set that could not be built", () => {
+  it("keeps the engine's words, and adds the refusal's own reason only for a set that could not be built", async () => {
+    const { agreementWords } = await import(new URL("../../budget/evm/lib.ts", import.meta.url).href);
     expect(agreementWords({ agreed: false, why: "disagree" } as any)).toBe("the RPC endpoints disagree");
     expect(agreementWords({ agreed: false, why: "unreadable", left: ["a: down"] } as any)).toBe("the RPC endpoints could not be read (left out: a: down)");
     expect(agreementWords({ agreed: false, why: "unreadable", reason: "the owner settings could not be read: broken" } as any)).toBe("the RPC endpoints could not be used: the owner settings could not be read: broken. Unset it, or ask the owner to add it in the owner settings");
