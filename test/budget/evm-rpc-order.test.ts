@@ -85,7 +85,7 @@ function run(argv: string[], env: Record<string, string>, script?: string): Prom
       const line = stdout.trim().split("\n").reverse().find((l) => l.startsWith("RESULT "));
       let result: any = null;
       try { result = line ? JSON.parse(line.slice(7)) : null; } catch {}
-      done({ code, stdout, stderr, result });
+      done({ code: code ?? 0, stdout, stderr, result });
     });
   });
 }
