@@ -10,10 +10,10 @@ import { agentKeyFile, publicFile } from "./paths.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 
 const VARS = {
-  evm: (label) => ({ key: "B4_AGENT_KEY", owner: "B4_OWNER_ADDRESS", agent: "B4_AGENT_ADDRESS", ownerInAgentFile: false, label }),
+  evm: (label) => ({ key: "B4_AGENT_KEY", store: "B4_AGENT_KEY_STORE", owner: "B4_OWNER_ADDRESS", agent: "B4_AGENT_ADDRESS", ownerInAgentFile: false, label }),
   // tempo keeps the owner's address in the agent file too; an extra agent key is AGENT<label>_*
   tempo: (label = "") => ({ key: `AGENT${label}_PRIVATE_KEY`, owner: "OWNER_ADDRESS", agent: `AGENT${label}_ADDRESS`, ownerInAgentFile: true, label }),
-  solana: (label) => ({ key: "SOLANA_AGENT_SECRET_BASE58", owner: "SOLANA_OWNER_ADDRESS", agent: "SOLANA_AGENT_ADDRESS", ownerInAgentFile: true, label }),
+  solana: (label) => ({ key: "SOLANA_AGENT_SECRET_BASE58", store: "SOLANA_AGENT_KEY_STORE", owner: "SOLANA_OWNER_ADDRESS", agent: "SOLANA_AGENT_ADDRESS", ownerInAgentFile: true, label }),
 };
 
 // Each file is opened once, non-blocking, and must be a regular file of a sane size (../secret-file.mjs): a FIFO in place of
@@ -53,7 +53,7 @@ export function setupGaps({ rail, chain, agent }) {
   if (problem) return { missing: [], owner: false, problem, agentKey: keyPath, publicFile: pubPath };
   const missing = [];
   if (!existsSync(keyPath)) missing.push("no agent key on this machine");
-  else if (!keys[v.key]) missing.push(v.label ? `no agent key for --agent ${v.label}` : "the agent key file holds no key");
+  else if (!keys[v.key] && !(keys[v.store] === "os-keychain" && keys[v.agent])) missing.push(v.label ? `no agent key for --agent ${v.label}` : "the agent key file holds no key");
   const owner = pub[v.owner] ?? (v.ownerInAgentFile ? keys[v.owner] : undefined);
   if (!owner) missing.push("no owner has connected a wallet");
   return { missing, owner: Boolean(owner), agentKey: keyPath, publicFile: pubPath };

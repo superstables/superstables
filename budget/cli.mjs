@@ -174,9 +174,9 @@ this machine).`,
 const OWNER_PRINTS = "the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final\n  false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), tx, next.";
 const COMMANDS = {
   setup: {
-    flags: { agent: "v", "new-owner": "b", hosted: "b", grant: "v", fund: "o", "fund-only": "b", ...OWNER_FLAGS }, required: [],
+    flags: { agent: "v", "new-owner": "b", hosted: "b", grant: "v", fund: "o", "fund-only": "b", "key-store": "v", ...OWNER_FLAGS }, required: [],
     help: helpText({
-      usage: "superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--hosted [--site URL] [--grant A] [--fund [AMOUNT]]]\n  [--fund-only] [--timeout S] [--no-open] [--detach|--wait]",
+      usage: "superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--hosted [--site URL] [--grant A] [--fund [AMOUNT]]]\n  [--fund-only] [--key-store file|os-keychain] [--timeout S] [--no-open] [--detach|--wait]",
       about: `The owner's first step on a rail and chain. Creates the agent key on this machine if there is none (it never
 overwrites one: running setup again reuses it), then asks the owner to connect their own wallet and sign a free sign-in
 message (no transaction). Records both addresses in the public file and prints the next steps. No owner key is created
@@ -193,6 +193,11 @@ a superstables.com subdomain, or another origin only when the owner set SUPERSTA
 the page on 127.0.0.1, no account. An agent already added to an account is taken only for the owner recorded here, with
 that owner's signed proof; otherwise the owner removes the agent on the site's account page and adds it again.
 setup --new-owner without --hosted moves a chain with approvals on superstables.com back to the page on this machine.
+--key-store file|os-keychain (evm and solana; default file): os-keychain keeps the agent key in this computer's keychain
+(macOS security, Linux secret-tool from libsecret-tools) and only its address in the key file; the key is passed to the
+keychain on standard input and never written to a file. A key already in the key file is moved there and the file's old
+bytes are overwritten. A locked keychain makes buy, grant, fund-agent, recover and owner requests on chains approved on superstables.com refuse; a local revoke still works. Rotate keeps the retired key's keychain entry. It does not protect the key from code running as you while the
+keychain is unlocked. Not for tempo.
 --grant A and --fund [AMOUNT] (with --hosted): one approval link for the whole set-up. After the owner adds this agent,
 the same page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain; not on
 tempo) and then the grant of A (tempo: for 24 hours), in that order. The command reads each transaction from the chain
@@ -813,6 +818,11 @@ function parse(argv) {
     if (cmd === "setup" && f["new-owner"]) badInput(ctx, "setup --agent adds a key for the recorded owner; --new-owner replaces the owner: run them separately");
     if (!new RegExp(`^${LABEL}$`).test(f.agent)) badInput(ctx, `--agent must be ${LABEL_WORDS}`);
   }
+  if (f["key-store"] !== undefined) {
+    if (cmd !== "setup") badInput(ctx, "--key-store goes with setup");
+    if (f.rail === "tempo") badInput(ctx, "--key-store is for evm and solana; tempo's agent keys stay in the key file (they are limited on chain)");
+    if (f["key-store"] !== "file" && f["key-store"] !== "os-keychain") badInput(ctx, "--key-store must be file or os-keychain");
+  }
   if (f["fund-only"]) {
     if (f.rail !== "tempo") badInput(ctx, "--fund-only is for tempo only (it tops up the owner from the Moderato faucet)");
     const other = ["agent", "new-owner", "hosted", "site", "grant", "fund", "owner-key-file", "detach", "replace", "wait"].find((k) => f[k] !== undefined && f[k] !== false);
@@ -954,7 +964,7 @@ function railCommand(verb, f, extra = {}) {
       case "read": return S("readBudget", []);
       case "grant": return O("setBudget", ["--amount", f.amount]);
       case "revoke": return O("revokeBudget", []);
-      case "setup": return O("setup", [...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...(f.fund === undefined ? [] : f.fund === true ? ["--fund"] : ["--fund-amount", f.fund])]);
+      case "setup": return O("setup", [...opt("key-store", f["key-store"]), ...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...(f.fund === undefined ? [] : f.fund === true ? ["--fund"] : ["--fund-amount", f.fund])]);
       case "fund-agent": return O("fundAgent", opt("amount", f.amount));
       case "rotate-address": return S("rotate", ["--address"]);
       case "rotate-balances": return S("rotate", ["--balances"]);
@@ -976,7 +986,7 @@ function evmCommand(verb, f, extra = {}) {
     case "grant": return E("setBudget", ["--cap", f.amount, ...ownerOpts(f)]);
     case "revoke": return E("revoke", ownerOpts(f));
     case "recover": return E("recover", [...opt("op", f.op), ...(extra.plan ? ["--plan"] : ownerOpts(f))]);
-    case "setup": return E("setup", [...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...(f.fund === undefined ? [] : ["--fund", ...(f.fund === true ? [] : ["--fund-amount", f.fund])]), ...ownerOpts(f)]);
+    case "setup": return E("setup", [...opt("key-store", f["key-store"]), ...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...(f.fund === undefined ? [] : ["--fund", ...(f.fund === true ? [] : ["--fund-amount", f.fund])]), ...ownerOpts(f)]);
     case "fund-agent": return E("fundAgent", [...opt("amount", f.amount), ...ownerOpts(f)]);
     case "rotate-address": return E("rotate", ["--address"]);
     case "rotate-clear": return E("rotate", ["--clear-agent", extra.agent]);
@@ -1944,6 +1954,12 @@ async function rotateLocked({ f, ctx }) {
     if (problem) return refusal(problem, `fix that file (or move it away if ${c} is not set up), then run rotate again. Nothing was sent`);
   }
   const oldAgent = existing?.swappedAt ? existing.oldAgent : current.agent;
+  // an old key that lives in the OS keychain: the new one goes there too, and the old entry stays, as the retired key file does
+  let oldInKeychain = false;
+  try {
+    const oldFile = existsSync(agentKeyFile(rail)) ? agentKeyFile(rail) : retiredKeyFile(rail, oldAgent);
+    oldInKeychain = new RegExp(`^${rail === "evm" ? "B4" : "SOLANA"}_AGENT_KEY_STORE=os-keychain$`, "m").test(readRegularFile(oldFile, "the agent key file"));
+  } catch {}
   const names = (c) => { const a = publicAgent({ rail, chain: c }); return Boolean(a) && sameAgent(rail, a, oldAgent); };
   for (const c of RAILS[rail].chains) if (publicAgent({ rail, chain: c }) && !names(c)) log(`superstables budget: ${rail} ${c} names another agent (${publicAgent({ rail, chain: c })}): left as it is`);
   const chains = [...new Set([...Object.keys(existing?.chains ?? {}), ...RAILS[rail].chains.filter(names)])];
@@ -1976,7 +1992,7 @@ async function rotateLocked({ f, ctx }) {
       }
     },
     clearChain: async (c) => quiet(await run(railCommand("rotate-clear", { rail, chain: c }, { agent: oldAgent }))),
-    setupChain: (c, entry) => runChild(["setup", "--rail", rail, ...chainArgs(c), ...(entry.hosted ? ["--hosted", "--site", entry.hosted, ...timing, "--wait"] : [...timing, ...signing(false)])]),
+    setupChain: (c, entry) => runChild(["setup", "--rail", rail, ...chainArgs(c), ...(oldInKeychain ? ["--key-store", "os-keychain"] : []), ...(entry.hosted ? ["--hosted", "--site", entry.hosted, ...timing, "--wait"] : [...timing, ...signing(false)])]),
     writeRecord: (record) => writeJournalFile(join(ROTATIONS_DIR, recordName(rail, record.oldAgent)), `${JSON.stringify(record, null, 2)}\n`),
   };
   const planOnly = f.plan === true || !sendsNow(f);

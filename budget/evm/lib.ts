@@ -4,7 +4,7 @@
 //   owner  approve(agent, cap)               (setBudget), approve(agent, 0) (revokeBudget)
 //   agent  USDC.transferFrom(owner, agent, price), then pays the seller with its own EIP-3009 signature
 //   agent  USDC.transferFrom(owner, owner, n)  (selfRevoke): lowers its own allowance without moving money
-import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import {
   createPublicClient, createWalletClient, http, parseAbi, encodeFunctionData, formatUnits, parseUnits, keccak256, isAddress,
@@ -14,7 +14,8 @@ import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { CFG, type GasOp } from "./chains.ts";
 import { EVM_CHAINS } from "./chains.mjs";
 import { EVM_RPC_MAX_BYTES, cappedRpcFetch } from "../rpc.mjs";
-import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
+import { HOME, agentKeyFile, ensurePrivateDir, publicFile, opsDir } from "../paths.mjs";
+import { readAgentSecret } from "../os-keychain.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
 import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
@@ -129,11 +130,25 @@ export function agentFileValues(): { env: Record<string, string>; problem?: unde
   }
 }
 /** The agent key file. Every reader of the key goes through here, so each one refuses a file other users can read. */
-export const agentEnv = () =>
+export const agentEnv = (): Record<string, string> => {
   // Mode 600 is set when the file is written, but that is a fact about that moment: a restore, a `cp` without -p, or
   // an editor can leave it readable by other users, and every signature from here on (a purchase, or a hosted request
   // to the site) would then be made with a key this machine no longer keeps to itself. Refuse rather than re-tighten.
-  parseSecretLines(AGENT_ENV, "the agent key file");
+  const env = parseSecretLines(AGENT_ENV, "the agent key file");
+  const store = env.B4_AGENT_KEY_STORE;
+  if (store === undefined) return env;
+  // The file names the OS keychain instead of holding the key: the key is read from there, for the caller that signs.
+  const refuse = (message: string) => Object.assign(new Error(message), { code: UNSAFE_SECRET_FILE });
+  if (store !== "os-keychain") throw refuse(`the agent key file ${AGENT_ENV} names an unknown key store "${store.slice(0, 40)}"`);
+  if (env.B4_AGENT_KEY) throw refuse(`the agent key file ${AGENT_ENV} names the keychain and also holds a key`);
+  if (!env.B4_AGENT_ADDRESS) throw refuse(`the agent key file ${AGENT_ENV} names the keychain but no agent address`);
+  try {
+    env.B4_AGENT_KEY = readAgentSecret("evm", env.B4_AGENT_ADDRESS);
+  } catch (err) {
+    throw refuse(`${(err as Error).message} (the agent key file ${AGENT_ENV} says it is there)`);
+  }
+  return env;
+};
 export const publicEnv = () => parseLines(PUBLIC_ENV);
 export function need(env: Record<string, string>, k: string, file: string): string {
   if (!env[k]) {
@@ -144,7 +159,7 @@ export function need(env: Record<string, string>, k: string, file: string): stri
 }
 /** Set B4_* keys in the public state file (no secrets), keeping every other line. Atomic. */
 export function writePublic(updates: Record<string, string>, drop: string[] = []) {
-  mkdirSync(dirname(PUBLIC_ENV), { recursive: true, mode: 0o700 });
+  ensurePrivateDir(dirname(PUBLIC_ENV), { root: HOME });
   const lines = existsSync(PUBLIC_ENV) ? readFileSync(PUBLIC_ENV, "utf8").split("\n").filter((l) => l !== "") : [`# ${CFG.label} public state (no secrets). B4_* = plain approve path.`];
   const seen = new Set<string>();
   const out = lines

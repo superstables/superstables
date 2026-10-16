@@ -19,14 +19,17 @@
 // grant (ApproveChecked up to the cap), in that order; the site builds each when the owner is ready. The command reads each
 // signature from the chain with fund-agent's and grant's checks before it reports it.
 // npx tsx budget/solana/setup.ts [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund | --fund-amount <sol>]] [--timeout <s>] [--no-open]
-//                                [--owner-key-file <path>]
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+//                                [--owner-key-file <path>] [--key-store file|os-keychain]
+import { existsSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import bs58 from "bs58";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
-import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, agentKeyFileValues, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
+import { UNSAFE_SECRET_FILE, readSecretFile, prepareSecretFile } from "../secret-file.mjs";
 import { retiredProblem } from "../retired.mjs";
+import { HOME, ensurePrivateDir } from "../paths.mjs";
+import { KEYCHAIN_UNAVAILABLE, deleteAgentSecret, storeAgentSecret } from "../os-keychain.mjs";
+import { overwriteInPlace } from "../../src/core/secret-overwrite.mjs";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
@@ -36,7 +39,7 @@ import { askConnect, closeOwnerPage, confirmHosted, emit, endUnapproved, sol, us
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/setup.ts [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund | --fund-amount <sol>]]
-                                      [--timeout <s>] [--no-open] [--owner-key-file <path>]
+                                      [--timeout <s>] [--no-open] [--owner-key-file <path>] [--key-store file|os-keychain]
 
 Create the agent key file (mode 600, never overwritten), let the owner connect their own wallet on the owner page, and write
 the public address file. No owner key is created. Prints addresses only, never a key.
@@ -49,8 +52,11 @@ the public address file. No owner key is created. Prints addresses only, never a
   --timeout <s>            how long the approval link stays open (default 600)
   --no-open                do not open the approval link in the default browser
   --owner-key-file <path>  tests and automation only: record this key file's address instead of asking the wallet
+  --key-store <store>      file (default) keeps the agent key in the key file; os-keychain keeps it in the OS keychain (macOS
+                           security, Linux secret-tool) with only its address in the file. An existing file key is moved there
+                           and the file's old bytes are overwritten
   -h, --help               show this help`;
-const cli = parseStrict(process.argv.slice(2), { "new-owner": "bool", hosted: "bool", site: "value", grant: "value", fund: "bool", "fund-amount": "value", timeout: "value", "no-open": "bool", "owner-key-file": "value" }, { usage: USAGE });
+const cli = parseStrict(process.argv.slice(2), { "new-owner": "bool", hosted: "bool", site: "value", grant: "value", fund: "bool", "fund-amount": "value", timeout: "value", "no-open": "bool", "owner-key-file": "value", "key-store": "value" }, { usage: USAGE });
 const newOwner = NEW_OWNER || cli["new-owner"] === true;
 const result = (exit: number, o: Record<string, unknown>) => emit("setup", exit, o);
 const usage = (message: string): never => {
@@ -97,19 +103,94 @@ const agentFileTextOrRefuse = (): string => {
     process.exit(result(3, { state: "refused_precheck", reason, next: `make ${AGENT_KEY_PATH} a regular file only you can read (chmod 600), then run setup again` }));
   }
 };
-const existing = parseEnvText(agentFileTextOrRefuse()) as Record<string, string>;
+const STORE = cli["key-store"] ?? "file";
+if (STORE !== "file" && STORE !== "os-keychain") usage(`--key-store must be file or os-keychain, not "${String(STORE).slice(0, 40)}"`);
+// the folders setup writes into must be real folders only this user can write to, checked before anything is written
+for (const dir of [dirname(AGENT_KEY_PATH), dirname(PUBLIC_PATH)]) {
+  try {
+    ensurePrivateDir(dir, { root: HOME });
+  } catch (err) {
+    const reason = (err as Error).message;
+    console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`);
+    process.exit(result(3, { state: "refused_precheck", reason, next: `make ${dir} a folder only you can write to (chmod 700), then run setup again` }));
+  }
+}
+const fileNow = agentKeyFileValues();
+if (fileNow.problem !== undefined) {
+  console.log(`REFUSED: ${fileNow.problem}. Nothing was changed on this machine.`);
+  process.exit(result(3, { state: "refused_precheck", reason: fileNow.problem, next: `make ${AGENT_KEY_PATH} a regular file only you can read (chmod 600) that names a key in this machine's keychain or holds one, then run setup again` }));
+}
+const existing = fileNow.env as Record<string, string>;
+const keychainRefusal = (err: unknown): never => {
+  const unavailable = (err as { code?: string }).code === KEYCHAIN_UNAVAILABLE;
+  const reason = unavailable ? `no keychain tool (secret-tool or security) answered: ${(err as Error).message}` : `the keychain refused the key: ${(err as Error).message}`;
+  console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`);
+  process.exit(result(3, { state: "refused_precheck", reason, next: unavailable ? "install secret-tool (libsecret-tools) on Linux, or use macOS, or run setup without --key-store os-keychain" : "unlock the keychain, then run setup again" }));
+};
 let agent: string;
+let keyStore: "file" | "os-keychain" = "file";
 if (existing.SOLANA_AGENT_SECRET_BASE58) {
   agent = Keypair.fromSecretKey(bs58.decode(existing.SOLANA_AGENT_SECRET_BASE58)).publicKey.toBase58();
-  console.log(`agent key file ${AGENT_KEY_PATH} exists; reusing it (agent ${agent})`);
+  if (existing.SOLANA_AGENT_KEY_STORE === "os-keychain") {
+    keyStore = "os-keychain";
+    console.log(`agent key file ${AGENT_KEY_PATH} exists; reusing it (agent ${agent}); the key is in the OS keychain`);
+  } else if (STORE === "os-keychain") {
+    // move the key: into the keychain first, then the file's own bytes are overwritten before the file is replaced
+    try {
+      storeAgentSecret("solana", agent, existing.SOLANA_AGENT_SECRET_BASE58);
+    } catch (err) {
+      keychainRefusal(err);
+    }
+    const rest = Object.entries(existing).filter(([k]) => !["SOLANA_AGENT_SECRET_BASE58", "SOLANA_AGENT_KEY_STORE", "SOLANA_AGENT_ADDRESS"].includes(k));
+    // the replacement is written beside the file first; the old bytes are overwritten only once it exists
+    let swap: ReturnType<typeof prepareSecretFile>;
+    try {
+      swap = prepareSecretFile(AGENT_KEY_PATH, `# Solana devnet AGENT key, kept in the OS keychain. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_KEY_STORE=os-keychain\nSOLANA_AGENT_ADDRESS=${agent}\n${rest.map(([k, v]) => `${k}=${v}\n`).join("")}`);
+    } catch (err) {
+      const reason = `the replacement for ${AGENT_KEY_PATH} could not be written (${(err as Error).message}); the key file was not changed`;
+      console.log(`REFUSED: ${reason}. The keychain entry made for the key is harmless and is overwritten on the next run.`);
+      process.exit(result(3, { state: "refused_precheck", reason, next: `make ${dirname(AGENT_KEY_PATH)} writable (chmod 700), then run setup again` }));
+    }
+    const gone = overwriteInPlace(AGENT_KEY_PATH);
+    try {
+      swap.commit();
+    } catch (err) {
+      swap.discard();
+      console.log(`REFUSED: the key file could not be replaced (${(err as Error).message}). Its old bytes are ${gone === "overwritten" ? "overwritten" : "unchanged"}; the key is in the keychain. Put these lines in ${AGENT_KEY_PATH}:\nSOLANA_AGENT_KEY_STORE=os-keychain\nSOLANA_AGENT_ADDRESS=${agent}`);
+      process.exit(result(3, { state: "refused_precheck", reason: `the key file could not be replaced (${(err as Error).message})`, next: `write the lines above into ${AGENT_KEY_PATH}, then run setup again` }));
+    }
+    keyStore = "os-keychain";
+    console.log(gone === "overwritten"
+      ? `moved the agent key into the keychain; the file's old bytes were overwritten (agent ${agent})`
+      : `moved the agent key into the keychain (agent ${agent}); the file's old bytes could not be overwritten (${gone}): delete any copy of the old file you made`);
+  } else {
+    console.log(`agent key file ${AGENT_KEY_PATH} exists; reusing it (agent ${agent})`);
+  }
 } else {
   if (existsSync(AGENT_KEY_PATH)) process.exit(result(3, { state: "refused_precheck", reason: `${AGENT_KEY_PATH} has no SOLANA_AGENT_SECRET_BASE58`, next: `move ${AGENT_KEY_PATH} away if you mean to start over` }));
   const kp = Keypair.generate();
   agent = kp.publicKey.toBase58();
-  mkdirSync(dirname(AGENT_KEY_PATH), { recursive: true, mode: 0o700 });
-  writeFileSync(AGENT_KEY_PATH, `# Solana devnet AGENT key. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_SECRET_BASE58=${bs58.encode(kp.secretKey)}\nSOLANA_AGENT_ADDRESS=${agent}\n`, { mode: 0o600, flag: "wx" });
-  console.log(`created the agent key file ${AGENT_KEY_PATH} (mode 600): agent ${agent}`);
+  if (STORE === "os-keychain") {
+    // the keychain first: if it refuses, no file is written and no key is lost
+    try {
+      storeAgentSecret("solana", agent, bs58.encode(kp.secretKey));
+    } catch (err) {
+      keychainRefusal(err);
+    }
+    try {
+      writeFileSync(AGENT_KEY_PATH, `# Solana devnet AGENT key, kept in the OS keychain. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_KEY_STORE=os-keychain\nSOLANA_AGENT_ADDRESS=${agent}\n`, { mode: 0o600, flag: "wx" });
+    } catch (err) {
+      try { deleteAgentSecret("solana", agent); } catch { /* the entry belongs to a key nothing else knows */ }
+      throw err;
+    }
+    keyStore = "os-keychain";
+    console.log(`created the agent key in the OS keychain (service superstables-budget-agent, account solana:${agent}); ${AGENT_KEY_PATH} (mode 600) holds only its address`);
+  } else {
+    writeFileSync(AGENT_KEY_PATH, `# Solana devnet AGENT key. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_SECRET_BASE58=${bs58.encode(kp.secretKey)}\nSOLANA_AGENT_ADDRESS=${agent}\n`, { mode: 0o600, flag: "wx" });
+    console.log(`created the agent key file ${AGENT_KEY_PATH} (mode 600): agent ${agent}`);
+  }
 }
+const keyWhere = keyStore === "os-keychain" ? "in its OS keychain (only its address is in the key file)" : `in ${AGENT_KEY_PATH}`;
 // a key that `budget rotate` retired is never set up again (the owner's revoke on chain is what stops it elsewhere)
 const retired = retiredProblem("solana", agent);
 if (retired) {
@@ -270,7 +351,7 @@ if (OWNER_KEY_FILE) {
     summary: "Connect your wallet and sign a message to record its address as the budget owner on this machine. This does not grant a budget or send a transaction.",
     rows: [
       { label: "Your agent", value: agent, mono: true },
-      { label: "Agent key", value: `on this machine only, in ${AGENT_KEY_PATH}` },
+      { label: "Agent key", value: `on this machine only, ${keyWhere}` },
       ...(recorded && !newOwner ? [{ label: "Owner on record", value: recorded, mono: true }] : []),
     ],
     enforced: [],
@@ -311,7 +392,7 @@ if (bound !== owner) {
   // checked again here, after the wait for the owner: the rewrite below is mode 600 and must not quietly replace a file
   // that other users could read in the meantime
   const text = agentFileTextOrRefuse();
-  if (!text.includes("SOLANA_AGENT_SECRET_BASE58=")) {
+  if (!text.includes("SOLANA_AGENT_SECRET_BASE58=") && !/^SOLANA_AGENT_KEY_STORE=os-keychain$/m.test(text)) {
     const reason = `${AGENT_KEY_PATH} changed while setup waited: it no longer holds the agent key`;
     console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`);
     process.exit(result(3, { state: "refused_precheck", reason, next: `restore ${AGENT_KEY_PATH}, then run setup again` }));

@@ -30,7 +30,7 @@
 // Usage: npx tsx budget/tempo/setup.ts [--agent <label>] [--fund-only] [--new-owner] [--hosted [--site <url>] [--grant <amount>]]
 //                                      [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
@@ -38,6 +38,7 @@ import { LABEL, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.
 import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, oneLine, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { UNSAFE_SECRET_FILE } from '../secret-file.mjs'
+import { HOME, ensurePrivateDir } from '../paths.mjs'
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from '../hosted.ts'
 import { chosenSite, isSiteRequestId, siteOrigin } from '../site.mjs'
 import { SETUP_KEYS, agentBinding, bindingLines, signLocalBinding } from '../owner-binding.mjs'
@@ -322,7 +323,7 @@ async function main() {
   } else {
     const key = generatePrivateKey()
     agent = privateKeyToAddress(key)
-    mkdirSync(dirname(AGENT_ENV_PATH), { recursive: true, mode: 0o700 })
+    ensurePrivateDir(dirname(AGENT_ENV_PATH), { root: HOME })
     writeFileSync(AGENT_ENV_PATH, `# Tempo agent: access-key private keys plus public addresses. NO owner private key. Only agent commands open this file.\nAGENT_PRIVATE_KEY=${key}\nAGENT_ADDRESS=${agent}\n`, { mode: 0o600, flag: 'wx' })
     console.log(`created the agent key file ${AGENT_ENV_PATH} (mode 600): agent ${agent}`)
   }

@@ -5,14 +5,14 @@
 // key file is read only when a test names it with --owner-key-file (loadOwnerKeyFile), and never
 // in the same process as the agent file (contract rule 1). Never logs a private key.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { Account, Addresses, createClient, http } from 'viem/tempo'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 
 import { CHAIN_ID as CHAIN_ID_, RPC_URL as RPC_URL_, TESTNET, TOKEN_DECIMALS as TOKEN_DECIMALS_, TOKEN_LABEL as TOKEN_LABEL_ } from './constants.mjs'
-import { agentKeyFile, ownerKeyFile, publicFile } from '../../paths.mjs'
+import { HOME, agentKeyFile, ensurePrivateDir, ownerKeyFile, publicFile } from '../../paths.mjs'
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from '../../secret-file.mjs'
 import { RPC_MAX_BYTES, cappedRpcFetch } from '../../rpc.mjs'
 import { markSend } from '../../proof.mjs'
@@ -170,7 +170,7 @@ export function writePublicEnv(updates: Record<string, string>, drop: string[] =
   for (const k of Object.keys(updates)) if (/PRIVATE|MNEMONIC|PASSWORD/i.test(k)) throw new Error(`${k} does not belong in the public file`)
   const env: Record<string, string> = { ...loadPublicEnv(), ...updates }
   for (const k of drop) delete env[k]
-  mkdirSync(dirname(PUBLIC_ENV_PATH), { recursive: true, mode: 0o700 })
+  ensurePrivateDir(dirname(PUBLIC_ENV_PATH), { root: HOME })
   writeFileSync(PUBLIC_ENV_PATH, '# Tempo public addresses only. Read commands use this file. No secrets.\n' + Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n') + '\n', { mode: 0o644 })
 }
 

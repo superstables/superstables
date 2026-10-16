@@ -143,6 +143,8 @@ export async function rotate({ rail, currentAgent, existing, chains, steps, plan
   // 7. finish
   record.finishedAt = now().toISOString();
   save();
+  // an old key that lived in the OS keychain stays there, like a retired key file: what is left at the retired address
+  // (gas, a late deposit) can still be moved by hand
   const hosted = [...new Set(keys.map((c) => record.chains[c].hosted).filter(Boolean))];
   const grants = keys.map((c) => `superstables budget grant --rail ${rail}${rail === "evm" ? ` --chain ${c}` : ""} --amount A`);
   return {
