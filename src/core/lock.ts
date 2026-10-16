@@ -1,16 +1,16 @@
 // A lock across processes on this computer, for a moment only (a check and a write), never while a person decides.
 //
 // The lock file holds { pid, pidStart, owner }: the holder's pid, that process's start identity, and a random owner id.
-// It is written whole to a temporary file and hard-linked into place, so it exists complete or not at all. It is taken
-// over only from a holder that is gone (no process with that pid and that start identity runs), never because it is
-// old: a live holder may be paused for any time. A dead holder's lock is broken under a mutex, and only if it is still
-// the same lock (same text, so the same owner id); a lock is released only by its owner. The mutex follows the same
-// rules (whole file, holder identity, taken over only from a gone holder, released only by its owner): Node has no
-// flock, and this ownership rule stands in for it. Nothing here is ever taken over because of its age. This is the design of
-// the budget's approval record lock (budget/approvals.mjs), which src/ cannot import.
+// It is written whole to a temporary file, flushed to disk, and hard-linked into place, so it exists complete or not at
+// all. It is taken over only from a holder that is gone (no process with that pid and that start identity runs), never
+// because it is old: a live holder may be paused for any time. A dead holder's lock is broken under a mutex, and only
+// if it is still the same lock (same text, so the same owner id); a lock is released only by its owner. The mutex
+// follows the same rules (whole file, holder identity, taken over only from a gone holder, released only by its owner):
+// Node has no flock, and this ownership rule stands in for it. Nothing here is ever taken over because of its age. This
+// is the design of the budget's approval record lock (budget/approvals.mjs), which src/ cannot import.
 
 import { randomBytes } from "node:crypto";
-import { linkSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, linkSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 
@@ -54,8 +54,17 @@ const RETRY_MS = 10;
  */
 async function acquire(path: string, me: string, deadline: number, breakDead?: (text: string) => Promise<void>): Promise<void> {
   const mine = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(mine, me, { mode: 0o600, flag: "wx" });
   try {
+    // On disk before it can become the lock: a lock that survives a crash must hold its holder in full, or every later
+    // payment would wait on a file nobody can judge.
+    const fd = openSync(mine, "wx", 0o600);
+    try {
+      const bytes = Buffer.from(me);
+      for (let at = 0; at < bytes.length; ) at += writeSync(fd, bytes, at);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     for (;;) {
       try {
         linkSync(mine, path);
