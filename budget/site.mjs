@@ -1,5 +1,5 @@
 // superstables.com for `superstables budget`: which site, and the requests that need no agent signature. Plain JavaScript with
-// Node built-ins only (and response.mjs, which has the same), so the dispatcher (cli.mjs), approvals.mjs and the rail scripts share it.
+// Node built-ins only (and response.mjs and ../src/core/owner-settings.js, which have the same), so the dispatcher (cli.mjs), approvals.mjs and the rail scripts share it.
 //
 // Hosted approvals (`setup --hosted`, every rail) record APPROVALS=hosted and SITE=<origin> in the chain's public file. Every
 // later owner command on that chain then asks the owner through the site instead of the page on 127.0.0.1. The site API is
@@ -12,56 +12,34 @@
 // The bearer token is the agent's access to one request. It is kept only in that approval's record (approvals.mjs, mode
 // 600) and in memory; nothing here logs it.
 
+import { DEFAULT_SITE, siteFor } from "../src/core/owner-settings.js";
 import { readCapped } from "./response.mjs";
 
-export const DEFAULT_SITE = "https://www.superstables.com";
+export { DEFAULT_SITE };
 export const BUDGET_API = "/api/v1/budget";
 
 /**
- * The owner's opt-in for a site outside superstables.com: the exact origin (or a comma list of origins), set by the owner in
- * their own environment. An agent never sets it. Without it, only superstables.com, its subdomains and this computer count.
+ * No longer read. SUPERSTABLES_ALLOW_SITE used to let the owner name another approval site in their environment, which an
+ * agent shares; the owner now sets one with `superstables owner settings site ORIGIN`. Named here so the dispatcher can warn.
  */
 export const ALLOW_SITE_ENV = "SUPERSTABLES_ALLOW_SITE";
 
-const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
-/** superstables.com itself or one of its subdomains (www.superstables.com, staging.superstables.com). */
-const isSuperstables = (host) => host === "superstables.com" || host.endsWith(".superstables.com");
-
 /**
- * The site's origin, or { error }. https only, except plain http on this computer (a local site for development and tests).
- * No path, query or credentials: every route is under /api/v1/budget/ on that origin. Only superstables.com, its subdomains
- * and this computer are accepted, unless the owner named that exact origin in SUPERSTABLES_ALLOW_SITE: an agent told to use
- * another site would otherwise send the owner's approvals there.
+ * The site's origin, or { error, ownerCommand? }. https only, except plain http on this computer. No path, query or
+ * credentials: every route is under /api/v1/budget/ on that origin. Which origins count is the owner's setting
+ * (src/core/owner-settings.js siteFor): for an owner action ("owner", the default) or a verdict ("verdict") only
+ * https://www.superstables.com (the apex is the same site) and what the owner allowed in their settings; for a read
+ * ("read") also any other https superstables.com host and this computer. An agent told to use another site would otherwise
+ * send the owner's approvals there.
+ * @param {unknown} value
+ * @param {"owner" | "verdict" | "read"} [purpose]
+ * @returns {{ origin?: string, error?: string, ownerCommand?: string }}
  */
-export function siteOrigin(value) {
+export function siteOrigin(value, purpose = "owner") {
   const raw = String(value ?? "").trim();
-  const shown = siteText(raw, 120);
-  let u;
-  try { u = new URL(raw); } catch { return { error: `"${shown}" is not a URL (for example ${DEFAULT_SITE})` }; }
-  if (u.username || u.password) return { error: "the site URL must not carry a user name or password" };
-  if (u.protocol !== "https:" && !(u.protocol === "http:" && LOOPBACK.has(u.hostname))) return { error: `the site must be an https URL (plain http only on 127.0.0.1 or localhost); got "${shown}"` };
-  if ((u.pathname !== "/" && u.pathname !== "") || u.search || u.hash) return { error: `the site is an origin only, such as ${DEFAULT_SITE}, with no path (got "${shown}")` };
-  if (!LOOPBACK.has(u.hostname) && !isSuperstables(u.hostname) && !ownerAllowed(u.origin)) {
-    return { error: `${u.origin} is not superstables.com: only https://superstables.com, its subdomains and 127.0.0.1 are used, unless the owner sets ${ALLOW_SITE_ENV}=${u.origin} in their own environment (an agent never sets it)` };
-  }
-  // superstables.com serves the same site as www.superstables.com, but it makes its approval links on www: the apex is that
-  // site, so a link on www is not refused as another site's.
-  if (u.origin === "https://superstables.com") return { origin: DEFAULT_SITE };
-  return { origin: u.origin };
-}
-
-/** The owner named this exact https origin in SUPERSTABLES_ALLOW_SITE. */
-function ownerAllowed(origin) {
-  const v = process.env[ALLOW_SITE_ENV]?.trim();
-  if (!v) return false;
-  return v.split(",").some((s) => {
-    try {
-      const u = new URL(s.trim());
-      return u.protocol === "https:" && !u.username && !u.password && (u.pathname === "/" || u.pathname === "") && !u.search && !u.hash && u.origin === origin;
-    } catch {
-      return false;
-    }
-  });
+  if (raw === "") return { error: `"" is not a URL (for example ${DEFAULT_SITE})` };
+  const site = siteFor(purpose, raw);
+  return site.error ? { error: siteText(site.error, 400), ...(site.ownerCommand ? { ownerCommand: site.ownerCommand } : {}) } : { origin: site.origin };
 }
 
 /**
@@ -85,10 +63,24 @@ export const isOtherSite = (origin) => {
   }
 };
 
-/** The site for a command: --site, else SUPERSTABLES_SITE, else superstables.com. { origin } or { error }. */
-export function chosenSite(flag) {
-  const v = flag ?? (process.env.SUPERSTABLES_SITE?.trim() || undefined) ?? DEFAULT_SITE;
-  return siteOrigin(v);
+/**
+ * The site for a command: --site, else SUPERSTABLES_SITE, else the owner's own site (their setting, else
+ * superstables.com). { origin } or { error, ownerCommand? }. Either source is a candidate only: it has to be a site the owner
+ * allows for `purpose`, and the error names where it came from.
+ * @param {string | undefined} flag
+ * @param {"owner" | "verdict" | "read"} [purpose]
+ * @returns {{ origin?: string, error?: string, ownerCommand?: string }}
+ */
+export function chosenSite(flag, purpose = "owner") {
+  const fromEnv = process.env.SUPERSTABLES_SITE?.trim() || undefined;
+  const source = flag !== undefined ? "--site" : fromEnv !== undefined ? "SUPERSTABLES_SITE" : null;
+  const candidate = flag ?? fromEnv;
+  if (candidate === undefined) {
+    const own = siteFor(purpose, undefined);
+    return own.error ? { error: siteText(own.error, 400) } : { origin: own.origin };
+  }
+  const site = siteOrigin(candidate, purpose);
+  return site.error ? { ...site, error: `${source}: ${site.error}` } : site;
 }
 
 /**

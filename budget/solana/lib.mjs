@@ -54,11 +54,12 @@ const crashHandler = async (err) => {
 crashHandler[RAIL_CRASH_HANDLER] = true;
 process.on("uncaughtException", crashHandler);
 
-// SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL (tests point it at a local fake; you can point it at your own node).
-// https, or http on this computer only (../rpc.mjs): anything else is ignored here with a warning, and the dispatcher refuses
-// the command before it runs a script.
+// SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL (tests point it at a local fake; you can point it at your own node);
+// with no variable, the RPC the owner set for solana-devnet (superstables owner settings rpc) is read. https, or http on this
+// computer only (../rpc.mjs): anything else is ignored here with a warning, and the dispatcher refuses the command before it
+// runs a script. An owner script (owner.ts) also refuses a variable that is not one of the owner's RPCs, before it does anything.
 export const RPC_URL = (() => {
-  const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana);
+  const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana, "read", "solana-devnet");
   if (r.error) process.stderr.write(`warning: ${r.error}; using ${DEFAULT_RPC.solana}\n`);
   return r.url;
 })();

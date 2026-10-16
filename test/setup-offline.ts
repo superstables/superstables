@@ -8,6 +8,7 @@
 // - The account's own ~/.superstables/policy.yaml is never the developer's real one (test/account-guard.mjs), here and in every
 //   node process a test starts.
 import { fileURLToPath } from "node:url";
+import { afterAll } from "vitest";
 
 if (!process.env.SUPERSTABLES_LIVE) {
   // Every RPC the client and the budget rails read, forced to an address on this computer where nothing listens,
@@ -31,3 +32,5 @@ if (!process.env.SUPERSTABLES_LIVE) {
     process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} ${accountOption}`.trim();
   }
 }
+
+afterAll(() => { (globalThis as { __superstablesRemoveNoAccountHome?: () => void }).__superstablesRemoveNoAccountHome?.(); });

@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { accountHomeWith } from "../helpers/owner-settings.js";
 
 const state = vi.hoisted(() => ({ tempoTestnet: true }));
 
@@ -48,7 +49,7 @@ const GATED = networkFor("eip155:8453") as EvmNetwork;
 const gatedOffer = () => usdcRequirement(0.01, PAY_TO, GATED);
 const homes: string[] = [];
 afterAll(() => { for (const h of homes) rmSync(h, { recursive: true, force: true }); });
-afterEach(() => { state.tempoTestnet = true; });
+afterEach(() => { state.tempoTestnet = true; vi.unstubAllEnvs(); });
 
 function tempoCharge(): MppChallenge {
   const issued = Challenge.from({
@@ -132,6 +133,9 @@ describe("a chain table entry that is not a testnet", () => {
     const base = termsFor(usdcRequirement(0.01, PAY_TO, BASE_SEPOLIA), 2);
     if (!base.supported) throw new Error(base.reason);
     const url = "http://127.0.0.1:9/x";
+    // a seller on this computer is refused on a chain that is not a testnet unless the owner allows it; the owner does here, so
+    // the quote reaches the terms check this test is about
+    vi.stubEnv("SUPERSTABLES_TEST_ACCOUNT_HOME", accountHomeWith({ version: 1, sellers: { allowLoopback: true } }));
     const now = Date.now();
     records.saveQuote({
       id: "q-gated", createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 300_000).toISOString(), status: "open", url,
