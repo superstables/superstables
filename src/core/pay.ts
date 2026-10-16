@@ -68,13 +68,20 @@ export class QuoteUsedError extends Error {
     readonly quoteId: string,
     /** The attempt this quote started, when the records still have it. */
     readonly attempt?: Attempt,
+    /** The attempt the quote's claim names, when its record is not readable (yet). */
+    readonly attemptId?: string,
   ) {
     super(
       attempt
         ? `A payment for this quote already exists: attempt ${attempt.id}, ${attempt.state}` +
             `${isFinal(attempt.state) ? "" : " (not final)"}. A quote starts at most one payment; ` +
             "do not start another one for it"
-        : "This quote has already been used to start a payment; quote again before paying",
+        : attemptId
+          ? `A payment for this quote already exists: attempt ${attemptId}, whose record is not readable yet. ` +
+            `A quote starts at most one payment; follow it with \`superstables status ${attemptId}\`. ` +
+            "If status still finds no such attempt a minute from now, that attempt stopped before anything was signed, " +
+            "and only then quote again"
+          : "This quote has already been used to start a payment; quote again before paying",
     );
     this.name = "QuoteUsedError";
   }
@@ -115,8 +122,12 @@ export class PaymentEngine {
     const quote = getQuote(quoteId, this.records);
     if (!quote) throw new Error(`There is no quote ${quoteId} on this machine`);
     if (quote.status === "used") {
+      // The claim names the attempt that holds the quote now. Its line may not be written yet, and after a quote was
+      // handed back, the newest record is an earlier attempt.
+      const holder = namedAttemptId(this.records.claimHolder(quote.id));
       const existing = this.records.attemptForQuote(quote.id);
-      throw new QuoteUsedError(quote.id, existing ? this.getAttempt(existing.id) : undefined);
+      if (existing && (!holder || holder === existing.id)) throw new QuoteUsedError(quote.id, this.getAttempt(existing.id));
+      throw new QuoteUsedError(quote.id, holder ? this.claimedBy(holder) : undefined, holder);
     }
     if (quote.status === "stale") {
       throw new Error("The seller changed its terms after this quote was taken; quote again before paying");
@@ -144,7 +155,7 @@ export class PaymentEngine {
     // read the same open quote. One claim file per quote, created only if none exists, decides which attempt it starts;
     // the other is told about that attempt instead.
     const holder = this.records.claimQuote(quote.id, attempt.id);
-    if (holder !== undefined) throw new QuoteUsedError(quote.id, holder ? this.claimedBy(holder) : undefined);
+    if (holder !== undefined) throw this.claimedQuoteError(quote.id, holder);
     this.records.saveQuote({ ...quote, status: "used" });
     this.runners.set(attempt.id, thisProcess());
     this.save(attempt);
@@ -163,14 +174,31 @@ export class PaymentEngine {
   }
 
   /**
-   * The attempt that holds a quote's claim. Another process writes it right after claiming, so it is waited for briefly
-   * (the claim and the record are microseconds apart); a process that stopped in between leaves no attempt to name.
+   * The refusal for a quote whose claim another process holds. The claim file is created, then its attempt id written in
+   * the next call, so an empty claim is read again, within the same deadline as the attempt's record.
    */
-  private claimedBy(id: string): Attempt | undefined {
+  private claimedQuoteError(quoteId: string, claimed: string): QuoteUsedError {
+    const deadline = performance.now() + CLAIM_WAIT_MS;
+    let holder: string | undefined = claimed;
     const pause = new Int32Array(new SharedArrayBuffer(4));
-    for (let waited = 0; ; waited += CLAIM_POLL_MS) {
+    while (holder === "" && performance.now() < deadline) {
+      Atomics.wait(pause, 0, 0, CLAIM_POLL_MS);
+      holder = this.records.claimHolder(quoteId);
+    }
+    return new QuoteUsedError(quoteId, holder ? this.claimedBy(holder, deadline) : undefined, namedAttemptId(holder));
+  }
+
+  /**
+   * The attempt that holds a quote's claim. Another process writes it right after claiming, so it is waited for briefly,
+   * in wall-clock time; one that stopped in between, or is slow to flush, leaves no record to name, and the claim's
+   * attempt id is named instead.
+   */
+  private claimedBy(id: string, deadline = performance.now() + CLAIM_WAIT_MS): Attempt | undefined {
+    // monotonic: the system clock may step during the wait
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    for (;;) {
       const found = this.getAttempt(id);
-      if (found || waited >= CLAIM_WAIT_MS) return found;
+      if (found || performance.now() >= deadline) return found;
       Atomics.wait(pause, 0, 0, CLAIM_POLL_MS);
     }
   }
@@ -1472,9 +1500,18 @@ const UNRECORDED_ANSWER =
   "the service answered for this payment, but its receipt could not be recorded while another process held the records' lock; " +
   "`superstables status` records it and checks the chain";
 
-/** How long a second claim on a quote waits for the first one's attempt record to appear, and how often it looks. */
-const CLAIM_WAIT_MS = 250;
-const CLAIM_POLL_MS = 10;
+/** The attempt id a claim names, when it has the shape of one this client makes; anything else is not printed. */
+function namedAttemptId(claimed: string | undefined): string | undefined {
+  return claimed && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(claimed) ? claimed : undefined;
+}
+
+/**
+ * How long a second claim on a quote waits for the first one's attempt record to appear, and how often it looks.
+ * Wall-clock: the first process flushes the claim, the quote and the attempt (records.ts) before its record is readable,
+ * which a loaded disk can take more than a second to do.
+ */
+const CLAIM_WAIT_MS = 2_000;
+const CLAIM_POLL_MS = 25;
 
 /** How often the chain is read while waiting for a payment to show. */
 const CHAIN_POLL_MS = 1_500;
