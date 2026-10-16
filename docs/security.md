@@ -240,10 +240,17 @@ history: delete those records and the count starts again.
 `pay` supports nine testnets, each with one token pinned in the client: x402 `exact` with test
 USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum
 Sepolia and Solana devnet, x402 `exact` with test USDG on Robinhood Chain Testnet, and MPP
-`tempo.charge` with test pathUSD on Tempo Moderato. On the EVM
-chains the token's EIP-712 signing domain is pinned too, so a seller cannot make the wallet show a
-signing name of its choosing. A requirement naming anything else, every mainnet included, is
-refused before anyone is asked. There is no configuration that turns on mainnet. A mainnet added
+`tempo.charge` with test pathUSD on Tempo Moderato. Each chain's token is one entry in the
+client's chain table: its address and decimals, and on the EVM chains its EIP-712 signing domain
+and whether a new allowance must start from 0. Nothing assumes six decimals. On the EVM chains the
+signing domain is pinned, so a seller cannot make the wallet show a signing name of its choosing,
+and before the first signature on a chain `pay` reads the token's `DOMAIN_SEPARATOR()` from the
+chain and refuses, before anyone is asked, when it is not the one the table states or the RPC
+answers for another chain. When a testnet's RPC cannot be read, `pay` goes on without that check (a
+wrong domain only makes a signature that does not verify) and reads again on the next payment. A
+budget grant never approves over a live allowance on any token, and a token that needs its
+allowance set to 0 first is never granted through an approval site such as superstables.com. A
+requirement naming anything else, every mainnet included, is refused before anyone is asked. There is no configuration that turns on mainnet. A mainnet added
 to the chain tables would still be refused by a separate check: before anything is signed, offered
 to a wallet or sent, `quote`, `pay`, the approval page, the local wallet and every
 `superstables budget` command ask it, and it refuses any chain whose table entry is not marked as

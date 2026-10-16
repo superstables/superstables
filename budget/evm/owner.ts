@@ -181,6 +181,28 @@ export async function findApproval(owner: Address, spender: Address, fromBlock: 
 /** USDC.approve(agent, cap): the transaction a grant asks the owner's wallet for. */
 export const grantTx = (agent: Address, cap: bigint): { to: Address; data: Hex } => ({ to: USDC, data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [agent, cap] }) });
 
+/**
+ * The owner's transactions for a grant of `cap`, from the allowance `live` read now: approve(agent, cap) from 0; over a
+ * live allowance approve(agent, 0) first, then approve(agent, cap) once the chain reads 0. Two steps on every token: an
+ * approveReset token needs them, and this client never overwrites a live allowance in place on any token (an agent that
+ * sees the pending approve could spend the old allowance and then the new one). Only setBudget --replace with an owner
+ * key file sends two; every flow that asks the owner's wallet or the site refuses a live allowance before asking.
+ */
+export const grantSteps = (agent: Address, cap: bigint, live: bigint): { to: Address; data: Hex }[] =>
+  live > 0n ? [grantTx(agent, 0n), grantTx(agent, cap)] : [grantTx(agent, cap)];
+
+/**
+ * Why a grant on this chain is not asked for through the approval site, or "". The token needs its allowance at 0 before
+ * a new one (approveReset), and the site's steps are a gas transfer and an approve only: no approve(0) step, and no read
+ * of 0 this client can check before the owner's wallet is asked. On the page on this computer a grant is asked for only
+ * after the allowance read 0 (setBudget.ts), and approve(cap) from 0 is valid on every token.
+ */
+export function approveResetHostedProblem(): string {
+  const site = approvalSite();
+  if (!CFG.approveReset || site === null) return "";
+  return `${SYM} on ${CFG.label} needs its allowance set to 0 before a new one is approved, and approvals on ${new URL(site).host} have no such step, so this budget is not asked for there`;
+}
+
 /** What the chain enforces for an evm grant of `cap`, and what it does not: the page's terms. */
 export const grantEnforced = (cap: bigint) => [
   `Withdrawals under this allowance total at most ${capWords(cap)}. Spending the allowance does not recover funds already withdrawn.`,

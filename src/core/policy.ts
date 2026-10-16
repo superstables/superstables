@@ -62,8 +62,8 @@ export function capUnit(asset: string): string {
 }
 
 /**
- * Caps and today's totals are whole numbers of millionths of their unit: 10⁻⁶ USD for the dollar stablecoins. Every
- * token pay pays in has six decimals, so their amounts are compared exactly.
+ * Caps and today's totals are whole numbers of millionths of their unit: 10⁻⁶ USD for the dollar stablecoins. A token's
+ * own decimals are scaled into it by capUnits; the unit is the policy's, not any token's.
  */
 export const CAP_DECIMALS = 6;
 
@@ -246,7 +246,10 @@ export interface Attempt {
   asset: string;
   /** The payment in the token's smallest units: what the caps compare. policyAmount(terms) gives it with its decimals. */
   amountAtomic?: bigint;
-  /** The token's decimals, which amountAtomic is counted in. Default CAP_DECIMALS (6: every token pay pays in). */
+  /**
+   * The token's decimals, which amountAtomic is counted in (policyAmount gives them from the chain table). Without it,
+   * amountAtomic is read in the cap's unit, millionths (CAP_DECIMALS).
+   */
   decimals?: number;
   /** Already spent today in this asset's cap unit, in millionths (Records.spentTodayAtomic). Needed when caps.per_day is set. */
   spentTodayAtomic?: bigint;
@@ -262,14 +265,15 @@ export interface Verdict {
 }
 
 /**
- * The amount fields of an Attempt for a payment's terms: amountAtomic as recorded, at its chain's token decimals (6 when
- * the chain is unknown). Empty when amountAtomic is not a whole number, so a cap then refuses.
+ * The amount fields of an Attempt for a payment's terms: amountAtomic as recorded, at its chain's token decimals. Empty
+ * when amountAtomic is not a whole number or the chain is not in this client's table, so a cap then refuses.
  */
 export function policyAmount(terms: { amountAtomic?: unknown; network?: unknown }): Pick<Attempt, "amountAtomic" | "decimals"> {
   const atomic = terms.amountAtomic;
   if (typeof atomic !== "string" || !/^\d{1,78}$/.test(atomic)) return {};
   const decimals = typeof terms.network === "string" ? networkFor(terms.network)?.token.decimals : undefined;
-  return { amountAtomic: BigInt(atomic), decimals: decimals ?? CAP_DECIMALS };
+  if (decimals === undefined) return {};
+  return { amountAtomic: BigInt(atomic), decimals };
 }
 
 /** A deprecated decimal field in millionths: undefined unless it is a finite, non-negative number exact at six places. */

@@ -28,6 +28,7 @@ import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
 import { evaluatePolicy, policyAmount, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
 import { firstPayable, railFor } from "./rails/index.js";
+import { tokenDomainProblem } from "./token-domain.js";
 import type { ChainReadOptions, Offer, PaymentFacts, PushRail, RailAdapter, X402Rail } from "./rails/types.js";
 import { join } from "node:path";
 import type { AbandonCause, Attempt, AttemptState, Quote, Receipt, ServiceOutcome } from "./types.js";
@@ -339,6 +340,18 @@ export class PaymentEngine {
         this.settleState(attempt, "failed", { refusal: "invalid", reason: reusedChallenge(reused.id) });
         return;
       }
+    }
+
+    // The token's signing domain, read on chain once per process before anyone is asked to sign on this chain
+    // (token-domain.ts). Before the cap reservation: a refused payment reserves nothing.
+    const evmNetwork = rail.signKind === "eip3009" ? networkFor(offer.terms.network) : undefined;
+    if (evmNetwork?.rail === "evm") {
+      const problem = await tokenDomainProblem(evmNetwork, this.chainRead);
+      if (problem) {
+        this.settleState(attempt, "failed", { refusal: "invalid", reason: `${problem}. Nothing was signed, and nobody was asked` });
+        return;
+      }
+      if (isFinal(attempt.state)) return;
     }
 
     // Reserve the amount against the daily cap before anyone is asked. Two `pay` processes asking at

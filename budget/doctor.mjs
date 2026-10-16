@@ -15,6 +15,7 @@ import { UNSAFE_SECRET_FILE, readRegularFile } from "./secret-file.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
 import { DEFAULT_RPC, jsonRpc, rpcFromEnv } from "./rpc.mjs";
 import { siteOrigin, siteText } from "./site.mjs";
+import { TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
 
@@ -23,7 +24,7 @@ const SOLANA = { rpc: rpcEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana), usd
 const TEMPO = { rpc: rpcEnv("SUPERSTABLES_TEMPO_RPC", DEFAULT_RPC.tempo), chainId: 42431, pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
 
 const rpc = (url, method, params = []) => jsonRpc(url, method, params);
-const erc20Balance = async (url, token, addr, decimals = 6) => Number(BigInt(await rpc(url, "eth_call", [{ to: token, data: "0x70a08231" + addr.slice(2).toLowerCase().padStart(64, "0") }, "latest"]))) / 10 ** decimals;
+const erc20Balance = async (url, token, addr, decimals) => Number(BigInt(await rpc(url, "eth_call", [{ to: token, data: "0x70a08231" + addr.slice(2).toLowerCase().padStart(64, "0") }, "latest"]))) / 10 ** decimals;
 const nativeBalance = async (url, addr) => Number(BigInt(await rpc(url, "eth_getBalance", [addr, "latest"]))) / 1e18;
 // The fee cap the next transaction would carry, in wei: base fee x 1.2 plus the tip (viem's default), else the legacy gas price.
 const evmFeeCap = async (url) => {
@@ -103,7 +104,7 @@ const RAILS = {
     rpc: async () => { const id = Number(await rpc(TEMPO.rpc, "eth_chainId")); if (id !== TEMPO.chainId) throw new Error(`chain id ${id}, expected ${TEMPO.chainId}`); return `chain id ${id}`; },
     // The agent's access key spends the owner's pathUSD and fees come from the owner, so only the owner needs funds.
     balances: async (owner) => [
-      { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(TEMPO.rpc, TEMPO.pathUsd, owner), need: TEMPO.minOwner, hint: "superstables budget setup --rail tempo --fund-only uses the Moderato faucet" },
+      { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(TEMPO.rpc, TEMPO.pathUsd, owner, PATH_USD_DECIMALS), need: TEMPO.minOwner, hint: "superstables budget setup --rail tempo --fund-only uses the Moderato faucet" },
     ],
   }),
   solana: () => ({

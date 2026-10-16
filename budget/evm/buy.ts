@@ -1,7 +1,7 @@
 import "./cli-guard.mjs";
 // buy (B4): the agent pays a real x402 `exact` (EIP-3009) seller under a plain ERC-20 approve. Agent command: opens the agent key file only. Chain from --chain / B4_CHAIN (chains.mjs; base-sepolia by default).
 //   1. GET the seller (free) -> 402 with the price.
-//   2. Prechecks before anything is signed or sent (rule 4): --max, token = the chain's USDC (6 decimals) and its EIP-712 domain, no Circle Gateway option, precision,
+//   2. Prechecks before anything is signed or sent (rule 4): --max, token = the chain's budget token at its chains.mjs decimals and its EIP-712 domain, no Circle Gateway option, precision,
 //      --pay-to, budget expiry (public file), allowance and owner balance cover the price, agent holds 0 USDC and has gas.
 //      A refusal exits 3 with RESULT state "refused_precheck".
 //   3. Journal the intent (rule 5), then the agent pulls exactly the price: USDC.transferFrom(owner, agent, price).

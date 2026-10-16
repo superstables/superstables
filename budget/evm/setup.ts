@@ -33,7 +33,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 import { EVM_CHAINS } from "./chains.mjs";
 import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, toUsdc, usageError, assertRpcChain, publicClient, tx, oneLine } from "./lib.ts";
-import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, fundingTx, fundValue, DEFAULT_FUND_AMOUNT, grantTx, grantEnforced, GRANT_NOT_ENFORCED, approveRow, capWords, checkFundSent, checkGrantSent, REVOKE_HINT, type SentCheck } from "./owner.ts";
+import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, fundingTx, fundValue, DEFAULT_FUND_AMOUNT, grantTx, approveResetHostedProblem, grantEnforced, GRANT_NOT_ENFORCED, approveRow, capWords, checkFundSent, checkGrantSent, REVOKE_HINT, type SentCheck } from "./owner.ts";
 import { NEW_OWNER } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
 import { chosenSite, isSiteRequestId, siteOrigin } from "../site.mjs";
@@ -64,6 +64,13 @@ const BUNDLE = GRANT !== undefined || FUND;
 if (BUNDLE && !HOSTED) usageError("--grant and --fund go with --hosted: without it, run setup, then fund-agent and grant, each with its own approval");
 const CAP = GRANT !== undefined ? toUsdc(GRANT) : undefined;
 if (CAP === 0n) usageError("--grant must be above 0");
+if (CAP !== undefined) {
+  const reset = approveResetHostedProblem();
+  if (reset) {
+    console.log(`REFUSED: ${reset}. Nothing was requested.`);
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason: reset, next: "run setup --hosted without --grant to add the agent, and ask the owner to grant on this computer (setup without --hosted)" }));
+  }
+}
 const FUND_AMT = FUND ? arg("fund-amount") ?? DEFAULT_FUND_AMOUNT : undefined;
 let FUND_VALUE = 0n;
 if (FUND_AMT !== undefined) {

@@ -1,20 +1,21 @@
 import "./cli-guard.mjs";
 // preflight (B4, any chain): read-only checks before anything is sent. No secret file.
 //   1. eth_chainId from the RPC equals chains.ts.
-//   2. The USDC contract answers name(), version(), decimals(); the EIP-712 domain separator recomputed from
-//      (name, version, chainId, token) equals DOMAIN_SEPARATOR(); all equal chains.ts.
+//   2. The USDC contract answers name(), version(), decimals(); DOMAIN_SEPARATOR() equals the separator computed from
+//      chains.ts (name, version, chainId, token); all equal chains.ts.
 //   3. Native vs ERC-20 balance of owner and agent (Arc: native = ERC-20 * 1e12, one balance in two units).
 //   4. With --url: fetch the seller's 402 (x402 v2: the payment-required header; v1: the JSON body), list every option with the
 //      verdict of buy's precheck, and name the chosen one: price, token, payTo, network, scheme, x402 version. Its RESULT carries
 //      the price (`price`) and the recipient (`payTo`) for buy's --max and --pay-to.
 // npx tsx budget/evm/preflight.ts --chain <name> [--url <seller url>] [--max <usdc>] [--pay-to <address>]
-import { domainSeparator, parseAbi, formatUnits, type Address } from "viem";
+import { parseAbi, formatUnits, type Address } from "viem";
 import { SYM, CFG, GAS, emit, oneLine, USDC, NETWORK, usdc, gasFmt, publicClient, nativeBalance, usdcBalance, arg, toUsdc, publicEnv, usageError, cmd } from "./lib.ts";
 import { checkAccept, MIN_AUTH_LIFETIME_S, MAX_AUTH_LIFETIME_S } from "./purchase.ts";
 import { EVM_CHAINS } from "./chains.mjs";
 import { readCapped } from "../response.mjs";
 import { isAddress } from "viem";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
+import { expectedDomainSeparator } from "../../src/core/token-domain.ts";
 
 let bad = 0, good = 0;
 const ok = (c: boolean, m: string) => { console.log(`${c ? "PASS" : "FAIL"} -- ${oneLine(m, 2000)}`); if (c) good++; else bad++; };
@@ -35,17 +36,20 @@ const [name, onchainVersion, decimals, ds] = await Promise.all([rd("name"), rd("
 const version: string = onchainVersion ?? CFG.domain.version;
 ok(name === CFG.domain.name && version === CFG.domain.version, `token name()/version() = ${name}/${onchainVersion ?? "(no version(): reverts)"}; chains.mjs says ${CFG.domain.name}/${CFG.domain.version}`);
 ok(Number(decimals) === CFG.decimals, `token decimals() = ${decimals}`);
-const calc = domainSeparator({ domain: { name, version, chainId: CFG.chainId, verifyingContract: USDC } });
-ok(calc === ds, `DOMAIN_SEPARATOR() ${ds.slice(0, 18)}... equals the one recomputed from (${name}, ${version}${onchainVersion === null ? " from chains.mjs" : ""}, ${CFG.chainId}, token)`);
+const expected = expectedDomainSeparator(CFG.chainId, { address: USDC, domain: CFG.domain });
+ok(String(ds).toLowerCase() === expected.toLowerCase(), `DOMAIN_SEPARATOR() ${ds.slice(0, 18)}... equals the one computed from chains.mjs (${CFG.domain.name}, ${CFG.domain.version}, ${CFG.chainId}, token): the domain pay checks and wallets sign over`);
 const fees = await publicClient.estimateFeesPerGas().catch(() => null);
-console.log(`gas: token ${GAS.symbol}${GAS.isUsdc ? " (native, 18 decimals; the same balance the ERC-20 shows in 6)" : ""}, gasPrice ${await publicClient.getGasPrice()} wei${fees?.maxFeePerGas ? `, maxFeePerGas ${fees.maxFeePerGas}` : ""}`);
+console.log(`gas: token ${GAS.symbol}${GAS.isUsdc ? " (native, ${GAS.decimals} decimals; the same balance the ERC-20 shows in ${CFG.decimals})" : ""}, gasPrice ${await publicClient.getGasPrice()} wei${fees?.maxFeePerGas ? `, maxFeePerGas ${fees.maxFeePerGas}` : ""}`);
 
 const p = publicEnv();
 for (const [who, addr] of [["owner", p.B4_OWNER_ADDRESS], ["agent", p.B4_AGENT_ADDRESS]] as const) {
   if (!addr || !isAddress(addr)) { console.log(`note: no ${who} address in the public file, so no ${who} balance to show. Not an error: preflight needs no setup; a budget starts with superstables budget setup --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}`); continue; }
   const [n, e] = [await nativeBalance(addr as Address), await usdcBalance(addr as Address)];
   console.log(`${who} ${addr}: native ${gasFmt(n)} ${GAS.symbol}, ERC-20 ${SYM} ${usdc(e)}`);
-  if (GAS.isUsdc) ok(n / 10n ** 12n === e, `${who}: native balance ${n} / 1e12 (rounded down) = ERC-20 balance ${e} (one balance, two units; the native one also holds sub-micro dust of 18-decimal fees: ${n % 10n ** 12n} wei)`);
+  if (GAS.isUsdc) {
+    const scale = 10n ** BigInt(GAS.decimals - CFG.decimals);
+    ok(n / scale === e, `${who}: native balance ${n} / 1e${GAS.decimals - CFG.decimals} (rounded down) = ERC-20 balance ${e} (one balance, two units; the native one also holds dust below one ${SYM} base unit from ${GAS.decimals}-decimal fees: ${n % scale} wei)`);
+  }
 }
 
 // v1 names the price maxAmountRequired, v2 amount

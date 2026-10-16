@@ -433,7 +433,7 @@ describe("capUnits and policyAmount", () => {
   it("reads a record's terms", () => {
     expect(policyAmount({ amountAtomic: "10000", network: "eip155:84532" })).toEqual({ amountAtomic: 10000n, decimals: 6 });
     expect(policyAmount({ amountAtomic: "1e3", network: "eip155:84532" })).toEqual({});
-    expect(policyAmount({ amountAtomic: "10000", network: "eip155:1" })).toEqual({ amountAtomic: 10000n, decimals: 6 });
+    expect(policyAmount({ amountAtomic: "10000", network: "eip155:1" })).toEqual({});
   });
 });
 
