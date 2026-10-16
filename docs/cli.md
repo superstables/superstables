@@ -9,6 +9,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | [`superstables setup`](#superstables-setup) | for pay: create the home directory and the policy file, then say what to do next |
 | [`superstables wallet init`](#superstables-wallet-init) | create this machine's wallet key, or import one |
 | [`superstables wallet serve`](#superstables-wallet-serve) | run the wallet: it asks the owner to approve every payment, in a browser page |
+| [`superstables wallet open`](#superstables-wallet-open) | open the running wallet's page in your browser, signed in |
 | [`superstables wallet status`](#superstables-wallet-status) | ask the running local wallet what it is doing |
 | [`superstables wallet address`](#superstables-wallet-address) | the address that pays, from this machine's wallet key |
 | [`superstables find`](#superstables-find) | search for services that charge per request, and say how each could be paid |
@@ -114,7 +115,7 @@ Start here, budget: superstables budget setup --rail evm
     wait               wait for an owner approval an agent started (--id)
 
 Who runs what:
-  owner   setup, wallet init, wallet serve, policy init, and every approval
+  owner   setup, wallet init, wallet serve, wallet open, policy init, and every approval
   agent   find, quote, pay, status, receipts, attempts, doctor
   Either may run the read-only commands.
 
@@ -203,6 +204,7 @@ Commands:
   init [options]    create this machine's wallet key, or import one
   serve [options]   run the wallet: it asks the owner to approve every payment,
                     in a browser page
+  open              open the running wallet's page in your browser, signed in
   status [options]  ask the running local wallet what it is doing
   address           the address that pays, from this machine's wallet key
   help [command]    display help for command
@@ -267,6 +269,25 @@ Prints: where it listens, the page's address, its launcher file and where the ow
   the secret itself), and the socket the agent asks on, then runs until Ctrl-C.
 Exit codes: 0 stopped, 1 could not start (a port in use, no key: run `superstables wallet init`)
   (the full table: superstables --help)
+```
+
+## superstables wallet open
+
+```text
+Usage: superstables wallet open [options]
+
+open the running wallet's page in your browser, signed in
+
+Options:
+  -h, --help  display help for command
+
+Moves money: no. The page it opens is where the owner approves payments.
+Run by: the owner, in a terminal of their own. Agents never run it.
+Example:
+  $ superstables --wallet local wallet open
+Prints: the launcher file it wrote (readable by this user only) and opens it in the browser.
+Exit codes: 0 opened, 1 the wallet is not running or the launcher could not be written (the full
+  table: superstables --help)
 ```
 
 ## superstables wallet status

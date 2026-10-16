@@ -38,7 +38,8 @@ describe.each(["plain", "superstables"] as const)("the approval page, %s look", 
   it("asks for the owner secret when the address has none, and keeps it out of the address bar", () => {
     expect(page).toContain('<form id="unlock" hidden');
     expect(page).toContain('<input id="secret-input" type="password"');
-    expect(page).toContain("sessionStorage.setItem(KEY, value)");
+    expect(page).not.toContain("sessionStorage");
+    expect(page).not.toContain("localStorage");
     expect(page).toContain('history.replaceState(null, "", location.pathname + location.search)');
     expect(page).toContain('window.addEventListener("hashchange"');
   });

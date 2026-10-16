@@ -37,7 +37,7 @@ import { walletStatus } from "../core/signer/wallet.js";
 import type { Attempt, Quote, Receipt, ServiceListing, WalletStatus } from "../core/types.js";
 import { clientVersion } from "../core/version.js";
 import { startDemoService } from "../demo-service/server.js";
-import { policySummary, startWallet } from "../wallet/daemon.js";
+import { openWalletPage, policySummary, startWallet } from "../wallet/daemon.js";
 import { initKey, keyExists, keyPath, loadAccount, readSecretFile } from "../wallet/keystore.js";
 import { SellerTextError, UNTRUSTED_LABEL, untrustedJson, untrustedText, untrustedUrl } from "../core/text.js";
 import { formatReport, runDoctor } from "./doctor.js";
@@ -256,6 +256,29 @@ explain(
       "where it listens, the page's address, its launcher file and where the owner secret is (never the secret " +
       "itself), and the socket the agent asks on, then runs until Ctrl-C.",
     exits: "0 stopped, 1 could not start (a port in use, no key: run `superstables wallet init`)",
+  },
+);
+
+explain(
+  wallet
+    .command("open")
+    .description("open the running wallet's page in your browser, signed in")
+    .action(async () => {
+      let launcher: string;
+      try {
+        launcher = await openWalletPage();
+      } catch (err) {
+        throw new CliError((err as Error).message);
+      }
+      console.log(field("launcher", launcher));
+      console.log("The page does not keep the owner secret, so a reload asks for it again: run this command to open it signed in.");
+    }),
+  {
+    money: "no. The page it opens is where the owner approves payments.",
+    who: "the owner, in a terminal of their own. Agents never run it.",
+    examples: ["superstables --wallet local wallet open"],
+    prints: "the launcher file it wrote (readable by this user only) and opens it in the browser.",
+    exits: "0 opened, 1 the wallet is not running or the launcher could not be written",
   },
 );
 

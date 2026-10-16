@@ -74,8 +74,13 @@ describe.skipIf(!live || !liveHome)("Base Sepolia, for real", () => {
     throw new Error("no pending request reached the wallet");
   }
 
-  const decide = (id: string, action: "approve" | "deny") =>
-    fetch(`${wallet.url}/owner/requests/${id}/${action}`, { method: "POST", headers: { authorization: `Bearer ${wallet.ownerSecret}` } });
+  // approving confirms the amount, recipient and chain the request showed, as the owner's page does
+  const decide = (request: WalletRequestView, action: "approve" | "deny") =>
+    fetch(`${wallet.url}/owner/requests/${request.id}/${action}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${wallet.ownerSecret}`, "content-type": "application/json" },
+      body: JSON.stringify({ amountAtomic: request.verified.amountAtomic, recipient: request.verified.recipient, network: request.verified.network }),
+    });
 
   it("pays the demo service once the owner approves, and records the transaction", async () => {
     const q = await quote({ service: demoService(), params: { asset: "BTC" } }, { records, policy: DEFAULT_POLICY });
@@ -86,7 +91,7 @@ describe.skipIf(!live || !liveHome)("Base Sepolia, for real", () => {
     const pending = await pendingRequest();
     expect(pending.verified.amountAtomic).toBe("10000");
     expect(pending.verified.recipient.toLowerCase()).toBe(payTo.toLowerCase());
-    await decide(pending.id, "approve");
+    await decide(pending, "approve");
 
     const done = await engine.waitForAttempt(attempt.id, 120_000);
     console.log(`attempt ${done.state}: ${done.transactionUrl ?? done.reason}`);
@@ -101,7 +106,7 @@ describe.skipIf(!live || !liveHome)("Base Sepolia, for real", () => {
     const q = await quote({ service: demoService(), params: { asset: "ETH" } }, { records, policy: DEFAULT_POLICY });
     const attempt = engine.startPayment(q.id);
     const pending = await pendingRequest();
-    await decide(pending.id, "deny");
+    await decide(pending, "deny");
     const done = await engine.waitForAttempt(attempt.id, 30_000);
     expect(done.state).toBe("denied");
     expect(done.transaction).toBeUndefined();

@@ -93,6 +93,11 @@ async function ask(
   return (await res.json()) as WalletRequestView;
 }
 
+/** What the owner's page posts when the owner confirms: the amount, recipient and chain the request showed. */
+const confirmation = (r: WalletRequestView) => ({ amountAtomic: r.verified.amountAtomic, recipient: r.verified.recipient, network: r.verified.network });
+const approveAs = (wallet: WalletHandle, r: WalletRequestView) =>
+  call(wallet, `/owner/requests/${r.id}/approve`, wallet.ownerSecret, "POST", confirmation(r));
+
 const readRequest = async (wallet: WalletHandle, id: string, token = wallet.agentToken): Promise<WalletRequestView> =>
   (await (await call(wallet, `/requests/${id}`, token)).json()) as WalletRequestView;
 
@@ -149,7 +154,7 @@ describe("the owner secret leaves the wallet only through a file only the owner 
     expect(readFileSync(launcher, "utf8")).toContain(`location.replace("${wallet.url}/#${wallet.ownerSecret}")`);
   });
 
-  it("deletes the launcher, and its folder, once the page signs in with the owner secret, not before", async () => {
+  it("keeps the launcher after the page signs in, so a reload can open it again, and deletes it when the wallet stops", async () => {
     const { wallet, launcherDir } = await startLoudWallet();
     const launcher = wallet.launcherPath!;
     const target = /location\.replace\("([^"]+)"\)/.exec(readFileSync(launcher, "utf8"))![1];
@@ -160,8 +165,11 @@ describe("the owner secret leaves the wallet only through a file only the owner 
     expect(existsSync(launcher)).toBe(true);
     // what the page does with the fragment: the owner's list, with the secret as a bearer token
     expect((await call(wallet, "/owner/requests", secret)).status).toBe(200);
+    expect(existsSync(launcher)).toBe(true);
+    expect(wallet.launcherPath).toBe(launcher);
+    expect(statSync(launcher).mode & 0o777).toBe(0o600);
+    await wallet.close();
     expect(existsSync(launcher)).toBe(false);
-    expect(wallet.launcherPath).toBeUndefined();
     // nothing lingers in the home folder
     expect(existsSync(launcherDir)).toBe(false);
   });
@@ -229,22 +237,20 @@ describe("the owner secret leaves the wallet only through a file only the owner 
     expect(existsSync(launcherDir)).toBe(false);
   });
 
-  it("keeps the launcher's path when deleting it fails, says so, and deletes it at close", async () => {
+  it("says so when the launcher cannot be deleted as the wallet stops", async () => {
     const { wallet, launcherDir, printed } = await startLoudWallet();
     const launcher = wallet.launcherPath!;
     chmodSync(launcherDir, 0o500); // EACCES on unlink
     const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void printed.push(a.map(String).join(" ")));
     try {
-      expect((await call(wallet, "/owner/requests", wallet.ownerSecret)).status).toBe(200);
+      await wallet.close();
     } finally {
       spy.mockRestore();
       chmodSync(launcherDir, 0o700);
     }
     expect(existsSync(launcher)).toBe(true);
-    expect(wallet.launcherPath).toBe(launcher);
     expect(printed.join("\n")).toMatch(/could not delete the page launcher .*EACCES/);
-    await wallet.close();
-    expect(existsSync(launcher)).toBe(false);
+    rmSync(launcher);
   });
 
   it("refuses a launcher folder that is a symlink, has another mode, or is a file, and falls back to the bare page", async () => {
@@ -399,7 +405,7 @@ describe("approving and denying", () => {
     const created = await ask(wallet, usdcRequirement(0.03, PAYEE) as unknown as Record<string, unknown>, {
       target: "https://service.example/thing",
     });
-    const approved = await call(wallet, `/owner/requests/${created.id}/approve`, wallet.ownerSecret, "POST");
+    const approved = await approveAs(wallet, created);
     expect(approved.status).toBe(200);
     expect(((await approved.json()) as WalletRequestView).result).toBeUndefined();
 
@@ -416,7 +422,7 @@ describe("approving and denying", () => {
   it("never lists a signature on the owner's list", async () => {
     const { wallet } = await startTestWallet();
     const created = await ask(wallet, usdcRequirement(0.01, PAYEE) as unknown as Record<string, unknown>);
-    await call(wallet, `/owner/requests/${created.id}/approve`, wallet.ownerSecret, "POST");
+    await approveAs(wallet, created);
     const listed = (await (await call(wallet, "/owner/requests", wallet.ownerSecret)).json()) as {
       requests: WalletRequestView[];
     };
@@ -428,8 +434,8 @@ describe("approving and denying", () => {
   it("refuses a second decision on the same request", async () => {
     const { wallet } = await startTestWallet();
     const created = await ask(wallet, usdcRequirement(0.01, PAYEE) as unknown as Record<string, unknown>);
-    expect((await call(wallet, `/owner/requests/${created.id}/approve`, wallet.ownerSecret, "POST")).status).toBe(200);
-    expect((await call(wallet, `/owner/requests/${created.id}/approve`, wallet.ownerSecret, "POST")).status).toBe(409);
+    expect((await approveAs(wallet, created)).status).toBe(200);
+    expect((await approveAs(wallet, created)).status).toBe(409);
     expect((await call(wallet, `/owner/requests/${created.id}/deny`, wallet.ownerSecret, "POST")).status).toBe(409);
   });
 
@@ -453,7 +459,7 @@ describe("approving and denying", () => {
     expect(expired.status).toBe("expired");
     expect(expired.reason).toContain("no answer from the owner");
     expect(expired.result).toBeUndefined();
-    expect((await call(wallet, `/owner/requests/${created.id}/approve`, wallet.ownerSecret, "POST")).status).toBe(409);
+    expect((await approveAs(wallet, created)).status).toBe(409);
   });
 });
 
@@ -524,7 +530,7 @@ describe("requests the wallet rejects before the owner sees them", () => {
       expect(rejected.reason).toMatch(testCase.reason);
       const stored = await readRequest(wallet, rejected.id);
       expect(stored.result).toBeUndefined();
-      expect((await call(wallet, `/owner/requests/${rejected.id}/approve`, wallet.ownerSecret, "POST")).status).toBe(409);
+      expect((await approveAs(wallet, rejected)).status).toBe(409);
     });
   }
 
@@ -591,7 +597,7 @@ describe("the owner's policy, applied inside the wallet", () => {
     for (const amount of [0.5, 0.5]) {
       const created = await ask(wallet, usdcRequirement(amount, PAYEE) as unknown as Record<string, unknown>);
       expect(created.status).toBe("pending");
-      const res = await call(wallet, `/owner/requests/${created.id}/approve`, wallet.ownerSecret, "POST");
+      const res = await approveAs(wallet, created);
       expect(((await res.json()) as WalletRequestView).status).toBe("signed");
     }
     const denied = await ask(wallet, usdcRequirement(0.05, PAYEE) as unknown as Record<string, unknown>);
@@ -606,7 +612,7 @@ describe("the audit log", () => {
     const approvedRequest = await ask(wallet, usdcRequirement(0.01, PAYEE) as unknown as Record<string, unknown>, {
       target: "https://service.example/thing",
     });
-    await call(wallet, `/owner/requests/${approvedRequest.id}/approve`, wallet.ownerSecret, "POST");
+    await approveAs(wallet, approvedRequest);
     const deniedRequest = await ask(wallet, usdcRequirement(0.02, PAYEE) as unknown as Record<string, unknown>);
     await call(wallet, `/owner/requests/${deniedRequest.id}/deny`, wallet.ownerSecret, "POST");
     const rejectedRequest = await ask(wallet, { scheme: "exact", network: "eip155:8453", amount: "1" });
@@ -675,7 +681,7 @@ describe("x402 v1 requirements", () => {
     expect(created.status).toBe("pending");
     expect(created.verified).toMatchObject({ amountAtomic: "10000", network: "eip155:84532", x402Version: 1 });
 
-    await call(wallet, `/owner/requests/${created.id}/approve`, wallet.ownerSecret, "POST");
+    await approveAs(wallet, created);
     const signed = await readRequest(wallet, created.id);
     expect(signed.status).toBe("signed");
     const authorization = signed.result?.payload.authorization as Record<string, string>;

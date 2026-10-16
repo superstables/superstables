@@ -245,8 +245,9 @@ superstables --wallet local wallet serve   # leave it running
 It binds `127.0.0.1:4411` and opens the approval page in your browser, already signed in. It
 does that through a launcher file only you can read, in `~/Superstables-wallet-open/`, and
 prints its path in case the browser does not open; the file, and the folder once empty, are
-deleted once the page is open. It never prints the owner secret itself. The page sends the secret to the wallet process in an Authorization header, so the owner
-can approve.
+deleted when the wallet stops. It never prints the owner secret itself. The page sends the secret to the wallet process in an Authorization header, so the owner
+can approve. The page does not keep the secret: after a reload, run `superstables --wallet local wallet open`
+to open it signed in again.
 
 Over SSH, or with a browser that cannot open the launcher file, forward the port
 (`ssh -L 4411:127.0.0.1:4411 user@host`), open `http://127.0.0.1:4411/` and paste the owner

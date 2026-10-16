@@ -17,8 +17,8 @@
 //     to an audit log that never contains the key or the signature.
 
 import { spawn } from "node:child_process";
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeSync } from "node:fs";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { connect } from "node:net";
@@ -42,6 +42,8 @@ import { termsFor, type RawAccept } from "../core/x402.js";
 import { untrustedText } from "../core/text.js";
 import { spentTodayFromAudit } from "./audit-total.js";
 import { loadAccount, readOrCreateSecret, writeAllSync } from "./keystore.js";
+import { pageCsp, scriptNonce } from "../core/signer/look.js";
+import { signedLifetime } from "../core/rails/evm.js";
 import { walletPage } from "./page.js";
 
 /** The owner approves every payment in this release; there is no unattended mode. */
@@ -122,8 +124,8 @@ export interface WalletHandle {
   /** The link the owner opens: the secret is in the fragment, so it never reaches the server. Never printed. */
   ownerUrl: string;
   /**
-   * The launcher file that opens `ownerUrl` in a browser (mode 0600), or undefined when none was written. Deleted once
-   * the page has signed in with the owner secret, and when the wallet stops.
+   * The launcher file that opens `ownerUrl` in a browser (mode 0600), or undefined when none was written. Deleted
+   * when the wallet stops.
    */
   launcherPath?: string;
   address: string;
@@ -349,6 +351,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       reported: record.reported,
       reason: record.reason,
     };
+    if (record.requirement) out.validForSeconds = signedLifetime((record.requirement as { maxTimeoutSeconds?: unknown }).maxTimeoutSeconds);
     if (withResult && record.result) out.result = record.result;
     if (record.withheld) out.withheld = true;
     if (forCancel) out.served = record.served === true;
@@ -520,6 +523,30 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
 
   // ── HTTP ─────────────────────────────────────────────────────────────────────────────
 
+  const CHANGED_REQUEST = "the request changed or is not the one you confirmed; nothing was signed";
+
+  /** The JSON the owner's page posts with an approval; undefined when there is none or it is not JSON. */
+  async function readConfirmation(req: IncomingMessage): Promise<unknown> {
+    if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) return undefined;
+    try {
+      return JSON.parse((await readBody(req)) || "null");
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** True when the owner confirmed exactly this request's amount, recipient and chain. */
+  function confirmedByOwner(record: WalletRequestRecord, body: unknown): boolean {
+    if (typeof body !== "object" || body === null) return false;
+    const { amountAtomic, recipient, network } = body as Record<string, unknown>;
+    const terms = record.verified;
+    return (
+      typeof amountAtomic === "string" && amountAtomic === terms.amountAtomic &&
+      typeof recipient === "string" && isSameAddress(recipient, terms.recipient) &&
+      typeof network === "string" && network === terms.network
+    );
+  }
+
   const TOO_MANY_PENDING = "three payment requests are already waiting for the owner; nothing was asked. Wait for the owner to decide one, then ask again";
   const tooManyPending = (): boolean => [...requests.values()].filter((r) => r.status === "pending").length >= MAX_PENDING;
 
@@ -563,6 +590,13 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     }
   }
 
+  /** The file the wallet reads its policy from, when it reads one and the file is there; the page names it. */
+  function selectedPolicyFile(): string | undefined {
+    if (options.policy) return undefined;
+    const file = options.policyFile ?? policyPath();
+    return existsSync(file) ? file : undefined;
+  }
+
   function shape(p: Policy): WalletStatus["policy"] {
     return {
       perCall: formatMoney(p.perCall),
@@ -592,7 +626,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       approvalMode: APPROVAL_MODE,
       pending: [...requests.values()].filter((r) => r.status === "pending").length,
       // With no usable policy nothing is signed, which is what a kill switch shows.
-      policy: policy ? shape(policy) : { allow: [], deny: [], stablecoins: [], killSwitch: true },
+      policy: policy ? { ...shape(policy), file: selectedPolicyFile() } : { allow: [], deny: [], stablecoins: [], killSwitch: true },
       also: policy?.also ? { file: policy.also.file, policy: shape(policy.also.policy) } : undefined,
       policyProblem,
     };
@@ -629,16 +663,20 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
 
     // The approval page itself carries no secret: the owner's fragment stays in the browser.
     if (method === "GET" && path === "/") {
+      const nonce = scriptNonce();
+      const proof = url.searchParams.get("proof");
       res.writeHead(200, {
+        ...(proof && /^[0-9a-f]{16,128}$/.test(proof) ? { [PROOF_HEADER]: walletProof(ownerSecret, port, proof) } : {}),
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
         // this page decides money, so it is not framed and not embedded
         "x-frame-options": "DENY",
-        "content-security-policy": "frame-ancestors 'none'",
+        // only the page's own script runs
+        "content-security-policy": pageCsp(nonce),
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
       });
-      res.end(walletPage());
+      res.end(walletPage(undefined, nonce));
       return;
     }
 
@@ -647,8 +685,6 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     // the socket knows the agent token only
     if (listener === "tcp" && token && secretEquals(token, ownerSecret)) {
       caller = "owner";
-      // the page is open and signed in: the launcher that carried the secret to it has done its job
-      removeLauncher();
     }
     else if (token && secretEquals(token, agentToken)) caller = "agent";
     if (!caller) {
@@ -789,6 +825,12 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
         send(res, 200, view(record, false));
         return;
       }
+      // The owner confirmed one payment: the amount, the recipient and the chain they saw. A request that is not that
+      // one, or a call that says nothing, signs nothing.
+      if (!confirmedByOwner(record, await readConfirmation(req))) {
+        send(res, 409, { error: CHANGED_REQUEST, request: view(record, false) });
+        return;
+      }
       try {
         await approve(record);
       } catch (err) {
@@ -872,6 +914,28 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
   }
 
   const url = `http://127.0.0.1:${port}`;
+  // where `wallet open` finds the page: written once the wallet is listening, removed when it stops
+  const pagePortFile = join(dir, PAGE_PORT_FILE);
+  try {
+    writeFileSync(pagePortFile, `${port} ${process.pid}\n`, { mode: 0o600 });
+    chmodSync(pagePortFile, 0o600);
+  } catch {
+    // without it `wallet open` says to start the wallet; the wallet itself does not need it
+    // and a file left by an earlier wallet would name the wrong port
+    try {
+      unlinkSync(pagePortFile);
+    } catch {
+      // none there
+    }
+  }
+  const removePagePort = (): void => {
+    try {
+      unlinkSync(pagePortFile);
+    } catch {
+      // gone already
+    }
+  };
+  process.once("exit", removePagePort);
   const ownerUrl = `${url}/#${ownerSecret}`;
   const ownerSecretFile = join(dir, "owner-secret");
 
@@ -889,6 +953,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
   if (!quiet || shouldOpen) {
     try {
       launcherPath = writeOwnerLauncher(launcherDir, ownerUrl, options.launcherIo);
+      heldLaunchers.add(launcherPath);
       launcherReady = true;
     } catch (err) {
       launcherProblem = (err as Error).message;
@@ -898,7 +963,26 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
   }
   /** Deletes the launcher. The path is forgotten only once the file is gone, so a later call (close, exit) can retry. */
   function removeLauncher(): void {
-    if (launcherPath === undefined) return;
+    // the launchers `wallet open` wrote are named after this process and go with it
+    try {
+      for (const name of readdirSync(launcherDir)) {
+        const m = LAUNCHER_NAME.exec(name);
+        // (a launcher another wallet in this same process still holds is left to that wallet)
+        if (m && Number(m[1]) === process.pid && join(launcherDir, name) !== launcherPath && !heldLaunchers.has(join(launcherDir, name))) {
+          try {
+            unlinkSync(join(launcherDir, name));
+          } catch {
+            // gone already
+          }
+        }
+      }
+    } catch {
+      // no folder, nothing to delete
+    }
+    if (launcherPath === undefined) {
+      removeEmptyFolder(launcherDir);
+      return;
+    }
     try {
       unlinkSync(launcherPath);
     } catch (err) {
@@ -907,6 +991,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
         return;
       }
     }
+    heldLaunchers.delete(launcherPath);
     launcherPath = undefined;
     launcherReady = false;
     removeEmptyFolder(launcherDir);
@@ -919,7 +1004,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     console.log(`  network:        ${DEFAULT_NETWORK.label}`);
     console.log(`  approval mode:  ask before every payment`);
     console.log(`  approve here:   ${url}/ (it asks for the owner secret)`);
-    if (launcherReady) console.log(`  open signed in: ${launcherPath} (only you can read it; deleted once the page is open)`);
+    if (launcherReady) console.log(`  open signed in: ${launcherPath} (only you can read it; kept until the wallet stops)`);
     if (launcherProblem) console.log(`  open signed in: no launcher (${launcherProblem}); open the page and paste the secret`);
     console.log(`  owner secret:   ${ownerSecretFile} (paste it into the page; never share it)`);
     console.log(`  over SSH:       ssh -L ${port}:127.0.0.1:${port} <you>@<this machine>, open ${url}/ on your machine, paste the secret`);
@@ -953,6 +1038,8 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       new Promise<void>((resolve) => {
         removeLauncher();
         process.off("exit", removeLauncher);
+        removePagePort();
+        process.off("exit", removePagePort);
         clearInterval(sweeper);
         let open = agentServer ? 2 : 1;
         const closed = () => {
@@ -1073,6 +1160,8 @@ export interface LauncherIo {
 export type LauncherError = Error & { leftover?: string };
 
 /** owner-<pid of the wallet that wrote it>-<random>.html */
+/** The serve launchers of the wallets running in this process; `wallet open` launchers are the others of its name. */
+const heldLaunchers = new Set<string>();
 const LAUNCHER_NAME = /^owner-(\d+)-[0-9a-f]+\.html$/;
 
 /** Whether a process with this pid exists. EPERM means it does, under another user. */
@@ -1095,12 +1184,12 @@ function processAlive(pid: number): boolean {
  * The folder is checked, then used by path. Someone who could swap it in between needs write access to the home
  * folder, which already gives them this account, so the check does not try to close that gap.
  */
-export function writeOwnerLauncher(dir: string, ownerUrl: string, io: LauncherIo = {}): string {
+export function writeOwnerLauncher(dir: string, ownerUrl: string, io: LauncherIo = {}, pid: number = process.pid): string {
   const unlink = io.unlinkSync ?? unlinkSync;
   ensurePrivateFolder(dir);
   for (const name of readdirSync(dir)) {
     const m = LAUNCHER_NAME.exec(name);
-    if (m && Number(m[1]) !== process.pid && !processAlive(Number(m[1]))) {
+    if (m && Number(m[1]) !== pid && Number(m[1]) !== process.pid && !processAlive(Number(m[1]))) {
       try {
         unlinkSync(join(dir, name));
       } catch {
@@ -1108,7 +1197,7 @@ export function writeOwnerLauncher(dir: string, ownerUrl: string, io: LauncherIo
       }
     }
   }
-  const path = join(dir, `owner-${process.pid}-${randomBytes(16).toString("hex")}.html`);
+  const path = join(dir, `owner-${pid}-${randomBytes(16).toString("hex")}.html`);
   // JSON is a valid JavaScript string literal; "<" is escaped so the value cannot close the script element
   const target = JSON.stringify(ownerUrl).replace(/</g, "\\u003c");
   const html = `<!doctype html>
@@ -1135,6 +1224,52 @@ export function writeOwnerLauncher(dir: string, ownerUrl: string, io: LauncherIo
   }
   closeSync(fd);
   return path;
+}
+
+/** The header that proves a page's server holds the owner secret: HMAC-SHA256 of the port it was asked on and the caller's nonce. */
+const PROOF_HEADER = "x-superstables-proof";
+function walletProof(secret: string, port: number, nonce: string): string {
+  return createHmac("sha256", secret).update(`wallet-open:127.0.0.1:${port}:${nonce}`).digest("hex");
+}
+
+/** The file in the wallet's folder that names the port its page is on and the wallet's pid, for `wallet open`. */
+const PAGE_PORT_FILE = "page-port";
+
+/**
+ * Opens the running wallet's page signed in: writes a fresh launcher from the owner secret in the wallet's folder and
+ * hands the browser its path. Returns that path. Throws a sentence when no wallet is running for this folder.
+ */
+export async function openWalletPage(options: { dir?: string; launcherDir?: string; opener?: (target: string) => void } = {}): Promise<string> {
+  const dir = options.dir ?? walletDir();
+  const notRunning = new Error("The wallet is not running; start it first with `superstables --wallet local wallet serve`.");
+  let port: number;
+  let walletPid: number;
+  let secret: string;
+  try {
+    const [portText, pidText] = readFileSync(join(dir, PAGE_PORT_FILE), "utf8").trim().split(/\s+/);
+    port = Number(portText);
+    walletPid = Number(pidText);
+    secret = readFileSync(join(dir, "owner-secret"), "utf8").trim();
+  } catch {
+    throw notRunning;
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || !Number.isInteger(walletPid) || walletPid < 1 || secret === "") throw notRunning;
+  // a page-port file outlives a wallet that crashed: only a wallet that answers with its page counts
+  // and the secret goes only to a page whose server shows it knows the secret
+  const nonce = randomBytes(16).toString("hex");
+  const answered = await fetch(`http://127.0.0.1:${port}/?proof=${nonce}`, { signal: AbortSignal.timeout(2000), redirect: "error" })
+    .then(async (res) => {
+      if (!res.ok || !(await res.text()).includes("Local wallet")) return false;
+      const given = res.headers.get(PROOF_HEADER) ?? "";
+      const expected = walletProof(secret, port, nonce);
+      return given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+    })
+    .catch(() => false);
+  if (!answered) throw notRunning;
+  // named after the wallet's process, so the wallet deletes it when it stops
+  const launcher = writeOwnerLauncher(options.launcherDir ?? defaultLauncherDir(), `http://127.0.0.1:${port}/#${secret}`, {}, walletPid);
+  (options.opener ?? openInBrowser)(launcher);
+  return launcher;
 }
 
 /** Best effort, and only that: a browser that will not open is not a wallet failure. */

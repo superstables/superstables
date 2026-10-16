@@ -111,7 +111,7 @@ Start here, budget: superstables budget setup --rail evm
     wait               wait for an owner approval an agent started (--id)
 
 Who runs what:
-  owner   setup, wallet init, wallet serve, policy init, and every approval
+  owner   setup, wallet init, wallet serve, wallet open, policy init, and every approval
   agent   find, quote, pay, status, receipts, attempts, doctor
   Either may run the read-only commands.
 

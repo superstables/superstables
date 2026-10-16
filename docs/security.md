@@ -418,11 +418,23 @@ sends the browser to `http://127.0.0.1:4411/#<owner-secret>`, and gives the brow
 file's path. The file goes in `~/Superstables-wallet-open/`, a folder that is not hidden, so a
 browser installed as a Snap (Ubuntu's Firefox) can open it. The wallet creates that folder with
 mode 0700, and refuses one that is a symlink, belongs to someone else or has another mode: then
-it writes no launcher and opens the page without the secret. It deletes the file once the page
-has signed in with the secret, or when the wallet stops, and the folder once it is empty. A URL fragment is not sent to the server. The page keeps
-the secret in that tab's session storage and takes it out of the address bar and the history.
-Anyone opening the page another way, over SSH for example, pastes the secret from
-`wallet/owner-secret`. The wallet verifies the same facts the approval page does and signs the same EIP-3009 authorization the
+it writes no launcher and opens the page without the secret. It keeps the file until the wallet
+stops, then deletes it, and the folder once it is empty: after a reload the page asks for the secret
+again, and the file is how the owner opens it signed in again. It holds the same secret, at the same
+mode in a folder of the same mode, as `wallet/owner-secret`, so keeping it adds no exposure.
+`superstables --wallet local wallet open` writes a fresh one and opens it, for when the tab was closed or the folder
+was cleaned. A URL fragment is not sent to the server. The page takes the secret out of the address
+bar and the history and keeps it in the page's memory only: it is never put in session or local
+storage, so closing or reloading the tab forgets it. Anyone opening the page another way, over SSH for
+example, pastes the secret from `wallet/owner-secret`.
+
+The page lists each request as a card that keeps its place while you read it: a new request goes
+below, and one that ended stays greyed in its slot until the pointer leaves the list. "Approve and
+sign" opens a confirmation in the card that names the amount, the recipient and the chain, and
+shows the amount as the token's raw value. "Yes, sign" posts those three values with the approval,
+and the wallet refuses with 409 when any of them differs from the request it holds, or when the call
+has no confirmation. The page also names the policy file that applies and its caps. Only the page's
+own script runs on it (a per-load nonce in its content security policy). The wallet verifies the same facts the approval page does and signs the same EIP-3009 authorization the
 page builds, at most ten minutes long and never to its own address, and every state change goes to
 `wallet/audit.jsonl`.
 

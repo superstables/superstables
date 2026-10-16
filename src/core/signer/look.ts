@@ -11,6 +11,7 @@
 // SUPERSTABLES_SITE decides when it is set, as it does for `superstables budget find`: pointing it at another site
 // gives the plain look even when a chain was linked to superstables.com earlier.
 
+import { randomBytes } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homeDir } from "../home.js";
@@ -281,4 +282,24 @@ ${parts.body}
 </body>
 </html>
 `;
+}
+
+/** A fresh nonce for one response's scripts: 128 random bits, base64. */
+export function scriptNonce(): string {
+  return randomBytes(16).toString("base64");
+}
+
+/**
+ * The content security policy for a local page. Only scripts carrying `nonce` run (none when there is no nonce); no
+ * plugin, no <base>, no form posts away, no framing. Nothing else is restricted: a browser wallet's injected provider
+ * may call its RPC from the page, so connect-src stays open, and styles and fonts are inline.
+ */
+export function pageCsp(nonce?: string): string {
+  return [
+    "frame-ancestors 'none'",
+    nonce ? `script-src 'nonce-${nonce}'` : "script-src 'none'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; ");
 }

@@ -99,7 +99,13 @@ async function ask(w: WalletHandle, requirements: Record<string, unknown>, extra
 }
 
 const pay = (amount: number, payTo = PAYEE): Record<string, unknown> => usdcRequirement(amount, payTo);
-const approve = (w: WalletHandle, id: string) => call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST");
+/** Approves the way the owner's page does: confirming the amount, recipient and chain the request showed. */
+const approve = async (w: WalletHandle, id: string) => {
+  const list = (await (await call(w, "/owner/requests", w.ownerSecret)).json()) as { requests: WalletRequestView[] };
+  const shown = list.requests.find((r) => r.id === id)?.verified;
+  const body = shown ? { amountAtomic: shown.amountAtomic, recipient: shown.recipient, network: shown.network } : {};
+  return call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST", body);
+};
 const cancel = (w: WalletHandle, id: string) => call(w, `/requests/${id}/cancel`, w.agentToken, "POST");
 const read = async (w: WalletHandle, id: string) => (await (await call(w, `/requests/${id}`, w.agentToken)).json()) as WalletRequestView;
 const pendingCount = async (w: WalletHandle) => ((await (await call(w, "/owner/requests", w.ownerSecret)).json()) as { requests: WalletRequestView[] }).requests.filter((r) => r.status === "pending").length;

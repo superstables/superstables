@@ -114,10 +114,14 @@ describe("how long an EVM authorization signed by pay lasts", () => {
     const attempt = engine.startPayment(q.id);
     const owner = { authorization: `Bearer ${wallet.ownerSecret}` };
     for (let i = 0; i < 400; i++) {
-      const { requests } = (await (await fetch(`${wallet.url}/owner/requests`, { headers: owner })).json()) as { requests: { id: string; status: string }[] };
+      const { requests } = (await (await fetch(`${wallet.url}/owner/requests`, { headers: owner })).json()) as { requests: { id: string; status: string; verified: { amountAtomic: string; recipient: string; network: string } }[] };
       const pending = requests.find((r) => r.status === "pending");
       if (pending) {
-        expect((await fetch(`${wallet.url}/owner/requests/${pending.id}/approve`, { method: "POST", headers: owner })).status).toBe(200);
+        expect((await fetch(`${wallet.url}/owner/requests/${pending.id}/approve`, {
+          method: "POST",
+          headers: { ...owner, "content-type": "application/json" },
+          body: JSON.stringify({ amountAtomic: pending.verified.amountAtomic, recipient: pending.verified.recipient, network: pending.verified.network }),
+        })).status).toBe(200);
         break;
       }
       await new Promise((r) => setTimeout(r, 10));
