@@ -26,6 +26,7 @@ import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import bs58 from "bs58";
 import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
+import { retiredProblem } from "../retired.mjs";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
@@ -107,6 +108,12 @@ if (existing.SOLANA_AGENT_SECRET_BASE58) {
   mkdirSync(dirname(AGENT_KEY_PATH), { recursive: true, mode: 0o700 });
   writeFileSync(AGENT_KEY_PATH, `# Solana devnet AGENT key. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_SECRET_BASE58=${bs58.encode(kp.secretKey)}\nSOLANA_AGENT_ADDRESS=${agent}\n`, { mode: 0o600, flag: "wx" });
   console.log(`created the agent key file ${AGENT_KEY_PATH} (mode 600): agent ${agent}`);
+}
+// a key that `budget rotate` retired is never set up again (the owner's revoke on chain is what stops it elsewhere)
+const retired = retiredProblem("solana", agent);
+if (retired) {
+  console.log(`REFUSED: ${retired}. Nothing was changed.`);
+  process.exit(result(3, { state: "refused_precheck", reason: retired, next: "move the agent key file away (superstables budget rotate --rail solana does this), then run setup again" }));
 }
 const pub = readPublic();
 if (pub.agent && pub.agent.toBase58() !== agent) {
