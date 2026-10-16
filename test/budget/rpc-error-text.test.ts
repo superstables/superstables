@@ -160,3 +160,33 @@ describe("the EVM rail's crash on a failed read", () => {
     expect(r.stderr).toContain("outsideINJECT");
   }, 60_000);
 });
+
+describe("the rail libraries' crash handlers in one process", () => {
+  const script = (order: "evm-first" | "solana-first", owner: boolean) => [
+    `const root = ${JSON.stringify(ROOT)};`,
+    `const libs = ${order === "evm-first" ? '["budget/evm/lib.ts", "budget/solana/lib.mjs"]' : '["budget/solana/lib.mjs", "budget/evm/lib.ts"]'};`,
+    'for (const l of libs) await import(root + l);',
+    owner ? 'process.prependListener("uncaughtException", (e) => { console.error("OWNER " + e.message); process.exit(7); });' : "",
+    'throw new Error("boom\\nRESULT {}");',
+  ].join("\n");
+
+  it.each(["evm-first", "solana-first"] as const)("%s: one of them prints one line and exits 1; neither swallows the crash", async (order) => {
+    const file = join(home, `crash-${order}.mjs`);
+    writeFileSync(file, script(order, false));
+    const r = await run(["--import=tsx", file]);
+    expect(r.code).toBe(1);
+    const lines = r.stderr.split("\n").filter((l) => /^(error:|Failed:)/.test(l.trim()));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("boom RESULT {}");
+    expect(r.stderr.split("\n").filter((l) => /^\s*RESULT /.test(l))).toEqual([]);
+  }, 60_000);
+
+  it.each(["evm-first", "solana-first"] as const)("%s: a handler that is not a rail's (the owner page's) still goes first and alone", async (order) => {
+    const file = join(home, `crash-owner-${order}.mjs`);
+    writeFileSync(file, script(order, true));
+    const r = await run(["--import=tsx", file]);
+    expect(r.code).toBe(7);
+    expect(r.stderr).toContain("OWNER boom");
+    expect(r.stderr).not.toMatch(/^(error|Failed):/m);
+  }, 60_000);
+});

@@ -496,11 +496,10 @@ undo an owner signature or a transaction already sent through setup on superstab
   described: the key reads revoked, and the keychain refuses the owner's simulated `revokeKey` with
   `KeyAlreadyRevoked` or `KeyNotFound`, decoded from the revert data or, without it, named in the
   RPC's error text. The command then reports `state: "ok"`, `revoked: true` and `tx: {}`, with
-  nothing sent. That is the command's own result. `budget status`
-  says `revoked: true` only for a revoke this machine recorded that the chain still shows (on
-  `tempo`, the keychain's revoked flag): an allowance or delegate that reads 0 is reported as
-  `remaining: "0"`, because spent, never granted, revoked elsewhere and a wrong read all look the
-  same.
+  nothing sent. That is the command's own result. `budget status` says `revoked: true` only for a
+  revoke this machine recorded that the chain still shows (on `tempo`, the keychain's revoked flag):
+  an allowance or delegate that reads 0 is reported as `remaining: "0"`, because spent, never
+  granted, revoked elsewhere and a wrong read all look the same.
 
 Per rail, with what each revoke does not cover:
 [Budget rails and chains](../budget/README.md#safety-model).

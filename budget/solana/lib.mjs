@@ -28,8 +28,12 @@ import bs58 from "bs58";
 // unfunded fee payer, not a raw JS crash.
 // A failed top-level await in an ES module raises uncaughtException (as do synchronous throws and unhandled rejections).
 // The owner page's handler (owner-page.ts), once installed, prints and exits itself.
-process.on("uncaughtException", async (err) => {
-  if (process.listenerCount("uncaughtException") > 1) return;
+// Every rail's crash handler carries this mark (the EVM library's too). A handler steps aside for any listener that is not
+// marked (the owner page's) and, when several marked ones are loaded in one process, for all but the first.
+const RAIL_CRASH_HANDLER = Symbol.for("superstables.railCrashHandler");
+const crashHandler = async (err) => {
+  const listeners = process.listeners("uncaughtException");
+  if (listeners.some((l) => !l[RAIL_CRASH_HANDLER]) || listeners.find((l) => l[RAIL_CRASH_HANDLER]) !== crashHandler) return;
   // the RPC's words and a program's logs are outside text: one line each, no hidden characters (oneLine, below)
   console.error("\nFailed:", oneLine(err?.message ?? err, 1000));
   if (typeof err?.getLogs === "function") {
@@ -43,7 +47,9 @@ process.on("uncaughtException", async (err) => {
     console.error("Logs:\n" + err.logs.map((l) => oneLine(l, 500)).join("\n"));
   }
   process.exit(1);
-});
+};
+crashHandler[RAIL_CRASH_HANDLER] = true;
+process.on("uncaughtException", crashHandler);
 
 // SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL (tests point it at a local fake; you can point it at your own node).
 // https, or http on this computer only (../rpc.mjs): anything else is ignored here with a warning, and the dispatcher refuses

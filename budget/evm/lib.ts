@@ -232,11 +232,19 @@ function crashText(err: any): string {
   }
   return oneLine((parts.join(" | ") || String(err?.message ?? err)).replace(/\s+/g, " "), 400);
 }
-process.on("uncaughtException", (err) => {
-  if (process.listenerCount("uncaughtException") > 1) return;
-  process.stderr.write(`error: ${crashText(err)}\n`);
-  process.exit(1);
-});
+// Every rail's crash handler carries this mark (the Solana library's too). A handler steps aside for any listener that is
+// not marked (the owner page's) and, when several marked ones are loaded in one process, for all but the first.
+const RAIL_CRASH_HANDLER = Symbol.for("superstables.railCrashHandler");
+const crashHandler = Object.assign(
+  (err: unknown) => {
+    const listeners = process.listeners("uncaughtException") as ((...a: unknown[]) => unknown)[];
+    if (listeners.some((l) => !(l as any)[RAIL_CRASH_HANDLER]) || listeners.find((l) => (l as any)[RAIL_CRASH_HANDLER]) !== crashHandler) return;
+    process.stderr.write(`error: ${crashText(err)}\n`);
+    process.exit(1);
+  },
+  { [RAIL_CRASH_HANDLER]: true },
+);
+process.on("uncaughtException", crashHandler);
 
 // ---- gas the agent can pay ----
 // Before the agent signs anything (pull, cancel, return, selfRevoke) it checks it can pay: the chain's gas limit for that
