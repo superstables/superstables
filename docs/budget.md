@@ -216,6 +216,21 @@ before another payment. Keep its journal and key. To remove the client, follow
 [Uninstalling](install.md#uninstalling), which separates revocation, site account removal and local
 file deletion. [Security](security.md#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do) covers key loss and revocation limits.
 
+## Replacing the agent key
+
+If an agent key may have been seen by someone else, replace it. `superstables budget rotate
+--rail evm` (or `--rail solana`) is the command; run it in the owner's terminal, because the owner
+approves each step, and start with `--plan`, which sends nothing. It retires the old address
+first, so this machine never grants, funds, sets up or buys with it again. Then, on every chain
+where that key is set up, the owner ends its allowance or delegate in their wallet, open purchases
+are settled or returned, and the key's funds go back to the owner. Only after that does it move
+the old key file to `keys/budget/retired/` and connect a new key on the same chains, with the same
+owner. Grant the new key as usual. A rotation that stops can be run again and continues where it
+stopped. On chains approved on superstables.com, also remove the old agent on the account page.
+On `tempo`, add a new key with `setup --agent LABEL`. What stops a stolen key is the owner's
+revoke on chain, not the retired list, which is a file on this machine.
+[Replacing a key](security.md#replacing-a-key) has the details and what it does not cover.
+
 ## Approve on superstables.com instead
 
 Use approval on superstables.com when the owner wants to approve from a device other than the machine running

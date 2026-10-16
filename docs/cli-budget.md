@@ -17,6 +17,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | [`superstables budget unlock`](#superstables-budget-unlock) | clear abandoned operation locks after stopping their processes | owner | moves no money |
 | [`superstables budget revoke`](#superstables-budget-revoke) | end the budget on chain | owner | moves no money |
 | [`superstables budget recover`](#superstables-budget-recover) | evm: stop the allowance, return stranded USDC to the owner | owner | moves money back |
+| [`superstables budget rotate`](#superstables-budget-rotate) | evm, solana: replace the agent key, retire the old one | owner | moves money back |
 | [`superstables budget wait`](#superstables-budget-wait) | the state of an owner approval an agent started (--id, --shown) | anyone | read only |
 | [`superstables budget find`](#superstables-budget-find) | services a budget can pay (--once: buy-once services) | anyone | read only |
 | [`superstables budget buy-once`](#superstables-budget-buy-once) | one purchase the owner approves on superstables.com | agent | moves money |
@@ -92,6 +93,7 @@ Commands (each takes --help):
   unlock      owner   clear abandoned operation locks after stopping their processes     moves no money
   revoke      owner   end the budget on chain                                            moves no money
   recover     owner   evm: stop the allowance, return stranded USDC to the owner          moves money back
+  rotate      owner   evm, solana: replace the agent key, retire the old one              moves money back
   wait        anyone  the state of an owner approval an agent started (--id, --shown)    read only
   find        anyone  services a budget can pay (--once: buy-once services)              read only
   buy-once    agent   one purchase the owner approves on superstables.com                moves money
@@ -651,6 +653,38 @@ Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wal
   the approval link expired, before the wallet was asked to send), 5 unknown (the wallet may have sent it, the command
   stopped or could not read the chain after sending, or the chain shows a transaction that does not match the plan:
   check status before trying again)
+```
+
+## superstables budget rotate
+
+```text
+superstables budget rotate --rail evm|solana [--plan] [--timeout S] [--no-open] [--owner-key-file <path> --yes]
+
+evm and solana. Replaces the agent key and retires the old one for good. The old address is retired first: from then on this
+machine never grants, funds, sets up or buys with it again. Then, on every chain where the old key is set up, the owner ends
+its allowance (evm) or delegate (solana) in their wallet, its open purchases are settled or returned, and its funds go back
+to the owner. Only then is the old key file moved to keys/budget/retired/, and a new key created and connected on the same
+chains, with the same owner. It runs recover, revoke, reconcile and setup as commands of their own, so each step asks the
+owner as that command does; run it where the owner is, because it stays in the foreground and waits for each approval.
+A rotation that stops can be run again: it continues where it stopped and never repeats an approval it recorded.
+--plan reads the chains and sends nothing. The retired list is a file on this machine: the owner's revoke on chain is
+what stops a stolen key. On a chain approved on superstables.com, the old agent is also removed on the account page.
+tempo has no rotation: setup --rail tempo --agent LABEL adds a new key (a revoked or expired tempo key is never granted again).
+
+How the owner approves: every step is the command of the same name, so each asks the owner as that command does, one approval
+link at a time (the APPROVE line on stdout, the words on stderr; recover and revoke on a page on 127.0.0.1, and on a chain
+set up with --hosted the revoke and setup links are on superstables.com). The link expires after --timeout seconds (default
+600), as for those commands; then the rotation stops and can be run again.
+Unattended tests only: --owner-key-file PATH --yes signs the owner's steps with that key file.
+rotate has no --detach, --wait or --replace: it runs in the foreground.
+
+Moves money: yes: the old key's funds go back to the owner, and its allowance or delegate is ended by the owner.
+Run by: the owner, with the agent key on this machine.
+Example:
+  $ superstables budget rotate --rail evm --plan
+Prints: the plan per chain on stderr, each approval link as it comes (APPROVE line), then one RESULT: state (planned, rotated or incomplete), oldAgent, newAgent, retired, chains (chain, recovered, setUp, hosted), next.
+  --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
+Exit codes: 0 rotated or planned, 1 a step failed, 2 bad input, 3 refused before anything was sent, 5 a step's outcome is unknown or a journal cannot be read (read next, then run it again)
 ```
 
 ## superstables budget wait

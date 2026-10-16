@@ -24,17 +24,19 @@
 import { afterPurchase, ownerCheck } from "./next-steps.mjs";
 import { SENDING_LINE, afterSend } from "./proof.mjs";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync, writeSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
+import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
 import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, recordMayHaveSent, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
-import { journalProblem } from "./journal.mjs";
+import { journalProblem, writeJournalFile } from "./journal.mjs";
+import { readRetired, retire, retiredProblem } from "./retired.mjs";
+import { rotate as rotateKey } from "./rotate.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
@@ -379,6 +381,34 @@ ${RECOVER_OWNER_HELP}`,
       exits: EXITS_OWNER,
     }),
   },
+  rotate: {
+    flags: { plan: "b", timeout: "v", "no-open": "b", "owner-key-file": "v", yes: "b" }, required: [],
+    help: helpText({
+      usage: "superstables budget rotate --rail evm|solana [--plan] [--timeout S] [--no-open] [--owner-key-file <path> --yes]",
+      about: `evm and solana. Replaces the agent key and retires the old one for good. The old address is retired first: from then on this
+machine never grants, funds, sets up or buys with it again. Then, on every chain where the old key is set up, the owner ends
+its allowance (evm) or delegate (solana) in their wallet, its open purchases are settled or returned, and its funds go back
+to the owner. Only then is the old key file moved to keys/budget/retired/, and a new key created and connected on the same
+chains, with the same owner. It runs recover, revoke, reconcile and setup as commands of their own, so each step asks the
+owner as that command does; run it where the owner is, because it stays in the foreground and waits for each approval.
+A rotation that stops can be run again: it continues where it stopped and never repeats an approval it recorded.
+--plan reads the chains and sends nothing. The retired list is a file on this machine: the owner's revoke on chain is
+what stops a stolen key. On a chain approved on superstables.com, the old agent is also removed on the account page.
+tempo has no rotation: setup --rail tempo --agent LABEL adds a new key (a revoked or expired tempo key is never granted again).
+
+How the owner approves: every step is the command of the same name, so each asks the owner as that command does, one approval
+link at a time (the APPROVE line on stdout, the words on stderr; recover and revoke on a page on 127.0.0.1, and on a chain
+set up with --hosted the revoke and setup links are on superstables.com). The link expires after --timeout seconds (default
+600), as for those commands; then the rotation stops and can be run again.
+Unattended tests only: --owner-key-file PATH --yes signs the owner's steps with that key file.
+rotate has no --detach, --wait or --replace: it runs in the foreground.`,
+      money: "yes: the old key's funds go back to the owner, and its allowance or delegate is ended by the owner.",
+      who: "the owner, with the agent key on this machine.",
+      example: "superstables budget rotate --rail evm --plan",
+      prints: "the plan per chain on stderr, each approval link as it comes (APPROVE line), then one RESULT: state (planned, rotated or incomplete), oldAgent, newAgent, retired, chains (chain, recovered, setUp, hosted), next.",
+      exits: "Exit codes: 0 rotated or planned, 1 a step failed, 2 bad input, 3 refused before anything was sent, 5 a step's outcome is unknown or a journal cannot be read (read next, then run it again)",
+    }),
+  },
   wait: {
     flags: { id: "v", timeout: "v", shown: "b", abandon: "b" }, required: ["id"],
     help: helpText({
@@ -536,6 +566,7 @@ Commands (each takes --help):
   unlock      owner   clear abandoned operation locks after stopping their processes     moves no money
   revoke      owner   end the budget on chain                                            moves no money
   recover     owner   evm: stop the allowance, return stranded USDC to the owner          moves money back
+  rotate      owner   evm, solana: replace the agent key, retire the old one              moves money back
   wait        anyone  the state of an owner approval an agent started (--id, --shown)    read only
   find        anyone  services a budget can pay (--once: buy-once services)              read only
   buy-once    agent   one purchase the owner approves on superstables.com                moves money
@@ -641,7 +672,7 @@ function resultFacts(fields) {
 }
 
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
   fields = resultFacts(fields);
@@ -819,6 +850,10 @@ function parse(argv) {
   if (cmd === "preflight" && f.rail === "evm") {
     for (const k of ["method", "body"]) if (f[k] !== undefined && !(k === "method" && f.method.toUpperCase() === "GET")) badInput(ctx, `evm preflight is GET only (no --${k})`);
   }
+  if (cmd === "rotate") {
+    if (f.rail === "tempo") badInput(ctx, "rotate is for evm and solana; on tempo, add a new key with superstables budget setup --rail tempo --agent LABEL");
+    if (rest.some((a) => a === "--chain" || a.startsWith("--chain="))) badInput(ctx, "rotate covers every chain the key is set up on; --chain is not taken");
+  }
   if (cmd === "recover" && f.rail !== "evm") badInput(ctx, "recover is EVM only (tempo and solana have no stranded funds: the agent never holds the budget)");
   if (cmd === "fund-agent" && f.rail === "tempo") badInput(ctx, "tempo's agent needs no gas: its access key spends the owner's pathUSD, and the fees come from the owner");
   if (cmd === "fund-agent" && f.amount !== undefined && !(f.rail === "solana" ? /^\d+(\.\d{1,9})?$/ : /^\d+(\.\d{1,18})?$/).test(f.amount)) badInput(ctx, f.rail === "solana" ? "--amount must be a decimal amount of SOL (at most 9 places)" : "--amount must be a decimal amount of the chain's gas token");
@@ -938,6 +973,10 @@ function railCommand(verb, f, extra = {}) {
       case "revoke": return O("revokeBudget", []);
       case "setup": return O("setup", [...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...(f.fund === undefined ? [] : f.fund === true ? ["--fund"] : ["--fund-amount", f.fund])]);
       case "fund-agent": return O("fundAgent", opt("amount", f.amount));
+      case "rotate-address": return S("rotate", ["--address"]);
+      case "rotate-balances": return S("rotate", ["--balances"]);
+      case "rotate-sweep": return S("rotate", ["--sweep"]);
+      case "rotate-clear": return S("rotate", ["--clear-agent", extra.agent]);
     }
   }
   return evmCommand(verb, f, extra);
@@ -956,6 +995,8 @@ function evmCommand(verb, f, extra = {}) {
     case "recover": return E("recover", [...opt("op", f.op), ...(extra.plan ? ["--plan"] : ownerOpts(f))]);
     case "setup": return E("setup", [...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...(f.fund === undefined ? [] : ["--fund", ...(f.fund === true ? [] : ["--fund-amount", f.fund])]), ...ownerOpts(f)]);
     case "fund-agent": return E("fundAgent", [...opt("amount", f.amount), ...ownerOpts(f)]);
+    case "rotate-address": return E("rotate", ["--address"]);
+    case "rotate-clear": return E("rotate", ["--clear-agent", extra.agent]);
   }
 }
 const evmReadFromResult = (r) => ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null });
@@ -1385,6 +1426,8 @@ function journalAnswer(f, ctx) {
 async function buy({ f, ctx }) {
   const earlier = f.op ? journalAnswer(f, ctx) : undefined;
   if (earlier) return earlier();
+  const retired = retiredAgentProblem(f) || await retiredKeyFileProblem(f);
+  if (retired) return refuseRetired(ctx, f, retired, { op: f.op, paid: false, delivered: false, amount: "0", tx: {} });
   // No setup on this computer (no agent key, or no owner connected): refused before the lock, the journal or a rail script,
   // so nothing is signed and nothing is left behind that looks like a purchase. The grant itself is on chain: the rail
   // reads it before it signs.
@@ -1624,6 +1667,8 @@ const notSentNext = (f) => walletFlow(f) ? undefined : "rerun the same command w
 const ownerNext = (o, rr, fallback) => (["refused_precheck", "unknown"].includes(o.state) && rr?.next ? rr.next : fallback);
 
 async function grant({ f, ctx }) {
+  const retired = retiredAgentProblem(f);
+  if (retired) return refuseRetired(ctx, f, retired, { amount: f.amount, tx: {} });
   const secs = f.expiry ? Math.ceil((Date.parse(f.expiry) - Date.now()) / 1000) : 86400;
   const now = await readBudget(f);
   const unit = unitOf(f);
@@ -1741,6 +1786,8 @@ async function setup({ f, ctx }) {
 }
 
 async function fundAgent({ f, ctx }) {
+  const retired = retiredAgentProblem(f);
+  if (retired) return refuseRetired(ctx, f, retired, { tx: {} });
   log(`\nfund-agent on ${f.rail} (${f.chain}): the owner sends the agent ${f.rail === "solana" ? "SOL for fees" : "gas"}. ${waitLine(f)}`);
   if (!sendsNow(f)) return emit(0, { ...ctx, state: "planned", tx: {}, next: notSentNext(f) });
   const r = await run(railCommand("fund-agent", f));
@@ -1748,6 +1795,232 @@ async function fundAgent({ f, ctx }) {
   const o = ownerOutcome(r.code, rr);
   if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, `superstables budget doctor --rail ${f.rail}`), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
   emit(0, { ...ctx, state: "settled", amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: f.rail === "solana" ? "superstables budget doctor --rail solana, then superstables budget grant --rail solana --amount A" : `superstables budget doctor --rail evm${chainFlag(f)}, then superstables budget grant --rail evm${chainFlag(f)} --amount A` });
+}
+
+// ---- rotate: replace the agent key and retire the old one (rotate.mjs holds the order) --------------------------------
+const AGENT_VAR = { evm: "B4_AGENT_ADDRESS", solana: "SOLANA_AGENT_ADDRESS" };
+/**
+ * Every agent address the public file names for this rail and chain, read the way the rail scripts read it (an `export `
+ * prefix on evm, quotes on evm, every line: the last one is the one the rail uses). `problem` when the file exists and cannot
+ * be read: no cap on its size, as the rails have none. Any mode: the line is public.
+ */
+function publicAgents(f) {
+  const path = publicFile(f.rail, f.chain);
+  let text;
+  try {
+    // O_NONBLOCK: a FIFO would otherwise wait for a writer forever; no size cap, as the rails have none
+    const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+    try {
+      if (!fstatSync(fd).isFile()) throw new Error("not a regular file");
+      text = readFileSync(fd, "utf8");
+    } finally { closeSync(fd); }
+  } catch (err) {
+    return err?.code === "ENOENT" ? { values: [] } : { values: [], problem: `the public file ${path} cannot be read (${err?.message ?? err}), so the agent it names cannot be checked against the retired list` };
+  }
+  const values = f.rail === "evm"
+    ? [...text.matchAll(/^(?:export\s+)?B4_AGENT_ADDRESS=(.*)$/gm)].map((m) => m[1].trim().replace(/^['"]|['"]$/g, ""))
+    : [...text.matchAll(/^SOLANA_AGENT_ADDRESS=(.*)$/gm)].map((m) => m[1].trim());
+  return { values: values.filter(Boolean) };
+}
+/** The agent address the rail uses from the public file (the last line), or null. */
+const publicAgent = (f) => publicAgents(f).values.at(-1) ?? null;
+/**
+ * Why this chain's agent may not be used, or "": the public file names (on any line) an agent that `budget rotate` retired
+ * here. A public file or a retired list that cannot be read is a reason too. Only evm and solana have a rotation. The owner's
+ * revoke on chain is what stops a retired key; this stops this client from arming or using it again.
+ */
+function retiredAgentProblem(f) {
+  if (!AGENT_VAR[f.rail]) return "";
+  const { values, problem } = publicAgents(f);
+  if (problem) return problem;
+  for (const address of values) {
+    const retired = retiredProblem(f.rail, address);
+    if (retired) return retired;
+  }
+  return "";
+}
+/** As retiredAgentProblem, for the address of the agent key file (read by the rail script; the key is never printed). */
+async function retiredKeyFileProblem(f) {
+  if (!AGENT_VAR[f.rail]) return "";
+  const who = railResult((await run(railCommand("rotate-address", { rail: f.rail, chain: RAILS[f.rail].chain }))).stdout);
+  return who?.agent ? retiredProblem(f.rail, who.agent) : "";
+}
+/** The refusal for a command that would arm, fund or use a retired agent. Nothing is signed or sent. */
+const refuseRetired = (ctx, f, reason, more = {}) => {
+  log(`superstables budget: refused: ${reason}`);
+  return emit(3, { ...ctx, state: "refused_precheck", ...more, reason, next: ctx.command === "buy" ? "ask the owner: this agent key was replaced" : `superstables budget status --rail ${f.rail}${chainFlag(f)}; the owner connects and grants the new agent` });
+};
+
+const ROTATIONS_DIR = join(STATE_DIR, "rotations");
+const recordName = (rail, address) => `${rail}-${rail === "evm" ? address.toLowerCase() : address}.json`;
+const retiredKeyFile = (rail, address) => join(KEYS_DIR, "retired", `${rail}-${rail === "evm" ? address.toLowerCase() : address}.env`);
+
+const sameAgent = (rail, a, b) => (rail === "solana" ? a === b : String(a).toLowerCase() === String(b).toLowerCase());
+/**
+ * The unfinished rotation record for this rail (with its path), null if none. Throws when a record cannot be read. `current`
+ * is the address of the key file; null when there is none, and then only a rotation that moved the key file is returned.
+ */
+function unfinishedRotation(rail, current) {
+  let names;
+  try { names = readdirSync(ROTATIONS_DIR); } catch (err) { if (err?.code === "ENOENT") return null; throw err; }
+  const open = [];
+  for (const name of names.filter((n) => n.startsWith(`${rail}-`) && n.endsWith(".json")).sort()) {
+    const path = join(ROTATIONS_DIR, name);
+    let r;
+    try { r = JSON.parse(readRegularFile(path, "the rotation record")); } catch (err) { throw new Error(`the rotation record ${path} cannot be read (${err?.message ?? err})`); }
+    if (!r || typeof r !== "object" || r.version !== 1 || r.rail !== rail || typeof r.oldAgent !== "string" || !r.chains || typeof r.chains !== "object") throw new Error(`the rotation record ${path} does not hold a rotation of the ${rail} key`);
+    if (!r.finishedAt) open.push({ ...r, path });
+  }
+  if (current === null) {
+    // A key file aside with no swap recorded counts as moved by rotate only when every chain was recovered already; otherwise
+    // the owner moved it by hand, and recover still needs it.
+    const recovered = (r) => Object.values(r.chains).every((e) => (rail === "evm" ? e?.recoveredAt : e?.revokedAt && e?.sweptAt));
+    const aside = (r) => existsSync(retiredKeyFile(rail, r.oldAgent));
+    const moved = open.filter((r) => r.swappedAt || (aside(r) && recovered(r)));
+    const byHand = open.find((r) => !r.swappedAt && aside(r) && !recovered(r));
+    if (!moved.length && byHand) {
+      const kept = retiredKeyFile(rail, byHand.oldAgent);
+      throw Object.assign(new Error(`the key file of ${byHand.oldAgent} was moved to ${kept} before its rotation recovered the funds, and recover needs it`), { next: `move ${kept} back to ${agentKeyFile(rail)}, then run rotate again. Nothing was sent` });
+    }
+    return moved.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))[0] ?? null;
+  }
+  // the one that belongs to the key file as it is now, else the newest
+  return open.find((r) => !r.swappedAt && sameAgent(rail, r.oldAgent, current)) ?? open.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))[0] ?? null;
+}
+
+/**
+ * Runs one command of this CLI as a child process and waits for it: its approval links are passed on at once, its logs go to
+ * stderr, and its last RESULT line is returned with its exit code. Each rotation step is an existing command, so each keeps
+ * its own owner approval, its records and its checks.
+ */
+function runChild(args) {
+  return new Promise((resolve) => {
+    const p = spawnIdentified(process.execPath, [fileURLToPath(import.meta.url), ...args], { stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    currentChild = p;
+    let partial = "";
+    let result = null;
+    const line = (l) => {
+      if (/^APPROVE \{/.test(l)) { try { approvalUrl = JSON.parse(l.slice(8)).url; } catch {} writeApprove(l); } else if (/^RESULT \{/.test(l)) result = railResult(l);
+    };
+    p.stdout.on("data", (d) => {
+      const lines = (partial + d).split("\n");
+      partial = lines.pop();
+      lines.forEach(line);
+    });
+    const errScrub = agentTokenScrubber();
+    p.stderr.on("data", (d) => { const t = errScrub.push(String(d)); if (t) process.stderr.write(t); });
+    // passed on to the child while it runs; removed after, as rotate runs one child per step
+    const stop = Object.fromEntries(["SIGINT", "SIGTERM"].map((s) => [s, () => { interrupted = true; try { p.kill(s); } catch {} }]));
+    for (const [s, fn] of Object.entries(stop)) process.on(s, fn);
+    const unhook = () => { for (const [s, fn] of Object.entries(stop)) process.off(s, fn); };
+    p.on("error", (e) => { unhook(); log(`superstables budget: could not start ${args[0]}: ${e.message}`); resolve({ code: p.pid === undefined ? 2 : 1, result: null }); });
+    p.on("close", (code, sig) => {
+      unhook();
+      if (partial) line(partial);
+      const t = errScrub.end();
+      if (t) process.stderr.write(t);
+      resolve({ code: code ?? (sig ? 130 : 1), result });
+    });
+  });
+}
+
+async function rotate({ f, ctx }) {
+  delete ctx.chain; // rotate covers every chain the key is set up on
+  const rail = f.rail;
+  // one rotation at a time per rail: both would write the same record. Taken before anything is read, so a run that waited
+  // never works from state an earlier run is about to change.
+  let lock = null;
+  if (!(f.plan === true || !sendsNow(f))) {
+    const lockPath = join(ROTATIONS_DIR, `${rail}.lock`);
+    const refuse = (reason, next) => {
+      log(`superstables budget: refused: ${reason}`);
+      return emit(3, { ...ctx, state: "refused_precheck", retired: false, reason, next });
+    };
+    try {
+      ensurePrivateDir(ROTATIONS_DIR, { root: HOME });
+      lock = lockFile(lockPath);
+    } catch (err) { return refuse(`the rotation lock could not be taken (${err.message})`, "nothing was sent; fix the folder, then run rotate again"); }
+    if (!lock.ok) return refuse(`another rotate of the ${rail} key is running (${lock.details})`, `wait for its RESULT, or stop it, then run rotate again. If none is running and this stays, remove ${lockPath} after stopping every rotate. Nothing was sent`);
+  }
+  try { return await rotateLocked({ f, ctx }); } finally { lock?.release(); }
+}
+
+async function rotateLocked({ f, ctx }) {
+  const rail = f.rail;
+  const refusal = (reason, next) => {
+    log(`superstables budget: refused: ${reason}`);
+    return emit(3, { ...ctx, state: "refused_precheck", retired: false, reason, next });
+  };
+  try { readRetired(); } catch (err) { return refusal(err.message, "repair that file or move it away, then run rotate again. Nothing was sent"); }
+
+  // the old agent: the address of the key file now
+  const who = await run(railCommand("rotate-address", { rail, chain: RAILS[rail].chain }));
+  let current = railResult(who.stdout);
+  let existing;
+  if (who.code !== 0 || !current?.agent) {
+    // a rotation that stopped after the key file moved aside has no key file now: its record says where it stopped
+    let moved = null;
+    if (!existsSync(agentKeyFile(rail))) {
+      try { moved = unfinishedRotation(rail, null); } catch (err) { return refusal(err.message, err.next ?? "repair that file or move it away, then run rotate again. Nothing was sent"); }
+    }
+    if (!moved) return refusal(current?.reason ?? `there is no agent key to rotate (${agentKeyFile(rail)})`, `superstables budget setup --rail ${rail} creates one. Nothing was changed`);
+    existing = moved;
+    current = { agent: moved.oldAgent };
+    log(`superstables budget: the key file of ${moved.oldAgent} was already moved to ${retiredKeyFile(rail, moved.oldAgent)}: finishing that rotation`);
+  } else {
+    try { existing = unfinishedRotation(rail, current.agent); } catch (err) { return refusal(err.message, "repair that file or move it away, then run rotate again. Nothing was sent"); }
+  }
+  // a chain whose public file cannot be read is not known to be free of the old key: its allowance could be left standing
+  for (const c of RAILS[rail].chains) {
+    const { problem } = publicAgents({ rail, chain: c });
+    if (problem) return refusal(problem, `fix that file (or move it away if ${c} is not set up), then run rotate again. Nothing was sent`);
+  }
+  const oldAgent = existing?.swappedAt ? existing.oldAgent : current.agent;
+  const names = (c) => { const a = publicAgent({ rail, chain: c }); return Boolean(a) && sameAgent(rail, a, oldAgent); };
+  for (const c of RAILS[rail].chains) if (publicAgent({ rail, chain: c }) && !names(c)) log(`superstables budget: ${rail} ${c} names another agent (${publicAgent({ rail, chain: c })}): left as it is`);
+  const chains = [...new Set([...Object.keys(existing?.chains ?? {}), ...RAILS[rail].chains.filter(names)])];
+  if (!chains.length) return refusal(`no ${rail} chain's public file names the agent key ${current.agent}`, `superstables budget setup --rail ${rail} connects it to an owner first. Nothing was changed`);
+
+  // The owner's steps are the commands of the same name, run in the foreground so each approval is waited for. A test key file
+  // signs them (setup takes none for a chain approved on the site: there the owner signs in).
+  const timing = [...opt("timeout", f.timeout), ...(f["no-open"] ? ["--no-open"] : [])];
+  const signing = (yes) => (f["owner-key-file"] ? [...opt("owner-key-file", f["owner-key-file"]), ...(yes ? ["--yes"] : [])] : ["--wait"]);
+  const chainArgs = (c) => (rail === "evm" ? ["--chain", c] : []);
+  const quiet = (r) => ({ code: r.code, result: railResult(r.stdout) });
+  const steps = {
+    planChain: async (c) => ({ ...quiet(await run(railCommand(rail === "evm" ? "recover" : "rotate-balances", { rail, chain: c }, { plan: true }))), hosted: hostedSite({ rail, chain: c }) }),
+    retire: async () => { try { retire(rail, oldAgent, "rotate"); return { code: 0 }; } catch (err) { return { code: 1, result: { reason: err.message } }; } },
+    readStopped: async (c) => { const now = await readBudget({ rail, chain: c }); return now.ok && now.remaining !== null && Number(now.remaining) === 0; },
+    recoverChain: (c) => runChild(["recover", "--rail", rail, ...chainArgs(c), ...timing, ...signing(true)]),
+    revoke: () => runChild(["revoke", "--rail", rail, ...timing, ...signing(true)]),
+    reconcile: (op) => runChild(["reconcile", "--rail", rail, "--op", op]),
+    sweep: async (c) => quiet(await run(railCommand("rotate-sweep", { rail, chain: c }))),
+    swapKey: async () => {
+      const target = retiredKeyFile(rail, oldAgent);
+      try {
+        ensurePrivateDir(dirname(target), { root: HOME });
+        // an earlier run may have moved the file and stopped before it wrote that down
+        if (existsSync(target)) return existsSync(agentKeyFile(rail)) ? { code: 1, result: { reason: `${target} exists already: move it away` } } : { code: 0 };
+        renameSync(agentKeyFile(rail), target);
+        return { code: 0 };
+      } catch (err) {
+        return { code: 1, result: { reason: `the old key file could not be moved to ${target} (${err.message})` } };
+      }
+    },
+    clearChain: async (c) => quiet(await run(railCommand("rotate-clear", { rail, chain: c }, { agent: oldAgent }))),
+    setupChain: (c, entry) => runChild(["setup", "--rail", rail, ...chainArgs(c), ...(entry.hosted ? ["--hosted", "--site", entry.hosted, ...timing, "--wait"] : [...timing, ...signing(false)])]),
+    writeRecord: (record) => writeJournalFile(join(ROTATIONS_DIR, recordName(rail, record.oldAgent)), `${JSON.stringify(record, null, 2)}\n`),
+  };
+  const planOnly = f.plan === true || !sendsNow(f);
+  // the folder the old key file moves to is checked now, not after the owner has approved the revoke
+  if (!planOnly) {
+    try { ensurePrivateDir(dirname(retiredKeyFile(rail, oldAgent)), { root: HOME }); } catch (err) { return refusal(`the folder for the old key file is not private (${err.message})`, "nothing was sent; fix the folder, then run rotate again"); }
+  }
+  log(`\nPLAN rotate on ${rail}: replace the agent key ${oldAgent} (chains: ${chains.join(", ")}). ${planOnly ? "Nothing is sent." : waitLine(f)}`);
+  log("  the old address is retired first; then, on each chain, the owner ends its allowance or delegate, open purchases are settled or returned, and its funds go back to the owner; then the key file moves to keys/budget/retired/ and a new key is connected on the same chains.");
+  const done = await rotateKey({ rail, currentAgent: current.agent, existing, chains, steps, plan: planOnly, keyMoved: !existsSync(agentKeyFile(rail)), log });
+  const { code, fields } = done;
+  emit(code, { ...ctx, ...fields, ...(fields.state === "incomplete" ? { final: false } : {}), url: approvalUrl, ...(planOnly && !f.plan && fields.state === "planned" ? { next: notSentNext(f) } : {}) });
 }
 
 // ---- detached owner approvals (approvals.mjs) -------------------------------------------------------
@@ -2050,7 +2323,7 @@ async function find({ f, ctx }) {
 }
 
 // ---- main -------------------------------------------------------------------------------------------
-const HANDLERS = { unlock, setup, "fund-agent": fundAgent, doctor, preflight, status, buy, "buy-once": buyOnce, reconcile, grant, revoke, recover, wait, find };
+const HANDLERS = { unlock, setup, "fund-agent": fundAgent, doctor, preflight, status, buy, "buy-once": buyOnce, reconcile, grant, revoke, recover, rotate, wait, find };
 const parsed = parse(process.argv.slice(2));
 if (WORKER_ID) {
   // the worker's backstop: nothing it runs may outlive the link, the send grace and the chain reads. It stops the rail

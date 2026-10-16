@@ -679,15 +679,30 @@ says "not supported", there is no command for it yet; do not move key files by h
   with `superstables budget revoke --rail tempo` (add `--agent OLD` if the old key had a label).
   A key revoked on an owner's account can never be granted again on that account. After this,
   every `buy` and `status` for the new key needs `--agent LABEL`.
-- **Budget agent key, `evm` and `solana`.** Not supported. `--agent` is for `tempo` only, and
-  `setup` reuses the agent key file it finds. The owner's revoke stops the key from spending
-  more, even a stolen one: `approve(agent, 0)` on `evm` stops new pulls (a price already pulled
-  can still settle), the SPL `Revoke` on `solana` ends the delegate. A revoke does not retire
-  the key: the owner can grant the same key again, so after a suspected leak, don't. On `evm`,
-  `superstables budget recover --rail evm [--chain C]` (`--chain` defaults to Base Sepolia)
-  returns USDC the agent key still holds to the owner. It runs
-  where the agent key file is, needs gas in the agent key (the owner sends some first if it is
-  short), and on a chain where USDC pays for gas (Arc Testnet) it leaves the agent's gas reserve.
+- **Budget agent key, `evm` and `solana`.** Supported: `superstables budget rotate --rail evm|solana`
+  (`--plan` first shows what it would do and sends nothing). It runs where the agent key file is,
+  in the owner's terminal, and goes in this order:
+  1. The old address is retired first, in `keys/budget/retired.json`. From then on this machine
+     never grants, funds, sets up or buys with it again.
+  2. On every chain where the old key is set up, the owner ends its authority in their wallet:
+     `approve(agent, 0)` on `evm` (a price already pulled can still settle, and `rotate` waits for
+     it), the SPL `Revoke` on `solana`. Open purchases are settled or returned. The old key's funds
+     go back to the owner: USDC above the gas reserve on `evm`, USDC and SOL on `solana`.
+  3. Only then is the old key file moved to `keys/budget/retired/`, and a new key is created and
+     connected on the same chains, with the same owner. Run `grant` for it as for any new agent.
+
+  A rotation that stops (the owner's link expired, a chain read failed) can be run again; it
+  continues where it stopped and never repeats an approval it recorded in `budget/rotations/`. On
+  chains approved on superstables.com the old agent also stays on the owner's account page until
+  the owner removes it there; `rotate` says so. What it does not do: the retired key file is kept
+  and no command uses it, so funds that reach a retired address later stay there until you move
+  them by hand; and the retired list is a file on this machine, as editable by whoever can edit the
+  public files as they are. It stops this client from arming the old key again. What stops a stolen
+  key is the owner's revoke on chain, which `rotate` makes before it moves the key. A plain revoke, without `rotate`,
+  does not retire the key: the owner can grant it again. `superstables budget recover --rail evm
+  [--chain C]` (`--chain` defaults to Base Sepolia) alone returns USDC the agent key still holds to
+  the owner. It needs gas in the agent key (the owner sends some first if it is short), and on a
+  chain where USDC pays for gas (Arc Testnet) it leaves the agent's gas reserve.
 - **Owner key.** It stays in the owner's wallet, which the client does not manage. `setup
   --new-owner` changes the owner recorded for a budget; it moves no funds, and it refuses while a
   budget is live (revoke first) or, on `evm`, while the agent key holds USDC (run `recover`
