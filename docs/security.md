@@ -61,12 +61,16 @@ whose `extra` holds anything but the token's signing domain, its decimals and th
 Tempo challenge that enables the machine-token route (`methodDetails.machineTokenEnabled`). The
 payer's signature is checked later, as described below.
 
+The page also shows the seller's scheme and host (the URL this client asked for the price and will call to pay), the
+policy file whose caps applied, with a flag when it is not your account's own, how long what your wallet signs stays valid,
+and what your wallet's prompt will show, raw values next to readable ones.
+
 **Reported — what the agent says the payment is for**, stored under `reported` and labelled
 unverified wherever it is shown:
 
-- `target` — the URL the agent says it is calling
-- `serviceId`, `serviceName`, `description` — the agent's own labels
+- `serviceId`, `serviceName` — the agent's own labels
 - `quoteId`, `attemptId` — the agent's record ids
+- the seller's own description, cleaned and cut to 200 characters, under "The seller says (not verified)"
 
 None of it changes what gets signed. The typed data the wallet is asked to sign is built from the
 verified requirement, field by field: `to` is the requirement's `payTo`, `value` is its
@@ -74,7 +78,7 @@ verified requirement, field by field: `to` is the requirement's `payTo`, `value`
 `maxTimeoutSeconds`, at most 600 seconds.
 
 There is one place where reported context has an effect: the policy takes the hostname for its
-`allow`/`deny` rules from `reported.target`, because the requirement does not carry the URL that
+`allow`/`deny` rules from the same URL the page shows as the seller, because the requirement does not carry the URL that
 was called. A dishonest agent could therefore misreport the host and slip past a host rule. It
 cannot misreport the amount, the asset, the chain or the recipient, so `caps.per_call`,
 `caps.per_day`, `stablecoins` and `kill_switch` are all judged on verified facts. Treat host
@@ -108,7 +112,8 @@ That id is deliberately narrow. Holding it lets someone see *one* payment and si
 - the client binds `127.0.0.1`, so another machine cannot reach the page directly; port
   forwarding can make it reachable elsewhere;
 - the page cannot be framed by another site (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), sends
-  no `Referer` (its link is the capability), and is served with `nosniff`;
+  no `Referer` (its link is the capability), and is served with `nosniff`; only the page's own scripts run: each
+  response carries a fresh nonce, and the content security policy allows scripts with that nonce only;
 - it answers only to the Host it is bound to, `127.0.0.1:PORT` (or `localhost:PORT`), so a web
   page under a DNS name that resolves to `127.0.0.1` cannot reach it;
 - `/account`, `/signature` and `/reject` accept only a JSON body sent from the page's own origin,
@@ -190,9 +195,11 @@ but it would not have to ask for the connection again.
 ## The approvals log
 
 The browser signer appends each state change of an approval to
-`~/.superstables/records/approvals.jsonl` (0600): the time, the id, the new status, the reason
-if there is one, the verified terms, the reported context, and the account that connected. A
-failed write does not stop the approval, so the file is not a guaranteed complete record.
+`~/.superstables/records/approvals.jsonl` (0600): the time, a hash of the id (`sha256:…`, which also
+appears as `walletRequestId` on the attempt; the id itself, which opens the page, is never written), the new
+status, the reason if there is one, the verified terms, the reported context, and the account that connected.
+Each line is flushed to disk. A failed write does not stop the approval, so the file is not a guaranteed
+complete record.
 
 It never contains a signature and never contains a key. It is a file for reading:
 

@@ -14,6 +14,11 @@ import { CAP_DECIMALS, capUnit, capUnits, policyAmount } from "./policy.js";
 import type { thisProcess } from "./lock.js";
 import type { Attempt, Quote, Receipt } from "./types.js";
 
+/** How an approval id is written down: sha256 of the id. It names the approval in approvals.jsonl and an attempt's walletRequestId, and opens nothing. */
+export function approvalIdHash(id: string): string {
+  return `sha256:${createHash("sha256").update(id).digest("hex")}`;
+}
+
 /**
  * The process running an attempt (its pid, that process's start identity where the system gives one, and its machine:
  * hostname, machine and boot ids): while it runs, it carries the attempt on; once it is gone, an attempt it left approved
@@ -129,7 +134,9 @@ export class Records {
    */
   saveAttempt(attempt: Attempt): Attempt {
     const { runner = attemptRunner(this, attempt.id), ...normalized }: StoredAttempt = { ...attempt, chainFinal: attempt.chainFinal ?? null };
-    const row: StoredAttempt = runner ? { ...normalized, runner } : normalized;
+    // the approval link works only in the process serving it, and its id is a capability: never on disk
+    const { approvalUrl: _link, ...stored } = normalized;
+    const row: StoredAttempt = runner ? { ...stored, runner } : stored;
     this.append("attempts.jsonl", row);
     return normalized;
   }
