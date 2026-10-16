@@ -286,6 +286,7 @@ explain(
               .join(", ") || "no caps set";
       console.log(field("policy", summary(status.policy)));
       if (status.also) console.log(field("also applies", `${status.also.file}: ${summary(status.also.policy)}`));
+      if (status.policyProblem) console.log(field("policy problem", status.policyProblem));
     }),
   {
     money: "no.",
@@ -655,8 +656,8 @@ explain(
         "(the default) it serves the approval page itself on 127.0.0.1 and prints its approval link; the page " +
         "works only while this command runs, and only in a browser on this machine (over SSH, forward " +
         `the port the approval link names: ssh -L ${DEFAULT_APPROVE_PORT}:127.0.0.1:${DEFAULT_APPROVE_PORT}). With --wallet local the ` +
-        "request goes to the wallet process, whose page outlives this command; approving there after " +
-        "pay has stopped pays nothing, because nothing is left to submit it.",
+        "request goes to the wallet process, whose page outlives this command; when pay stops waiting it cancels " +
+        "the request there, so approving it afterwards signs nothing.",
       "Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base " +
         "Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet; MPP with test " +
         "pathUSD on Tempo Moderato. The wallet signs on " +

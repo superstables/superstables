@@ -32,7 +32,9 @@ const SLOW = [
   "test/cli/cli.test.ts",
   "test/core/browser-signer.test.ts",
   "test/core/wallet-public-rpc.test.ts",
+  "test/core/wallet-signer-cancel.test.ts",
   "test/scripts/supply-chain-pack.test.ts",
+  "test/wallet/daemon-gate.test.ts",
 ];
 
 export default defineConfig({

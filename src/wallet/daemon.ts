@@ -17,15 +17,16 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { appendFileSync, chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
+import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import type { PaymentRequirements } from "@x402/core/types";
 import type { PrivateKeyAccount } from "viem/accounts";
-import { DEFAULT_NETWORK, evmNetworkFor, fromAtomic, usdcBalance } from "../core/chain.js";
-import { DEFAULT_WALLET_PORT, ensureDir, policyPath, walletDir } from "../core/home.js";
-import { capUnit, evaluatePolicy, formatMoney, loadPolicy, type Policy } from "../core/policy.js";
+import { DEFAULT_NETWORK, evmNetworkFor, isSameAddress, networkFor, usdcBalance } from "../core/chain.js";
+import { DEFAULT_WALLET_PORT, accountPolicyPath, ensureDir, policyPath, walletDir } from "../core/home.js";
+import { capUnit, capUnits, evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Policy, type Verdict } from "../core/policy.js";
+import { syncDirectory } from "../core/private-dir.mjs";
 import { LocalKeySigner } from "../core/signer/local.js";
 import { LOCAL_WALLET_EVM_ONLY, type Eip3009SignRequest, type Eip3009SignResult } from "../core/signer/types.js";
 import type {
@@ -37,6 +38,7 @@ import type {
 } from "../core/types.js";
 import { termsFor, type RawAccept } from "../core/x402.js";
 import { untrustedText } from "../core/text.js";
+import { spentTodayFromAudit } from "./audit-total.js";
 import { loadAccount, readOrCreateSecret, writeAllSync } from "./keystore.js";
 import { walletPage } from "./page.js";
 
@@ -47,14 +49,30 @@ const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 const BALANCE_TIMEOUT_MS = 5_000;
 /** A sign request is a few hundred bytes; anything this large is not one. */
 const MAX_BODY_BYTES = 256 * 1024;
+/** Payment requests that may wait for the owner at once. */
+const MAX_PENDING = 3;
+/** How long after the client's own deadline the wallet still hands out a signature (a poll in flight, a slow loopback). */
+const RESULT_GRACE_MS = 15_000;
+/** The audit log is read whole on every request; a file past this is not one the wallet wrote. */
+const MAX_AUDIT_BYTES = 64 * 1024 * 1024;
+/** The wait a client may announce for its request. */
+const MIN_WAIT_MS = 1_000;
+const MAX_WAIT_MS = 3_600_000;
 
 export interface StartWalletOptions {
   /** 0 picks a free port (tests). Defaults to DEFAULT_WALLET_PORT. */
   port?: number;
   /** Where the key, the credentials and the audit log live. Defaults to walletDir(). */
   dir?: string;
-  /** The owner's policy. Defaults to the policy file, or the built-in defaults. */
+  /**
+   * A fixed policy, for tests and library callers: when set, no file is read. Otherwise the wallet reads the policy files
+   * again whenever it judges a request (see policyFile and accountPolicyFile).
+   */
   policy?: Policy;
+  /** The selected policy file. Defaults to policyPath() (SUPERSTABLES_POLICY, or policy.yaml in the home folder). */
+  policyFile?: string;
+  /** The account's own policy file, which applies as well. Defaults to accountPolicyPath(). */
+  accountPolicyFile?: string;
   /** The wallet's account. Defaults to the key in `dir`. */
   account?: PrivateKeyAccount;
   approvalTimeoutMs?: number;
@@ -72,6 +90,17 @@ export interface StartWalletOptions {
   launcherDir?: string;
   /** Tests only: file operations the launcher uses, to simulate failures. */
   launcherIo?: LauncherIo;
+  /** Tests only: how long after a client's wait a signature is still handed out. Default 15 s. */
+  resultGraceMs?: number;
+  /** Tests only: file operations the audit log uses, to simulate failures. */
+  auditIo?: AuditIo;
+}
+
+/** File operations the audit log uses; tests replace them to simulate failures. */
+export interface AuditIo {
+  openSync?: typeof openSync;
+  writeSync?: typeof writeSync;
+  fsyncSync?: typeof fsyncSync;
 }
 
 export interface WalletHandle {
@@ -104,7 +133,20 @@ interface WalletRequestRecord {
   requirement?: PaymentRequirements;
   x402Version: 1 | 2;
   result?: Eip3009SignResult;
+  /** The latest time (ms) a signature is handed out: the client's wait plus a short grace. */
+  serveUntil: number;
+  /** The wallet will not hand out this signature: the client stopped waiting for it. */
+  withheld?: boolean;
+  /** The signature was handed to the agent token. */
+  served?: boolean;
+  /** The decimals of the token of verified.network: what the amount is counted in. 6 for a blank record. */
+  decimals: number;
 }
+
+/** The wallet cannot do what it was asked to without breaking its own rules: the caller may ask again later. */
+class WalletUnavailable extends Error {}
+/** The policy as it reads now refuses an approval. */
+class PolicyNow extends Error {}
 
 type Caller = "agent" | "owner";
 
@@ -158,7 +200,6 @@ function policyDomain(context?: PaymentContext): string {
 export async function startWallet(options: StartWalletOptions = {}): Promise<WalletHandle> {
   const dir = ensureDir(options.dir ?? walletDir());
   const account = options.account ?? loadAccount(dir);
-  const policy = options.policy ?? loadPolicy(policyPath());
   const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
   const quiet = options.quiet === true;
   const readBalance = options.balance !== false;
@@ -169,9 +210,24 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
   const signer = new LocalKeySigner(account);
   const requests = new Map<string, WalletRequestRecord>();
 
+  /**
+   * The policy to judge by, read from its files every time it is needed: what counts is the policy at the moment of
+   * signing, not the one the wallet started with. The selected file and, when it is another file, the account's own.
+   * Throws when a file cannot be used, which refuses.
+   */
+  function currentPolicy(): Policy {
+    if (options.policy) return options.policy;
+    return loadPaymentPolicy(options.policyFile ?? policyPath(), options.accountPolicyFile ?? accountPolicyPath());
+  }
+
   // ── audit ────────────────────────────────────────────────────────────────────────────
 
-  /** One line per state change. Never a key, never a signature: this file is for reading. */
+  let auditSynced = false;
+
+  /**
+   * One line per state change, written in full and flushed. Never a key, never a signature: this file is for reading.
+   * Throws when the line is not safely on disk: a state the wallet cannot record is a state it does not enter.
+   */
   function audit(record: WalletRequestRecord): void {
     const line = {
       at: new Date().toISOString(),
@@ -181,48 +237,96 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       verified: record.verified,
       reported: record.reported,
     };
+    const io = options.auditIo ?? {};
+    let fd: number | undefined;
     try {
-      appendFileSync(auditPath, `${JSON.stringify(line)}\n`, { mode: 0o600 });
+      // Never a symlink, and never waited on: a FIFO in this place must not stop the wallet.
+      fd = (io.openSync ?? openSync)(auditPath, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0), 0o600);
+      if (!fstatSync(fd).isFile()) throw new Error("the audit log is not a regular file");
+      writeAllSync(fd, `${JSON.stringify(line)}\n`, io.writeSync);
+      (io.fsyncSync ?? fsyncSync)(fd);
+      if (!auditSynced) {
+        syncDirectory(dir);
+        auditSynced = true;
+      }
     } catch (err) {
-      // An unwritable audit file must not stop the owner from deciding; say so and carry on.
-      if (!quiet) console.error(`wallet: could not write the audit log: ${(err as Error).message}`);
+      throw new Error(`the wallet could not write its audit log ${auditPath} (${(err as Error).message}); nothing was asked or signed`, { cause: err });
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  }
+
+  /** The line for a state that makes nothing signable (a refusal, an expiry): if it cannot be written, say so and carry on. */
+  function tryAudit(record: WalletRequestRecord): void {
+    try {
+      audit(record);
+    } catch (err) {
+      if (!quiet) console.error(`wallet: ${(err as Error).message}`);
+    }
+  }
+
+  /** The audit log's text; "" when there is none yet. Throws for anything that is not a regular file the wallet can read. */
+  function readAuditText(): string {
+    let fd: number;
+    try {
+      fd = openSync(auditPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+      throw err;
+    }
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile()) throw new Error("it is not a regular file");
+      if (st.size > MAX_AUDIT_BYTES) throw new Error("it is too large to read");
+      return readFileSync(fd, "utf8");
+    } finally {
+      closeSync(fd);
     }
   }
 
   /**
-   * What this wallet has already signed today (UTC), per asset, read back from its own audit
-   * log so a restart does not reset the day. Summed in atomic units: money is never added up
-   * as floating point.
+   * What this wallet has authorised today (UTC) in `asset`'s cap unit, in millionths: the audit log's approved and signed
+   * requests, read back so a restart does not reset the day, and every request still waiting for the owner, which the
+   * owner may approve any moment. `exclude` is the request being judged. Whole numbers only: money is never added up as
+   * floating point. Throws when the total cannot be known, which refuses.
    */
-  function spentTodayDecimal(asset: string): number {
-    let total = 0n;
+  function spentTodayAtomic(asset: string, exclude?: string): bigint {
     let text: string;
     try {
-      text = readFileSync(auditPath, "utf8");
-    } catch {
-      return 0;
+      text = readAuditText();
+    } catch (err) {
+      throw new Error(`today's spending cannot be read from the audit log (${(err as Error).message}); until it is fixed nothing is signed`);
     }
     const today = new Date().toISOString().slice(0, 10);
-    for (const line of text.split("\n")) {
-      if (line.trim() === "") continue;
-      try {
-        const entry = JSON.parse(line) as { at?: string; status?: string; verified?: VerifiedTerms };
-        if (entry.status !== "signed" || !entry.verified) continue;
-        if (!entry.at || entry.at.slice(0, 10) !== today) continue;
-        // The caps count the dollar stablecoins together (USDC and USDG here), any other asset on its own.
-        if (capUnit(entry.verified.asset) !== capUnit(asset)) continue;
-        total += BigInt(entry.verified.amountAtomic);
-      } catch {
-        // A truncated or hand-edited line is skipped rather than failing the payment path.
-      }
+    const counted = spentTodayFromAudit(text, asset, today, (caip2) => networkFor(caip2)?.token.decimals);
+    if ("problem" in counted) {
+      throw new Error(`today's spending cannot be read from the audit log (${counted.problem}); until it is fixed nothing is signed`);
     }
-    // This wallet signs USDC and USDG only, which have six decimals on every chain it signs on.
-    return fromAtomic(total.toString(), DEFAULT_NETWORK.usdc.decimals);
+    let total = counted.total;
+    for (const r of requests.values()) {
+      if (r.status !== "pending" || r.id === exclude || capUnit(r.verified.asset) !== capUnit(asset)) continue;
+      total += capUnits(BigInt(r.verified.amountAtomic), r.decimals);
+    }
+    return total;
+  }
+
+  /** The policy's verdict on a verified payment as the policy and the log read now. A policy or a log that cannot be read refuses. */
+  function verdictFor(record: WalletRequestRecord, terms: VerifiedTerms): Verdict {
+    try {
+      return evaluatePolicy(currentPolicy(), {
+        domain: policyDomain(record.reported),
+        asset: terms.asset,
+        ...policyAmount(terms),
+        spentTodayAtomic: spentTodayAtomic(terms.asset, record.id),
+      });
+    } catch (err) {
+      return { allowed: false, reason: (err as Error).message };
+    }
   }
 
   // ── request lifecycle ────────────────────────────────────────────────────────────────
 
-  function view(record: WalletRequestRecord, withResult: boolean): WalletRequestView {
+  function view(record: WalletRequestRecord, withResult: boolean, forCancel = false): WalletRequestView {
     const out: WalletRequestView = {
       id: record.id,
       status: record.status,
@@ -233,6 +337,8 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       reason: record.reason,
     };
     if (withResult && record.result) out.result = record.result;
+    if (record.withheld) out.withheld = true;
+    if (forCancel) out.served = record.served === true;
     return out;
   }
 
@@ -242,8 +348,11 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     for (const record of requests.values()) {
       if (record.status !== "pending" || record.expiresAt > now) continue;
       record.status = "expired";
-      record.reason = `no answer from the owner within ${Math.round(approvalTimeoutMs / 1000)}s`;
-      audit(record);
+      record.reason = record.expiresAt < record.createdAt + approvalTimeoutMs
+        ? "the client's wait ended before the owner answered; nothing was signed"
+        : `no answer from the owner within ${Math.round(approvalTimeoutMs / 1000)}s`;
+      // an expiry happens in memory whatever the log says: a request that expires without a line was never counted
+      tryAudit(record);
     }
   }
 
@@ -251,9 +360,12 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
   // The wallet's own timer must never be the reason a process refuses to exit.
   sweeper.unref();
 
-  function createRequest(sign: unknown): WalletRequestRecord {
+  function createRequest(sign: unknown, waitMs: number | undefined): WalletRequestRecord {
     const id = randomUUID();
     const now = Date.now();
+    // The client says how long it will wait; a client that says nothing is waiting for the wallet's own window.
+    const deadline = waitMs === undefined ? undefined : now + waitMs;
+    const expiresAt = Math.min(now + approvalTimeoutMs, deadline ?? Infinity);
     const request = (sign ?? {}) as Partial<Eip3009SignRequest> & { kind?: string };
     // Only the two wire versions there are; anything else is refused below, never read as version 2.
     const named: unknown = request.x402Version;
@@ -277,10 +389,12 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       id,
       status: "rejected",
       createdAt: now,
-      expiresAt: now + approvalTimeoutMs,
+      expiresAt,
+      serveUntil: (deadline ?? expiresAt) + (options.resultGraceMs ?? RESULT_GRACE_MS),
       verified: blank,
       reported,
       x402Version: version,
+      decimals: DEFAULT_NETWORK.usdc.decimals,
     };
     requests.set(id, record);
 
@@ -288,17 +402,17 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       record.reason = request.kind === "tempo-transfer" || request.kind === "solana-transaction"
         ? LOCAL_WALLET_EVM_ONLY
         : `this wallet signs eip3009 authorizations, not "${String(request.kind)}"`;
-      audit(record);
+      tryAudit(record);
       return record;
     }
     if (named !== 1 && named !== 2) {
       record.reason = `x402 version ${untrustedText(String(named), 20)} is not supported (only 1 and 2)`;
-      audit(record);
+      tryAudit(record);
       return record;
     }
     if (!request.requirements || typeof request.requirements !== "object") {
       record.reason = "the request carried no payment requirement to check";
-      audit(record);
+      tryAudit(record);
       return record;
     }
 
@@ -306,40 +420,70 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     const judged = termsFor(request.requirements as RawAccept, version);
     if (!judged.supported) {
       record.reason = judged.reason;
-      audit(record);
+      tryAudit(record);
       return record;
     }
     // One EVM key: an x402 payment on any other rail is approved in a browser wallet instead.
     if (!evmNetworkFor(judged.terms.network)) {
       record.reason = LOCAL_WALLET_EVM_ONLY;
-      audit(record);
+      tryAudit(record);
       return record;
     }
     record.verified = { ...judged.terms, payer: account.address };
     record.requirement = judged.requirement;
+    record.decimals = policyAmount(judged.terms).decimals ?? DEFAULT_NETWORK.usdc.decimals;
+    // The recipient is never the account paying: the transfer would move nothing, yet the payment would count as paid.
+    if (isSameAddress(judged.terms.recipient, account.address)) {
+      record.reason = "the recipient is this wallet's own address, so this payment was refused; nothing was signed";
+      tryAudit(record);
+      return record;
+    }
 
-    const verdict = evaluatePolicy(policy, {
-      domain: policyDomain(reported),
-      amountDecimal: judged.terms.amountDecimal,
-      asset: judged.terms.asset,
-      spentTodayDecimal: spentTodayDecimal(judged.terms.asset),
-    });
+    const verdict = verdictFor(record, record.verified);
     if (!verdict.allowed) {
       record.status = "denied";
       record.reason = verdict.reason;
-      audit(record);
+      tryAudit(record);
       return record;
     }
 
     record.status = "pending";
     record.reason = undefined;
-    audit(record);
+    // Nothing waits for the owner without its line on disk: the line is what makes it count toward the day.
+    try {
+      audit(record);
+    } catch (err) {
+      requests.delete(record.id);
+      throw new WalletUnavailable((err as Error).message);
+    }
     return record;
   }
 
+  /** What went wrong underneath a failed audit write, without audit()'s own "nothing was asked or signed". */
+  function auditDetail(err: unknown): string {
+    const cause = (err as Error).cause;
+    return cause instanceof Error ? cause.message : (err as Error).message;
+  }
+
   async function approve(record: WalletRequestRecord): Promise<void> {
+    // The policy as it reads now, and the day as the log and the other waiting requests make it: not what they were when
+    // the request arrived.
+    const verdict = verdictFor(record, record.verified);
+    if (!verdict.allowed) {
+      record.status = "rejected";
+      record.reason = `the spend policy now refuses this payment: ${verdict.reason}`;
+      tryAudit(record);
+      throw new PolicyNow(record.reason);
+    }
+    // The decision is on disk, and counted, before anything is signed.
     record.status = "approved";
-    audit(record);
+    try {
+      audit(record);
+    } catch (err) {
+      record.status = "rejected";
+      record.reason = "the wallet could not write its audit log, so it did not sign";
+      throw new WalletUnavailable(`${record.reason} (${auditDetail(err)})`);
+    }
     const result = await signer.sign({
       kind: "eip3009",
       // Exactly the requirement that was checked and shown, not a rebuilt one.
@@ -348,10 +492,23 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     });
     record.result = result;
     record.status = "signed";
-    audit(record);
+    try {
+      audit(record);
+    } catch (err) {
+      // A signature the wallet cannot record is one it did not give. The approved line already on disk keeps the amount
+      // counted, so nothing is written over it.
+      record.result = undefined;
+      record.status = "rejected";
+      record.reason = "the wallet signed, but could not record it in its audit log, so the signature was discarded; nothing can be paid with it";
+      if (!quiet) console.error(`wallet: ${(err as Error).message}`);
+      throw new WalletUnavailable(`${record.reason} (${auditDetail(err)})`);
+    }
   }
 
   // ── HTTP ─────────────────────────────────────────────────────────────────────────────
+
+  const TOO_MANY_PENDING = "three payment requests are already waiting for the owner; nothing was asked. Wait for the owner to decide one, then ask again";
+  const tooManyPending = (): boolean => [...requests.values()].filter((r) => r.status === "pending").length >= MAX_PENDING;
 
   function send(res: ServerResponse, status: number, body: unknown): void {
     const text = JSON.stringify(body);
@@ -393,8 +550,26 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     }
   }
 
+  function shape(p: Policy): WalletStatus["policy"] {
+    return {
+      perCall: formatMoney(p.perCall),
+      perDay: formatMoney(p.perDay),
+      allow: p.allow,
+      deny: p.deny,
+      stablecoins: p.stablecoins,
+      killSwitch: p.killSwitch,
+    };
+  }
+
   async function status(): Promise<WalletStatus> {
     sweep();
+    let policy: Policy | undefined;
+    let policyProblem: string | undefined;
+    try {
+      policy = currentPolicy();
+    } catch (err) {
+      policyProblem = (err as Error).message;
+    }
     return {
       address: account.address,
       network: DEFAULT_NETWORK.caip2,
@@ -403,14 +578,10 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       balanceDecimal: await balanceDecimal(),
       approvalMode: APPROVAL_MODE,
       pending: [...requests.values()].filter((r) => r.status === "pending").length,
-      policy: {
-        perCall: formatMoney(policy.perCall),
-        perDay: formatMoney(policy.perDay),
-        allow: policy.allow,
-        deny: policy.deny,
-        stablecoins: policy.stablecoins,
-        killSwitch: policy.killSwitch,
-      },
+      // With no usable policy nothing is signed, which is what a kill switch shows.
+      policy: policy ? shape(policy) : { allow: [], deny: [], stablecoins: [], killSwitch: true },
+      also: policy?.also ? { file: policy.also.file, policy: shape(policy.also.policy) } : undefined,
+      policyProblem,
     };
   }
 
@@ -426,6 +597,13 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
       res.writeHead(421, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
       res.end("This wallet answers to its own host only.\n");
+      return;
+    }
+    // A web page can make the browser send a request here, with an Origin of its own. This wallet answers to its own page
+    // only; callers that are not browsers send no Origin at all.
+    const origin = req.headers.origin;
+    if (origin !== undefined && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) {
+      send(res, 403, { error: "this wallet answers to its own page only" });
       return;
     }
 
@@ -475,6 +653,14 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       return;
     }
     if (method === "POST" && path === "/requests") {
+      if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) {
+        send(res, 415, { error: "the request body must be JSON (content-type: application/json)" });
+        return;
+      }
+      if (tooManyPending()) {
+        send(res, 429, { error: TOO_MANY_PENDING });
+        return;
+      }
       let body: unknown;
       try {
         body = JSON.parse(await readBody(req) || "{}");
@@ -483,8 +669,23 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
         return;
       }
       const sign = (body as { sign?: unknown })?.sign;
-      const record = createRequest(sign);
-      send(res, 200, view(record, false));
+      const waitMs = (body as { waitMs?: unknown })?.waitMs;
+      if (waitMs !== undefined && (typeof waitMs !== "number" || !Number.isInteger(waitMs) || waitMs < MIN_WAIT_MS || waitMs > MAX_WAIT_MS)) {
+        send(res, 400, { error: "waitMs must be a whole number of milliseconds from 1000 to 3600000" });
+        return;
+      }
+      // Again, now that the body is here: others may have arrived while it was read. Nothing awaits from here to the
+      // record being stored, so this check and the new request are one step.
+      if (tooManyPending()) {
+        send(res, 429, { error: TOO_MANY_PENDING });
+        return;
+      }
+      try {
+        send(res, 200, view(createRequest(sign, waitMs), false));
+      } catch (err) {
+        if (!(err instanceof WalletUnavailable)) throw err;
+        send(res, 503, { error: err.message });
+      }
       return;
     }
     if (method === "GET" && path === "/owner/requests") {
@@ -505,7 +706,41 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
         send(res, 404, { error: "no such request" });
         return;
       }
-      send(res, 200, view(record, true));
+      // A signature is handed out until the client's wait ends (plus a short grace), and never after it cancelled.
+      const servable = record.status === "signed" && !record.withheld && Date.now() <= record.serveUntil;
+      if (servable && record.result) record.served = true;
+      if (record.status === "signed" && !servable && !record.withheld) {
+        record.withheld = true;
+        record.reason ??= "the client stopped waiting before this signature was collected, so the wallet will not hand it out";
+        tryAudit(record);
+      }
+      send(res, 200, view(record, servable));
+      return;
+    }
+
+    const cancel = /^\/requests\/([^/]+)\/cancel$/.exec(path);
+    if (method === "POST" && cancel) {
+      const record = requests.get(idOf(cancel[1]));
+      if (!record) {
+        send(res, 404, { error: "no such request" });
+        return;
+      }
+      if (record.status === "pending") {
+        record.status = "expired";
+        record.reason = "the client stopped waiting and cancelled this request; nothing was signed";
+        tryAudit(record);
+        send(res, 200, view(record, false, true));
+        return;
+      }
+      if (record.status === "approved" || record.status === "signed") {
+        // While it is being signed as much as after: approve() never clears this, and GET never serves a withheld one.
+        record.withheld = true;
+        record.reason = "the client stopped waiting; this signature is withheld and will not be handed out";
+        tryAudit(record);
+        send(res, 200, view(record, false, true));
+        return;
+      }
+      send(res, 409, { error: `this request is ${record.status}, so there is nothing to cancel`, request: view(record, false) });
       return;
     }
 
@@ -523,16 +758,24 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       if (decision[2] === "deny") {
         record.status = "denied";
         record.reason = "denied by the owner in the wallet";
-        audit(record);
+        tryAudit(record);
         send(res, 200, view(record, false));
         return;
       }
       try {
         await approve(record);
       } catch (err) {
+        if (err instanceof PolicyNow) {
+          send(res, 409, { error: err.message, request: view(record, false) });
+          return;
+        }
+        if (err instanceof WalletUnavailable) {
+          send(res, 503, { error: err.message });
+          return;
+        }
         record.status = "rejected";
         record.reason = `the wallet could not sign this request: ${(err as Error).message}`;
-        audit(record);
+        tryAudit(record);
         send(res, 500, view(record, false));
         return;
       }
@@ -614,7 +857,13 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     if (launcherProblem) console.log(`  open signed in: no launcher (${launcherProblem}); open the page and paste the secret`);
     console.log(`  owner secret:   ${ownerSecretFile} (paste it into the page; never share it)`);
     console.log(`  over SSH:       ssh -L ${port}:127.0.0.1:${port} <you>@<this machine>, open ${url}/ on your machine, paste the secret`);
-    console.log(`  policy:         ${policySummary(policy)}`);
+    try {
+      const policy = currentPolicy();
+      console.log(`  policy:         ${policySummary(policy)}`);
+      if (policy.also) console.log(`  also applies:   ${policy.also.file}: ${policySummary(policy.also.policy)}`);
+    } catch (err) {
+      console.log(`  policy:         cannot be used: ${(err as Error).message}`);
+    }
     console.log(`  agent token:    ${agentTokenFile}`);
   }
 

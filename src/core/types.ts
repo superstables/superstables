@@ -340,6 +340,10 @@ export interface WalletRequestView {
   reason?: string;
   /** Present only once signed; returned to the agent-token caller that created the request. The local wallet signs EIP-3009 only. */
   result?: { kind: "eip3009"; payload: { signature: string; authorization: Record<string, unknown> }; signer: string };
+  /** The wallet will not hand out this signature: the client stopped waiting for it. */
+  withheld?: boolean;
+  /** Set only in a cancel answer: whether this signature had been handed out before the cancel. */
+  served?: boolean;
 }
 
 export interface WalletStatus {
@@ -357,4 +361,6 @@ export interface WalletStatus {
   policy: { perCall?: string; perDay?: string; allow: string[]; deny: string[]; stablecoins: string[]; killSwitch: boolean };
   /** The account's own policy file, when it applies as well as the one above: both must allow a payment. */
   also?: { file: string; policy: WalletStatus["policy"] };
+  /** Why the wallet's policy files cannot be used, in which case nothing is signed. */
+  policyProblem?: string;
 }
