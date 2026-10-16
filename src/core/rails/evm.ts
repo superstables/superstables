@@ -1,7 +1,7 @@
 // The x402 exact rail on EVM chains. The owner's wallet signs one EIP-3009 TransferWithAuthorization over the chain's
 // USDC domain; the seller's facilitator submits it and pays the gas; the chain is then read for that authorization's
 // use (settlement.ts). The chains, their USDC and its signing domain are pinned in src/core/chain.ts: a seller whose
-// token, chain or domain differs is refused before the owner is asked. Only EIP-3009 offers with known `extra` fields are
+// token, chain or domain differs is refused before the owner is asked. Only EIP-3009 offers with known `extra` fields (plus display-only ones, ignored) are
 // taken, and what is signed lasts ten minutes at most.
 
 import { encodePaymentSignatureHeader } from "@x402/core/http";
@@ -27,8 +27,28 @@ const MAX_TIMEOUT_SECONDS = 3_600;
  * left as offered (its server matches it exactly; its facilitator checks only that validBefore has not passed).
  */
 export const MAX_SIGNED_LIFETIME_S = 600;
-/** The `extra` keys an EVM offer may carry: the token's signing domain and decimals (checked against the pinned ones), and the transfer method. */
+/**
+ * The `extra` keys an EVM offer may carry that the signing path reads or that are checked here: the token's signing domain
+ * and decimals (checked against the pinned ones), and the transfer method. The x402 SDK's exact scheme reads only `name`,
+ * `version` and `assetTransferMethod`; any other key (the escrow, voucher and fee fields of other schemes, `paymentFlow`)
+ * changes what is signed or how, so it is refused.
+ */
 const EXTRA_KEYS = new Set(["name", "version", "decimals", "assetTransferMethod"]);
+/**
+ * Display-only keys that sellers send beside them (seen on Brickken's Ethereum Sepolia offers). Nothing here or in the SDK's
+ * exact scheme reads them: the amount and token come from `amount` and `asset`, so they are never shown and never signed
+ * over. They must be plain text (`chainId` is checked against the chain), and the requirement still goes back to the seller
+ * as offered. This is a named list, not "ignore everything unknown", so a field a future SDK starts to read stays refused.
+ */
+const DISPLAY_KEYS = new Set(["tokenSymbol", "displayPrice", "chainId"]);
+const DISPLAY_TEXT_MAX = 200;
+
+/** Whether an offer's `chainId` names this chain: the number, its decimal string, or the CAIP-2 form. */
+function namesChain(value: unknown, network: NetworkInfo): boolean {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value === network.chainId;
+  if (typeof value !== "string") return false;
+  return value === network.caip2 || (/^[0-9]{1,15}$/.test(value) && Number(value) === network.chainId);
+}
 
 /** How long the authorization signed for a requirement lasts, in seconds: the seller's window, at most MAX_SIGNED_LIFETIME_S. */
 export function signedLifetime(maxTimeoutSeconds: unknown): number {
@@ -62,7 +82,17 @@ export const evmRail: X402Rail = {
     if (accept.extra?.decimals !== undefined && Number(accept.extra.decimals) !== network.usdc.decimals) {
       return { supported: false, reason: `the offer's token decimals are not ${network.token.symbol}'s (${network.usdc.decimals})` };
     }
-    const unknown = Object.keys(accept.extra ?? {}).filter((key) => !EXTRA_KEYS.has(key));
+    const extraFields = (accept.extra ?? {}) as Record<string, unknown>;
+    if (extraFields.chainId !== undefined && !namesChain(extraFields.chainId, network)) {
+      return { supported: false, reason: `the offer's chain id (${untrustedText(String(extraFields.chainId), 30)}) is not ${network.label}'s (${network.chainId})` };
+    }
+    for (const key of ["tokenSymbol", "displayPrice"]) {
+      const text = extraFields[key];
+      if (text !== undefined && (typeof text !== "string" || text.length > DISPLAY_TEXT_MAX)) {
+        return { supported: false, reason: `the offer's ${key} is not short plain text` };
+      }
+    }
+    const unknown = Object.keys(extraFields).filter((key) => !EXTRA_KEYS.has(key) && !DISPLAY_KEYS.has(key));
     if (unknown.length > 0) {
       return { supported: false, reason: `the offer carries signing fields this client does not use (${unknown.slice(0, 3).map((key) => untrustedText(key, 30)).join(", ")}${unknown.length > 3 ? ", and more" : ""})` };
     }

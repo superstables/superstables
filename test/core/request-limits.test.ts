@@ -10,7 +10,7 @@ import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { Challenge } from "mppx";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it } from "vitest";
-import { BASE_SEPOLIA, SOLANA_DEVNET, TEMPO_MODERATO, usdcRequirement, type EvmNetwork } from "../../src/core/chain.js";
+import { BASE_SEPOLIA, ETHEREUM_SEPOLIA, SOLANA_DEVNET, TEMPO_MODERATO, usdcRequirement, type EvmNetwork } from "../../src/core/chain.js";
 import { settleWith, verifyWith } from "../../src/core/facilitator.js";
 import { parseMppChallenges } from "../../src/core/mpp.js";
 import { PaymentEngine } from "../../src/core/pay.js";
@@ -158,6 +158,36 @@ describe("EIP-3009 offers only, with known fields", () => {
       expect(judged, String(method)).toMatchObject({ supported: false, reason: expect.stringMatching(/signs EIP-3009 transfers only/) });
     }
     expect(termsFor(offer({ extra: { name: "USDC", version: "2", assetTransferMethod: "eip3009" } }), 2).supported).toBe(true);
+  });
+
+  it("takes a seller's display-only fields and ignores them", () => {
+    const brickken = (over: Record<string, unknown> = {}): RawAccept => {
+      const base = usdcRequirement(0.01, PAY_TO, ETHEREUM_SEPOLIA) as unknown as RawAccept;
+      return { ...base, extra: { ...base.extra, tokenSymbol: "USDC", displayPrice: "$0.01", chainId: 11155111, ...over } };
+    };
+    const judged = termsFor(brickken(), 2);
+    expect(judged.supported).toBe(true);
+    if (judged.supported) {
+      expect(judged.terms.asset).toBe("USDC");
+      expect(judged.terms.amountDecimal).toBe(0.01);
+      // The requirement goes back to the seller as offered.
+      expect(judged.requirement.extra).toMatchObject({ tokenSymbol: "USDC", displayPrice: "$0.01", chainId: 11155111 });
+    }
+    // The chain id may be a numeric string or CAIP-2 form.
+    expect(termsFor(brickken({ chainId: "11155111" }), 2).supported).toBe(true);
+    expect(termsFor(brickken({ chainId: "eip155:11155111" }), 2).supported).toBe(true);
+    // Their text is never shown, so what it says does not matter; but it must be text.
+    expect(termsFor(brickken({ displayPrice: "\u001b[31m free \u001b[0m" }), 2).supported).toBe(true);
+    expect(termsFor(brickken({ displayPrice: { nested: true } }), 2)).toMatchObject({ supported: false, reason: expect.stringMatching(/displayPrice/) });
+    expect(termsFor(brickken({ tokenSymbol: 1 }), 2)).toMatchObject({ supported: false, reason: expect.stringMatching(/tokenSymbol/) });
+  });
+
+  it("refuses a chain id that is not the offer's chain", () => {
+    for (const chainId of [1, 84532, "84532", "eip155:1", "0x aa", "", null, 11155111.5, true]) {
+      const base = usdcRequirement(0.01, PAY_TO, ETHEREUM_SEPOLIA) as unknown as RawAccept;
+      const judged = termsFor({ ...base, extra: { ...base.extra, chainId } }, 2);
+      expect(judged, String(chainId)).toMatchObject({ supported: false, reason: expect.stringMatching(/chain id/) });
+    }
   });
 
   it("refuses unknown or malformed extra fields, and decimals that are not the token's", () => {
