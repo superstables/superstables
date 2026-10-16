@@ -72,16 +72,29 @@ export function evmRpcEnvName(chainKey) {
 }
 
 /**
- * One EVM chain's replacement RPC from the environment: B4_RPC_<CHAIN> first, then B4_RPC. { url, custom, name } when one is set
- * and usable (`name` is the variable); { url: fallback, custom: false } when neither is set; { ..., error } with the first
- * variable set to something refused. The one lookup chains.ts (every rail script) and doctor share.
+ * The EVM RPC variable that is set and so decides this chain's RPC: B4_RPC_<CHAIN> when it is set, else B4_RPC, else null.
+ * Presence only: whether the value is usable is for rpcFromEnv and the owner settings' judgement.
  */
-export function evmRpcFromEnv(chainKey, fallback) {
-  for (const name of [evmRpcEnvName(chainKey), RPC_ENV.evm]) {
-    const r = rpcFromEnv(name, fallback);
-    if (r.error || r.custom) return { ...r, name };
-  }
-  return { url: fallback, custom: false };
+export function evmEnvNameSet(chainKey) {
+  for (const name of [evmRpcEnvName(chainKey), RPC_ENV.evm]) if (process.env[name]?.trim()) return name;
+  return null;
+}
+
+/** The variable that decides a rail's RPC on a chain: for evm the one evmEnvNameSet names (else B4_RPC), else the rail's own. */
+function rpcEnvNameFor(rail, chain) {
+  if (rail === "evm" && chain) return evmEnvNameSet(chain) ?? RPC_ENV.evm;
+  return RPC_ENV[rail];
+}
+
+/**
+ * One EVM chain's RPC, in this order: B4_RPC_<CHAIN>, then B4_RPC, then the owner's settings for the chain, then `fallback`.
+ * The two variables are looked up by presence first, and the owner settings are consulted only when neither is set, so the
+ * owner's URL never hides a variable. { url, custom, name }, `name` being the variable that decided it (B4_RPC when none is
+ * set); { ..., error } when it is refused (rpcFromEnv's words, and for "owner" and "verdict" the owner settings').
+ */
+export function evmRpcFromEnv(chainKey, fallback, purpose = "read") {
+  const name = evmEnvNameSet(chainKey) ?? RPC_ENV.evm;
+  return { ...rpcFromEnv(name, fallback, purpose, budgetChainKey("evm", chainKey)), name };
 }
 
 /**
@@ -90,14 +103,14 @@ export function evmRpcFromEnv(chainKey, fallback) {
  * dispatcher checks it before an owner command starts, and each rail's owner.ts before its script does anything.
  */
 export function ownerRpcProblem(rail, chain) {
-  const name = RPC_ENV[rail];
+  const name = rpcEnvNameFor(rail, chain);
   if (!name) return "";
   const builtin = rail === "evm" ? EVM_CHAINS[chain]?.rpc : DEFAULT_RPC[rail];
   return rpcFor(budgetChainKey(rail, chain), "owner", process.env[name], { envName: name, fallback: builtin }).error ?? "";
 }
 /** What to do about it. */
 export function ownerRpcNext(rail, chain) {
-  return `unset ${RPC_ENV[rail]}, or ask the owner to run ${SETTINGS_COMMAND} rpc ${budgetChainKey(rail, chain)} <url> in their own terminal; nothing was asked or sent`;
+  return `unset ${rpcEnvNameFor(rail, chain)}, or ask the owner to run ${SETTINGS_COMMAND} rpc ${budgetChainKey(rail, chain)} <url> in their own terminal; nothing was asked or sent`;
 }
 
 /**
@@ -124,11 +137,8 @@ export function refusedRpcEnv(rail, chain) {
 export function customRpc(rail, chain) {
   const name = RPC_ENV[rail];
   if (!name) return undefined;
-  if (rail === "evm" && chain) {
-    const own = rpcFromEnv(evmRpcEnvName(chain), "");
-    if (own.custom) return own.url;
-  }
-  const r = rpcFromEnv(name, "");
+  const set = rail === "evm" && chain ? evmEnvNameSet(chain) : null;
+  const r = rpcFromEnv(set ?? name, ""); // the variables only: the owner's own RPC is not a replacement the agent set, and is not echoed
   return r.custom ? r.url : undefined;
 }
 
@@ -138,7 +148,7 @@ export function customRpc(rail, chain) {
  * The environment URL is the primary only: it joins the confirming set when it is one of the built-in endpoints.
  */
 export function budgetVerdictSet(chainKey, envUrl) {
-  return endpointSet(chainKey, "verdict", { envUrl, envName: evmRpcEnvName(chainKey), testnet: true });
+  return endpointSet(chainKey, "verdict", { envUrl, envName: evmEnvNameSet(chainKey) ?? RPC_ENV.evm, testnet: true });
 }
 
 /** The reader the agreement engine calls: one JSON-RPC call, answers capped (jsonRpc). */

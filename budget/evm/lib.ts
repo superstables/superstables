@@ -18,7 +18,7 @@ import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
-import { agreeAtFinalEvm, agreementWords } from "../../src/core/rpc-quorum.mjs";
+import { agreeAtFinalEvm, agreementWords as engineWords } from "../../src/core/rpc-quorum.mjs";
 import { finalityFor } from "../../src/core/finality-policy.js";
 
 export { CFG, type GasOp };
@@ -414,7 +414,12 @@ export async function assertReadChain(command: string) {
 // A verdict that lets the agent pay again or reads as "revoked" is believed only when the configured endpoints, run by different
 // operators, show the same final block and the same value there (src/core/rpc-quorum.mjs). Every read below is bound to the
 // compared block by its hash, and none of them throws: a failure is the engine's { agreed: false } with the reason in words.
-export { agreementWords };
+/**
+ * The engine's words for a failed agreement. A set that could not be built at all (an RPC variable the owner's settings do not
+ * allow, an unreadable settings file) says why in the refusal's own words, which the engine keeps as `reason`.
+ */
+export const agreementWords = (failed: Parameters<typeof engineWords>[0] & { reason?: string }): string =>
+  failed.why === "unreadable" && failed.reason && !failed.left?.length ? `the RPC endpoints could not be used: ${failed.reason}` : engineWords(failed);
 /** The endpoints that decide a verdict on this chain. */
 export const verdictSet = () => budgetVerdictSet(CFG.key, customRpc("evm", CFG.key));
 type Agreed<T> = Awaited<ReturnType<typeof agreeAtFinalEvm>> & { value?: T };
