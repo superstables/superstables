@@ -241,6 +241,11 @@ superstables --wallet local setup          # creates ~/.superstables/wallet/key,
 superstables --wallet local wallet serve   # leave it running
 ```
 
+Setup asks for a passphrase, twice, and stores the key encrypted with it; `wallet serve` asks for it
+each time it starts. Without a terminal there is nobody to ask, so setup creates no key: run
+`superstables wallet init --no-passphrase` to store it unencrypted (testnet only), and
+`superstables wallet encrypt` later to protect it.
+
 It binds `127.0.0.1:4411` and opens the approval page in your browser, already signed in. It
 does that through a launcher file only you can read, in `~/Superstables-wallet-open/`, and
 prints its path in case the browser does not open; the file, and the folder once empty, are
