@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startFakeRpc } from "../helpers/fake-site.js";
 import { makeChain, makeHome } from "../helpers/fake-evm.js";
 import { accountHomeWith } from "../helpers/owner-settings.js";
-import { agreementWords } from "../../budget/evm/lib.ts";
+import { agreementWords } from "../../budget/evm/lib.js";
 import { evmRpcFromEnv, ownerRpcNext, ownerRpcProblem } from "../../budget/rpc.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
