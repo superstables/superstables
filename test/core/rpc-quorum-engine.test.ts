@@ -1,10 +1,20 @@
 // The agreement engine: endpoints are believed together, never one alone. In-process fakes, no network.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { KNOWN_NETWORKS } from "../../src/core/chain.js";
 import { EVM_CHAINS } from "../../budget/evm/chains.mjs";
-import { callerSet, endpointId, endpointSet, mainnetRpcReady, operatorOf, providerOf, RPC_ENDPOINTS, RPC_TESTNETS, useOwnerSettings } from "../../src/core/rpc-endpoints.mjs";
+import { callerSet, endpointId, endpointSet, mainnetRpcReady, operatorOf, providerOf, RPC_ENDPOINTS, RPC_TESTNETS } from "../../src/core/rpc-endpoints.mjs";
+import { defaultOwnerSettings, readOwnerSettings } from "../../src/core/owner-settings.js";
 import { agreeAtFinalEvm, agreeAtFinalSolana, agreementWords, canonical, checkIdentity, forgetIdentities } from "../../src/core/rpc-quorum.mjs";
+
+// The owner's settings reach rpc-endpoints.mjs through owner-settings.js, which is mocked here (readOwnerSettings only).
+vi.mock("../../src/core/owner-settings.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../src/core/owner-settings.js")>()), readOwnerSettings: vi.fn() }));
+const settings = (rpc: Record<string, unknown> = {}, rpcEnv = { allowLoopback: false }) => ({ ...defaultOwnerSettings(), rpc, rpcEnv }) as never;
+const noPins = (rpcEnv?: { allowLoopback: boolean }) => vi.mocked(readOwnerSettings).mockReturnValue(settings({}, rpcEnv));
+const pin = (chain: string, o: { urls: string[]; ownNode?: boolean; quorum?: number }, rpcEnv?: { allowLoopback: boolean }) =>
+  vi.mocked(readOwnerSettings).mockReturnValue(settings({ [chain]: { ownNode: false, quorum: o.ownNode ? 1 : 2, ...o } }, rpcEnv));
+const unreadableSettings = (why: string) => vi.mocked(readOwnerSettings).mockImplementation(() => { throw new Error(why); });
+noPins();
 
 type Fake = { chainId?: number; finalized?: number | string; timestamp?: string; hashes?: Record<number, string>; value?: unknown; genesis?: string; slot?: number; readSlot?: number; fail?: boolean };
 
@@ -38,7 +48,7 @@ const A = "https://a.example", B = "https://b.example";
 
 afterEach(() => {
   forgetIdentities();
-  useOwnerSettings(() => undefined);
+  noPins();
 });
 
 describe("agreeAtFinalEvm", () => {
@@ -203,25 +213,106 @@ describe("endpoint sets", () => {
   });
 
   it("an owner node is a quorum of one; pinned owner urls replace the table", () => {
-    useOwnerSettings(() => ({ urls: ["http://127.0.0.1:8545", "https://x.example"], ownNode: true }));
+    pin("base-sepolia", { urls: ["http://127.0.0.1:8545", "https://x.example"], ownNode: true });
     const s = endpointSet("base-sepolia", "verdict", { testnet: true });
     expect(s).toMatchObject({ quorum: 1, agreement: "owner-node", verdict: [{ url: "http://127.0.0.1:8545", source: "settings" }] });
-    useOwnerSettings(() => ({ urls: ["https://a.one.example", "https://b.one.example"] }));
+    pin("base-sepolia", { urls: ["https://a.one.example", "https://b.one.example"] });
     expect(endpointSet("base-sepolia", "verdict", { testnet: false })).toMatchObject({ quorum: 2 });
   });
 
-  it("an env URL is the read primary but joins a verdict only when it is already in the set", () => {
+  it("an env URL is the read primary but is refused for a verdict or an owner action unless it is already allowed", () => {
     const env = "https://liar.example";
     expect(endpointSet("base-sepolia", "read", { envUrl: env, testnet: true })).toMatchObject({ primary: { url: env, source: "env" } });
-    const v = endpointSet("base-sepolia", "verdict", { envUrl: env, testnet: true });
-    expect(v).toMatchObject({ note: expect.stringContaining("not used") });
-    expect("error" in v ? [] : v.verdict.map((e) => e.url)).not.toContain(env);
+    for (const purpose of ["verdict", "owner"] as const) {
+      const v = endpointSet("base-sepolia", purpose, { envUrl: env, envName: "SUPERSTABLES_RPC_URL", testnet: true });
+      expect(v).toEqual({ error: expect.stringContaining("SUPERSTABLES_RPC_URL") });
+    }
     const same = RPC_ENDPOINTS["base-sepolia"][1].url;
-    expect(endpointSet("base-sepolia", "verdict", { envUrl: same, testnet: true })).not.toHaveProperty("note");
+    expect(endpointSet("base-sepolia", "verdict", { envUrl: same, testnet: true })).toMatchObject({ primary: { url: same, source: "env" } });
+  });
+
+  it("an env URL is judged by rpcFor: trailing slash, blanks, syntax and loopback", () => {
+    const first = RPC_ENDPOINTS["base-sepolia"][0];
+    const slash = endpointSet("base-sepolia", "owner", { envUrl: `${first.url}/`, testnet: true });
+    expect(slash).toMatchObject({ primary: { url: first.url, operator: first.operator, source: "env" }, quorum: 2 });
+    const blank = endpointSet("base-sepolia", "owner", { envUrl: "  ", testnet: true });
+    expect(blank).toMatchObject({ primary: { url: first.url, source: "builtin" } });
+    expect(endpointSet("base-sepolia", "read", { envUrl: "ftp://x.example", testnet: true })).toHaveProperty("error");
+    expect(endpointSet("base-sepolia", "verdict", { envUrl: "http://127.0.0.1:8545", testnet: true })).toHaveProperty("error");
+  });
+
+  describe("a loopback env URL the owner allows", () => {
+    const LOOP = "http://127.0.0.1:8545";
+    const urls = (s: ReturnType<typeof endpointSet>) => ("error" in s ? ["error"] : s.verdict.map((e) => e.url));
+    const decide = (s: ReturnType<typeof endpointSet>, fakes: Record<string, Fake>) =>
+      agreeAtFinalEvm({ set: s as never, call: transport(fakes).call, chainId: 84532, finality: "finalized", read: read(fakes) });
+
+    it("(a) never joins a single set; it is only the primary", () => {
+      noPins({ allowLoopback: true });
+      const s = endpointSet("arc-testnet", "verdict", { envUrl: LOOP, testnet: true });
+      expect(s).toMatchObject({ quorum: 1, agreement: "single", primary: { url: LOOP, operator: "127.0.0.1", source: "env" } });
+      expect(urls(s)).toEqual([RPC_ENDPOINTS["arc-testnet"][0].url]);
+    });
+
+    it("(b) cannot decide a single set alone when the chain's RPC is down", async () => {
+      noPins({ allowLoopback: true });
+      const s = endpointSet("arc-testnet", "verdict", { envUrl: LOOP, testnet: true });
+      expect((await decide(s, { [LOOP]: { finalized: 100 }, [RPC_ENDPOINTS["arc-testnet"][0].url]: { fail: true } })).agreed).toBe(false);
+    });
+
+    it("(c) cannot decide an owner-node set alone when the owner's node is down", async () => {
+      pin("base-sepolia", { urls: ["http://127.0.0.1:1"], ownNode: true }, { allowLoopback: true });
+      const s = endpointSet("base-sepolia", "verdict", { envUrl: "http://127.0.0.1:9000", testnet: true });
+      expect(urls(s)).toEqual(["http://127.0.0.1:1"]);
+      expect(s).toMatchObject({ quorum: 1, agreement: "owner-node" });
+      expect((await decide(s, { "http://127.0.0.1:9000": { finalized: 100 }, "http://127.0.0.1:1": { fail: true } })).agreed).toBe(false);
+    });
+
+    it("(d) does not make a quorum reachable that the set's own operators cannot reach", () => {
+      noPins({ allowLoopback: true });
+      const s = endpointSet("arc-testnet", "verdict", { envUrl: LOOP, testnet: false });
+      expect(s).toMatchObject({ quorum: 2, primary: { url: LOOP } });
+      expect(urls(s)).not.toContain(LOOP);
+    });
+
+    it("(e) is one more ordinary endpoint in a quorum set that already reaches its quorum", () => {
+      noPins({ allowLoopback: true });
+      const s = endpointSet("base-sepolia", "verdict", { envUrl: LOOP, testnet: true });
+      expect(s).toMatchObject({ quorum: 2, agreement: "quorum" });
+      expect(urls(s)).toEqual([...RPC_ENDPOINTS["base-sepolia"].map((e) => e.url), LOOP]);
+    });
+
+    it("(f) a variable equal to an owner URL outside an owner-node verdict is the primary, not a member", () => {
+      pin("base-sepolia", { urls: ["http://127.0.0.1:1", "https://x.example"], ownNode: true });
+      const s = endpointSet("base-sepolia", "verdict", { envUrl: "https://x.example/", testnet: true });
+      expect(urls(s)).toEqual(["http://127.0.0.1:1"]);
+      expect(s).toMatchObject({ primary: { url: "https://x.example", operator: "x.example", source: "env" } });
+    });
+
+    it("(g) a read set keeps the table's verdict list", () => {
+      noPins({ allowLoopback: true });
+      const s = endpointSet("base-sepolia", "read", { envUrl: LOOP, testnet: true });
+      expect(s).toMatchObject({ primary: { url: LOOP } });
+      expect(urls(s)).toEqual(RPC_ENDPOINTS["base-sepolia"].map((e) => e.url));
+    });
+
+    it("a variable equal to a built-in URL that is not a member takes the table's url and operator", () => {
+      pin("base-sepolia", { urls: ["https://a.one.example", "https://b.one.example"] });
+      const b = RPC_ENDPOINTS["base-sepolia"][0];
+      const s = endpointSet("base-sepolia", "owner", { envUrl: `${b.url}/`, testnet: true });
+      expect(s).toMatchObject({ primary: { url: b.url, operator: b.operator, source: "env" } });
+      expect(urls(s)).toEqual(["https://a.one.example", "https://b.one.example"]);
+    });
+  });
+
+  it("unreadable owner settings give the settings module's own words, once", () => {
+    const words = "the owner settings at /x/settings.json cannot be used: it is not JSON. Nothing was done";
+    vi.mocked(readOwnerSettings).mockImplementation(() => { throw Object.assign(new Error(words), { code: "OWNER_SETTINGS_UNREADABLE" }); });
+    expect(endpointSet("base-sepolia", "verdict", { testnet: true })).toEqual({ error: words });
   });
 
   it("settings that cannot be read give an error, never a negative; unknown chains too", () => {
-    useOwnerSettings(() => { throw new Error("bad json"); });
+    unreadableSettings("bad json");
     expect(endpointSet("base-sepolia", "verdict", { testnet: true })).toEqual({ error: expect.stringContaining("bad json") });
     expect(endpointSet("nowhere", "read", { testnet: true })).toHaveProperty("error");
   });
@@ -240,7 +331,7 @@ describe("endpoint sets", () => {
   it("is mainnet-ready with an owner node or two operators", () => {
     expect(mainnetRpcReady("arc-testnet")).toBe(false);
     expect(mainnetRpcReady("base-sepolia")).toBe(true);
-    useOwnerSettings(() => ({ urls: ["http://127.0.0.1:1"], ownNode: true }));
+    pin("arc-testnet", { urls: ["http://127.0.0.1:1"], ownNode: true });
     expect(mainnetRpcReady("arc-testnet")).toBe(true);
   });
 });
@@ -369,21 +460,21 @@ describe("canonical accepts plain data only", () => {
 });
 
 describe("endpoint sets, round 1 fixes", () => {
-  afterEach(() => useOwnerSettings(() => undefined));
+  afterEach(() => noPins());
 
   it("pinning one URL does not lower the quorum: single belongs to the chain's table", () => {
-    useOwnerSettings(() => ({ urls: ["https://only.example"] }));
+    pin("base-sepolia", { urls: ["https://only.example"] });
     expect(endpointSet("base-sepolia", "verdict", { testnet: true })).toMatchObject({ quorum: 2, agreement: "quorum" });
-    useOwnerSettings(() => ({ urls: ["https://a.same.example", "https://b.same.example"] }));
+    pin("ethereum-sepolia", { urls: ["https://a.same.example", "https://b.same.example"] });
     expect(endpointSet("ethereum-sepolia", "verdict", { testnet: true })).toMatchObject({ quorum: 2, agreement: "quorum" });
   });
 
   it("an owner node with a quorum above one keeps all its URLs and that quorum", () => {
-    useOwnerSettings(() => ({ urls: ["http://127.0.0.1:1", "http://127.0.0.1:2"], ownNode: true, quorum: 2 }));
+    pin("base-sepolia", { urls: ["http://127.0.0.1:1", "http://127.0.0.1:2"], ownNode: true, quorum: 2 });
     const s = endpointSet("base-sepolia", "verdict", { testnet: true });
     expect(s).toMatchObject({ quorum: 2, agreement: "quorum" });
     expect("error" in s ? [] : s.verdict).toHaveLength(2);
-    useOwnerSettings(() => ({ urls: ["http://127.0.0.1:1", "http://127.0.0.1:2"], ownNode: true, quorum: 1 }));
+    pin("base-sepolia", { urls: ["http://127.0.0.1:1", "http://127.0.0.1:2"], ownNode: true, quorum: 1 });
     expect(endpointSet("base-sepolia", "verdict", { testnet: true })).toMatchObject({ quorum: 1, agreement: "owner-node" });
   });
 
@@ -401,25 +492,27 @@ describe("endpoint sets, round 1 fixes", () => {
     expect(label).toMatch(/^[0-9a-f]{12}$/);
   });
 
-  it("an env URL equal to a built-in URL is allowed for every purpose, with no note", () => {
-    useOwnerSettings(() => ({ urls: ["https://mine.example", "https://mine2.example"] }));
+  it("an env URL equal to a built-in URL is allowed for every purpose", () => {
+    pin("base-sepolia", { urls: ["https://mine.example", "https://mine2.example"] });
     const builtin = RPC_ENDPOINTS["base-sepolia"][0].url;
     for (const purpose of ["read", "verdict", "owner"] as const) {
       const s = endpointSet("base-sepolia", purpose, { envUrl: builtin, envName: "SUPERSTABLES_RPC_URL", testnet: true });
       expect(s).not.toHaveProperty("note");
       expect(s).toMatchObject({ primary: { url: builtin, source: "env", operator: "base" } });
     }
+    const second = RPC_ENDPOINTS["base-sepolia"][1];
+    expect(endpointSet("base-sepolia", "owner", { envUrl: second.url, testnet: true })).toMatchObject({ primary: { url: second.url, operator: second.operator } });
   });
 });
 
 // Provider aliases (the website's providers.md): one provider under several domains counts once.
 describe("providers", () => {
-  afterEach(() => useOwnerSettings(() => undefined));
+  afterEach(() => noPins());
   const operators = (s: ReturnType<typeof endpointSet>) => ("error" in s ? [] : s.verdict.map((e) => e.operator));
 
   it("pins on arc.io and arc.network are one provider, so they cannot confirm each other", async () => {
     const io = "https://rpc.testnet.arc.io", net = "https://rpc.testnet.arc.network";
-    useOwnerSettings(() => ({ urls: [io, net] }));
+    pin("arc-testnet", { urls: [io, net] });
     const s = endpointSet("arc-testnet", "verdict", { testnet: true });
     expect(operators(s)).toEqual(["circle", "circle"]);
     expect(s).toMatchObject({ quorum: 2, agreement: "quorum" });
@@ -431,13 +524,13 @@ describe("providers", () => {
 
   it("a third party's host under arc.io is Circle", () => {
     expect(providerOf("arc-testnet", "https://rpc.blockdaemon.testnet.arc.io")).toBe("circle");
-    useOwnerSettings(() => undefined);
+    noPins();
     const s = endpointSet("arc-testnet", "read", { envUrl: "https://rpc.blockdaemon.testnet.arc.io", testnet: true });
     expect(s).toMatchObject({ primary: { operator: "circle", source: "env" } });
   });
 
   it("a pin on arbitrum.io with a trailing slash and a pin on publicnode are two providers", () => {
-    useOwnerSettings(() => ({ urls: ["https://sepolia-rollup.arbitrum.io/rpc/", "https://arbitrum-sepolia-rpc.publicnode.com"] }));
+    pin("arbitrum-sepolia", { urls: ["https://sepolia-rollup.arbitrum.io/rpc/", "https://arbitrum-sepolia-rpc.publicnode.com"] });
     expect(operators(endpointSet("arbitrum-sepolia", "verdict", { testnet: true }))).toEqual(["offchain-labs", "publicnode"]);
   });
 
@@ -450,15 +543,16 @@ describe("providers", () => {
   });
 
   it("example.org and example.co.uk stay two providers", () => {
-    useOwnerSettings(() => ({ urls: ["https://a.example.org", "https://b.example.co.uk"] }));
+    pin("base-sepolia", { urls: ["https://a.example.org", "https://b.example.co.uk"] });
     const ops = operators(endpointSet("base-sepolia", "verdict", { testnet: true }));
     expect(ops).toEqual(["example.org", "example.co.uk"]);
     expect(new Set(ops).size).toBe(2);
   });
 
-  it("the table keeps its url and operator, and the env membership rule stays an exact URL", () => {
-    useOwnerSettings(() => ({ urls: ["https://rpc.testnet.arc.io", "https://x.example"] }));
-    const s = endpointSet("arc-testnet", "verdict", { envUrl: "https://rpc.testnet.arc.network/", testnet: true });
-    expect(s).toMatchObject({ note: expect.stringContaining("not used") });
+  it("the table keeps its url and operator, and a pin is matched by its parsed URL", () => {
+    pin("arc-testnet", { urls: ["https://rpc.testnet.arc.io", "https://x.example"] });
+    const s = endpointSet("arc-testnet", "verdict", { envUrl: "https://rpc.testnet.arc.io/", testnet: true });
+    expect(s).toMatchObject({ primary: { url: "https://rpc.testnet.arc.io", operator: "circle", source: "env" } });
+    expect(endpointSet("arc-testnet", "verdict", { envUrl: "https://elsewhere.example", testnet: true })).toHaveProperty("error");
   });
 });
