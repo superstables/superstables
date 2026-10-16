@@ -283,19 +283,39 @@ wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 | `SUPERSTABLES_DEMO_SERVICE_URL` | `https://www.superstables.com/api/demo/market` | Where the built-in catalogue says the paid service is |
 | `SUPERSTABLES_DEMO_PAY_TO` | none | Default recipient for `demo-service` |
 | `SUPERSTABLES_DEMO_HOST` | `127.0.0.1` | Which interface `demo-service` binds |
-| `SUPERSTABLES_RPC_URL` | `https://sepolia.base.org` | Base Sepolia RPC, used to read the USDC balance and to check a settlement on chain (https, or http on this machine) |
-| `SUPERSTABLES_TEMPO_RPC` | `https://rpc.moderato.tempo.xyz` | Tempo Moderato RPC, used to check a `pay` on chain and to search for one whose transaction the page did not report (https, or http on this machine). The budget's tempo rail reads it too |
-| `SUPERSTABLES_SOLANA_RPC` | `https://api.devnet.solana.com` | Solana devnet RPC, used to check a `pay` on chain (https, or http on this machine). The budget's solana rail reads it too |
+| `SUPERSTABLES_RPC_URL` | `https://sepolia.base.org` | Base Sepolia RPC, used to read the USDC balance and to check a settlement on chain (https, or http on this machine). Unset: the owner's RPC, else this default |
+| `SUPERSTABLES_TEMPO_RPC` | `https://rpc.moderato.tempo.xyz` | Tempo Moderato RPC, used to check a `pay` on chain and to search for one whose transaction the page did not report (https, or http on this machine). The budget's tempo rail reads it too; for owner actions only when the owner's settings name it. Unset: the owner's RPC, else this default |
+| `SUPERSTABLES_SOLANA_RPC` | `https://api.devnet.solana.com` | Solana devnet RPC, used to check a `pay` on chain (https, or http on this machine). The budget's solana rail reads it too; for owner actions only when the owner's settings name it. Unset: the owner's RPC, else this default |
 | `SUPERSTABLES_INDEX_URL` | `https://www.superstables.com/api/v1/services` | The service index `find` reads. Point it at another index that answers the same API, or set it to `off` to list the built-in catalogue only |
 | `SUPERSTABLES_DEMO_SERVICES` | unset (off) | `on` includes Superstables' testnet services from the catalogue on superstables.com in discovery. Most return prepared sample output, carry `mock: true` and come after the listings not marked simulated; the market data service returns live prices. `find --demo` does the same for one search; leave it off to list no simulated services |
 | `SUPERSTABLES_CATALOGUE_URL` | `https://www.superstables.com/api/demo/catalogue` | Where those services are published, read only when `SUPERSTABLES_DEMO_SERVICES` is on. Point it at another deployment, or set it to `off` |
-| `SUPERSTABLES_SITE` | `https://www.superstables.com` | The site `setup --hosted` uses when `--site` is not given; `budget find` and `buy-once` use it before the site a setup on superstables.com recorded. `setup --hosted` records its site as `SITE=` in the chain's public file, and later owner commands on that chain use that one and refuse a different `--site`. The owner's approvals happen on this site. Only superstables.com, its subdomains and this machine are accepted, unless `SUPERSTABLES_ALLOW_SITE` names the origin |
-| `SUPERSTABLES_ALLOW_SITE` | unset | The owner's opt-in for a site outside superstables.com: the exact `https` origin, or a comma-separated list. Set it yourself, in your own environment, only for a site you have checked; an agent never sets it |
+| `SUPERSTABLES_SITE` | `https://www.superstables.com` | The site `setup --hosted` uses when `--site` is not given; `budget find` and `buy-once` use it before the site a setup on superstables.com recorded. `setup --hosted` records its site as `SITE=` in the chain's public file, and later owner commands on that chain use that one and refuse a different `--site`. The owner's approvals happen on this site. It counts only when the owner's settings allow it (`superstables owner settings`); `www.superstables.com` always does |
+| `SUPERSTABLES_ALLOW_SITE` | unset | No longer read; a warning is printed when it is set. Use `superstables owner settings site <origin>` |
 | `SUPERSTABLES_DOCTOR_OFFLINE` | unset | `1` makes `doctor` skip every check that needs network access |
 
 `SUPERSTABLES_HOME` is read when state is first touched, so set it before starting a process
 rather than during one. The CLI's `--home <dir>` sets it for you, and `--wallet <mode>` sets
 `SUPERSTABLES_WALLET` the same way.
+
+### Owner settings
+
+The approval site and the RPCs that owner actions trust are not set by an agent's environment. They live in
+`~/.superstables/owner/settings.json`, in the home directory the operating system records for your account, so
+every `SUPERSTABLES_HOME` of that account shares one file. With no file, the built-in defaults apply:
+`https://www.superstables.com` and each chain's public RPC.
+
+```
+superstables owner settings show
+superstables owner settings site <origin>        # or: site --clear
+superstables owner settings allow-staging on
+superstables owner settings allow-loopback site|rpc|sellers on
+superstables owner settings rpc <chain> <url...> [--own-node] [--quorum N]
+```
+
+`show` is read only. Every change runs only in your own terminal and asks you to type `yes`. `allow-loopback` is for
+development machines: it lets a site, an RPC variable or a seller on this computer count as yours. RPC URLs are never
+printed whole, because they can carry an access key. A file that exists but cannot be used (not valid, a symlink,
+writable by others) stops the commands that need it, and `superstables owner settings show` says why.
 
 ## Ports
 

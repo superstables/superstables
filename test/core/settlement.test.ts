@@ -82,9 +82,9 @@ describe("checkSettlement", () => {
   });
 
   it("reads only an RPC that uses HTTPS, or HTTP on this machine", () => {
-    expect(settlementRpc({})).toEqual({ url: "https://sepolia.base.org" });
-    expect(settlementRpc({ SUPERSTABLES_RPC_URL: "https://rpc.example/x" })).toEqual({ url: "https://rpc.example/x" });
-    expect(settlementRpc({ SUPERSTABLES_RPC_URL: "http://127.0.0.1:8545" })).toEqual({ url: "http://127.0.0.1:8545" });
+    expect(settlementRpc({})).toEqual({ url: "https://sepolia.base.org", source: "default" });
+    expect(settlementRpc({ SUPERSTABLES_RPC_URL: "https://rpc.example/x" })).toEqual({ url: "https://rpc.example/x", source: "env" });
+    expect(settlementRpc({ SUPERSTABLES_RPC_URL: "http://127.0.0.1:8545" })).toEqual({ url: "http://127.0.0.1:8545", source: "env" });
     expect(settlementRpc({ SUPERSTABLES_RPC_URL: "http://rpc.example" })).toEqual({ error: "SUPERSTABLES_RPC_URL must use HTTPS, or HTTP on this machine" });
     expect(settlementRpc({ SUPERSTABLES_RPC_URL: "https://u:p@rpc.example" })).toHaveProperty("error");
   });

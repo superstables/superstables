@@ -54,9 +54,10 @@ try {
     pages.push({ name: `pay-${network.key}`, publicRpc: network.defaultRpc, html: await response.text() });
   }
   if (mode !== 'pay') {
-    const [evm, { TEMPO_OWNER_CHAIN }, { SOLANA_OWNER_CHAIN }] = await Promise.all([
-      mode === 'other-owners' ? undefined : source('../../budget/evm/owner.ts'), source('../../budget/tempo/owner.ts'), source('../../budget/solana/owner.ts'),
-    ]);
+    // one after the other: each owner script refuses an RPC the owner has not set when it loads, and the first to load decides what is reported
+    const evm = mode === 'other-owners' ? undefined : await source('../../budget/evm/owner.ts');
+    const { TEMPO_OWNER_CHAIN } = await source('../../budget/tempo/owner.ts');
+    const { SOLANA_OWNER_CHAIN } = await source('../../budget/solana/owner.ts');
     for (const [key, ownerChain] of [...(evm ? [[chain, evm.OWNER_CHAIN]] : []), ['tempo-moderato', TEMPO_OWNER_CHAIN], ['solana-devnet', SOLANA_OWNER_CHAIN]]) {
       const handle = owner.request({ kind: 'connect', chain: ownerChain, signIn: 'Connect your wallet to set up a budget.', timeoutMs: 300_000,
         terms: { title: 'Connect your wallet', summary: 'Prove this wallet is yours. This signature grants no spending permission.', rows: [], enforced: [], notEnforced: [], notes: [] },

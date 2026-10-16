@@ -20,7 +20,7 @@ import { Abis, Addresses } from 'viem/tempo'
 import type { OwnerChain, OwnerTerms } from '../../src/core/signer/owner-approval-server.ts'
 import { closeOwnerPage, ownerPageFor } from '../owner-page.ts'
 import { DEFAULT_SITE, differsFromRequest, mismatchReason } from '../site.mjs'
-import { DEFAULT_RPC } from '../rpc.mjs'
+import { DEFAULT_RPC, ownerRpcNext, ownerRpcProblem } from '../rpc.mjs'
 import { AGENT_ENV_PATH, CHAIN_ID, EXPLORER_BASE, TOKEN_ADDRESS, TOKEN_LABEL, fromBaseUnits, loadPublicEnv, makeClient, parseEnvFile, agentFileText } from './lib/common.ts'
 import { chainHead, rpcRead, sleep, topicOf } from './lib/chain.ts'
 import { LABEL } from './lib/args.mjs'
@@ -51,6 +51,18 @@ export const MIN_FEE_BALANCE = 100_000n // 0.1 in 6-decimal units
 export function emit(command: string, exit: number, o: Record<string, unknown>): number {
   console.log(`RESULT ${JSON.stringify({ ok: exit === 0, command, rail: 'tempo', chain: 'moderato', ...o })}`)
   return exit
+}
+
+// An owner script reads and sends only through an RPC the owner set (or the built-in one): a variable that names another is
+// refused here, before this script reads a key, asks the owner or sends anything. The dispatcher refuses it earlier; this
+// covers a script run directly. (src/core/owner-settings.js)
+{
+  const problem = ownerRpcProblem('tempo', 'moderato')
+  if (problem) {
+    const command = String(process.argv[1] ?? '').split(/[\\/]/).pop()!.replace(/\.(?:ts|mjs)$/, '') || 'owner'
+    console.log(`REFUSED: ${problem}. Nothing was asked or sent.`)
+    process.exit(emit(command, 3, { state: 'refused_precheck', reason: problem, next: ownerRpcNext('tempo', 'moderato') }))
+  }
 }
 
 export const agentFlag = (label: string) => (label ? ` --agent ${label}` : '')

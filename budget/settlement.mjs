@@ -8,6 +8,7 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import { finalityFor } from "../src/core/finality-policy.js";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { DEFAULT_RPC, jsonRpc, rpcFromEnv } from "./rpc.mjs";
+import { budgetChainKey } from "../src/core/owner-settings.js";
 import { siteText } from "./site.mjs";
 
 /** topic0 of ERC-20 and TIP-20 Transfer(address indexed from, address indexed to, uint256 value). */
@@ -70,9 +71,10 @@ function solanaIdentity(raw, tx, payer, nonce) {
 
 /** The RPC this computer reads `rail` and `chain` through. */
 export function settlementRpc(rail, chain) {
-  if (rail === "tempo") return rpcFromEnv("SUPERSTABLES_TEMPO_RPC", DEFAULT_RPC.tempo).url;
-  if (rail === "solana") return rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana).url;
-  return rpcFromEnv("B4_RPC", EVM_CHAINS[chain]?.rpc ?? EVM_CHAINS["base-sepolia"].rpc).url;
+  const key = budgetChainKey(rail, chain);
+  if (rail === "tempo") return rpcFromEnv("SUPERSTABLES_TEMPO_RPC", DEFAULT_RPC.tempo, "read", key).url;
+  if (rail === "solana") return rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana, "read", key).url;
+  return rpcFromEnv("B4_RPC", EVM_CHAINS[chain]?.rpc ?? EVM_CHAINS["base-sepolia"].rpc, "read", EVM_CHAINS[chain] ? key : "base-sepolia").url;
 }
 
 const topicAddress = (t) => (typeof t === "string" && t.length === 66 ? `0x${t.slice(26)}`.toLowerCase() : null);

@@ -111,9 +111,14 @@ Start here, budget: superstables budget setup --rail evm
     wait               wait for an owner approval an agent started (--id)
 
 Who runs what:
-  owner   setup, wallet init, wallet serve, wallet open, policy init, and every approval
+  owner   setup, wallet init, wallet serve, wallet open, policy init, owner settings, and every approval
   agent   find, quote, pay, status, receipts, attempts, doctor
   Either may run the read-only commands.
+
+Owner settings:
+  superstables owner settings show   the approval site and the RPCs that owner actions trust (read only)
+  Changes run only in the owner's own terminal. SUPERSTABLES_SITE and the RPC variables count for
+  owner actions only when they name what these settings allow.
 
 Where state lives:
   SUPERSTABLES_HOME, default ~/.superstables (--home <dir> for one command): policy.yaml,
@@ -136,9 +141,12 @@ Environment:
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; \`off\` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
   SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances and the chain check on a settlement
-                                 (https, or http on this machine); wallets adding the chain get the public RPC
-  SUPERSTABLES_TEMPO_RPC         the Tempo Moderato RPC for pay's chain checks (https, or http on this machine)
-  SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine)
+                                 (https, or http on this machine); wallets adding the chain get the public RPC;
+                                 unset: the RPC set with superstables owner settings rpc, else the chain's public one
+  SUPERSTABLES_TEMPO_RPC         the Tempo Moderato RPC for pay's chain checks (https, or http on this machine);
+                                 unset: the RPC set with superstables owner settings rpc, else the chain's public one
+  SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine);
+                                 unset: the RPC set with superstables owner settings rpc, else the chain's public one
   SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, this install's own port or a free one when busy
   SUPERSTABLES_WALLET_URL        the local wallet over TCP, for one started with wallet serve --tcp (default: its private
                                  socket in the wallet folder; its page is on http://127.0.0.1:${DEFAULT_WALLET_PORT})

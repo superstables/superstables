@@ -543,13 +543,20 @@ Per rail, with what each revoke does not cover:
 
 `setup --hosted` moves a chain's owner approvals to a site (superstables.com by default), and
 `buy-once` has the site take one payment. The site is trusted to show the owner the right page; it
-is not trusted to say who the owner is or what was paid.
+is not trusted to say who the owner is or what was paid. Which site those links may be on is the
+owner's setting, not the agent's (see "Which site" below).
 
-- **Which site.** `--site`, `SUPERSTABLES_SITE` and a recorded `SITE` accept superstables.com, its
-  subdomains and this machine only. Another origin is used only when the owner sets
-  `SUPERSTABLES_ALLOW_SITE` to that exact `https` origin in their own environment. An agent never
-  sets it, so an agent told to "use this other site" cannot send the owner's approvals there. When
-  the site is not `www.superstables.com`, the logs and `message_for_owner` name its host.
+- **Which site.** Approvals happen on `https://www.superstables.com` (the apex is the same site).
+  Staging, other `*.superstables.com` hosts and a site on this machine are used only when the owner
+  allows them in the owner settings: `superstables owner settings site <origin>`, `allow-staging on`
+  or `allow-loopback site on`. The settings are a file in the account's own home,
+  `~/.superstables/owner/settings.json`, that only a command in the owner's terminal writes.
+  `--site`, `SUPERSTABLES_SITE` and a recorded `SITE` count only when they name an allowed site, so
+  an agent told to "use this other site" cannot send the owner's approvals there.
+  `SUPERSTABLES_ALLOW_SITE` is no longer read. An agent runs as the same user and could still edit the
+  file itself; a later milestone's owner signature will make that evident. A revoke on a chain whose
+  recorded site is no longer allowed asks on the page on this machine instead. When the site is not
+  `www.superstables.com`, the logs and `message_for_owner` name its host, including a site on this machine.
 - **Requests name the site.** Each request the agent key signs names the site's origin and a fresh
   nonce (agent request proof v2). A compatible site checks that the origin is its own and refuses a
   nonce it has already seen, so a proof made for one site fails on another and a captured one fails
@@ -624,7 +631,11 @@ is not trusted to say who the owner is or what was paid.
   requested) and names the other ways to revoke: Revoke on the owner's account page on the site,
   or a revoke transaction the owner signs in their own wallet.
 - **RPC replacements.** `B4_RPC`, `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC` must be
-  `https`, or `http` on this machine; every check above reads the chain through them. A
+  `https`, or `http` on this machine; every check above reads the chain through them. For owner
+  actions (setup, grant, revoke, fund-agent, recover) a replacement counts only when it is one of the
+  owner's RPCs for that chain (`superstables owner settings rpc <chain> <url...>`) or the chain's
+  built-in one; any other value stops the command (exit 3) before anything is asked or sent. With no
+  replacement set, every command reads through the owner's RPC when there is one. A
   replacement in use is named in the `RESULT` (`rpc`). Approval pages on your machine do not
   pass replacement RPC URLs to the owner's wallet, including URLs that carry access keys.
   When asking the wallet to add a chain, they offer the chain's public RPC.

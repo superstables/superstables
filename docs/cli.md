@@ -22,6 +22,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | [`superstables doctor`](#superstables-doctor) | check everything pay needs, one line at a time |
 | [`superstables policy show`](#superstables-policy-show) | print the policy in force |
 | [`superstables policy init`](#superstables-policy-init) | write a commented policy.yaml, if there is not one already |
+| [`superstables owner settings`](#superstables-owner-settings) | show or change the approval site and the RPCs owner actions trust |
 
 ## superstables
 
@@ -71,6 +72,8 @@ Commands:
   doctor [options]               check everything pay needs, one line at a time
   policy                         the spend policy this client and the wallet
                                  both apply to pay
+  owner                          the owner's own settings: the approval site and
+                                 the RPCs owner actions trust
   help [command]                 display help for command
 
 What this is:
@@ -115,9 +118,14 @@ Start here, budget: superstables budget setup --rail evm
     wait               wait for an owner approval an agent started (--id)
 
 Who runs what:
-  owner   setup, wallet init, wallet serve, wallet open, policy init, and every approval
+  owner   setup, wallet init, wallet serve, wallet open, policy init, owner settings, and every approval
   agent   find, quote, pay, status, receipts, attempts, doctor
   Either may run the read-only commands.
+
+Owner settings:
+  superstables owner settings show   the approval site and the RPCs that owner actions trust (read only)
+  Changes run only in the owner's own terminal. SUPERSTABLES_SITE and the RPC variables count for
+  owner actions only when they name what these settings allow.
 
 Where state lives:
   SUPERSTABLES_HOME, default ~/.superstables (--home <dir> for one command): policy.yaml,
@@ -140,9 +148,12 @@ Environment:
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; `off` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
   SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances and the chain check on a settlement
-                                 (https, or http on this machine); wallets adding the chain get the public RPC
-  SUPERSTABLES_TEMPO_RPC         the Tempo Moderato RPC for pay's chain checks (https, or http on this machine)
-  SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine)
+                                 (https, or http on this machine); wallets adding the chain get the public RPC;
+                                 unset: the RPC set with superstables owner settings rpc, else the chain's public one
+  SUPERSTABLES_TEMPO_RPC         the Tempo Moderato RPC for pay's chain checks (https, or http on this machine);
+                                 unset: the RPC set with superstables owner settings rpc, else the chain's public one
+  SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine);
+                                 unset: the RPC set with superstables owner settings rpc, else the chain's public one
   SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, this install's own port or a free one when busy
   SUPERSTABLES_WALLET_URL        the local wallet over TCP, for one started with wallet serve --tcp (default: its private
                                  socket in the wallet folder; its page is on http://127.0.0.1:4411)
@@ -707,4 +718,72 @@ Example:
 Prints: the path written and the policy now in force.
 Exit codes: 0 written, 1 a policy exists already (pass --force to replace it) (the full table:
   superstables --help)
+```
+
+## superstables owner
+
+```text
+Usage: superstables owner [options] [command]
+
+the owner's own settings: the approval site and the RPCs owner actions trust
+
+Options:
+  -h, --help                             display help for command
+
+Commands:
+  settings [options] [action] [args...]  show or change the approval site and the RPCs owner actions trust
+  help [command]                         display help for command
+
+The settings are a file in the account's own home (~/.superstables/owner/settings.json). Only the
+commands below, run in the owner's own terminal, write it. SUPERSTABLES_SITE, --site and the RPC
+variables count for owner actions only when they name what the settings allow.
+
+Moves money: no.
+Run by: the owner. An agent may run `owner settings show`, and never a change.
+Example:
+  $ superstables owner settings show
+Prints: see `owner settings --help`.
+Exit codes: 0 done, 1 the settings file cannot be used, 2 bad input, 3 refused (the full table:
+  superstables --help)
+```
+
+## superstables owner settings
+
+```text
+Usage: superstables owner settings [options] [action] [args...]
+
+show or change the approval site and the RPCs owner actions trust
+
+Arguments:
+  action        show (default), site, allow-staging, allow-loopback or rpc
+  args          the action's arguments
+
+Options:
+  --own-node    rpc: the first URL is your own node (a quorum of 1 is then
+                enough)
+  --quorum <n>  rpc: how many of the URLs must agree (1 to the number of URLs)
+  --clear       site: back to https://www.superstables.com; rpc <chain>: back to
+                the built-in RPC
+  --json        show: print the settings as JSON (RPC hosts only)
+  -h, --help    display help for command
+
+Actions: show the settings in force (read only; the default) site <origin> | site --clear the
+approval site (default https://www.superstables.com) allow-staging on|off allow
+https://staging.superstables.com allow-loopback site|rpc|sellers on|off development only: a site, an
+RPC variable or a seller on this computer rpc <chain> <url...> [--own-node] [--quorum N] | rpc
+<chain> --clear the RPCs owner actions and verdicts use
+
+A change asks for a typed yes and runs only when stdin is a terminal. RPC URLs are never printed
+whole: they can carry an access key.
+
+Moves money: no.
+Run by: the owner, in their own terminal. An agent runs `show` only and never a change.
+Example:
+  $ superstables owner settings show
+  $ superstables owner settings allow-staging on
+  $ superstables owner settings rpc base-sepolia https://rpc.example/KEY
+Prints: show: the settings, one per line (--json: one JSON object). A change: the before and after
+  lines, then the path written.
+Exit codes: 0 done, 1 the settings file cannot be used, 2 bad input, 3 refused (no terminal, or the
+  answer was not yes) (the full table: superstables --help)
 ```

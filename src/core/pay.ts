@@ -123,7 +123,7 @@ export class PaymentEngine {
     }
     if (quote.status === "expired") throw new Error("This quote has expired; quote again before paying");
     // Old quotes too: a quote taken before this rule, or written by hand, is not claimed and the owner is never asked.
-    const urlProblem = sellerUrlProblem(quote.url);
+    const urlProblem = sellerUrlProblem(quote.url, networkFor(quote.terms.network) ?? { testnet: false });
     if (urlProblem) throw new Error(`This quote's seller URL ${urlProblem}; nothing was started. Quote an https URL`);
 
     const at = new Date().toISOString();
@@ -531,7 +531,7 @@ export class PaymentEngine {
       return;
     }
     // The credential goes to this URL and nowhere else: refused here as well, so the rule is local to the send.
-    const sendProblem = sellerUrlProblem(quote.url);
+    const sendProblem = sellerUrlProblem(quote.url, networkFor(quote.terms.network) ?? { testnet: false });
     if (sendProblem) {
       this.settleState(attempt, "failed", {
         payer: signed.signer,
