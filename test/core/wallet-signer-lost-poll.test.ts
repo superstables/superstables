@@ -49,6 +49,13 @@ const call = (w: WalletHandle, path: string, token: string, method = "GET") =>
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const refusal = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e as SignRefused);
 
+/** Approving a cancelled request is refused with 409, and the view in the refusal says the request expired. */
+async function expectCancelled(w: WalletHandle, id: string): Promise<void> {
+  const res = await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST");
+  expect(res.status).toBe(409);
+  expect(((await res.json()) as { request?: WalletRequestView }).request?.status).toBe("expired");
+}
+
 async function pendingId(w: WalletHandle): Promise<string> {
   for (let i = 0; i < 200; i++) {
     const list = (await (await call(w, "/owner/requests", w.ownerSecret)).json()) as { requests: WalletRequestView[] };
@@ -66,6 +73,8 @@ interface Faults {
    * answer 200 with a view that confirms nothing, or fail slowly on its first call only.
    */
   cancel?: "pass" | "fail" | "404" | "503-spoof" | "pending" | "fail-slow-once";
+  /** The wait the wallet is asked for when the request is created, in place of the signer's own deadline (the wallet's must not expire first). */
+  walletWaitMs?: number;
 }
 function transport(faults: Faults) {
   const calls: string[] = [];
@@ -74,6 +83,9 @@ function transport(faults: Faults) {
     const path = new URL(String(input)).pathname;
     const method = init?.method ?? "GET";
     calls.push(`${method} ${path.replace(/\/requests\/[^/]+/, "/requests/:id")}`);
+    if (method === "POST" && path === "/requests" && faults.walletWaitMs !== undefined && typeof init?.body === "string") {
+      return fetch(input, { ...init, body: JSON.stringify({ ...JSON.parse(init.body), waitMs: faults.walletWaitMs }) });
+    }
     if (method === "POST" && path.endsWith("/cancel")) {
       if (faults.cancel === "fail") throw new TypeError("fetch failed");
       if (faults.cancel === "404") return new Response(JSON.stringify({ error: "no such route" }), { status: 404 });
@@ -118,7 +130,7 @@ describe("a wait that ends abnormally cancels the request first", () => {
     expect(err?.message).toMatch(/cancelled/);
     expect(t.calls.filter((c) => c.endsWith("/cancel"))).toHaveLength(1);
     const id = await pendingId(w);
-    expect((await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST")).status).toBe(409);
+    await expectCancelled(w, id);
     const after = (await (await call(w, `/requests/${id}`, w.agentToken)).json()) as WalletRequestView;
     expect(after.status).toBe("expired");
     expect(after.result).toBeUndefined();
@@ -133,7 +145,7 @@ describe("a wait that ends abnormally cancels the request first", () => {
       expect(err?.code).toBe("unavailable");
       expect(t.calls.filter((c) => c.endsWith("/cancel"))).toHaveLength(1);
       const id = await pendingId(w);
-      expect((await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST")).status).toBe(409);
+      await expectCancelled(w, id);
       await w.close();
       wallets.pop();
     }
@@ -166,7 +178,7 @@ describe("a wait that ends abnormally cancels the request first", () => {
     faults.cancel = "pass";
     await signer.close();
     expect(t.calls.filter((c) => c.endsWith("/cancel"))).toHaveLength(2);
-    expect((await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST")).status).toBe(409);
+    await expectCancelled(w, id);
   });
 
   it("5. a 0.4.0 wallet without /cancel is named, and the refusal is unknown, not a final failure", async () => {
@@ -182,7 +194,7 @@ describe("a wait that ends abnormally cancels the request first", () => {
 
   it("6. the deadline with a cancel that fails is unknown too, not 'expired, nothing signed'", async () => {
     const w = await realWallet();
-    const t = transport({ cancel: "fail" });
+    const t = transport({ cancel: "fail", walletWaitMs: 60_000 });
     const signer = new WalletSigner({ url: w.url, agentToken: w.agentToken, fetchImpl: t.fetchImpl, pollMs: 20, timeoutMs: 1100 });
     const err = await refusal(signer.sign(REQ));
     expect(err?.code).toBe("unknown");
@@ -201,7 +213,7 @@ describe("a wait that ends abnormally cancels the request first", () => {
     const id = await pendingId(w);
     faults.cancel = "pass";
     await signer.close();
-    expect((await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST")).status).toBe(409);
+    await expectCancelled(w, id);
   });
 
   it("8. a cancel answer that confirms nothing (a pending view) is not a cancel", async () => {
@@ -239,6 +251,6 @@ describe("a wait that ends abnormally cancels the request first", () => {
     expect(err?.code).toBe("unknown");
     expect(t.calls.filter((c) => c.endsWith("/cancel"))).toHaveLength(2);
     const id = await pendingId(w);
-    expect((await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST")).status).toBe(409);
+    await expectCancelled(w, id);
   });
 });

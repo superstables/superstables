@@ -91,8 +91,8 @@ async function standing(signatures, waitMs = 60_000) {
     } catch { seen = []; }
     if (seen.length === signatures.length) {
       // a failed transfer moved nothing, but one that landed beside it may still be reorganised away: "failed" only once every
-      // transfer without an error is finalized, so the funds are not counted as returned (or swept again) before that
-      if (seen.some((st) => st?.err)) { if (seen.every((st) => st?.err || st?.confirmationStatus === "finalized")) return "failed"; }
+      // transfer, the failed one too, is finalized, so the funds are not counted as returned (or swept again) before that
+      if (seen.some((st) => st?.err)) { if (seen.every((st) => st?.confirmationStatus === "finalized")) return "failed"; }
       else if (seen.every((st) => st?.confirmationStatus === "finalized")) return "final";
       if (seen.some((st) => !st) && Date.now() >= until) return "not_found";
     }

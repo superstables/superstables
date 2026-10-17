@@ -293,13 +293,14 @@ describe("solana: rotate needs the revoke finalized", () => {
     expect(unknown.result).toMatchObject({ state: "not_found", final: false });
   }, 240_000);
 
-  it("a sweep whose USDC transfer is confirmed and whose SOL transfer failed is pending until the USDC transfer is finalized", async () => {
+  it("a sweep with a failed SOL transfer is pending until every transfer is finalized, the failed one too", async () => {
     const c = await solCase();
     const usdcSig = bs58.encode(Buffer.alloc(64, 7));
     const solSig = bs58.encode(Buffer.alloc(64, 8));
     let usdcStatus = "confirmed";
+    let solStatus = "finalized";
     c.solana.overrides = {
-      getSignatureStatuses: (params) => ({ context: { slot: c.solana.slot }, value: (params[0] as string[]).map((s) => (s === solSig ? { slot: 1, confirmations: null, err: { InstructionError: [0, "Custom"] }, confirmationStatus: "finalized" } : { slot: 1, confirmations: null, err: null, confirmationStatus: usdcStatus })) }),
+      getSignatureStatuses: (params) => ({ context: { slot: c.solana.slot }, value: (params[0] as string[]).map((s) => (s === solSig ? { slot: 1, confirmations: null, err: { InstructionError: [0, "Custom"] }, confirmationStatus: solStatus } : { slot: 1, confirmations: null, err: null, confirmationStatus: usdcStatus })) }),
     };
     const env = { ...process.env, SUPERSTABLES_HOME: c.home, SUPERSTABLES_SOLANA_RPC: c.solana.url } as Record<string, string>;
     const confirm = () => new Promise<Out>((done) => {
@@ -315,6 +316,10 @@ describe("solana: rotate needs the revoke finalized", () => {
     const waiting = await confirm();
     expect(waiting.result, all(waiting)).toMatchObject({ state: "pending", final: false });
     usdcStatus = "finalized";
+    solStatus = "confirmed";
+    const early = await confirm();
+    expect(early.result, all(early)).toMatchObject({ state: "pending", final: false });
+    solStatus = "finalized";
     const done = await confirm();
     expect(done.result, all(done)).toMatchObject({ state: "failed", final: false });
   }, 240_000);
