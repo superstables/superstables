@@ -9,7 +9,7 @@
 // exclusively with mode 600 and flushed to disk, which is then renamed over the old one: a crash leaves the old file or
 // the new one, never a truncated one, and the new key is never in a file other users can read, whatever the old file's
 // mode was.
-import { closeSync, constants, fstatSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 
@@ -128,6 +128,55 @@ export function prepareSecretFile(path, text, io = {}) {
       try { unlinkSync(tmp); } catch {}
     },
   };
+}
+
+/** prepareSecretFile's temporary name for a file called `base` (see above): .<name>.<pid>.<8 hex>.tmp */
+const replacementName = (base) => new RegExp(`^\\.${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.(\\d+)\\.[0-9a-f]{8}\\.tmp$`);
+
+/**
+ * Whether `path` is what overwriteInPlace leaves: a regular file of at least one byte, every byte 0. False for anything
+ * else, a missing file included; never throws, and never blocks on a FIFO.
+ * @param {string} path
+ */
+export function isZeroed(path) {
+  try {
+    const text = readRegularFile(path, "key file");
+    return text.length > 0 && /^\0+$/.test(text);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The replacements prepareSecretFile wrote beside `path` that were neither renamed over it nor removed: a process stopped
+ * between its two halves. Only regular files (lstat: no symlink) of this user, mode 600, no larger than a key file.
+ * @param {string} path
+ * @returns {{ path: string, pid: number, text: string }[]}
+ */
+export function leftoverReplacements(path) {
+  const found = [];
+  let names;
+  try {
+    names = readdirSync(dirname(path));
+  } catch {
+    return found;
+  }
+  const pattern = replacementName(basename(path));
+  for (const name of names.sort()) {
+    const m = pattern.exec(name);
+    if (!m) continue;
+    const full = join(dirname(path), name);
+    try {
+      const st = lstatSync(full);
+      if (!st.isFile()) continue;
+      if (typeof process.getuid === "function" && st.uid !== process.getuid()) continue;
+      if ((st.mode & 0o077) !== 0 || st.size > MAX_SECRET_FILE_BYTES) continue;
+      found.push({ path: full, pid: Number(m[1]), text: readSecretFile(full, "replacement key file") });
+    } catch {
+      // unreadable or gone: not a replacement this can use
+    }
+  }
+  return found;
 }
 
 /**
