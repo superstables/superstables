@@ -498,7 +498,7 @@ async function otherRail(rail: "tempo" | "solana", opts: { local?: boolean; fres
   };
   const bound = opts.fresh ? "" : rail === "tempo" ? `OWNER_ADDRESS=${owner}\n` : `SOLANA_OWNER_ADDRESS=${owner}\n`;
   if (rail === "tempo") put(["keys", "budget", "tempo-agent.env"], `AGENT_PRIVATE_KEY=${TEMPO_KEY}\nAGENT_ADDRESS=${TEMPO_AGENT}\n${bound}`, 0o600);
-  else put(["keys", "budget", "solana-agent.env"], `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT.publicKey.toBase58()}\n${bound}`, 0o600);
+  else if (!opts.fresh) put(["keys", "budget", "solana-agent.env"], `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT.publicKey.toBase58()}\n${bound}`, 0o600);
   const hosted = opts.local ? "" : `APPROVALS=hosted\nSITE=${site.url}\n`;
   if (!opts.fresh && rail === "tempo") put(["budget", "public", "tempo-moderato.env"], `OWNER_ADDRESS=${owner}\nAGENT_ADDRESS=${TEMPO_AGENT}\n${hosted}`, 0o644);
   if (!opts.fresh && rail === "solana") put(["budget", "public", "solana-devnet.env"], `SOLANA_OWNER_ADDRESS=${owner}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT.publicKey.toBase58()}\n${hosted}`, 0o644);
@@ -1091,7 +1091,7 @@ const ROWS: Row[] = [
     timeout: 150_000,
   },
   {
-    path: "budget revoke on this machine: the allowance already reads 0, and the owner's revoke is still sent; until it is final the answer is unknown (interim)",
+    path: "budget revoke on this machine: the allowance already reads 0, and the owner's revoke is still sent, and is settled once the chain's final block is past it",
     covers: [],
     run: async () => {
       const REVOKE: Hex = `0x${"cf".repeat(32)}`;
@@ -1104,9 +1104,8 @@ const ROWS: Row[] = [
     expect: [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
       { verdict: "paid", match: { http: 200, status: "confirmed", sending: true, hash: `0x${"cf".repeat(32)}` } },
-      // Interim (until the owner-action finality change in this same release resolves it as landed): the final block the endpoints agree on
-      // is older than the revoke this machine just recorded, so the revoke is not yet called seen. The answer is unknown (exit 5), never settled.
-      { verdict: "unknown", match: { exit: 5, command: "revoke", state: "unknown", tx: { revoke: `0x${"cf".repeat(32)}` } } },
+      // The endpoints agree on a final block past the revoke, so the revoke is final and the answer is done.
+      { verdict: "paid", match: { exit: 0, command: "revoke", state: "settled", tx: { revoke: `0x${"cf".repeat(32)}` } } },
     ],
     timeout: 150_000,
   },

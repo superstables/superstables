@@ -530,6 +530,17 @@ undo an owner signature or a transaction already sent through setup on superstab
   read shows 0. Without `--op` it sweeps the rest of the agent key only when every journal of that
   chain can be read and no operation of the agent can still move money; otherwise it names them,
   sweeps nothing and answers unknown (exit 5). Its amounts are exact token units, never floating point.
+- **An owner action is final only at a final block.** A grant, revoke, gas transfer or recover revoke
+  is reported `final: true` only once its block is final on that chain (the `finalized` tag on most
+  EVM chains, `latest` on Tempo Moderato and SKALE Base Sepolia, `finalized` commitment on Solana)
+  and the endpoints agree the effect reads the same at a final block. Until then it is `landed`
+  (exit 0, `final: false`): `revoke` says the allowance or delegate reads 0 but does not call the
+  budget revoked, and `status` names the last owner action and whether it is final. A new grant
+  waits for the previous revoke to be final, and a setup that bundles a grant refuses unless it can
+  read, at a final block, that no older allowance is live, or the agent key was created in that same
+  setup. A reused agent key with no owner on record now links first: setup refuses
+  the grant and says to set up (link), then grant. The website's own budget pages still say `confirmed` at one confirmation until its
+  finality change lands.
 - **Revoke ends the permission once it is confirmed on chain.** The owner approves it in their
   wallet: `approve(agent, 0)` on `evm`, `revokeKey` on `tempo`, the SPL `Revoke` on `solana`. It
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds

@@ -2261,7 +2261,7 @@ describe("the owner commands' words on an evm chain", () => {
     }
   });
 
-  it("fund-agent's done page shows the agent's balance read after the transfer", async () => {
+  it("fund-agent's page says landed, not done, while no endpoint agrees the transfer is final", async () => {
     const value = POL / 100n; // 0.01 POL
     const { env } = amoyBudget(POL / 50n, POL / 50n + value, value);
     let url = "";
@@ -2287,8 +2287,8 @@ describe("the owner commands' words on an evm chain", () => {
     });
     await driving;
     expect(r.code).toBe(0);
-    expect(message).toBe("Done. Your agent received 0.01 POL and now has 0.03 POL. You can close this page.");
-    expect(r.result).toMatchObject({ command: "fund-agent", state: "settled", tx: { fundAgent: hash } });
+    expect(message).toBe("Sent and included on chain. Your agent's balance shows the transfer, but the chain has not made it final yet. You can close this page.");
+    expect(r.result).toMatchObject({ command: "fund-agent", state: "landed", final: false, tx: { fundAgent: hash } });
   });
 });
 

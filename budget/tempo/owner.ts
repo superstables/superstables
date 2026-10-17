@@ -305,7 +305,8 @@ export function revertedReceiptOf(err: unknown): { transactionHash: Hex } | null
   return null
 }
 
-export type Sent = { hash: Hex; status: 'success' | 'reverted'; blockNumber: bigint; blockTimestamp?: number; type: string; feePayer?: string; feeToken?: string; problems: string[]; siteFailed?: string }
+/** `final`: Tempo Moderato is final the moment a block is canonical (finality-policy: instant), so this is true when the receipt's block is on the chain. */
+export type Sent = { hash: Hex; status: 'success' | 'reverted'; blockNumber: bigint; final: boolean; blockTimestamp?: number; type: string; feePayer?: string; feeToken?: string; problems: string[]; siteFailed?: string }
 
 /** Transaction types the owner's wallet may use: a plain root-signed transaction (the design sends type 2). */
 const OWNER_TX_TYPES = ['0x0', '0x1', '0x2']
@@ -346,9 +347,14 @@ export async function readSent(hash: Hex, want: { from: Address; data: Hex; afte
   if (r.feePayer && !same(r.feePayer, want.from)) problems.push(`its fee was paid by ${r.feePayer}, not the owner`)
   // the site reported this transaction as failed: never settled here, whatever the chain shows
   if (want.siteFailed) problems.push(want.siteFailed)
+  // The receipt's block has to be on the chain: the block at that number carries the hash the receipt names, and it is at or below
+  // the latest block. Anything else (a block the chain replaced, a receipt for a block it does not have) is "not committed".
   const block = await rpcRead('eth_getBlockByNumber', [r.blockNumber, false]).catch(() => null)
+  const latest = await rpcRead('eth_blockNumber', []).then((v: string) => BigInt(v), () => null)
+  const canonical = Boolean(block) && typeof r.blockHash === 'string' && same(block.hash, r.blockHash) && latest !== null && BigInt(r.blockNumber) <= latest
+  if (!canonical) problems.push('it is not in a committed block on chain')
   return {
-    hash, status: r.status === '0x1' ? 'success' : 'reverted', blockNumber: BigInt(r.blockNumber), blockTimestamp: block?.timestamp ? parseInt(block.timestamp, 16) : undefined,
+    hash, status: r.status === '0x1' ? 'success' : 'reverted', blockNumber: BigInt(r.blockNumber), final: canonical, blockTimestamp: block?.timestamp ? parseInt(block.timestamp, 16) : undefined,
     type, feePayer: r.feePayer, feeToken: r.feeToken ?? t.feeToken ?? undefined, problems, ...(want.siteFailed ? { siteFailed: want.siteFailed } : {}),
   }
 }

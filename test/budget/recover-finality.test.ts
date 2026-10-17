@@ -335,11 +335,13 @@ async function recover(o: { ops?: Record<string, string>; allowances: bigint[]; 
     selfRevokeCore: async () => o.selfRevoke ?? { state: "nothing", before: 0n, after: 0n, used: 0n, ownerBalance: 0n, note: "allowance is already 0" },
     readUntil: async <T,>(read: () => Promise<T>) => read(),
     writePublic: () => {},
+    allowanceAgreed: async () => ({ agreed: true, value: 0n }),
+    finalityOf: async () => ({ landed: true, final: true }),
   }));
   vi.doMock("../../budget/op-lock.mjs", async (importOriginal) => ({ ...((await importOriginal()) as object), requireRecordLock: () => ({ release() {} }) }));
   vi.doMock("../../budget/evm/owner.js", async (importOriginal) => ({
     ...((await importOriginal()) as object),
-    revokeInWallet: async (...a: unknown[]) => { revokeCalls.push(a); o.onRevoke?.(opsDir); return REVOKE_TX; }, // onRevoke: something happens in the folder after the first scan
+    revokeInWallet: async (...a: unknown[]) => { revokeCalls.push(a); o.onRevoke?.(opsDir); return { hash: REVOKE_TX, final: true, block: 101n }; }, // onRevoke: something happens in the folder after the first scan
     fundInWallet: async () => process.exit(3),
   }));
   if (o.makeSafe) vi.doMock("../../budget/evm/ops.js", async (importOriginal) => ({ ...((await importOriginal()) as object), makeSafe: o.makeSafe }));

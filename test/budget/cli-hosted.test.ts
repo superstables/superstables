@@ -5,7 +5,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, s
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { encodeFunctionData, pad, parseAbi, toEventSelector } from "viem";
 import { accountHomeWith } from "../helpers/owner-settings.js";
 import { evmOwner, evmOwnerKey, signLinkProof, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
@@ -19,6 +20,11 @@ const OTHER = evmOwner("33");
 let home: string;
 let site: FakeSite;
 let rpc: TestServer;
+// The client runs from a copy whose endpoint table names the fake RPC (twice, as two operators): a grant is asked for only when the
+// endpoints agree, at a final block, that the allowance is 0, and an owner action is final only when they agree on it there.
+let tree: EndpointTree;
+beforeAll(() => { tree = endpointTree(); });
+afterAll(() => tree.close());
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "ss-budget-hosted-"));
@@ -37,7 +43,8 @@ function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<
     delete env.SUPERSTABLES_SITE;
     Object.assign(env, extraEnv);
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+    tree.set({ "base-sepolia": [{ url: rpc.url, operator: "fake-a" }, { url: `${rpc.url}/`, operator: "fake-b" }], "arc-testnet": [{ url: rpc.url, operator: "fake-a" }] });
+    const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -678,7 +685,7 @@ describe("owner commands on a hosted chain", () => {
   }, 120_000);
 
   it("a site the owner has not allowed is refused for an owner action, and SUPERSTABLES_ALLOW_SITE allows nothing", async () => {
-    const strict = accountHomeWith({ version: 1, rpc: { "base-sepolia": { urls: [rpc.url] } } }); // reads go to the fake chain; no site on this computer is allowed
+    const strict = accountHomeWith({ version: 1, rpc: { "base-sepolia": { urls: [rpc.url], ownNode: true } } }); // reads go to the fake chain; no site on this computer is allowed
     const env = { SUPERSTABLES_TEST_ACCOUNT_HOME: strict, B4_RPC: "" };
     const s = await budget(["setup", "--rail", "evm", "--hosted", "--site", "https://evil.example"], env);
     expect(s.code).toBe(2);
@@ -916,9 +923,12 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
   const FUND_VALUE = 100_000_000_000_000n;
 
   /** The agent key setup reuses, and a chain that shows the owner's two transactions in block 0x20 (the head is 0x10 before). */
-  const prepare = async () => {
+  const prepare = async (finalHead?: string) => {
     mkdirSync(join(home, "keys", "budget"), { recursive: true });
     writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=0x${"11".repeat(32)}\nB4_AGENT_ADDRESS=${AGENT}\n`, { mode: 0o600 });
+    // a reused key is granted over only when the owner is on record and the endpoints read its allowance at a final block
+    mkdirSync(join(home, "budget", "public"), { recursive: true });
+    writeFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${AGENT}\n`);
     const txs: Record<string, { to: string; input: string; value: bigint; logs?: unknown[] }> = {
       [FUND_HASH]: { to: AGENT, input: "0x", value: FUND_VALUE },
       [GRANT_HASH]: { to: USDC, input: approve, value: 0n, logs: [approvalLog(USDC, OWNER, AGENT, 10000n, "0x20")] },
@@ -928,6 +938,8 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     const blockHash = `0x${"ef".repeat(32)}`;
     await rpc.close();
     rpc = await startFakeRpc(84532, (method, params) => {
+      // a chain whose final head is still below the owner's block
+      if (finalHead && method === "eth_getBlockByNumber" && params[0] === "finalized") return { number: finalHead, hash: `0x${"cd".repeat(32)}`, timestamp: "0x7d0", transactions: [] };
       if (method === "eth_blockNumber") return funded || granted ? "0x20" : "0x10";
       const t = txs[params[0]];
       if (method === "eth_getTransactionByHash" && t) return { hash: params[0], blockHash, blockNumber: "0x20", from: OWNER, to: t.to, input: t.input, value: `0x${t.value.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
@@ -987,6 +999,26 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     expect(readFileSync(join(approvals(), `${first.result.id}.json`), "utf8")).not.toContain("ssbt_");
   }, 180_000);
 
+  it.each([
+    ["grant and gas", ["--grant", "0.01", "--fund"], /^landed, not final yet: superstables budget status --rail evm .*later shows when the grant is final.* Do not rely on the budget until then\. Nothing to do for the gas transfer: it is final once its block is/],
+    ["grant only", ["--grant", "0.01"], /^landed, not final yet: superstables budget status --rail evm .*later shows when the grant is final.* Do not rely on the budget until then$/],
+    ["gas only", ["--fund"], /^landed, not final yet\. Nothing to do: the gas transfer is final once its block is/],
+  ])("the final head below the owner's block (%s): steps are landed and next is whole sentences", async (_name, flags, want) => {
+    await prepare("0x10");
+    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, ...flags]);
+    expect(first.code, first.stderr).toBe(0);
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: OWNER });
+    const hashes: Record<string, string> = { fund_agent: FUND_HASH, grant: GRANT_HASH };
+    for (const st of r.steps!) Object.assign(st, { state: "confirmed", tx_hash: hashes[st.kind], wallet_asked: true });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ state: "ok" }); // wait keeps `final` as the command having ended
+    expect(done.result.steps.map((x: any) => x.state)).toEqual(flags.includes("--grant") && flags.includes("--fund") ? ["landed", "landed"] : ["landed"]);
+    expect(String(done.result.next).split("Then: ").pop()).toMatch(want); // the dispatcher puts the owner notice first, then "Then: " and the rail's next
+    expect(done.result.next).not.toMatch(/\. [a-z]/);
+  }, 180_000);
+
   it("Arc Testnet: the gas step is a plain transfer of native USDC (18 decimals), checked by the transaction and the agent's native balance", async () => {
     const ARC_USDC = "0x3600000000000000000000000000000000000000";
     // fund-agent's default on Arc: 0.1 USDC, native, 18 decimals
@@ -994,6 +1026,9 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     const arcApprove = encodeFunctionData({ abi: parseAbi(["function approve(address spender, uint256 value) returns (bool)"]), functionName: "approve", args: [AGENT, 10000n] });
     mkdirSync(join(home, "keys", "budget"), { recursive: true });
     writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=0x${"11".repeat(32)}\nB4_AGENT_ADDRESS=${AGENT}\n`, { mode: 0o600 });
+    // a reused key is granted over only when the owner is on record and the endpoints read its allowance at a final block
+    mkdirSync(join(home, "budget", "public"), { recursive: true });
+    writeFileSync(join(home, "budget", "public", "evm-arc-testnet.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${AGENT}\n`);
     const txs: Record<string, { to: string; input: string; value: bigint; logs?: unknown[] }> = {
       [FUND_HASH]: { to: AGENT, input: "0x", value: ARC_FUND },
       [GRANT_HASH]: { to: ARC_USDC, input: arcApprove, value: 0n, logs: [approvalLog(ARC_USDC, OWNER, AGENT, 10000n, "0x20")] },

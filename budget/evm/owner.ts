@@ -12,7 +12,7 @@ import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts"
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { ownerEvidence, plannedCall, type EvidenceReads } from "./delegation.ts";
 import { searchLogs } from "../../src/core/log-windows.mjs";
-import { CFG, GAS, SYM, USDC, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need } from "./lib.ts";
+import { CFG, GAS, SYM, USDC, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need, allowanceAgreed, finalityOf, thatTakes, agreementWords } from "./lib.ts";
 
 export { closeOwnerPage };
 
@@ -39,6 +39,13 @@ export const OWNER_CHAIN: OwnerChain = {
 export const chainFlag = CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`;
 /** How the owner revokes, in words the page and the logs share. */
 export const REVOKE_HINT = `superstables budget revoke --rail evm${chainFlag}. You approve that in your wallet too.`;
+
+/** What the owner page says when a revoke is in a block but the chain has not made it final yet. */
+export const landedRevoke = (): string => `Sent and included on chain. The allowance reads 0, but the chain has not made this final yet${thatTakes()}. Until then, check superstables budget status before you rely on it. Funds already withdrawn remain under the agent key. You can close this page.`;
+/** The same for a grant. */
+export const landedGrant = (cap: bigint): string => `Sent and included on chain. The allowance reads ${capWords(cap)}, but the chain has not made it final yet${thatTakes()}. You can close this page. To end it: ${REVOKE_HINT}`;
+/** The same for the gas transfer. */
+export const landedFund = (): string => `Sent and included on chain. Your agent's balance shows the transfer, but the chain has not made it final yet${thatTakes()}. You can close this page.`;
 
 /** undefined: read the public file. setup decides for itself (--hosted), before the file says anything. */
 let chosenSite: string | null | undefined;
@@ -79,7 +86,8 @@ export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   },
 });
 
-export type Sent = { hash: Hex; status: "success" | "reverted"; blockNumber: bigint; logs: any[]; problems: string[]; unresolved?: string; siteFailed?: string };
+/** `final`: the block the transaction landed in is final on this chain as the endpoints agree (finalityOf); a landed one is not a problem. */
+export type Sent = { hash: Hex; status: "success" | "reverted"; blockNumber: bigint; blockHash?: string; final: boolean; logs: any[]; problems: string[]; unresolved?: string; siteFailed?: string };
 
 /** Code and nonce reads at a block for the delegation evidence: a few tries, then undefined (not known), never a guess. */
 const evidenceReads: EvidenceReads = {
@@ -129,7 +137,8 @@ export async function readSent(hash: Hex, want: { from: Address; to: Address; da
   if (block <= want.afterBlock) problems.push(`it was mined in block ${r.blockNumber}, before this request started (block ${want.afterBlock})`);
   if (want.siteFailed) problems.push(want.siteFailed);
   await sleep(2500); // public RPC nodes lag a moment behind a block they just served
-  return { hash, status: r.status, blockNumber: block, logs: r.logs, problems, ...(problems.length === 0 && unresolved ? { unresolved } : {}), ...(want.siteFailed ? { siteFailed: want.siteFailed } : {}) };
+  const final = r.status === "success" ? (await finalityOf(hash, r)).final : false;
+  return { hash, status: r.status, blockNumber: block, blockHash: r.blockHash, final, logs: r.logs, problems, ...(problems.length === 0 && unresolved ? { unresolved } : {}), ...(want.siteFailed ? { siteFailed: want.siteFailed } : {}) };
 }
 
 /** The Approval(owner, spender, value) events of this token in a receipt. */
@@ -239,7 +248,7 @@ export function fundValue(amt: string): bigint {
 
 /** What the chain shows for a transaction the owner's wallet reported, checked against the plan. */
 /** `proof`: a failed check names the chain's proof (../proof.mjs). */
-export type SentCheck = { state: "settled" | "mismatch" | "failed" | "unknown"; proof?: "reverted"; tx: string; reason?: string; next?: string; allowance?: bigint; agentGas?: bigint };
+export type SentCheck = { state: "settled" | "mismatch" | "failed" | "unknown"; proof?: "reverted"; tx: string; reason?: string; next?: string; allowance?: bigint; agentGas?: bigint; final?: boolean };
 
 /**
  * The gas transfer: the owner's account sent exactly `t` (to, data, value), mined after `afterBlock`, and successful: sent
@@ -270,7 +279,7 @@ export async function checkFundSent(hash: Hex, o: { owner: Address; agent: Addre
     return { state: "unknown", tx: sent.hash, reason, ...(after === undefined ? {} : { agentGas: after }) };
   }
   console.log(`agent balance after the transfer: ${gasFmt(after)} ${GAS.symbol}`);
-  return { state: "settled", tx: sent.hash, agentGas: after };
+  return { state: "settled", tx: sent.hash, agentGas: after, final: sent.final };
 }
 
 /**
@@ -309,7 +318,10 @@ export async function checkGrantSent(hash: Hex, o: { owner: Address; agent: Addr
     console.log(`REFUSED: ${reason}`);
     return { state: "mismatch", tx: sent.hash, reason, allowance };
   }
-  return { state: "settled", tx: sent.hash, allowance };
+  // final only when the endpoints agree, at a final block at or after this one, that the allowance is the cap
+  const at = sent.final ? await allowanceAgreed(o.owner, o.agent, sent.blockNumber) : null;
+  const final = at !== null && at.agreed && at.value === o.cap;
+  return { state: "settled", tx: sent.hash, allowance, final };
 }
 
 /** The plain words shared by every allowance page. */
@@ -349,7 +361,7 @@ const withEarlier = (earlier: Earlier | undefined, o: Record<string, unknown>) =
   earlier ? { ...earlier.result, ...(earlier.stepTx && o.tx ? { [earlier.stepTx]: o.tx } : {}), ...o, ...(earlier.done ? { next: `${earlier.done}. ${o.next}` } : {}) } : o;
 
 /** Owner approve(agent, 0) through the wallet page. Returns the verified transaction hash, or exits with a RESULT. */
-export async function revokeInWallet(command: string, owner: Address, agent: Address, title?: string, earlier?: Earlier): Promise<Hex> {
+export async function revokeInWallet(command: string, owner: Address, agent: Address, title?: string, earlier?: Earlier): Promise<{ hash: Hex; final: boolean; block: bigint }> {
   const before = await allowanceOf(owner, agent);
   const held = await usdcBalance(agent);
   if (!GAS.isUsdc && (await nativeBalance(owner)) === 0n) {
@@ -407,9 +419,22 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     await closeOwnerPage();
     process.exit(emit(command, 1, withEarlier(earlier, { state: "not_revoked", tx: sent.hash, allowance: usdc(after), reason: "the allowance still reads above 0", next: "run revoke again" })));
   }
-  handle.finish({ outcome: "confirmed", message: `Confirmed. This allowance is 0. Funds already withdrawn remain under the agent key. You can close this page.`, hash: sent.hash });
+  // The allowance reads 0 on the first endpoint. It is final only when this transaction's block is final and the endpoints agree,
+  // at a final block at or after it, that the allowance is 0; an agreed value above 0 there is not a revoke.
+  const at = await allowanceAgreed(owner, agent, sent.blockNumber);
+  if (at.agreed && at.value !== 0n) {
+    const now = at.value as bigint;
+    handle.finish({ outcome: "failed", message: `The chain still shows an allowance of ${usdc(now)} ${SYM}. Run the revoke again.`, hash: sent.hash });
+    await closeOwnerPage();
+    process.exit(emit(command, 1, withEarlier(earlier, { state: "not_revoked", tx: sent.hash, allowance: usdc(now), reason: "the allowance still reads above 0", next: "run revoke again" })));
+  }
+  const final = sent.final && at.agreed && at.value === 0n;
+  if (!final) {
+    console.log(`the revoke is in block ${sent.blockNumber} and the allowance reads 0, but the chain has not made it final yet (${at.agreed ? "its block is not confirmed as final" : agreementWords(at)})`);
+    handle.finish({ outcome: "confirmed", message: landedRevoke(), hash: sent.hash });
+  } else handle.finish({ outcome: "confirmed", message: `Confirmed. This allowance is 0. Funds already withdrawn remain under the agent key. You can close this page.`, hash: sent.hash });
   await closeOwnerPage();
-  return sent.hash;
+  return { hash: sent.hash, final, block: sent.blockNumber };
 }
 
 /**
@@ -420,8 +445,8 @@ export function fundingTx(agent: Address, value: bigint, _hosted: boolean): { to
   return { to: agent, value, words: "" };
 }
 
-/** Owner sends the agent `value` of the gas token through the wallet page. Returns the verified hash, or exits with a RESULT. */
-export async function fundInWallet(command: string, owner: Address, agent: Address, value: bigint, amt: string, agentHas: bigint, earlier?: Earlier): Promise<Hex> {
+/** Owner sends the agent `value` of the gas token through the wallet page. Returns the verified hash and whether its block is final, or exits with a RESULT. */
+export async function fundInWallet(command: string, owner: Address, agent: Address, value: bigint, amt: string, agentHas: bigint, earlier?: Earlier): Promise<{ hash: Hex; final: boolean }> {
   const startBlock = await publicClient.getBlockNumber();
   const action = command === "recover" ? "recover-gas" : "fund-agent";
   // recover's owner steps stay on this computer, so only fund-agent can be hosted
@@ -462,7 +487,8 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
     await closeOwnerPage();
     process.exit(emit(command, c.state === "mismatch" ? 3 : 1, withEarlier(earlier, { state: c.state, proof: c.proof, tx: c.tx, reason: c.reason, next: "check wallet activity, then superstables budget doctor --rail evm" })));
   }
-  handle.finish({ outcome: "confirmed", message: `Done. Your agent received ${amt} ${GAS.symbol} and now has ${gasFmt(c.agentGas!)} ${GAS.symbol}. You can close this page.`, hash: c.tx });
+  const final = c.final === true;
+  handle.finish({ outcome: "confirmed", message: final ? `Done. Your agent received ${amt} ${GAS.symbol} and now has ${gasFmt(c.agentGas!)} ${GAS.symbol}. You can close this page.` : landedFund(), hash: c.tx });
   await closeOwnerPage();
-  return c.tx as Hex;
+  return { hash: c.tx as Hex, final };
 }

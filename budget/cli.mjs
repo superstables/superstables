@@ -287,7 +287,8 @@ Prints the terms first: the cap, the true maximum, and what the chain enforces a
   solana  makes the agent the delegate of the owner's USDC account up to A, in total. Run fund-agent first.
 evm and solana refuse --expiry, --period and --sellers: the chain cannot enforce them. A live budget is never replaced
 silently: revoke it first. tempo: --agent LABEL picks the access key (a revoked key can never be granted again).
-Check the result with superstables budget status.
+On evm and solana a grant is refused while the previous revoke is not final, and the result is state landed (exit 0,
+final false) until the grant itself is final. Check the result with superstables budget status.
 
 ${OWNER_HELP}`,
       money: "not at once: it lets the agent spend up to A from the owner's wallet, purchase by purchase, once the owner\n  approves it. The owner pays the transaction fee.",
@@ -307,11 +308,12 @@ first, names the home it checked (SUPERSTABLES_HOME, default ~/.superstables; ho
 command. If the budget is elsewhere, ask the user for the path: do not point SUPERSTABLES_HOME at another home yourself.
 remaining 0 means there is nothing to spend: the owner grants one.
 revoked is true only for a revoke this machine recorded that the chain still shows (tempo: the key reads revoked); an
-allowance or delegate that reads 0 without that record is remaining 0 and revoked false.`,
+allowance or delegate that reads 0 without that record is remaining 0 and revoked false. A revoke that landed but is not
+final yet is not revoked: lastOwnerAction says which action is waiting and whether it is final.`,
       money: "no. It reads files and the chain only; no secret is opened.",
       who: "anyone.",
       example: "superstables budget status --rail evm",
-      prints: "the owner on record on stderr, then a RESULT line: remaining, expiry, revoked, atRisk, owner, next.",
+      prints: "the owner on record on stderr, then a RESULT line: remaining, expiry, revoked, atRisk, lastOwnerAction, owner, next.",
       exits: "Exit codes: 0 read, 1 failed (no budget set up here, or the chain could not be read: read reason and next), 2 bad input",
     }),
   },
@@ -516,6 +518,7 @@ back what was already spent; on evm, superstables budget recover returns strande
 It always sends the revoke, even when the budget already reads empty or revoked: one read is not proof that nothing is
 live. It sends nothing only where the chain would refuse the transaction: on solana when the owner has no USDC account
 (revoked null), and on tempo when a simulated revokeKey from the owner is refused as already done (revoked true, tx {}).
+On evm and solana the result is state landed (exit 0, revoked false, final false) until the revoke is final.
 
 ${OWNER_HELP}`,
       money: "no funds move. The owner pays the transaction fee.",
@@ -680,7 +683,7 @@ function resultFacts(fields) {
 }
 
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "agreement", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "agreement", "lastOwnerAction", "ownerRevokeFinal", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
   fields = resultFacts(fields);
@@ -1012,7 +1015,7 @@ function evmCommand(verb, f, extra = {}) {
     case "rotate-clear": return E("rotate", ["--clear-agent", extra.agent]);
   }
 }
-const evmReadFromResult = (r) => r.state !== "ok" ? { ok: false, code: 1 } : ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null });
+const evmReadFromResult = (r) => r.state !== "ok" ? { ok: false, code: 1 } : ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null, lastOwnerAction: r.lastOwnerAction ?? null });
 // ---- end of EVM section -----------------------------------------------------------------------------
 
 // ---- running a rail script --------------------------------------------------------------------------
@@ -1216,7 +1219,8 @@ async function readBudget(f) {
   if (f.rail === "solana") {
     const remaining = pick(/delegatedAmount \(remaining\):\s+([\d.]+) USDC/);
     const most = pick(/maximum the delegate can still move:\s+([\d.]+) USDC/);
-    return { ok: true, remaining: remaining ?? null, expiry: null, revoked: pick(/revoked:\s+(true|false)/) === "true", atRisk: most ?? null, unconfirmed: unconfirmedWords(t) };
+    const last = /last owner action:\s+(revoke|grant)\s+(\S+)\s+\((final|landed, not final yet)\)/.exec(t);
+    return { ok: true, remaining: remaining ?? null, expiry: null, revoked: pick(/revoked:\s+(true|false)/) === "true", atRisk: most ?? null, unconfirmed: unconfirmedWords(t), lastOwnerAction: last ? { action: last[1], tx: last[2], final: last[3] === "final" } : null };
   }
   const rr = railResult(t); // evm: the read script ends with a RESULT line
   return rr ? evmReadFromResult(rr) : { ok: false, code: 2 };
@@ -1241,11 +1245,12 @@ const newOp = () => { const d = new Date().toISOString().replace(/\D/g, "").slic
 const txOf = (text) => [...text.matchAll(/(?:tx hash|signature):\s*(\S+)|\/tx\/(0x[0-9a-fA-F]{64})/gi)].map((m) => m[1] ?? m[2]).pop();
 
 // ---- state -> exit code (from the rail's RESULT state, never from the rail's own exit code) ---------
-const STATES = ["planned", "sent", "settled", "failed", "refused_precheck", "refused_chain", "unknown", "not_found", "ok", "waiting_owner"];
+// landed: an owner action that is in a block but not final yet (exit 0, final: false); status says when it is final
+const STATES = ["planned", "sent", "settled", "failed", "refused_precheck", "refused_chain", "unknown", "not_found", "ok", "waiting_owner", "landed"];
 function exitFor(cmd, state, delivered) {
   switch (state) {
     case "settled": return delivered === true ? 0 : delivered === false || cmd === "buy" ? 4 : 0;
-    case "planned": case "sent": case "ok": case "waiting_owner": return 0;
+    case "planned": case "sent": case "ok": case "waiting_owner": case "landed": return 0;
     case "refused_precheck": return 3;
     case "unknown": return 5;
     default: return 1; // failed, refused_chain, not_found
@@ -1401,8 +1406,13 @@ async function status({ f, ctx }) {
   const ag = agentFlag(f);
   // Spent, revoked or expired: report it; a new budget is the owner's to ask for, so no grant recipe here (rule 10 of the skill).
   const ownerAsks = "a new budget starts only when the owner explicitly asks for one";
+  const lastNotFinal = s.lastOwnerAction && s.lastOwnerAction.final === false ? s.lastOwnerAction : null;
   const next = s.unconfirmed
     ? `the budget could not be confirmed on chain (${s.unconfirmed}): count it as live; run ${statusCommand(f)} again later`
+    : lastNotFinal
+    ? lastNotFinal.action === "revoke"
+      ? `the revoke ${lastNotFinal.tx} landed but the chain has not made it final yet: count the budget as live, and run ${statusCommand(f)} again later`
+      : `the grant ${lastNotFinal.tx} landed but the chain has not made it final yet: do not rely on the budget until ${statusCommand(f)} says it is final`
     : s.revoked
     ? `the budget is revoked: nothing to spend. Report it; ${ownerAsks}${f.rail === "tempo" ? " (a revoked tempo key can never be granted again)" : ""}`
     : s.expired
@@ -1415,7 +1425,7 @@ async function status({ f, ctx }) {
             ? `the budget is spent: nothing to spend. Report it; ${ownerAsks}`
             : empty ? `nothing to spend (spent, never granted, or revoked): the owner grants a budget with superstables budget grant --rail ${f.rail}${chainFlag(f)} --amount A when they ask for one` : "none";
   const tempoFields = f.rail === "tempo" ? { expired: s.expired, refillsAt: s.refillsAt } : {};
-  emit(0, { ...ctx, state: "ok", remaining: s.remaining, expiry: s.expiry, revoked: s.revoked, ...tempoFields, atRisk: s.atRisk, owner: owner ?? undefined, next, ...(s.unconfirmed ? { reason: s.unconfirmed } : {}) });
+  emit(0, { ...ctx, state: "ok", remaining: s.remaining, expiry: s.expiry, revoked: s.revoked, ...tempoFields, atRisk: s.atRisk, lastOwnerAction: s.lastOwnerAction ?? null, owner: owner ?? undefined, next, ...(s.unconfirmed ? { reason: s.unconfirmed } : {}) });
 }
 
 const chainFlag = (f) => (f.chain === RAILS[f.rail].chain ? "" : ` --chain ${f.chain}`);
@@ -1651,7 +1661,7 @@ async function reconcile({ f, ctx }) {
 // unknown, or a failure whose RESULT names the chain's proof, and makes every other one unknown.
 // mismatch: a transaction the owner's wallet sent landed and did something other than the plan (another amount, recipient
 // or call), so it moved something: unknown, never a refusal that says nothing was sent
-const OWNER_STATES = { set: "settled", revoked: "settled", ok: "settled", planned: "planned", refused_precheck: "refused_precheck", mismatch: "unknown", not_revoked: "failed", failed: "failed", unknown: "unknown" };
+const OWNER_STATES = { landed: "landed", set: "settled", revoked: "settled", ok: "settled", planned: "planned", refused_precheck: "refused_precheck", mismatch: "unknown", not_revoked: "failed", failed: "failed", unknown: "unknown" };
 const carriesTx = (tx) => (typeof tx === "string" ? tx !== "" : Boolean(tx) && typeof tx === "object" && Object.values(tx).some(Boolean));
 /**
  * Whether this owner command may have sent: its rail was about to broadcast, a signal stopped it once a link existed, its
@@ -1674,6 +1684,8 @@ function ownerOutcome(code, rr = null) {
   const c = [0, 2, 3, 5].includes(code) ? code : 1;
   const byCode = { 0: "settled", 2: "failed", 3: "refused_precheck", 5: "unknown" }[c] ?? "failed";
   const mapped = OWNER_STATES[rr?.state];
+  // in a block, not final yet: the rail says so with exit 0 and its own `landed`
+  if (c === 0 && rr?.state === "landed") return { code: 0, state: "landed", reason: rr?.reason, proof: undefined };
   return { code: c, state: c !== 0 && mapped && mapped !== "settled" && mapped !== "planned" ? mapped : byCode, reason: rr?.reason, proof: rr?.proof };
 }
 // Owner transaction hashes: the evm RESULT carries them; the other rails print an explorer line.
@@ -1722,6 +1734,8 @@ async function grant({ f, ctx }) {
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
   if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, amount: f.amount, tx: rr?.tx ? { grant: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, o.state === "refused_precheck" ? "read reason and tx; a changed wallet transaction may already be on chain. Check status before granting again" : `${statusCommand(f)}: the chain may or may not have changed`), reason: o.reason ?? `the rail script exited ${r.code}` });
+  // in a block, not final yet: the rail says landed, and the readback below (which counts only what is final) is skipped
+  if (o.state === "landed") return emit(0, { ...ctx, state: "landed", final: false, amount: f.amount, remaining: null, tx: { grant: ownerTx(rr, r.stdout) ?? null }, url: approvalUrl, next: rr?.next ?? `${statusCommand(f)} later: the grant is final when status says so` });
   const after = await readBudget(f);
   emit(0, { ...ctx, state: "settled", amount: f.amount, remaining: after.ok ? after.remaining : null, tx: { grant: ownerTx(rr, r.stdout) ?? null }, expiry: after.ok ? after.expiry : null, url: approvalUrl, next: "none" });
 }
@@ -1753,6 +1767,8 @@ async function revoke({ f, ctx }) {
   // solana: no USDC account, so no delegate to clear and nothing sent. One read decided it, so revoked is null, not true.
   if (r.code === 0 && rr?.evidence === "no_token_account") return emit(0, { ...ctx, state: "ok", remaining: "0", revoked: null, agreement: rr.agreement, tx: {}, next: "none", reason: rr.reason ?? "the owner has no USDC account, so there is no delegate to clear; nothing was sent" });
   const after = await readBudget(f);
+  // in a block, not final yet: revoked stays false until status can say it is final
+  if (o.state === "landed") return emit(0, { ...ctx, state: "landed", final: false, remaining: after.ok ? after.remaining : null, revoked: false, tx: { revoke: ownerTx(rr, r.stdout) ?? null }, url: approvalUrl, next: rr?.next ?? `${statusCommand(f)} later: the revoke is final when status says so` });
   // tempo: the key reads revoked and the keychain refused a simulated revokeKey from the owner, so nothing was sent
   if (r.code === 0 && rr?.evidence === "simulated_already_revoked" && after.ok && after.revoked) return emit(0, { ...ctx, state: "ok", remaining: after.remaining, revoked: true, agreement: rr.agreement, tx: {}, next: "none", reason: "already revoked: the key reads revoked, and the keychain refuses a simulated revokeKey from the owner as already done; nothing was sent" });
   const done = r.code === 0 && after.ok && after.revoked;
@@ -1771,7 +1787,8 @@ async function recover({ f, ctx }) {
   const o = ownerOutcome(r.code, rr);
   const tx = {};
   for (const [k, v] of [["selfRevoke", rr?.selfRevokeTx], ["ownerRevoke", rr?.ownerRevokeTx], ["gas", rr?.gasTx], ["sweep", rr?.sweepTx]]) if (v) tx[k] = v;
-  emit(o.code, { ...ctx, state: o.state, proof: o.proof, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, url: approvalUrl, next: o.code === 0 ? "none" : ownerNext(o, rr, `superstables budget status --rail ${f.rail}; then superstables budget recover again`), reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
+  const revokeNotFinal = rr?.ownerRevokeFinal === false;
+  emit(o.code, { ...ctx, state: o.state, ...(revokeNotFinal ? { final: false } : {}), ...(typeof rr?.ownerRevokeFinal === "boolean" ? { ownerRevokeFinal: rr.ownerRevokeFinal } : {}), proof: o.proof, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, url: approvalUrl, next: o.code === 0 ? (revokeNotFinal ? `${statusCommand(f)} later: the owner's revoke is final when status says so` : "none") : ownerNext(o, rr, `superstables budget status --rail ${f.rail}; then superstables budget recover again`), reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
 }
 
 async function setup({ f, ctx }) {
@@ -1803,7 +1820,7 @@ async function setup({ f, ctx }) {
   const owner = rr?.owner ? ownerCheck({ rail: f.rail, chain: f.chain, owner: rr.owner, site }) : null;
   const check = owner?.next;
   if (owner) log(`\n${owner.words}`);
-  emit(0, { ...ctx, state: "ok", owner: rr?.owner, agent: rr?.agent, approvals: site ? "hosted" : "local", site: site ?? undefined, ...steps, url: approvalUrl, next: check ? `${check}. Then: ${rr?.next ?? "none"}` : rr?.next ?? "none" });
+  emit(0, { ...ctx, state: "ok", ...(rr?.final === false ? { final: false } : {}), owner: rr?.owner, agent: rr?.agent, approvals: site ? "hosted" : "local", site: site ?? undefined, ...steps, url: approvalUrl, next: check ? `${check}. Then: ${rr?.next ?? "none"}` : rr?.next ?? "none" });
 }
 
 async function fundAgent({ f, ctx }) {
@@ -1815,6 +1832,7 @@ async function fundAgent({ f, ctx }) {
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
   if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, `superstables budget doctor --rail ${f.rail}`), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
+  if (o.state === "landed") return emit(0, { ...ctx, state: "landed", final: false, amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: rr?.next ?? `landed, not final yet. Nothing to do: the transfer is final once its block is. superstables budget doctor --rail ${f.rail}${chainFlag(f)} reads the balance` });
   emit(0, { ...ctx, state: "settled", amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: f.rail === "solana" ? "superstables budget doctor --rail solana, then superstables budget grant --rail solana --amount A" : `superstables budget doctor --rail evm${chainFlag(f)}, then superstables budget grant --rail evm${chainFlag(f)} --amount A` });
 }
 

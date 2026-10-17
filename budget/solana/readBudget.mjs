@@ -101,12 +101,26 @@ const confirmed = confirmedNone || confirmedZero;
 const revoked = noDelegate && revokedAt !== undefined && confirmedNone;
 const unconfirmed = (noDelegate || zero) && !confirmed;
 const why = !agreed ? "" : agreed.agreed ? (noDelegate ? "the confirming RPC endpoints read a delegate" : "the confirming RPC endpoints read a different amount") : agreementWords(agreed);
+// The owner's last recorded action (the revoke when REVOKED_AT is recorded, else the grant: a grant drops REVOKED_AT) and whether its
+// signature is finalized. Only for the owner the public file records.
+const sigLike = (v) => typeof v === "string" && /^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(v);
+const lastAction = pubEnv.SOLANA_OWNER_ADDRESS === ownerPk.toBase58()
+  ? revokedAt !== undefined && sigLike(pubEnv.REVOKED_TX) ? { action: "revoke", tx: pubEnv.REVOKED_TX } : sigLike(pubEnv.GRANT_TX) ? { action: "grant", tx: pubEnv.GRANT_TX } : null
+  : null;
+let lastFinal = false;
+if (lastAction) {
+  try {
+    const st = (await conn.getSignatureStatuses([lastAction.tx], { searchTransactionHistory: true })).value[0];
+    lastFinal = st?.confirmationStatus === "finalized" && !st.err;
+  } catch { /* not read: not final */ }
+}
 console.log("On-chain (owner USDC token account):");
 console.log(`  owner: ${ownerPk.toBase58()}`);
 console.log(`  delegate: ${acc.delegate?.toBase58() ?? "none"}`);
 if (agreed) console.log(`  agreement: ${confirmed ? agreed.agreement : why}`);
 console.log(`  delegatedAmount (remaining): ${unconfirmed ? `unknown (${why})` : `${fromBaseUnits(acc.delegatedAmount)} USDC`}`);
 console.log(`  revoked: ${revoked}${revoked ? ` (this machine recorded a revoke at ${new Date(revokedAt * 1000).toISOString()})` : unconfirmed ? ` (not confirmed: ${why})` : acc.delegate === null ? " (no delegate reads: spent, never granted, or revoked without a record on this machine)" : ""}`);
+if (lastAction) console.log(`  last owner action: ${lastAction.action} ${lastAction.tx} (${lastFinal ? "final" : "landed, not final yet"})`);
 console.log(`  owner token balance (informational, not the budget): ${fromBaseUnits(acc.amount)} USDC`);
 console.log(`  maximum the delegate can still move: ${unconfirmed ? `unknown (${why})` : `${formatUnits(effective)} USDC (the smaller of the two above)`}`);
 console.log("\nNo expiry and no seller list exist on this rail. The budget lasts until it is spent or revoked.");

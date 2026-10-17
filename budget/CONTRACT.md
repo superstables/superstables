@@ -33,6 +33,8 @@ The README says which owner action stops the agent even if the agent key is stol
 
 `revoke` never skips its transaction on one read: on `evm` and `solana` it always sends (on `solana` unless the owner has no USDC account, where the transaction would fail), and on `tempo` it skips only when the keychain refuses a simulated `revokeKey` from the owner. `status` reports `revoked: true` only for a revoke this machine recorded that the chain still shows (on `tempo`, the keychain's revoked flag).
 
+An owner action is final only at a final block: `revoke`, `grant`, `fund-agent` and `recover` report `landed` (exit 0, `final: false`) until the transaction's block is final on the chain's rule and the agreeing endpoints read the effect there. A grant waits for the previous revoke to be final, and a setup that bundles a grant never grants over an allowance or delegate it cannot read at a final block, unless the agent key was created in that same setup.
+
 ## 4. Every purchase is checked before anything is signed
 
 `buy` must refuse, before any signature, pull or transaction, when:

@@ -431,7 +431,7 @@ export async function startFakeRpc(chainId: number, extra?: (method: string, par
       return {
         jsonrpc: "2.0",
         id: c.id,
-        result: given ?? (c.method === "eth_chainId" ? `0x${chainId.toString(16)}` : c.method === "eth_call" ? `0x${"0".repeat(64)}` : c.method === "eth_blockNumber" ? "0x1" : c.method === "eth_getBalance" ? "0xde0b6b3a7640000" : "0x0"),
+        result: given ?? (c.method === "eth_chainId" ? `0x${chainId.toString(16)}` : c.method === "eth_call" ? `0x${"0".repeat(64)}` : c.method === "eth_blockNumber" ? "0x1" : c.method === "eth_getBlockByNumber" ? { number: "0x1000", hash: `0x${"ef".repeat(32)}`, timestamp: "0x7d0", transactions: [] } : c.method === "eth_getBalance" ? "0xde0b6b3a7640000" : "0x0"),
       };
     };
     json(res, 200, Array.isArray(body) ? body.map(answer) : answer(body));

@@ -11,6 +11,7 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { generatePrivateKey, privateKeyToAccount, privateKeyToAddress } from "viem/accounts";
+import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { startFakeSolana, startFakeTempo, type FakeSolana, type FakeTempo } from "../helpers/fake-chains.js";
 import { evmOwner, evmOwnerKey, linkProofText, signLinkProof, solanaOwner, solanaOwnerKeypair, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import type { TestServer } from "../helpers/servers.js";
@@ -299,7 +300,10 @@ let site: FakeSite;
 let rpc: TestServer;
 let solana: FakeSolana;
 let tempo: FakeTempo;
-beforeAll(() => undefined);
+// a grant is asked for only when the endpoints agree the allowance is 0 at a final block: the copy names the fake RPC as two operators
+let tree: EndpointTree;
+beforeAll(() => { tree = endpointTree(); });
+afterAll(() => tree.close());
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "ss-binding-"));
   site = await startFakeSite();
@@ -325,7 +329,8 @@ function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     Object.assign(env, extraEnv);
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+    tree.set({ "base-sepolia": [{ url: rpc.url, operator: "fake-a" }, { url: `${rpc.url}/`, operator: "fake-b" }] });
+    const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => {

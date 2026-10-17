@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { domainSeparator } from "viem";
+import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { makeChain, makeHome, startFakeEvm, startSeller, usdc } from "../helpers/fake-evm.js";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -90,10 +91,17 @@ describe("a copy of the client whose Base Sepolia token says approveReset: true"
 });
 
 describe("the real tree against a token that reverts an approve over a live allowance", () => {
+  // the grant is asked for only when two endpoints agree, at a final block, that the allowance is 0: a copy names the fake twice
+  let tree: EndpointTree;
+  beforeAll(() => { tree = endpointTree(); });
+  afterAll(() => tree.close());
   async function setup(live: bigint) {
     const ownerKey = generatePrivateKey(), owner = privateKeyToAccount(ownerKey);
     const agentKey = generatePrivateKey(), agent = privateKeyToAccount(agentKey);
     const chain = await startFakeEvm();
+    const mirror = await chain.mirror();
+    cleanups.push(() => mirror.close());
+    tree.set({ "base-sepolia": [{ url: chain.url, operator: "fake-a" }, { url: mirror.url, operator: "fake-b" }] });
     (chain as unknown as { approveReset: boolean }).approveReset = true;
     chain.setUsdc(owner.address, usdc("100"));
     chain.setNative(owner.address, 10n ** 20n);
@@ -105,7 +113,7 @@ describe("the real tree against a token that reverts an approve over a live allo
     writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=${agentKey}\n`, { mode: 0o600 });
     writeFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${owner.address}\nB4_AGENT_ADDRESS=${agent.address}\n`);
     writeFileSync(join(home, "owner.env"), `B4_OWNER_KEY=${ownerKey}\n`, { mode: 0o600 });
-    const grant = (extra: string[]) => run(ROOT, TSX, [join(ROOT, "budget/evm/setBudget.ts"), "--cap", "2", ...extra], { SUPERSTABLES_HOME: home, B4_RPC: chain.url });
+    const grant = (extra: string[]) => run(tree.root, TSX, [join(tree.root, "budget/evm/setBudget.ts"), "--cap", "2", ...extra], { SUPERSTABLES_HOME: home, B4_RPC: chain.url });
     const approvals = () => chain.sentRaw.filter((t) => t.data.startsWith(APPROVE)).map((t) => BigInt(`0x${t.data.slice(74, 138)}`));
     return { chain, owner, agent, home, grant, approvals };
   }

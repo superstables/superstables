@@ -118,7 +118,7 @@ export async function startFakeTempo(): Promise<FakeTempo> {
       }
       case "eth_getTransactionReceipt": {
         const t = txs.get(params[0]);
-        return t ? { transactionHash: params[0], status: t.reverted ? "0x0" : "0x1", blockNumber: hex(t.block), from: t.from, to: KEYCHAIN, logs: [], gasUsed: "0x1" } : null;
+        return t ? { transactionHash: params[0], status: t.reverted ? "0x0" : "0x1", blockNumber: hex(t.block), blockHash: `0x${"ab".repeat(32)}`, from: t.from, to: KEYCHAIN, logs: [], gasUsed: "0x1" } : null;
       }
       case "eth_getLogs": return [];
       default: return null;
@@ -183,6 +183,8 @@ export interface FakeSolana extends TestServer {
   landHeld?: () => string | undefined;
   /** The slot getSignatureStatuses answers from (default: the current slot): a node lagging behind answers from an earlier one. */
   statusSlot?: () => number;
+  /** The commitment getSignatureStatuses reports for every landed signature (default "finalized": a test sets "confirmed" for a transaction the chain has not finalized). */
+  confirmationStatus?: "confirmed" | "finalized";
   /** What getGenesisHash answers (default: Solana devnet's); null makes it fail. */
   genesis: string | null;
   /** Every RPC method asked, in order. */
@@ -329,14 +331,14 @@ export async function startFakeSolana(opts: { websocket?: boolean } = {}): Promi
       }
       case "getTransaction": return txs.get(params[0]) ?? null;
       case "getEpochInfo": return { absoluteSlot: chain.slot, blockHeight: chain.slot, epoch: 0, slotIndex: chain.slot, slotsInEpoch: 432000 };
-      case "getSignatureStatuses": return { context: { slot: chain.statusSlot?.() ?? chain.slot }, value: params[0].map((s: string) => (txs.has(s) ? { slot: txs.get(s).slot, confirmations: null, err: null, confirmationStatus: "confirmed" } : null)) };
+      case "getSignatureStatuses": return { context: { slot: chain.statusSlot?.() ?? chain.slot }, value: params[0].map((s: string) => (txs.has(s) ? { slot: txs.get(s).slot, confirmations: null, err: null, confirmationStatus: chain.confirmationStatus ?? "finalized" } : null)) };
       case "getLatestBlockhash": return ctx({ blockhash: bs58.encode(Buffer.alloc(32, 9)), lastValidBlockHeight: chain.slot + 150 });
       case "sendTransaction": {
         const tx = Transaction.from(Buffer.from(params[0], "base64"));
         // a node refuses a transaction whose signatures do not verify
         if (!tx.signature || !tx.verifySignatures()) throw new Error("Transaction signature verification failure");
         const signature = bs58.encode(tx.signature);
-        // a key signing for itself (acceptTokenTransactions): one Revoke or one TransferChecked, checked as the token program does
+        // a key signing for itself (acceptTokenTransactions): one Revoke, ApproveChecked or TransferChecked, checked as the token program does
         const token = chain.acceptTokenTransactions && tx.instructions.length === 1 && tx.instructions[0].programId.equals(TOKEN_PROGRAM) ? tx.instructions[0] : undefined;
         const walletOf = (account: string) => [...chain.usdc.keys()].find((o) => ataOf(o).toBase58() === account);
         const signs = (k: { pubkey: PublicKey; isSigner: boolean }) => k.isSigner && tx.signatures.some((s) => s.publicKey.equals(k.pubkey) && s.signature !== null);
@@ -346,6 +348,16 @@ export async function startFakeSolana(opts: { websocket?: boolean } = {}): Promi
           if (token.keys[0].pubkey.toBase58() !== ataOf(owner).toBase58() || !chain.usdc.has(owner)) throw new Error("fake solana: Revoke: the source is not the token account of its owner");
           if (!signs(token.keys[1])) throw new Error("fake solana: Revoke: the owner has not signed");
           chain.land({ kind: "revoke", owner, agent: "", signature });
+          chain.afterSend?.(signature);
+          return signature;
+        }
+        if (token && token.data[0] === 13) {
+          // ApproveChecked: [source, mint, delegate, owner (signer)], amount, decimals
+          const owner = walletOf(token.keys[0].pubkey.toBase58());
+          if (!owner) throw new Error("fake solana: ApproveChecked: a token account that does not exist");
+          if (token.keys[1].pubkey.toBase58() !== USDC_MINT.toBase58() || token.data[9] !== 6) throw new Error("fake solana: ApproveChecked: not the USDC mint's decimals");
+          if (token.keys[3].pubkey.toBase58() !== owner || !signs(token.keys[3])) throw new Error("fake solana: ApproveChecked: the owner has not signed");
+          chain.land({ kind: "grant", owner, agent: token.keys[2].pubkey.toBase58(), amount: token.data.readBigUInt64LE(1), signature });
           chain.afterSend?.(signature);
           return signature;
         }
