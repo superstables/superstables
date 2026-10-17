@@ -47,7 +47,12 @@ export async function believedDomainSeparator(network: EvmNetwork, chainRead: Ch
 }
 
 function rpcUrlOf(network: EvmNetwork, chainRead: ChainReadOptions): { url: string } | { error: string } {
-  const given = chainRead.rpcUrlFor?.(network);
+  const given =
+    chainRead.rpcUrlFor?.(network) ??
+    (() => {
+      const set = chainRead.endpointsFor?.(network);
+      return set && !("error" in set) ? set.primary.url : undefined;
+    })();
   return given ? { url: given } : chainRpc(network, process.env, "read");
 }
 

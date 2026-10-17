@@ -218,6 +218,7 @@ it("uses the EVM instant-finality exception only for pinned SKALE", async () => 
   const baseTx = chain.settle({ from: PAYER, to: TO, value: "10000", nonce: NONCE });
   expect((await checkSettlement({ transaction: baseTx, payer: PAYER, recipient: TO, amountAtomic: "10000", nonce: NONCE }, { rpcUrl: chain.url })).chain).toBe("unchecked");
   const transaction = chain.settle({ from: PAYER, to: TO, value: "10000", nonce: NONCE, token: SKALE_BASE_SEPOLIA.usdc.address });
+  chain.chainId = SKALE_BASE_SEPOLIA.chainId;
   expect(await checkSettlement({ network: SKALE_BASE_SEPOLIA.caip2, transaction, payer: PAYER, recipient: TO, amountAtomic: "10000", nonce: NONCE }, { rpcUrl: chain.url })).toEqual({ chain: "verified" });
 });
 

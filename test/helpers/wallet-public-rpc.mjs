@@ -17,7 +17,7 @@ if (mode === 'reads') {
     reads.push({ path: req.url, method: call.method });
     res.setHeader('content-type', 'application/json');
     const result = call.method === 'getBalance' ? { context: { slot: 1 }, value: 123 }
-      : call.method === 'getBlockHeight' ? 123 : call.method === 'eth_call' ? `0x${'7b'.padStart(64, '0')}` : '0x7b';
+      : call.method === 'getBlockHeight' ? 123 : call.method === 'eth_call' ? `0x${'7b'.padStart(64, '0')}` : call.method === 'eth_chainId' ? '0x14a34' : '0x7b';
     res.end(JSON.stringify({ jsonrpc: '2.0', id: call.id, result }));
   });
   await new Promise(resolve => stub.listen(0, '127.0.0.1', resolve));

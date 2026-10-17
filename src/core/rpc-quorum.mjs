@@ -5,7 +5,7 @@
 
 /** @typedef {(url: string, method: string, params: unknown[]) => Promise<unknown>} Call */
 /** @typedef {{ kind: "evm", chainId: number } | { kind: "solana", genesis: string }} Identity */
-/** @typedef {{ url: string, operator: string }} Member */
+/** @typedef {{ url: string, operator: string, source?: string }} Member */
 /** @typedef {"quorum"|"owner-node"|"single"|"caller"} Agreement */
 /** @typedef {{ verdict: Member[], quorum: number, agreement: Agreement } | { error: string }} VerdictSet */
 /** @typedef {{ agreed: false, why: "missing"|"disagree"|"not_final_yet"|"unreadable", reason: string, left?: string[] }} Failed */
@@ -125,13 +125,21 @@ async function usable(set, identity, call) {
 }
 
 /**
+ * The operators that count toward a quorum: an endpoint an RPC variable added (source "env") may disagree, never stand in
+ * for one of the set's own operators.
+ * @param {Member[]} members
+ */
+export const deciding = (members) => new Set(members.filter((m) => m.source !== "env").map((m) => m.operator));
+
+/**
  * @param {Member[]} members @param {{ quorum: number }} set @param {string[]} left @param {boolean} [answered] whether any endpoint got as far as answering
  * @returns {Failed | undefined}
  */
 function short(members, set, left, answered = members.length > 0) {
   if (members.length === 0) return { agreed: false, why: answered ? "missing" : "unreadable", reason: left.join("; ") || "no endpoint answered", left };
-  if (new Set(members.map((m) => m.operator)).size < set.quorum) {
-    return { agreed: false, why: "missing", reason: `${members.length} endpoint(s) from ${new Set(members.map((m) => m.operator)).size} operator(s) answered; ${set.quorum} needed`, left };
+  const deciders = deciding(members);
+  if (deciders.size < set.quorum) {
+    return { agreed: false, why: "missing", reason: `${members.length} endpoint(s) from ${deciders.size} operator(s) answered; ${set.quorum} needed`, left };
   }
   return undefined;
 }
@@ -204,7 +212,7 @@ export async function agreeAtFinalEvm({ set, call, chainId, finality, read, atLe
     value: ok[0].value,
     block: { number: F, hash: ok[0].hash, timestamp: Number(ok[0].timestamp), highest },
     agreement: vset.agreement,
-    operators: [...new Set(ok.map((r) => r.m.operator))],
+    operators: [...deciding(ok.map((r) => r.m))],
   };
 }
 
@@ -264,7 +272,7 @@ export async function agreeAtFinalSolana({ set, call, genesis, read, minSlot, at
   const missing = short(ok.map((r) => r.m), vset, left, members.length > 0);
   if (missing) return missing;
   if (atLeast !== undefined && floor < atLeast) return { agreed: false, why: "not_final_yet", reason: `final slot ${floor} is below slot ${atLeast}`, left };
-  return { agreed: true, value: ok[0].value, slot: floor, highest, agreement: vset.agreement, operators: [...new Set(ok.map((r) => r.m.operator))] };
+  return { agreed: true, value: ok[0].value, slot: floor, highest, agreement: vset.agreement, operators: [...deciding(ok.map((r) => r.m))] };
 }
 
 /**

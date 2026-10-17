@@ -15,7 +15,8 @@ import { inclusion } from "../finality.js";
 import { encodeFunctionData, getAddress, keccak256, toBytes, toHex, type Hex } from "viem";
 import { TEMPO_MODERATO, fromAtomic, isAddress, isTransactionId, mainnetName } from "../chain.js";
 import { hashCredential, type MppChallenge } from "../mpp.js";
-import { chainRpc, rpcCall } from "../rpc.js";
+import { rpcCall, verifiedRpc } from "../rpc.js";
+import { searchLogs } from "../log-windows.mjs";
 import type { ChainCheck } from "../settlement.js";
 import { untrustedText } from "../text.js";
 import type { SignResult } from "../signer/types.js";
@@ -150,10 +151,8 @@ interface RpcLog {
   blockNumber?: string;
 }
 
-function rpcOf(options: ChainReadOptions): { url: string } | { error: string } {
-  const override = options.rpcUrlFor?.(TEMPO_MODERATO);
-  return override ? { url: override } : chainRpc(TEMPO_MODERATO);
-}
+/** The RPC Tempo Moderato is read through, after it has said it is that chain. */
+const primaryRpc = (options: ChainReadOptions) => verifiedRpc(TEMPO_MODERATO, options);
 
 /** Does this TransferWithMemo log show exactly this payment? */
 function showsPayment(log: RpcLog, facts: PaymentFacts): boolean {
@@ -177,8 +176,8 @@ async function checkTempoPayment(facts: PaymentFacts, options: ChainReadOptions)
   if (!facts.memo || !isHash(facts.memo) || !isAddress(facts.payer) || !isAddress(facts.recipient)) {
     return { chain: "unchecked", reason: "this payment's memo was not recorded, so it cannot be matched" };
   }
-  const rpc = rpcOf(options);
-  if ("error" in rpc) return { chain: "unchecked", reason: `the chain was not read: ${rpc.error}` };
+  const rpc = await primaryRpc(options);
+  if ("error" in rpc) return { chain: "unchecked", reason: rpc.error };
   let receipt: { status?: string; transactionHash?: string; blockNumber?: string; blockHash?: string; logs?: RpcLog[] } | null;
   try {
     receipt = await rpcCall(rpc.url, "eth_getTransactionReceipt", [facts.transaction], options);
@@ -213,8 +212,6 @@ async function checkTempoPayment(facts: PaymentFacts, options: ChainReadOptions)
 const BLOCKS_PER_SECOND = 4;
 /** The public Moderato RPC answers log searches of up to 100,000 blocks. */
 const LOG_RANGE = 100_000n;
-/** At most this many log searches for one payment: about three million blocks, days of Moderato. */
-const MAX_LOG_SEARCHES = 30;
 
 /**
  * Look for a payment whose hash never reached this machine, or did but did not show yet: first the hash, then every
@@ -231,8 +228,8 @@ async function findTempoPayment(facts: PaymentFacts, options: ChainReadOptions):
   const attributed = new Set((facts.attributed ?? []).map((tx) => tx.toLowerCase()));
   const boundary = /^\d+$/.test(facts.searchFromBlock ?? "") ? BigInt(facts.searchFromBlock!) : undefined;
   const since = facts.since ? Date.parse(facts.since) / 1000 : NaN;
-  const rpc = rpcOf(options);
-  if ("error" in rpc) return { found: false, unreadable: true, reason: `the chain was not read: ${rpc.error}` };
+  const rpc = await primaryRpc(options);
+  if ("error" in rpc) return { found: false, unreadable: true, reason: rpc.error };
   try {
     /** Is this transaction, mined in this block, after the wallet was asked? */
     const after = async (block: bigint | undefined): Promise<boolean> => {
@@ -255,43 +252,46 @@ async function findTempoPayment(facts: PaymentFacts, options: ChainReadOptions):
     const latest = await rpcCall<{ number?: string; timestamp?: string } | null>(rpc.url, "eth_getBlockByNumber", ["latest", false], options);
     const head = blockOf(latest?.number);
     if (head === undefined) return { found: false, unreadable: true, reason: "the chain could not be read: the RPC did not give a usable answer" };
-    const cap = LOG_RANGE * BigInt(MAX_LOG_SEARCHES);
     let from: bigint;
-    let reaches = true;
     if (boundary !== undefined) {
       from = boundary + 1n;
     } else {
       const chainTime = Number(BigInt(latest?.timestamp ?? ""));
       const seconds = Number.isFinite(since) ? Math.max(0, chainTime - since) + 120 : 3_600;
       const wanted = BigInt(Math.ceil(seconds * BLOCKS_PER_SECOND));
-      reaches = wanted <= cap;
-      const span = wanted > cap ? cap : wanted;
-      from = head > span ? head - span : 0n;
+      from = head > wanted ? head - wanted : 0n;
     }
-    const until = from + cap - 1n < head ? from + cap - 1n : head;
-    if (until < head) reaches = false;
-    while (from <= until) {
-      const to = from + LOG_RANGE - 1n > until ? until : from + LOG_RANGE - 1n;
-      const logs = await rpcCall<RpcLog[]>(
-        rpc.url,
-        "eth_getLogs",
-        [{ address: TEMPO_MODERATO.token.address, fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}`, topics: [TRANSFER_WITH_MEMO_TOPIC, topicOf(facts.payer), topicOf(facts.recipient), facts.memo] }],
-        options,
-      );
-      for (const log of Array.isArray(logs) ? logs : []) {
-        if (!showsPayment(log, facts) || !isHash(log.transactionHash) || attributed.has(log.transactionHash.toLowerCase())) continue;
-        if (!(await after(blockOf(log.blockNumber)))) continue;
-        // The log is the chain's own answer to a search by memo; the receipt is read again to be sure it succeeded.
-        const check = await checkTempoPayment({ ...facts, transaction: log.transactionHash }, options);
-        if (check.chain === "verified" || check.included) return { found: true, transaction: log.transactionHash, ...(check.included ? { final: false } : {}) };
-      }
-      from = to + 1n;
-    }
+    // In windows the RPC accepts: a refused range narrows the window, a rate limit is waited for (src/core/log-windows.mjs).
+    const search = await searchLogs<RpcLog, FoundPayment>(
+      async (fromBlock, toBlock) => {
+        const logs = await rpcCall<RpcLog[]>(
+          rpc.url,
+          "eth_getLogs",
+          [{ address: TEMPO_MODERATO.token.address, fromBlock: `0x${fromBlock.toString(16)}`, toBlock: `0x${toBlock.toString(16)}`, topics: [TRANSFER_WITH_MEMO_TOPIC, topicOf(facts.payer), topicOf(facts.recipient), facts.memo] }],
+          options,
+        );
+        return Array.isArray(logs) ? logs : [];
+      },
+      { from, to: head, window: Number(LOG_RANGE), blockSeconds: 1 / BLOCKS_PER_SECOND },
+      async (logs) => {
+        for (const log of logs) {
+          if (!showsPayment(log, facts) || !isHash(log.transactionHash) || attributed.has(log.transactionHash.toLowerCase())) continue;
+          if (!(await after(blockOf(log.blockNumber)))) continue;
+          // The log is the chain's own answer to a search by memo; the receipt is read again to be sure it succeeded.
+          const check = await checkTempoPayment({ ...facts, transaction: log.transactionHash }, options);
+          if (check.chain === "verified" || check.included) return { found: true, transaction: log.transactionHash, ...(check.included ? { final: false } : {}) } as FoundPayment;
+        }
+        return undefined;
+      },
+      options.logSearch,
+    );
+    if (search.found) return search.found;
+    // Tempo has no negative verdict: nothing found is never "never", so a search never releases a payment from the cap.
     return {
       found: false,
-      reason: reaches
+      reason: search.covered
         ? "the chain shows no transfer with this payment's memo"
-        : "the chain shows no transfer with this payment's memo in the blocks searched, which do not cover the whole time since the owner was asked",
+        : `the chain shows no transfer with this payment's memo in the blocks searched (to block ${search.searchedTo}), which do not cover the whole time since the owner was asked`,
     };
   } catch {
     return { found: false, unreadable: true, reason: "the chain could not be read: the RPC did not give a usable answer" };
@@ -304,7 +304,7 @@ function blockOf(value: unknown): bigint | undefined {
 
 /** The head block's number, read right before the owner's wallet is asked to send. Throws when it cannot be read. */
 async function tempoHeadBlock(options: ChainReadOptions): Promise<string> {
-  const rpc = rpcOf(options);
+  const rpc = await primaryRpc(options);
   if ("error" in rpc) throw new Error(rpc.error);
   const latest = await rpcCall<{ number?: string } | null>(rpc.url, "eth_getBlockByNumber", ["latest", false], options);
   const head = blockOf(latest?.number);

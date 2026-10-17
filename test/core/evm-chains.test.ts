@@ -195,6 +195,8 @@ describe("reading a settlement on each EVM chain", () => {
     chain = await startFakeBaseSepolia();
     for (const network of EVM_NETWORKS) {
       const input = { transaction: tx, payer, recipient: PAY_TO, amountAtomic: "10000", nonce, network: network.caip2 };
+      // one fake serves every chain, and says which one it is each time (the identity check)
+      chain.chainId = network.chainId;
       chain.receipts.set(tx, paymentReceipt({ payer, to: PAY_TO, value: 10000n, nonce, token: network.usdc.address }));
       expect(await checkSettlement(input, { rpcUrl: chain.url }), network.key).toEqual({ chain: "verified" });
       // The same logs from another chain's USDC contract are not this payment.

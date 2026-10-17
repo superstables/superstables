@@ -90,6 +90,7 @@ describe("status on EVM chains", () => {
     const chain = await evmChain();
     const r = ledger();
     const token = POLYGON_AMOY.usdc.address;
+    chain.chainId = POLYGON_AMOY.chainId;
     const validBefore = new Date((chain.head.timestamp + 300) * 1000).toISOString();
     const cancelled = chain.settle({ from: PAYER, to: RECIPIENT, value: "10000", nonce: NONCE, token });
     chain.used.get(NONCE)!.cancelled = true;

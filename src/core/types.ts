@@ -7,6 +7,16 @@ import type { SettleResponse } from "@x402/core/types";
 import type { RailRequirement } from "./rails/types.js";
 import type { ChainState } from "./settlement.js";
 
+/** How a "never paid" verdict was agreed: two operators, the owner's own node, the one public RPC of a testnet, or an RPC the calling code pinned. */
+export type ChainAgreement = "quorum" | "owner-node" | "single" | "caller";
+/** Where it was agreed: the operators, and the final block (decimal) and its hash (EVM), or the slot (Solana). */
+export interface ChainAgreedAt {
+  operators: string[];
+  block?: string;
+  blockHash?: string;
+  slot?: number;
+}
+
 // ── Discovery ────────────────────────────────────────────────────────────────────────────
 
 export interface ServiceParam {
@@ -252,6 +262,12 @@ export interface Attempt {
    * block after it.
    */
   searchedToSlot?: number;
+  /** Solana: how far each other verdict endpoint (by its id) has read those blocks, none holding the payment. */
+  confirmSearchedTo?: Record<string, number>;
+  /** How the chain's "never paid" verdict was agreed, on a payment released as unpaid. */
+  chainAgreement?: ChainAgreement;
+  /** Where it was agreed: the operators, and the final block (EVM) or slot (Solana). */
+  chainAgreedAt?: ChainAgreedAt;
   /**
    * What the chain says about the payment: "verified" (the transaction is this payment), "mismatch" (the transaction the
    * seller named is not; the attempt is then uncertain), "unchecked" (the chain could not say yet), or "unpaid" (a later
@@ -296,6 +312,8 @@ export interface Receipt {
   /** What the chain says about the settlement: see Attempt.chain. Absent on receipts written before it was read. */
   chain?: ChainState;
   chainReason?: string;
+  chainAgreement?: ChainAgreement;
+  chainAgreedAt?: ChainAgreedAt;
   /** Inclusion was proven; a later reorg cannot authorize repayment. */
   paymentIncluded?: true;
   /** True for final matching inclusion, false for provisional matching inclusion, null when none is established or finality was not observed. */

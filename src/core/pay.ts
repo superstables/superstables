@@ -33,7 +33,7 @@ import type { ChainReadOptions, Offer, PaymentFacts, PushRail, RailAdapter, X402
 import { join } from "node:path";
 import { accountPolicyPath, retiredListPath } from "./home.js";
 import { signedPolicyCheck } from "./owner-settings.js";
-import type { AbandonCause, Attempt, AttemptState, Quote, Receipt, ServiceOutcome } from "./types.js";
+import type { AbandonCause, Attempt, AttemptState, ChainAgreedAt, ChainAgreement, Quote, Receipt, ServiceOutcome } from "./types.js";
 import { FINAL_ATTEMPT_STATES } from "./types.js";
 
 /** How much of the service's answer is kept on the attempt and the receipt. */
@@ -54,10 +54,15 @@ export interface PaymentEngineOptions {
   fetchImpl?: typeof fetch;
   /** How long each exchange with the seller may take, answer included. Shortened in tests; two minutes otherwise. */
   timeoutMs?: number;
-  /** The RPC every chain read goes through, whatever the chain. Tests point it at a fake chain; chainRpc() otherwise. */
+  /**
+   * The RPC every chain read goes through, whatever the chain. Caller-pinned: believed alone, even to say a payment was never
+   * made, and labelled `caller` on the record. Never set by the CLI; chainRpc() otherwise.
+   */
   rpcUrl?: string;
-  /** The RPC of one chain, when tests run several fake ones; rpcUrl, then chainRpc(), otherwise. */
+  /** The RPC of one chain, caller-pinned like `rpcUrl` (tests run several fake ones); rpcUrl, then chainRpc(), otherwise. */
   rpcUrlFor?: (network: NetworkInfo) => string | undefined;
+  /** The endpoints of a chain: its primary for reads and the set whose agreement decides "never paid" (SDK and tests). */
+  endpointsFor?: ChainReadOptions["endpointsFor"];
   /** The clock the cap reservation reads. Tests move it; Date.now otherwise. */
   now?: () => number;
 }
@@ -112,7 +117,7 @@ export class PaymentEngine {
     this.signer = options.signer;
     this.fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
     this.timeoutMs = options.timeoutMs ?? SUBMIT_TIMEOUT_MS;
-    this.chainRead = chainReadOptions(options.rpcUrl, options.rpcUrlFor);
+    this.chainRead = chainReadOptions(options.rpcUrl, options.rpcUrlFor, options.endpointsFor);
     this.now = options.now ?? Date.now;
   }
 
@@ -1250,17 +1255,17 @@ async function reconcile(records: Records, attempt: Attempt, rail: RailAdapter, 
     }
     return commit(records, attempt, (r, current) => recordSearch(r, current, "The earlier payment inclusion was removed; outcome unknown. Do not pay again.", found.searchedToSlot, true));
   }
-  if (found.never) return commit(records, attempt, (r, current) => recordUnpaid(r, current, found.reason));
+  if (found.never) return commit(records, attempt, (r, current) => recordUnpaid(r, current, found.reason, found.agreement, found.agreedAt));
   if (contradiction) return commit(records, attempt, (r, current) => recordChain(r, current, contradiction));
   const reason = found.unreadable && named ? named : found.reason;
-  return commit(records, attempt, (r, current) => recordSearch(r, current, reason, found.searchedToSlot));
+  return commit(records, attempt, (r, current) => recordSearch(r, current, reason, found.searchedToSlot, false, found.confirmSearchedTo));
 }
 
 /**
  * Not found yet, or the chain could not say: the attempt keeps its state, with the chain's latest answer, and how far a
  * Solana search read the blocks the payment could have landed in (never less far than another search already had).
  */
-function recordSearch(records: Records, attempt: Attempt, reason: string, searchedToSlot?: number, inclusionRemoved = false): Attempt {
+function recordSearch(records: Records, attempt: Attempt, reason: string, searchedToSlot?: number, inclusionRemoved = false, confirmSearchedTo?: Record<string, number>): Attempt {
   // Resolved meanwhile (found, or shown never paid): an undecided search says nothing new.
   if (finalPayment(records, attempt) || attempt.chain === "unpaid" || attempt.state === "failed") return attempt;
   if (attempt.paymentIncluded && attempt.state !== "uncertain" && !inclusionRemoved) return attempt;
@@ -1277,7 +1282,9 @@ function recordSearch(records: Records, attempt: Attempt, reason: string, search
     records.saveReceipt({ ...rest, chain: "unchecked", chainFinal: null, chainReason });
   }
   const further = searchedToSlot !== undefined && searchedToSlot > (attempt.searchedToSlot ?? -1);
-  const updated: Attempt = { ...attempt, ...(inclusionRemoved ? { state: "uncertain", paymentIncluded: true, reason } : {}), chain: mismatch ? "mismatch" : "unchecked", chainFinal: null, chainReason, ...(further ? { searchedToSlot } : {}), updatedAt: at };
+  // each other endpoint's mark, never moved back by a search that read less
+  const confirmed = confirmSearchedTo ? Object.fromEntries(Object.entries({ ...attempt.confirmSearchedTo, ...confirmSearchedTo }).map(([id, slot]) => [id, Math.max(slot, attempt.confirmSearchedTo?.[id] ?? -1, confirmSearchedTo[id] ?? -1)])) : undefined;
+  const updated: Attempt = { ...attempt, ...(confirmed ? { confirmSearchedTo: confirmed } : {}), ...(inclusionRemoved ? { state: "uncertain", paymentIncluded: true, reason } : {}), chain: mismatch ? "mismatch" : "unchecked", chainFinal: null, chainReason, ...(further ? { searchedToSlot } : {}), updatedAt: at };
   records.saveAttempt(updated);
   return updated;
 }
@@ -1372,7 +1379,7 @@ function recordAnswer(records: Records, fresh: Receipt): Receipt {
     return records.saveReceipt({ ...fresh, at: current?.at ?? fresh.at, chain: "mismatch", chainFinal: null, chainMismatch: record?.chainMismatch, chainReason: record?.chainReason });
   }
   if (record?.chain === "unpaid") {
-    return records.saveReceipt({ ...fresh, at: current?.at ?? fresh.at, chain: "unpaid", chainFinal: null, chainReason: record.chainReason ?? "the chain shows this payment was never made, and it can no longer be" });
+    return records.saveReceipt({ ...fresh, at: current?.at ?? fresh.at, chain: "unpaid", chainFinal: null, chainReason: record.chainReason ?? "the chain shows this payment was never made, and it can no longer be", ...(record.chainAgreement ? { chainAgreement: record.chainAgreement } : {}), ...(record.chainAgreedAt ? { chainAgreedAt: record.chainAgreedAt } : {}) });
   }
   const receipt = records.saveReceipt(current && (current.chain === "verified" || rejectedTransaction(current)) ? mergedReceipt(current, fresh) : fresh);
   if (record?.chain === "verified" && (record.state === "settled" || record.state === "paid_service_failed") && (record.receiptId ?? record.id) === receipt.id) {
@@ -1419,17 +1426,19 @@ function mergedReceipt(current: Receipt, fresh: Receipt): Receipt {
  * with chain "unpaid", and a receipt the seller's report had written is marked so; neither counts against the cap. Never
  * over a payment finalized meanwhile.
  */
-function recordUnpaid(records: Records, attempt: Attempt, chainReason: string): Attempt {
+function recordUnpaid(records: Records, attempt: Attempt, chainReason: string, chainAgreement: ChainAgreement, chainAgreedAt: ChainAgreedAt): Attempt {
   if (finalPayment(records, attempt) || attempt.chain === "unpaid") return attempt;
   const at = new Date().toISOString();
   const receipt = receiptOf(records, attempt);
-  if (receipt) records.saveReceipt({ ...receipt, chain: "unpaid", chainFinal: null, chainReason });
+  if (receipt) records.saveReceipt({ ...receipt, chain: "unpaid", chainFinal: null, chainReason, chainAgreement, chainAgreedAt });
   const updated: Attempt = {
     ...attempt,
     state: "failed",
     chain: "unpaid",
     chainFinal: null,
     chainReason,
+    chainAgreement,
+    chainAgreedAt,
     reason: receipt
       ? "the service reported this payment settled, but the chain shows it was never made, and it can no longer be"
       : "the chain shows this payment was never made, and it can no longer be",
@@ -1466,6 +1475,7 @@ function paymentFacts(attempt: Attempt, payer: string): PaymentFacts {
     ...(attempt.lastValidBlockHeight !== undefined ? { lastValidBlockHeight: attempt.lastValidBlockHeight } : {}),
     ...(attempt.searchFromSlot !== undefined ? { searchFromSlot: attempt.searchFromSlot } : {}),
     ...(attempt.searchedToSlot !== undefined ? { searchedToSlot: attempt.searchedToSlot } : {}),
+    ...(attempt.confirmSearchedTo ? { confirmSearchedTo: attempt.confirmSearchedTo } : {}),
     ...(since ? { since } : {}),
   };
 }
@@ -1525,8 +1535,10 @@ function receiptFor(input: {
 }
 
 /** Chain reads through one RPC for every chain (tests), one per chain, or each chain's own (chainRpc). */
-function chainReadOptions(rpcUrl?: string, rpcUrlFor?: (network: NetworkInfo) => string | undefined): ChainReadOptions {
-  return { rpcUrlFor: (network) => rpcUrlFor?.(network) ?? rpcUrl };
+function chainReadOptions(rpcUrl?: string, rpcUrlFor?: (network: NetworkInfo) => string | undefined, endpointsFor?: ChainReadOptions["endpointsFor"]): ChainReadOptions {
+  // Only what the calling code pinned: with nothing pinned, the endpoints are the table's (or the owner's) and the environment's
+  // variable is read for reads only.
+  return { ...(rpcUrl || rpcUrlFor ? { rpcUrlFor: (network: NetworkInfo) => rpcUrlFor?.(network) ?? rpcUrl } : {}), ...(endpointsFor ? { endpointsFor } : {}) };
 }
 
 /** Why a payment the seller reported is uncertain when its receipt could not be recorded. */
@@ -1605,7 +1617,16 @@ function chainEvidence(check: ChainCheck): Pick<Attempt, "chain" | "chainFinal" 
 }
 
 export function paymentOutput(record: Attempt | Receipt) {
-  return { chain: record.chain, chain_final: record.chain === "verified" ? record.chainFinal ?? null : null };
+  return {
+    chain: record.chain,
+    chain_final: record.chain === "verified" ? record.chainFinal ?? null : null,
+    ...(record.chain === "unpaid" && record.chainAgreement ? { chain_agreement: record.chainAgreement, ...(record.chainAgreedAt ? { chain_agreed_at: shownAgreedAt(record.chainAgreedAt) } : {}) } : {}),
+  };
+}
+
+/** Where a "never paid" verdict was agreed, as JSON: the operators and the final block or slot, in snake case. */
+function shownAgreedAt(at: ChainAgreedAt) {
+  return { operators: at.operators, ...(at.block ? { block: at.block } : {}), ...(at.blockHash ? { block_hash: at.blockHash } : {}), ...(at.slot !== undefined ? { slot: at.slot } : {}) };
 }
 
 /**

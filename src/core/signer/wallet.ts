@@ -99,6 +99,18 @@ function wireFor(options: WalletSignerOptions): WalletWire {
   };
 }
 
+/** A refusal for an HTTP answer that is not ok, with its status kept as a number, not only in the text. */
+class WalletHttpError extends SignRefused {
+  constructor(
+    readonly httpStatus: number,
+    reason: string,
+    /** The request view a 409 carries, when the body was whole and said so. */
+    readonly request?: WalletRequestView,
+  ) {
+    super("invalid", reason);
+  }
+}
+
 /**
  * Why `path` is not this user's wallet socket, or undefined when it is: a socket (not a symlink) owned by this user, in a
  * real folder owned by this user that no other user can write to. Only someone who can write to that folder could put
@@ -216,9 +228,18 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
     throw new SignRefused("unavailable", down);
   }
   if (!res.ok) {
-    const { text } = await readBody(res, 200, HTTP_TIMEOUT_MS);
+    const { text } = await readBody(res, res.status === 409 ? 4096 : 200, HTTP_TIMEOUT_MS);
     const said = untrustedText(text, 200);
-    throw new SignRefused("invalid", `the wallet refused the request (HTTP ${res.status})${said ? `: ${said}` : ""}`);
+    let request: WalletRequestView | undefined;
+    if (res.status === 409) {
+      try {
+        const view = (JSON.parse(text) as { request?: WalletRequestView } | null)?.request;
+        if (view && typeof view === "object" && typeof view.status === "string") request = view;
+      } catch {
+        // not a whole JSON body: the status alone says what it says
+      }
+    }
+    throw new WalletHttpError(res.status, `the wallet refused the request (HTTP ${res.status})${said ? `: ${said}` : ""}`, request);
   }
   // more than the cap, cut off, or late: not an answer from this wallet
   const { text, end } = await readBody(res, WALLET_MAX_BYTES, HTTP_TIMEOUT_MS, WALLET_MAX_BYTES + 1);
@@ -229,6 +250,13 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
     throw new SignRefused("unavailable", down);
   }
 }
+
+/** What the wallet answered to a cancel: the request's view, "already closed" (409), no such route (404, a 0.4.0 wallet), or nothing usable. */
+type CancelOutcome =
+  | { kind: "answered"; view: WalletRequestView }
+  | { kind: "closed" }
+  | { kind: "unsupported" }
+  | { kind: "failed" };
 
 export class WalletSigner implements Signer {
   readonly kind = "wallet" as const;
@@ -242,8 +270,10 @@ export class WalletSigner implements Signer {
   private readonly timeoutMs: number;
   /** Requests this signer is waiting on, so closing it can cancel them. */
   private readonly outstanding = new Set<string>();
-  /** One cancel per request, shared by the deadline and by close(). */
-  private readonly cancels = new Map<string, Promise<WalletRequestView | undefined>>();
+  /** One cancel per request, shared by the deadline and by close(); a cancel that could not be confirmed is dropped, so close() tries again. */
+  private readonly cancels = new Map<string, Promise<CancelOutcome>>();
+  /** Requests whose cancel was not confirmed: still the wallet's to sign, so they stay in `outstanding` for close(). */
+  private readonly unconfirmed = new Set<string>();
   private closed = false;
 
   constructor(options: WalletSignerOptions = {}) {
@@ -309,11 +339,15 @@ export class WalletSigner implements Signer {
         if (Date.now() >= deadline) throw await this.gaveUp(id, "expired");
         await sleep(Math.max(0, Math.min(this.pollMs, deadline - Date.now())));
         if (this.closed) throw await this.gaveUp(id, "abandoned");
-        view = await walletRequest<WalletRequestView>(
-          this.wire,
-          "GET",
-          `/requests/${encodeURIComponent(id)}`,
-        );
+        try {
+          view = await walletRequest<WalletRequestView>(this.wire, "GET", `/requests/${encodeURIComponent(id)}`);
+          // JSON that is not a request view (null, a number) is no answer either, and must not escape as a TypeError
+          if (!view || typeof view !== "object" || typeof view.status !== "string") throw new SignRefused("unavailable", WALLET_DOWN);
+        } catch (err) {
+          // The request exists in the wallet and this wait is over without an answer (network, HTTP error, cut-off body):
+          // it is cancelled before its id is forgotten, and what is said depends on what the cancel answered.
+          throw await this.afterCancel(id, "unavailable", `lost contact with the wallet while waiting for the owner (${(err as Error).message})`);
+        }
         if (view.status === "denied") {
           throw new SignRefused("denied", view.reason ?? "the owner denied this payment in the wallet", view.id);
         }
@@ -327,7 +361,7 @@ export class WalletSigner implements Signer {
       // Closed while the last answer was on its way: closed means no signature comes back, even this one.
       if (this.closed) throw await this.gaveUp(id, "abandoned");
     } finally {
-      this.outstanding.delete(id);
+      if (!this.unconfirmed.has(id)) this.outstanding.delete(id);
     }
 
     if (!view.result) {
@@ -343,15 +377,36 @@ export class WalletSigner implements Signer {
 
   /** The refusal for a wait that ended without a signature, after the wallet was told to forget the request. */
   private async gaveUp(id: string, code: "expired" | "abandoned"): Promise<SignRefused> {
-    const answer = await this.cancel(id);
     const waited = `the wallet did not answer within ${Math.round(this.timeoutMs / 1000)} s`;
-    if (!answer) {
+    return this.afterCancel(id, code, code === "expired" ? waited : "the payment stopped waiting");
+  }
+
+  /**
+   * Cancels the request, then says what is known. `lead` is why the wait ended. Only a cancel the wallet answered (or a
+   * request it reports already closed) can say that nothing was signed; an answer that a signature was handed out, or no
+   * answer at all, is unknown, because a signature may have reached whoever holds the agent token.
+   */
+  private async afterCancel(id: string, code: "expired" | "abandoned" | "unavailable", lead: string): Promise<SignRefused> {
+    const outcome = await this.cancelOutcome(id);
+    if (outcome.kind === "unsupported") {
+      // A 0.4.0 wallet has no /cancel. Waiting there ended by deadline or close keeps its earlier answer; a wait lost to a
+      // failure cannot say whether the owner approved, so that one is unknown.
+      const tail = "this wallet does not know this request or cannot cancel requests (0.4.0 and earlier), so approving it there later still signs, but this payment will not be sent";
+      return code === "unavailable"
+        ? new SignRefused("unknown", `${lead}; ${tail}; whether it was signed is unknown: check \`superstables status\``, id)
+        : new SignRefused(code, `${lead}; ${tail}`, id);
+    }
+    if (outcome.kind === "failed") {
       return new SignRefused(
-        code,
-        `${code === "expired" ? waited : "the payment stopped waiting"}; this wallet cannot cancel requests, so approving it there later still signs, but this payment will not be sent`,
+        "unknown",
+        `${lead}; the wallet could not be reached to cancel the request, so it may still sign it, or may already have: this payment will not be sent, but check \`superstables status\``,
         id,
       );
     }
+    if (outcome.kind === "closed") {
+      return new SignRefused(code, `${lead}; the wallet reports the request already ended (denied, expired or rejected), so it signs nothing more`, id);
+    }
+    const answer = outcome.view;
     // Still being signed when the cancel landed is the same as signed and not yet collected: the wallet withholds it.
     if (answer.status === "signed" || answer.status === "approved") {
       if (answer.status === "signed" && answer.served) {
@@ -361,20 +416,43 @@ export class WalletSigner implements Signer {
     }
     if (answer.status === "denied") return new SignRefused("denied", answer.reason ?? "the owner denied this payment in the wallet", id);
     if (answer.status === "rejected") return new SignRefused("invalid", answer.reason ?? "the wallet rejected the request", id);
-    return new SignRefused(
-      code,
-      code === "expired"
-        ? `${waited}; the request was cancelled in the wallet, so approving it there now signs nothing`
-        : "the payment stopped waiting; the wallet request was cancelled",
-      id,
-    );
+    if (code !== "abandoned") return new SignRefused(code, `${lead}; the request was cancelled in the wallet, so approving it there now signs nothing`, id);
+    return new SignRefused(code, "the payment stopped waiting; the wallet request was cancelled", id);
   }
 
   /** Tells the wallet this request is no longer wanted. Once per request; undefined when the wallet did not answer in kind (an older wallet, or none). */
   async cancel(id: string): Promise<WalletRequestView | undefined> {
+    const outcome = await this.cancelOutcome(id);
+    return outcome.kind === "answered" ? outcome.view : undefined;
+  }
+
+  private cancelOutcome(id: string): Promise<CancelOutcome> {
     let done = this.cancels.get(id);
     if (!done) {
-      done = walletRequest<WalletRequestView>(this.wire, "POST", `/requests/${encodeURIComponent(id)}/cancel`).catch(() => undefined);
+      done = walletRequest<WalletRequestView>(this.wire, "POST", `/requests/${encodeURIComponent(id)}/cancel`).then(
+        // only a status that says the request is no longer signable confirms the cancel
+        (view): CancelOutcome => (view && ["expired", "approved", "signed", "denied", "rejected"].includes(view.status) ? { kind: "answered", view } : { kind: "failed" }),
+        (err: unknown): CancelOutcome => {
+          // 404 is a wallet with no such route (0.4.0) or no such request, 409 is a request that is no longer pending or
+          // signable: an owner denial comes back as denied when the answer says so.
+          const status = err instanceof WalletHttpError ? err.httpStatus : undefined;
+          if (status === 404) return { kind: "unsupported" };
+          if (status === 409) {
+            const request = (err as WalletHttpError).request;
+            return request?.status === "denied" ? { kind: "answered", view: request } : { kind: "closed" };
+          }
+          return { kind: "failed" };
+        },
+      ).then((outcome) => {
+        if (outcome.kind === "failed") {
+          // Not confirmed: keep the id for close(), and let the next cancel ask again.
+          this.unconfirmed.add(id);
+          this.cancels.delete(id);
+        } else {
+          this.unconfirmed.delete(id);
+        }
+        return outcome;
+      });
       this.cancels.set(id, done);
     }
     return done;
@@ -383,7 +461,12 @@ export class WalletSigner implements Signer {
   /** Stops every wait this signer has open, cancelling its requests in the wallet. */
   async close(): Promise<void> {
     this.closed = true;
-    await Promise.all([...this.outstanding].map((id) => this.cancel(id)));
+    const ids = [...this.outstanding];
+    // A cancel already in flight is shared with this call: when it fails, nobody has asked a second time yet.
+    const inFlight = ids.filter((id) => this.cancels.has(id));
+    await Promise.all(ids.map((id) => this.cancelOutcome(id)));
+    await Promise.all(inFlight.filter((id) => this.unconfirmed.has(id)).map((id) => this.cancelOutcome(id)));
+    for (const id of [...this.outstanding]) if (!this.unconfirmed.has(id)) this.outstanding.delete(id);
   }
 }
 

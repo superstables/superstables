@@ -655,7 +655,9 @@ export async function escrowCtx() {
 // ---- self revoke (the agent lowers its own allowance without moving money) ----
 // transferFrom(owner, owner, n) spends n of the agent's allowance and moves n from the owner to the owner. It needs the owner's
 // balance to be at least n, so n = min(remaining allowance, owner balance); whatever is left is reported.
-export type SelfRevoke = { state: "nothing" | "revoked" | "partial" | "blocked"; before: bigint; after: bigint; used: bigint; ownerBalance: bigint; tx?: Hex; note: string };
+// `block` and `final` say where the transaction is and whether the chain made it final: final only when its block is final on the
+// chain's rule and the endpoints agree the allowance is 0 at a final block at or after it (as the owner's revoke is judged).
+export type SelfRevoke = { state: "nothing" | "revoked" | "partial" | "blocked"; before: bigint; after: bigint; used: bigint; ownerBalance: bigint; tx?: Hex; block?: bigint; final?: boolean; note: string };
 export async function selfRevokeCore(w: Wallet, owner: Address, log: (s: string) => void = console.log): Promise<SelfRevoke> {
   const agent = w.account.address;
   const before = await allowanceOf(owner, agent);
@@ -667,8 +669,14 @@ export async function selfRevokeCore(w: Wallet, owner: Address, log: (s: string)
   const data = encodeFunctionData({ abi: erc20Abi, functionName: "transferFrom", args: [owner, owner, n] });
   const sent = await send(w, USDC, data, "selfRevoke transferFrom(owner, owner)", { op: "selfRevoke" });
   const after = await readUntil(() => allowanceOf(owner, agent), (v) => v === before - n);
+  let final = false;
+  if (after === 0n) {
+    const fin = await finalityOf(sent.hash, { blockNumber: sent.blockNumber, blockHash: sent.blockHash });
+    const at = await allowanceAgreed(owner, agent, sent.blockNumber);
+    final = fin.final && at.agreed && at.value === 0n;
+  }
   return {
-    state: after === 0n ? "revoked" : "partial", before, after, used: n, ownerBalance, tx: sent.hash,
+    state: after === 0n ? "revoked" : "partial", before, after, used: n, ownerBalance, tx: sent.hash, block: sent.blockNumber, final,
     note: after === 0n ? "allowance is 0" : `owner balance covered only ${usdc(n)} ${SYM}; ${usdc(after)} ${SYM} of allowance remains. The owner revokes the rest`,
   };
 }

@@ -67,6 +67,7 @@ Owner actions are now reported as final only once the chain says so. A grant, re
 - `toAtomic`, `fromAtomic`, `round6` and `Records.spentToday` round through floating point and are for display only. `Records.spentToday` returns `NaN` when the total can't be read.
 - On EVM chains, `PaymentTerms` carries the seller's `maxTimeoutSeconds`, and `sameTerms` compares it.
 - `ensureDir` now applies the private-folder check described under Upgrade and recovery. It throws, naming the folder, when one is not a folder you own that no other user can write to.
+- Approvals on superstables.com follow its accounts that hold several wallets: the steps the client gives the owner after an account refusal (`ethereum_account_required`, `owner_proof_owner_mismatch`, `wrong_account`) now ask for a wallet the account holds, added by an account admin on the account page, instead of signing out and in with another wallet. The new refusal `owner_wallet_required` on a Solana grant gets its own step, and the request reason `page_stopped_before_send` is reported by name. The guides describe sign-in with a wallet or an email address.
 
 ### Deprecated
 
