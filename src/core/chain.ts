@@ -6,7 +6,7 @@
 // The seven EVM chains are the budget's (budget/evm/chains.mjs, its own program with its own build); a test checks that
 // this table agrees with that one field by field.
 
-import { chainRpc } from "./rpc.js";
+import { verifiedRpc } from "./rpc.js";
 import { finalityFor, SOLANA_DEVNET_GENESIS } from "./finality-policy.js";
 import { createPublicClient, http } from "viem";
 import type { PaymentRequirements } from "@x402/core/types";
@@ -37,7 +37,7 @@ interface NetworkCommon {
   explorer: string;
   /** Added after a transaction or address in an explorer link, e.g. "?cluster=devnet". */
   explorerQuery?: string;
-  /** The RPC an EVM chain's balances are read through. Browser wallets are offered `defaultRpc` instead. */
+  /** The public RPC of this chain. Balances and payment checks are read through chainRpc (src/core/rpc.ts), which may name another one. */
   rpc: string;
   /** The public RPC offered to a browser wallet, and the one a settlement is read through when `rpcEnv` names no other (see chainRpc in src/core/rpc.ts). */
   defaultRpc: string;
@@ -129,7 +129,7 @@ export const BASE_SEPOLIA: EvmNetwork = evm({
   label: "Base Sepolia (testnet)",
   testnet: true,
   v1Name: "base-sepolia",
-  rpc: process.env.SUPERSTABLES_RPC_URL ?? "https://sepolia.base.org",
+  rpc: "https://sepolia.base.org",
   defaultRpc: "https://sepolia.base.org",
   rpcEnv: "SUPERSTABLES_RPC_URL",
   explorer: "https://sepolia.basescan.org",
@@ -438,7 +438,7 @@ const ERC20_BALANCE_OF = [
  */
 export async function usdcBalance(address: string, network: NetworkInfo = DEFAULT_NETWORK): Promise<number> {
   if (network.rail === "solana") throw new Error("balances on Solana are not read by this function");
-  const rpc = network.rail === "tempo" ? chainRpc(network) : { url: network.rpc };
+  const rpc = await verifiedRpc(network);
   if ("error" in rpc) throw new Error(rpc.error);
   const client = createPublicClient({ transport: http(rpc.url) });
   const raw = await client.readContract({

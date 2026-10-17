@@ -41,6 +41,7 @@ async function payOn(network: EvmNetwork, { alsoOffer, pick }: { alsoOffer?: Pay
   const facilitator = await startFakeFacilitator();
   const seller = await startPaidEndpoint({ priceDecimal: 0.01, payTo: SELLER, facilitatorUrl: facilitator.url, network, alsoOffer });
   const chain = await startFakeBaseSepolia();
+  chain.chainId = network.chainId; // the fake says which chain it stands for
   const dir = mkdtempSync(join(home, `${network.key}-`));
   const signer = new BrowserWalletSigner({ port: 0, home: dir, policy: DEFAULT_POLICY, timeoutMs: 10_000, balance: false });
   opened.push(facilitator, seller, chain, { close: () => signer.close() });

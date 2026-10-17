@@ -11,6 +11,8 @@ import type { NetworkInfo } from "./chain.js";
 import { readCapped } from "./http.js";
 import { rangeRefusal } from "./log-windows.mjs";
 import { rpcFor } from "./owner-settings.js";
+import { callerSet, endpointSet, type EndpointSet } from "./rpc-endpoints.mjs";
+import { checkIdentity, type Identity } from "./rpc-quorum.mjs";
 
 const CHECK_TIMEOUT_MS = 10_000;
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
@@ -91,4 +93,62 @@ export async function rpcCall<T>(url: string, method: string, params: unknown[],
     throw new RpcError("the RPC answered with an error", undefined, code, undefined, rangeRefusal(code, answer.error?.message));
   }
   return answer.result as T;
+}
+
+// ── Which endpoint a read goes to, and that it is the right chain ────────────────────────────────────────────
+
+/** What a read is told about where to go: tests and the SDK pin an RPC (believed alone, labelled "caller") or give a whole set. */
+export interface EndpointChoice {
+  /** An RPC the calling code pinned for this chain. The environment never sets this. */
+  rpcUrlFor?: (network: NetworkInfo) => string | undefined;
+  /** The endpoints of a chain, primary and verdict set (the SDK and tests). */
+  endpointsFor?: (network: NetworkInfo) => EndpointSet | undefined;
+}
+
+/** The identity a chain's endpoints must answer: its chain id (EVM, Tempo) or its genesis hash (Solana). */
+export function identityOf(network: NetworkInfo): Identity {
+  return network.rail === "solana" ? { kind: "solana", genesis: network.genesisHash } : { kind: "evm", chainId: network.chainId };
+}
+
+/** One JSON-RPC call in the shape the agreement engine calls. */
+export const rpcCaller = (options: RpcOptions) => (url: string, method: string, params: unknown[]) => rpcCall<unknown>(url, method, params, options);
+
+/**
+ * The endpoints whose agreement lets a payment be called never made: what the calling code gave (`endpointsFor`), else the one
+ * RPC it pinned (`caller`), else the chain's table, or the owner's own RPCs, plus an environment variable only where the engine
+ * allows it. The environment never yields `caller`.
+ */
+export function verdictSet(network: NetworkInfo, options: EndpointChoice = {}): EndpointSet {
+  const given = options.endpointsFor?.(network);
+  if (given) return given;
+  const pinned = options.rpcUrlFor?.(network);
+  if (pinned) return callerSet(pinned);
+  const name = network.rpcEnv;
+  return endpointSet(network.key, "verdict", { envUrl: name ? process.env[name] : undefined, envName: name, testnet: network.testnet });
+}
+
+/**
+ * The RPC this chain is read through, after asking it which chain it is on (once per process): no read is made from an
+ * endpoint that answers another chain. An `error` says why nothing was read; `wrongChain` marks an endpoint that answered
+ * another chain, or another genesis.
+ */
+export async function verifiedRpc(network: NetworkInfo, options: EndpointChoice & RpcOptions = {}): Promise<{ url: string } | { error: string; wrongChain?: true }> {
+  let url: string;
+  const given = options.endpointsFor?.(network);
+  const pinned = options.rpcUrlFor?.(network);
+  if (given) {
+    if ("error" in given) return { error: `the chain was not read: ${given.error}` };
+    url = given.primary.url;
+  } else if (pinned) {
+    url = pinned;
+  } else {
+    const chosen = chainRpc(network);
+    if ("error" in chosen) return { error: `the chain was not read: ${chosen.error}` };
+    // The table's own first endpoint is the default; a table that names another one (a copy in a test) is followed.
+    const set = endpointSet(network.key, "read", { envUrl: network.rpcEnv ? process.env[network.rpcEnv] : undefined, envName: network.rpcEnv, testnet: network.testnet });
+    url = "error" in set ? chosen.url : set.primary.url;
+  }
+  const words = await checkIdentity(url, identityOf(network), rpcCaller(options));
+  if (words === "") return { url };
+  return { error: `the chain was not read: ${words}`, ...(/ answers /.test(words) ? { wrongChain: true as const } : {}) };
 }

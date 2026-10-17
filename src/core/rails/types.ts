@@ -14,6 +14,7 @@
 
 import type { PaymentRequirements } from "@x402/core/types";
 import type { NetworkInfo, Rail } from "../chain.js";
+import type { EndpointSet } from "../rpc-endpoints.mjs";
 import type { MppChallenge } from "../mpp.js";
 import type { ChainCheck } from "../settlement.js";
 import type { SignKind, SignRequest, SignResult } from "../signer/types.js";
@@ -35,6 +36,8 @@ export type Judged = { supported: true; offer: Offer } | { supported: false; rea
 /** Where a rail reads its chain: tests point a network at a fake one; otherwise chainRpc (src/core/rpc.ts). */
 export interface ChainReadOptions {
   rpcUrlFor?: (network: NetworkInfo) => string | undefined;
+  /** The endpoints of a chain: its primary for reads and the set that decides a verdict (SDK and tests). */
+  endpointsFor?: (network: NetworkInfo) => EndpointSet | undefined;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   /**

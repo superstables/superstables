@@ -15,7 +15,7 @@
 import { encodePaymentSignatureHeader } from "@x402/core/http";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { SOLANA_DEVNET, fromAtomic, isTransactionId, type NetworkInfo } from "../chain.js";
-import { chainRpc, rateLimited, rpcCall, type RpcOptions } from "../rpc.js";
+import { rateLimited, rpcCall, verifiedRpc, type RpcOptions } from "../rpc.js";
 import type { ChainCheck } from "../settlement.js";
 import { base58Decode, isSolanaAddress } from "../signer/owner-approval-server.js";
 import type { SignResult } from "../signer/types.js";
@@ -158,8 +158,8 @@ export const solanaRail: X402Rail = {
   async checkPayment(facts: PaymentFacts, options: ChainReadOptions): Promise<ChainCheck> {
     if (!isTransactionId(SOLANA_DEVNET.caip2, facts.transaction)) return { chain: "unchecked", reason: "no transaction signature was given" };
     if (!matchable(facts)) return { chain: "unchecked", reason: "this payment's signed transaction was not recorded, so it cannot be matched" };
-    const rpc = rpcFor(options);
-    if ("error" in rpc) return { chain: "unchecked", reason: `the chain was not read: ${rpc.error}` };
+    const rpc = await primaryRpc(options);
+    if ("error" in rpc) return { chain: "unchecked", reason: rpc.error };
     let found: RpcTransaction | null;
     try {
       found = await readTransaction(rpc.url, facts.transaction, options);
@@ -207,8 +207,8 @@ export const solanaRail: X402Rail = {
    */
   async findPayment(facts: PaymentFacts, options: ChainReadOptions): Promise<FoundPayment> {
     if (!matchable(facts)) return { found: false, reason: "the owner's signature was not recorded, so the payment cannot be looked for" };
-    const rpc = rpcFor(options);
-    if ("error" in rpc) return { found: false, reason: `the chain was not read: ${rpc.error}`, unreadable: true };
+    const rpc = await primaryRpc(options);
+    if ("error" in rpc) return { found: false, reason: rpc.error, unreadable: true };
     const unreadable: FoundPayment = { found: false, reason: "the chain could not be read: the RPC did not give a usable answer", unreadable: true };
     const attributed = new Set(facts.attributed ?? []);
     // A transaction the seller named comes first; it counts only if it carries the owner's signature.
@@ -228,10 +228,6 @@ export const solanaRail: X402Rail = {
       return { found: false, reason: `transaction ${signature} carries the owner's signature, but ${check.reason}` };
     };
     try {
-      const genesis = await rpcCall<unknown>(rpc.url, "getGenesisHash", [], options);
-      if (genesis !== SOLANA_DEVNET.genesisHash) {
-        return { found: false, reason: "the Solana RPC this client reads is not on Solana devnet (its genesis hash differs), so it was not searched", unreadable: true };
-      }
       const epoch = await rpcCall<{ absoluteSlot?: unknown; blockHeight?: unknown } | null>(rpc.url, "getEpochInfo", [{ commitment: "finalized" }], options);
       const finalizedSlot = epoch?.absoluteSlot;
       const height = epoch?.blockHeight;
@@ -333,21 +329,16 @@ export class NotDevnetError extends Error {
   }
 }
 
-/** Where Solana devnet is read: the engine's choice (tests), or SUPERSTABLES_SOLANA_RPC, or the public devnet RPC. */
-function rpcFor(options: Pick<ChainReadOptions, "rpcUrlFor">): { url: string } | { error: string } {
-  const chosen = options.rpcUrlFor?.(SOLANA_DEVNET);
-  return chosen ? { url: chosen } : chainRpc(SOLANA_DEVNET);
-}
+/** Where Solana devnet is read: the caller's choice, or SUPERSTABLES_SOLANA_RPC, or the public devnet RPC, once it has said it is devnet (its genesis hash). */
+const primaryRpc = (options: ChainReadOptions) => verifiedRpc(SOLANA_DEVNET, options);
 
 /**
  * A fresh blockhash to build a payment on, after checking that the RPC is Solana devnet (its genesis hash). Throws
  * NotDevnetError when it is another cluster, and any other error when it could not be read.
  */
 export async function devnetBlockhash(options: ChainReadOptions = {}): Promise<{ blockhash: string; lastValidBlockHeight: number; slot?: number }> {
-  const rpc = rpcFor(options);
-  if ("error" in rpc) throw new Error(rpc.error);
-  const genesis = await rpcCall<unknown>(rpc.url, "getGenesisHash", [], options);
-  if (genesis !== SOLANA_DEVNET.genesisHash) throw new NotDevnetError();
+  const rpc = await primaryRpc(options);
+  if ("error" in rpc) throw rpc.wrongChain ? new NotDevnetError() : new Error(rpc.error);
   const latest = await rpcCall<{ context?: { slot?: unknown }; value?: { blockhash?: unknown; lastValidBlockHeight?: unknown } }>(rpc.url, "getLatestBlockhash", [{ commitment: "confirmed" }], options);
   const blockhash = latest?.value?.blockhash;
   const lastValidBlockHeight = latest?.value?.lastValidBlockHeight;
@@ -361,7 +352,7 @@ export async function devnetBlockhash(options: ChainReadOptions = {}): Promise<{
 
 /** Devnet's block height now. Throws when it could not be read. */
 export async function devnetBlockHeight(options: ChainReadOptions = {}): Promise<number> {
-  const rpc = rpcFor(options);
+  const rpc = await primaryRpc(options);
   if ("error" in rpc) throw new Error(rpc.error);
   const height = await rpcCall<unknown>(rpc.url, "getBlockHeight", [{ commitment: "confirmed" }], options);
   if (typeof height !== "number" || !Number.isSafeInteger(height)) throw new Error("the RPC answered getBlockHeight with something else");

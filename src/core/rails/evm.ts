@@ -145,7 +145,7 @@ export const evmRail: X402Rail = {
         nonce: facts.nonce,
         network: facts.network,
       },
-      { ...(network && options.rpcUrlFor?.(network) ? { rpcUrl: options.rpcUrlFor(network) } : {}), fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs },
+      { ...(network && options.rpcUrlFor?.(network) ? { rpcUrl: options.rpcUrlFor(network) } : {}), ...(options.endpointsFor ? { endpointsFor: options.endpointsFor } : {}), fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs },
     );
   },
 
@@ -165,7 +165,7 @@ export const evmRail: X402Rail = {
         transaction: facts.transaction,
         paymentBlock: facts.paymentBlock,
       },
-      { ...(network && options.rpcUrlFor?.(network) ? { rpcUrl: options.rpcUrlFor(network) } : {}), fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs },
+      { ...(network && options.rpcUrlFor?.(network) ? { rpcUrl: options.rpcUrlFor(network) } : {}), ...(options.endpointsFor ? { endpointsFor: options.endpointsFor } : {}), fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs },
     );
   },
 };

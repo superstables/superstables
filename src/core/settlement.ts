@@ -21,7 +21,7 @@
 
 import { decodeFunctionResult, encodeFunctionData, keccak256, toBytes } from "viem";
 import { BASE_SEPOLIA, evmNetworkFor, isAddress, type EvmNetwork } from "./chain.js";
-import { chainRpc, rpcCall, type RpcOptions } from "./rpc.js";
+import { chainRpc, rpcCall, verifiedRpc, type EndpointChoice, type RpcOptions } from "./rpc.js";
 import { searchLogs, type LogSearchOptions } from "./log-windows.mjs";
 import { inclusion } from "./finality.js";
 import type { ChainMismatch } from "./types.js";
@@ -78,7 +78,7 @@ interface RpcLog {
 /** Read the transaction's receipt and say whether it is this payment. Never throws. */
 export async function checkSettlement(
   input: SettlementToCheck,
-  options: { rpcUrl?: string; fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  options: { rpcUrl?: string; endpointsFor?: EndpointChoice["endpointsFor"]; fetchImpl?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<ChainCheck> {
   if (!isHash(input.transaction)) return { chain: "unchecked", reason: "no transaction hash was given" };
   const network = input.network === undefined ? BASE_SEPOLIA : evmNetworkFor(input.network);
@@ -86,8 +86,8 @@ export async function checkSettlement(
   if (!input.nonce || !/^0x[0-9a-fA-F]{64}$/.test(input.nonce) || !isAddress(input.payer) || !isAddress(input.recipient)) {
     return { chain: "unchecked", reason: "this payment's signed authorization was not recorded, so it cannot be matched" };
   }
-  const rpc = options.rpcUrl ? { url: options.rpcUrl } : chainRpc(network);
-  if ("error" in rpc) return { chain: "unchecked", reason: `the chain was not read: ${rpc.error}` };
+  const rpc = await verifiedRpc(network, { ...options, ...(options.rpcUrl ? { rpcUrlFor: () => options.rpcUrl } : {}) });
+  if ("error" in rpc) return { chain: "unchecked", reason: rpc.error };
 
   let receipt: { status?: string; transactionHash?: string; blockNumber?: string; blockHash?: string; logs?: RpcLog[] } | null;
   try {
@@ -182,7 +182,7 @@ interface Block {
  *
  * Never throws: a chain that cannot be read is `unreadable`, and decides nothing.
  */
-export async function findAuthorization(input: AuthorizationToFind, options: { rpcUrl?: string; logSearch?: LogSearchOptions } & RpcOptions = {}): Promise<FoundPayment> {
+export async function findAuthorization(input: AuthorizationToFind, options: { rpcUrl?: string; endpointsFor?: EndpointChoice["endpointsFor"]; logSearch?: LogSearchOptions } & RpcOptions = {}): Promise<FoundPayment> {
   const network = evmNetworkFor(input.network);
   if (!network || !input.nonce || !/^0x[0-9a-fA-F]{64}$/.test(input.nonce) || !isAddress(input.payer) || !isAddress(input.recipient)) {
     return { found: false, reason: "this payment's signed authorization was not recorded, so it cannot be looked for" };
@@ -192,8 +192,8 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
     if (named.chain === "verified") return { found: true, transaction: input.transaction };
     if (named.included) return { found: true, transaction: input.transaction, final: false, paymentBlock: named.paymentBlock };
   }
-  const rpc = options.rpcUrl ? { url: options.rpcUrl } : chainRpc(network);
-  if ("error" in rpc) return { found: false, unreadable: true, reason: `the chain was not read: ${rpc.error}` };
+  const rpc = await verifiedRpc(network, { ...options, ...(options.rpcUrl ? { rpcUrlFor: () => options.rpcUrl } : {}) });
+  if ("error" in rpc) return { found: false, unreadable: true, reason: rpc.error };
   const unreadable: FoundPayment = { found: false, unreadable: true, reason: "the chain could not be read: the RPC did not give a usable answer" };
   let authorizationUsed = false;
   try {

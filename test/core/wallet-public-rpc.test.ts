@@ -106,8 +106,8 @@ describe("browser wallets receive only public RPCs", () => {
     expect(output.viemRpc).toEqual([output.configuredRpc]);
     expect(output.configuredRpc).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/configured\/SECRET-KEY-123$/);
     expect(output.reads.map((read: { method: string }) => read.method)).toEqual([
-      "eth_blockNumber", "eth_blockNumber", "getBalance", "eth_blockNumber", "eth_blockNumber", "getBlockHeight", "eth_call",
+      "eth_blockNumber", "eth_blockNumber", "getBalance", "eth_blockNumber", "eth_blockNumber", "getBlockHeight", "eth_chainId", "eth_call",
     ]);
-    expect(output.reads.map((read: { path: string }) => read.path)).toEqual(Array(7).fill("/configured/SECRET-KEY-123"));
+    expect(output.reads.map((read: { path: string }) => read.path)).toEqual(Array(8).fill("/configured/SECRET-KEY-123"));
   });
 });

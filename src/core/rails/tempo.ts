@@ -15,7 +15,7 @@ import { inclusion } from "../finality.js";
 import { encodeFunctionData, getAddress, keccak256, toBytes, toHex, type Hex } from "viem";
 import { TEMPO_MODERATO, fromAtomic, isAddress, isTransactionId, mainnetName } from "../chain.js";
 import { hashCredential, type MppChallenge } from "../mpp.js";
-import { chainRpc, rpcCall } from "../rpc.js";
+import { rpcCall, verifiedRpc } from "../rpc.js";
 import type { ChainCheck } from "../settlement.js";
 import { untrustedText } from "../text.js";
 import type { SignResult } from "../signer/types.js";
@@ -150,10 +150,8 @@ interface RpcLog {
   blockNumber?: string;
 }
 
-function rpcOf(options: ChainReadOptions): { url: string } | { error: string } {
-  const override = options.rpcUrlFor?.(TEMPO_MODERATO);
-  return override ? { url: override } : chainRpc(TEMPO_MODERATO);
-}
+/** The RPC Tempo Moderato is read through, after it has said it is that chain. */
+const primaryRpc = (options: ChainReadOptions) => verifiedRpc(TEMPO_MODERATO, options);
 
 /** Does this TransferWithMemo log show exactly this payment? */
 function showsPayment(log: RpcLog, facts: PaymentFacts): boolean {
@@ -177,8 +175,8 @@ async function checkTempoPayment(facts: PaymentFacts, options: ChainReadOptions)
   if (!facts.memo || !isHash(facts.memo) || !isAddress(facts.payer) || !isAddress(facts.recipient)) {
     return { chain: "unchecked", reason: "this payment's memo was not recorded, so it cannot be matched" };
   }
-  const rpc = rpcOf(options);
-  if ("error" in rpc) return { chain: "unchecked", reason: `the chain was not read: ${rpc.error}` };
+  const rpc = await primaryRpc(options);
+  if ("error" in rpc) return { chain: "unchecked", reason: rpc.error };
   let receipt: { status?: string; transactionHash?: string; blockNumber?: string; blockHash?: string; logs?: RpcLog[] } | null;
   try {
     receipt = await rpcCall(rpc.url, "eth_getTransactionReceipt", [facts.transaction], options);
@@ -231,8 +229,8 @@ async function findTempoPayment(facts: PaymentFacts, options: ChainReadOptions):
   const attributed = new Set((facts.attributed ?? []).map((tx) => tx.toLowerCase()));
   const boundary = /^\d+$/.test(facts.searchFromBlock ?? "") ? BigInt(facts.searchFromBlock!) : undefined;
   const since = facts.since ? Date.parse(facts.since) / 1000 : NaN;
-  const rpc = rpcOf(options);
-  if ("error" in rpc) return { found: false, unreadable: true, reason: `the chain was not read: ${rpc.error}` };
+  const rpc = await primaryRpc(options);
+  if ("error" in rpc) return { found: false, unreadable: true, reason: rpc.error };
   try {
     /** Is this transaction, mined in this block, after the wallet was asked? */
     const after = async (block: bigint | undefined): Promise<boolean> => {
@@ -304,7 +302,7 @@ function blockOf(value: unknown): bigint | undefined {
 
 /** The head block's number, read right before the owner's wallet is asked to send. Throws when it cannot be read. */
 async function tempoHeadBlock(options: ChainReadOptions): Promise<string> {
-  const rpc = rpcOf(options);
+  const rpc = await primaryRpc(options);
   if ("error" in rpc) throw new Error(rpc.error);
   const latest = await rpcCall<{ number?: string } | null>(rpc.url, "eth_getBlockByNumber", ["latest", false], options);
   const head = blockOf(latest?.number);
