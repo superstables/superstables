@@ -216,11 +216,10 @@ describe("PaymentEngine", () => {
     const s = await stack();
     const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
     const barrier = mkdtempSync(join(tmpdir(), "superstables-barrier-"));
-    const tsx = resolve(dirname(fileURLToPath(import.meta.url)), "../../node_modules/tsx/dist/cli.mjs");
     const script = resolve(dirname(fileURLToPath(import.meta.url)), "../helpers/claim-process.ts");
     const run = () =>
       new Promise<Record<string, string | null>>((done, fail) => {
-        const child = spawn(process.execPath, [tsx, script, s.records.dir, q.id, barrier], { env: process.env });
+        const child = spawn(process.execPath, ["--import", "tsx", script, s.records.dir, q.id, barrier], { env: process.env });
         let out = "";
         child.stdout.on("data", (chunk) => (out += chunk));
         child.on("exit", () => {
@@ -828,10 +827,10 @@ describe("PaymentEngine", () => {
     const cap: Policy = { ...DEFAULT_POLICY, perDay: { amount: 0.01, asset: "USDC" } };
     const qA = await quote({ url: s.url }, { records: s.records, policy: cap });
     const qB = await quote({ url: s.url }, { records: s.records, policy: cap });
-    const tsx = resolve(dirname(fileURLToPath(import.meta.url)), "../../node_modules/tsx/dist/cli.mjs");
     const script = resolve(dirname(fileURLToPath(import.meta.url)), "../helpers/pay-process.ts");
     const pay = (quoteId: string) => {
-      const child = spawn(process.execPath, [tsx, script, s.records.dir, quoteId, "0.01"], { env: process.env });
+      // tsx's loader in this process, not its CLI: a SIGKILL to the CLI would leave the script it runs still running
+      const child = spawn(process.execPath, ["--import", "tsx", script, s.records.dir, quoteId, "0.01"], { env: process.env });
       const lines: Record<string, unknown>[] = [];
       const waiters: (() => void)[] = [];
       createInterface({ input: child.stdout }).on("line", (line) => {

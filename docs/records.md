@@ -131,6 +131,13 @@ chain); `unchecked` (with `chainReason`) when the chain could not say yet. `supe
 reads the chain again for an unchecked attempt: first the transaction the seller named, then the
 payment itself, as for an `uncertain` one (below).
 
+When a later check releases a payment as `unpaid`, the attempt and its receipt also hold `chainAgreement`
+(`quorum`, `owner-node`, `single` or `caller`: see [security.md](security.md#which-rpc-is-believed)) and
+`chainAgreedAt` (`operators`, and the final block as a decimal `block` and its `blockHash`, or the Solana
+`slot`). A Solana attempt in progress holds `confirmSearchedTo`: how far each other verdict endpoint, by an
+id made from its URL, has read the blocks the payment could have landed in. `status --json` prints
+`chain_agreement` and `chain_agreed_at` (`operators`, `block`, `block_hash`, `slot`).
+
 A later chain check can change `settled` or `paid_service_failed` to `uncertain` and mark its
 receipt `mismatch`, correct the receipt to the transaction that is this payment, or, when the chain
 shows the payment was never made and can no longer be, make the attempt `failed` and mark its

@@ -20,7 +20,9 @@ export const LOG_PACE_MS = 2_000;
 export const LOG_RETRY_MAX_MS = 30_000;
 
 const RANGE_CODES = new Set([-32614, -32005, -32602]);
-const RANGE_WORDS = /range|limit|too many/i;
+const RANGE_WORDS = /block range|range (?:is )?too (?:large|wide|big)|limited to (?:a )?\d+ ?(?:block )?range|max(?:imum)? (?:block )?range|query returned more than|too many (?:blocks|results|logs)|exceeds? (?:the )?(?:max(?:imum)? )?(?:block )?range|response size/i;
+/** Words of a rate limit: the RPC is limiting how often this client asks, not how wide. */
+const RATE_WORDS = /rate.?limit|too many requests|request limit|daily request count|requests? per (?:second|minute)|capacity|throttl/i;
 
 /**
  * Does a JSON-RPC error read as a refusal of the block range asked for? -32614 (Base's "eth_getLogs is limited to a 200
@@ -30,11 +32,23 @@ const RANGE_WORDS = /range|limit|too many/i;
  * @returns {boolean}
  */
 export function rangeRefusal(code, message) {
+  // "rate limit exceeded" under -32005 is a rate limit: waiting helps, narrowing the window does not
+  if (typeof message === "string" && RATE_WORDS.test(message)) return false;
   return (typeof code === "number" && RANGE_CODES.has(code)) || (typeof message === "string" && RANGE_WORDS.test(message));
 }
 
+/**
+ * Does an RPC error read as a rate limit: HTTP or JSON-RPC 429, or words that say the RPC limits how often it is asked?
+ * @param {unknown} code
+ * @param {unknown} message
+ * @returns {boolean}
+ */
+export function rateRefusal(code, message) {
+  return code === 429 || (typeof message === "string" && RATE_WORDS.test(message));
+}
+
 /** @param {any} err */
-const limited = (err) => err?.status === 429 || err?.code === 429;
+const limited = (err) => err?.status === 429 || err?.code === 429 || err?.rateLimited === true || rateRefusal(err?.code, err?.details ?? err?.message);
 /** @param {any} err */
 const refusedRange = (err) => !limited(err) && (err?.rangeRefused === true || rangeRefusal(err?.code, err?.details));
 /** @param {any} err @returns {number} */

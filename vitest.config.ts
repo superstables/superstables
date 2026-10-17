@@ -44,6 +44,7 @@ const SLOW = [
   "test/cli/owner-settings-command.test.ts",
   "test/cli/wallet-encrypted.test.ts",
   "test/core/browser-signer.test.ts",
+  "test/core/rpc-quorum-status-cli.test.ts",
   "test/core/wallet-public-rpc.test.ts",
   "test/core/wallet-signer-cancel.test.ts",
   "test/scripts/supply-chain-pack.test.ts",

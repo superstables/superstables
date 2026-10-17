@@ -70,7 +70,8 @@ describe("checkSettlement", () => {
     expect((await checkSettlement(PAYMENT, { rpcUrl: chain.url })).chain).toBe("unchecked");
     const unreachable = await checkSettlement(PAYMENT, { rpcUrl: "http://127.0.0.1:9/" });
     expect(unreachable.chain).toBe("unchecked");
-    expect(unreachable.reason).toContain("the chain could not be read");
+    // the RPC is asked which chain it is on before anything is read from it
+    expect(unreachable.reason).toContain("could not be asked which chain it is on");
   });
 
   it("leaves it unchecked without reading anything when no hash was given", async () => {
@@ -189,6 +190,7 @@ describe("findAuthorization", () => {
     // reorganisation replaces it with the facilitator's payment of the same authorization, and finality passes it.
     chain = await startFakeBaseSepolia();
     const token = POLYGON_AMOY.usdc.address;
+    chain.chainId = POLYGON_AMOY.chainId;
     const cancelled = chain.settle({ from: PAYER, to: PAY_TO, value: 10000n, nonce: NONCE, token });
     chain.used.get(NONCE)!.cancelled = true;
     chain.finalizedLag = 2;
@@ -255,12 +257,14 @@ describe("finality on each EVM chain", () => {
     chain.finalizedLag = undefined; // SKALE's RPC refuses the finalized tag
     const validBefore = new Date((chain.head.timestamp + 60) * 1000).toISOString();
     chain.advance(120);
+    chain.chainId = SKALE_BASE_SEPOLIA.chainId;
     const skale = await findAuthorization(
       { network: SKALE_BASE_SEPOLIA.caip2, payer: PAYER, recipient: PAY_TO, amountAtomic: "10000", nonce: NONCE, validBefore, since: new Date().toISOString() },
       { rpcUrl: chain.url },
     );
     expect(skale).toMatchObject({ found: false, never: true });
     // The same answers from a chain that needs a finalized block: undecided.
+    chain.chainId = BASE_SEPOLIA.chainId;
     const base = await findAuthorization(
       { network: BASE_SEPOLIA.caip2, payer: PAYER, recipient: PAY_TO, amountAtomic: "10000", nonce: NONCE, validBefore, since: new Date().toISOString() },
       { rpcUrl: chain.url },

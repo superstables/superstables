@@ -5,6 +5,7 @@
 // judgement: which offers it pays and which it refuses before the owner is asked, the credential, and what the chain
 // must show for a payment to count.
 
+import { forgetIdentities } from "../../src/core/rpc-quorum.mjs";
 import { randomBytes } from "node:crypto";
 import { decodePaymentSignatureHeader } from "@x402/core/http";
 import { ComputeBudgetProgram, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
@@ -409,6 +410,9 @@ describe("what the chain must show", () => {
       found: false,
       never: true,
       reason: `no transaction carrying the owner's signature succeeded, and its blockhash expired at block height ${builtHeight + 150} (the chain is at ${builtHeight + 151}): none of the 151 blocks it could land in holds one that did, so it can no longer land`,
+      // the RPC the options pin is believed alone, and the verdict says so
+      agreement: "caller",
+      agreedAt: { operators: ["127.0.0.1"], slot: expect.any(Number) },
     });
     // Without the last valid height, nothing is ever called final.
     expect(await solanaRail.findPayment!(facts({ lastValidBlockHeight: undefined }), options())).toEqual({ found: false, reason: "no transaction carrying the owner's signature was found yet" });
@@ -467,9 +471,12 @@ describe("what the chain must show", () => {
     expect(await solanaRail.findPayment!(facts(), options())).toMatchObject({ found: false, unreadable: true });
     chain.blockFails.clear();
     // Another cluster's RPC: not searched.
+    // (an endpoint's identity is asked once per process, so the node changing cluster is asked again)
+    forgetIdentities();
     chain.genesis = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
-    expect(await solanaRail.findPayment!(facts(), options())).toMatchObject({ found: false, unreadable: true, reason: expect.stringMatching(/not on Solana devnet/) });
+    expect(await solanaRail.findPayment!(facts(), options())).toMatchObject({ found: false, unreadable: true, reason: expect.stringMatching(/answers another genesis/) });
     chain.genesis = SOLANA_DEVNET.genesisHash;
+    forgetIdentities();
     // A node behind the finalized slot the search started from: it refuses, and nothing is decided.
     chain.contextSlot = builtAt + 151 - 1;
     expect(await solanaRail.findPayment!(facts(), options())).toMatchObject({ found: false, unreadable: true });
