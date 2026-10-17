@@ -221,9 +221,9 @@ file deletion. [Security](security.md#hosted-approvals-and-buy-once-what-the-sit
 Use approval on superstables.com when the owner wants to approve from a device other than the machine running
 the agent. superstables.com supports Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy,
 SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
-The owner needs a compatible wallet on that device and an account created by signing in with an
-Ethereum or Solana wallet. For now, a Solana account supports only Solana agents, Solana budgets and Solana single
-purchases. With an Ethereum account, Solana also requires a Solana wallet. Signing in and adding an agent do
+The owner needs a compatible wallet on that device and a superstables.com account. They sign in with an
+Ethereum or Solana wallet or an email address. The account holds the wallets that approve: an Ethereum wallet for
+the EVM chains and Tempo, a Solana wallet for Solana. An account admin adds wallets on the account page. Signing in and adding an agent do
 not grant a budget; funding and grant are separate wallet transactions.
 
 The [owner guide](https://www.superstables.com/docs/owner) covers the approval handoff, sign-in
@@ -235,14 +235,13 @@ superstables budget setup --rail tempo --hosted
 superstables budget setup --rail solana --hosted
 ```
 
-Setup then prints an approval link and a match code. The owner opens it, signs in with an Ethereum or Solana wallet
-the first time (a message, no fee), picks the same code and adds the agent to their superstables.com
+Setup then prints an approval link and a match code. The owner opens it, signs in the first time (with a wallet,
+a message and no fee, or with an email address), picks the same code and adds the agent to their superstables.com
 account. From then on, `fund-agent`, `grant` and `revoke` on that chain ask through the site, each
 with its own approval link and code, and the owner approves the transaction in their wallet there. `recover`
 still uses the page on this machine. The CLI, agent key and purchase journals stay on your own runtime; the owner's key stays in their wallet. Purchases need no approval from
-the site: the client pays the seller directly. On Solana the owner also connects a Solana wallet on
-the site's page (with a Solana account, the wallet they signed in with); that address is the owner on
-record, and it signs each transaction the site builds.
+the site: the client pays the seller directly. On Solana the owner signs on the site's page with a Solana
+wallet their account holds; that address is the owner on record, and it signs each transaction the site builds.
 
 The [site account](https://www.superstables.com/account) lets the owner inspect linked agents and
 revoke budgets. It shows Single purchase requests made on superstables.com, not a complete history of budget purchases;
