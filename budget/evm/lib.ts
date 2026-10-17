@@ -13,12 +13,12 @@ import {
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { CFG, type GasOp } from "./chains.ts";
 import { EVM_CHAINS } from "./chains.mjs";
-import { EVM_RPC_MAX_BYTES, cappedRpcFetch, budgetCall, budgetVerdictSet, customRpc } from "../rpc.mjs";
+import { EVM_RPC_MAX_BYTES, cappedRpcFetch, budgetCall, budgetVerdictSet, customRpc, evmEnvNameSet } from "../rpc.mjs";
 import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
-import { agreeAtFinalEvm, agreementWords as engineWords } from "../../src/core/rpc-quorum.mjs";
+import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
 import { finalityFor } from "../../src/core/finality-policy.js";
 
 export { CFG, type GasOp };
@@ -371,6 +371,8 @@ export async function agentGasFor(from: Address, to: Address, data: Hex, op: Gas
 // ---- sending ----
 /** Refuse to sign anything when the RPC does not answer for the chain in chains.ts (a mainnet RPC behind a testnet name, a wrong URL). Read once. */
 let rpcChecked = false;
+/** An RPC URL as an agent may see it: the host only. The path, query and credentials of a URL can hold an access key. */
+export const rpcHost = (url: string): string => { try { return new URL(url).host; } catch { return "(unreadable URL)"; } };
 export async function assertRpcChain() {
   const gate = chainGate({ rail: "evm", key: CFG.key, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet }, chainGateSettings());
   if (gate) {
@@ -380,7 +382,7 @@ export async function assertRpcChain() {
   if (rpcChecked) return;
   const id = Number(await retry(() => publicClient.request({ method: "eth_chainId" })));
   if (id !== CFG.chainId) {
-    console.error(`REFUSED: the RPC ${RPC} answers chain id ${id}, not ${CFG.chainId} (${CFG.label}). Nothing was signed or sent.`);
+    console.error(`REFUSED: the RPC ${rpcHost(RPC)} answers chain id ${id}, not ${CFG.chainId} (${CFG.label}). Nothing was signed or sent.`);
     process.exit(3);
   }
   rpcChecked = true;
@@ -391,21 +393,31 @@ export async function assertRpcChain() {
  * load-time gate already ran. A wrong chain exits 3 with nothing read from it.
  */
 let readChainChecked = false;
+/**
+ * Why the RPC read cannot be used for this chain, in words, or "" when it answers the pinned chain id or does not answer at all
+ * (one attempt, no retries: an RPC that does not answer is not a wrong chain, and no verdict rests on this endpoint without the
+ * engine's own identity check). Only a 0x quantity equal to the pinned id passes; anything else that answered ("zz", "0x", a
+ * decimal string) is not this chain.
+ */
+export async function readChainProblem(): Promise<string> {
+  let raw: unknown;
+  try { raw = await budgetCall(RPC, "eth_chainId", []); } catch { return ""; }
+  const id = typeof raw === "string" && /^0x[0-9a-f]+$/i.test(raw) ? Number(BigInt(raw)) : NaN;
+  if (id === CFG.chainId) return "";
+  const shown = Number.isNaN(id) ? "an unreadable chain id" : `chain id ${id}`;
+  return `the RPC ${rpcHost(RPC)} answers ${shown}, not ${CFG.chainId} (${CFG.label}). Nothing was read from another chain`;
+}
+/** What to do about a wrong-chain RPC: name the variable that is actually set, or the owner's settings when the RPC is the owner's. */
+export function wrongChainNext(): string {
+  const set = evmEnvNameSet(CFG.key);
+  return set ? `check ${set}, or unset it` : `the owner's RPC for ${CFG.key} answers another chain: ask the owner to fix it with \`superstables owner settings rpc ${CFG.key} <url>\` in the owner's own terminal`;
+}
 export async function assertReadChain(command: string) {
   if (readChainChecked || rpcChecked) return;
-  // One attempt, no retries: an RPC that does not answer is not a wrong chain. The command goes on and fails or stays unknown on its
-  // own reads, and no verdict rests on this endpoint without the engine's own identity check.
-  let raw: unknown;
-  try { raw = await budgetCall(RPC, "eth_chainId", []); } catch { return; }
-  // Only a 0x quantity equal to the pinned id passes. Anything else that answered ("zz", "0x", a decimal string) is not this chain.
-  const id = typeof raw === "string" && /^0x[0-9a-f]+$/i.test(raw) ? Number(BigInt(raw)) : NaN;
-  if (id !== CFG.chainId) {
-    let host = "(unreadable URL)";
-    try { host = new URL(RPC).host; } catch {}
-    const shown = Number.isNaN(id) ? "an unreadable chain id" : `chain id ${id}`;
-    const reason = `the RPC ${host} answers ${shown}, not ${CFG.chainId} (${CFG.label}). Nothing was read from another chain`;
+  const reason = await readChainProblem();
+  if (reason) {
     console.error(`REFUSED: ${reason}.`);
-    process.exit(emit(command, 3, { state: "refused_precheck", reason, next: `check B4_RPC_${CFG.key.toUpperCase().replace(/-/g, "_")} and B4_RPC, or unset them` }));
+    process.exit(emit(command, 3, { state: "refused_precheck", reason, next: wrongChainNext() }));
   }
   readChainChecked = true;
 }
@@ -419,7 +431,7 @@ export async function assertReadChain(command: string) {
  * allow, an unreadable settings file) says why in the refusal's own words, which the engine keeps as `reason`.
  */
 export const agreementWords = (failed: Parameters<typeof engineWords>[0] & { reason?: string }): string =>
-  failed.why === "unreadable" && failed.reason && !failed.left?.length ? `the RPC endpoints could not be used: ${failed.reason}. Unset it, or ask the owner to add it in the owner settings` : engineWords(failed);
+  failed.why === "unreadable" && failed.reason && !failed.left?.length ? endpointSetErrorWords(failed.reason, evmEnvNameSet(CFG.key) ?? undefined) : engineWords(failed);
 /** The endpoints that decide a verdict on this chain. */
 export const verdictSet = () => budgetVerdictSet(CFG.key, customRpc("evm", CFG.key));
 type Agreed<T> = Awaited<ReturnType<typeof agreeAtFinalEvm>> & { value?: T };

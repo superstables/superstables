@@ -10,7 +10,7 @@
 // be read or answered by anyone on the way, and every check the commands make reads the chain through it. The dispatcher
 // refuses a command when one of them is set to anything else (exit 2), and every RESULT names a replacement in use (`rpc`).
 
-import { SETTINGS_COMMAND, budgetChainKey, rpcFor } from "../src/core/owner-settings.js";
+import { SETTINGS_COMMAND, budgetChainKey, rpcFor, shownUrl } from "../src/core/owner-settings.js";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { readCapped } from "./response.mjs";
 import { endpointSet } from "../src/core/rpc-endpoints.mjs";
@@ -55,7 +55,7 @@ export function rpcFromEnv(name, fallback, purpose = "read", chainKey) {
   const v = process.env[name]?.trim();
   if (v) {
     const problem = rpcUrlProblem(v);
-    if (problem) return { url: fallback, custom: false, error: `${name} is refused: ${problem} (got "${v.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").slice(0, 120)}")` };
+    if (problem) return { url: fallback, custom: false, error: `${name} is refused: ${problem} (got ${shownUrl(v)})` };
   }
   if (chainKey === undefined) {
     if (purpose !== "read") throw new TypeError(`rpcFromEnv: purpose "${purpose}" needs the chain key`);

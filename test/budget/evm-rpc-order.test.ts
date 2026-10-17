@@ -1,14 +1,14 @@
 // Which RPC a budget EVM command uses (B4_RPC_<CHAIN>, then B4_RPC, then the owner's settings, then the built-in one), that the
 // owner-action guard judges the variable that actually wins, and that a refused endpoint set says why. Loopback fakes only.
 import { spawn } from "node:child_process";
-import { appendFileSync, rmSync } from "node:fs";
+import { appendFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { startFakeRpc } from "../helpers/fake-site.js";
 import { makeChain, makeHome } from "../helpers/fake-evm.js";
 import { accountHomeWith } from "../helpers/owner-settings.js";
-import { evmRpcFromEnv, ownerRpcNext, ownerRpcProblem } from "../../budget/rpc.mjs";
+import { rpcFromEnv, evmRpcFromEnv, ownerRpcNext, ownerRpcProblem } from "../../budget/rpc.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const BUILTIN = "https://sepolia.base.org";
@@ -170,9 +170,9 @@ describe("a set that cannot be built says why, in the owner settings' words (the
     const r = await zeroAllowance((url) => ({ B4_RPC: url }));
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.result).toMatchObject({ allowanceZero: true, revoked: false });
-    expect(r.result.agreement).toMatch(/^the RPC endpoints could not be used: B4_RPC \(http:\/\/127\.0\.0\.1:\d+\) is not an RPC the owner set for base-sepolia/);
-    expect(r.stdout).toContain("revoked: no: the allowance reads 0 on this RPC, but the RPC endpoints could not be used: B4_RPC (");
-    expect(r.result.agreement).toContain("Unset it, or ask the owner to add it in the owner settings");
+    expect(r.result.agreement).toMatch(/^the RPC endpoints could not be read: B4_RPC \(http:\/\/127\.0\.0\.1:\d+\) is not an RPC the owner set for base-sepolia/);
+    expect(r.stdout).toContain("revoked: no: the allowance reads 0 on this RPC, but the RPC endpoints could not be read: B4_RPC (");
+    expect(r.result.agreement).toContain("; unset it, or ask the owner to add it in the owner settings");
   }, 90_000);
 
   it("B4_RPC_BASE_SEPOLIA is the name in the words when it is the one that decided", async () => {
@@ -186,6 +186,127 @@ describe("agreementWords", () => {
     const { agreementWords } = await import(new URL("../../budget/evm/lib.ts", import.meta.url).href);
     expect(agreementWords({ agreed: false, why: "disagree" } as any)).toBe("the RPC endpoints disagree");
     expect(agreementWords({ agreed: false, why: "unreadable", left: ["a: down"] } as any)).toBe("the RPC endpoints could not be read (left out: a: down)");
-    expect(agreementWords({ agreed: false, why: "unreadable", reason: "the owner settings could not be read: broken" } as any)).toBe("the RPC endpoints could not be used: the owner settings could not be read: broken. Unset it, or ask the owner to add it in the owner settings");
+    expect(agreementWords({ agreed: false, why: "unreadable", reason: "B4_RPC (https://a.example/…) is not an RPC the owner set for base-sepolia: owner actions" } as any)).toContain("; unset it, or ask the owner to add it in the owner settings");
+    // an unreadable settings file has nothing to unset: it says what to do instead
+    const broken = agreementWords({ agreed: false, why: "unreadable", reason: "the owner settings could not be read: broken" } as any);
+    expect(broken).toBe("the RPC endpoints could not be read: the owner settings could not be read: broken; ask the owner to check the owner settings");
   });
+});
+
+describe("a wrong-chain RPC: what to do, and that no URL's path or key reaches the agent (the real CLI)", () => {
+  const KEY = "SECRETKEY123";
+  async function wrong() {
+    const calls: string[] = [];
+    const fake = await startFakeRpc(1, (m) => { calls.push(m); return undefined; });
+    const h = makeHome();
+    cleanups.push(() => fake.close(), h.cleanup);
+    return { calls, fake, h, keyed: `${fake.url}/v2/${KEY}` };
+  }
+  const settingsFor = (url: string) => account({ version: 1, rpc: { "base-sepolia": { urls: [url] } } });
+  const quiet = (r: Out) => { expect(r.stdout + r.stderr).not.toContain(KEY); };
+
+  it("the owner's own RPC on another chain: no variable is named, the owner settings are", async () => {
+    const { calls, h, keyed } = await wrong();
+    const r = await run([], { SUPERSTABLES_HOME: h.home, SUPERSTABLES_TEST_ACCOUNT_HOME: settingsFor(keyed) }, "budget/evm/read.ts");
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.result.next).toContain("superstables owner settings rpc base-sepolia <url>");
+    expect(r.result.next).toContain("owner's own terminal");
+    expect(r.result.next).not.toContain("B4_RPC");
+    expect(new Set(calls)).toEqual(new Set(["eth_chainId"]));
+    quiet(r);
+  }, 90_000);
+
+  it("B4_RPC on another chain names B4_RPC", async () => {
+    const { h, keyed } = await wrong();
+    const r = await run([], { SUPERSTABLES_HOME: h.home, SUPERSTABLES_TEST_ACCOUNT_HOME: account(null), B4_RPC: keyed }, "budget/evm/read.ts");
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.result.next).toBe("check B4_RPC, or unset it");
+    quiet(r);
+  }, 90_000);
+
+  it("B4_RPC_BASE_SEPOLIA on another chain names that variable, not B4_RPC", async () => {
+    const { h, keyed } = await wrong();
+    const r = await run([], { SUPERSTABLES_HOME: h.home, SUPERSTABLES_TEST_ACCOUNT_HOME: account(null), B4_RPC_BASE_SEPOLIA: keyed, B4_RPC: BUILTIN }, "budget/evm/read.ts");
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.result.next).toBe("check B4_RPC_BASE_SEPOLIA, or unset it");
+    quiet(r);
+  }, 90_000);
+
+  it("revoke run directly refuses an owner's RPC on another chain with the host only", async () => {
+    const { calls, fake, h, keyed } = await wrong();
+    const r = await run(["--owner-key-file", join(h.home, "owner.env")], { SUPERSTABLES_HOME: h.home, SUPERSTABLES_TEST_ACCOUNT_HOME: settingsFor(keyed) }, "budget/evm/revoke.ts");
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.stderr).toContain(`the RPC ${new URL(fake.url).host} answers chain id 1, not 84532`);
+    expect(new Set(calls)).toEqual(new Set(["eth_chainId"]));
+    quiet(r);
+  }, 90_000);
+
+  it("revoke --plan run directly checks the chain before it reads the allowance", async () => {
+    const { calls, h, keyed } = await wrong();
+    const r = await run(["--plan"], { SUPERSTABLES_HOME: h.home, SUPERSTABLES_TEST_ACCOUNT_HOME: settingsFor(keyed) }, "budget/evm/revoke.ts");
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(new Set(calls)).toEqual(new Set(["eth_chainId"]));
+    quiet(r);
+  }, 90_000);
+
+  it("through the dispatcher, revoke with the owner's RPC on another chain never prints the key", async () => {
+    const { h, keyed } = await wrong();
+    writeFileSync(join(h.home, "owner.env"), `OWNER_PRIVATE_KEY=0x${"22".repeat(32)}\n`, { mode: 0o600 });
+    const r = await run(["revoke", "--rail", "evm", "--yes", "--owner-key-file", join(h.home, "owner.env")], { SUPERSTABLES_HOME: h.home, SUPERSTABLES_TEST_ACCOUNT_HOME: settingsFor(keyed) });
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    quiet(r);
+  }, 90_000);
+
+  it("through the dispatcher, a B4_RPC the owner did not set is refused without the key", async () => {
+    const { h, keyed } = await wrong();
+    const r = await run(["revoke", "--rail", "evm", "--yes"], { SUPERSTABLES_HOME: h.home, SUPERSTABLES_TEST_ACCOUNT_HOME: account(null), B4_RPC: keyed });
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    quiet(r);
+  }, 90_000);
+
+  it("preflight prints the RPC's host, not its URL", async () => {
+    const { h, keyed } = await wrong();
+    const r = await run([], { SUPERSTABLES_HOME: h.home, SUPERSTABLES_TEST_ACCOUNT_HOME: settingsFor(keyed) }, "budget/evm/preflight.ts");
+    expect(r.stdout).toMatch(/rpc 127\.0\.0\.1:\d+,/);
+    quiet(r);
+  }, 90_000);
+});
+
+describe("the owner's own RPC is never echoed to the agent (the real CLI)", () => {
+  it("no rpc field in the RESULT, and the URL's path is nowhere in the output", async () => {
+    const chain = await makeChain({ allow: "1" });
+    const h = makeHome();
+    cleanups.push(() => chain.close(), h.cleanup);
+    const r = await run([], { SUPERSTABLES_HOME: h.home, SUPERSTABLES_TEST_ACCOUNT_HOME: account({ version: 1, rpc: { "base-sepolia": { urls: [`${chain.url}/v2/SECRETKEY123`] } } }) }, "budget/evm/read.ts");
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(chain.rpcLog.length).toBeGreaterThan(0);
+    expect(r.result).not.toHaveProperty("rpc");
+    expect(r.stdout + r.stderr).not.toContain("SECRETKEY123");
+  }, 90_000);
+});
+
+describe("a refused RPC variable never echoes the URL's credentials or path", () => {
+  const BAD = "ftp://user:SECRETPW@rpc.example.test/v2/APIKEY123";
+  it("rpcFromEnv's refusal shows scheme and host only", () => {
+    for (const bad of [BAD, "https://user:SECRETPW@rpc.example.test/v2/APIKEY123", "http://rpc.example.test/v2/APIKEY123"]) {
+      const r = withEnv({ B4_RPC: bad }, () => rpcFromEnv("B4_RPC", BUILTIN));
+      expect(r.error, bad).toContain("B4_RPC is refused");
+      expect(r.error).not.toMatch(/SECRETPW|APIKEY123/);
+    }
+  });
+  it("the dispatcher's RESULT and stderr carry neither", async () => {
+    const h = makeHome();
+    cleanups.push(h.cleanup);
+    const r = await run(["revoke", "--rail", "evm"], { SUPERSTABLES_HOME: h.home, SUPERSTABLES_TEST_ACCOUNT_HOME: account(null), B4_RPC: "https://user:SECRETPW@rpc.example.test/v2/APIKEY123" });
+    expect(r.code, r.stdout + r.stderr).not.toBe(0);
+    expect(r.stdout + r.stderr).toContain("B4_RPC");
+    expect(r.stdout + r.stderr).not.toMatch(/SECRETPW|APIKEY123/);
+  }, 90_000);
+  it("the RESULT rpc field of an allowed replacement hides the path", async () => {
+    const chain = await makeChain({ allow: "1" });
+    const h = makeHome();
+    cleanups.push(() => chain.close(), h.cleanup);
+    const r = await run([], { SUPERSTABLES_HOME: h.home, SUPERSTABLES_TEST_ACCOUNT_HOME: account(null), B4_RPC: `${chain.url}/v2/APIKEY123` }, "budget/evm/read.ts");
+    expect(r.stdout + r.stderr).not.toContain("APIKEY123");
+  }, 90_000);
 });
