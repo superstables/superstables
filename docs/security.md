@@ -35,7 +35,7 @@ home folder itself may be a link to such a folder. Budget folders (`keys/budget/
 written to them. The client reads the local wallet's agent token
 only from a regular file that only you can read.
 
-When a budget command opens its owner approval link in your browser, it does not put the link on a command line, where every user on the machine could read it with `ps`. It writes a launcher file, mode 0600, in `~/Superstables-budget-open/` (mode 0700), which sends the browser to the link, and gives the browser only the file's path. The file is deleted when the approval ends or the command stops, and the folder once it is empty.
+When a budget command opens its owner approval link in your browser, it does not put the link on a command line, where every user on the machine could read it with `ps`. It writes a launcher file, mode 0600, in `~/Superstables-budget-open/` (mode 0700), which sends the browser to the link, and gives the browser only the file's path. The file is deleted when the approval ends or the command stops, and the folder once it is empty; one left by a command that was killed is removed the next time a link is opened. The folder check looks at that folder only, so it assumes your home folder is not writable by other users: in a home folder others can write to, they could swap the launcher folder between the check and the file's creation. The file itself is still created exclusively, with mode 0600. The local wallet's launcher, below, has the same limit.
 
 Before the owner signs, the client builds an authorization and serves a page that shows its terms.
 After it checks the signature it gets back, it sends the authorization to the seller, which has a
@@ -104,6 +104,12 @@ on the site, and the owner acts there signed in to their account with their wall
 There is no password on the approval page. The authority is the id in the URL: 128 bits of
 randomness, generated when the payment is created, and handed to the agent as part of its tool
 result so it can pass it to you.
+
+`superstables pay` prints the link once, in its own output (on stderr with `--json`). No record holds it: the attempt
+record and the approvals log never contain the id, `status` never repeats it, and the link works only while that `pay`
+process runs. The one place it can end up on disk is wherever the person or agent who ran `pay` sends that output, a log
+file for example. Whoever can read that file can open the payment's approval page while `pay` runs, though signing still
+needs the owner's wallet, so such a file should be private (`umask 077` before the command) and deleted when `pay` ends.
 
 That id is deliberately narrow. Holding it lets someone see *one* payment and sign *that* one:
 
@@ -483,7 +489,8 @@ stops, then deletes it, and the folder once it is empty: after a reload the page
 again, and the file is how the owner opens it signed in again. It holds the same secret, at the same
 mode in a folder of the same mode, as `wallet/owner-secret`, so keeping it adds no exposure.
 `superstables --wallet local wallet open` writes a fresh one and opens it, for when the tab was closed or the folder
-was cleaned. A URL fragment is not sent to the server. The page takes the secret out of the address
+was cleaned. Before it writes the secret anywhere, it asks the process on the port the wallet recorded for its page to prove it knows
+the owner secret (an HMAC of a fresh nonce), so a different process that has taken that port after a crash gets nothing. A URL fragment is not sent to the server. The page takes the secret out of the address
 bar and the history and keeps it in the page's memory only: it is never put in session or local
 storage, so closing or reloading the tab forgets it. Anyone opening the page another way, over SSH for
 example, pastes the secret from `wallet/owner-secret`.
@@ -530,7 +537,10 @@ writing the owner's address into the agent key file. A refusal at this later che
 undo an owner signature or a transaction already sent through setup on superstables.com. `doctor` fails if that file holds an owner key.
 - **The chain enforces the budget.** On `evm`, the total allowance. On `solana`, the delegated
   amount. On `tempo`, the access key's total or per-period limit, its expiry, and its seller list
-  when one was granted. No rail enforces a per-payment maximum on chain.
+  when one was granted. When the owner's account pays the network fee (a push payment, or a pull payment the seller does not
+  sponsor), the fee is paid in pathUSD and counts against that limit, as measured on Tempo Moderato, and a payment the chain
+  refuses still costs its fee; `buy` refuses before signing when the price plus the largest fee the payment can have is more
+  than what is left. No rail enforces a per-payment maximum on chain.
 - **This CLI checks the rest**, before it signs: `--max`, the expected token, `--pay-to` and one
   purchase per `--op`. On `evm`, before the pull, it has the x402 client build the payment it would
   send and checks it against the option those checks passed, including the token's EIP-712 domain
@@ -596,9 +606,8 @@ undo an owner signature or a transaction already sent through setup on superstab
   budget revoked, and `status` names the last owner action and whether it is final. A new grant
   waits for the previous revoke to be final, and a setup that bundles a grant refuses unless it can
   read, at a final block, that no older allowance is live, or the agent key was created in that same
-  setup. A reused agent key with no owner on record now links first: setup refuses
-  the grant and says to set up (link), then grant. The website's own budget pages still say `confirmed` at one confirmation until its
-  finality change lands.
+  setup. A reused agent key with no owner on record links first: setup refuses
+  the grant, sending nothing, and says to set up (link), then grant.
 - **Revoke ends the permission once it is confirmed on chain.** The owner approves it in their
   wallet: `approve(agent, 0)` on `evm`, `revokeKey` on `tempo`, the SPL `Revoke` on `solana`. It
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds
@@ -801,7 +810,11 @@ says "not supported", there is no command for it yet; do not move key files by h
   `B4_AGENT_ADDRESS` line. Moving a key in is ordered so that no step loses it: the keychain takes the
   key and is read back, the replacement file is written beside the old one, the old file's bytes are
   overwritten, and only then is the replacement renamed over it; if the replacement cannot be written,
-  setup refuses and the old file is untouched. A locked keychain makes `buy`, `grant`, `fund-agent`,
+  setup refuses and the old file is untouched. If the process is killed in the moment between the overwrite and the rename, the key
+  file holds zeros, the key is in the keychain under the account above, and a hidden file named `.<name>.<pid>.<random>.tmp`
+  (mode 0600) beside it holds the address lines. `setup` does not finish that move by itself, and its message for a missing
+  key does not mention this case. Do not start a new agent because of it: the old one may still hold a live budget. Look the
+  key up in the keychain as above. A locked keychain makes `buy`, `grant`, `fund-agent`,
   `recover` and owner requests on chains approved on superstables.com refuse, because the agent key signs
   them; the local `revoke` still works. `tempo` agent keys stay in files in this release.
 - **Budget agent key, `evm` and `solana`.** Supported: `superstables budget rotate --rail evm|solana`
@@ -841,7 +854,58 @@ says "not supported", there is no command for it yet; do not move key files by h
   and start it again: it creates a new one. The client reads the agent token from its file on
   each request; `SUPERSTABLES_WALLET_AGENT_TOKEN`, if you set it, needs the new value.
 
-## What changes in the next milestone
+## What mainnet still needs
 
+This client does not sign on mainnet, and no setting turns it on. This section lists what would have to be true before a
+chain that is not a testnet could be added, so that what the code enforces today stays separate from what it does not.
+
+**What the code requires.** Every signature, wallet request and broadcast, in `pay` and in every `superstables budget` rail,
+passes one chain gate first. A chain whose table entry is not marked as a testnet is refused unless all three of these hold:
+
+- **The build allows mainnet signing.** A constant in the client, `MAINNET_SIGNING`, is `false`. Nothing reads it from the
+  environment or from a file.
+- **Your signed settings enable the chain.** `superstables owner settings sign` has your wallet sign the list of chains
+  enabled for signing, and the gate reads that list only from a valid signature. The list that command offers is empty in this
+  build, so no chain can be enabled.
+- **The chain has everything mainnet needs.** The gate asks, for each chain, for four things: an RPC endpoint you chose for it,
+  the chain's token facts checked, a finality profile for the chain, and agent keys stored other than as plain text. This build
+  reports all four as missing for every chain. The gate does not test them yet. The parts exist (the owner's RPC settings, the
+  token facts every chain table must state, a finality rule per chain, and the OS keychain for `evm` and `solana` agent keys),
+  but a chain added to the tables would still be reported as lacking all four until that check is written.
+
+**What is still outside the code.**
+
+- **Evidence from real runs.** What the client assumes about a chain, such as when its blocks are final, which network fees
+  count against an access key's limit and what the token's signing domain is, was checked on the testnets it supports. It has
+  not been checked on any mainnet chain, and each one needs the same checks before it is added.
+- **Refusing public files from before the agent address was signed.** On testnet the client warns and goes on (see
+  [Budgets](#budgets)). A mainnet chain would have to refuse them, and that refusal is not written.
+- **Package provenance.** The npm package is published without npm provenance, so nothing on the registry ties it to a commit;
+  rebuilding it is the check ([checking a build](install.md#checking-a-build-against-its-commit)).
+- **The site.** This page covers the client. What superstables.com would need before it supports mainnet is separate work.
 - **A signing surface that reads like money.** Browser wallets such as MetaMask show an EIP-712 authorization in atomic
-  units; a person should see "0.01 USDC to this seller" in the wallet, not only on our page.
+  units; a person should see "0.01 USDC to this seller" in the wallet, not only on our page. The approval page shows raw and
+  readable values side by side, but the wallet's own prompt is not something this client controls.
+
+### Limits this release leaves in place
+
+These are known, and none of them is planned work for the release that adds mainnet.
+
+- **Windows.** Windows is not supported (use WSL), and `superstables budget` refuses to run on native Windows. The code that
+  opens a page in the browser still names Windows' `start`: the budget's opener runs `cmd /c start`, and the wallet and the
+  settings signing page run `start` through a shell. Nothing on this page is claimed for native Windows.
+- **`doctor` contacts other hosts.** `superstables doctor` asks the Superstables index, the demo service and each public
+  facilitator whether they answer, so those hosts see this machine's address. That is what it is for.
+  `SUPERSTABLES_DOCTOR_OFFLINE=1` skips every one of those checks and says so on each line.
+- **The owner's-terminal check is a speed bump.** `superstables budget unlock`, `superstables owner settings` changes and
+  `owner settings sign` run only when standard input is a terminal, and the first two also ask for a typed confirmation. An
+  agent that drives a pseudo-terminal can pass that check. It stops an agent that runs the command carelessly, not one that
+  means to. What an owner action is worth rests on the owner's wallet, not on this check.
+- **`owner settings sign` puts its link on the opener's command line.** It opens its page by giving the browser opener the
+  link itself, not a launcher file as the budget commands and the wallet do, so another user on the machine could read the
+  link with `ps` while the opener runs. Run it with `--no-open` to have it print the link and open the link yourself.
+  Signing still needs your wallet.
+- **Old Tempo purchase records stay unknown.** The client does not repair Tempo purchase records written by an earlier version.
+  A record with no recorded expiry, or with neither a payment memo nor a transaction hash, stays `unknown`, and
+  `superstables budget reconcile` does not report it `not_found` once its expiry passes. Nothing in such a record shows the
+  payment can no longer settle. Do not pay again on that basis.

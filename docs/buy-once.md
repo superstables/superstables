@@ -200,7 +200,7 @@ Paying quote b54cdbae-339a-4c84-965c-2d146ee5a945 (attempt b65773de-a08b-4c91-b5
   awaiting_approval: waiting for the owner on the approval page (it closes when this command stops)
 
 Open this approval link and approve the payment in your browser wallet:
-  http://127.0.0.1:4412/approve/324a415688aa0b48d2ee25a8a1e9326e
+  http://127.0.0.1:24817/approve/324a415688aa0b48d2ee25a8a1e9326e
 ```
 
 `pay` asks the seller for its terms again and refuses if they changed. The client checks the spend
@@ -281,7 +281,10 @@ must keep running until the owner decides, so start it detached and read the app
 nohup superstables pay <quote-id> --json > pay.json 2> pay.log < /dev/null &
 ```
 
-Read `pay.log` for the attempt id (its first line) and the approval link. Write it exactly
+Read `pay.log` for the attempt id (its first line) and the approval link. It is the only place the
+link is printed: `status` does not repeat it and no record holds it. Whoever can read `pay.log` can open
+that payment's approval page while `pay` runs, though signing still needs the owner's wallet, so keep the
+file where only you can read it (`umask 077` before starting) and delete it when `pay` ends. Write the link exactly
 as printed, with the price and the recipient, in a reply to the owner, and end your turn there:
 some agent hosts show the owner nothing of a turn until it ends, and `pay` keeps the page open in
 the background. When the owner says they have approved or rejected it, run
