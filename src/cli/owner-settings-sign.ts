@@ -3,13 +3,13 @@
 // wallet; the server checks the signature before anything is written, and the file is written only from what it checked, with the
 // hashes recomputed once more. An agent has no terminal to type into and no wallet: the command runs only in the owner's own.
 
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { accountPolicyPath, retiredListPath } from "../core/home.js";
 import {
   SETTINGS_COMMAND, SIGN_COMMAND, readOwnerSettings, requirePolicyFile, settingsPayload, settingsSignedAt, signatureRecord, signedSettings, writeOwnerSettings,
 } from "../core/owner-settings.js";
 import { OwnerApprovalServer, type OwnerChain, type OwnerTerms } from "../core/signer/owner-approval-server.js";
+import { launcherDir, openLink, removeLauncher } from "../core/owner-launcher.mjs";
 import { CliError, EXIT } from "./outcome.js";
 
 export type SignRail = "evm" | "solana";
@@ -37,8 +37,10 @@ export interface SignOptions {
   rail: SignRail;
   /** How long the page stays open. */
   timeoutMs?: number;
-  /** Opens the page; the default opens the owner's browser. */
+  /** Opens the page instead of the launcher (`--no-open` passes a no-op; tests). */
   open?: (url: string) => void;
+  /** Tests: the launcher folder, and what is given the launcher's path. */
+  launcher?: { dir?: string; opener?: (path: string) => void };
   /** Where the link and the rows are said. Default stderr. */
   say?: (line: string) => void;
   /** 0 (the default) picks a free port. */
@@ -47,17 +49,6 @@ export interface SignOptions {
   lingerMs?: number;
   /** Test hook: the chains enabled for signing (this build offers none to the owner). */
   enabledChains?: string[];
-}
-
-function openBrowser(url: string): void {
-  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  try {
-    const child = spawn(command, [url], { stdio: "ignore", detached: true, shell: process.platform === "win32" });
-    child.on("error", () => undefined);
-    child.unref();
-  } catch {
-    // no browser: the link is printed
-  }
 }
 
 function retiredCount(path: string): string {
@@ -119,6 +110,10 @@ export async function signOwnerSettings(options: SignOptions): Promise<{ signer:
   }
   const signedAt = settingsSignedAt();
   const say = options.say ?? ((line: string) => process.stderr.write(`${line}\n`));
+  // the link is a capability: the opener gets only the path of a launcher file only this user can read (src/core/owner-launcher.mjs)
+  const dir = options.launcher?.dir ?? launcherDir();
+  let launcher: string | undefined;
+  const dropLauncher = () => { if (launcher !== undefined && removeLauncher(launcher, dir)) launcher = undefined; };
   const server = new OwnerApprovalServer({ port: options.port ?? 0 });
   await server.start();
   try {
@@ -132,8 +127,14 @@ export async function signOwnerSettings(options: SignOptions): Promise<{ signer:
     });
     say(`Open this page in the browser with your ${options.rail === "solana" ? "Solana" : "EVM"} wallet, and sign your settings there:\n\n  ${handle.url}\n`);
     for (const row of terms.rows) say(`  ${row.label}: ${row.value.replace(/\n/g, " ")}`);
-    (options.open ?? openBrowser)(handle.url);
+    if (options.open) options.open(handle.url);
+    else {
+      const opened = openLink(handle.url, { dir, ...(options.launcher?.opener ? { opener: options.launcher.opener } : {}) });
+      if ("problem" in opened) say(`(The link was not opened in a browser: ${opened.problem}. Open the link above.)`);
+      else { launcher = opened.path; process.once("exit", dropLauncher); }
+    }
     const outcome = await handle.settled;
+    dropLauncher();
     if (outcome.status !== "connected" || !outcome.signature) {
       const why = outcome.status === "rejected" || outcome.status === "expired" ? outcome.reason : "no signature came back";
       throw new CliError(`${SETTINGS_COMMAND} sign: ${outcome.status === "expired" ? "the page expired" : "the signing was not completed"}: ${why}. Nothing was written.`, EXIT.refused);
@@ -169,6 +170,8 @@ export async function signOwnerSettings(options: SignOptions): Promise<{ signer:
     await new Promise((resolve) => setTimeout(resolve, options.lingerMs ?? 3_000));
     return { signer: outcome.address, signedAt, path: now.path };
   } finally {
+    dropLauncher();
+    process.removeListener("exit", dropLauncher);
     await server.close();
   }
 }

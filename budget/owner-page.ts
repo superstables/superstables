@@ -13,7 +13,7 @@
 // on stderr. The default browser opens it too, through a private launcher file (owner-launcher.mjs), unless --no-open.
 // --timeout <seconds> sets how long the link stays open (default 600). Each rail binds these helpers to its chain with
 // ownerPageFor (evm/owner.ts, tempo/owner.ts, solana/owner.ts).
-import { openLink, removeLauncher } from "./owner-launcher.mjs";
+import { openLink, removeLauncher } from "../src/core/owner-launcher.mjs";
 import { existsSync, statSync } from "node:fs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "./secret-file.mjs";
 import {

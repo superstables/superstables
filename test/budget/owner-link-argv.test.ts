@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openLink, removeLauncher, writeLauncher } from "../../budget/owner-launcher.mjs";
+import { openLink, removeLauncher, writeLauncher } from "../../src/core/owner-launcher.mjs";
 import { startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));

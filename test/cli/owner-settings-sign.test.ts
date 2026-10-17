@@ -3,7 +3,8 @@
 // signature back. Nothing is written unless the wallet signed exactly what the page showed.
 import { spawn } from "node:child_process";
 import { generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -217,4 +218,106 @@ describe("the command", () => {
     const json = JSON.parse((await cli(["show", "--json"])).stdout);
     expect(json).toMatchObject({ signature: true, signedBy: owner.address, signatureValid: true, policyMatches: true });
   }, 60_000);
+});
+
+// The page's link is a capability: on a command line any user on the machine could read it (ps). The browser is given only the
+// path of a launcher file, the way the budget commands do it (src/core/owner-launcher.mjs).
+describe("opening the page", () => {
+  const posix = process.platform !== "win32";
+  const savedPath = process.env.PATH;
+  const savedHomeDir = process.env.HOME;
+  let scratch: string;
+  beforeEach(() => {
+    scratch = mkdtempSync(join(tmpdir(), "ss-sign-open-"));
+    mkdirSync(join(scratch, "home"));
+    mkdirSync(join(scratch, "bin"));
+    // a stub opener: logs its argv, and the modes of its argument and of that argument's folder, then the file's text
+    const stub = `#!/bin/sh\n{ printf 'ARGC %s\\n' "$#"; for a in "$@"; do printf 'ARG %s\\n' "$a"; done\n  [ -f "$1" ] && { printf 'FILEMODE %s\\n' "$(stat -c %a "$1")"; printf 'DIRMODE %s\\n' "$(stat -c %a "$(dirname "$1")")"; cat "$1"; }\n} >> "$OPENER_LOG"\n`;
+    for (const name of ["xdg-open", "open"]) writeFileSync(join(scratch, "bin", name), stub, { mode: 0o755 });
+    process.env.OPENER_LOG = join(scratch, "opener.log");
+    process.env.PATH = `${join(scratch, "bin")}:${savedPath}`;
+    process.env.HOME = join(scratch, "home");
+  });
+  afterEach(() => {
+    process.env.PATH = savedPath;
+    if (savedHomeDir === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHomeDir;
+    delete process.env.OPENER_LOG;
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const urlIn = (lines: string[]) => /http:\/\/127\.0\.0\.1:\d+\/\S+/.exec(lines.join("\n"))?.[0];
+  const until = async (ok: () => boolean) => { for (let i = 0; i < 200 && !ok(); i++) await new Promise((r) => setTimeout(r, 25)); };
+  /** Runs the command with no `open` hook; `launcher` overrides the launcher folder and the opener. */
+  function runLauncher(act: (url: string) => Promise<void>, launcher?: { dir?: string; opener?: (path: string) => void }, extra: { open?: (u: string) => void } = {}) {
+    const lines: string[] = [];
+    const done = signOwnerSettings({ rail: "evm", say: (l) => lines.push(l), lingerMs: 0, timeoutMs: 8_000, ...(launcher ? { launcher } : {}), ...extra });
+    const wallet = until(() => urlIn(lines) !== undefined).then(() => act(urlIn(lines)!));
+    return { done, wallet, lines };
+  }
+  const signIt = async (url: string) => {
+    const { facts: f } = await facts(url);
+    const res = await postSigned(url, { address: owner.address, signature: await signTyped(owner, JSON.parse(f.typedData!)) });
+    expect(res.status).toBe(200);
+  };
+  const reject = (url: string) => fetch(`${url}/reject`, { method: "POST", headers: { origin: origin(url), "content-type": "application/json" }, body: JSON.stringify({ by: "page" }) }).then(() => undefined);
+  const folder = () => join(scratch, "home", "Superstables-budget-open");
+
+  it.skipIf(!posix)("the link never reaches the opener's argv", async () => {
+    let url = "";
+    const { done, wallet } = runLauncher(async (u) => {
+      url = u;
+      await until(() => existsSync(process.env.OPENER_LOG!) && readFileSync(process.env.OPENER_LOG!, "utf8").includes("</script>"));
+      await signIt(u);
+    });
+    await done;
+    await wallet;
+    const log = readFileSync(process.env.OPENER_LOG!, "utf8");
+    const args = log.split("\n").filter((l) => l.startsWith("ARG ")).map((l) => l.slice(4));
+    expect(log).toContain("ARGC 1");
+    expect(args).toHaveLength(1);
+    expect(args[0].startsWith(`${folder()}/`)).toBe(true);
+    expect(args[0]).not.toContain("127.0.0.1");
+    expect(args[0]).not.toContain(url.split("/").pop()!);
+    expect(log).toContain("FILEMODE 600");
+    expect(log).toContain("DIRMODE 700");
+    expect(log).toContain(JSON.stringify(url));
+    expect(existsSync(folder())).toBe(false);
+  });
+
+  it("a rejected signing removes the launcher too", async () => {
+    const paths: string[] = [];
+    const dir = join(scratch, "launchers");
+    const { done, wallet } = runLauncher(reject, { dir, opener: (p) => { paths.push(p); expect(readFileSync(p, "utf8")).toContain("location.replace"); } });
+    await expect(done).rejects.toThrow(/the signing was not completed/);
+    await wallet;
+    expect(paths).toHaveLength(1);
+    expect(existsSync(paths[0])).toBe(false);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it.skipIf(!posix)("a launcher folder others can write to: nothing is opened, and the command says so", async () => {
+    const dir = join(scratch, "open-to-all");
+    mkdirSync(dir);
+    chmodSync(dir, 0o777);
+    const opened: string[] = [];
+    const { done, wallet, lines } = runLauncher(signIt, { dir, opener: (p) => opened.push(p) });
+    await done;
+    await wallet;
+    expect(opened).toEqual([]);
+    expect(lines.some((l) => /^\(The link was not opened in a browser: .*\. Open the link above\.\)$/.test(l)), lines.join("\n")).toBe(true);
+  });
+
+  it("open overrides the launcher", async () => {
+    const seen: string[] = [];
+    const dir = join(scratch, "launchers");
+    const lines: string[] = [];
+    const done = signOwnerSettings({ rail: "evm", say: (l) => lines.push(l), lingerMs: 0, timeoutMs: 8_000, open: (u) => seen.push(u), launcher: { dir, opener: () => seen.push("launcher") } });
+    const failed = expect(done).rejects.toThrow();
+    await until(() => seen.length > 0);
+    await reject(seen[0]);
+    await failed;
+    expect(seen).toHaveLength(1);
+    expect(existsSync(dir)).toBe(false);
+  });
 });
