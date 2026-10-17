@@ -9,10 +9,11 @@ import { fileURLToPath } from "node:url";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { lockFile } from "../../budget/op-lock.mjs";
 import { startFakeEvm, usdc, type FakeEvm } from "../helpers/fake-evm.js";
 import { startFakeSolana, type FakeSolana } from "../helpers/fake-chains.js";
+import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const CLI = join(ROOT, "budget/cli.mjs");
@@ -31,12 +32,12 @@ const write = (path: string, text: string, mode = 0o600) => {
   mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
   writeFileSync(path, text, { mode });
 };
-function budget(args: string[], env: Record<string, string> = {}, killAfterMs = 0): Promise<Out> {
+function budget(args: string[], env: Record<string, string> = {}, killAfterMs = 0, root = ROOT): Promise<Out> {
   return new Promise((done, fail) => {
     const e: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, ...env };
     delete e.SUPERSTABLES_SITE;
     delete e.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env: e });
+    const child = spawn(process.execPath, [root === ROOT ? CLI : join(root, "budget/cli.mjs"), ...args], { cwd: root, env: e });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -392,12 +393,18 @@ const SOL_AGENT = SOL_AGENT_KP.publicKey.toBase58();
 
 describe("rotate, solana", () => {
   let solana: FakeSolana;
+  // The client runs from a copy whose endpoint table names the fake devnet: the read after the revoke confirms it through the
+  // table's endpoints, never through an RPC that only the environment names.
+  let tree: EndpointTree;
+  beforeAll(() => { tree = endpointTree(); });
+  afterAll(() => tree.close());
   beforeEach(async () => {
     solana = await startFakeSolana({ websocket: true });
     solana.acceptTokenTransactions = true;
+    tree.set({ "solana-devnet": [solana.url] });
     cleanups.push(() => solana.close());
   });
-  const run = (args: string[]) => budget(args, { SUPERSTABLES_SOLANA_RPC: solana.url });
+  const run = (args: string[]) => budget(args, { SUPERSTABLES_SOLANA_RPC: solana.url }, 0, tree.root);
   const ownerFile = () => {
     const path = file("owner-sol.env");
     write(path, `SOLANA_OWNER_SECRET_BASE58=${bs58.encode(SOL_OWNER_KP.secretKey)}\n`);
