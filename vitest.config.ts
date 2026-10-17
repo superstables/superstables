@@ -5,6 +5,7 @@ import { defineConfig } from "vitest/config";
 // CI full workflow (nightly and on demand) run everything. A new test file is fast until it is listed here.
 const SLOW = [
   "test/budget/agent-binding.test.ts",
+  "test/budget/agent-key-store.test.ts",
   "test/budget/approvals-token.test.ts",
   "test/budget/approve-reset.test.ts",
   "test/budget/chain-gate.test.ts",

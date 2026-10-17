@@ -246,6 +246,12 @@ each time it starts. Without a terminal there is nobody to ask, so setup creates
 `superstables wallet init --no-passphrase` to store it unencrypted (testnet only), and
 `superstables wallet encrypt` later to protect it.
 
+Budget agent keys (`superstables budget setup --key-store os-keychain`, on `evm` and `solana`) can live in the
+operating system's keychain instead of a file. Linux needs `secret-tool`, from the `libsecret-tools` package, and a
+running secret service; macOS has `security` built in. Without the tool, setup refuses and writes nothing. A locked
+keychain makes `buy`, `grant`, `fund-agent`, `recover` and owner requests on chains approved on superstables.com
+refuse until it is unlocked (a local `revoke` still works). The key file then holds only the address.
+
 It binds `127.0.0.1:4411` and opens the approval page in your browser, already signed in. It
 does that through a launcher file only you can read, in `~/Superstables-wallet-open/`, and
 prints its path in case the browser does not open; the file, and the folder once empty, are

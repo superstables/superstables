@@ -30,9 +30,9 @@
 // Nothing here kills a process group it did not start. `--replace` first asks the running page to cancel
 // (POST /cancel): only a page that confirms the wallet was never asked is stopped.
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, linkSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
+import { HOME, approvalsDir, ensurePrivateDir, ownerApprovalsLog } from "./paths.mjs";
 import { writeJournalFile } from "./journal.mjs";
 import { spawnIdentified } from './child-identity.mjs';
 import { createIdentitySource, inspectProcess, visiblePid } from '../src/core/process-identity.mjs';
@@ -67,7 +67,7 @@ const activeFile = (rail, chain) => join(approvalsDir(), `active-${rail}-${chain
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function ensureDir() {
-  mkdirSync(approvalsDir(), { recursive: true, mode: 0o700 });
+  ensurePrivateDir(approvalsDir(), { root: HOME });
 }
 
 export function readApproval(id) {

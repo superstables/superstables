@@ -10,7 +10,9 @@
 // stop it with nobody there. The owner's fixed minimum applies only when the fee cannot be read: the owner approves in a
 // wallet that shows the fee and refuses what it cannot pay, and on a cheap testnet that minimum is many times the real cost.
 import { existsSync, statSync } from "node:fs";
-import { agentKeyFile, ownerKeyFile, publicFile } from "./paths.mjs";
+import { join } from "node:path";
+import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ownerKeyFile, privateDirProblem, publicFile } from "./paths.mjs";
+import { readAgentSecret } from "./os-keychain.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile } from "./secret-file.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
 import { DEFAULT_RPC, evmRpcFromEnv, jsonRpc, rpcFromEnv } from "./rpc.mjs";
@@ -65,7 +67,7 @@ const RAILS = {
     const c = { ...EVM_CHAINS[chain], rpc: evmRpcFromEnv(chain, EVM_CHAINS[chain].rpc).url }, d = c.doctor, tok = c.token, g = c.gas, L = g.limits;
     const flag = ` --chain ${chain}`;
     return {
-      ownerVars: null, agentVars: ["B4_AGENT_KEY"], ownerSecrets: ["B4_OWNER_KEY"], agentKeyVar: "B4_AGENT_KEY",
+      ownerVars: null, agentVars: ["B4_AGENT_KEY"], ownerSecrets: ["B4_OWNER_KEY"], agentKeyVar: "B4_AGENT_KEY", storeVar: "B4_AGENT_KEY_STORE",
       pub: publicFile("evm", chain), ownerAddr: "B4_OWNER_ADDRESS", agentAddr: "B4_AGENT_ADDRESS",
       setup: `superstables budget setup --rail evm${flag}`, newOwner: `superstables budget setup --rail evm${flag} --new-owner`,
       keyAddress: evmKeyAddress, caseSensitive: false,
@@ -108,7 +110,7 @@ const RAILS = {
     ],
   }),
   solana: () => ({
-    ownerVars: null, agentVars: ["SOLANA_AGENT_SECRET_BASE58", "SOLANA_OWNER_ADDRESS"], ownerSecrets: ["SOLANA_OWNER_SECRET_BASE58"], agentKeyVar: "SOLANA_AGENT_SECRET_BASE58",
+    ownerVars: null, agentVars: ["SOLANA_AGENT_SECRET_BASE58", "SOLANA_OWNER_ADDRESS"], ownerSecrets: ["SOLANA_OWNER_SECRET_BASE58"], agentKeyVar: "SOLANA_AGENT_SECRET_BASE58", storeVar: "SOLANA_AGENT_KEY_STORE",
     pub: publicFile("solana", "devnet"), ownerAddr: "SOLANA_OWNER_ADDRESS", agentAddr: "SOLANA_AGENT_ADDRESS",
     setup: "superstables budget setup --rail solana",
     keyAddress: solanaKeyAddress, caseSensitive: true,
@@ -177,9 +179,42 @@ export async function runDoctor(f) {
   for (const [label, path, env, vars] of files) {
     if (!existsSync(path)) { line(false, label, `${path} does not exist${r.ownerVars ? "" : ` (run ${r.setup})`}`); continue; }
     if (unsafe.has(path)) { line(false, `${label} ${path}`, unsafe.get(path)); continue; }
-    const missing = vars.filter((v) => !env[v]);
+    // a file that names the OS keychain holds the agent's address where the key would be (evm and solana)
+    const inKeychain = label === "agent key file" && r.storeVar && env[r.storeVar] === "os-keychain";
+    const missing = (inKeychain ? vars.map((v) => (v === r.agentKeyVar ? r.agentAddr : v)) : vars).filter((v) => !env[v]);
     const m = mode(path);
     line(m === "600" && !missing.length, `${label} ${path}`, [m !== "600" && `mode is ${m}, must be 600 (chmod 600 ${path})`, missing.length && `missing ${missing.join(", ")}`].filter(Boolean).join("; "));
+  }
+
+  // Where the agent key is kept: in the file, or in the OS keychain (the file then names it and holds the address).
+  let agentSecret = agent[r.agentKeyVar];
+  if (existsSync(agentKeyFile(f.rail)) && !unsafe.has(agentKeyFile(f.rail))) {
+    if (r.storeVar && agent[r.storeVar] !== undefined) {
+      if (agent[r.storeVar] !== "os-keychain") line(false, "key storage", `${r.storeVar} is "${String(agent[r.storeVar]).slice(0, 40)}", not os-keychain`);
+      else if (agent[r.agentKeyVar]) line(false, "key storage", `the agent key file names the keychain and also holds a key (${r.agentKeyVar})`);
+      else {
+        let problem = "";
+        try {
+          agentSecret = readAgentSecret(f.rail, agent[r.agentAddr] ?? "");
+          const a = await r.keyAddress(agentSecret).catch(() => null);
+          const same = !!a && (r.caseSensitive ? a === agent[r.agentAddr] : a.toLowerCase() === agent[r.agentAddr].toLowerCase());
+          if (!same) problem = a ? `the keychain holds a key for ${a}, the agent key file says ${agent[r.agentAddr]}` : "the keychain entry is not a valid key";
+        } catch (err) {
+          agentSecret = undefined;
+          problem = err.message;
+        }
+        line(!problem, "agent key in the OS keychain", problem || agent[r.agentAddr]);
+        process.stderr.write("  info  key storage: OS keychain\n");
+      }
+    } else if (agent[r.agentKeyVar]) {
+      process.stderr.write("  info  key storage: file (testnet only; mainnet will require the OS keychain)\n");
+    }
+  }
+  // the folders the budget writes into: real folders of this user that others cannot write to
+  {
+    const folders = [KEYS_DIR, join(STATE_DIR, "public"), join(STATE_DIR, "ops"), approvalsDir()];
+    const bad = folders.map((d) => privateDirProblem(d, { root: HOME })).filter(Boolean);
+    line(!bad.length, "budget folders", bad.join("; "));
   }
 
   const ownerAddress = pub[r.ownerAddr] ?? owner[r.ownerAddr] ?? agent[r.ownerAddr];
@@ -199,8 +234,8 @@ export async function runDoctor(f) {
       }
     }
     line(!problems.length, "agent key file holds no owner key", problems.join("; "));
-    if (r.agentKeyVar && agent[r.agentKeyVar] && agentAddress) {
-      const a = await r.keyAddress(agent[r.agentKeyVar]).catch(() => null);
+    if (r.agentKeyVar && agentSecret && agentAddress) {
+      const a = await r.keyAddress(agentSecret).catch(() => null);
       const match = !!a && (r.caseSensitive ? a === agentAddress : a.toLowerCase() === agentAddress.toLowerCase());
       line(match, "agent key matches the agent address in the public file", a ? (match ? agentAddress : `the key is for ${a}, the public file says ${agentAddress}`) : "the key is not a valid key");
     }

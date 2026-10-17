@@ -7,9 +7,10 @@
 //   public file         public addresses only. Read commands (readBudget, reconcile) and owner commands use it.
 //   an owner key file   tests and automation only, named with --owner-key-file <path> (mode 600):
 //                       SOLANA_OWNER_SECRET_BASE58. The default path ownerKeyFile("solana") is never read.
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
+import { HOME, ensurePrivateDir, ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
+import { readAgentSecret } from "../os-keychain.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret-file.mjs";
 import { DEFAULT_RPC, SOLANA_RPC_MAX_BYTES, budgetCall, cappedRpcFetch, jsonRpc, rpcFromEnv } from "../rpc.mjs";
 import { markSend } from "../proof.mjs";
@@ -249,6 +250,27 @@ export function parseSecretEnvFile(path, what) {
 }
 
 /**
+ * The agent key file's values, with the key put in when the file names the OS keychain instead of holding it (setup
+ * --key-store os-keychain): then SOLANA_AGENT_SECRET_BASE58 is what the keychain returns. Refuses (UNSAFE_SECRET_FILE) a file that
+ * names the keychain and also holds a key, an unknown store, or an entry that is missing.
+ */
+function agentFileEnv(path, what) {
+  const env = parseSecretEnvFile(path, what);
+  const store = env.SOLANA_AGENT_KEY_STORE;
+  if (store === undefined) return env;
+  const refuse = (message) => Object.assign(new Error(message), { code: UNSAFE_SECRET_FILE });
+  if (store !== "os-keychain") throw refuse(`${what} ${path} names an unknown key store "${String(store).slice(0, 40)}"`);
+  if (env.SOLANA_AGENT_SECRET_BASE58) throw refuse(`${what} ${path} names the keychain and also holds a key`);
+  if (!env.SOLANA_AGENT_ADDRESS) throw refuse(`${what} ${path} names the keychain but no agent address`);
+  try {
+    env.SOLANA_AGENT_SECRET_BASE58 = readAgentSecret("solana", env.SOLANA_AGENT_ADDRESS);
+  } catch (err) {
+    throw refuse(`${err.message} (${what} ${path} says it is there)`);
+  }
+  return env;
+}
+
+/**
  * The agent key file's values for a command that must refuse cleanly rather than throw: `{ env }` ({} when there is no
  * file), or `{ problem }` when the file must not be used (readable by other users, not a regular file). Read once, and
  * checked on the file actually read, so ask again after any wait instead of keeping an earlier answer.
@@ -256,7 +278,7 @@ export function parseSecretEnvFile(path, what) {
  */
 export function agentKeyFileValues() {
   try {
-    return { env: parseSecretEnvFile(AGENT_KEY_PATH, "the agent key file") };
+    return { env: agentFileEnv(AGENT_KEY_PATH, "the agent key file") };
   } catch (err) {
     if (err && err.code === "ENOENT") return { env: {} };
     if (err && err.code === UNSAFE_SECRET_FILE) return { problem: err.message };
@@ -264,12 +286,12 @@ export function agentKeyFileValues() {
   }
 }
 
-function loadKeypair(path, secretName, addressName, what) {
+function loadKeypair(path, secretName, addressName, what, read = parseSecretEnvFile) {
   requireFile(path, what);
   // Mode 600 is set when the file is written, but a restore, a `cp` without -p or an editor can leave it
   // readable by other users, and every purchase from here on would then be signed with a key this machine
   // no longer keeps to itself. Refuse rather than quietly re-tighten; the check is on the file actually read.
-  const env = parseSecretEnvFile(path, what);
+  const env = read(path, what);
   const secret = env[secretName];
   if (!secret) throw new Error(`${secretName} missing from ${path}`);
   const keypair = Keypair.fromSecretKey(bs58.decode(secret));
@@ -289,7 +311,7 @@ export function loadOwner(path) {
 
 // Agent commands only. Opens solana-agent.env, never the owner file.
 export function loadAgent() {
-  const { keypair, env } = loadKeypair(AGENT_KEY_PATH, "SOLANA_AGENT_SECRET_BASE58", "SOLANA_AGENT_ADDRESS", "Agent key file");
+  const { keypair, env } = loadKeypair(AGENT_KEY_PATH, "SOLANA_AGENT_SECRET_BASE58", "SOLANA_AGENT_ADDRESS", "Agent key file", agentFileEnv);
   return { keypair, owner: pk(env, "SOLANA_OWNER_ADDRESS") };
 }
 
@@ -308,7 +330,7 @@ export function writePublic(pairs, drop = []) {
   const env = existsSync(PUBLIC_PATH) ? parseEnvFile(PUBLIC_PATH) : {};
   Object.assign(env, pairs);
   for (const k of drop) delete env[k];
-  mkdirSync(dirname(PUBLIC_PATH), { recursive: true, mode: 0o700 });
+  ensurePrivateDir(dirname(PUBLIC_PATH), { root: HOME });
   const body =
     "# Solana devnet public addresses only. Read commands use this file. No secrets.\n" +
     Object.entries(env).map(([k, v]) => `${k}=${v}\n`).join("");

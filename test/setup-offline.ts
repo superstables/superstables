@@ -10,6 +10,15 @@
 import { fileURLToPath } from "node:url";
 import { afterAll } from "vitest";
 
+// Folders the tests create for the client (a home, its budget folders) get the mode a private folder must have, whatever
+// the developer's umask: a group-writable umask (002, the default on some systems) would make them "writable by others",
+// and the client refuses those (src/core/private-dir.mjs). Every process a test starts inherits it.
+try {
+  process.umask(0o022);
+} catch {
+  /* a worker thread cannot set it; the pool runs forks */
+}
+
 if (!process.env.SUPERSTABLES_LIVE) {
   // Every RPC the client and the budget rails read, forced to an address on this computer where nothing listens,
   // whatever the environment said. A test that needs a chain starts a fake one and passes its address itself.

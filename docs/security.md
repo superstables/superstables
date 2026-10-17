@@ -30,8 +30,9 @@ The client's own folders are private. Before it writes to its home folder (`~/.s
 checks that each is a folder you own that no other user can write to, and creates a missing one with
 mode 0700. A folder under the home that is a symbolic link, belongs to someone else or that others
 can write to is refused with the reason, and a folder others can only read is set back to 0700. The
-home folder itself may be a link to such a folder. Budget folders (`keys/budget/`, `budget/`) are
-created with mode 0700 but not yet checked this way. The client reads the local wallet's agent token
+home folder itself may be a link to such a folder. Budget folders (`keys/budget/`,
+`budget/public/`, `budget/ops/`, `budget/approvals/`) are checked the same way before anything is
+written to them. The client reads the local wallet's agent token
 only from a regular file that only you can read.
 
 Before the owner signs, the client builds an authorization and serves a page that shows its terms.
@@ -460,7 +461,10 @@ code running as your user can. Run that mode with a key that holds testnet funds
   `fund-agent`, `grant`, `revoke` and the owner's part of `recover` show their terms on a page on
   `127.0.0.1` before the wallet is asked; on a chain set up with `--hosted`, all but `recover` show
   them on the site instead.
-  The agent key, in `~/.superstables/keys/budget/<rail>-agent.env` (mode 600), signs purchases.
+  The agent key, in `~/.superstables/keys/budget/<rail>-agent.env` (mode 600) or, with
+  `setup --key-store os-keychain` on `evm` and `solana`, in the OS keychain with only its address in
+  that file, signs purchases. A keychain does not protect the key from code running as you while the
+  keychain is unlocked: it protects it from copies of the file and from backups.
   Setup and commands that sign with the agent key check the file before using it. If other users
 on the machine can read it, they refuse (exit 3) and say which `chmod` fixes it. An initial
 refusal happens before anything is signed. On `tempo` and `solana`, setup checks again before
@@ -712,6 +716,22 @@ says "not supported", there is no command for it yet; do not move key files by h
   with `superstables budget revoke --rail tempo` (add `--agent OLD` if the old key had a label).
   A key revoked on an owner's account can never be granted again on that account. After this,
   every `buy` and `status` for the new key needs `--agent LABEL`.
+- **Budget agent key in the OS keychain, `evm` and `solana`.** `superstables budget setup --rail
+  evm|solana --key-store os-keychain` creates the key in the keychain (macOS `security`, Linux
+  `secret-tool`) and writes only its address to the key file. Moving an existing agent key there with
+  the same command overwrites the file's copy in place with zeros first, then replaces the file. That
+  clears the file's own bytes and any hard link to it; it cannot clear copies a copy-on-write or
+  journalling file system, a snapshot or a backup already holds. `rotate` of such a key puts the
+  new one in the keychain too and keeps the old entry: the retired key file names it, and it stays under
+  service `superstables-budget-agent`, account `<rail>:<old address>` (`secret-tool lookup service
+  superstables-budget-agent account evm:0x...` on Linux; `security find-generic-password -s
+  superstables-budget-agent -a evm:0x... -w` on macOS), so funds left at the retired address can
+  still be moved by hand. Moving a key in is ordered so that no step loses it: the keychain takes the
+  key and is read back, the replacement file is written beside the old one, the old file's bytes are
+  overwritten, and only then is the replacement renamed over it; if the replacement cannot be written,
+  setup refuses and the old file is untouched. A locked keychain makes `buy`, `grant`, `fund-agent`,
+  `recover` and owner requests on chains approved on superstables.com refuse, because the agent key signs
+  them; the local `revoke` still works. `tempo` agent keys stay in files in this release.
 - **Budget agent key, `evm` and `solana`.** Supported: `superstables budget rotate --rail evm|solana`
   (`--plan` first shows what it would do and sends nothing). It runs where the agent key file is,
   in the owner's terminal, and goes in this order:
@@ -727,9 +747,9 @@ says "not supported", there is no command for it yet; do not move key files by h
   A rotation that stops (the owner's link expired, a chain read failed) can be run again; it
   continues where it stopped and never repeats an approval it recorded in `budget/rotations/`. On
   chains approved on superstables.com the old agent also stays on the owner's account page until
-  the owner removes it there; `rotate` says so. What it does not do: the retired key file is kept
-  and no command uses it, so funds that reach a retired address later stay there until you move
-  them by hand; and the retired list is a file on this machine, as editable by whoever can edit the
+  the owner removes it there; `rotate` says so. What it does not do: the retired key (the file, or for a key
+  in the keychain the keychain entry the file names) is kept and no command uses it, so funds that reach a
+  retired address later stay there until you move them by hand; and the retired list is a file on this machine, as editable by whoever can edit the
   public files as they are. It stops this client from arming the old key again. What stops a stolen
   key is the owner's revoke on chain, which `rotate` makes before it moves the key. A plain revoke, without `rotate`,
   does not retire the key: the owner can grant it again. `superstables budget recover --rail evm

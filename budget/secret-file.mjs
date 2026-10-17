@@ -91,6 +91,46 @@ function fsyncDir(dir) {
 }
 
 /**
+ * First half of {@link replaceSecretFile}: writes `text` to a temporary file next to `path` (mode 600, O_EXCL, fsynced)
+ * and returns `commit` (rename it over `path`) and `discard` (remove it). Throws, leaving no temporary file and `path`
+ * untouched, when it cannot be written. Lets a caller overwrite the old file's bytes between the two halves.
+ * @param {string} path
+ * @param {string} text
+ * @param {{ writeSync?: typeof writeSync }} [io]
+ * @returns {{ commit: () => void, discard: () => void }}
+ */
+export function prepareSecretFile(path, text, io = {}) {
+  const dir = dirname(path);
+  const tmp = join(dir, `.${basename(path)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
+  let fd;
+  try {
+    fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    writeAllSync(fd, text, io.writeSync);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+  } catch (err) {
+    if (fd !== undefined) try { closeSync(fd); } catch {}
+    try { unlinkSync(tmp); } catch {}
+    throw err;
+  }
+  return {
+    commit() {
+      try {
+        renameSync(tmp, path);
+      } catch (err) {
+        try { unlinkSync(tmp); } catch {}
+        throw err;
+      }
+      fsyncDir(dir);
+    },
+    discard() {
+      try { unlinkSync(tmp); } catch {}
+    },
+  };
+}
+
+/**
  * Replace (or create) a secret file with `text`, mode 600, atomically. See the top of this file. On any error the
  * temporary file is removed and the original is left as it was. `io.writeSync` is for tests.
  * @param {string} path

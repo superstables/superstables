@@ -26,8 +26,8 @@ import "./cli-guard.mjs";
 // complete it. Once recorded, the owner never changes silently: --new-owner replaces it explicitly, and only while no
 // budget is live (allowance 0).
 // npx tsx budget/evm/setup.ts [--chain <name>] [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund [--fund-amount <amount>]]] [--timeout <s>]
-//                             [--no-open] [--owner-key-file <path>]
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+//                             [--no-open] [--owner-key-file <path>] [--key-store file|os-keychain]
+import { existsSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
@@ -38,6 +38,10 @@ import { NEW_OWNER } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
 import { chosenSite, isSiteRequestId, siteOrigin } from "../site.mjs";
 import { retiredProblem } from "../retired.mjs";
+import { HOME, ensurePrivateDir } from "../paths.mjs";
+import { KEYCHAIN_UNAVAILABLE, deleteAgentSecret, storeAgentSecret } from "../os-keychain.mjs";
+import { overwriteInPlace } from "../../src/core/secret-overwrite.mjs";
+import { prepareSecretFile } from "../secret-file.mjs";
 import { SETUP_KEYS, agentBinding, bindingLines, signLocalBinding } from "../owner-binding.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
@@ -80,23 +84,95 @@ if (FUND_AMT !== undefined) {
 }
 
 // 1. the agent key
+// where the secret lives: the key file (default), or the OS keychain with only its address in the file (src: ../os-keychain.mjs)
+const STORE = arg("key-store") ?? "file";
+if (STORE !== "file" && STORE !== "os-keychain") usageError(`--key-store must be file or os-keychain, not "${STORE.slice(0, 40)}"`);
+// the folders setup writes into must be real folders only this user can write to, checked before anything is written
+for (const dir of [dirname(AGENT_ENV), dirname(PUBLIC_ENV)]) {
+  try {
+    ensurePrivateDir(dir, { root: HOME });
+  } catch (err) {
+    const reason = (err as Error).message;
+    console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`);
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: `make ${dir} a folder only you can write to (chmod 700), then run setup again` }));
+  }
+}
 let agentAddr: Address;
 const agentFile = agentFileValues();
 if (agentFile.problem !== undefined) {
   // reusing it would hand the owner's budget to a key other users on this machine may already hold
   console.log(`REFUSED: ${agentFile.problem}. Nothing was changed on this machine.`);
-  process.exit(emit("setup", 3, { state: "refused_precheck", reason: agentFile.problem, next: `make ${AGENT_ENV} a regular file only you can read (chmod 600), then run setup again` }));
+  process.exit(emit("setup", 3, { state: "refused_precheck", reason: agentFile.problem, next: `make ${AGENT_ENV} a regular file only you can read (chmod 600) that names a key in this machine's keychain or holds one, then run setup again` }));
 }
+const keychainRefusal = (err: unknown): never => {
+  const unavailable = (err as { code?: string }).code === KEYCHAIN_UNAVAILABLE;
+  const reason = unavailable ? `no keychain tool (secret-tool or security) answered: ${(err as Error).message}` : `the keychain refused the key: ${(err as Error).message}`;
+  console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`);
+  process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: unavailable ? "install secret-tool (libsecret-tools) on Linux, or use macOS, or run setup without --key-store os-keychain" : "unlock the keychain, then run setup again" }));
+};
+let keyStore: "file" | "os-keychain" = "file";
 if (existsSync(AGENT_ENV)) {
+  const inKeychain = agentFile.env.B4_AGENT_KEY_STORE === "os-keychain";
   agentAddr = privateKeyToAccount(need(agentFile.env, "B4_AGENT_KEY", AGENT_ENV) as Hex).address;
-  console.log(`agent key file ${AGENT_ENV} exists; reusing it (agent ${agentAddr})`);
+  keyStore = inKeychain ? "os-keychain" : "file";
+  if (inKeychain) {
+    console.log(`agent key file ${AGENT_ENV} exists; reusing it (agent ${agentAddr}); the key is in the OS keychain`);
+  } else if (STORE === "os-keychain") {
+    // move the key: into the keychain first, then the file's own bytes are overwritten before the file is replaced
+    try {
+      storeAgentSecret("evm", agentAddr, agentFile.env.B4_AGENT_KEY);
+    } catch (err) {
+      keychainRefusal(err);
+    }
+    const rest = Object.entries(agentFile.env).filter(([k]) => k !== "B4_AGENT_KEY" && k !== "B4_AGENT_KEY_STORE" && k !== "B4_AGENT_ADDRESS");
+    // the replacement is written beside the file first; the old bytes are overwritten only once it exists
+    let swap: ReturnType<typeof prepareSecretFile>;
+    try {
+      swap = prepareSecretFile(AGENT_ENV, `B4_AGENT_KEY_STORE=os-keychain\nB4_AGENT_ADDRESS=${agentAddr}\n${rest.map(([k, v]) => `${k}=${v}\n`).join("")}`);
+    } catch (err) {
+      const reason = `the replacement for ${AGENT_ENV} could not be written (${(err as Error).message}); the key file was not changed`;
+      console.log(`REFUSED: ${reason}. The keychain entry made for the key is harmless and is overwritten on the next run.`);
+      process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: `make ${dirname(AGENT_ENV)} writable (chmod 700), then run setup again` }));
+    }
+    const gone = overwriteInPlace(AGENT_ENV);
+    try {
+      swap.commit();
+    } catch (err) {
+      swap.discard();
+      console.log(`REFUSED: the key file could not be replaced (${(err as Error).message}). Its old bytes are ${gone === "overwritten" ? "overwritten" : "unchanged"}; the key is in the keychain. Put these lines in ${AGENT_ENV}:\nB4_AGENT_KEY_STORE=os-keychain\nB4_AGENT_ADDRESS=${agentAddr}`);
+      process.exit(emit("setup", 3, { state: "refused_precheck", reason: `the key file could not be replaced (${(err as Error).message})`, next: `write the lines above into ${AGENT_ENV}, then run setup again` }));
+    }
+    keyStore = "os-keychain";
+    console.log(gone === "overwritten"
+      ? `moved the agent key into the keychain; the file's old bytes were overwritten (agent ${agentAddr})`
+      : `moved the agent key into the keychain (agent ${agentAddr}); the file's old bytes could not be overwritten (${gone}): delete any copy of the old file you made`);
+  } else {
+    console.log(`agent key file ${AGENT_ENV} exists; reusing it (agent ${agentAddr})`);
+  }
 } else {
   const key = newKey();
   agentAddr = privateKeyToAccount(key).address;
-  mkdirSync(dirname(AGENT_ENV), { recursive: true, mode: 0o700 });
-  writeFileSync(AGENT_ENV, `B4_AGENT_KEY=${key}\nB4_AGENT_ADDRESS=${agentAddr}\n`, { mode: 0o600, flag: "wx" });
-  console.log(`created the agent key file ${AGENT_ENV} (mode 600): agent ${agentAddr}`);
+  if (STORE === "os-keychain") {
+    // the keychain first: if it refuses, no file is written and no key is lost
+    try {
+      storeAgentSecret("evm", agentAddr, key);
+    } catch (err) {
+      keychainRefusal(err);
+    }
+    try {
+      writeFileSync(AGENT_ENV, `B4_AGENT_KEY_STORE=os-keychain\nB4_AGENT_ADDRESS=${agentAddr}\n`, { mode: 0o600, flag: "wx" });
+    } catch (err) {
+      try { deleteAgentSecret("evm", agentAddr); } catch { /* the entry belongs to a key nothing else knows */ }
+      throw err;
+    }
+    keyStore = "os-keychain";
+    console.log(`created the agent key in the OS keychain (service superstables-budget-agent, account evm:${agentAddr}); ${AGENT_ENV} (mode 600) holds only its address`);
+  } else {
+    writeFileSync(AGENT_ENV, `B4_AGENT_KEY=${key}\nB4_AGENT_ADDRESS=${agentAddr}\n`, { mode: 0o600, flag: "wx" });
+    console.log(`created the agent key file ${AGENT_ENV} (mode 600): agent ${agentAddr}`);
+  }
 }
+const keyWhere = keyStore === "os-keychain" ? "in its OS keychain (only its address is in the key file)" : `in ${AGENT_ENV}`;
 // a key that `budget rotate` retired is never set up again (the owner's revoke on chain is what stops it elsewhere)
 const retired = retiredProblem("evm", agentAddr);
 if (retired) {
@@ -253,7 +329,7 @@ if (OWNER_KEY_FILE) {
     rows: [
       { label: "Your agent", value: agentAddr, mono: true },
       { label: "Chain", value: `${CFG.label} (testnet)` },
-      { label: "Agent key", value: `on the agent's machine only, in ${AGENT_ENV}` },
+      { label: "Agent key", value: `on the agent's machine only, ${keyWhere}` },
     ],
     enforced: [],
     notEnforced: [],
@@ -281,7 +357,7 @@ if (OWNER_KEY_FILE) {
     summary: "Connect your wallet and sign a message to record its address as the budget owner on this machine. This does not grant a budget or send a transaction.",
     rows: [
       { label: "Your agent", value: agentAddr, mono: true },
-      { label: "Agent key", value: `on this machine only, in ${AGENT_ENV}` },
+      { label: "Agent key", value: `on this machine only, ${keyWhere}` },
       ...(recorded && !NEW_OWNER ? [{ label: "Owner on record", value: recorded, mono: true }] : []),
     ],
     enforced: [],
