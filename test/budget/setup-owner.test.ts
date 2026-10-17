@@ -288,7 +288,8 @@ describe("tempo setup --agent: a new key for the owner on record only", () => {
     expect(refused.result.next).toBe("superstables budget setup --rail tempo --new-owner records one owner again (refused while a budget is live on either), then superstables budget setup --rail tempo --agent 2");
     expect(read(r.agentFile)).toBe(r.agentText(r.C));
     write(r.agentFile, r.agentText());
-    const added = await budget(["setup", "--rail", "tempo", "--agent", "2"]);
+    // signed with the recorded owner's key file: without one, setup leaves an approval page waiting for the owner's signature
+    const added = await budget(["setup", "--rail", "tempo", "--agent", "2", "--owner-key-file", r.ownerKey("A")]);
     expect(added.code, added.stderr).toBe(0);
     expect(owned(read(r.agentFile), r, r.A)).toBe(true);
     expect(read(r.agentFile)).toMatch(/^AGENT2_ADDRESS=0x[0-9a-fA-F]{40}$/m);
@@ -451,7 +452,7 @@ describe("tempo --new-owner: every recorded key, by the public file's labels too
     expect(moved.code, moved.stderr).toBe(3);
     expect(moved.result.reason).toMatch(new RegExp(`access key ${extra} is authorized on the recorded owner ${r.A}`));
     // another label works
-    const other = await budget(["setup", "--rail", "tempo", "--agent", "3"]);
+    const other = await budget(["setup", "--rail", "tempo", "--agent", "3", "--owner-key-file", r.ownerKey("A")]);
     expect(other.code, other.stderr).toBe(0);
     expect(read(r.publicFile)).toMatch(new RegExp(`^AGENT2_ADDRESS=${extra}$`, "m"));
   }, 90_000);

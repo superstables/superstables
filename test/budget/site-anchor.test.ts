@@ -1,7 +1,7 @@
 // The approval site is the owner's setting (src/core/owner-settings.js), not the agent's environment: the real dispatcher
 // (budget/cli.mjs) against fake sites on 127.0.0.1, with the owner's settings made per case. No network, no key.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,7 +34,17 @@ beforeEach(async () => {
   purchases = await startFakePurchaseSite();
   rpc = await startFakeRpc(84532);
 });
+/** Ends the approval waiters a case left in the background (a hosted setup returns while its waiter keeps running). Linux only. */
+function stopWaiters(forHome: string) {
+  if (process.platform !== "linux") return;
+  for (const pid of readdirSync("/proc").filter((n) => /^\d+$/.test(n))) {
+    try {
+      if (readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(`SUPERSTABLES_HOME=${forHome}`)) process.kill(Number(pid), "SIGKILL");
+    } catch { /* gone, or not ours */ }
+  }
+}
 afterEach(async () => {
+  stopWaiters(home);
   await site.close();
   await purchases.close();
   await rpc.close();
@@ -246,7 +256,6 @@ describe("an unusable settings file", () => {
   }, 60_000);
 });
 
-import { readdirSync } from "node:fs";
 async function fileCount(h: string): Promise<number> {
   try { return readdirSync(join(h, "budget", "approvals")).length; } catch { return 0; }
 }
