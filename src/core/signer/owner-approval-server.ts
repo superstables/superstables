@@ -114,6 +114,12 @@ export interface OwnerActionInput {
    * is not that owner stops. A transaction defaults to `account`; a first connect has none.
    */
   recordedOwner?: string;
+  /** The RPC hosts the command reads, and where they come from: shown on the page. */
+  rpc?: OwnerPageFacts["rpc"];
+  /** The budget token. The page offers it to the wallet only when the terms say so (`watchToken`). */
+  token?: OwnerPageFacts["token"];
+  /** Whether the owner signed the agent address at setup: shown on the page when the action names an agent. */
+  binding?: OwnerPageFacts["binding"];
   timeoutMs: number;
 }
 
@@ -369,6 +375,10 @@ export class OwnerApprovalServer {
       transaction: record.transaction,
       message: record.kind === "connect" ? signInMessage(record.signIn!, record.id) : undefined,
       expiresAt: record.expiresAt,
+      origin: this.url,
+      rpc: record.rpc,
+      binding: record.binding,
+      token: record.terms.watchToken ? record.token : undefined,
     };
   }
 

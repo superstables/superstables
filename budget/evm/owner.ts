@@ -6,13 +6,14 @@ import { encodeFunctionData, parseEventLogs, parseUnits, type Address, type Hex 
 import { privateKeyToAccount } from "viem/accounts";
 import { DEFAULT_SITE, differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import { ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
+import { rpcFacts } from "../page-facts.mjs";
 import { EVM_CHAINS } from "./chains.mjs";
 import { CHAINS } from "./chains.ts";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { ownerEvidence, plannedCall, type EvidenceReads } from "./delegation.ts";
 import { searchLogs } from "../../src/core/log-windows.mjs";
-import { CFG, GAS, SYM, USDC, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need, allowanceAgreed, finalityOf, thatTakes, agreementWords } from "./lib.ts";
+import { CFG, GAS, SYM, USDC, USDC_DECIMALS, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need, allowanceAgreed, finalityOf, thatTakes, agreementWords } from "./lib.ts";
 
 export { closeOwnerPage };
 
@@ -60,8 +61,25 @@ export function approvalSite(): string | null {
   return p.APPROVALS === "hosted" ? p.SITE || DEFAULT_SITE : null;
 }
 
+/** The budget token, as the page offers it to the owner's wallet before an approval of it. */
+export const OWNER_TOKEN = { address: USDC, symbol: SYM, decimals: USDC_DECIMALS };
+
+/** What the wallet will show for approve(agent, atomic) on the budget token: the raw amount next to the readable one. */
+export const approveShows = (agent: Address, atomic: bigint): string[] => [
+  `approve(spender ${agent}, amount ${atomic}): ${usdc(atomic)} ${SYM}`,
+  `To: the ${SYM} token contract ${USDC}`,
+  `A network fee in ${GAS.symbol}, paid from your wallet`,
+];
+/** The same for the plain transfer of the chain's gas token (on Arc that is USDC in 18 decimals). */
+export const fundShows = (agent: Address, wei: bigint): string[] => [
+  `A transfer of ${wei} wei: ${gasFmt(wei)} ${GAS.symbol}`,
+  `To: ${agent}`,
+  `A network fee in ${GAS.symbol}, paid from your wallet`,
+];
+
 export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   chain: OWNER_CHAIN,
+  pageFacts: () => ({ rpc: rpcFacts("evm", CFG.key), token: OWNER_TOKEN }),
   walletWords: "any EVM browser wallet, such as MetaMask, Rabby or Coinbase Wallet",
   statusCommand: `superstables budget status --rail evm${chainFlag}`,
   emit,
@@ -348,6 +366,7 @@ export function revokeTerms(owner: Address, agent: Address, allowance: bigint, h
       "No reversal of withdrawals confirmed before this revoke.",
     ],
     notes: ["This changes spending permission; it does not return funds. You pay the network fee shown in your wallet. You can grant a new budget later."],
+    walletShows: approveShows(agent, 0n),
   };
 }
 
@@ -470,6 +489,7 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
       "The agent controls the transferred funds and can send them elsewhere. This does not grant permission to withdraw more from your wallet.",
       `superstables budget recover returns recoverable ${SYM}. It leaves a gas reserve on Arc and does not return other gas tokens. Revoking a budget does not undo this transfer.`,
     ],
+    walletShows: fundShows(agent, value),
   });
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved(command, outcome, { ...earlier?.result }, undefined, earlier?.done);
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
