@@ -57,6 +57,7 @@ import { SellerTextError, UNTRUSTED_LABEL, untrustedJson, untrustedText, untrust
 import { formatReport, runDoctor } from "./doctor.js";
 import { field, json, money, table, yesNo } from "./format.js";
 import { MAIN_HELP, explain } from "./help.js";
+import { registerOwnerCommand } from "./owner-settings.js";
 import { BUDGET_PLACEHOLDERS, exampleQuoteCommand, formatListingCommands, listingCommands } from "./next.js";
 import {
   CliError,
@@ -1136,6 +1137,8 @@ explain(
     exits: "0 written, 1 a policy exists already (pass --force to replace it)",
   },
 );
+
+registerOwnerCommand(program);
 
 // ── Plumbing ─────────────────────────────────────────────────────────────────────────────
 

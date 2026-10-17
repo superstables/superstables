@@ -13,6 +13,7 @@ import { agentProof, agentProofText, bodyHash, HostedApprovals, HostedRefusal, o
 import { accountRefusalNext, cancelSiteRequest, chosenSite, listSiteServices, siteFailure, siteName, siteOrigin, siteText } from "../../budget/site.mjs";
 import { agentProofV2Text, evmOwner, evmOwnerKey, linkProofText, signLinkProof, solanaOwner, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import { startServer } from "../helpers/servers.js";
+import { accountHomeWith } from "../helpers/owner-settings.js";
 
 const KEY = `0x${"11".repeat(32)}` as const;
 const AGENT = privateKeyToAccount(KEY).address;
@@ -159,30 +160,33 @@ describe("owner proof", () => {
 });
 
 describe("site URL", () => {
-  it("takes superstables.com, its subdomains and this computer; another site only with the owner's exact opt-in", () => {
-    const before = process.env.SUPERSTABLES_ALLOW_SITE;
+  it("an owner action takes www.superstables.com and what the owner's settings allow; a read also takes any superstables.com host", () => {
+    const before = process.env.SUPERSTABLES_TEST_ACCOUNT_HOME;
     try {
-      delete process.env.SUPERSTABLES_ALLOW_SITE;
+      process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = accountHomeWith(null);
       // The apex is www.superstables.com's site, which makes its approval links on www.
       expect(siteOrigin("https://superstables.com").origin).toBe("https://www.superstables.com");
       expect(siteOrigin("https://superstables.com/").origin).toBe("https://www.superstables.com");
-      expect(siteOrigin("https://superstables.com:8443").origin).toBe("https://superstables.com:8443");
-      expect(siteOrigin("https://staging.superstables.com").origin).toBe("https://staging.superstables.com");
-      expect(siteOrigin("https://localhost:8443").origin).toBe("https://localhost:8443");
-      for (const bad of ["https://evil.example", "https://superstables.com.evil.example", "https://evilsuperstables.com", "https://xn--superstables-xyz.com"]) {
-        expect(siteOrigin(bad).error, bad).toMatch(/is not superstables\.com.*SUPERSTABLES_ALLOW_SITE=.*an agent never sets it/);
+      for (const bad of ["https://superstables.com:8443", "https://staging.superstables.com", "https://localhost:8443", "https://evil.example", "https://superstables.com.evil.example", "https://evilsuperstables.com", "https://xn--superstables-xyz.com"]) {
+        expect(siteOrigin(bad).error, bad).toMatch(/is not an approval site the owner allows: approvals use https:\/\/www\.superstables\.com unless the owner runs superstables owner settings .* in their own terminal \(an agent never does\)/);
       }
-      process.env.SUPERSTABLES_ALLOW_SITE = "https://approvals.example.org";
+      expect(siteOrigin("https://staging.superstables.com").ownerCommand).toBe("superstables owner settings allow-staging on");
+      expect(siteOrigin("https://staging.superstables.com", "read").origin).toBe("https://staging.superstables.com");
+      expect(siteOrigin("https://evil.example", "read").error).toBeDefined();
+      process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = accountHomeWith({ version: 1, site: { origin: "https://approvals.example.org", allowStaging: true } });
       expect(siteOrigin("https://approvals.example.org").origin).toBe("https://approvals.example.org");
-      expect(siteOrigin("https://approvals.example.org:8443").error).toMatch(/is not superstables\.com/);
-      expect(siteOrigin("https://evil.example").error).toMatch(/is not superstables\.com/);
-      // the opt-in never makes plain http acceptable off this computer
-      process.env.SUPERSTABLES_ALLOW_SITE = "http://approvals.example.org";
+      expect(siteOrigin("https://staging.superstables.com").origin).toBe("https://staging.superstables.com");
+      expect(siteOrigin("https://approvals.example.org:8443").error).toMatch(/is not an approval site/);
+      expect(siteOrigin("https://evil.example").error).toMatch(/is not an approval site/);
+      // an environment variable allows nothing: SUPERSTABLES_ALLOW_SITE is not read
+      process.env.SUPERSTABLES_ALLOW_SITE = "https://evil.example";
+      expect(siteOrigin("https://evil.example").error).toMatch(/is not an approval site/);
       expect(siteOrigin("http://approvals.example.org").error).toMatch(/https/);
-      expect(chosenSite(undefined).origin).toBe("https://www.superstables.com");
+      expect(chosenSite(undefined).origin).toBe("https://approvals.example.org");
     } finally {
-      if (before === undefined) delete process.env.SUPERSTABLES_ALLOW_SITE;
-      else process.env.SUPERSTABLES_ALLOW_SITE = before;
+      delete process.env.SUPERSTABLES_ALLOW_SITE;
+      if (before === undefined) delete process.env.SUPERSTABLES_TEST_ACCOUNT_HOME;
+      else process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = before;
     }
   });
 
@@ -206,17 +210,24 @@ describe("site URL", () => {
     expect(siteOrigin("https://user:pw@www.superstables.com").error).toMatch(/password/);
   });
 
-  it("defaults to superstables.com, and SUPERSTABLES_SITE overrides it", () => {
+  it("defaults to superstables.com, and SUPERSTABLES_SITE is a candidate the owner's settings must allow", () => {
     const before = process.env.SUPERSTABLES_SITE;
+    const home = process.env.SUPERSTABLES_TEST_ACCOUNT_HOME;
     try {
       delete process.env.SUPERSTABLES_SITE;
+      process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = accountHomeWith({ version: 1, site: { allowLoopback: true, allowStaging: true } });
       expect(chosenSite(undefined).origin).toBe("https://www.superstables.com");
       process.env.SUPERSTABLES_SITE = "http://localhost:4000";
       expect(chosenSite(undefined).origin).toBe("http://localhost:4000");
       expect(chosenSite("https://staging.superstables.com").origin).toBe("https://staging.superstables.com");
+      process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = accountHomeWith(null);
+      expect(chosenSite(undefined).error).toMatch(/^SUPERSTABLES_SITE: http:\/\/localhost:4000 is not an approval site the owner allows/);
+      expect(chosenSite("https://staging.superstables.com").error).toMatch(/^--site: /);
     } finally {
       if (before === undefined) delete process.env.SUPERSTABLES_SITE;
       else process.env.SUPERSTABLES_SITE = before;
+      if (home === undefined) delete process.env.SUPERSTABLES_TEST_ACCOUNT_HOME;
+      else process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = home;
     }
   });
 });

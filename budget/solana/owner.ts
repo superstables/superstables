@@ -21,7 +21,7 @@ import type { OwnerChain, OwnerTerms, SolanaTransactionPort } from "../../src/co
 import { verifyEd25519 } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { DEFAULT_SITE } from "../site.mjs";
-import { DEFAULT_RPC } from "../rpc.mjs";
+import { DEFAULT_RPC, ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
 import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, clusterProblem, formatUnits, oneLine, parseEnvFile, retryRead, sleep } from "./lib.mjs";
 
 export { closeOwnerPage };
@@ -42,6 +42,18 @@ export const SOLANA_OWNER_CHAIN: OwnerChain = {
 export function emit(command: string, exit: number, o: Record<string, unknown>): number {
   console.log(`RESULT ${JSON.stringify({ ok: exit === 0, command, rail: "solana", chain: "devnet", ...o })}`);
   return exit;
+}
+
+// An owner script reads and sends only through an RPC the owner set (or the built-in one): a variable that names another is
+// refused here, before this script reads a key, asks the owner or sends anything. The dispatcher refuses it earlier; this
+// covers a script run directly. (src/core/owner-settings.js)
+{
+  const problem = ownerRpcProblem("solana", "devnet");
+  if (problem) {
+    const command = String(process.argv[1] ?? "").split(/[\\/]/).pop()!.replace(/\.(?:ts|mjs)$/, "") || "owner";
+    console.log(`REFUSED: ${problem}. Nothing was asked or sent.`);
+    process.exit(emit(command, 3, { state: "refused_precheck", reason: problem, next: ownerRpcNext("solana", "devnet") }));
+  }
 }
 
 /** undefined: read the public file. setup decides for itself (--hosted), before the file says anything. */

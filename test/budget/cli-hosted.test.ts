@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { encodeFunctionData, pad, parseAbi, toEventSelector } from "viem";
+import { accountHomeWith } from "../helpers/owner-settings.js";
 import { evmOwner, evmOwnerKey, signLinkProof, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import type { TestServer } from "../helpers/servers.js";
 
@@ -97,7 +98,9 @@ describe("--site on every command", () => {
 
   // An owner command would start an approval. --timeout 1 is refused after --site is checked, so it stands in for "accepted" without one.
   const OWNER_COMMANDS = new Set(["setup", "grant", "fund-agent", "revoke", "recover"]);
-  const run = (args: string[], site: string) => budget(OWNER_COMMANDS.has(args[0]) ? [...args, "--timeout", "1", "--site", site] : [...args, "--site", site]);
+  // staging is an approval site only when the owner allows it (the default test home allows this computer)
+  const wide = accountHomeWith({ version: 1, site: { allowStaging: true, allowLoopback: true }, rpcEnv: { allowLoopback: true } });
+  const run = (args: string[], site: string) => budget(OWNER_COMMANDS.has(args[0]) ? [...args, "--timeout", "1", "--site", site] : [...args, "--site", site], { SUPERSTABLES_TEST_ACCOUNT_HOME: wide });
   const accepted = (r: { result: any }, args: string[]) => expect(r.result.reason ?? "", args.join(" ")).toMatch(OWNER_COMMANDS.has(args[0]) ? /^--timeout must be/ : /^(?!.*(--site|unknown flag))/);
 
   it("is accepted and ignored where no site is recorded (a chain that approves on this computer, or tempo and solana)", async () => {
@@ -674,26 +677,24 @@ describe("owner commands on a hosted chain", () => {
     }
   }, 120_000);
 
-  it("a site outside superstables.com is refused unless the owner named it in SUPERSTABLES_ALLOW_SITE", async () => {
-    const r = await budget(["status", "--rail", "evm", "--site", "https://evil.example"]);
-    expect(r.code).toBe(2);
-    expect(r.result.reason).toMatch(/--site: https:\/\/evil\.example is not superstables\.com.*SUPERSTABLES_ALLOW_SITE=https:\/\/evil\.example.*an agent never sets it/);
-    const s = await budget(["setup", "--rail", "evm", "--hosted", "--site", "https://evil.example"]);
+  it("a site the owner has not allowed is refused for an owner action, and SUPERSTABLES_ALLOW_SITE allows nothing", async () => {
+    const strict = accountHomeWith({ version: 1, rpc: { "base-sepolia": { urls: [rpc.url] } } }); // reads go to the fake chain; no site on this computer is allowed
+    const env = { SUPERSTABLES_TEST_ACCOUNT_HOME: strict, B4_RPC: "" };
+    const s = await budget(["setup", "--rail", "evm", "--hosted", "--site", "https://evil.example"], env);
     expect(s.code).toBe(2);
-    const env = await budget(["setup", "--rail", "evm", "--hosted"], { SUPERSTABLES_SITE: "https://evil.example" });
-    expect(env.code).toBe(2);
-    expect(env.result.reason).toMatch(/is not superstables\.com/);
-    // the owner's exact opt-in: accepted (status reads no site, so nothing goes out)
-    const ok = await budget(["status", "--rail", "evm", "--site", "https://evil.example"], { SUPERSTABLES_ALLOW_SITE: "https://evil.example" });
-    expect(ok.result.reason ?? "").not.toMatch(/--site/);
-    // a recorded SITE outside the list is not used either
+    expect(s.result.reason).toMatch(/--site: https:\/\/evil\.example is not an approval site the owner allows.*superstables owner settings site https:\/\/evil\.example.*an agent never does/);
+    const viaEnv = await budget(["setup", "--rail", "evm", "--hosted"], { ...env, SUPERSTABLES_SITE: "https://evil.example", SUPERSTABLES_ALLOW_SITE: "https://evil.example" });
+    expect(viaEnv.code).toBe(2);
+    expect(viaEnv.result.reason).toMatch(/^SUPERSTABLES_SITE: https:\/\/evil\.example is not an approval site the owner allows/);
+    expect(viaEnv.stderr).toContain("SUPERSTABLES_ALLOW_SITE is no longer read");
+    // a recorded SITE the owner does not allow is not used either
     mkdirSync(join(home, "budget", "public"), { recursive: true });
     mkdirSync(join(home, "keys", "budget"), { recursive: true });
     writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=0x${"11".repeat(32)}\nB4_AGENT_ADDRESS=0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A\n`, { mode: 0o600 });
     writeFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A\nAPPROVALS=hosted\nSITE=https://evil.example\n`);
-    const g = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"]);
+    const g = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"], env);
     expect(g.code).toBe(3);
-    expect(g.result.reason).toMatch(/the recorded site is not usable: https:\/\/evil\.example is not superstables\.com/);
+    expect(g.result.reason).toMatch(/the recorded site is not usable: https:\/\/evil\.example is not an approval site the owner allows/);
   }, 60_000);
 
   it("an RPC replacement must be https or on this computer; one in use is named in the RESULT", async () => {

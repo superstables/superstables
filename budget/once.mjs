@@ -29,7 +29,7 @@ import { approvalsDir, onceDir } from "./paths.mjs";
 import { claim, isApprovalId, newApprovalId, readApproval, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { CHAIN_ID as TEMPO_CHAIN_ID, TOKEN_ADDRESS as PATH_USD, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
-import { accountRefusalNext, accountWaitingWords, call, isOtherSite, siteName, siteText } from "./site.mjs";
+import { accountRefusalNext, accountWaitingWords, call, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
 import { readSettlement } from "./settlement.mjs";
 
 /** The chain buy-once used before listings named others; the default in words when nothing else is known. */
@@ -515,11 +515,12 @@ export function messageForOwner(r) {
   const what = t.title ?? r.action ?? r.command ?? "this request";
   const unit = !t.unit || t.unit === "USDC" ? "test USDC" : `${t.unit} (testnet)`;
   const hasAmount = t.amount != null && t.amount !== "";
-  const local = /^http:\/\/(127\.0\.0\.1|localhost)/.test(r.url);
+  const hostedOn = typeof r.hosted?.site === "string"; // a site's link, not this client's own page
+  const local = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(r.url);
   let origin = null;
   try { origin = new URL(r.url).origin; } catch {}
   // a link on a site other than www.superstables.com says which site it is, before anything else
-  const other = origin && !local && isOtherSite(origin) ? `This approval link is on ${siteName(origin)}, not www.superstables.com.` : null;
+  const other = origin && (hostedOn || !local) && isOtherSite(origin) ? `This approval link is on ${siteName(origin)}${local ? ", a site on this computer," : ","} not www.superstables.com.` : null;
   return [
     `Review and approve in your wallet: ${what}`,
     other,
@@ -876,6 +877,9 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
   record = accumulate(record, null);
   if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
   const h = record.hosted;
+  // the record is the agent's to write, and the site's "not paid" ends a purchase: a site the owner does not allow now is not read
+  const allowed = siteOrigin(h.site, "verdict");
+  if (allowed.error) return { final: false, record, unreachable: `${siteName(h.site)} is not an approval site the owner allows now, so nothing was read from it (the owner allows it with ${allowed.ownerCommand ?? "superstables owner settings show"})` };
   const r = await readPurchase({ site: h.site, id: h.requestId, token: h.token, wait: waitS, timeoutMs: readTimeoutMs, fetchImpl });
   // every answer's payment evidence is kept in the record, an error envelope's money_moved included
   if (!r.ok) {
@@ -1021,6 +1025,9 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
   const open = found?.record;
   if (open && found.unresolved) {
     return refused(`buy-once purchase ${open.id} has no final answer yet (${found.unresolved}): one at a time`, found.next ? `${found.next}; ${ABANDON(open.id)}` : `nothing was started. Run superstables budget wait --id ${open.id} --shown later to read it again; ${ABANDON(open.id)}`, 3, { pending: open, pendingState: "unknown" });
+  }
+  if (open && (replace || found.unreadable) && siteOrigin(open.hosted.site, "verdict").error) {
+    return refused(`the pending purchase ${open.id} was made on ${siteName(open.hosted.site)}, which is not an approval site the owner allows now, so ${replace ? "it is not replaced" : "nothing was read from it"}`, `nothing was started and nothing was sent to it; ${ABANDON(open.id)}`, 3, { pending: open });
   }
   if (open && found.unreadable && !replace) {
     return refused(`buy-once purchase ${open.id} has no final answer and ${siteName(open.hosted.site)} could not be read just now (${found.unreadable}): one at a time`, `nothing was started. Run superstables budget wait --id ${open.id} --shown when the site answers; ${ABANDON(open.id)}`, 3, { pending: open });
