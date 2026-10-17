@@ -70,6 +70,11 @@ export function accountPolicyPath(): string {
   return join(home, ".superstables", "policy.yaml");
 }
 
+/** The agent addresses `budget rotate` retired (written by the budget; the owner's signed settings cover its bytes). */
+export function retiredListPath(): string {
+  return join(homeDir(), "keys", "budget", "retired.json");
+}
+
 /** The wallet writes this; the agent side reads it. Bearer token for the agent-facing routes only. */
 export function agentTokenPath(): string {
   return join(walletDir(), "agent-token");

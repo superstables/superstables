@@ -26,7 +26,11 @@ import { join } from "node:path";
 import type { PaymentRequirements } from "@x402/core/types";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { DEFAULT_NETWORK, evmNetworkFor, isSameAddress, networkFor, usdcBalance } from "../core/chain.js";
-import { DEFAULT_WALLET_PORT, accountPolicyPath, ensureDir, policyPath, walletDir, walletSocketPath } from "../core/home.js";
+import { DEFAULT_WALLET_PORT, accountPolicyPath, ensureDir, policyPath, retiredListPath, walletDir, walletSocketPath } from "../core/home.js";
+import {
+  SIGN_COMMAND, readOwnerSettings, settingsPayload, settingsSignedAt, settingsTypedData, signatureRecord,
+  requirePolicyFile, signedBy, signedPolicyCheck, signedSettings, writeOwnerSettings,
+} from "../core/owner-settings.js";
 import { capUnit, capUnits, evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Policy, type Verdict } from "../core/policy.js";
 import { syncDirectory } from "../core/private-dir.mjs";
 import { LocalKeySigner } from "../core/signer/local.js";
@@ -135,6 +139,8 @@ export interface WalletHandle {
 interface WalletRequestRecord {
   id: string;
   status: WalletRequestStatus;
+  /** An approval of this request has begun: no other one starts. Set once, never cleared. */
+  deciding?: boolean;
   createdAt: number;
   expiresAt: number;
   /** Derived here from the requirement, never from the agent. */
@@ -481,7 +487,26 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     return cause instanceof Error ? cause.message : (err as Error).message;
   }
 
+  /** The files the owner's signed settings cover, as this wallet reads them (its account policy file may be set by a test). */
+  const settingsFiles = () => ({ policyPath: options.accountPolicyFile ?? accountPolicyPath(), retiredPath: retiredListPath() });
+
   async function approve(record: WalletRequestRecord): Promise<void> {
+    // Taken before the first await: a second approval of the same request (a double click) finds it deciding and stops, so one
+    // request is signed once however the answers interleave.
+    if (record.status !== "pending" || record.deciding) throw new PolicyNow(`this request is ${record.deciding && record.status === "pending" ? "already being decided" : record.status}, so there is nothing to decide`);
+    record.deciding = true;
+    // The owner's settings, when this wallet's own key signed them, cover the account's spend policy file: a policy that
+    // differs from the signed one is not signed for until the owner signs again. Settings another wallet signed do not count.
+    const signedPolicy = await signedPolicyCheck(account.address, settingsFiles());
+    // The owner may have denied it, or the agent cancelled, while the signature was being checked: that answer stands.
+    if (record.status !== "pending") throw new PolicyNow(`this request is ${record.status}, so there is nothing to decide`);
+    if (signedPolicy.warn && !quiet) console.error(`wallet: warning: ${signedPolicy.warn}`);
+    if (signedPolicy.refuse) {
+      record.status = "rejected";
+      record.reason = signedPolicy.refuse;
+      tryAudit(record);
+      throw new PolicyNow(record.reason);
+    }
     // The policy as it reads now, and the day as the log and the other waiting requests make it: not what they were when
     // the request arrived.
     const verdict = verdictFor(record, record.verified);
@@ -760,6 +785,27 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       return;
     }
 
+    if (method === "GET" && path === "/owner/settings") {
+      send(res, 200, await settingsView());
+      return;
+    }
+    if (method === "POST" && path === "/owner/settings/sign") {
+      if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) {
+        send(res, 415, { error: "the request body must be JSON (content-type: application/json)" });
+        return;
+      }
+      let confirmed: unknown;
+      try {
+        confirmed = JSON.parse((await readBody(req)) || "null");
+      } catch {
+        send(res, 400, { error: "the request body is not JSON" });
+        return;
+      }
+      const done = await signSettings(confirmed);
+      send(res, done.status, done.body);
+      return;
+    }
+
     /** The id in a path, decoded; "" (no request) when its escapes are malformed. */
     const idOf = (raw: string): string => { try { return decodeURIComponent(raw); } catch { return ""; } };
     const single = /^\/requests\/([^/]+)$/.exec(path);
@@ -853,6 +899,59 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     }
 
     send(res, 404, { error: "no such route" });
+  }
+
+  // ── the owner's settings, signed with this wallet's own key ──────────────────────────────────────────────────────────
+
+  /** What the settings card shows: whether the settings are signed, by whom, and what signing now would cover. */
+  async function settingsView(): Promise<Record<string, unknown>> {
+    const files = settingsFiles();
+    let settings;
+    try {
+      settings = readOwnerSettings();
+    } catch (err) {
+      return { problem: (err as Error).message };
+    }
+    let preview;
+    try {
+      requirePolicyFile(files.policyPath);
+      preview = settingsPayload(settings, files);
+    } catch (err) {
+      return { problem: (err as Error).message };
+    }
+    const signed = settings.signature ? await signedSettings(files).catch(() => undefined) : undefined;
+    return {
+      wallet: account.address,
+      policyFile: files.policyPath,
+      preview,
+      signed: signed
+        ? { signer: signed.signer, signedAt: signed.signedAt, valid: signed.valid, policyMatches: signed.policyMatches, why: signed.why, thisWallet: signedBy(signed, account.address) }
+        : null,
+    };
+  }
+
+  /** Signs what the owner saw: the hashes in `confirmed` must be those of the files now, or nothing is signed. */
+  async function signSettings(confirmed: unknown): Promise<{ status: number; body: unknown }> {
+    const files = settingsFiles();
+    let settings;
+    let payload;
+    try {
+      settings = readOwnerSettings();
+      requirePolicyFile(files.policyPath);
+      payload = settingsPayload(settings, files);
+    } catch (err) {
+      return { status: 409, body: { error: `${(err as Error).message}; nothing was signed` } };
+    }
+    const c = confirmed as { settingsHash?: unknown; policyHash?: unknown; retiredHash?: unknown } | null;
+    if (!c || c.settingsHash !== payload.settingsHash || c.policyHash !== payload.policyHash || c.retiredHash !== payload.retiredHash) {
+      return { status: 409, body: { error: "the settings, the policy or the retired agent keys are not what the card showed; nothing was signed. Look at the card again" } };
+    }
+    const signedAt = settingsSignedAt();
+    const value = await account.signTypedData(settingsTypedData(payload, signedAt));
+    writeOwnerSettings({ ...settings, signature: signatureRecord({ scheme: "eip712", signer: account.address, signedAt, payload, value }) });
+    const check = await signedSettings(files);
+    if (!check?.valid) return { status: 500, body: { error: `the signature was written but does not verify (${check?.why ?? "unknown"}); run ${SIGN_COMMAND}` } };
+    return { status: 200, body: await settingsView() };
   }
 
   const serverFor = (listener: Listener): Server =>

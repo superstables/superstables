@@ -34,6 +34,7 @@ const SLOW = [
   "test/budget/tempo-rpc.test.ts",
   "test/cli/cli.test.ts",
   "test/cli/owner-settings-command.test.ts",
+  "test/cli/owner-settings-sign.test.ts",
   "test/core/browser-signer.test.ts",
   "test/core/wallet-public-rpc.test.ts",
   "test/core/wallet-signer-cancel.test.ts",

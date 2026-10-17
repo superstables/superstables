@@ -13,12 +13,13 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_NETWORK, networkFor, usdcBalance, type Rail } from "../chain.js";
-import { browserWalletPath, ensureDir, homeDir, recordsDir } from "../home.js";
+import { accountPolicyPath, browserWalletPath, ensureDir, homeDir, recordsDir, retiredListPath } from "../home.js";
+import { signedBy, signedPolicyCheck, signedSettings } from "../owner-settings.js";
 import { evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Policy } from "../policy.js";
 import { Records } from "../records.js";
 import { judgeSignRequest } from "../rails/index.js";
 import type { VerifiedTerms, WalletStatus } from "../types.js";
-import { ApprovalServer } from "./approval-server.js";
+import { ApprovalServer, type SettingsNote } from "./approval-server.js";
 import { SignRefused, type Eip3009SignRequest, type Eip3009SignResult, type SignHooks, type SignRequest, type SignResult, type Signer } from "./types.js";
 
 /** How long an approval page waits for the person before the request expires. */
@@ -80,6 +81,8 @@ export class BrowserWalletSigner implements Signer {
       preferredPort: options.preferredPort,
       recordsDirPath: dir,
       onAccount: (address, network) => this.remember(address, network),
+      settingsNote: (address) => settingsNoteFor(address),
+      accountRefusal: (address) => accountRefusalFor(address),
     });
     this.remembered = this.readRemembered();
   }
@@ -261,6 +264,32 @@ export class BrowserWalletSigner implements Signer {
     } catch {
       // Remembering is a convenience: a home directory that will not take it changes nothing.
     }
+  }
+}
+
+/** What the owner's signed settings say about the account that connected: undefined when unsigned or not valid. */
+export async function settingsNoteFor(address: string): Promise<SettingsNote | undefined> {
+  try {
+    const signed = await signedSettings({ policyPath: accountPolicyPath(), retiredPath: retiredListPath() });
+    if (!signed?.valid || !signed.signer || !signed.signedAt) return undefined;
+    // "Signed by" only for a signature that holds and covers the policy in use.
+    const yours = signedBy(signed, address);
+    if (yours && !signed.policyMatches) return undefined;
+    return { applies: yours ? "yours" : "other", signer: signed.signer, signedAt: signed.signedAt };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Why the wallet that just connected may not go on: the owner's signed settings bind it and the account policy file in use is
+ * not the one signed. The address remembered from an earlier payment only guesses who will connect; this is the check on who did.
+ */
+async function accountRefusalFor(address: string): Promise<string | undefined> {
+  try {
+    return (await signedPolicyCheck(address, { policyPath: accountPolicyPath(), retiredPath: retiredListPath() })).refuse;
+  } catch {
+    return undefined;
   }
 }
 

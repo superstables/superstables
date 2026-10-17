@@ -121,6 +121,21 @@ export const APPROVAL_PAGE_SCRIPT = `
     else say(why || "This payment was rejected. Cancel any open wallet request.", "bad");
   }
 
+  // The owner's signed settings, as far as they concern the wallet that connected: one row, filled from the /account answer.
+  function settingsRow(note) {
+    var value = el("settings-note");
+    if (!value) return;
+    value.textContent = "";
+    if (!note || (note.applies !== "yours" && note.applies !== "other")) { show("settings-label", false); show("settings-note", false); return; }
+    var when = String(note.signedAt || "").slice(0, 10);
+    value.textContent = note.applies === "yours"
+      ? note.signer + " on " + when
+      : "signed by " + note.signer + "; they do not apply to this wallet";
+    el("settings-label").textContent = note.applies === "yours" ? "Signed by" : "Signed settings";
+    show("settings-label", true);
+    show("settings-note", true);
+  }
+
   function post(path, body) {
     return fetch(base + path, {
       method: "POST",
@@ -129,6 +144,7 @@ export const APPROVAL_PAGE_SCRIPT = `
       body: JSON.stringify(body || {})
     }).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (data) {
+        if (path === "/account" && res.ok) settingsRow(data && data.signedSettings);
         return { ok: res.ok, status: res.status, data: data };
       });
     });
@@ -378,6 +394,7 @@ export function approvalPage(facts: ApprovalPageFacts, step: WalletStep = eip300
       <dt>Token</dt><dd class="mono">${esc(facts.assetAddress)}</dd>
       <dt>Expires in</dt><dd><span id="expiry">${seconds}</span> s</dd>
       <dt id="account-label" hidden>Paying from</dt><dd id="account" class="mono" hidden></dd>
+      <dt id="settings-label" hidden>Signed settings</dt><dd id="settings-note" class="mono" hidden></dd>
     </dl>
     ${reportedBlock(facts.reported)}
     <div id="say" class="note" hidden></div>

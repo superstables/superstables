@@ -6,11 +6,13 @@
 import { createInterface } from "node:readline";
 import type { Command } from "commander";
 import { Option } from "commander";
+import { accountPolicyPath, retiredListPath } from "../core/home.js";
+import { signOwnerSettings } from "./owner-settings-sign.js";
 import {
-  DEFAULT_SITE, OWNER_SETTINGS_UNREADABLE, RPC_CHAIN_KEYS, SETTINGS_COMMAND, ownerRpcUrlProblem, ownerSettingsPath,
-  readOwnerSettings, sameRpcUrl, shownUrl, writeOwnerSettings,
+  DEFAULT_SITE, OWNER_SETTINGS_UNREADABLE, RPC_CHAIN_KEYS, SETTINGS_COMMAND, SIGN_COMMAND, ownerRpcUrlProblem, ownerSettingsPath,
+  readOwnerSettings, sameRpcUrl, shownUrl, signedSettings, writeOwnerSettings,
 } from "../core/owner-settings.js";
-import type { OwnerSettings } from "../core/owner-settings.js";
+import type { OwnerSettings, SignedSettings } from "../core/owner-settings.js";
 import { CliError, EXIT, badInput } from "./outcome.js";
 import { explain } from "./help.js";
 
@@ -105,16 +107,25 @@ export function applyChange(current: OwnerSettings, action: string, args: string
       return { next, before: `rpc ${key}: ${rpcWords(was)}`, after: `rpc ${key}: ${rpcWords(next.rpc[key])}` };
     }
     default:
-      return { error: `unknown action "${action.slice(0, 40)}": use show, site, allow-staging, allow-loopback or rpc` };
+      return { error: `unknown action "${action.slice(0, 40)}": use show, sign, site, allow-staging, allow-loopback or rpc` };
   }
 }
 
-/** Why a change cannot be typed here: stdin must be a terminal. "" when it can. U4's `sign` reuses it. */
+/** Why a change cannot be typed here: stdin must be a terminal. "" when it can. `sign` uses it too. */
 export function ownerTerminalProblem(): string {
   return process.stdin.isTTY ? "" : "changing the owner settings needs the owner's own terminal (stdin is not a terminal)";
 }
 
-function showLines(s: OwnerSettings): string[] {
+/** The signature line of `show`: who signed, and whether the policy still matches. */
+export function signatureLine(s: OwnerSettings, signed: SignedSettings | undefined): string {
+  if (!s.signature) return "signature: none";
+  if (!signed) return "signature: none";
+  if (!signed.valid) return `signature: present but not valid: ${signed.why ?? "unknown"} (sign again)`;
+  const when = signed.signedAt ?? "";
+  return `signature: signed by ${signed.signer} on ${when.slice(0, 10)}; ${signed.policyMatches ? "policy matches" : "policy changed since signing (sign again)"}`;
+}
+
+function showLines(s: OwnerSettings, signed?: SignedSettings): string[] {
   const lines = [
     `settings file: ${s.path}${s.present ? "" : " (missing: built-in defaults apply)"}`,
     `approval site: ${siteWords(s)}`,
@@ -124,7 +135,7 @@ function showLines(s: OwnerSettings): string[] {
   const chains = Object.keys(s.rpc);
   if (chains.length) for (const k of chains) lines.push(`rpc ${k}: ${rpcWords(s.rpc[k])}`);
   else lines.push("rpc: built-in for every chain");
-  lines.push(`signature: ${s.signature ? "present (not checked in this version)" : "none"}`);
+  lines.push(signatureLine(s, signed));
   return lines;
 }
 
@@ -168,24 +179,36 @@ export function registerOwnerCommand(program: Command): void {
     owner
       .command("settings")
       .description("show or change the approval site and the RPCs owner actions trust")
-      .argument("[action]", "show (default), site, allow-staging, allow-loopback or rpc")
+      .argument("[action]", "show (default), sign, site, allow-staging, allow-loopback or rpc")
       .argument("[args...]", "the action's arguments")
       .addOption(new Option("--own-node", "rpc: the first URL is your own node (a quorum of 1 is then enough)"))
       .addOption(new Option("--quorum <n>", "rpc: how many of the URLs must agree (1 to the number of URLs)"))
       .addOption(new Option("--clear", "site: back to https://www.superstables.com; rpc <chain>: back to the built-in RPC"))
       .addOption(new Option("--json", "show: print the settings as JSON (RPC hosts only)"))
-      .action(async (action: string | undefined, args: string[], options: ChangeOptions & { json?: boolean }) => {
+      .addOption(new Option("--rail <rail>", "sign: the wallet family that signs, evm (default) or solana").choices(["evm", "solana"]))
+      .addOption(new Option("--no-open", "sign: print the link and do not open the browser"))
+      .action(async (action: string | undefined, args: string[], options: ChangeOptions & { json?: boolean; rail?: "evm" | "solana"; open?: boolean }) => {
+        if (action === "sign") {
+          if (args.length) throw badInput("superstables owner settings: sign takes no arguments (--rail evm|solana)");
+          const refusal = ownerTerminalProblem();
+          if (refusal) throw new CliError(`superstables owner settings: refused: ${refusal}. Nothing was signed.`, EXIT.refused);
+          const done = await signOwnerSettings({ rail: options.rail ?? "evm", ...(options.open === false ? { open: () => undefined } : {}) });
+          console.log(`Signed by ${done.signer}. Wrote the signature to ${done.path}.`);
+          return;
+        }
         if (action === undefined || action === "show") {
           const s = current();
+          const signed = s.signature ? await signedSettings({ policyPath: accountPolicyPath(), retiredPath: retiredListPath() }).catch(() => undefined) : undefined;
           if (options.json) {
             console.log(JSON.stringify({
               path: s.path, present: s.present, site: s.site,
               rpc: Object.fromEntries(Object.entries(s.rpc).map(([k, r]) => [k, { hosts: r.urls.map(shownUrl), ownNode: r.ownNode, quorum: r.quorum }])),
               rpcEnv: s.rpcEnv, sellers: s.sellers, signature: s.signature !== undefined,
+              ...(signed ? { signedBy: signed.signer, signedAt: signed.signedAt, signatureValid: signed.valid, policyMatches: signed.policyMatches } : {}),
             }, null, 2));
             return;
           }
-          for (const line of showLines(s)) console.log(line);
+          for (const line of showLines(s, signed)) console.log(line);
           if (process.env.SUPERSTABLES_ALLOW_SITE?.trim()) console.log("note: SUPERSTABLES_ALLOW_SITE is set in this environment; it is no longer read");
           return;
         }
@@ -195,10 +218,11 @@ export function registerOwnerCommand(program: Command): void {
         const change = applyChange(before, action, args, options);
         if ("error" in change) throw badInput(`superstables owner settings: ${change.error}`);
         console.error(`change: ${change.before} -> ${change.after}`);
+        if (before.signature) console.error(`warning: this breaks your settings signature, and with it the pin on your spend policy. Run ${SIGN_COMMAND} afterwards to sign again.`);
         if (!(await typedYes())) throw new CliError("Confirmation did not match. Nothing was written.", EXIT.refused);
         writeOwnerSettings(change.next);
         console.log(`Wrote ${ownerSettingsPath()}.`);
-        if (before.signature) console.log("The signature on the old settings no longer covers them; it was removed.");
+        if (before.signature) console.log(`The signature on the old settings no longer covers them, so it was removed. Run ${SIGN_COMMAND} to sign again.`);
         if (change.warning) console.log(change.warning);
       }),
     {
@@ -207,13 +231,15 @@ export function registerOwnerCommand(program: Command): void {
           "  site <origin> | site --clear          the approval site (default https://www.superstables.com)\n" +
           "  allow-staging on|off                  allow https://staging.superstables.com\n" +
           "  allow-loopback site|rpc|sellers on|off  development only: a site, an RPC variable or a seller on this computer\n" +
-          "  rpc <chain> <url...> [--own-node] [--quorum N] | rpc <chain> --clear   the RPCs owner actions and verdicts use",
-        "A change asks for a typed yes and runs only when stdin is a terminal. RPC URLs are never printed whole: they can carry an access key.",
+          "  rpc <chain> <url...> [--own-node] [--quorum N] | rpc <chain> --clear   the RPCs owner actions and verdicts use\n" +
+          "  sign [--rail evm|solana]              your wallet signs these settings, your spend policy, your retired agent keys and the enabled chains",
+        "A change asks for a typed yes and runs only when stdin is a terminal. RPC URLs are never printed whole: they can carry an access key. " +
+          "`sign` opens a page on 127.0.0.1 where your own wallet signs: signed settings apply only to approvals made with that wallet, and a policy file that differs from the signed one is refused until you sign again.",
       ],
       money: "no.",
-      who: "the owner, in their own terminal. An agent runs `show` only and never a change.",
-      examples: ["superstables owner settings show", "superstables owner settings allow-staging on", "superstables owner settings rpc base-sepolia https://rpc.example/KEY"],
-      prints: "show: the settings, one per line (--json: one JSON object). A change: the before and after lines, then the path written.",
+      who: "the owner, in their own terminal. An agent runs `show` only and never a change or a signature.",
+      examples: ["superstables owner settings show", "superstables owner settings allow-staging on", "superstables owner settings rpc base-sepolia https://rpc.example/KEY", "superstables owner settings sign"],
+      prints: "show: the settings, one per line (--json: one JSON object). A change: the before and after lines, then the path written. sign: the link, the rows to sign, then the signer.",
       exits: "0 done, 1 the settings file cannot be used, 2 bad input, 3 refused (no terminal, or the answer was not yes)",
     },
   );

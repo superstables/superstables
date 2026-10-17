@@ -9,18 +9,22 @@
 // SUPERSTABLES_TEMPO_RPC, SUPERSTABLES_SOLANA_RPC) count for an owner action or a verdict only when they name what these
 // settings (or the built-in defaults) allow. Plain reads ("read") keep the environment.
 //
-// The agent runs as the same user, so it can still edit this file directly: that is a change only the owner's wallet
-// signature can make evident, which comes with signed settings. What this file removes now is the environment knob.
+// The agent runs as the same user, so it can still edit this file directly. What makes that evident is the owner's wallet
+// signature (see "Signed settings" below): over these settings, the spend policy file, the retired agent keys and the
+// chains enabled for signing. What the file removes by itself is the environment knob.
 //
 // Plain JavaScript with JSDoc types, like chain-gate.js: the budget's .mjs files, its TypeScript and src/ share it; tsc
-// emits it to dist with its declaration, and scripts/budget-build.mjs bundles it into dist/budget. Node built-ins only.
+// emits it to dist with its declaration, and scripts/budget-build.mjs bundles it into dist/budget. Node built-ins; viem is loaded only
+// when an EIP-712 signature is checked, so a checkout without its packages still reads the settings.
 // It never reads the environment: callers pass the value of a variable, so no variable moves the file or what it says.
 
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readSync, renameSync, unlinkSync, writeSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { ensurePrivateDir, privateDirProblem, syncDirectory } from "./private-dir.mjs";
+import { isSolanaAddress, verifyEd25519 } from "./ed25519-verify.mjs";
+import { chainPrerequisitesMissing, setChainGateSource } from "./chain-gate.js";
 
 export const OWNER_SETTINGS_VERSION = 1;
 /** Production: the only approval site with no setting. superstables.com (the apex) is the same site. */
@@ -63,7 +67,7 @@ const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
  * @property {Record<string, OwnerRpc>} rpc        keyed by RPC_CHAIN_KEYS
  * @property {{ allowLoopback: boolean }} rpcEnv   an RPC variable naming this computer counts as the owner's (development)
  * @property {{ allowLoopback: boolean }} sellers  a seller on this computer may be paid on a chain that is not a testnet
- * @property {Record<string, unknown>} [signature] reserved for the owner's wallet signature; opaque here
+ * @property {Record<string, unknown>} [signature] the owner's wallet signature (see SignedSettings); read as it is here, checked by signedSettings()
  * @property {boolean} present                     false: no file, these are the defaults
  * @property {string} path
  */
@@ -401,3 +405,315 @@ export function writeOwnerSettings(next) {
   }
   syncDirectory(ownerDir());
 }
+
+// ── Signed settings ────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// The owner signs one payload with their wallet (`superstables owner settings sign`): the hash of these settings, the hash of
+// the account's own policy.yaml, the hash of the retired agent keys, the chains enabled for signing and the approval site.
+// EIP-712 typed data for an EVM wallet (a domain with no chain id, because the settings apply on every chain); the same
+// facts as a fixed text for a Solana wallet's signMessage. The signature sits in the settings file, field `signature`:
+//
+//   { scheme: "eip712" | "ed25519", signer, signedAt, payload: { settingsHash, policyHash, retiredHash, enabledChains, site }, value }
+//
+// Signed settings count only for actions made with the wallet that signed them (settingsFor): an agent that signs with a
+// key of its own signs nothing the owner's wallet is bound by. Every hash is recomputed from the files now on disk.
+
+export const SETTINGS_SCHEMES = Object.freeze(["eip712", "ed25519"]);
+/** The EIP-712 domain: no chain id. */
+export const SETTINGS_DOMAIN = Object.freeze({ name: "Superstables owner settings", version: "1" });
+export const SETTINGS_TYPES = Object.freeze({
+  Settings: [
+    { name: "site", type: "string" },
+    { name: "enabledChains", type: "string" },
+    { name: "policy", type: "bytes32" },
+    { name: "retiredAgents", type: "bytes32" },
+    { name: "settings", type: "bytes32" },
+    { name: "signedAt", type: "uint256" },
+  ],
+});
+export const SIGN_COMMAND = `${SETTINGS_COMMAND} sign`;
+const MAX_HASHED_BYTES = 1024 * 1024;
+const HASH_TEXT = /^sha256:[0-9a-f]{64}$/;
+const sha = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+/** The hash of nothing: an absent policy file or retired list. */
+export const EMPTY_HASH = sha("");
+
+/** The account's own policy file, the one the policy hash covers. */
+export const ownerPolicyPath = () => join(accountStateDir(), "policy.yaml");
+/** The default retired agent keys file (the client's home is the account's own unless SUPERSTABLES_HOME says otherwise). */
+export const ownerRetiredPath = () => join(accountStateDir(), "keys", "budget", "retired.json");
+
+/** JSON with sorted keys and no whitespace: the same value always gives the same text. */
+export function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isObject(value)) return `{${Object.keys(value).sort().filter((k) => value[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
+/** sha256 of the settings (the fields in SETTINGS_FIELDS, as parsed: key order and omitted defaults do not matter). */
+export function settingsHash(settings) {
+  const { version, site, rpc, rpcEnv, sellers } = settings;
+  return sha(canonicalJson({ version, site, rpc, rpcEnv, sellers }));
+}
+
+/** sha256 of a file's bytes; of nothing when it is absent. Throws, in words, when it is there and cannot be read as a file. */
+export function fileHash(path) {
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  } catch (err) {
+    if (err?.code === "ENOENT") return EMPTY_HASH;
+    throw new Error(`${path} could not be opened (${err?.code ?? "error"})`);
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new Error(`${path} is not a regular file`);
+    if (st.size > MAX_HASHED_BYTES) throw new Error(`${path} is larger than ${MAX_HASHED_BYTES} bytes`);
+    return sha(readFileSync(fd));
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Throws, in words, unless the account policy file exists: a signature over an absent file pins nothing, because the policy
+ * in use then comes from wherever the agent's environment points. Signing waits until the owner has written the file.
+ */
+export function requirePolicyFile(path) {
+  try {
+    closeSync(openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)));
+  } catch (err) {
+    if (err?.code === "ENOENT") throw new Error(`There is no spend policy file at ${path}. The owner writes one there, then signs. When SUPERSTABLES_HOME and SUPERSTABLES_POLICY are not set, superstables policy init writes it there.`);
+  }
+}
+
+/** The chains as signed: distinct, sorted, plain keys. Throws on anything else. */
+export function canonicalChains(chains) {
+  if (!Array.isArray(chains) || chains.length > 20 || chains.some((c) => typeof c !== "string" || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(c))) throw new Error("the enabled chains are a list of up to 20 chain keys");
+  return [...new Set(chains)].sort();
+}
+const chainsText = (chains) => (chains.length ? chains.join(", ") : "none");
+
+/**
+ * What the owner is asked to sign now: the hashes of the files as they are on disk.
+ * @param {OwnerSettings} settings
+ * @param {{ enabledChains?: string[], policyPath?: string, retiredPath?: string }} [options]
+ */
+export function settingsPayload(settings, options = {}) {
+  return {
+    settingsHash: settingsHash(settings),
+    policyHash: fileHash(options.policyPath ?? ownerPolicyPath()),
+    retiredHash: fileHash(options.retiredPath ?? ownerRetiredPath()),
+    enabledChains: canonicalChains(options.enabledChains ?? []),
+    site: settings.site.origin,
+  };
+}
+
+/** A time the signature can carry exactly: whole seconds, as an ISO text. */
+export const settingsSignedAt = (date = new Date()) => new Date(Math.floor(date.getTime() / 1000) * 1000).toISOString();
+const secondsOf = (signedAt) => BigInt(Math.floor(Date.parse(signedAt) / 1000));
+const bytes32 = (hash) => `0x${hash.slice(7)}`;
+
+/** The EIP-712 typed data for `payload` (viem's shape: the message's signedAt is a bigint). */
+export function settingsTypedData(payload, signedAt) {
+  return {
+    domain: { ...SETTINGS_DOMAIN },
+    types: SETTINGS_TYPES,
+    primaryType: /** @type {"Settings"} */ ("Settings"),
+    message: {
+      site: payload.site,
+      enabledChains: chainsText(payload.enabledChains),
+      policy: bytes32(payload.policyHash),
+      retiredAgents: bytes32(payload.retiredHash),
+      settings: bytes32(payload.settingsHash),
+      signedAt: secondsOf(signedAt),
+    },
+  };
+}
+
+/** The same typed data as the JSON an eth_signTypedData_v4 request carries (an explicit EIP712Domain, signedAt as text). */
+export function settingsTypedDataJson(payload, signedAt) {
+  const t = settingsTypedData(payload, signedAt);
+  return JSON.stringify({
+    domain: t.domain,
+    types: { EIP712Domain: [{ name: "name", type: "string" }, { name: "version", type: "string" }], ...t.types },
+    primaryType: t.primaryType,
+    message: { ...t.message, signedAt: t.message.signedAt.toString() },
+  });
+}
+
+/** The fixed text a Solana wallet signs. */
+export function settingsMessage(payload, signedAt) {
+  return [
+    "Superstables owner settings, version 1",
+    `Site: ${payload.site}`,
+    `Chains enabled for signing: ${chainsText(payload.enabledChains)}`,
+    `Policy: ${payload.policyHash}`,
+    `Retired agents: ${payload.retiredHash}`,
+    `Settings: ${payload.settingsHash}`,
+    `Signed at: ${signedAt}`,
+  ].join("\n");
+}
+
+/** The signature record the settings file carries. */
+export const signatureRecord = ({ scheme, signer, signedAt, payload, value }) => ({ scheme, signer, signedAt, payload, value });
+
+function shapeOf(sig) {
+  if (!isObject(sig)) return { error: "it is not an object" };
+  const keys = Object.keys(sig);
+  if (keys.length !== 5 || ["scheme", "signer", "signedAt", "payload", "value"].some((k) => !keys.includes(k))) return { error: "it does not have exactly a scheme, signer, signedAt, payload and value" };
+  if (!SETTINGS_SCHEMES.includes(sig.scheme)) return { error: "its scheme is not eip712 or ed25519" };
+  const addressOk = sig.scheme === "eip712" ? typeof sig.signer === "string" && /^0x[0-9a-fA-F]{40}$/.test(sig.signer) : isSolanaAddress(sig.signer);
+  if (!addressOk) return { error: "its signer is not an address of its scheme" };
+  if (typeof sig.signedAt !== "string" || Number.isNaN(Date.parse(sig.signedAt)) || settingsSignedAt(new Date(sig.signedAt)) !== sig.signedAt) return { error: "its signedAt is not a time in whole seconds" };
+  if (typeof sig.value !== "string" || sig.value.length > 400) return { error: "its value is not a signature" };
+  const p = sig.payload;
+  if (!isObject(p) || Object.keys(p).length !== 5) return { error: "its payload is not the five signed facts" };
+  for (const k of ["settingsHash", "policyHash", "retiredHash"]) if (typeof p[k] !== "string" || !HASH_TEXT.test(p[k])) return { error: `its payload.${k} is not a sha256` };
+  let chains;
+  try { chains = canonicalChains(p.enabledChains); } catch (err) { return { error: `its payload.enabledChains: ${err.message}` }; }
+  if (JSON.stringify(chains) !== JSON.stringify(p.enabledChains)) return { error: "its payload.enabledChains are not sorted and distinct" };
+  if (typeof p.site !== "string" || p.site.length > 200) return { error: "its payload.site is not a site" };
+  return { ok: { ...sig, payload: { settingsHash: p.settingsHash, policyHash: p.policyHash, retiredHash: p.retiredHash, enabledChains: chains, site: p.site } } };
+}
+
+// EIP-712 signatures that were checked in this process. A key is the signer, the signature and the hash of what it covers, so
+// a changed file can never inherit an earlier "yes". Recovering a secp256k1 signer is asynchronous; the chain gate is not,
+// so the gate reads this set (primeSignedSettings fills it) and a signature never checked reads as not valid.
+const checked = new Set();
+const checkedKey = (sig) => `${sig.signer.toLowerCase()}|${sig.value}|${sha(canonicalJson({ payload: sig.payload, signedAt: sig.signedAt }))}`;
+
+/**
+ * @typedef {object} SignedSettings
+ * @property {"eip712" | "ed25519"} [scheme]
+ * @property {string} [signer]                          the wallet that signed
+ * @property {string} [signedAt]
+ * @property {{ settingsHash: string, policyHash: string, retiredHash: string, enabledChains: string[], site: string }} [payload]
+ * @property {boolean} valid          the signature is the signer's, and the settings and the retired agent keys are as signed
+ * @property {boolean} policyMatches  the account's policy.yaml is the one signed (a different policy is not an invalid signature: pay refuses it)
+ * @property {string} [why]           in words, every hash that differs, or why the signature does not hold
+ */
+
+function inspect(options) {
+  const settings = options.settings ?? readOwnerSettings();
+  if (!settings.signature) return undefined;
+  const shaped = shapeOf(settings.signature);
+  if (shaped.error) return { done: { valid: false, policyMatches: false, why: `the signature in the owner settings is malformed: ${shaped.error}` } };
+  const sig = shaped.ok;
+  const out = { scheme: sig.scheme, signer: sig.signer, signedAt: sig.signedAt, payload: sig.payload, valid: false, policyMatches: false };
+  const problems = [];
+  let sigOk;
+  if (sig.scheme === "ed25519") {
+    let raw;
+    try { raw = Buffer.from(sig.value, "base64"); } catch { raw = Buffer.alloc(0); }
+    sigOk = /^[A-Za-z0-9+/]+={0,2}$/.test(sig.value) && verifyEd25519(sig.signer, Buffer.from(settingsMessage(sig.payload, sig.signedAt), "utf8"), raw);
+  } else if (/^0x[0-9a-fA-F]+$/.test(sig.value)) {
+    sigOk = checked.has(checkedKey(sig)) ? true : undefined;
+  } else {
+    sigOk = false;
+  }
+  if (sigOk === false) problems.push(`the signature is not ${sig.signer}'s over the facts it names`);
+  let settingsOk = true;
+  const nowSettings = settingsHash(settings);
+  if (nowSettings !== sig.payload.settingsHash || sig.payload.site !== settings.site.origin) {
+    settingsOk = false;
+    problems.push(`the owner settings are not the ones signed (signed ${sig.payload.settingsHash}, now ${nowSettings})`);
+  }
+  const retiredPath = options.retiredPath ?? ownerRetiredPath();
+  try {
+    const now = fileHash(retiredPath);
+    if (now !== sig.payload.retiredHash) { settingsOk = false; problems.push(`the retired agent keys are not the ones signed (signed ${sig.payload.retiredHash}, now ${now})`); }
+  } catch (err) {
+    settingsOk = false;
+    problems.push(`the retired agent keys cannot be read (${err.message})`);
+  }
+  const policyPath = options.policyPath ?? ownerPolicyPath();
+  try {
+    const now = fileHash(policyPath);
+    out.policyMatches = now === sig.payload.policyHash;
+    if (!out.policyMatches) problems.push(`the spend policy ${policyPath} is not the one signed (signed ${sig.payload.policyHash}, now ${now})`);
+  } catch (err) {
+    problems.push(`the spend policy cannot be read (${err.message})`);
+  }
+  if (problems.length) out.why = problems.join("; ");
+  return { out, sig, sigOk, settingsOk };
+}
+const conclude = (r, sigOk) => ({ ...r.out, valid: sigOk === true && r.settingsOk });
+
+/**
+ * The owner's signed settings with every hash recomputed from the files now on disk, or undefined when the settings carry no
+ * signature. Throws OWNER_SETTINGS_UNREADABLE when the settings file cannot be used. See SignedSettings.
+ * @param {{ settings?: OwnerSettings, policyPath?: string, retiredPath?: string }} [options]
+ * @returns {Promise<SignedSettings | undefined>}
+ */
+export async function signedSettings(options = {}) {
+  const r = inspect(options);
+  if (!r) return undefined;
+  if (r.done) return r.done;
+  let sigOk = r.sigOk;
+  if (sigOk === undefined) {
+    try {
+      const { verifyTypedData } = await import("viem");
+      sigOk = await verifyTypedData({ address: /** @type {`0x${string}`} */ (r.sig.signer), ...settingsTypedData(r.sig.payload, r.sig.signedAt), signature: /** @type {`0x${string}`} */ (r.sig.value) });
+    } catch {
+      sigOk = false;
+    }
+    if (sigOk) checked.add(checkedKey(r.sig));
+    else r.out.why = [`the signature is not ${r.sig.signer}'s over the facts it names`, r.out.why].filter(Boolean).join("; ");
+  }
+  return conclude(r, sigOk);
+}
+
+/** signedSettings() for a caller that cannot wait: an EIP-712 signature not yet checked in this process reads as not valid. */
+export function signedSettingsChecked(options = {}) {
+  const r = inspect(options);
+  if (!r) return undefined;
+  if (r.done) return r.done;
+  const out = conclude(r, r.sigOk);
+  if (r.sigOk === undefined) out.why = ["its signature has not been checked in this process yet", out.why].filter(Boolean).join("; ");
+  return out;
+}
+
+/** Checks the settings signature now, so the chain gate (which cannot wait) can read it. Never throws. */
+export async function primeSignedSettings(options = {}) {
+  try { await signedSettings(options); } catch {}
+}
+
+/** Whether `wallet` is the address that signed. EVM addresses compare without case, Solana ones exactly. */
+export function signedBy(signed, wallet) {
+  if (!signed?.signer || typeof wallet !== "string") return false;
+  return signed.scheme === "eip712" ? signed.signer.toLowerCase() === wallet.toLowerCase() : signed.signer === wallet;
+}
+
+/**
+ * The signed settings for an action made with `wallet`: only when the signature is valid and `wallet` signed it.
+ * @param {string} wallet
+ */
+export async function settingsFor(wallet, options = {}) {
+  const s = await signedSettings(options);
+  return s?.valid && signedBy(s, wallet) ? s : undefined;
+}
+
+/**
+ * What the signed settings say about the spend policy for an action by `wallet` (unknown: undefined, then they apply).
+ * { refuse } when the policy file in use is not the one signed; { warn } when the settings carry a signature that does not
+ * hold (treated as unsigned); {} when there is nothing to say.
+ * @param {string | undefined} wallet
+ * @returns {Promise<{ refuse?: string, warn?: string }>}
+ */
+export async function signedPolicyCheck(wallet, options = {}) {
+  let s;
+  try { s = await signedSettings(options); } catch { return {}; }
+  if (!s) return {};
+  if (wallet !== undefined && s.signer !== undefined && !signedBy(s, wallet)) return {};
+  if (!s.valid) return { warn: `the signature on the owner settings does not hold (${s.why}); they are treated as unsigned. The owner runs ${SIGN_COMMAND} to sign again` };
+  if (s.payload.policyHash === EMPTY_HASH) return { refuse: `The owner signed their settings when there was no spend policy file, so the signature pins no policy and nothing was signed. The owner writes a policy file, for example with superstables policy init, then runs ${SIGN_COMMAND}.` };
+  if (s.policyMatches) return {};
+  return { refuse: `The spend policy changed after the owner signed their settings, so nothing was signed. The owner runs ${SIGN_COMMAND} to sign the policy in use.` };
+}
+
+setChainGateSource(() => {
+  const s = signedSettingsChecked();
+  if (!s?.valid) return undefined;
+  return { enabledChains: [...s.payload.enabledChains], missing: Object.fromEntries(s.payload.enabledChains.map((k) => [k, chainPrerequisitesMissing(k)])) };
+});
