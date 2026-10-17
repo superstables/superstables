@@ -46,6 +46,13 @@ async function realWallet(): Promise<WalletHandle> {
 
 const call = (w: WalletHandle, path: string, token: string, method = "GET") =>
   fetch(`${w.url}${path}`, { method, headers: { authorization: `Bearer ${token}` } });
+/** The owner's approval as the wallet requires it: the amount, recipient and chain they confirmed (REQ's own). */
+const approve = (w: WalletHandle, id: string) =>
+  fetch(`${w.url}/owner/requests/${id}/approve`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${w.ownerSecret}`, "content-type": "application/json" },
+    body: JSON.stringify({ amountAtomic: "30000", recipient: PAYEE, network: "eip155:84532" }),
+  });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const refusal = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e as SignRefused);
 
@@ -118,7 +125,7 @@ describe("a wait that ends abnormally cancels the request first", () => {
     expect(err?.message).toMatch(/cancelled/);
     expect(t.calls.filter((c) => c.endsWith("/cancel"))).toHaveLength(1);
     const id = await pendingId(w);
-    expect((await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST")).status).toBe(409);
+    expect((await approve(w, id)).status).toBe(409);
     const after = (await (await call(w, `/requests/${id}`, w.agentToken)).json()) as WalletRequestView;
     expect(after.status).toBe("expired");
     expect(after.result).toBeUndefined();
@@ -133,7 +140,7 @@ describe("a wait that ends abnormally cancels the request first", () => {
       expect(err?.code).toBe("unavailable");
       expect(t.calls.filter((c) => c.endsWith("/cancel"))).toHaveLength(1);
       const id = await pendingId(w);
-      expect((await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST")).status).toBe(409);
+      expect((await approve(w, id)).status).toBe(409);
       await w.close();
       wallets.pop();
     }
@@ -144,7 +151,7 @@ describe("a wait that ends abnormally cancels the request first", () => {
     const t = transport({ poll: "lose-signed" });
     const pending = refusal(signerOn(w, t).sign(REQ));
     const id = await pendingId(w);
-    expect((await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST")).status).toBe(200);
+    expect((await approve(w, id)).status).toBe(200);
     const err = await pending;
     expect(err?.code).toBe("unknown");
     expect(err?.message).toMatch(/superstables status/);
@@ -166,7 +173,7 @@ describe("a wait that ends abnormally cancels the request first", () => {
     faults.cancel = "pass";
     await signer.close();
     expect(t.calls.filter((c) => c.endsWith("/cancel"))).toHaveLength(2);
-    expect((await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST")).status).toBe(409);
+    expect((await approve(w, id)).status).toBe(409);
   });
 
   it("5. a 0.4.0 wallet without /cancel is named, and the refusal is unknown, not a final failure", async () => {
@@ -201,7 +208,7 @@ describe("a wait that ends abnormally cancels the request first", () => {
     const id = await pendingId(w);
     faults.cancel = "pass";
     await signer.close();
-    expect((await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST")).status).toBe(409);
+    expect((await approve(w, id)).status).toBe(409);
   });
 
   it("8. a cancel answer that confirms nothing (a pending view) is not a cancel", async () => {
@@ -239,6 +246,6 @@ describe("a wait that ends abnormally cancels the request first", () => {
     expect(err?.code).toBe("unknown");
     expect(t.calls.filter((c) => c.endsWith("/cancel"))).toHaveLength(2);
     const id = await pendingId(w);
-    expect((await call(w, `/owner/requests/${id}/approve`, w.ownerSecret, "POST")).status).toBe(409);
+    expect((await approve(w, id)).status).toBe(409);
   });
 });
