@@ -37,7 +37,7 @@ async function realWallet(): Promise<WalletHandle> {
   const dir = mkdtempSync(join(tmpdir(), "superstables-lost-poll-"));
   dirs.push(dir);
   const wallet = await startWallet({
-    port: 0, dir, account: privateKeyToAccount(generatePrivateKey()), policy: POLICY, quiet: true, openBrowser: false,
+    port: 0, tcp: true, dir, account: privateKeyToAccount(generatePrivateKey()), policy: POLICY, quiet: true, openBrowser: false,
     balance: false, launcherDir: join(dir, "open"),
   });
   wallets.push(wallet);
