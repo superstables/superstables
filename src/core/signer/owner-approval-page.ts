@@ -707,7 +707,8 @@ function list(items: string[]): string {
 const OWNER_LEDE = "Review the terms here before you sign with your own wallet. Your wallet keeps its signing key.";
 
 /** The whole page for one owner action, terms and all, ready to serve. */
-export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look: PageLook = pageLook()): string {
+export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look: PageLook = pageLook(), nonce?: string): string {
+  const scriptAttr = nonce ? ` nonce="${nonce}"` : "";
   const left = Math.max(0, Math.round((facts.expiresAt - Date.now()) / 1000));
   const clock = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
   const solana = facts.chain.family === "solana";
@@ -793,7 +794,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
   </div>
 
 <script id="owner-facts" type="application/json">${inlineJson(facts)}</script>
-<script>${OWNER_PAGE_SCRIPT}</script>`;
+<script${scriptAttr}>${OWNER_PAGE_SCRIPT}</script>`;
   return framePage({
     look,
     title: terms.title,

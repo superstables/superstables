@@ -484,6 +484,11 @@ describe("the owner server fills the page's facts", () => {
     const { handle } = await get({});
     const res = await fetch(handle.url);
     expect(res.headers.get("x-frame-options")).toBe("DENY");
-    expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    const csp = res.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("script-src 'nonce-");
+    const nonce = /script-src 'nonce-([^']+)'/.exec(csp)?.[1];
+    expect(nonce).toBeTruthy();
+    expect(await res.text()).toContain(`<script nonce="${nonce}">`);
   });
 });

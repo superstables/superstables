@@ -29,6 +29,7 @@
 import { createPublicKey, randomBytes, verify as verifySignature } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { isProof, type PROOFS } from "../proofs.mjs";
+import { pageCsp, scriptNonce } from "./look.js";
 import { dirname } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { getAddress, isAddress, verifyMessage } from "viem";
@@ -389,13 +390,13 @@ export class OwnerApprovalServer {
     res.end(JSON.stringify(body));
   }
 
-  private html(res: ServerResponse, status: number, html: string): void {
+  private html(res: ServerResponse, status: number, html: string, nonce?: string): void {
     res.writeHead(status, {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
       "x-frame-options": "DENY",
-      // Framing only. A stricter connect-src would break wallets whose injected provider calls RPC from the page.
-      "content-security-policy": "frame-ancestors 'none'",
+      // Only this page's own script runs (pageCsp); connect-src stays open, because a wallet's injected provider may call RPC from the page.
+      "content-security-policy": pageCsp(nonce),
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
     });
@@ -443,7 +444,10 @@ export class OwnerApprovalServer {
       if (!leaf && method === "GET") return this.html(res, 404, ownerNotFoundPage());
       return this.json(res, 404, { error: "nothing is waiting under this approval link" });
     }
-    if (!leaf && method === "GET") return this.html(res, 200, ownerApprovalPage(this.facts(record), record.terms));
+    if (!leaf && method === "GET") {
+      const nonce = scriptNonce();
+      return this.html(res, 200, ownerApprovalPage(this.facts(record), record.terms, undefined, nonce), nonce);
+    }
     if (leaf === "/state" && method === "GET") {
       return this.json(res, 200, {
         status: record.status,
