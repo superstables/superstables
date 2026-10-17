@@ -241,7 +241,7 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
           agreedAt: dead.agreedAt,
         };
       }
-      if ("used" in dead) return { ...unreadable, authorizationUsed: true };
+      if ("used" in dead) return { ...unreadable, authorizationUsed: true, reason: "the chain shows the owner's authorization unused on one RPC, but the RPC endpoints show it used" };
       return { found: false, reason: `the chain shows the owner's authorization unused and past its expiry on one RPC, but ${dead.reason}` };
     }
     authorizationUsed = true;
@@ -381,7 +381,7 @@ export async function confirmCancellationFinal(
   if (v.used === true && receipt && receipt.status === "0x1" && receipt.cancels === true && typeof receipt.blockNumber === "string" && BigInt(receipt.blockNumber) <= agreed.block.number) {
     return { dead: true, ...agreedAtOf(agreed) };
   }
-  return { dead: false, reason: "the cancellation is not shown in a final block" };
+  return { dead: false, reason: "the RPC endpoints do not show the cancellation in a final block" };
 }
 
 /**

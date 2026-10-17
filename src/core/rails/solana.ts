@@ -318,7 +318,7 @@ export const solanaRail: X402Rail = {
       const lastSlot = searchedTo;
       const left: string[] = [];
       const confirmed: Record<string, number> = { ...facts.confirmSearchedTo };
-      const agreeing = new Set(set.verdict.filter((m) => sameRpcUrl(m.url, rpc.url)).map((m) => m.operator));
+      const agreeing = new Set(set.verdict.filter((m) => m.source !== "env" && sameRpcUrl(m.url, rpc.url)).map((m) => m.operator));
       for (const member of set.verdict) {
         if (sameRpcUrl(member.url, rpc.url)) continue;
         const words = await checkIdentity(member.url, identityOf(SOLANA_DEVNET), rpcCaller(options));
@@ -360,7 +360,7 @@ export const solanaRail: X402Rail = {
             confirmSearchedTo: confirmed,
           };
         }
-        agreeing.add(member.operator);
+        if (member.source !== "env") agreeing.add(member.operator);
       }
       if (agreeing.size < set.quorum) {
         return { found: false, unreadable: true, reason: agreementWords({ agreed: false, why: agreeing.size ? "missing" : "unreadable", reason: "", left }), ...progress() };

@@ -280,6 +280,14 @@ describe("a payment is called never made only when the endpoints agree", () => {
     expectHeld(await recheckChain(r, "a", { fetchImpl: net.fetchImpl }), r, /the RPC endpoints disagree/);
   });
 
+  it("a loopback RPC variable cannot stand in for a table endpoint that cannot be reached", async () => {
+    const a = await chainOf();
+    vi.stubEnv("SUPERSTABLES_RPC_URL", (await own(a.mirror())).url);
+    const r = ledger();
+    evmAttempt(r, pastValidBefore(a));
+    expectHeld(await recheckChain(r, "a", { fetchImpl: route({ [BASE_URL]: a.url }).fetchImpl }), r, /a second RPC endpoint was not available/);
+  });
+
   it("a testnet with one public RPC is decided by it, labelled single", async () => {
     const a = await chainOf(ARC_TESTNET.chainId);
     const net = route({ "https://rpc.testnet.arc.network": a.url });
@@ -436,6 +444,41 @@ describe("Solana: a second endpoint reads the blocks too", () => {
     const other = await own(s.chain.mirror((method) => (method === "getGenesisHash" ? MAINNET_GENESIS : undefined)));
     const done = await recheckChain(s.records, "sol", { endpointsFor: () => twoOperators(primary.url, other.url) } as never);
     expectHeld(done, s.records, /answers another genesis/);
+  });
+
+  it("a loopback RPC variable cannot stand in for an owner RPC that cannot be read", async () => {
+    const s = await solanaCase();
+    const second = await own(s.chain.mirror());
+    vi.stubEnv("SUPERSTABLES_SOLANA_RPC", (await own(s.chain.mirror())).url);
+    vi.stubEnv("SUPERSTABLES_TEST_ACCOUNT_HOME", accountHomeWith({ version: 1, rpcEnv: { allowLoopback: true }, rpc: { "solana-devnet": { urls: ["http://127.0.0.1:9/", second.url.replace("127.0.0.1", "localhost")] } } }));
+    expectHeld(await recheckChain(s.records, "sol"), s.records, /a second RPC endpoint was not available/);
+  });
+
+  it("the owner's two Solana RPCs from the owner settings: a primary that hides the block cannot release it", async () => {
+    const s = await solanaCase({ land: true });
+    const slot = s.landedSlot!;
+    const hiding = await own(s.chain.mirror((method, params) => {
+      if (method === "getSignaturesForAddress") return [];
+      if (method === "getBlock" && params[0] === slot) return { blockHeight: slot - 10, blockTime: 0, parentSlot: slot - 1, blockhash: bs58.encode(randomBytes(32)), transactions: [] };
+      return undefined;
+    }));
+    const honest = await own(s.chain.mirror());
+    // 127.0.0.1 and localhost are two operators (operatorOf in src/core/rpc-endpoints.mjs)
+    vi.stubEnv("SUPERSTABLES_TEST_ACCOUNT_HOME", accountHomeWith({ version: 1, rpcEnv: { allowLoopback: true }, rpc: { "solana-devnet": { urls: [hiding.url, honest.url.replace("127.0.0.1", "localhost")] } } }));
+    expect(await recheckChain(s.records, "sol")).toMatchObject({ state: "paid_service_failed", chain: "verified", transaction: s.landed });
+  });
+
+  it("a loopback RPC variable that hides the block is read first, and the table's endpoint still reads the blocks", async () => {
+    const s = await solanaCase({ land: true });
+    const slot = s.landedSlot!;
+    const hiding = await own(s.chain.mirror((method, params) => {
+      if (method === "getSignaturesForAddress") return [];
+      if (method === "getBlock" && params[0] === slot) return { blockHeight: slot - 10, blockTime: 0, parentSlot: slot - 1, blockhash: bs58.encode(randomBytes(32)), transactions: [] };
+      return undefined;
+    }));
+    vi.stubEnv("SUPERSTABLES_SOLANA_RPC", hiding.url);
+    const done = await recheckChain(s.records, "sol", { fetchImpl: route({ "https://api.devnet.solana.com": s.chain.url }).fetchImpl });
+    expect(done).toMatchObject({ state: "paid_service_failed", chain: "verified", transaction: s.landed });
   });
 
   it("an RPC variable the owner did not approve is read, never believed", async () => {
