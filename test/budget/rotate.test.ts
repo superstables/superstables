@@ -513,3 +513,24 @@ describe("the files rotate leaves", () => {
   }, 240_000);
 });
 
+
+describe("--clear-agent forgets the owner's signature for the old agent", () => {
+  const TSX = resolve(ROOT, "node_modules/.bin/tsx");
+  const setupLines = "SETUP_MESSAGE=abc\nSETUP_SIGNATURE=0xdead\nSETUP_SIGNED_AT=2026-10-16T10:00:00.000Z\n";
+  it("evm: no SETUP_* line is left, the owner stays", () => {
+    const agent = privateKeyToAccount(generatePrivateKey()).address;
+    write(PUBLIC_EVM(), `B4_OWNER_ADDRESS=${OWNER.address}\nB4_AGENT_ADDRESS=${agent}\n${setupLines}`, 0o644);
+    execFileSync(TSX, [resolve(ROOT, "budget/evm/rotate.ts"), "--clear-agent", agent], { cwd: ROOT, env: { ...process.env, SUPERSTABLES_HOME: home } });
+    const pub = readFileSync(PUBLIC_EVM(), "utf8");
+    expect(pub).not.toMatch(/^SETUP_/m);
+    expect(pub).toContain(`B4_OWNER_ADDRESS=${OWNER.address}`);
+  }, 60_000);
+  it("solana: no SETUP_* line is left, the owner stays", () => {
+    const pubPath = file("budget", "public", "solana-devnet.env");
+    write(pubPath, `SOLANA_OWNER_ADDRESS=${SOL_OWNER}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n${setupLines}`, 0o644);
+    execFileSync(process.execPath, [resolve(ROOT, "budget/solana/rotate.mjs"), "--clear-agent", SOL_AGENT], { cwd: ROOT, env: { ...process.env, SUPERSTABLES_HOME: home } });
+    const pub = readFileSync(pubPath, "utf8");
+    expect(pub).not.toMatch(/^SETUP_/m);
+    expect(pub).toContain(`SOLANA_OWNER_ADDRESS=${SOL_OWNER}`);
+  }, 60_000);
+});

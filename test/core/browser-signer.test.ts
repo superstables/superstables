@@ -907,7 +907,7 @@ describe("the owner approval page", () => {
     expect((await getJson(`${handle.url}/state`)).body.status).toBe("pending");
     const real = await postJson(`${handle.url}/connect`, { address: OWNER.address, signature: await OWNER.signMessage({ message }) });
     expect(real.status).toBe(200);
-    expect(await handle.settled).toEqual({ status: "connected", address: OWNER.address });
+    expect(await handle.settled).toEqual({ status: "connected", address: OWNER.address, proof: { message, signature: await OWNER.signMessage({ message }) } });
   });
 
   it("answers only on 127.0.0.1, and nothing under an unknown link", async () => {
@@ -1010,7 +1010,7 @@ describe("the owner approval page with a Solana wallet", () => {
     expect((await getJson(`${handle.url}/state`)).body.status).toBe("pending");
     const real = await postJson(`${handle.url}/connect`, { address: SOL_OWNER.address, signature: SOL_OWNER.sign(message).toString("base64"), signedMessage: message.toString("base64") });
     expect(real.status).toBe(200);
-    expect(await handle.settled).toEqual({ status: "connected", address: SOL_OWNER.address });
+    expect(await handle.settled).toEqual({ status: "connected", address: SOL_OWNER.address, proof: { message: message.toString("utf8"), signature: `0x${SOL_OWNER.sign(message).toString("hex")}` } });
   });
 
   it("builds nothing before the owner's account is connected, and asks only that account", async () => {

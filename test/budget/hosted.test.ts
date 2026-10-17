@@ -248,7 +248,7 @@ describe("hosted approvals", () => {
     expect(h.url).toMatch(new RegExp(`^${site.url}/approve/budget/bl_test0001#ssba_`));
     expect(h.matchCode).toBe("ABC-DEF");
     expect(h.link).toEqual({ id: "bl_test0001", code: "ABC-DEF" });
-    expect(await h.settled).toEqual({ status: "connected", address: OWNER });
+    expect(await h.settled).toMatchObject({ status: "connected", address: OWNER, proof: { message: expect.stringMatching(/^Superstables: add an agent to my account\n/), signature: expect.stringMatching(/^0x[0-9a-f]+$/) } });
     // the site sent the owner's proof over this very link, and the client checked it
     expect(site.requests[0].owner_proof).toMatchObject({ scheme: "eip191", message: linkProofText({ site: site.url, owner: OWNER, agent: AGENT, rail: "evm", chain: "base-sepolia", linkId: "bl_test0001", code: "ABC-DEF" }) });
     expect(site.posts).toEqual([{ path: "/api/v1/budget/links", ok: true, why: undefined }]);
@@ -269,7 +269,7 @@ describe("hosted approvals", () => {
       site.reply = answer(OWNER, await signLinkProof(facts()));
       const h = await connect({ prior: { owner: OWNER, linkId: LINK, linkCode: CODE } });
       expect(h).toMatchObject({ id: LINK, url: "", matchCode: "", alreadyLinked: true, link: { id: LINK, code: CODE } });
-      expect(await h.settled).toEqual({ status: "connected", address: OWNER });
+      expect(await h.settled).toMatchObject({ status: "connected", address: OWNER });
       expect(site.posts[0]).toMatchObject({ path: "/api/v1/budget/links", ok: true });
       // nothing to poll, nothing stored
       expect(site.requests).toEqual([]);
@@ -982,7 +982,7 @@ describe("hosted approvals on tempo and solana", () => {
       if (r.polls >= 2) Object.assign(r, { state: "linked", owner: SOL_OWNER });
     };
     const h = await solana().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
-    expect(await h.settled).toEqual({ status: "connected", address: SOL_OWNER });
+    expect(await h.settled).toMatchObject({ status: "connected", address: SOL_OWNER });
     expect(site.posts).toEqual([{ path: "/api/v1/budget/links", ok: true, why: undefined }]);
     expect(site.requests[0].body).toEqual({ rail: "solana", chain: "devnet", agent: SOL_KEY.address });
   });
@@ -1032,7 +1032,7 @@ describe("hosted approvals on tempo and solana", () => {
     Object.assign(r.steps![0], { state: "confirmed", tx_hash: SIG, wallet_asked: true });
     Object.assign(r.steps![1], { state: "rejected", reason: "the owner rejected it", reason_code: "owner_rejected" });
     const b = await h.bundle!;
-    expect(b.link).toEqual({ status: "connected", address: SOL_OWNER });
+    expect(b.link).toMatchObject({ status: "connected", address: SOL_OWNER });
     expect(b.steps).toMatchObject([{ kind: "fund_agent", state: "confirmed", hash: SIG }, { kind: "grant", state: "rejected", hash: null, reasonCode: "owner_rejected" }]);
   });
 
@@ -1083,7 +1083,7 @@ describe("hosted approvals on tempo and solana", () => {
       if (r.kind !== "link" && r.polls >= 2) Object.assign(r, { state: "confirmed", tx_hash: HASH });
     };
     const c = tempo();
-    expect(await (await c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 })).settled).toEqual({ status: "connected", address: OWNER });
+    expect(await (await c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 })).settled).toMatchObject({ status: "connected", address: OWNER });
     site.owner = OWNER;
     const tx = { to: KEYCHAIN, data: "0x5ae7ab32" + "0".repeat(24) + AGENT.slice(2).toLowerCase(), value: "0x0" };
     const h = await c.request({ kind: "evm-transaction", action: "revoke", account: OWNER, transaction: tx, terms: TERMS, timeoutMs: 60_000 });

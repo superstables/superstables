@@ -195,7 +195,7 @@ grant, say), the agent is still added and recorded, and state is that step's. Th
 agent is added. An agent already added on the chain is refused (exit 3): ask for gas and a budget
 with fund-agent and grant. Without --hosted, --grant and --fund are refused: run fund-agent and grant after setup.
 tempo: also tops up the owner from the Moderato faucet when it holds less than 1 pathUSD. --agent LABEL adds a new agent
-key for the next budget (a revoked or expired key can never be granted again); it needs no page, except on a chain with approvals on superstables.com, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
+key for the next budget (a revoked or expired key can never be granted again); the owner signs a message naming the new key (on this computer's page, or with --owner-key-file in tests), except on a chain with approvals on superstables.com, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
 nothing else; it needs no page either.
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on

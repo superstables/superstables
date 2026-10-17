@@ -6,13 +6,13 @@ import "./cli-guard.mjs";
 // Prints the agent's native balance before and after, so the cost is exact.
 // npx tsx budget/evm/fundAgent.ts [--chain <name>] [--amount <decimal>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 import { type Hex } from "viem";
-import { SYM, CFG, GAS, emit, arg, gasFmt, OWNER_KEY_FILE, ownerCtx, readCtx, nativeBalance, usdcBalance, usdc, readUntil, sendNative, usageError, assertRpcChain, tx } from "./lib.ts";
+import { SYM, CFG, GAS, emit, arg, gasFmt, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, nativeBalance, usdcBalance, usdc, readUntil, sendNative, usageError, assertRpcChain, tx } from "./lib.ts";
 import { fundInWallet, fundValue, DEFAULT_FUND_AMOUNT } from "./owner.ts";
 
 const amt = arg("amount") ?? DEFAULT_FUND_AMOUNT;
 let value = 0n;
 try { value = fundValue(amt); } catch (e) { usageError((e as Error).message); }
-const p = readCtx();
+const p = await ownerPlanCtx(); // public addresses, checked against the owner's setup signature
 await assertRpcChain();
 const ob = await nativeBalance(p.owner), ab = await nativeBalance(p.agent);
 console.log(`${CFG.label}: owner ${gasFmt(ob)} ${GAS.symbol} (native), agent ${gasFmt(ab)} ${GAS.symbol} (native)`);

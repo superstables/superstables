@@ -20,7 +20,7 @@ import "./cli-guard.mjs";
 // Exit codes: 0 set, 3 refused (live allowance, the owner rejected or the link expired, or the allowance on chain is not
 // exactly the cap), 5 the wallet may have sent it but no hash came back, 1 anything else that failed.
 import { encodeFunctionData, type Hex } from "viem";
-import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, erc20Abi, USDC, publicClient, assertRpcChain, tx } from "./lib.ts";
+import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, erc20Abi, USDC, publicClient, assertRpcChain, tx } from "./lib.ts";
 import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, grantMismatchSteps, tokenRow, approveRow, capWords, REVOKE_HINT, grantTx, grantEnforced, GRANT_NOT_ENFORCED } from "./owner.ts";
 import { differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
@@ -34,7 +34,7 @@ if (verifyOnly && replace) { console.error("error: --verify-only sends nothing, 
 if (replace && !OWNER_KEY_FILE) { console.error("error: --replace needs --owner-key-file. In the wallet flow, revoke first, then grant"); process.exit(2); }
 
 const result = (exit: number, o: Record<string, unknown>) => emit("setBudget", exit, o);
-const pub = readCtx();
+const pub = await ownerPlanCtx(); // public addresses, checked against the owner's setup signature
 await assertRpcChain();
 const beforeAllow = await allowanceOf(pub.owner, pub.agent);
 const ownerBal = await usdcBalance(pub.owner);

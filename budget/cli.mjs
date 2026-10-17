@@ -201,7 +201,7 @@ grant, say), the agent is still added and recorded, and state is that step's. Th
 agent is added. An agent already added on the chain is refused (exit 3): ask for gas and a budget
 with fund-agent and grant. Without --hosted, --grant and --fund are refused: run fund-agent and grant after setup.
 tempo: also tops up the owner from the Moderato faucet when it holds less than 1 pathUSD. --agent LABEL adds a new agent
-key for the next budget (a revoked or expired key can never be granted again); it needs no page, except on a chain with approvals on superstables.com, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
+key for the next budget (a revoked or expired key can never be granted again); the owner signs a message naming the new key (on this computer's page, or with --owner-key-file in tests), except on a chain with approvals on superstables.com, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
 nothing else; it needs no page either.
 
 ${OWNER_HELP}
@@ -810,7 +810,6 @@ function parse(argv) {
   if (f.method !== undefined && !/^(GET|POST|PUT|PATCH|DELETE)$/.test(f.method.toUpperCase())) badInput(ctx, "--method must be GET, POST, PUT, PATCH or DELETE");
   if (f.agent !== undefined) {
     if (f.rail !== "tempo") badInput(ctx, "--agent is for tempo only (it picks the access key)");
-    if (cmd === "setup" && (f["owner-key-file"] !== undefined)) badInput(ctx, "setup --agent adds a key for an owner already recorded: it takes no --owner-key-file");
     if (cmd === "setup" && f["new-owner"]) badInput(ctx, "setup --agent adds a key for the recorded owner; --new-owner replaces the owner: run them separately");
     if (!new RegExp(`^${LABEL}$`).test(f.agent)) badInput(ctx, `--agent must be ${LABEL_WORDS}`);
   }
@@ -1712,7 +1711,7 @@ async function revoke({ f, ctx }) {
 
 async function recover({ f, ctx }) {
   const plan = await run(railCommand("recover", f, { plan: true })); // the script's own --plan sends nothing
-  if (plan.code !== 0) { const o = ownerOutcome(plan.code, railResult(plan.stdout)); return emit(o.code, { ...ctx, state: o.state, tx: {}, next: "read the plan output above", reason: o.reason ?? `the recover plan exited ${plan.code}` }); }
+  if (plan.code !== 0) { const o = ownerOutcome(plan.code, railResult(plan.stdout)); return emit(o.code, { ...ctx, state: o.state, tx: {}, next: railResult(plan.stdout)?.next ?? "read the plan output above", reason: o.reason ?? `the recover plan exited ${plan.code}` }); }
   if (!sendsNow(f)) return emit(0, { ...ctx, state: "planned", tx: {}, next: "rerun the same command with --yes to send (the owner key file signs the owner's steps)" });
   const r = await run(railCommand("recover", f));
   const rr = railResult(r.stdout);

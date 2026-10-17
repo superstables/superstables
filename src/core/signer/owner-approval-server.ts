@@ -118,7 +118,8 @@ export interface OwnerActionInput {
 }
 
 export type OwnerActionOutcome =
-  | { status: "connected"; address: string }
+  /** `proof`: the exact text the wallet signed and the signature (0x hex; a Solana signature is its 64 bytes as hex). */
+  | { status: "connected"; address: string; proof?: { message: string; signature: string } }
   /**
    * `siteFailed` (hosted approvals only): the site reported this transaction as failed, in words. The command still reads the
    * chain, but never reports such a step as settled.
@@ -520,7 +521,7 @@ export class OwnerApprovalServer {
       record.address = address;
       record.status = "connected";
       this.audit(record);
-      record.resolve({ status: "connected", address });
+      record.resolve({ status: "connected", address, proof: { message, signature: isSolana(record.chain) ? `0x${Buffer.from(signature, "base64").toString("hex")}` : signature } });
       return this.json(res, 200, { status: record.status });
     }
 

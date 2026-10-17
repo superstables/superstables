@@ -466,6 +466,15 @@ undo an owner signature or a transaction already sent through setup on superstab
   `--hosted` there is no local page and no origin check: the owner adds the agent on the site, and
   the client records an owner only with that owner's signature over the add-agent request (see
   [Budget approvals and Single purchase on superstables.com](#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do)).
+- **The agent address is the one the owner signed for.** Setup keeps the text the owner's wallet
+  signed, which names the agent's address, and the signature, in the public file. Before `grant`,
+  `fund-agent` or `recover` (and so `rotate`) builds anything, the command checks that signature
+  against the owner on record, that the address matches the agent key on this machine when the key
+  is here, and that the address was not retired. An edited public file is refused before any page
+  opens. A public file from before this check has no signature: on testnet the command warns and
+  goes on, and running `setup` again where the agent key is records one. Deleting the signature
+  lines makes a file look that old, which is why mainnet will refuse such files. The check proves
+  who the owner on record signed for, not who that owner is. `revoke` is never blocked by it.
 - **The checks depend on the rail.** The command builds the page's terms and the transaction
   from the same plan: the command's arguments and the chain's state, not the agent's description.
   On `evm` and `tempo`, the wallet signs and submits, and the command then checks the transaction
