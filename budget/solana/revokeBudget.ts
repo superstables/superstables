@@ -16,7 +16,7 @@
 // A confirmed revoke is recorded in the public file (REVOKED_AT, REVOKED_TX, REVOKED_SLOT): status reports revoked only while the
 // chain still shows no delegate. This command reports revoked, final: true only once the transaction is finalized (waiting up
 // to a minute) and the owner's endpoints agree, at finalized, that no delegate is left; before that it reports landed (exit 0,
-// final: false).
+// final: false). Both results carry the signature and its slot.
 //
 // npx tsx budget/solana/revokeBudget.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
 // Exit codes: 0 revoked (or the owner has no USDC account: nothing sent, revoked null), 1 failed on chain, never landed, or a delegate still reads, 3 refused (the
@@ -166,9 +166,9 @@ if (!final) {
   console.log("The revoke is in a block and no delegate reads, but the transaction is not finalized yet. Until then, check superstables budget status before you rely on it.");
   finish?.({ outcome: "confirmed", message: LANDED_SOLANA_REVOKE, hash: sig });
   await closeOwnerPage();
-  process.exit(result(0, { state: "landed", final: false, revoked: false, tx: sig, remaining: "0", next: "superstables budget status --rail solana later: the revoke is final when status says so" }));
+  process.exit(result(0, { state: "landed", final: false, revoked: false, tx: sig, ...(fin.slot !== undefined ? { slot: fin.slot } : {}), remaining: "0", next: "superstables budget status --rail solana later: the revoke is final when status says so" }));
 }
 console.log("This delegation is cleared. Transactions that still require it will fail. Previously transferred funds are not recovered.");
 finish?.({ outcome: "confirmed", message: "Confirmed. Your USDC account has no delegate. This does not recover tokens already transferred. You can close this page.", hash: sig });
 await closeOwnerPage();
-process.exit(result(0, { state: "revoked", final: true, tx: sig, remaining: "0", next: "none" }));
+process.exit(result(0, { state: "revoked", final: true, tx: sig, ...(fin.slot !== undefined ? { slot: fin.slot } : {}), remaining: "0", next: "none" }));

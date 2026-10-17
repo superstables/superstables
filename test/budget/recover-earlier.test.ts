@@ -206,7 +206,7 @@ describe("recover.ts hands the completed revoke to the later owner steps", () =>
     expect(run.revokeCalls[0]![4]).toMatchObject({ result: { selfRevokeTx: SELF_TX }, stepTx: "ownerRevokeTx" });
     expect(run.fundCalls).toHaveLength(1);
     const earlier = run.fundCalls[0]![6] as { result: Record<string, unknown>; done: string; stepTx: string };
-    expect(earlier.result).toEqual({ selfRevokeTx: SELF_TX, ownerRevokeTx: REVOKE_TX, allowanceAfterRevoke: "0" });
+    expect(earlier.result).toMatchObject({ selfRevokeTx: SELF_TX, ownerRevokeTx: REVOKE_TX, ownerRevokeBlock: "101", ownerRevokeFinal: true, revokeFinal: true, allowanceAfterRevoke: "0" });
     expect(earlier.stepTx).toBe("gasTx");
     expect(earlier.done).toBe(`the allowance read 0 after the agent's own revoke ${SELF_TX} and the owner's revoke ${REVOKE_TX} before this step. No funds were returned yet`);
   });

@@ -23,6 +23,10 @@ import { requireRecordLock, requireKeyLock } from "../op-lock.mjs";
 // --plan prints these steps for the current chain state and sends nothing (no key file, no page).
 //
 // npx tsx budget/evm/recover.ts [--chain <name>] [--op <id>] [--plan] [--timeout <s>] [--no-open] [--owner-key-file <path>]
+// The RESULT says where each revoke is and whether it is final, for both ways of stopping the authority: selfRevokeTx/Block/Final
+// (the agent's own transferFrom) and ownerRevokeTx/Block/Final (the owner's approve 0), and revokeFinal: the allowance is 0 at a
+// final block, as the endpoints agree, at or after the revoke that ended it (the owner's when there is one, else the agent's).
+// `budget rotate` goes on only on revokeFinal: true.
 // Exit codes: 0 recovered (or planned), 1 incomplete or failed, 3 refused before anything was sent (unknown --op, the owner
 // rejected or the link expired), 5 an operation is still unknown, or the sweep was skipped (a journal cannot be read, or an
 // operation can still move money).
@@ -123,6 +127,8 @@ let ownerRevokeBlock: bigint | null = null;
 // whether the owner's revoke is final on the chain (null: the owner sent none in this run)
 let ownerRevokeFinal: boolean | null = null;
 let agreedAbove = 0n;
+const selfRevokeBlock = sr?.block ?? null;
+const selfRevokeFinal = sr?.tx ? sr.final === true : null;
 // The owner's approve(agent, 0) is skipped only when the agent's own revoke in this run was mined and brought the
 // allowance to 0 (selfRevokeCore read 0 after it), and this later read shows 0 too.
 const selfRevokeProven = !!sr?.tx && sr.state === "revoked" && allowanceAfter === 0n;
@@ -158,8 +164,14 @@ if (allowanceAfter !== 0n) {
 // No owner revoke in this run (the agent's own did the work): drop the revoke's tx and block so a stale pair from an earlier
 // revoke cannot vouch for this one, and status falls back to the time bound.
 const ownerRevoked = !!ownerRevokeTx && ownerRevokeBlock !== null;
-writePublic({ B4_REVOKED_AT: String(Math.floor(Date.now() / 1000)), ...(ownerRevoked ? { B4_REVOKED_TX: ownerRevokeTx!, B4_REVOKED_BLOCK: String(ownerRevokeBlock) } : {}) }, ["B4_CAP", "B4_EXPIRY", "B4_SET_AT", "B4_SET_TX", "B4_SET_BLOCK", ...(ownerRevoked ? [] : ["B4_REVOKED_TX", "B4_REVOKED_BLOCK"])]);
-if (ownerRevokeFinal === false) console.log("the owner's revoke is in a block and the allowance reads 0, but the chain has not made it final yet: superstables budget status shows when it is");
+// The revoke that ended the authority is the one the public file records, so status can call the budget revoked only once that
+// transaction is final: the owner's when there is one (it came last), else the agent's own.
+const selfRevoked = !ownerRevoked && !!sr?.tx && sr.block !== undefined;
+const boundTx = ownerRevoked ? ownerRevokeTx! : selfRevoked ? sr!.tx! : null;
+const boundBlock = ownerRevoked ? ownerRevokeBlock : selfRevoked ? sr!.block! : null;
+writePublic({ B4_REVOKED_AT: String(Math.floor(Date.now() / 1000)), ...(boundTx ? { B4_REVOKED_TX: boundTx, B4_REVOKED_BLOCK: String(boundBlock), B4_REVOKED_BY: ownerRevoked ? "owner" : "agent" } : {}) }, ["B4_CAP", "B4_EXPIRY", "B4_SET_AT", "B4_SET_TX", "B4_SET_BLOCK", ...(boundTx ? [] : ["B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_REVOKED_BY"])]);
+const revokeFinal = ownerRevoked ? ownerRevokeFinal === true : selfRevoked ? selfRevokeFinal === true : false;
+if (!revokeFinal) console.log(`${ownerRevoked ? "the owner's" : "the agent's own"} revoke is in a block and the allowance reads 0, but the chain has not made it final yet: superstables budget status shows when it is`);
 
 // gas for the agent-side returns
 let topUp = 0n;
@@ -167,7 +179,8 @@ let gasTx: Hex | null = null;
 // What the revoke step completed, said in the past tense: a later step can't vouch for the allowance now (a wallet may have
 // sent something else), only for what was read before it.
 const revokes = [sr?.tx && `the agent's own revoke ${sr.tx}`, ownerRevokeTx && `the owner's revoke ${ownerRevokeTx}`].filter(Boolean).join(" and ");
-const revoked = { selfRevokeTx: sr?.tx ?? null, ownerRevokeTx, allowanceAfterRevoke: usdc(allowanceAfter) };
+const blockWord = (b: bigint | null) => (b === null ? null : String(b));
+const revoked = { selfRevokeTx: sr?.tx ?? null, selfRevokeBlock: blockWord(selfRevokeBlock), selfRevokeFinal, ownerRevokeTx, ownerRevokeBlock: blockWord(ownerRevokeBlock), ownerRevokeFinal, revokeFinal, allowanceAfterRevoke: usdc(allowanceAfter) };
 const revokedWords = `the allowance read 0${revokes ? ` after ${revokes}` : ""} before this step. No funds were returned yet`;
 try {
   const returnGas = returnOps.length ? await agentGas(pub.agent, returnOps) : null;
@@ -252,6 +265,6 @@ console.log(`recover: ${state}`);
 process.exit(emit("recover", exit, {
   state, op: opId ?? null, swept: usdc(returnedNow + sweptNow), // journaled returns plus the plain sweep (on a gas-in-USDC chain the reserve is not swept)
   sweepTx: sweepTx ?? madeSafe.find((m) => m.returnTx)?.returnTx ?? null, sweepBy: sweepTx ? "transfer" : madeSafe.some((m) => m.returnTx) ? "journaled return" : "none",
-  madeSafe, selfRevokeTx: sr?.tx ?? null, ownerRevokeTx, ownerRevokeFinal, gasTx, agentHolds: usdc(heldAfter), allowance: usdc(allowanceAfter),
+  madeSafe, selfRevokeTx: sr?.tx ?? null, selfRevokeBlock: blockWord(selfRevokeBlock), selfRevokeFinal, ownerRevokeTx, ownerRevokeBlock: blockWord(ownerRevokeBlock), ownerRevokeFinal, revokeFinal, gasTx, agentHolds: usdc(heldAfter), allowance: usdc(allowanceAfter),
   unreadable: (blockers ?? scan).unreadable, undecided: blockers?.undecided ?? [], ...(sweepSkipped ? { reason: `sweep skipped: ${sweepSkipped}` } : {}), next,
 }));

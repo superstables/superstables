@@ -676,7 +676,12 @@ its allowance (evm) or delegate (solana) in their wallet, its open purchases are
 to the owner. Only then is the old key file moved to keys/budget/retired/, and a new key created and connected on the same
 chains, with the same owner. It runs recover, revoke, reconcile and setup as commands of their own, so each step asks the
 owner as that command does; run it where the owner is, because it stays in the foreground and waits for each approval.
-A rotation that stops can be run again: it continues where it stopped and never repeats an approval it recorded.
+A rotation that stops can be run again: it continues where it stopped and repeats no approval it recorded as done.
+Nothing is replaced until the chain has made the revoke final: on every chain, endpoints that agree must show at a final block
+(solana: a finalized slot) that the old agent has no allowance or delegate left, and on solana the sweep's transfers must be
+finalized too. A revoke that is only in a block leaves the rotation incomplete (state incomplete, final false, exit 5): the old
+key file and its records stay, and the transactions are recorded. Run it again once superstables budget status says the revoke is
+final; rotate then checks the recorded transactions and does not send them again.
 --plan reads the chains and sends nothing. The retired list is a file on this machine: the owner's revoke on chain is
 what stops a stolen key. On a chain approved on superstables.com, the old agent is also removed on the account page.
 tempo has no rotation: setup --rail tempo --agent LABEL adds a new key (a revoked or expired tempo key is never granted again).
@@ -692,9 +697,9 @@ Moves money: yes: the old key's funds go back to the owner, and its allowance or
 Run by: the owner, with the agent key on this machine.
 Example:
   $ superstables budget rotate --rail evm --plan
-Prints: the plan per chain on stderr, each approval link as it comes (APPROVE line), then one RESULT: state (planned, rotated or incomplete), oldAgent, newAgent, retired, chains (chain, recovered, setUp, hosted), next.
+Prints: the plan per chain on stderr, each approval link as it comes (APPROVE line), then one RESULT: state (planned, rotated or incomplete), oldAgent, newAgent, retired, chains (chain, recovered, setUp, hosted, revocation), next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
-Exit codes: 0 rotated or planned, 1 a step failed, 2 bad input, 3 refused before anything was sent, 5 a step's outcome is unknown or a journal cannot be read (read next, then run it again)
+Exit codes: 0 rotated or planned, 1 a step failed, 2 bad input, 3 refused before anything was sent, 5 a step's outcome is unknown, a revoke is not final yet or a journal cannot be read (read next, then run it again)
 ```
 
 ## superstables budget wait

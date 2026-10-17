@@ -413,7 +413,7 @@ if (same(ownerAddr, agentAddr)) {
 const replaced = recorded && !same(recorded, ownerAddr) ? recorded : undefined;
 const asked = !OWNER_KEY_FILE && !reuse;
 if (HOSTED && !linked) throw new Error("an add-agent request without its id and code");
-const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_SET_TX", "B4_SET_BLOCK", "B4_EXPIRY", "B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", ...(binding ? [] : SETUP_KEYS)] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : [])];
+const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_SET_TX", "B4_SET_BLOCK", "B4_EXPIRY", "B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_REVOKED_BY", ...(binding ? [] : SETUP_KEYS)] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : [])];
 writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}), ...(binding ? bindingLines(binding) : {}) }, drop);
 if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${ownerAddr}`);
 console.log(`${CFG.label}: wrote ${PUBLIC_ENV} (no secret).${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ""}`);
@@ -480,7 +480,7 @@ async function finishBundle(): Promise<never> {
   }
   if (grantDone) {
     const now = Math.floor(Date.now() / 1000);
-    writePublic({ B4_CAP: String(CAP), B4_SET_AT: String(now), B4_SET_TX: grantDone.tx }, ["B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_SET_BLOCK", "B4_EXPIRY"]);
+    writePublic({ B4_CAP: String(CAP), B4_SET_AT: String(now), B4_SET_TX: grantDone.tx }, ["B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_REVOKED_BY", "B4_SET_BLOCK", "B4_EXPIRY"]);
     console.log(`budget: ${usdc(CAP!)} ${SYM}, allowance == cap on chain.`);
   }
   await closeOwnerPage();

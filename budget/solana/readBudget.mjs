@@ -82,6 +82,7 @@ if (!acc) {
     process.exit(1);
   }
   console.log("Owner USDC account not found (the chain says it does not exist): no delegate, nothing can move.");
+  console.log(`  agent: ${pubEnv.SOLANA_AGENT_ADDRESS ?? "none"}`);
   console.log(`  agreement: ${agreementLine(agreed)}`);
   console.log("  delegatedAmount (remaining): 0 USDC");
   console.log("  maximum the delegate can still move: 0 USDC");
@@ -116,6 +117,7 @@ if (lastAction) {
 }
 console.log("On-chain (owner USDC token account):");
 console.log(`  owner: ${ownerPk.toBase58()}`);
+console.log(`  agent: ${pubEnv.SOLANA_AGENT_ADDRESS ?? "none"}`);
 console.log(`  delegate: ${acc.delegate?.toBase58() ?? "none"}`);
 if (agreed) console.log(`  agreement: ${confirmed ? agreed.agreement : why}`);
 console.log(`  delegatedAmount (remaining): ${unconfirmed ? `unknown (${why})` : `${fromBaseUnits(acc.delegatedAmount)} USDC`}`);

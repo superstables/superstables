@@ -12,7 +12,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { AGENT_ENV, CFG, PUBLIC_ENV, agentFileValues, arg, emit, flag, publicEnv, usageError, writePublic } from "./lib.ts";
 
 /** What a rotated chain forgets about the old agent: its address, its budget terms and the link that named it. */
-export const CLEARED_KEYS = ["B4_AGENT_ADDRESS", "B4_CAP", "B4_SET_AT", "B4_SET_TX", "B4_SET_BLOCK", "B4_EXPIRY", "B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", "LINK_ID", "LINK_CODE", ...SETUP_KEYS];
+export const CLEARED_KEYS = ["B4_AGENT_ADDRESS", "B4_CAP", "B4_SET_AT", "B4_SET_TX", "B4_SET_BLOCK", "B4_EXPIRY", "B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_REVOKED_BY", "LINK_ID", "LINK_CODE", ...SETUP_KEYS];
 
 const clear = arg("clear-agent");
 const address = flag("address");

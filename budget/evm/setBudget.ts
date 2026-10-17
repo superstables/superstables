@@ -197,7 +197,7 @@ const now = Math.floor(Date.now() / 1000);
 const expiry = expiryIn ? now + expiryIn : undefined;
 writePublic(
   { B4_CAP: String(cap), B4_SET_AT: String(now), ...(approveTx && approveBlock ? { B4_SET_TX: approveTx, B4_SET_BLOCK: String(approveBlock.blockNumber) } : {}), ...(expiry ? { B4_EXPIRY: String(expiry) } : {}) },
-  ["B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", ...(expiry ? [] : ["B4_EXPIRY"])],
+  ["B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_REVOKED_BY", ...(expiry ? [] : ["B4_EXPIRY"])],
 );
 console.log(`budget: ${usdc(cap)} ${SYM}, allowance == cap on chain.${approveTx ? ` ${tx(approveTx)}` : ""}`);
 console.log(`no on-chain expiry and no on-chain period: the allowance stays until the agent spends it or someone revokes it${expiry ? `; advisory expiry ${new Date(expiry * 1000).toISOString()} is enforced only by buy's precheck, not by the chain` : ""}.`);

@@ -26,11 +26,11 @@ const agreedZero = agreed !== null && agreed.agreed === true && agreed.value ===
 // revoke drops B4_SET_AT) and whether its transaction is final: seen at or below the agreed final block, in the block named.
 const isHash = (v: unknown): v is `0x${string}` => typeof v === "string" && /^0x[0-9a-fA-F]{64}$/.test(v);
 const last = recorded && isHash(pe.B4_REVOKED_TX) ? { action: "revoke", tx: pe.B4_REVOKED_TX } : /^\d+$/.test(pe.B4_SET_AT ?? "") && isHash(pe.B4_SET_TX) ? { action: "grant", tx: pe.B4_SET_TX } : null;
-let lastOwnerAction: { action: string; tx: string; final: boolean } | null = null;
+let lastOwnerAction: { action: string; tx: string; final: boolean; by?: "agent" | "owner" } | null = null;
 if (last) {
   const got = await receiptAgreed(last.tx as `0x${string}`);
   const v: any = got.agreed ? got.value : null;
-  lastOwnerAction = { action: last.action, tx: last.tx, final: v !== null && typeof v === "object" && v.state === undefined && v.status === "0x1" };
+  lastOwnerAction = { action: last.action, tx: last.tx, final: v !== null && typeof v === "object" && v.state === undefined && v.status === "0x1", ...(last.action === "revoke" ? { by: pe.B4_REVOKED_BY === "agent" ? "agent" : "owner" } : {}) };
 }
 const revokeFinal = lastOwnerAction?.action !== "revoke" || lastOwnerAction.final;
 const revoked = allowance === 0n && recorded && agreedZero && revokeFinal;
@@ -41,10 +41,10 @@ console.log(`allowance (owner -> agent): ${usdc(allowance)} ${SYM}  (the agent c
 console.log(`cap recorded in the public file: ${c.cap !== undefined ? usdc(c.cap) : "none"}${c.cap !== undefined && c.cap !== allowance ? `  (spent or changed: ${usdc(c.cap > allowance ? c.cap - allowance : 0n)} used)` : ""}`);
 console.log(`expiry (public file, NOT enforced by the chain): ${c.expiry ? `${new Date(c.expiry * 1000).toISOString()} (${c.expiry > now ? `${c.expiry - now} s left` : "passed: the owner should revoke"})` : "none"}`);
 console.log("period: none (a plain approve has no period)");
-if (lastOwnerAction) console.log(`last owner action: ${lastOwnerAction.action} ${lastOwnerAction.tx} (${lastOwnerAction.final ? "final" : "landed, not final yet"})`);
+if (lastOwnerAction) console.log(`last owner action: ${lastOwnerAction.action}${lastOwnerAction.by === "agent" ? " (the agent's own)" : ""} ${lastOwnerAction.tx} (${lastOwnerAction.final ? "final" : "landed, not final yet"})`);
 console.log(`revoked: ${revoked ? `yes: this machine recorded a revoke at ${new Date(c.revokedAt! * 1000).toISOString()}, and the allowance reads 0` : recorded && allowance === 0n ? `no: the allowance reads 0 on this RPC, but ${agreement}` : allowance === 0n ? "no record of a revoke on this machine; the allowance reads 0 (spent, never granted, or revoked)" : "no"}`);
 process.exit(emit("read", 0, {
-  state: "ok", allowance: usdc(allowance), ownerUsdc: usdc(ownerBal), agentUsdc: usdc(held), ownerGas: `${gasFmt(ownerNative)} ${GAS.symbol}`, agentGas: `${gasFmt(agentNative)} ${GAS.symbol}`, cap: c.cap !== undefined ? usdc(c.cap) : null,
+  state: "ok", agent: c.agent, allowance: usdc(allowance), ownerUsdc: usdc(ownerBal), agentUsdc: usdc(held), ownerGas: `${gasFmt(ownerNative)} ${GAS.symbol}`, agentGas: `${gasFmt(agentNative)} ${GAS.symbol}`, cap: c.cap !== undefined ? usdc(c.cap) : null,
   maxMovable: usdc(allowance < ownerBal ? allowance : ownerBal), expiry: c.expiry ? new Date(c.expiry * 1000).toISOString() : null, expired: c.expiry ? c.expiry <= now : false,
   revoked, allowanceZero: allowance === 0n, agreement, lastOwnerAction, revokedAt: recorded ? new Date(c.revokedAt! * 1000).toISOString() : null, enforcedOnChain: { expiry: false, period: false, sellers: false }, next: "none",
 }));
