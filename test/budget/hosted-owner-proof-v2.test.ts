@@ -8,6 +8,9 @@ import { HostedApprovals, HostedRefusal, OWNER_PROOF_TITLE_V2, ownerProofProblem
 import { siteWord } from "../../budget/site.mjs";
 import { ACCOUNT_ID, evmOwner, linkProofText, signLinkProof, solanaOwner, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 
+// the owner proof the site answered with is passed on, for the agent binding
+const PROOF = { message: expect.stringMatching(/^Superstables: add an agent to my account/), signature: expect.stringMatching(/^0x[0-9a-f]+$/) };
+
 const KEY = `0x${"11".repeat(32)}` as const;
 const AGENT = privateKeyToAccount(KEY).address;
 const OWNER = evmOwner("22");
@@ -38,7 +41,7 @@ describe("owner proof v2 on a site that lists it", () => {
     linkOnSecondRead();
     const h = await connect();
     expect(site.requests[0].body).toEqual({ rail: "evm", chain: "base-sepolia", agent: AGENT, owner_proof_version: 2 });
-    expect(await h.settled).toEqual({ status: "connected", address: OWNER });
+    expect(await h.settled).toEqual({ status: "connected", address: OWNER, proof: PROOF });
     // the signed text is the nine lines the protocol freezes
     const text = (site.requests[0].owner_proof as { message: string }).message.split("\n");
     expect(text).toHaveLength(9);
@@ -53,7 +56,7 @@ describe("owner proof v2 on a site that lists it", () => {
     const h = await connect(evm(), { then: [GRANT] });
     expect(site.requests[0].body.owner_proof_version).toBe(2);
     site.requests[0].steps![0].state = "confirmed";
-    expect((await h.bundle!).link).toEqual({ status: "connected", address: OWNER });
+    expect((await h.bundle!).link).toEqual({ status: "connected", address: OWNER, proof: PROOF });
   });
 
   it("V1s: on Solana", async () => {
@@ -62,7 +65,7 @@ describe("owner proof v2 on a site that lists it", () => {
     const c = new HostedApprovals({ site: site.url, rail: "solana", chain: "devnet", agentKey: SOL_KEY, pollWaitS: 0, minPollMs: 20 });
     const h = await connect(c);
     expect(site.requests[0].body.owner_proof_version).toBe(2);
-    expect(await h.settled).toEqual({ status: "connected", address: SOL_OWNER });
+    expect(await h.settled).toEqual({ status: "connected", address: SOL_OWNER, proof: PROOF });
   });
 
   it("V2 (adversarial): a v2 link answered with the v1 text is refused, and nothing is recorded", async () => {
@@ -119,7 +122,7 @@ describe("owner proof v2 on a site that lists it", () => {
     linkOnSecondRead();
     const h = await connect();
     expect(site.requests[0].body).toEqual({ rail: "evm", chain: "base-sepolia", agent: AGENT });
-    expect(await h.settled).toEqual({ status: "connected", address: OWNER });
+    expect(await h.settled).toEqual({ status: "connected", address: OWNER, proof: PROOF });
     expect((site.requests[0].owner_proof as { message: string }).message).toBe(linkProofText({ site: site.origin, owner: OWNER, agent: AGENT, rail: "evm", chain: "base-sepolia", linkId: site.requests[0].id, code: "ABC-DEF" }));
     // a list with other features only
     site.features = ["expected_owner"];
@@ -159,13 +162,13 @@ describe("an agent already linked, answered with a v2 proof", () => {
     site.reply = answer({ owner_proof: await signLinkProof({ ...facts(), account: ACCOUNT_ID }), owner_proof_version: 2, account_id: ACCOUNT_ID });
     const h = await connect(evm(), { prior });
     expect(h).toMatchObject({ alreadyLinked: true, link: { id: LINK, code: CODE } });
-    expect(await h.settled).toEqual({ status: "connected", address: OWNER });
+    expect(await h.settled).toEqual({ status: "connected", address: OWNER, proof: PROOF });
   });
 
   it("V7b: a v1 proof for the recorded link is accepted as well (the link is the client's own earlier one)", async () => {
     site.features = ["owner_proof_v2"];
     site.reply = answer({ owner_proof: await signLinkProof(facts()), owner_proof_version: 1 });
-    expect(await (await connect(evm(), { prior })).settled).toEqual({ status: "connected", address: OWNER });
+    expect(await (await connect(evm(), { prior })).settled).toEqual({ status: "connected", address: OWNER, proof: PROOF });
   });
 
   it("V7c (adversarial): a v2 proof whose account differs from the answer's account_id, or an answer with no account_id, is refused", async () => {

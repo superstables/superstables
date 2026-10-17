@@ -9,6 +9,9 @@ import { HostedApprovals, type HostedRecord } from "../../budget/hosted.js";
 import { evmOwner, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import { startFakePurchaseSite, type FakePurchaseSite } from "../helpers/fake-purchase-site.js";
 
+// the owner proof the site answered with is passed on, for the agent binding
+const PROOF = { message: expect.stringMatching(/^Superstables: add an agent to my account/), signature: expect.stringMatching(/^0x[0-9a-f]+$/) };
+
 process.env.SUPERSTABLES_HOME = mkdtempSync(join(tmpdir(), "ss-renewal-"));
 const { settleOnce } = await import("../../budget/once.mjs");
 const approvals = await import("../../budget/approvals.mjs");
@@ -47,7 +50,7 @@ describe("a budget poll whose token expired", () => {
     expireThenLink();
     const h = await connect();
     const oldToken = site.requests[0].token;
-    expect(await h.settled).toEqual({ status: "connected", address: OWNER });
+    expect(await h.settled).toEqual({ status: "connected", address: OWNER, proof: PROOF });
     const renewal = site.posts.filter((p) => p.path.endsWith("/token"));
     expect(renewal).toEqual([{ path: `/api/v1/budget/requests/${site.requests[0].id}/token`, ok: true, why: undefined }]);
     // the record: first the creation, then the same request with the new token, and nothing else changed
@@ -64,7 +67,7 @@ describe("a budget poll whose token expired", () => {
     const h = await connect(evm(), { then: [GRANT] });
     const oldToken = site.requests[0].token;
     site.requests[0].steps![0].state = "confirmed";
-    expect((await h.bundle!).link).toEqual({ status: "connected", address: OWNER });
+    expect((await h.bundle!).link).toEqual({ status: "connected", address: OWNER, proof: PROOF });
     expect(site.requests[0].renewals).toBe(1);
     expect(records).toHaveLength(2);
     expect(records[1].token).toBe(site.requests[0].token);
