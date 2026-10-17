@@ -35,12 +35,18 @@ export const MAX_SIGNED_LIFETIME_S = 600;
  */
 const EXTRA_KEYS = new Set(["name", "version", "decimals", "assetTransferMethod"]);
 /**
- * Display-only keys that sellers send beside them (seen on Brickken's Ethereum Sepolia offers). Nothing here or in the SDK's
- * exact scheme reads them: the amount and token come from `amount` and `asset`, so they are never shown and never signed
- * over. They must be plain text (`chainId` is checked against the chain), and the requirement still goes back to the seller
- * as offered. This is a named list, not "ignore everything unknown", so a field a future SDK starts to read stays refused.
+ * Display-only keys that sellers send beside them, as on Brickken's Ethereum Sepolia offer captured on 16 Oct 2026 (kept whole
+ * in test/core/fixtures): `tokenSymbol`, `displayPrice` and `routeKey` (plain text), and `chainId`, `paymentChainId` and
+ * `operationChainId` (each must name the offer's own chain). Nothing here or in the SDK's exact scheme reads them: the amount
+ * and token come from `amount` and `asset`, so they are never shown to the owner and never signed over. (`quote --json` does
+ * print the stored offer to the agent, cleaned.) The requirement still goes back to the seller as offered. This is a named
+ * list, not "ignore everything unknown", so a field a future SDK starts to read stays refused. Keep it in step with the fixture.
  */
-const DISPLAY_KEYS = new Set(["tokenSymbol", "displayPrice", "chainId"]);
+const DISPLAY_KEYS = new Set(["tokenSymbol", "displayPrice", "routeKey", "chainId", "paymentChainId", "operationChainId"]);
+/** The display keys that must name the offer's chain. */
+const CHAIN_KEYS = ["chainId", "paymentChainId", "operationChainId"] as const;
+/** The display keys that must be short plain text. */
+const TEXT_KEYS = ["tokenSymbol", "displayPrice", "routeKey"] as const;
 const DISPLAY_TEXT_MAX = 200;
 
 /** Whether an offer's `chainId` names this chain: the number, its decimal string, or the CAIP-2 form. */
@@ -83,14 +89,20 @@ export const evmRail: X402Rail = {
       return { supported: false, reason: `the offer's token decimals are not ${network.token.symbol}'s (${network.usdc.decimals})` };
     }
     const extraFields = (accept.extra ?? {}) as Record<string, unknown>;
-    if (extraFields.chainId !== undefined && !namesChain(extraFields.chainId, network)) {
-      return { supported: false, reason: `the offer's chain id (${untrustedText(String(extraFields.chainId), 30)}) is not ${network.label}'s (${network.chainId})` };
+    for (const key of CHAIN_KEYS) {
+      if (extraFields[key] !== undefined && !namesChain(extraFields[key], network)) {
+        return { supported: false, reason: `the offer's chain id (${key}: ${untrustedText(String(extraFields[key]), 30)}) is not ${network.label}'s (${network.chainId})` };
+      }
     }
-    for (const key of ["tokenSymbol", "displayPrice"]) {
+    for (const key of TEXT_KEYS) {
       const text = extraFields[key];
       if (text !== undefined && (typeof text !== "string" || text.length > DISPLAY_TEXT_MAX)) {
         return { supported: false, reason: `the offer's ${key} is not short plain text` };
       }
+    }
+    // `routeKey` is the only one a seller may expect to be read by something: no control characters at all.
+    if (typeof extraFields.routeKey === "string" && /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(extraFields.routeKey)) {
+      return { supported: false, reason: "the offer's routeKey is not short plain text" };
     }
     const unknown = Object.keys(extraFields).filter((key) => !EXTRA_KEYS.has(key) && !DISPLAY_KEYS.has(key));
     if (unknown.length > 0) {
