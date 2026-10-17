@@ -170,7 +170,7 @@ describe("demo service: paying for a call", () => {
     });
 
     expect(fake.calls).toMatchObject({ verify: 1, settle: 1 });
-    expect(fake.lastSettle?.requirements.amount).toBe(toAtomic(PRICE));
+    expect(fake.lastSettle?.requirements.amount).toBe(toAtomic(PRICE, BASE_SEPOLIA.token.decimals));
     expect(fake.lastSettle?.requirements.payTo).toBe(PAY_TO);
   });
 
@@ -199,7 +199,7 @@ describe("demo service: paying for a call", () => {
     const fake = await facilitator();
     const demo = await service({ facilitators: [fake.url] });
     const { requirement } = await challengeOf(`${demo.url}/v1/market?asset=BTC`);
-    const cheaper: PaymentRequirements = { ...requirement, amount: toAtomic(PRICE / 2) };
+    const cheaper: PaymentRequirements = { ...requirement, amount: toAtomic(PRICE / 2, BASE_SEPOLIA.token.decimals) };
     const { header } = await credentialFor(cheaper);
 
     const res = await fetch(`${demo.url}/v1/market?asset=BTC`, { headers: { "PAYMENT-SIGNATURE": header } });
@@ -279,7 +279,7 @@ describe("the test helpers themselves", () => {
     const judged = termsFor(challenge.accepts[0], 1);
     expect(judged.supported).toBe(true);
     if (!judged.supported) return;
-    expect(judged.terms.amountAtomic).toBe(toAtomic(PRICE));
+    expect(judged.terms.amountAtomic).toBe(toAtomic(PRICE, BASE_SEPOLIA.token.decimals));
     expect(judged.terms.recipient).toBe(PAY_TO);
     expect(judged.terms.network).toBe(BASE_SEPOLIA.caip2);
 
@@ -330,8 +330,8 @@ describe("the test helpers themselves", () => {
     const first = decodePaymentRequiredHeader((await fetch(seller.url)).headers.get("payment-required") ?? "");
     const second = decodePaymentRequiredHeader((await fetch(seller.url)).headers.get("payment-required") ?? "");
 
-    expect(first.accepts[0].amount).toBe(toAtomic(PRICE));
-    expect(second.accepts[0].amount).toBe(toAtomic(PRICE * 2));
+    expect(first.accepts[0].amount).toBe(toAtomic(PRICE, BASE_SEPOLIA.token.decimals));
+    expect(second.accepts[0].amount).toBe(toAtomic(PRICE * 2, BASE_SEPOLIA.token.decimals));
   });
 });
 

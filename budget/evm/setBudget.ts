@@ -19,9 +19,9 @@ import "./cli-guard.mjs";
 //                                 [--owner-key-file <path> [--replace]] [--verify-only]
 // Exit codes: 0 set, 3 refused (live allowance, the owner rejected or the link expired, or the allowance on chain is not
 // exactly the cap), 5 the wallet may have sent it but no hash came back, 1 anything else that failed.
-import { encodeFunctionData, type Hex } from "viem";
-import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, erc20Abi, USDC, publicClient, assertRpcChain, tx } from "./lib.ts";
-import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, grantMismatchSteps, tokenRow, approveRow, capWords, REVOKE_HINT, grantTx, grantEnforced, GRANT_NOT_ENFORCED } from "./owner.ts";
+import { type Hex } from "viem";
+import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, USDC, publicClient, assertRpcChain, tx } from "./lib.ts";
+import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, grantMismatchSteps, tokenRow, approveRow, capWords, REVOKE_HINT, grantTx, grantSteps, approveResetHostedProblem, grantEnforced, GRANT_NOT_ENFORCED } from "./owner.ts";
 import { differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
@@ -52,9 +52,10 @@ const { data } = grantTx(pub.agent, cap);
 
 if (!verifyOnly && OWNER_KEY_FILE) {
   const c = await ownerCtx();
-  if (beforeAllow > 0n) {
+  const steps = grantSteps(c.agent, cap, beforeAllow);
+  if (steps.length > 1) {
     if (!replace) liveRefusal();
-    await send(c.wallet, USDC, encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [c.agent, 0n] }), "setBudget --replace: approve(agent, 0) first");
+    await send(c.wallet, steps[0].to, steps[0].data, "setBudget --replace: approve(agent, 0) first");
     const zero = await readUntil(() => allowanceOf(c.owner, c.agent), (v) => v === 0n);
     if (zero !== 0n) { console.log(`REFUSED: the allowance still reads ${usdc(zero)} after the revoke; not approving on top of it`); process.exit(result(3, { state: "refused_precheck", reason: `the allowance still reads ${usdc(zero)} after the revoke`, allowance: usdc(zero), next: "revoke, then set the budget again" })); }
   }
@@ -62,6 +63,11 @@ if (!verifyOnly && OWNER_KEY_FILE) {
 } else if (!verifyOnly) {
   // Refuse here, before any link exists, whatever would make the owner's approval fail or unsafe.
   if (beforeAllow > 0n) liveRefusal();
+  const reset = approveResetHostedProblem();
+  if (reset) {
+    console.log(`REFUSED: ${reset}. Nothing was requested.`);
+    process.exit(result(3, { state: "refused_precheck", reason: reset, next: "this token's budgets are approved on this computer only: ask the owner to set this chain up without --hosted" }));
+  }
   if (!GAS.isUsdc && ownerGas === 0n) {
     const reason = `the owner ${pub.owner} has no ${GAS.symbol} to pay the fee for the approval`;
     console.log(`REFUSED: ${reason}`);

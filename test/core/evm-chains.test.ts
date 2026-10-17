@@ -50,7 +50,7 @@ describe("the EVM chain table", () => {
       expect(network.defaultRpc, network.key).toBe(b.rpc);
       expect(network.explorer, network.key).toBe(b.explorer);
       expect(network.usdc, network.key).toEqual({ address: b.token.address, decimals: b.token.decimals, eip712: b.token.domain });
-      expect(network.token, network.key).toEqual({ symbol: b.token.symbol, address: b.token.address, decimals: b.token.decimals });
+      expect(network.token, network.key).toEqual(b.token);
       expect(network.v1Name, network.key).toBe(b.legacy[0] ?? "");
       expect(network.wallet.nativeCurrency.symbol, network.key).toBe(b.gas.symbol);
       expect(network.wallet.nativeCurrency.decimals, network.key).toBe(b.gas.decimals);

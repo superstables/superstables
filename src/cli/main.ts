@@ -55,7 +55,7 @@ import {
 import { askHidden, askNewPassphrase, canAsk } from "../wallet/passphrase.js";
 import { SellerTextError, UNTRUSTED_LABEL, untrustedJson, untrustedText, untrustedUrl } from "../core/text.js";
 import { formatReport, runDoctor } from "./doctor.js";
-import { field, json, money, table, yesNo } from "./format.js";
+import { field, json, money, table, termsMoney, yesNo } from "./format.js";
 import { MAIN_HELP, explain } from "./help.js";
 import { registerOwnerCommand } from "./owner-settings.js";
 import { BUDGET_PLACEHOLDERS, exampleQuoteCommand, formatListingCommands, listingCommands } from "./next.js";
@@ -561,7 +561,7 @@ explain(
       console.log(field("quote", taken.id));
       console.log(field("url", taken.url));
       if (taken.serviceName) console.log(field("service", taken.serviceName));
-      console.log(field("price", money(taken.terms.amountDecimal, taken.terms.asset)));
+      console.log(field("price", termsMoney(taken.terms)));
       console.log(field("network", taken.terms.networkLabel));
       if (taken.otherChains?.length) {
         console.log(field("also on", `${taken.otherChains.join(", ")} (the seller offers these too; \`--chain <chain>\` quotes one of them)`));
@@ -820,7 +820,7 @@ explain(
       console.log(field("quote", attempt.quoteId));
       console.log(field("state", `${attempt.state}${isFinalAttempt(attempt) ? "" : " (not final)"}`));
       console.log(field("url", attempt.url));
-      console.log(field("price", money(attempt.terms.amountDecimal, attempt.terms.asset)));
+      console.log(field("price", termsMoney(attempt.terms)));
       if (receipt) console.log(field("transaction", shownTransaction(receipt.transaction, receipt.terms.network).url ?? "no transaction hash was given"));
       if (attempt.reason) console.log(field("reason", attempt.reason));
       printAttemptOutcome(records, attempt, receipt);
@@ -879,7 +879,7 @@ explain(
           ["when", "amount", "service", "outcome", "chain", "attempt", "transaction"],
           receipts.map((receipt) => [
             receipt.at,
-            money(receipt.terms.amountDecimal, receipt.terms.asset),
+            termsMoney(receipt.terms),
             receipt.serviceName ?? receipt.url,
             receipt.serviceOutcome,
             paymentOutput(receipt).chain ?? "unchecked",
@@ -931,7 +931,7 @@ explain(
             attempt.createdAt,
             attempt.id,
             attempt.state,
-            money(attempt.terms.amountDecimal, attempt.terms.asset),
+            termsMoney(attempt.terms),
             attempt.serviceName ?? attempt.url,
           ]),
         ),
@@ -1204,7 +1204,7 @@ function printAttemptOutcome(records: Records, attempt: Attempt, known?: Receipt
     console.log("");
     console.log(field("receipt", receipt.id));
     // Paid only when the chain says so; otherwise the amount the seller reported paid.
-    console.log(field(receipt.chain === "verified" || receipt.paymentIncluded ? "paid" : "amount", money(receipt.terms.amountDecimal, receipt.terms.asset)));
+    console.log(field(receipt.chain === "verified" || receipt.paymentIncluded ? "paid" : "amount", termsMoney(receipt.terms)));
     console.log(field("transaction", shownTransaction(receipt.transaction, receipt.terms.network).url ?? "no transaction hash was given"));
     console.log(field("payer", shownPayer(receipt.payer, receipt.terms.network) ?? "unknown"));
     console.log(field("chain", receiptChain(receipt)));

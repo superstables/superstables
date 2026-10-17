@@ -6,6 +6,7 @@ import { defineConfig } from "vitest/config";
 const SLOW = [
   "test/budget/agent-binding.test.ts",
   "test/budget/approvals-token.test.ts",
+  "test/budget/approve-reset.test.ts",
   "test/budget/chain-gate.test.ts",
   "test/budget/chain-guard.test.ts",
   "test/budget/cli-hosted-rails.test.ts",

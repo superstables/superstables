@@ -47,7 +47,7 @@ export const evmRail: X402Rail = {
       return { supported: false, reason: `${network.label} is not an EVM chain this client signs x402 payments on` };
     }
     const scheme = accept.scheme ?? "exact";
-    if (!accept.asset || !isSameAddress(accept.asset, network.usdc.address)) {
+    if (!accept.asset || !isSameAddress(accept.asset, network.token.address)) {
       return { supported: false, reason: `asset ${untrustedText(accept.extra?.name ?? accept.asset ?? "unknown", 60)} is not ${network.token.symbol} on ${network.label}` };
     }
     const extra: unknown = accept.extra;
@@ -59,8 +59,8 @@ export const evmRail: X402Rail = {
     if (method !== undefined && method !== "eip3009") {
       return { supported: false, reason: `this client signs EIP-3009 transfers only, and the offer asks for ${untrustedText(String(method), 30)}` };
     }
-    if (accept.extra?.decimals !== undefined && Number(accept.extra.decimals) !== network.usdc.decimals) {
-      return { supported: false, reason: `the offer's token decimals are not ${network.token.symbol}'s (${network.usdc.decimals})` };
+    if (accept.extra?.decimals !== undefined && Number(accept.extra.decimals) !== network.token.decimals) {
+      return { supported: false, reason: `the offer's token decimals are not ${network.token.symbol}'s (${network.token.decimals})` };
     }
     const unknown = Object.keys(accept.extra ?? {}).filter((key) => !EXTRA_KEYS.has(key));
     if (unknown.length > 0) {
@@ -68,7 +68,7 @@ export const evmRail: X402Rail = {
     }
     // The signing domain is the token's own. An offer that names another one is either wrong or asks the owner's wallet to show
     // a name the seller chose as the signing application; either way the signature would not verify on chain.
-    const domain = network.usdc.eip712;
+    const domain = network.token.domain;
     if ((accept.extra?.name !== undefined && accept.extra.name !== domain.name) || (accept.extra?.version !== undefined && accept.extra.version !== domain.version)) {
       return { supported: false, reason: `the offer's signing domain is not ${network.token.symbol}'s on ${network.label} (expected name "${domain.name}", version "${domain.version}"), so the signature would not verify` };
     }
@@ -78,17 +78,17 @@ export const evmRail: X402Rail = {
     }
     if (typeof accept.payTo !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(accept.payTo)) return { supported: false, reason: "the recipient (payTo) is missing or malformed" };
     if (/^0x0{40}$/i.test(accept.payTo)) return { supported: false, reason: "the recipient is the zero address" };
-    if (isSameAddress(accept.payTo, network.usdc.address)) return { supported: false, reason: `the recipient is the ${network.token.symbol} contract itself` };
+    if (isSameAddress(accept.payTo, network.token.address)) return { supported: false, reason: `the recipient is the ${network.token.symbol} contract itself` };
     const timeout = accept.maxTimeoutSeconds ?? 300;
     if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout <= 0 || timeout > MAX_TIMEOUT_SECONDS) {
       return { supported: false, reason: `the offer's payment window is outside what is signed (at most ${MAX_TIMEOUT_SECONDS} seconds)` };
     }
     const amountAtomic = atomic;
     const terms: PaymentTerms = {
-      amountDecimal: fromAtomic(amountAtomic, network.usdc.decimals),
+      amountDecimal: fromAtomic(amountAtomic, network.token.decimals),
       amountAtomic,
       asset: network.token.symbol,
-      assetAddress: network.usdc.address,
+      assetAddress: network.token.address,
       network: network.caip2,
       networkLabel: network.label,
       recipient: accept.payTo,

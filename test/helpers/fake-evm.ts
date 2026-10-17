@@ -55,6 +55,8 @@ export interface FakeEvm {
   logs: Log[];
   rpcLog: { method: string; params: any[] }[];
   sentRaw: { from: string; to: string; data: string; hash: string; nonce: number; status: string }[];
+  /** approve(spender, v > 0) reverts while the allowance is above 0 (a USDT-style token) */
+  approveReset?: boolean;
   /** hooks a test sets */
   hook?: (method: string, params: any[]) => { result?: unknown; error?: { code: number; message: string; data?: unknown } } | undefined;
   /** drop sendRawTransaction without mining (returns hash) */
@@ -125,7 +127,9 @@ export async function startFakeEvm(opts: FakeEvmOpts = {}): Promise<FakeEvm> {
       case "version": return enc("version", DOMAIN.version);
       case "DOMAIN_SEPARATOR": return enc("DOMAIN_SEPARATOR", DOMAIN_SEPARATOR);
       case "authorizationState": return enc("authorizationState", s.used.has(key(a[0], a[1])));
-      case "approve": s.allow.set(key(from, a[0]), a[1]); emit([T_APPROVAL, topicAddr(from), topicAddr(a[0])], pad(toHex(a[1]), { size: 32 })); return enc("approve", true);
+      case "approve":
+        if ((fake as FakeEvm).approveReset && a[1] > 0n && (s.allow.get(key(from, a[0])) ?? 0n) > 0n) throw new Error("revert: approve from a live allowance");
+        s.allow.set(key(from, a[0]), a[1]); emit([T_APPROVAL, topicAddr(from), topicAddr(a[0])], pad(toHex(a[1]), { size: 32 })); return enc("approve", true);
       case "transfer": move(from, a[0], a[1]); return enc("transfer", true);
       case "transferFrom": {
         const k = key(a[0], from);

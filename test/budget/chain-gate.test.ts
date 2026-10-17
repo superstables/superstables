@@ -164,7 +164,7 @@ describe("a copy of the client whose chain tables name chains that are not testn
     edit("budget/evm/chains.mjs", "};\n\nexport const EVM_CHAIN_KEYS", `  "gated-base": {
     label: "Gated Base", chainId: 8453, viem: "base", testnet: false,
     rpc: "https://mainnet.base.org", explorer: "https://basescan.org",
-    token: { address: "${BASE_SEPOLIA_USDC}", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
+    token: { address: "${BASE_SEPOLIA_USDC}", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" }, approveReset: false },
     legacy: [],
     gas: { symbol: "ETH", decimals: 18, isToken: false, limits: FIAT_TOKEN_GAS, minAgent: "0.000002", topUp: "0.00003" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "none", gasFaucet: "none" },
