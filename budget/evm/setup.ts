@@ -37,6 +37,7 @@ import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, 
 import { NEW_OWNER } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
 import { chosenSite, isSiteRequestId, siteOrigin } from "../site.mjs";
+import { retiredProblem } from "../retired.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const d = (EVM_CHAINS as Record<string, any>)[CFG.key].doctor;
@@ -87,6 +88,12 @@ if (existsSync(AGENT_ENV)) {
   mkdirSync(dirname(AGENT_ENV), { recursive: true, mode: 0o700 });
   writeFileSync(AGENT_ENV, `B4_AGENT_KEY=${key}\nB4_AGENT_ADDRESS=${agentAddr}\n`, { mode: 0o600, flag: "wx" });
   console.log(`created the agent key file ${AGENT_ENV} (mode 600): agent ${agentAddr}`);
+}
+// a key that `budget rotate` retired is never set up again (the owner's revoke on chain is what stops it elsewhere)
+const retired = retiredProblem("evm", agentAddr);
+if (retired) {
+  console.log(`REFUSED: ${retired}. Nothing was changed.`);
+  process.exit(emit("setup", 3, { state: "refused_precheck", reason: retired, next: `move the agent key file away (superstables budget rotate --rail evm does this), then run setup again` }));
 }
 
 const p = publicEnv();
