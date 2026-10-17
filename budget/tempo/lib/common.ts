@@ -17,6 +17,7 @@ import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from '../../sec
 import { RPC_MAX_BYTES, cappedRpcFetch } from '../../rpc.mjs'
 import { markSend } from '../../proof.mjs'
 import { agentBinding, hostedFlags, legacyWarning } from '../../owner-binding.mjs'
+import { noteBinding } from '../../page-facts.mjs'
 import { chainGate, chainGateSettings } from '../../../src/core/chain-gate.js'
 
 export const RPC_URL: string = RPC_URL_
@@ -332,6 +333,7 @@ export async function ownerPlanCtx(label: string, refuse: (reason: string, next:
   }
   const b = await agentBinding('tempo', { owner, agent, lines: pub }, { label, keyAgent, file: PUBLIC_ENV_PATH, testnet: TESTNET === true })
   if (b.state === 'refused') return refuse(b.problem, next)
+  noteBinding(b) // the page this plan opens says whether the owner signed this agent
   if (b.state === 'legacy') console.error(legacyWarning('tempo', PUBLIC_ENV_PATH, agent, `${flag}${hosted}`))
   return { owner, agent }
 }

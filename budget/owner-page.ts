@@ -19,6 +19,7 @@ import { UNSAFE_SECRET_FILE, readSecretFile } from "./secret-file.mjs";
 import {
   OwnerApprovalServer,
   type OwnerActionHandle,
+  type OwnerActionInput,
   type OwnerActionOutcome,
   type OwnerChain,
   type OwnerTerms,
@@ -26,6 +27,7 @@ import {
   type SolanaTransactionPort,
 } from "../src/core/signer/owner-approval-server.ts";
 import { ownerApprovalsLog } from "./paths.mjs";
+import { bindingFacts } from "./page-facts.mjs";
 import { HOLDER_ENV, recordHosted } from "./approvals.mjs";
 import { sendBegan } from "./proof.mjs";
 import { HOSTED_KIND, HostedApprovals, HostedRefusal, type HostedBundleOutcome, type HostedSettings, type HostedStep, type PriorLink } from "./hosted.ts";
@@ -167,6 +169,8 @@ export interface OwnerRail {
   railFlag?: string;
   /** The wallets a hosted page asks for, when they differ from walletWords (solana: Solana or Ethereum sign-in). */
   hostedWalletWords?: string;
+  /** What the page on this computer says about the command: the RPC hosts it reads and, for a token approval, the token (page-facts.mjs). */
+  pageFacts?: () => { rpc?: OwnerActionInput["rpc"]; token?: OwnerActionInput["token"] };
 }
 
 export type Unapproved = Extract<OwnerActionOutcome, { status: "rejected" | "expired" }>;
@@ -187,6 +191,8 @@ async function settledOf<T extends { finish(v: OwnerVerdict): void; settled: Pro
 
 /** The page helpers bound to one rail and chain. */
 export function ownerPageFor(rail: OwnerRail) {
+  /** The facts every page on this computer carries: the RPC hosts, the token, and the agent binding an owner plan noted. */
+  const pageFacts = () => ({ ...rail.pageFacts?.(), binding: bindingFacts() });
   const inMinutes = (expiresAt: number) => {
     const minutes = Math.round((expiresAt - Date.now()) / 60000);
     return minutes >= 1 ? `${minutes} minute${minutes === 1 ? "" : "s"}` : `${Math.round((expiresAt - Date.now()) / 1000)} seconds`;
@@ -264,7 +270,8 @@ export function ownerPageFor(rail: OwnerRail) {
         return { handle, outcome: await handle.settled, link: handle.link };
       }
       const s = await page();
-      const handle = s.request({ kind: "connect", chain: rail.chain, terms, signIn, recordedOwner: replacing, timeoutMs: OWNER_TIMEOUT_MS });
+      // a sign-in names no agent: the binding is not shown on it
+      const handle = s.request({ kind: "connect", chain: rail.chain, terms, signIn, recordedOwner: replacing, timeoutMs: OWNER_TIMEOUT_MS, rpc: pageFacts().rpc });
       announce(action, handle, terms);
       return { handle, outcome: await handle.settled };
     },
@@ -279,7 +286,7 @@ export function ownerPageFor(rail: OwnerRail) {
         return settledOf(handle);
       }
       const s = await page();
-      const handle = s.request({ kind: "evm-transaction", chain: rail.chain, terms, account: owner, timeoutMs: OWNER_TIMEOUT_MS, transaction });
+      const handle = s.request({ kind: "evm-transaction", chain: rail.chain, terms, account: owner, timeoutMs: OWNER_TIMEOUT_MS, transaction, ...pageFacts() });
       announce(action, handle, terms);
       return settledOf(handle);
     },
@@ -299,7 +306,7 @@ export function ownerPageFor(rail: OwnerRail) {
     /** Solana: the owner's wallet signs what `port` builds when the owner presses Approve; `port` checks and sends it. */
     async askSolanaTransaction(action: string, owner: string, port: SolanaTransactionPort, terms: OwnerTerms) {
       const s = await page();
-      const handle = s.request({ kind: "solana-transaction", chain: rail.chain, terms, account: owner, solana: port, timeoutMs: OWNER_TIMEOUT_MS });
+      const handle = s.request({ kind: "solana-transaction", chain: rail.chain, terms, account: owner, solana: port, timeoutMs: OWNER_TIMEOUT_MS, ...pageFacts() });
       announce(action, handle, terms);
       return settledOf(handle);
     },

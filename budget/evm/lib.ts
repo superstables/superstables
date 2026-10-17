@@ -19,6 +19,7 @@ import { readAgentSecret } from "../os-keychain.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
 import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
+import { noteBinding } from "../page-facts.mjs";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
 import { finalityFor, finalWords } from "../../src/core/finality-policy.js";
@@ -693,6 +694,7 @@ export async function ownerPlanCtx({ retiredOk = false }: { retiredOk?: boolean 
   }
   const b = await agentBinding("evm", { owner: pub.owner, agent: pub.agent, lines: publicEnv() }, { keyAgent, file: PUBLIC_ENV, retiredOk, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet === true });
   if (b.state === "refused") return refusePlan(pub, b.problem);
+  noteBinding(b); // the page this plan opens says whether the owner signed this agent
   if (b.state === "legacy") console.error(legacyWarning("evm", PUBLIC_ENV, pub.agent, `${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}${hostedFlags(publicEnv())}`));
   return pub;
 }

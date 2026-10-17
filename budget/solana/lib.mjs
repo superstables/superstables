@@ -15,6 +15,7 @@ import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret
 import { DEFAULT_RPC, SOLANA_RPC_MAX_BYTES, budgetCall, cappedRpcFetch, jsonRpc, rpcFromEnv } from "../rpc.mjs";
 import { markSend } from "../proof.mjs";
 import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
+import { noteBinding } from "../page-facts.mjs";
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 import { endpointSet } from "../../src/core/rpc-endpoints.mjs";
@@ -471,6 +472,7 @@ export async function ownerPlanCtx(refuse) {
   }
   const b = await agentBinding("solana", { owner: owner.toBase58(), agent: agent.toBase58(), lines: env }, { keyAgent, file: PUBLIC_PATH, testnet: TESTNET === true });
   if (b.state === "refused") return refuse(b.problem, next);
+  noteBinding(b); // the page this plan opens says whether the owner signed this agent
   if (b.state === "legacy") console.error(legacyWarning("solana", PUBLIC_PATH, agent.toBase58(), hostedFlags(env)));
   return { owner, agent };
 }

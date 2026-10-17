@@ -24,7 +24,7 @@ import "./cli-guard.mjs";
 // exactly the cap), 5 the wallet may have sent it but no hash came back, 1 anything else that failed.
 import { type Hex } from "viem";
 import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, USDC, publicClient, assertRpcChain, tx, allowanceAgreed, agreementWords, finalityOf, usuallyWords, sleep } from "./lib.ts";
-import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, grantMismatchSteps, tokenRow, approveRow, capWords, REVOKE_HINT, grantTx, grantSteps, approveResetHostedProblem, grantEnforced, GRANT_NOT_ENFORCED, landedGrant, chainFlag } from "./owner.ts";
+import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, grantMismatchSteps, tokenRow, approveRow, approveShows, capWords, REVOKE_HINT, grantTx, grantSteps, approveResetHostedProblem, grantEnforced, GRANT_NOT_ENFORCED, landedGrant, chainFlag } from "./owner.ts";
 import { differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
@@ -124,6 +124,8 @@ if (!verifyOnly && OWNER_KEY_FILE) {
       `To end the budget at any time: ${REVOKE_HINT}`,
       "This grants permission; it does not transfer the budget now. You pay a network fee shown in your wallet. Grant only an amount you accept putting at risk.",
     ],
+    walletShows: approveShows(pub.agent, cap),
+    watchToken: true,
   });
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setBudget", outcome, { requested: usdc(cap) });
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);

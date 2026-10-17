@@ -496,6 +496,7 @@ code running as your user can. Run that mode with a key that holds testnet funds
   `fund-agent`, `grant`, `revoke` and the owner's part of `recover` show their terms on a page on
   `127.0.0.1` before the wallet is asked; on a chain set up with `--hosted`, all but `recover` show
   them on the site instead.
+  The page on `127.0.0.1` names the chain by its chain id (Solana: the cluster's genesis hash), the RPC hosts the command reads and where they come from (hosts only, never a path or key), its own address, whether you signed the agent address at setup, and the exact values your wallet will show. Right before an EVM page asks the wallet to send, it switches the wallet to the chain, reads the chain id again and puts it in the transaction. If the wallet switches account or chain after connecting, the page asks you to connect again.
   The agent key, in `~/.superstables/keys/budget/<rail>-agent.env` (mode 600) or, with
   `setup --key-store os-keychain` on `evm` and `solana`, in the OS keychain with only its address in
   that file, signs purchases. A keychain does not protect the key from code running as you while the

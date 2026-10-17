@@ -21,6 +21,7 @@ import type { OwnerChain, OwnerTerms } from '../../src/core/signer/owner-approva
 import { closeOwnerPage, ownerPageFor } from '../owner-page.ts'
 import { DEFAULT_SITE, differsFromRequest, mismatchReason } from '../site.mjs'
 import { DEFAULT_RPC, ownerRpcNext, ownerRpcProblem } from '../rpc.mjs'
+import { rpcFacts } from '../page-facts.mjs'
 import { AGENT_ENV_PATH, CHAIN_ID, EXPLORER_BASE, TOKEN_ADDRESS, TOKEN_LABEL, fromBaseUnits, loadPublicEnv, makeClient, parseEnvFile, agentFileText } from './lib/common.ts'
 import { chainHead, rpcRead, sleep, topicOf } from './lib/chain.ts'
 import { LABEL } from './lib/args.mjs'
@@ -124,6 +125,7 @@ function agentKeyFor(agent: Address, action: string, site: string): Hex | undefi
 }
 
 export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
+  pageFacts: () => ({ rpc: rpcFacts('tempo', 'moderato') }),
   chain: TEMPO_OWNER_CHAIN,
   walletWords: 'any EVM browser wallet that can add a custom network',
   statusCommand: 'superstables budget status --rail tempo',
@@ -453,8 +455,18 @@ export function grantTerms(p: GrantPlan & { owner: Address; expirySeconds: numbe
       `To end the budget at any time: superstables budget revoke --rail tempo${agentFlag(p.label)}. You approve that in your wallet too.`,
       'A revoked or expired key can never be granted again: the next budget needs a new agent key (superstables budget setup --rail tempo --agent LABEL).',
     ],
+    walletShows: [
+      `Call authorizeKey for the key ${p.agent} on the account keychain ${KEYCHAIN}`,
+      `Spending limit: ${p.limit} in base units (${amt})${p.period ? `, refilled every ${p.period} seconds` : ', no refill'}`,
+      `Expires: unix time ${p.expiry} (${iso(p.expiry)})`,
+      p.sellers ? `Allowed calls: token transfers to ${p.sellers.join(', ')}` : 'Allowed calls: any',
+      `A network fee in ${feeTokenWords(p.feeToken)}, paid from your account`,
+    ],
   }
 }
+
+/** The fee token in words: its label when it is the budget token, else its address. */
+const feeTokenWords = (feeToken: Address) => (feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : feeToken)
 
 export function revokeTerms(p: { owner: Address; agent: Address; remaining: bigint; expiry: number; feeToken: Address; label: string }): OwnerTerms {
   return {
@@ -476,6 +488,11 @@ export function revokeTerms(p: { owner: Address; agent: Address; remaining: bigi
     notes: [
       `This revokes permission; it does not return funds. The expected fee token is ${p.feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : p.feeToken}. Check both the token and fee in your wallet.`,
       'This key can never be granted again. For a new budget, make a new agent key: superstables budget setup --rail tempo --agent LABEL.',
+    ],
+    walletShows: [
+      `Call revokeKey for the key ${p.agent} on the account keychain ${KEYCHAIN}`,
+      'No token amount moves',
+      `A network fee in ${feeTokenWords(p.feeToken)}, paid from your account`,
     ],
   }
 }

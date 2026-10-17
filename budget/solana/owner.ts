@@ -22,7 +22,9 @@ import { verifyEd25519 } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { DEFAULT_SITE } from "../site.mjs";
 import { DEFAULT_RPC, ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, agreedAccount, clusterProblem, formatUnits, oneLine, parseEnvFile, retryRead, sleep } from "./lib.mjs";
+import { rpcFacts } from "../page-facts.mjs";
+import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
+import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, agreedAccount, clusterProblem, formatUnits, USDC_DECIMALS, oneLine, parseEnvFile, retryRead, sleep } from "./lib.mjs";
 
 export { closeOwnerPage };
 
@@ -34,6 +36,7 @@ export const SOLANA_OWNER_CHAIN: OwnerChain = {
   explorer: "https://explorer.solana.com",
   explorerQuery: "?cluster=devnet",
   walletChain: "solana:devnet",
+  genesis: SOLANA_DEVNET_GENESIS,
   nativeCurrency: { name: "SOL", symbol: "SOL", decimals: 9 },
   testnet: true,
 };
@@ -83,6 +86,7 @@ function revokeWithoutAgentKey(site: string, reason: string): never {
 
 export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved } = ownerPageFor({
   chain: SOLANA_OWNER_CHAIN,
+  pageFacts: () => ({ rpc: rpcFacts("solana", "devnet") }),
   walletWords: "any Solana wallet, such as Phantom, Solflare or Backpack",
   hostedWalletWords: "a Solana wallet such as Phantom or an Ethereum wallet such as MetaMask to sign in; with a Solana account, use the Solana wallet you signed in with to add this agent; with an Ethereum account, also connect a Solana wallet for this agent",
   statusCommand: "superstables budget status --rail solana",
@@ -436,6 +440,8 @@ export const LANDED_SOLANA_FUND = "Sent and included on Solana. Your agent's bal
 const walletNote =
   "Check the terms before signing. The command allows only small network fee additions before sending your signed transaction, then checks the result on Solana. If the wallet cannot show or simulate the effects, reject if you cannot verify them.";
 
+const FEE_SHOWS = "A network fee in SOL, typically 0.000005 SOL";
+
 export function grantTerms(p: { owner: string; agent: string; ata: string; cap: bigint; held: bigint }): OwnerTerms {
   const amt = `${formatUnits(p.cap)} USDC`;
   return {
@@ -466,6 +472,11 @@ export function grantTerms(p: { owner: string; agent: string; ata: string; cap: 
       "To end the budget at any time: superstables budget revoke --rail solana. You approve that in your wallet too.",
       "This grants permission; it does not transfer USDC now. You pay a network fee, typically 0.000005 SOL for this transaction. Check the wallet fee and grant only an amount you accept putting at risk.",
     ],
+    walletShows: [
+      `SPL Token approveChecked: delegate ${p.agent}, amount ${p.cap}, decimals ${USDC_DECIMALS}: ${amt}`,
+      `From your USDC account ${p.ata}`,
+      FEE_SHOWS,
+    ],
   };
 }
 
@@ -484,6 +495,7 @@ export function revokeTerms(p: { owner: string; agent: string | null; ata: strin
     enforced: ["Once this revoke takes effect, transactions using this delegation fail, including ones signed earlier. The key cannot use this delegation even if stolen."],
     notEnforced: ["No reversal of transfers confirmed before this revoke. It does not recover tokens already moved or stop the key spending its own funds."],
     notes: [walletNote, "This removes spending permission; it does not return funds. You pay a network fee, typically 0.000005 SOL. Check the wallet fee. You can grant a new budget later."],
+    walletShows: [`SPL Token Revoke: clears the delegate on your USDC account ${p.ata}`, FEE_SHOWS],
   };
 }
 
@@ -506,5 +518,6 @@ export function fundTerms(p: { owner: string; agent: string; lamports: bigint; a
       "The agent controls the transferred SOL and can send it elsewhere. This does not grant permission to spend your USDC.",
       "Revoking the budget does not undo this transfer. Unspent SOL stays in the agent account. This tool has no Solana recovery command.",
     ],
+    walletShows: [`System transfer of ${p.lamports} lamports: ${sol(p.lamports)} SOL`, `To: ${p.agent}`, FEE_SHOWS],
   };
 }
