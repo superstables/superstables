@@ -712,7 +712,8 @@ approval sent nothing; after setup --hosted with --grant or --fund, or recover, 
 steps, tx and budget status). Run the owner command again for a new one (setup reuses the agent key it created).
 --abandon (the owner only, for a buy-once purchase the site never ends): reads the site once; if the purchase still has
 no final answer, keeps its record, marks it given up with the time, and returns state unknown, exit 5, final true. The
-payment stays unknown; buy-once can start a new purchase. An agent never runs it.
+payment stays unknown; buy-once can start a new purchase. A purchase read as paid whose payment is not final keeps its
+paid result, is marked finalityAbandonedAt, and no longer holds the next buy-once. An agent never runs it.
 
 Moves money: no. It never approves, signs or sends anything.
 Run by: anyone, usually the agent that started the owner command, after the owner says they've approved.

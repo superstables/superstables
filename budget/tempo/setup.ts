@@ -126,7 +126,7 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
     enforced: [],
     notEnforced: [],
     notes: [`You pick the match code your agent shows you before the key is added. The agent key stays on the agent's machine; ${host} does not receive it.`],
-  }, '', undefined, undefined, { prior })
+  }, '', undefined, undefined, { prior, expectedOwner: owner })
   if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent: address, linked: false })
   if (outcome.status !== 'connected') throw new Error(`unexpected approval outcome ${outcome.status}`)
   if (!same(outcome.address, owner)) {
@@ -443,7 +443,7 @@ async function main() {
         `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on the agent's machine; ${HOST} does not receive it.`,
         ...(plan ? ['You pay the network fee in your wallet. To end the budget at any time: superstables budget revoke --rail tempo.'] : [`Grants and revokes for this agent are then approved on ${HOST}, in your wallet.`]),
       ],
-    }, '', newOwner ? recorded : undefined, then, { prior, newOwner })
+    }, '', newOwner ? recorded : undefined, then, { prior, newOwner, expectedOwner: newOwner ? undefined : recorded })
     bundle = r.bundle
     linked = r.link
     const outcome = r.outcome

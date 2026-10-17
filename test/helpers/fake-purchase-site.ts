@@ -7,7 +7,7 @@
 import { createHash, createPrivateKey, randomUUID, sign } from "node:crypto";
 import { Keypair, PublicKey, TransactionMessage } from "@solana/web3.js";
 import bs58 from "bs58";
-import { keccak256, toBytes } from "viem";
+import { getAddress, keccak256, toBytes } from "viem";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readBody, startServer, type TestServer } from "./servers.js";
 
@@ -28,12 +28,18 @@ export interface FakePurchase {
   service: Service;
   state: string;
   nonce?: string;
+  /** EVM x402: the order the nonce is keccak256 of (superstables-order/1), as the site shows it once a payer is recorded. */
+  order?: string;
+  /** Each creation's Idempotency-Key and Superstables-Replay-Secret, as received. */
+  secret?: string;
   payment: Record<string, unknown>;
   delivery: Record<string, unknown>;
   reason?: string;
   reason_code?: string;
   final: boolean;
   polls: number;
+  /** fixed once per purchase, as the real site shows its authorization window */
+  validBefore?: string;
   cancels: number;
   /** Overrides the terms the site says it created (a seller that changed its price). */
   terms?: Record<string, unknown>;
@@ -64,6 +70,8 @@ export interface FakePurchaseSite extends TestServer {
   /** Called on every read of a purchase, before the answer. */
   onPoll?: (p: FakePurchase) => void;
   onChainRead?: (method: string) => Promise<void>;
+  /** A creation whose Idempotency-Key repeats without a Superstables-Replay-Secret is refused with 409 replay_secret_required (the site's switch). */
+  replaySecretRequired?: boolean;
   /** Answer POST /api/v1/purchases with this status and error instead of creating one. */
   refuseCreate?: { status: number; error: { code: string; message: string; allowed?: unknown } };
   /** Answer reads of a purchase with this instead of its view (an error the site returns). */
@@ -175,6 +183,16 @@ const json = (res: ServerResponse, status: number, body: unknown) => {
 };
 const atomic = (decimal: string) => String(Math.round(Number(decimal) * 1e6));
 
+/** The order an EVM x402 purchase's authorization nonce commits to, spelled as the site spells it (superstables-order/1). */
+export const orderOf = (p: { id: string; service: Service }, salt = `0x${"00".repeat(32)}`) => JSON.stringify({
+  v: "superstables-order/1",
+  purchase: p.id,
+  service: p.service.id,
+  request: `GET https://seller.example/${p.service.id}`,
+  pay: { network: p.service.network ?? "eip155:84532", asset: getAddress(p.service.asset), to: getAddress(p.service.payTo ?? SELLER), amount: atomic(p.service.amount) },
+  salt,
+});
+
 const listing = (s: Service) => ({
   id: s.id,
   name: s.name,
@@ -196,7 +214,7 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
     id: p.id, state: p.state, final: p.final, livemode: false,
     service: { id: p.service.id, name: p.service.name, simulated: p.service.simulated === true, testnet: true },
     request: { method: "GET", url: `https://seller.example/${p.service.id}`, params: p.body.params ?? {} },
-    terms: terms(p), payment: { ...p.payment, ...(p.nonce ? { authorization: { nonce: p.nonce } } : {}) }, delivery: p.delivery,
+    terms: terms(p), payment: { ...p.payment, ...(p.nonce && p.payment.payer ? { authorization: { nonce: p.nonce, ...(p.order ? { order: p.order } : {}), valid_before: (p.validBefore ??= new Date(Date.now() + 600_000).toISOString()) } } : {}) }, delivery: p.delivery,
     ...(p.state === "settled" || p.state === "paid_service_failed" ? { receipt: { id: p.id, purchase_id: p.id, transaction: (p.payment.transaction as string) ?? TX, payer: (p.payment.payer as string) ?? PAYER } } : {}),
     ...(p.reason ? { reason: p.reason } : {}), ...(p.reason_code ? { reason_code: p.reason_code } : {}),
     message: `purchase ${p.state}`, next: "see state", next_action: { type: p.final ? "done" : "wait_for_owner" },
@@ -206,6 +224,12 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
   site.removePayment = (transaction) => { landed.delete(transaction); };
   site.pay = (p, paid = { transaction: TX, payer: PAYER }) => {
     const c = paid.chain === false ? {} : paid.chain ?? {};
+    const evmX402 = !(p.service.network ?? "").startsWith("solana:") && p.service.protocol !== "mpp";
+    // EVM x402: the nonce is keccak256 of the order naming this purchase and its terms, as the site makes it
+    if (evmX402 && p.nonce === undefined) {
+      p.order ??= orderOf(p);
+      p.nonce = keccak256(toBytes(p.order));
+    }
     p.nonce ??= `0x${createHash("sha256").update(p.id).digest("hex")}`;
     let raw: string | undefined;
     if ((p.service.network ?? "").startsWith("solana:")) {
@@ -277,11 +301,24 @@ export async function startFakePurchaseSite(): Promise<FakePurchaseSite> {
     if (req.method === "POST" && url.pathname === "/api/v1/purchases") {
       if (site.refuseCreate) return json(res, site.refuseCreate.status, { error: { ...site.refuseCreate.error, money_moved: false } });
       const body = JSON.parse(raw);
+      const key = String(req.headers["idempotency-key"] ?? "");
+      const secretHeader = req.headers["superstables-replay-secret"];
+      // the replay secret is valid only with an Idempotency-Key, 16 to 255 visible ASCII characters
+      if (secretHeader !== undefined && (!key || typeof secretHeader !== "string" || !/^[\x21-\x7e]{16,255}$/.test(secretHeader))) return json(res, 400, { error: { code: "invalid_replay_secret", message: "the replay secret is not valid", money_moved: false } });
+      const again = key ? site.purchases.find((x) => x.key === key) : undefined;
+      if (again) {
+        if (site.replaySecretRequired && secretHeader === undefined) return json(res, 409, { error: { code: "replay_secret_required", message: "this key was used before: send its replay secret", money_moved: false } });
+        if (secretHeader !== undefined && again.secret === secretHeader) return json(res, 200, {
+          ...view(again), access_token: again.token, replayed: true,
+          approval: { url: `${site.approvalBase ?? server.url}/approve/${again.id}#${site.approvalFragment ?? "sspa_test_replay"}`, match_code: "KPT-RWD", expires_at: new Date(Date.now() + 600_000).toISOString() },
+          message_for_owner: "Open the approval link and pick KPT-RWD.",
+        });
+      }
       const s = site.services.find((x) => x.id === body.service_id);
       if (!s) return json(res, 404, { error: { code: "not_found", message: "no such service", money_moved: false } });
       if (body.max_amount && Number(s.amount) > Number(body.max_amount)) return json(res, 409, { error: { code: "price_above_max", message: `the service costs ${s.amount}, above max_amount ${body.max_amount}`, money_moved: false } });
       const id = randomUUID();
-      const p: FakePurchase = { id, token: `sspt_test_${id.replace(/-/g, "")}`, key: String(req.headers["idempotency-key"] ?? "") || undefined, body, service: s, state: "awaiting_approval", final: false, payment: { status: "awaiting_approval" }, delivery: { status: "pending" }, polls: 0, cancels: 0 };
+      const p: FakePurchase = { id, token: `sspt_test_${id.replace(/-/g, "")}`, key: String(req.headers["idempotency-key"] ?? "") || undefined, secret: String(req.headers["superstables-replay-secret"] ?? "") || undefined, body, service: s, state: "awaiting_approval", final: false, payment: { status: "awaiting_approval" }, delivery: { status: "pending" }, polls: 0, cancels: 0 };
       site.tweak?.(p);
       site.purchases.push(p);
       return json(res, 201, {

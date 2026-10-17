@@ -433,7 +433,8 @@ approval sent nothing; after setup --hosted with --grant or --fund, or recover, 
 steps, tx and budget status). Run the owner command again for a new one (setup reuses the agent key it created).
 --abandon (the owner only, for a buy-once purchase the site never ends): reads the site once; if the purchase still has
 no final answer, keeps its record, marks it given up with the time, and returns state unknown, exit 5, final true. The
-payment stays unknown; buy-once can start a new purchase. An agent never runs it.`,
+payment stays unknown; buy-once can start a new purchase. A purchase read as paid whose payment is not final keeps its
+paid result, is marked finalityAbandonedAt, and no longer holds the next buy-once. An agent never runs it.`,
       money: "no. It never approves, signs or sends anything.",
       who: "anyone, usually the agent that started the owner command, after the owner says they've approved.",
       example: "superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60",
@@ -672,7 +673,7 @@ function resultFacts(fields) {
 }
 
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
   fields = resultFacts(fields);
@@ -2214,7 +2215,7 @@ async function buyOnce({ f, ctx }) {
       const p = r.pending;
       // the open purchase's state comes from its own evidence: one the site named a payment for is never waiting_owner
       const state = r.pendingState ?? (p.cancelUnconfirmed || !mayBeUnpaid(p.seen) ? "unknown" : "waiting_owner");
-      return emit(3, { ...ctx, service: f.service, state: "refused_pending", paid: null, delivered: null, amount: null, tx: {}, pending: { id: p.id, purchase: p.hosted?.requestId, service: p.service?.id, state, ...(p.url && state !== "unknown" ? { url: p.url, matchCode: p.matchCode, expires: p.expires, terms: p.terms, message_for_owner: messageForOwner(p) } : {}) }, next: r.next, reason: `no new purchase was started: ${r.reason}` });
+      return emit(3, { ...ctx, service: f.service, state: "refused_pending", paid: null, delivered: null, amount: null, tx: {}, pending: { id: p.id, purchase: p.hosted?.requestId, service: p.service?.id, state, ...(p.url && state === "waiting_owner" ? { url: p.url, matchCode: p.matchCode, expires: p.expires, terms: p.terms, message_for_owner: messageForOwner(p) } : {}) }, next: r.next, reason: `no new purchase was started: ${r.reason}` });
     }
     return emit(r.code, { ...ctx, service: f.service, state: r.state, paid: false, delivered: false, amount: "0", tx: {}, next: r.next, reason: r.reason });
   }

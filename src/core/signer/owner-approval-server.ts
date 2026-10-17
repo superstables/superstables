@@ -530,9 +530,10 @@ export class OwnerApprovalServer {
     if (leaf === "/account") {
       if (record.status !== "pending" && record.status !== "ready") return this.json(res, 409, { error: `this is already ${record.status}` });
       if (!address) return this.json(res, 400, { error: "that is not an account address" });
+      // Another account changes nothing: an owner account already connected stays ready, so whoever else holds the link
+      // cannot undo it. The page shows the same words as before.
       if (address !== record.account) {
-        record.status = "pending";
-        return this.json(res, 403, { error: `this must be sent from ${record.account}, the owner address this budget was set up with. Switch to that account in your wallet and connect again.` });
+        return this.json(res, 409, { error: `this must be sent from ${record.account}, the owner address this budget was set up with. Switch to that account in your wallet and connect again.`, status: record.status });
       }
       record.address = address;
       record.status = "ready";

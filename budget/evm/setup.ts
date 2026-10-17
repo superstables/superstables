@@ -228,7 +228,7 @@ if (OWNER_KEY_FILE) {
       ...(CAP !== undefined ? [`The grant gives permission; it does not transfer the budget now. Do not change the spending cap in your wallet. To end the budget at any time: ${REVOKE_HINT}`] : []),
       "You pay the network fee for each transaction, shown in your wallet.",
     ],
-  }, "", NEW_OWNER ? recorded : undefined, then, { prior, newOwner: NEW_OWNER });
+  }, "", NEW_OWNER ? recorded : undefined, then, { prior, newOwner: NEW_OWNER, expectedOwner: NEW_OWNER ? undefined : recorded });
   bundle = r.bundle;
   linked = r.link;
   const outcome = r.outcome;
@@ -260,7 +260,7 @@ if (OWNER_KEY_FILE) {
       `Grants, revokes and gas for this agent are then approved on ${HOST}, in your wallet. You pick the match code your agent shows you before the agent is added or anything is sent.`,
       `The agent key stays on the agent's machine; ${HOST} does not receive it. Your signing key stays in your wallet.`,
     ],
-  }, "", NEW_OWNER ? recorded : undefined, undefined, { prior, newOwner: NEW_OWNER });
+  }, "", NEW_OWNER ? recorded : undefined, undefined, { prior, newOwner: NEW_OWNER, expectedOwner: NEW_OWNER ? undefined : recorded });
   const outcome = r.outcome;
   linked = r.link;
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent: agentAddr });

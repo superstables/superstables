@@ -566,7 +566,11 @@ owner's setting, not the agent's (see "Which site" below).
   picking the match code, the owner's wallet signs the site, the owner, the agent, the rail and
   chain, the request ID and the code. The client rebuilds that text from its own values and
   verifies the signature for that owner before it records anyone; without a valid proof it records
-  nothing. An `already_linked` answer counts only for the owner already recorded, with that owner's
+  nothing. When this machine already records an owner and the site says it supports it, the
+  add-agent request also names that owner (`expected_owner`), and the site refuses any other
+  account. The client checks that the site repeated it. On any site, a bundled setup that the site
+  adds to another account is withdrawn before anything is recorded. An `already_linked` answer
+  counts only for the owner already recorded, with that owner's
   proof over the add-agent request stored when they were recorded, and never with `--new-owner`.
   Moving a chain with approvals on superstables.com to another site means adding the agent there, with a new owner proof.
 - **The owner on record does not move under a live budget.** `--new-owner` is refused while a
@@ -588,8 +592,10 @@ owner's setting, not the agent's (see "Which site" below).
   page allows); anything else is a mismatch, and the owner revokes. `buy-once` reports a purchase
   paid only when the chain shows the transfer of exactly the purchase's amount, in the listed
   token, to the listed recipient, mined no more than 60 seconds before the purchase was created (an
-  allowance for clock differences); otherwise the result is unknown
-  and the agent never buys again.
+  allowance for clock differences), and only for the payment the site first showed for this purchase.
+  The payer and authorization it named are fixed from that answer on, and on EVM chains the
+  authorization's nonce must be the hash of an order naming this purchase and its terms; otherwise
+  the result is unknown and the agent never buys again.
 - **Single purchase on superstables.com checks the site's reported amounts.** The site states each amount twice, as a decimal
   for display and as an integer in token units. They must agree, the token must have 6 decimals,
   and `--max` and the listing price are compared with the integer. These are checks on the site's
@@ -598,7 +604,9 @@ owner's setting, not the agent's (see "Which site" below).
   not confirm leaves the purchase `unknown` and blocks the next `buy-once`. If the site never
   resolves it, the owner can use `budget wait --id ID --abandon` to release that local block; the
   payment remains unknown. Purchase ids must be UUIDs. Purchase results do not repeat arbitrary
-  site text; discovery presents listing text as data.
+  site text; discovery presents listing text as data. A paid purchase holds the next `buy-once` until the chain shows its payment final; the owner can stop waiting for finality with `wait --id ID --abandon`. Once the owner's wallet has signed, the site's word alone
+  never makes a purchase "not paid". Creation sends a random `Superstables-Replay-Secret`, so only
+  this client's own retry can return its purchase.
 - **Approval links are data.** An approval link is used only as `<site>/approve/budget/<id>#<token>` (or
   `<site>/approve/<id>#<token>` for a purchase), rewritten by the URL parser. Text from the site
   loses control, zero-width and bidi characters before it is printed.
