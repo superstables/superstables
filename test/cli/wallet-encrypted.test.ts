@@ -175,7 +175,7 @@ describe("wallet serve with an encrypted key", () => {
     expect(wrong.stderr).toContain("the passphrase is not right; the wallet did not start");
     expect(wrong.stdout).not.toContain("Superstables wallet on");
 
-    const child = start(["wallet", "serve", "--port", "0", "--no-open"], { terminal: true });
+    const child = start(["wallet", "serve", "--port", "0", "--no-open", "--tcp"], { terminal: true });
     let stdout = "";
     child.stdout!.on("data", (chunk) => (stdout += String(chunk)));
     child.stdin!.write(typed(PASS));
