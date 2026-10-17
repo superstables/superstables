@@ -13,7 +13,7 @@ import { SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/w
 import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, oneLine, explorerTx, parseUnits, parseStrict, usageError, ownerPlanCtx, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
-import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort } from "./owner.ts";
+import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort, finalizedOf, LANDED_SOLANA_FUND } from "./owner.ts";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
@@ -125,6 +125,10 @@ if (delta === null && after < agentHas + amount) {
   process.exit(result(5, { state: "unknown", tx: sig, reason: why, next: "superstables budget doctor --rail solana: read the agent's SOL" }));
 }
 if (after < agentHas + amount) console.log(`the agent's balance reads ${sol(after)} SOL now, less than ${sol(agentHas + amount)}: it spent some, or the node lags behind; the transaction itself moved ${sol(amount)} SOL`);
-finish?.({ outcome: "confirmed", message: `Done. Your agent received ${sol(amount)} SOL. You can close this page.`, hash: sig });
+// Final: the transfer's signature reaches finalized (waiting up to a minute); before that it is landed.
+const fin = await finalizedOf(conn, sig);
+const final = fin.final && !fin.failed;
+if (!final) console.log("The transfer is in a block, but the transaction is not finalized yet.");
+finish?.({ outcome: "confirmed", message: final ? `Done. Your agent received ${sol(amount)} SOL. You can close this page.` : LANDED_SOLANA_FUND, hash: sig });
 await closeOwnerPage();
-process.exit(result(0, { state: "ok", tx: sig, sent: sol(amount), agentBefore: sol(agentHas), agentAfter: sol(after), next: "none" }));
+process.exit(result(0, { state: final ? "ok" : "landed", final, tx: sig, sent: sol(amount), agentBefore: sol(agentHas), agentAfter: sol(after), next: final ? "none" : "landed, not finalized yet. Nothing to do: the transfer is final once its transaction is finalized. superstables budget doctor --rail solana reads the balance" }));

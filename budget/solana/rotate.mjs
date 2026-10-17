@@ -26,7 +26,7 @@ Steps of superstables budget rotate. Devnet only.
   -h, --help             show this help`;
 
 /** What a rotated chain forgets about the old agent: its address, the revoke mark and the link that named it. */
-export const CLEARED_KEYS = ["SOLANA_AGENT_ADDRESS", "REVOKED_AT", "LINK_ID", "LINK_CODE", ...SETUP_KEYS];
+export const CLEARED_KEYS = ["SOLANA_AGENT_ADDRESS", "REVOKED_AT", "REVOKED_TX", "REVOKED_SLOT", "GRANT_TX", "GRANT_SLOT", "LINK_ID", "LINK_CODE", ...SETUP_KEYS];
 /** A transfer by a key that signs alone: five thousand lamports a signature. */
 const FEE_LAMPORTS = 5000n;
 /** Operations in these states cannot move money any more. */

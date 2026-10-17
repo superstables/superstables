@@ -45,7 +45,7 @@ export function markSend(body) {
 export const proven = (o) => ["failed", "not_revoked"].includes(o?.state) && isProof(o?.proof);
 
 /** What an owner command may still say once it may have sent: done, unknown, or a failure the chain proved. */
-const STANDS = new Set(["settled", "ok", "unknown"]);
+const STANDS = new Set(["settled", "ok", "unknown", "landed"]);
 
 /**
  * The answer an owner command gives once it may have sent. `fields` is its RESULT as built; `check` the read-only command

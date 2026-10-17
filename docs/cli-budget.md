@@ -358,7 +358,8 @@ Prints the terms first: the cap, the true maximum, and what the chain enforces a
   solana  makes the agent the delegate of the owner's USDC account up to A, in total. Run fund-agent first.
 evm and solana refuse --expiry, --period and --sellers: the chain cannot enforce them. A live budget is never replaced
 silently: revoke it first. tempo: --agent LABEL picks the access key (a revoked key can never be granted again).
-Check the result with superstables budget status.
+On evm and solana a grant is refused while the previous revoke is not final, and the result is state landed (exit 0,
+final false) until the grant itself is final. Check the result with superstables budget status.
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on
 stdout and in words on stderr. The owner opens it in the browser that has their wallet, and approves or rejects there.
@@ -414,7 +415,8 @@ first, names the home it checked (SUPERSTABLES_HOME, default ~/.superstables; ho
 command. If the budget is elsewhere, ask the user for the path: do not point SUPERSTABLES_HOME at another home yourself.
 remaining 0 means there is nothing to spend: the owner grants one.
 revoked is true only for a revoke this machine recorded that the chain still shows (tempo: the key reads revoked); an
-allowance or delegate that reads 0 without that record is remaining 0 and revoked false.
+allowance or delegate that reads 0 without that record is remaining 0 and revoked false. A revoke that landed but is not
+final yet is not revoked: lastOwnerAction says which action is waiting and whether it is final.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
@@ -423,7 +425,7 @@ Moves money: no. It reads files and the chain only; no secret is opened.
 Run by: anyone.
 Example:
   $ superstables budget status --rail evm
-Prints: the owner on record on stderr, then a RESULT line: remaining, expiry, revoked, atRisk, owner, next.
+Prints: the owner on record on stderr, then a RESULT line: remaining, expiry, revoked, atRisk, lastOwnerAction, owner, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 read, 1 failed (no budget set up here, or the chain could not be read: read reason and next), 2 bad input
 ```
@@ -566,6 +568,7 @@ back what was already spent; on evm, superstables budget recover returns strande
 It always sends the revoke, even when the budget already reads empty or revoked: one read is not proof that nothing is
 live. It sends nothing only where the chain would refuse the transaction: on solana when the owner has no USDC account
 (revoked null), and on tempo when a simulated revokeKey from the owner is refused as already done (revoked true, tx {}).
+On evm and solana the result is state landed (exit 0, revoked false, final false) until the revoke is final.
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on
 stdout and in words on stderr. The owner opens it in the browser that has their wallet, and approves or rejects there.

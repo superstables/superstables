@@ -24,7 +24,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import bs58 from "bs58";
-import { AGENT_KEY_PATH, PUBLIC_PATH, agentKeyFileValues, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, agentKeyFileValues, agreedAccount, agreementLine, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, prepareSecretFile } from "../secret-file.mjs";
 import { retiredProblem } from "../retired.mjs";
 import { HOME, ensurePrivateDir } from "../paths.mjs";
@@ -35,7 +35,7 @@ import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
 import { chosenSite, differsFromRequest, isSiteRequestId, mismatchReason, siteOrigin } from "../site.mjs";
 import { SETUP_KEYS, agentBinding, bindingLines, signLocalBinding } from "../owner-binding.mjs";
-import { askConnect, closeOwnerPage, confirmHosted, emit, endUnapproved, sol, useApprovalSite } from "./owner.ts";
+import { askConnect, closeOwnerPage, confirmHosted, emit, endUnapproved, finalizedOf, agreedFinalAccount, sol, useApprovalSite } from "./owner.ts";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/setup.ts [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund | --fund-amount <sol>]]
@@ -129,6 +129,9 @@ const keychainRefusal = (err: unknown): never => {
 };
 let agent: string;
 let keyStore: "file" | "os-keychain" = "file";
+// A grant bundled into this setup is asked for over an older delegate only when it can be read that none is live: a key created in
+// this very run cannot have one, a key that already existed might.
+let createdNow = false;
 if (existing.SOLANA_AGENT_SECRET_BASE58) {
   agent = Keypair.fromSecretKey(bs58.decode(existing.SOLANA_AGENT_SECRET_BASE58)).publicKey.toBase58();
   if (existing.SOLANA_AGENT_KEY_STORE === "os-keychain") {
@@ -169,6 +172,7 @@ if (existing.SOLANA_AGENT_SECRET_BASE58) {
 } else {
   if (existsSync(AGENT_KEY_PATH)) process.exit(result(3, { state: "refused_precheck", reason: `${AGENT_KEY_PATH} has no SOLANA_AGENT_SECRET_BASE58`, next: `move ${AGENT_KEY_PATH} away if you mean to start over` }));
   const kp = Keypair.generate();
+  createdNow = true;
   agent = kp.publicKey.toBase58();
   if (STORE === "os-keychain") {
     // the keychain first: if it refuses, no file is written and no key is lost
@@ -262,13 +266,30 @@ if (CAP !== undefined || LAMPORTS !== undefined) {
   then = [];
   if (LAMPORTS !== undefined) then.push({ kind: "fund_agent", solana: { amount_atomic: String(LAMPORTS) } });
   if (CAP !== undefined) {
-    // a live delegate is never overwritten silently (grant refuses the same way)
-    if (recorded && !newOwner) {
-      const acc = await retryRead(() => getAccountOrNull(connection("owner"), getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(recorded)))).catch(() => null);
-      if (acc?.delegate && acc.delegatedAmount > 0n) {
-        const reason = `a budget is live: the owner on record ${recorded} has delegate ${acc.delegate.toBase58()} with ${formatUnits(acc.delegatedAmount)} USDC left. A grant overwrites it, so it is not asked for here`;
+    // a live delegate is never overwritten silently (grant refuses the same way), and an unreadable account is not taken as "none"
+    if (!createdNow) {
+      const refuseGrant = (reason: string, next: string): never => {
         console.log(`REFUSED: ${reason}. Nothing was requested.`);
-        process.exit(result(3, { state: "refused_precheck", reason, owner: recorded, next: "revoke first (superstables budget revoke --rail solana), then superstables budget grant --rail solana --amount A" }));
+        return process.exit(result(3, { state: "refused_precheck", reason, ...(recorded ? { owner: recorded } : {}), next }));
+      };
+      if (!recorded || newOwner) refuseGrant(
+        !recorded
+          ? "this agent key existed before this setup, and no owner is recorded for it here, so whether an older delegate is live cannot be read. Set up first (link), then grant"
+          : "this agent key existed before this setup, and this setup replaces the owner, so whether the new owner already has this agent as its delegate cannot be read before the link. Set up first (link), then grant",
+        `superstables budget setup --rail solana${HOSTED ? " --hosted" : ""}${newOwner ? " --new-owner" : ""}, then superstables budget grant --rail solana --amount A`,
+      );
+      const ownerAta = getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(recorded!)).toBase58();
+      const at = await agreedAccount(ownerAta, { purpose: "owner" });
+      if (!at.agreed) refuseGrant(`the owner's USDC account at finalized could not be confirmed (${agreementLine(at)})`, "superstables budget doctor --rail solana, then run setup again");
+      if (at.value && at.value.delegate !== null && at.value.delegatedAmount > 0n) {
+        const latest = await retryRead(() => getAccountOrNull(connection("owner"), getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(recorded!)))).catch(() => null);
+        const quiet = !latest?.delegate || latest.delegatedAmount === 0n;
+        refuseGrant(
+          quiet
+            ? `the previous revoke is not finalized yet: the account shows no live delegate on the latest read but delegate ${at.value.delegate} with ${formatUnits(at.value.delegatedAmount)} USDC at finalized. Grant again once it is finalized`
+            : `a budget is live: the owner on record ${recorded} has delegate ${at.value.delegate} with ${formatUnits(at.value.delegatedAmount)} USDC left. A grant overwrites it, so it is not asked for here`,
+          quiet ? "superstables budget status --rail solana, then grant again once the revoke is finalized" : "revoke first (superstables budget revoke --rail solana), then superstables budget grant --rail solana --amount A",
+        );
       }
     }
     then.push({ kind: "grant", solana: { amount_atomic: String(CAP) } });
@@ -404,7 +425,7 @@ const asked = !OWNER_KEY_FILE && !reuse;
 if (HOSTED && !linked) throw new Error("an add-agent request without its id and code");
 // hosted: APPROVALS, SITE, and the link the owner signed (LINK_ID, LINK_CODE: a later "already linked" answer is checked
 // against them)
-writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}), ...(binding ? bindingLines(binding) : {}) }, [...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : []), ...(replaced || CAP !== undefined ? ["REVOKED_AT"] : []), ...(replaced && !binding ? SETUP_KEYS : [])]);
+writePublic({ SOLANA_OWNER_ADDRESS: owner, SOLANA_AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}), ...(binding ? bindingLines(binding) : {}) }, [...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : []), ...(replaced || CAP !== undefined ? ["REVOKED_AT", "REVOKED_TX", "REVOKED_SLOT"] : []), ...(replaced ? ["GRANT_TX", "GRANT_SLOT"] : []), ...(replaced && !binding ? SETUP_KEYS : [])]);
 console.log(`wrote ${PUBLIC_PATH} (no secret) and the owner's address into ${AGENT_KEY_PATH}.${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ""}`);
 if (binding) console.log(`the owner's signature naming agent ${agent} is recorded in ${PUBLIC_PATH}`);
 
@@ -436,9 +457,23 @@ process.exit(result(0, { state: "ok", owner, ...(replaced ? { replacedOwner: rep
  * state of the first step that is not, with what did happen.
  */
 async function finishBundle(): Promise<never> {
-  type Report = { kind: string; state: "settled" | "mismatch" | "failed" | "unknown" | "refused_precheck"; proof?: "reverted"; tx?: string; txUrl?: string; amount?: string; reason?: string; reasonCode?: string };
+  type Report = { kind: string; state: "settled" | "mismatch" | "failed" | "unknown" | "refused_precheck"; final?: boolean; proof?: "reverted"; tx?: string; txUrl?: string; amount?: string; reason?: string; reasonCode?: string };
   const reports: Report[] = [];
   let remaining: bigint | undefined;
+  // Each settled step is also read for finality (finalized, waiting up to a minute): started when the step is read, awaited together.
+  const pending: Promise<void>[] = [];
+  const finalOf = (kind: string, sig: string) => {
+    const r = reports[reports.length - 1];
+    pending.push((async () => {
+      const fin = await finalizedOf(conn, sig);
+      let ok = fin.final && !fin.failed;
+      if (ok && kind === "grant") {
+        const ag = await agreedFinalAccount(getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(owner)).toBase58(), fin.slot);
+        ok = ag.agreed && ag.value !== null && ag.value.delegate === agent && ag.value.delegatedAmount <= CAP!;
+      }
+      r.final = ok;
+    })());
+  };
   for (const s of bundle?.steps ?? []) {
     const amount = s.kind === "grant" ? formatUnits(CAP!) : sol(LAMPORTS!);
     if (s.hash) {
@@ -461,6 +496,7 @@ async function finishBundle(): Promise<never> {
         if (delta !== LAMPORTS) { report("mismatch", delta === null ? "the transaction does not touch the agent" : `the transaction moved ${sol(delta)} SOL to the agent, not ${sol(LAMPORTS!)}`); continue; }
         console.log(`agent: +${sol(delta)} SOL (had ${sol(agentHad)})`);
         report("settled");
+        finalOf(s.kind, s.hash);
       } else {
         const ata = getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(owner));
         let after = await retryRead(() => getAccount(conn, ata)).catch(() => null);
@@ -476,6 +512,7 @@ async function finishBundle(): Promise<never> {
         remaining = after!.delegatedAmount;
         console.log(`delegate ${agent}, delegatedAmount ${formatUnits(remaining)} USDC`);
         report("settled");
+        finalOf(s.kind, s.hash);
       }
     } else if (s.walletAsked || s.state === "unknown") {
       reports.push({ kind: s.kind, state: "unknown", amount, reason: s.reason || "the wallet was asked to sign, but superstables.com reported no signature" });
@@ -489,6 +526,9 @@ async function finishBundle(): Promise<never> {
       reports.push({ kind: s.kind, state: "refused_precheck", amount, reason: `nothing was sent: ${why}`, reasonCode: s.reasonCode ?? undefined });
     }
   }
+  await Promise.all(pending);
+  const settledGrant = reports.find((r) => r.kind === "grant" && r.state === "settled");
+  if (settledGrant?.tx) writePublic({ GRANT_TX: settledGrant.tx }, ["GRANT_SLOT"]);
   await closeOwnerPage();
   const name = (k: string) => (k === "grant" ? "budget" : "SOL");
   const done = (r: Report) => (r.kind === "grant" ? `${r.amount} USDC approved` : `${r.amount} SOL sent`);
@@ -500,9 +540,11 @@ async function finishBundle(): Promise<never> {
   const funded = reports.some((r) => r.kind === "fund_agent" && r.state === "settled");
   const base = { owner, agent, linked: true, steps: reports, tx: txs, cap: granted ? formatUnits(CAP!) : undefined, allowance: granted && remaining !== undefined ? formatUnits(remaining) : undefined, sent: funded ? sol(LAMPORTS!) : undefined, publicFile: PUBLIC_PATH, agentKeyFile: AGENT_KEY_PATH };
   const first = reports.find((r) => r.state !== "settled");
+  const notFinal = reports.filter((r) => r.state === "settled" && r.final === false);
   if (!first && reports.length === (then?.length ?? 0)) {
+    if (notFinal.length) console.log(`\n${notFinal.map((r) => name(r.kind)).join(" and ")}: in a block as planned, but the transaction is not finalized yet`);
     console.log(`\nDone with one approval link: the agent was added to the account${funded ? ", has SOL for fees" : ""}${granted ? ` and has a budget of ${formatUnits(CAP!)} USDC` : ""}.`);
-    process.exit(result(0, { state: "ok", ...base, next: granted ? "none: the agent can buy under the budget. superstables budget status --rail solana shows what is left" : "superstables budget grant --rail solana --amount A, only when the owner asks for a budget" }));
+    process.exit(result(0, { state: "ok", ...base, steps: reports.map((r) => (r.state === "settled" && r.final === false ? { ...r, state: "landed" } : r)), ...(notFinal.length ? { final: false } : {}), next: notFinal.length ? (notFinal.some((r) => r.kind === "grant") ? `landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final. Do not rely on the budget until then${notFinal.some((r) => r.kind !== "grant") ? ". Nothing to do for the SOL transfer: it is final once its transaction is finalized" : ""}` : "landed, not finalized yet. Nothing to do: the SOL transfer is final once its transaction is finalized") : granted ? "none: the agent can buy under the budget. superstables budget status --rail solana shows what is left" : "superstables budget grant --rail solana --amount A, only when the owner asks for a budget" }));
   }
   const f: Report = first ?? { kind: "grant", state: "unknown", reason: "superstables.com reported fewer steps than asked for" };
   const later = reports.filter((r) => r.state !== "settled").map((r) => (r.kind === "grant" ? "superstables budget grant --rail solana --amount A" : "superstables budget fund-agent --rail solana")).join(" and ");

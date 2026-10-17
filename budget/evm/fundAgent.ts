@@ -6,8 +6,8 @@ import "./cli-guard.mjs";
 // Prints the agent's native balance before and after, so the cost is exact.
 // npx tsx budget/evm/fundAgent.ts [--chain <name>] [--amount <decimal>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 import { type Hex } from "viem";
-import { SYM, CFG, GAS, emit, arg, gasFmt, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, nativeBalance, usdcBalance, usdc, readUntil, sendNative, usageError, assertRpcChain, tx } from "./lib.ts";
-import { fundInWallet, fundValue, DEFAULT_FUND_AMOUNT } from "./owner.ts";
+import { SYM, CFG, GAS, emit, arg, gasFmt, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, nativeBalance, usdcBalance, usdc, readUntil, sendNative, usageError, assertRpcChain, tx, finalityOf, thatTakes, usuallyWords } from "./lib.ts";
+import { fundInWallet, fundValue, DEFAULT_FUND_AMOUNT, chainFlag } from "./owner.ts";
 
 const amt = arg("amount") ?? DEFAULT_FUND_AMOUNT;
 let value = 0n;
@@ -22,13 +22,17 @@ if (ob < value) {
 }
 
 let hash: Hex;
+let final: boolean;
 if (OWNER_KEY_FILE) {
   const c = await ownerCtx();
-  hash = (await sendNative(c.wallet, c.agent, value, `fund agent ${amt} ${GAS.symbol} (owner -> agent, plain transfer)`)).hash;
+  const sent = await sendNative(c.wallet, c.agent, value, `fund agent ${amt} ${GAS.symbol} (owner -> agent, plain transfer)`);
+  hash = sent.hash;
+  final = (await finalityOf(hash, { blockNumber: sent.blockNumber, blockHash: sent.blockHash })).final;
 } else {
-  hash = await fundInWallet("fundAgent", p.owner, p.agent, value, amt, ab);
+  ({ hash, final } = await fundInWallet("fundAgent", p.owner, p.agent, value, amt, ab));
 }
 const aa = await readUntil(() => nativeBalance(p.agent), (v) => v >= ab + value);
 console.log(`agent ${gasFmt(aa)} ${GAS.symbol} ${tx(hash)}`);
 if (GAS.isUsdc) console.log(`agent ERC-20 ${SYM} balance: ${usdc(await usdcBalance(p.agent))} (native / 1e12)`);
-process.exit(emit("fundAgent", 0, { state: "ok", tx: hash, explorer: tx(hash), sent: gasFmt(value), agentNativeBefore: gasFmt(ab), agentNativeAfter: gasFmt(aa), next: "none" }));
+if (!final) console.log(`the transfer is in a block, but the chain has not made it final yet${thatTakes()}`);
+process.exit(emit("fundAgent", 0, { state: final ? "ok" : "landed", final, tx: hash, explorer: tx(hash), sent: gasFmt(value), agentNativeBefore: gasFmt(ab), agentNativeAfter: gasFmt(aa), next: final ? "none" : `landed, not final yet. Nothing to do: the transfer is final once its block is${usuallyWords()}. superstables budget doctor --rail evm${chainFlag} reads the balance` }));

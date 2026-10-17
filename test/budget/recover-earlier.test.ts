@@ -179,11 +179,13 @@ describe("recover.ts hands the completed revoke to the later owner steps", () =>
       selfRevokeCore: async () => ({ state: "partial", before: 5_000_000n, after: 2_000_000n, used: 3_000_000n, ownerBalance: 3_000_000n, tx: SELF_TX, note: "lowered the allowance by what the owner holds" }),
       readUntil: async <T,>(read: () => Promise<T>) => read(),
       writePublic: () => {},
+    allowanceAgreed: async () => ({ agreed: true, value: 0n }),
+    finalityOf: async () => ({ landed: true, final: true }),
     }));
     vi.doMock("../../budget/evm/ops.js", async (importOriginal) => ({ ...((await importOriginal()) as object), pendingJournalsFor: () => [], scanJournals: () => ({ journals: [], unreadable: [] }), sweepBlockers: async () => ({ unreadable: [], undecided: [] }) }));
     vi.doMock("../../budget/evm/owner.js", async (importOriginal) => ({
       ...((await importOriginal()) as object),
-      revokeInWallet: async (...a: unknown[]) => { revokeCalls.push(a); return REVOKE_TX; },
+      revokeInWallet: async (...a: unknown[]) => { revokeCalls.push(a); return { hash: REVOKE_TX, final: true, block: 101n }; },
       fundInWallet: async (...a: unknown[]) => { fundCalls.push(a); process.exit(3); },
     }));
     // recover.ts is imported more than once in this process and its exit listener never runs: no key lock to wait for

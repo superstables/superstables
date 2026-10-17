@@ -21,7 +21,7 @@ import { markSend } from "../proof.mjs";
 import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
-import { finalityFor } from "../../src/core/finality-policy.js";
+import { finalityFor, finalWords } from "../../src/core/finality-policy.js";
 
 export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
@@ -505,6 +505,31 @@ export async function txAgreed(hash: Hex, atLeast?: bigint): Promise<Agreed<any>
   }, atLeast);
 }
 
+/**
+ * Whether the block a transaction landed in is final on this chain, as the endpoints agree: the receipt read at the agreed final
+ * block names the block hash the first read saw, and its block is at or below that final block. A read that does not agree, a block
+ * not yet final, a missing endpoint or an unreadable answer is `final: false`: this never says final on a doubt, and never throws.
+ * `finalBlock` is the agreed final block when the read agreed.
+ */
+export async function finalityOf(hash: Hex, landed: { blockNumber: bigint | string; blockHash?: string }): Promise<{ landed: true; final: boolean; finalBlock?: bigint }> {
+  try {
+    const block = BigInt(landed.blockNumber);
+    const got = await receiptAgreed(hash, block);
+    if (!got.agreed) return { landed: true, final: false };
+    const v: any = got.value;
+    if (!v || typeof v !== "object" || v.state !== undefined || typeof v.blockHash !== "string") return { landed: true, final: false, finalBlock: got.block.number };
+    const sameHash = landed.blockHash === undefined || v.blockHash.toLowerCase() === String(landed.blockHash).toLowerCase();
+    return { landed: true, final: sameHash && BigInt(v.blockNumber) <= got.block.number, finalBlock: got.block.number };
+  } catch {
+    return { landed: true, final: false };
+  }
+}
+
+/** " (usually about N minutes)" when the chain's typical time is known, else "". */
+export const usuallyWords = (): string => { const w = finalWords("evm", CFG.key); return w ? ` (usually ${w})` : ""; };
+/** "; that usually takes about N minutes" when the chain's typical time is known, else "". */
+export const thatTakes = (): string => { const w = finalWords("evm", CFG.key); return w ? `; that usually takes ${w}` : ""; };
+
 /** Total fee a receipt paid: execution fee plus the L1 data fee Base adds (not in gasUsed; Arc has none). */
 export function feeOf(r: any): bigint {
   return BigInt(r.gasUsed) * BigInt(r.effectiveGasPrice) + BigInt(r.l1Fee ?? 0);
@@ -525,7 +550,7 @@ export async function sendNative(w: Wallet, to: Address, value: bigint, label: s
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
   if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber });
-  return { hash, feeWei: feeOf(r) };
+  return { hash, blockNumber: r.blockNumber, blockHash: r.blockHash as string, feeWei: feeOf(r) };
 }
 /** `agent`: an agent transaction (selfRevoke, sweep): its gas is checked first (agentGasFor), and it is signed with that gas and fee. */
 export async function send(w: Wallet, to: Address, data: Hex, label: string, agent?: { op: GasOp; then?: GasOp[] }) {
@@ -536,7 +561,7 @@ export async function send(w: Wallet, to: Address, data: Hex, label: string, age
   console.log(`${label}: ${r.status} ${tx(hash)}`);
   await sleep(3500);
   if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber });
-  return { hash, blockNumber: r.blockNumber, feeWei: feeOf(r) };
+  return { hash, blockNumber: r.blockNumber, blockHash: r.blockHash as string, feeWei: feeOf(r) };
 }
 /**
  * Sign the transaction locally, hand its hash to `onHash` (the caller writes it to the operation journal), and only

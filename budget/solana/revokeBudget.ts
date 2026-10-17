@@ -13,8 +13,10 @@
 // that no delegate is live (Revoke succeeds on an account without one). Only an owner with no USDC account is sent
 // nothing, because a Revoke there fails on chain; that answer needs the owner's endpoints to agree at finalized commitment (else
 // it is unknown, exit 5), and it says revoked: null, not revoked.
-// A confirmed revoke is recorded in the public file (REVOKED_AT): status reports revoked only while the chain still
-// shows no delegate.
+// A confirmed revoke is recorded in the public file (REVOKED_AT, REVOKED_TX, REVOKED_SLOT): status reports revoked only while the
+// chain still shows no delegate. This command reports revoked, final: true only once the transaction is finalized (waiting up
+// to a minute) and the owner's endpoints agree, at finalized, that no delegate is left; before that it reports landed (exit 0,
+// final: false).
 //
 // npx tsx budget/solana/revokeBudget.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
 // Exit codes: 0 revoked (or the owner has no USDC account: nothing sent, revoked null), 1 failed on chain, never landed, or a delegate still reads, 3 refused (the
@@ -25,7 +27,7 @@ import { AGENT_KEY_PATH, CLUSTER_NEXT, agreedAccount, clusterProblem, connection
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { readRegularFile } from "../secret-file.mjs";
-import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort } from "./owner.ts";
+import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort, finalizedOf, agreedFinalAccount, LANDED_SOLANA_REVOKE } from "./owner.ts";
 import { agreementWords } from "../../src/core/rpc-quorum.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
@@ -151,9 +153,22 @@ if (after.delegate || after.delegatedAmount !== 0n) {
   await closeOwnerPage();
   process.exit(result(1, { state: "not_revoked", tx: sig, remaining: formatUnits(after.delegatedAmount), reason: "a delegate still reads on chain", next: "run revoke again" }));
 }
+// Final: the signature reaches finalized, and the owner's endpoints agree at finalized, from that slot on, that no delegate is left.
+const fin = await finalizedOf(conn, sig);
+let final = false;
+if (fin.final && !fin.failed) {
+  const ag = await agreedFinalAccount(ata.toBase58(), fin.slot);
+  final = ag.agreed && ag.value !== null && ag.value.delegate === null && ag.value.delegatedAmount === 0n;
+}
 // recorded: status reports this budget as revoked only while the chain still shows no delegate (readBudget.mjs)
-writePublic({ REVOKED_AT: String(Math.floor(Date.now() / 1000)) });
+writePublic({ REVOKED_AT: String(Math.floor(Date.now() / 1000)), REVOKED_TX: sig, ...(fin.slot !== undefined ? { REVOKED_SLOT: String(fin.slot) } : {}) }, ["GRANT_TX", "GRANT_SLOT", ...(fin.slot === undefined ? ["REVOKED_SLOT"] : [])]);
+if (!final) {
+  console.log("The revoke is in a block and no delegate reads, but the transaction is not finalized yet. Until then, check superstables budget status before you rely on it.");
+  finish?.({ outcome: "confirmed", message: LANDED_SOLANA_REVOKE, hash: sig });
+  await closeOwnerPage();
+  process.exit(result(0, { state: "landed", final: false, revoked: false, tx: sig, remaining: "0", next: "superstables budget status --rail solana later: the revoke is final when status says so" }));
+}
 console.log("This delegation is cleared. Transactions that still require it will fail. Previously transferred funds are not recovered.");
 finish?.({ outcome: "confirmed", message: "Confirmed. Your USDC account has no delegate. This does not recover tokens already transferred. You can close this page.", hash: sig });
 await closeOwnerPage();
-process.exit(result(0, { state: "revoked", tx: sig, remaining: "0", next: "none" }));
+process.exit(result(0, { state: "revoked", final: true, tx: sig, remaining: "0", next: "none" }));

@@ -22,7 +22,7 @@ import { verifyEd25519 } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { DEFAULT_SITE } from "../site.mjs";
 import { DEFAULT_RPC, ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, clusterProblem, formatUnits, oneLine, parseEnvFile, retryRead, sleep } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, agreedAccount, clusterProblem, formatUnits, oneLine, parseEnvFile, retryRead, sleep } from "./lib.mjs";
 
 export { closeOwnerPage };
 
@@ -388,6 +388,48 @@ export async function confirmSent(conn: Connection, s: Issued, waitMs = 120_000)
   }
   return { status: "unknown" };
 }
+
+export type Finalized = { final: boolean; slot?: number; failed?: boolean };
+
+/**
+ * Whether a transaction the command saw land has reached `finalized`: polls its signature status (with the history search) every
+ * two seconds for up to `waitMs` (a minute). `{ final: true }` once the status says finalized (`failed` when it finalized with an
+ * error); `{ final: false }` when the time runs out, with the last slot it was seen in. A read that fails is only a poll lost: this
+ * never throws and never says final without the chain saying so. `confirmSent` is unchanged: it is what detects the landing.
+ */
+export async function finalizedOf(conn: Connection, signature: string, waitMs = 60_000): Promise<Finalized> {
+  const until = Date.now() + waitMs;
+  let slot: number | undefined;
+  for (;;) {
+    try {
+      const st = (await retryRead(() => conn.getSignatureStatuses([signature], { searchTransactionHistory: true }))).value[0];
+      if (st) {
+        if (typeof st.slot === "number") slot = st.slot;
+        if (st.confirmationStatus === "finalized") return st.err ? { final: true, failed: true, slot } : { final: true, slot };
+      }
+    } catch { /* a lost poll */ }
+    if (Date.now() >= until) return { final: false, slot };
+    await sleep(2000);
+  }
+}
+
+/**
+ * The owner's token account at `finalized` from slot `slot` on, as the owner's endpoints agree: the engine's answer (agreed, with the
+ * account or null, or why not). The endpoints may be a moment behind the one that said finalized, so a short wait for them is built in.
+ */
+export async function agreedFinalAccount(ata: string, slot: number | undefined, tries = 6, gapMs = 2000): Promise<Awaited<ReturnType<typeof agreedAccount>>> {
+  const at = slot === undefined ? undefined : BigInt(slot);
+  let got = await agreedAccount(ata, { minSlot: at, atLeast: at, purpose: "owner" });
+  for (let i = 1; i < tries && !got.agreed; i++) {
+    await sleep(gapMs);
+    got = await agreedAccount(ata, { minSlot: at, atLeast: at, purpose: "owner" });
+  }
+  return got;
+}
+
+export const LANDED_SOLANA_REVOKE = "Sent and included on Solana. Your USDC account shows no delegate, but the transaction is not finalized yet. Until then, check superstables budget status before you rely on it. This does not recover tokens already transferred. You can close this page.";
+export const LANDED_SOLANA_GRANT = "Sent and included on Solana. The chain shows your budget, but the transaction is not finalized yet. You can close this page. To end it: superstables budget revoke --rail solana. You approve that in your wallet too.";
+export const LANDED_SOLANA_FUND = "Sent and included on Solana. Your agent's balance shows the transfer, but the transaction is not finalized yet. You can close this page.";
 
 // ── terms ────────────────────────────────────────────────────────────────────────────────────────────────
 

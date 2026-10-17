@@ -32,7 +32,7 @@ import { dirname } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 import { EVM_CHAINS } from "./chains.mjs";
-import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, toUsdc, usageError, assertRpcChain, assertReadChain, readChainProblem, publicClient, tx, oneLine } from "./lib.ts";
+import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, allowanceAgreed, agreementWords, usuallyWords, toUsdc, usageError, assertRpcChain, assertReadChain, readChainProblem, publicClient, tx, oneLine } from "./lib.ts";
 import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, fundingTx, fundValue, DEFAULT_FUND_AMOUNT, grantTx, approveResetHostedProblem, grantEnforced, GRANT_NOT_ENFORCED, approveRow, capWords, checkFundSent, checkGrantSent, REVOKE_HINT, type SentCheck } from "./owner.ts";
 import { NEW_OWNER } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
@@ -111,6 +111,9 @@ const keychainRefusal = (err: unknown): never => {
   process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: unavailable ? "install secret-tool (libsecret-tools) on Linux, or use macOS, or run setup without --key-store os-keychain" : "unlock the keychain, then run setup again" }));
 };
 let keyStore: "file" | "os-keychain" = "file";
+// A grant bundled into this setup is asked for over an older allowance only when it can be read to be 0: a key created in this very
+// run cannot have one, a key that already existed might.
+const createdNow = !existsSync(AGENT_ENV);
 if (existsSync(AGENT_ENV)) {
   const inKeychain = agentFile.env.B4_AGENT_KEY_STORE === "os-keychain";
   agentAddr = privateKeyToAccount(need(agentFile.env, "B4_AGENT_KEY", AGENT_ENV) as Hex).address;
@@ -227,12 +230,29 @@ if (BUNDLE) {
     then.push({ kind: "fund_agent", transaction: { to: fundTx.to, data: fundTx.data ?? "0x", value: `0x${(fundTx.value ?? 0n).toString(16)}` } });
   }
   if (CAP !== undefined) {
-    // a live allowance is never overwritten silently (grant refuses the same way)
-    const live = recorded && !NEW_OWNER ? await allowanceOf(recorded, agentAddr).catch(() => null) : 0n;
-    if (live !== null && live > 0n) {
-      const reason = `a budget is live: the owner on record ${recorded} still allows the agent ${usdc(live)} ${SYM}. A grant overwrites it in place, so it is not asked for here`;
-      console.log(`REFUSED: ${reason}. Nothing was requested.`);
-      process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `revoke first (superstables budget revoke --rail evm${chainFlag}), then superstables budget grant --rail evm${chainFlag} --amount A` }));
+    // a live allowance is never overwritten silently (grant refuses the same way), and an unreadable one is not taken as 0
+    if (!createdNow) {
+      const refuse = (reason: string, next: string): never => {
+        console.log(`REFUSED: ${reason}. Nothing was requested.`);
+        return process.exit(emit("setup", 3, { state: "refused_precheck", reason, ...(recorded ? { owner: recorded } : {}), next }));
+      };
+      if (!recorded || NEW_OWNER) refuse(
+        !recorded
+          ? "this agent key existed before this setup, and no owner is recorded for it here, so whether an older allowance is live cannot be read. Set up first (link), then grant"
+          : "this agent key existed before this setup, and this setup replaces the owner, so whether the new owner already gives this agent an allowance cannot be read before the link. Set up first (link), then grant",
+        `superstables budget setup --rail evm${chainFlag}${HOSTED ? " --hosted" : ""}${NEW_OWNER ? " --new-owner" : ""}, then superstables budget grant --rail evm${chainFlag} --amount A`,
+      );
+      const at = await allowanceAgreed(recorded!, agentAddr);
+      if (!at.agreed) refuse(`the allowance at the chain's final block could not be confirmed (${agreementWords(at)})`, `superstables budget doctor --rail evm${chainFlag}, then run setup again`);
+      if (at.value !== 0n) {
+        const latest = await allowanceOf(recorded!, agentAddr).catch(() => null);
+        refuse(
+          latest === 0n
+            ? `the previous revoke is not final yet: the allowance reads 0 at the latest block but ${usdc(at.value as bigint)} ${SYM} at the final block. Grant again once it is final${usuallyWords()}`
+            : `a budget is live: the owner on record ${recorded} still allows the agent ${usdc(at.value as bigint)} ${SYM}. A grant overwrites it in place, so it is not asked for here`,
+          latest === 0n ? `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final` : `revoke first (superstables budget revoke --rail evm${chainFlag}), then superstables budget grant --rail evm${chainFlag} --amount A`,
+        );
+      }
     }
     const g = grantTx(agentAddr, CAP);
     then.push({ kind: "grant", transaction: { to: g.to, data: g.data, value: "0x0" } });
@@ -393,7 +413,7 @@ if (same(ownerAddr, agentAddr)) {
 const replaced = recorded && !same(recorded, ownerAddr) ? recorded : undefined;
 const asked = !OWNER_KEY_FILE && !reuse;
 if (HOSTED && !linked) throw new Error("an add-agent request without its id and code");
-const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_EXPIRY", "B4_REVOKED_AT", ...(binding ? [] : SETUP_KEYS)] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : [])];
+const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_SET_TX", "B4_SET_BLOCK", "B4_EXPIRY", "B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", ...(binding ? [] : SETUP_KEYS)] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : [])];
 writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}), ...(binding ? bindingLines(binding) : {}) }, drop);
 if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${ownerAddr}`);
 console.log(`${CFG.label}: wrote ${PUBLIC_ENV} (no secret).${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ""}`);
@@ -432,7 +452,7 @@ process.exit(emit("setup", 0, { state: "ok", owner: ownerAddr, ...(replaced ? { 
  */
 async function finishBundle(): Promise<never> {
   const steps = bundle?.steps ?? [];
-  type Report = { kind: string; state: SentCheck["state"] | "refused_precheck"; proof?: SentCheck["proof"]; tx?: string; txUrl?: string; amount?: string; reason?: string; next?: string; reasonCode?: string };
+  type Report = { kind: string; state: SentCheck["state"] | "refused_precheck"; final?: boolean; proof?: SentCheck["proof"]; tx?: string; txUrl?: string; amount?: string; reason?: string; next?: string; reasonCode?: string };
   const reports: Report[] = [];
   let grantDone: SentCheck | undefined;
   for (const s of steps) {
@@ -445,7 +465,7 @@ async function finishBundle(): Promise<never> {
         ? await checkGrantSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, cap: CAP!, afterBlock: startBlock, siteFailed })
         : await checkFundSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, t: fundTx!, value: FUND_VALUE, agentHad, afterBlock: startBlock, siteFailed });
       if (s.kind === "grant" && c.state === "settled") grantDone = c;
-      reports.push({ kind: s.kind, state: c.state, proof: c.proof, tx: c.tx, txUrl: tx(c.tx), amount, reason: c.reason, next: c.next });
+      reports.push({ kind: s.kind, state: c.state, final: c.state === "settled" ? c.final === true : undefined, proof: c.proof, tx: c.tx, txUrl: tx(c.tx), amount, reason: c.reason, next: c.next });
     } else if (s.walletAsked || s.state === "unknown") {
       reports.push({ kind: s.kind, state: "unknown", amount, reason: s.reason || "the wallet was asked to send, but superstables.com reported no transaction" });
     } else {
@@ -460,7 +480,7 @@ async function finishBundle(): Promise<never> {
   }
   if (grantDone) {
     const now = Math.floor(Date.now() / 1000);
-    writePublic({ B4_CAP: String(CAP), B4_SET_AT: String(now) }, ["B4_REVOKED_AT", "B4_EXPIRY"]);
+    writePublic({ B4_CAP: String(CAP), B4_SET_AT: String(now), B4_SET_TX: grantDone.tx }, ["B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_SET_BLOCK", "B4_EXPIRY"]);
     console.log(`budget: ${usdc(CAP!)} ${SYM}, allowance == cap on chain.`);
   }
   await closeOwnerPage();
@@ -473,9 +493,12 @@ async function finishBundle(): Promise<never> {
   const txs = Object.fromEntries(reports.filter((r) => r.tx).map((r) => [r.kind === "grant" ? "grant" : "fundAgent", r.tx]));
   const base = { owner: ownerAddr, agent: agentAddr, linked: true, steps: reports, tx: txs, cap: grantDone ? usdc(CAP!) : undefined, allowance: grantDone?.allowance !== undefined ? usdc(grantDone.allowance) : undefined, sent: reports.find((r) => r.kind === "fund_agent" && r.state === "settled") ? FUND_AMT : undefined, publicFile: PUBLIC_ENV, agentKeyFile: AGENT_ENV };
   const first = reports.find((r) => r.state !== "settled");
+  // landed: on chain as planned, but not final yet
+  const notFinal = reports.filter((r) => r.state === "settled" && r.final === false);
   if (!first) {
+    if (notFinal.length) console.log(`\n${notFinal.map((r) => name(r.kind)).join(" and ")}: in a block as planned, but the chain has not made it final yet${usuallyWords()}`);
     console.log(`\nDone with one approval link: the agent was added to the account${FUND_AMT ? ", has gas" : ""}${CAP !== undefined ? ` and has a budget of ${usdc(CAP)} ${SYM}` : ""}.`);
-    process.exit(emit("setup", 0, { state: "ok", ...base, next: CAP !== undefined ? `none: the agent can buy under the budget. superstables budget status --rail evm${chainFlag} shows what is left` : `superstables budget grant --rail evm${chainFlag} --amount A, only when the owner asks for a budget` }));
+    process.exit(emit("setup", 0, { state: "ok", ...base, steps: reports.map((r) => (r.state === "settled" && r.final === false ? { ...r, state: "landed" } : r)), ...(notFinal.length ? { final: false } : {}), next: notFinal.length ? (notFinal.some((r) => r.kind === "grant") ? `landed, not final yet: superstables budget status --rail evm${chainFlag} later shows when the grant is final${usuallyWords()}. Do not rely on the budget until then${notFinal.some((r) => r.kind !== "grant") ? ". Nothing to do for the gas transfer: it is final once its block is" : ""}` : `landed, not final yet. Nothing to do: the gas transfer is final once its block is${usuallyWords()}`) : CAP !== undefined ? `none: the agent can buy under the budget. superstables budget status --rail evm${chainFlag} shows what is left` : `superstables budget grant --rail evm${chainFlag} --amount A, only when the owner asks for a budget` }));
   }
   const missing = reports.filter((r) => r.state !== "settled");
   const later = missing.map((r) => (r.kind === "grant" ? `superstables budget grant --rail evm${chainFlag} --amount A` : `superstables budget fund-agent --rail evm${chainFlag}`)).join(" and ");

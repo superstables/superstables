@@ -431,6 +431,7 @@ describe("solana, hosted", () => {
 
   it("setup --hosted --fund --grant: one link, then SOL and the budget; wait reads both from the chain", async () => {
     write(file("keys", "budget", "solana-agent.env"), `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);
+    write(file("budget", "public", "solana-devnet.env"), `SOLANA_OWNER_ADDRESS=${SOL_OWNER}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`, 0o644); // a reused key is granted over only with the owner on record
     const first = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--grant", "0.05", "--fund"]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", action: "setup" });
@@ -448,6 +449,34 @@ describe("solana, hosted", () => {
       steps: [{ kind: "fund_agent", state: "settled", amount: "0.01" }, { kind: "grant", state: "settled", amount: "0.05" }],
       tx: { fundAgent: r.steps![0].tx_hash, grant: r.steps![1].tx_hash },
     });
+  }, 180_000);
+
+  it.each([
+    ["grant and SOL", ["--grant", "0.05", "--fund"], /^landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final\. Do not rely on the budget until then\. Nothing to do for the SOL transfer: it is final once its transaction is finalized$/],
+    ["grant only", ["--grant", "0.05"], /^landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final\. Do not rely on the budget until then$/],
+    ["SOL only", ["--fund"], /^landed, not finalized yet\. Nothing to do: the SOL transfer is final once its transaction is finalized$/],
+  ])("setup --hosted with the transactions only confirmed (%s): steps are landed and next is whole sentences", async (_name, flags, want) => {
+    solana.confirmationStatus = "confirmed";
+    write(file("keys", "budget", "solana-agent.env"), `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);
+    write(file("budget", "public", "solana-devnet.env"), `SOLANA_OWNER_ADDRESS=${SOL_OWNER}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\nREVOKED_AT=1\nREVOKED_TX=oldRevoke\nREVOKED_SLOT=2\nGRANT_SLOT=3\n`, 0o644); // an older revoke and grant of this pair
+    const first = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, ...flags]);
+    expect(first.code, first.stderr).toBe(0);
+    solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: null, delegated: 0n });
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: SOL_OWNER });
+    for (const st of r.steps!) Object.assign(st, { state: "confirmed", wallet_asked: true, tx_hash: st.kind === "grant" ? solana.land({ kind: "grant", owner: SOL_OWNER, agent: SOL_AGENT, amount: 50_000n }) : solana.land({ kind: "fund_agent", owner: SOL_OWNER, agent: SOL_AGENT, amount: 10_000_000n }) });
+    const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ state: "ok" }); // wait keeps `final` as the command having ended
+    if (flags.includes("--grant")) {
+      // the grant is the owner's last action: the older revoke's record and the older grant's slot are gone
+      expect(publicOf("solana")).not.toMatch(/^(REVOKED_AT|REVOKED_TX|REVOKED_SLOT)=/m);
+      expect(publicOf("solana")).toMatch(/^GRANT_TX=\S+$/m);
+      expect(publicOf("solana")).not.toMatch(/^GRANT_SLOT=3$/m);
+    }
+    expect(done.result.steps.map((x: any) => x.state)).toEqual(flags.length === 3 ? ["landed", "landed"] : ["landed"]);
+    expect(String(done.result.next).split("Then: ").pop()).toMatch(want); // the dispatcher puts the owner notice first, then "Then: " and the rail's next
+    expect(done.result.next).not.toMatch(/\. [a-z]/);
   }, 180_000);
 
   it("grant sends the intent; the command reads the delegate and its amount on chain", async () => {
@@ -509,6 +538,7 @@ describe("solana, hosted", () => {
 
     rmSync(file("budget", "public", "solana-devnet.env"));
     write(file("keys", "budget", "solana-agent.env"), `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);
+    write(file("budget", "public", "solana-devnet.env"), `SOLANA_OWNER_ADDRESS=${SOL_OWNER}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`, 0o644); // a reused key is granted over only with the owner on record
     solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: null, delegated: 0n });
     site.onPoll = undefined;
     const first = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--grant", "0.05", "--fund"]);
@@ -604,6 +634,7 @@ describe("solana, hosted", () => {
 
   it("setup --hosted --grant: a step whose transaction carries another instruction is reported as a mismatch", async () => {
     write(file("keys", "budget", "solana-agent.env"), `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);
+    write(file("budget", "public", "solana-devnet.env"), `SOLANA_OWNER_ADDRESS=${SOL_OWNER}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`, 0o644); // a reused key is granted over only with the owner on record
     const first = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--grant", "0.05"]);
     expect(first.code, first.stderr).toBe(0);
     const r = site.requests[0];
@@ -641,6 +672,7 @@ describe("solana, hosted", () => {
 
   it("an agent already linked, with --grant: refused, with fund-agent and grant one by one", async () => {
     write(file("keys", "budget", "solana-agent.env"), `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);
+    write(file("budget", "public", "solana-devnet.env"), `SOLANA_OWNER_ADDRESS=${SOL_OWNER}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`, 0o644); // a reused key is granted over only with the owner on record
     site.linked = { [SOL_AGENT]: SOL_OWNER };
     const r = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--grant", "0.05"]);
     expect(r.code, r.stderr).toBe(3);

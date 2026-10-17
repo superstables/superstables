@@ -5,7 +5,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { evmOwner, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import { startFakePurchaseSite, type FakePurchaseSite } from "../helpers/fake-purchase-site.js";
 import { DEV_SETTINGS, accountHomeWith } from "../helpers/owner-settings.js";
@@ -13,6 +14,10 @@ import type { TestServer } from "../helpers/servers.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
+// a grant is asked for only when the endpoints agree, at a final block, that the allowance is 0: a copy names the fake twice
+let tree: EndpointTree;
+beforeAll(() => { tree = endpointTree(); });
+afterAll(() => tree.close());
 const OWNER = evmOwner("22");
 
 let home: string;
@@ -60,7 +65,8 @@ function budget(args: string[], acct: string, extraEnv: Record<string, string> =
     delete env.SUPERSTABLES_ALLOW_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     Object.assign(env, extraEnv);
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+      tree.set({ "base-sepolia": [{ url: rpc.url, operator: "fake-a" }, { url: `${rpc.url}/`, operator: "fake-b" }] });
+    const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -80,7 +86,7 @@ const hostedChain = (siteUrl: string) => {
   writeFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A\nAPPROVALS=hosted\nSITE=${siteUrl}\n`);
 };
 /** The owner's RPC is the fake chain (so reads work offline), and nothing on this computer is allowed as a site. */
-const strict = () => account({ version: 1, rpc: { "base-sepolia": { urls: [rpc.url] } } });
+const strict = () => account({ version: 1, rpc: { "base-sepolia": { urls: [rpc.url], ownNode: true } } });
 const BUY = ["buy-once", "--service", "demo-market-data", "--param", "asset=BTC", "--max", "0.01", "--detach"];
 
 describe("setup --hosted: the site", () => {

@@ -28,6 +28,7 @@ const SLOW = [
   "test/budget/lock-recovery.test.ts",
   "test/budget/once-not-final.test.ts",
   "test/budget/operation-races.test.ts",
+  "test/budget/owner-finality.test.ts",
   "test/budget/owner-rpc.test.ts",
   "test/budget/read-caps-cli.test.ts",
   "test/budget/revoke-always.test.ts",
