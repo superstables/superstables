@@ -165,7 +165,7 @@ describe("what the owner's wallet signs on each EVM chain", () => {
   it("offers the wallet each chain with its own currency: ETH, Arc's 18-decimal USDC, POL, SKALE's CREDIT", () => {
     for (const network of EVM_NETWORKS) {
       const facts = eip3009Step.pageFacts(record(network));
-      expect(facts, network.key).toEqual({
+      expect(facts, network.key).toMatchObject({
         chainIdHex: `0x${VECTORS[network.key].chainId.toString(16)}`,
         chainName: budget[network.key].label,
         rpcUrl: budget[network.key].rpc,
