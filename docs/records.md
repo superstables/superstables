@@ -290,10 +290,10 @@ it became uncertain. One waiting for the owner counts until its reservation (`re
 `reservedUntil`) ends: the signer's approval window and one minute of grace. A reservation that lapses before the
 owner is asked, or before a signature is sent, is checked against the cap again and renewed, or the
 payment stops there. Before the owner is asked, `pay` checks the cap and reserves the amount under a lock every
-`pay` process on this machine shares, so two payments started at once cannot both pass. A payment
-that ends unsigned releases its reservation. Each payment counts once. It is checked
-once when a quote is taken, and again at the gate, before anyone is asked to approve. (With the
-local wallet there is a second count, from the wallet's own audit log of what it signed today.)
+`pay` process on this machine shares, so two payments started at once cannot both pass. The lock file is written to disk
+before it is taken, so a crash cannot leave one that cannot be read. A payment that ends unsigned releases its reservation.
+Each payment counts once. It is checked once when a quote is taken, and again at the gate, before anyone is asked to
+approve. (With the local wallet there is a second count, from the wallet's own audit log of what it signed today.)
 These are local files, not chain history. Delete them and the count starts again.
 This is a software policy, and [security.md](security.md) says exactly how far that goes.
 
