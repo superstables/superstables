@@ -1777,7 +1777,7 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/solana/buy.mjs", has: '"own transaction landed and failed"', why: SOLANA_PURCHASE },
   { file: "budget/solana/buy.mjs", has: "reason: oneLine(JSON.stringify(assessment.err), 300)", why: SOLANA_PURCHASE },
   { file: "budget/solana/reconcile.mjs", has: "reconcile: own transaction failed on chain", why: SOLANA_PURCHASE },
-  { file: "budget/solana/rotate.mjs", has: 'if (seen.some((st) => st?.err))', why: "a sweep, not a purchase: the chain's own signature statuses show an error on a transfer and every other transfer is finalized, so nothing of it moved and the funds are swept again; a status that is not final is pending, never failed" },
+  { file: "budget/solana/rotate.mjs", has: 'if (seen.some((st) => st?.err))', why: "a sweep, not a purchase: the chain's own signature statuses show an error on a transfer and every transfer, the one with the error included, is finalized, so nothing of it moved and the funds are swept again; a status that is not final is pending, never failed" },
   { file: "budget/solana/reconcile.mjs", has: 'emit(result("failed"', why: SOLANA_PURCHASE },
   { file: "budget/solana/revokeBudget.ts", has: "The chain still shows delegate", why: AFTER_SEND_UNPROVEN },
   { file: "budget/solana/revokeBudget.ts", has: "a delegate still reads on chain", why: AFTER_SEND_UNPROVEN },
