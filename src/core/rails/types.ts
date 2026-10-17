@@ -14,6 +14,7 @@
 
 import type { PaymentRequirements } from "@x402/core/types";
 import type { NetworkInfo, Rail } from "../chain.js";
+import type { LogSearchOptions } from "../log-windows.mjs";
 import type { EndpointSet } from "../rpc-endpoints.mjs";
 import type { MppChallenge } from "../mpp.js";
 import type { ChainCheck } from "../settlement.js";
@@ -47,6 +48,8 @@ export interface ChainReadOptions {
   searchMs?: number;
   /** How long one search may spend reading the same blocks on each other verdict endpoint (Solana; `searchMs` when not given). */
   confirmMs?: number;
+  /** How a log search is paced and bounded (tests shorten it). */
+  logSearch?: LogSearchOptions;
 }
 
 /** Everything the chain is asked about one payment: from the attempt, never from the seller's report. */

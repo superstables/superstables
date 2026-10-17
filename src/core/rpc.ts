@@ -9,12 +9,14 @@
 
 import type { NetworkInfo } from "./chain.js";
 import { readCapped } from "./http.js";
-import { rangeRefusal } from "./log-windows.mjs";
+import { rangeRefusal, rateRefusal } from "./log-windows.mjs";
 import { rpcFor } from "./owner-settings.js";
 import { callerSet, endpointSet, type EndpointSet } from "./rpc-endpoints.mjs";
 import { checkIdentity, type Identity } from "./rpc-quorum.mjs";
 
 const CHECK_TIMEOUT_MS = 10_000;
+/** How much of an error answer is read to find the RPC's error code: 64 KB. */
+const ERROR_BODY_BYTES = 64 * 1024;
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 export type RpcPurpose = "owner" | "verdict" | "read";
@@ -61,6 +63,8 @@ export class RpcError extends Error {
     readonly retryAfterMs?: number,
     /** The RPC refused the block range asked for (log-windows.mjs, rangeRefusal). Its own words are not kept. */
     readonly rangeRefused?: boolean,
+    /** The RPC said it is limiting how often this client asks (a 429, or words that say so): wait rather than narrow. */
+    readonly rateLimited?: boolean,
   ) {
     super(message);
     this.name = "RpcError";
@@ -69,7 +73,7 @@ export class RpcError extends Error {
 
 /** Did the RPC say it is limiting this client's requests (HTTP 429, or JSON-RPC error 429)? */
 export function rateLimited(err: unknown): err is RpcError {
-  return err instanceof RpcError && (err.status === 429 || err.code === 429);
+  return err instanceof RpcError && (err.status === 429 || err.code === 429 || err.rateLimited === true);
 }
 
 /** One JSON-RPC call. Throws on a transport error, a non-2xx answer, an RPC error or an unreadable answer. */
@@ -84,13 +88,24 @@ export async function rpcCall<T>(url: string, method: string, params: unknown[],
   });
   if (!res.ok) {
     const retryAfter = res.headers.get("retry-after")?.trim();
-    throw new RpcError(`HTTP ${res.status}`, res.status, undefined, retryAfter && /^\d{1,4}$/.test(retryAfter) ? Number(retryAfter) * 1000 : undefined);
+    const retryAfterMs = retryAfter && /^\d{1,4}$/.test(retryAfter) ? Number(retryAfter) * 1000 : undefined;
+    // A JSON-RPC error often rides in a 4xx answer (Base's -32614 does): read it, as far as a cap, and keep its code, never its words.
+    let code: number | undefined;
+    let message: unknown;
+    try {
+      const body = JSON.parse(await readCapped(res, ERROR_BODY_BYTES, timeoutMs, url)) as { error?: { code?: unknown; message?: unknown } };
+      code = typeof body?.error?.code === "number" ? body.error.code : undefined;
+      message = body?.error?.message;
+    } catch {
+      /* not JSON, or cut short: the status alone says what happened */
+    }
+    throw new RpcError(code === undefined ? `HTTP ${res.status}` : "the RPC answered with an error", res.status, code, retryAfterMs, rangeRefusal(code, message), rateRefusal(code, message) || res.status === 429);
   }
   const text = await readCapped(res, options.maxBytes ?? 2_000_000, timeoutMs, url);
   const answer = JSON.parse(text) as { result?: T; error?: { code?: unknown; message?: unknown } };
   if (answer.error !== undefined) {
     const code = typeof answer.error?.code === "number" ? answer.error.code : undefined;
-    throw new RpcError("the RPC answered with an error", undefined, code, undefined, rangeRefusal(code, answer.error?.message));
+    throw new RpcError("the RPC answered with an error", undefined, code, undefined, rangeRefusal(code, answer.error?.message), rateRefusal(code, answer.error?.message));
   }
   return answer.result as T;
 }
