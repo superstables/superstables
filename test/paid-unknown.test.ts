@@ -228,9 +228,9 @@ afterAll(() => {
 });
 
 type Ran = { code: number; stdout: string; stderr: string };
-function exec(args: string[], env: Record<string, string | undefined>, onChild?: (child: ReturnType<typeof spawn>) => void): Promise<Ran> {
+function exec(args: string[], env: Record<string, string | undefined>, onChild?: (child: ReturnType<typeof spawn>) => void, cwd = ROOT): Promise<Ran> {
   return new Promise((done, fail) => {
-    const child = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, ...env } as NodeJS.ProcessEnv });
+    const child = spawn(process.execPath, args, { cwd, env: { ...process.env, ...env } as NodeJS.ProcessEnv });
     onChild?.(child);
     let stdout = "";
     let stderr = "";
@@ -714,7 +714,12 @@ const ROWS: Row[] = [
       }));
       const open = await status("status while the authorization is valid", x.home, x.attempt.id, x.env);
       x.chain.advance(300 + 180);
-      return [open, await status("status after it expired unused", x.home, x.attempt.id, x.env)];
+      // "Never paid" needs two operators at the same final block: this status reads a copy of the client whose table names the
+      // fake chain twice (an RPC named only in the environment, as SUPERSTABLES_RPC_URL is here, never decides it).
+      setRows({ "base-sepolia": [{ url: x.chain.url, operator: "fake-a" }, { url: `${x.chain.url}/`, operator: "fake-b" }] });
+      const treeMain = resolve(tree.root, "src/cli/main.ts");
+      const expired = seenPay("status after it expired unused", "status", await exec(["--import", "tsx", treeMain, "status", x.attempt.id, "--json"], payEnv(x.home, x.env), undefined, tree.root));
+      return [open, expired];
     },
     expect: [
       { verdict: "unknown", match: { ...UNCERTAIN_PAY(), chain_reason: expect.stringMatching(/^the chain shows the owner's authorization unused so far; it can still be used until /) } },

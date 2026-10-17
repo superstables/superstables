@@ -108,6 +108,12 @@ export async function startFakeBaseSepolia(): Promise<FakeBaseSepolia> {
     switch (method) {
       case "eth_getTransactionReceipt": {
         const hash = String(params[0] ?? "").toLowerCase();
+        // A cancellation's receipt logs AuthorizationCanceled, not a payment
+        const cancel = [...chain.used.entries()].find(([, u]) => u.cancelled && u.transaction.toLowerCase() === hash);
+        if (cancel) {
+          const [nonce, u] = cancel;
+          return { transactionHash: hash, status: "0x1", blockNumber: hex(u.block), blockHash: hashOf(u.block), logs: [{ address: u.token, topics: [CANCELED_TOPIC, topic(u.payer), nonce], data: "0x" }] };
+        }
         const found = chain.receipts.has(hash) ? chain.receipts.get(hash) : (chain.dynamic?.(hash) ?? null);
         // A real node's receipt names its transaction; a test that wants another (or none) sets transactionHash itself.
         if (!found || typeof found !== "object") return found;

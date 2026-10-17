@@ -285,6 +285,7 @@ async function findTempoPayment(facts: PaymentFacts, options: ChainReadOptions):
       }
       from = to + 1n;
     }
+    // Tempo has no negative verdict: nothing found is never "never", so a search never releases a payment from the cap.
     return {
       found: false,
       reason: reaches

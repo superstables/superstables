@@ -15,7 +15,10 @@
 import { encodePaymentSignatureHeader } from "@x402/core/http";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { SOLANA_DEVNET, fromAtomic, isTransactionId, type NetworkInfo } from "../chain.js";
-import { rateLimited, rpcCall, verifiedRpc, type RpcOptions } from "../rpc.js";
+import { identityOf, rateLimited, rpcCall, rpcCaller, verdictSet, verifiedRpc, type RpcOptions } from "../rpc.js";
+import { endpointId } from "../rpc-endpoints.mjs";
+import { sameRpcUrl } from "../owner-settings.js";
+import { agreementWords, checkIdentity } from "../rpc-quorum.mjs";
 import type { ChainCheck } from "../settlement.js";
 import { base58Decode, isSolanaAddress } from "../signer/owner-approval-server.js";
 import type { SignResult } from "../signer/types.js";
@@ -218,8 +221,8 @@ export const solanaRail: X402Rail = {
       if (named.included) return { found: true, transaction: facts.transaction, final: false };
     }
     /** A transaction carrying the owner's signature, read and judged: paid, or why not. */
-    const judge = async (signature: string): Promise<FoundPayment | "unreadable"> => {
-      const found = await readTransaction(rpc.url, signature, options, CANDIDATE_VERSION);
+    const judge = async (url: string, signature: string): Promise<FoundPayment | "unreadable"> => {
+      const found = await readTransaction(url, signature, options, CANDIDATE_VERSION);
       if (!found) return "unreadable";
       if (!found.transaction?.signatures?.includes(facts.ownerSignature!)) return { found: false, reason: "" };
       const check = judgeTransaction(found, signature, facts);
@@ -273,7 +276,7 @@ export const solanaRail: X402Rail = {
       } else {
         for (const signature of candidates) {
           if (attributed.has(signature)) continue;
-          const judged = await judge(signature);
+          const judged = await judge(rpc.url, signature);
           // Listed, and then not readable: it might be this payment.
           if (judged === "unreadable") return unreadable;
           if (judged.found) return judged;
@@ -298,7 +301,7 @@ export const solanaRail: X402Rail = {
       for (const block of window.blocks) {
         for (const signature of block.carrying) {
           if (attributed.has(signature)) continue;
-          const judged = await judge(signature).catch(() => "unreadable" as const);
+          const judged = await judge(rpc.url, signature).catch(() => "unreadable" as const);
           if (judged === "unreadable") return { ...unreadable, ...progress() };
           if (judged.found) return judged;
           if (judged.reason) landedUnpaid = judged.reason;
@@ -306,12 +309,70 @@ export const solanaRail: X402Rail = {
         searchedTo = block.slot;
       }
       if (window.incomplete !== undefined) return { found: false, reason: window.incomplete, unreadable: true, ...progress() };
+
+      // The primary read the whole window clean. A lying primary could have hidden the one block that holds the payment, and
+      // Solana RPCs cannot be asked about a past slot: so every other endpoint of the verdict set reads the whole window
+      // itself, with its own progress, and judges the transactions carrying the owner's signature itself.
+      const set = verdictSet(SOLANA_DEVNET, options);
+      if ("error" in set) return { found: false, unreadable: true, reason: agreementWords({ agreed: false, why: "unreadable", reason: set.error }), ...progress() };
+      const lastSlot = searchedTo;
+      const left: string[] = [];
+      const confirmed: Record<string, number> = { ...facts.confirmSearchedTo };
+      const agreeing = new Set(set.verdict.filter((m) => sameRpcUrl(m.url, rpc.url)).map((m) => m.operator));
+      for (const member of set.verdict) {
+        if (sameRpcUrl(member.url, rpc.url)) continue;
+        const words = await checkIdentity(member.url, identityOf(SOLANA_DEVNET), rpcCaller(options));
+        if (words) {
+          left.push(words);
+          continue;
+        }
+        const id = endpointId(member.url);
+        const behind = { found: false as const, unreadable: true as const, ...progress(), ...(Object.keys(confirmed).length ? { confirmSearchedTo: confirmed } : {}) };
+        let theirs: WindowRead;
+        try {
+          const there = await rpcCall<{ blockHeight?: unknown } | null>(member.url, "getEpochInfo", [{ commitment: "finalized" }], options);
+          if (!isCount(there?.blockHeight) || there.blockHeight <= last!) {
+            return { ...behind, reason: "no transaction carrying the owner's signature was found in the blocks it could land in on one RPC, but a second RPC endpoint does not show the blockhash expired yet" };
+          }
+          theirs = await readWindow(member.url, fromSlot, last!, facts.ownerSignature!, facts.confirmSearchedTo?.[id], { ...options, searchMs: options.confirmMs ?? options.searchMs });
+        } catch {
+          left.push("a second RPC endpoint could not be read (it gave an unreadable answer)");
+          continue;
+        }
+        let theirTo = theirs.readTo;
+        for (const block of theirs.blocks) {
+          for (const signature of block.carrying) {
+            if (attributed.has(signature)) continue;
+            const judged = await judge(member.url, signature).catch(() => "unreadable" as const);
+            if (judged === "unreadable") return { ...behind, reason: "the chain could not be read: a second RPC endpoint did not give a usable answer" };
+            // a payment found on one endpoint is found: a positive may rest on a single endpoint
+            if (judged.found) return judged;
+          }
+          theirTo = block.slot;
+        }
+        if (theirTo !== undefined) confirmed[id] = theirTo;
+        if (theirs.incomplete !== undefined) {
+          return {
+            found: false,
+            unreadable: true,
+            reason: "no transaction carrying the owner's signature was found in the blocks it could land in on one RPC, but a second RPC endpoint has not finished reading them; the next status reads on",
+            ...progress(),
+            confirmSearchedTo: confirmed,
+          };
+        }
+        agreeing.add(member.operator);
+      }
+      if (agreeing.size < set.quorum) {
+        return { found: false, unreadable: true, reason: agreementWords({ agreed: false, why: agreeing.size ? "missing" : "unreadable", reason: "", left }), ...progress() };
+      }
       return {
         found: false,
         never: true,
         reason: landedUnpaid
           ? `${landedUnpaid}, and its blockhash expired at block height ${last} (the chain is at ${height}), so it can no longer land`
           : `no transaction carrying the owner's signature succeeded, and its blockhash expired at block height ${last} (the chain is at ${height}): none of the ${WINDOW_BLOCKS} blocks it could land in holds one that did, so it can no longer land`,
+        agreement: set.agreement,
+        agreedAt: { operators: [...agreeing], ...(lastSlot !== undefined ? { slot: lastSlot } : {}) },
       };
     } catch {
       return unreadable;

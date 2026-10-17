@@ -18,7 +18,7 @@ import type { EndpointSet } from "../rpc-endpoints.mjs";
 import type { MppChallenge } from "../mpp.js";
 import type { ChainCheck } from "../settlement.js";
 import type { SignKind, SignRequest, SignResult } from "../signer/types.js";
-import type { Attempt, PaymentContext, PaymentTerms } from "../types.js";
+import type { Attempt, ChainAgreedAt, ChainAgreement, PaymentContext, PaymentTerms } from "../types.js";
 import type { Challenge, RawAccept } from "../x402.js";
 
 /** The seller's requirement as this client acts on it: an x402 accept object, or an MPP challenge. */
@@ -45,6 +45,8 @@ export interface ChainReadOptions {
    * what it has read whole is kept, and the next search reads the rest.
    */
   searchMs?: number;
+  /** How long one search may spend reading the same blocks on each other verdict endpoint (Solana; `searchMs` when not given). */
+  confirmMs?: number;
 }
 
 /** Everything the chain is asked about one payment: from the attempt, never from the seller's report. */
@@ -78,9 +80,14 @@ export interface PaymentFacts {
   searchFromSlot?: number;
   /** Solana: an earlier search read the blocks the payment could have landed in up to this slot, none holding it. */
   searchedToSlot?: number;
+  /** Solana: how far each other verdict endpoint (by its id) has read the same blocks, none holding the payment. */
+  confirmSearchedTo?: Record<string, number>;
   /** Transactions already recorded as the payment of another attempt: never this one's, whatever they show. */
   attributed?: readonly string[];
 }
+
+/** How a "never paid" verdict was agreed: see src/core/rpc-endpoints.mjs. */
+export type { ChainAgreement, ChainAgreedAt } from "../types.js";
 
 /**
  * A search for a payment nobody reported (or that a seller reported without a transaction the chain confirms): found
@@ -91,7 +98,9 @@ export interface PaymentFacts {
  */
 export type FoundPayment =
   | { found: true; transaction: string; final?: false; paymentBlock?: string }
-  | { found: false; reason: string; unreadable?: boolean; never?: boolean; inclusionGone?: true; authorizationUsed?: true; searchedToSlot?: number };
+  // `never` carries the proof that the verdict set agreed: a "never" cannot be built without it
+  | { found: false; never: true; reason: string; agreement: ChainAgreement; agreedAt: ChainAgreedAt; searchedToSlot?: number; unreadable?: undefined; inclusionGone?: undefined; authorizationUsed?: undefined }
+  | { found: false; never?: false; reason: string; unreadable?: boolean; inclusionGone?: true; authorizationUsed?: true; searchedToSlot?: number; confirmSearchedTo?: Record<string, number> };
 
 /** What a signed result records on the attempt before anything leaves this machine. */
 export type SignedFacts = Pick<Attempt, "authorizationNonce" | "authorizationValidBefore" | "paymentMemo" | "ownerSignature" | "lastValidBlockHeight" | "searchFromSlot">;

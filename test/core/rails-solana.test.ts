@@ -410,6 +410,9 @@ describe("what the chain must show", () => {
       found: false,
       never: true,
       reason: `no transaction carrying the owner's signature succeeded, and its blockhash expired at block height ${builtHeight + 150} (the chain is at ${builtHeight + 151}): none of the 151 blocks it could land in holds one that did, so it can no longer land`,
+      // the RPC the options pin is believed alone, and the verdict says so
+      agreement: "caller",
+      agreedAt: { operators: ["127.0.0.1"], slot: expect.any(Number) },
     });
     // Without the last valid height, nothing is ever called final.
     expect(await solanaRail.findPayment!(facts({ lastValidBlockHeight: undefined }), options())).toEqual({ found: false, reason: "no transaction carrying the owner's signature was found yet" });

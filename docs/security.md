@@ -330,18 +330,39 @@ When the chain shows the payment can no longer happen, the attempt becomes `fail
   hold no payment (`searchedToSlot`); the next status reads on from the block after it. Finalized
   blocks do not change, so what an earlier status read still holds. The list of the owner's token
   account's transactions is used to find a payment, never to show one is missing: an RPC writes that
-  list after the blocks, so it can lag them.
+  list after the blocks, so it can lag them. A second endpoint of the verdict set (below) reads the
+  same blocks itself, with its own progress (`confirmSearchedTo`), and a payment it finds is the answer.
 - On Tempo Moderato: never. A transfer the wallet was asked to send has no expiry, so only finding it
   resolves the attempt.
 
 The same search decides a payment the seller reported without a transaction the chain confirms.
 
-These checks trust the RPC's answer. The client does not run a node: a dishonest or compromised RPC
-can answer with a receipt that never happened, or hide one that did. HTTPS authenticates the
-connection to that RPC, not the chain behind it. Base Sepolia uses `SUPERSTABLES_RPC_URL` when it is
-set, Tempo Moderato `SUPERSTABLES_TEMPO_RPC` and Solana devnet `SUPERSTABLES_SOLANA_RPC` (each
-HTTPS, or HTTP on this machine, without credentials); otherwise the client uses the chain's
-configured public RPC. Use an RPC you trust when that matters. The budget rails read the chain too.
+### Which RPC is believed
+
+A payment is read through one RPC, but one RPC's word is never enough to call a payment unpaid, because
+that frees the daily cap and lets an agent pay again. Every endpoint is first asked which chain it is on
+(`eth_chainId`, or the genesis hash on Solana) before anything is read from it, once per process, and an
+endpoint on another chain is not read at all. Then `unpaid` is decided only when the verdict set agrees:
+
+- two endpoints run by different operators show the same final block (number, hash and time) and the same
+  answer there (`chain_agreement: "quorum"`); or
+- the owner's own node, set with `superstables owner settings rpc` and `ownNode` (`owner-node`); or
+- on a testnet whose table lists one public RPC, that RPC (`single`); or
+- an RPC the calling code pinned (the SDK's `rpcUrl`, `rpcUrlFor`; `caller`). The CLI pins none.
+
+The attempt and its receipt record how, and where: `chainAgreement` and `chainAgreedAt` (the operators and
+the final block and its hash, or the Solana slot); `status --json` prints `chain_agreement` and
+`chain_agreed_at`. The endpoints come from the table in `src/core/rpc-endpoints.mjs`, or from the owner's
+settings when they set their own.
+
+`SUPERSTABLES_RPC_URL`, `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC` (each HTTPS, or HTTP on this
+machine, without credentials) still choose where reads go, but an endpoint named only there never decides
+`unpaid`: unless it is a table URL or one the owner set, the attempt stays `uncertain` and counted, with the
+way out in words (unset the variable, or ask the owner to add it in the owner settings). When endpoints
+disagree, one is missing or unreadable, or a confirmer is still reading, the attempt also stays
+`uncertain`, and the agent is told not to pay again. Records written before this check are not re-opened,
+and a purchase on the hosted site (`buy-once`) is not covered by it. The client does not run a node: HTTPS
+authenticates the connection to an RPC, not the chain behind it. The budget rails use the same endpoints.
 
 - **Solana and Tempo budget verdicts.** A verdict that lets an agent pay again or ends a budget (a delegate,
   a token account or an access key gone, a purchase that never happened or failed) is believed only when
