@@ -3,12 +3,15 @@
 // Every outcome that is not a signature is a refusal with a reason, never an exception the
 // caller has to guess at — "the owner said no" is an answer, and the agent should say it.
 
+import { verifyTypedData } from "viem";
+import { authorizationTypes } from "@x402/evm";
 import { agentTokenPath, walletUrl } from "../home.js";
 import { readBody } from "../http.js";
 import { untrustedText } from "../text.js";
-import { evmNetworkFor, networkFor } from "../chain.js";
+import { evmNetworkFor, isSameAddress, networkFor } from "../chain.js";
+import { MAX_SIGNED_LIFETIME_S } from "../rails/evm.js";
 import type { WalletRequestView, WalletStatus } from "../types.js";
-import { LOCAL_WALLET_EVM_ONLY, SignRefused, type Eip3009SignResult, type SignHooks, type SignRequest, type Signer } from "./types.js";
+import { LOCAL_WALLET_EVM_ONLY, SignRefused, type Eip3009SignRequest, type Eip3009SignResult, type SignHooks, type SignRequest, type Signer } from "./types.js";
 import { readSecretFile } from "../../wallet/keystore.js";
 
 export interface WalletSignerOptions {
@@ -85,6 +88,20 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
     if (err instanceof SignRefused) throw err;
     throw new SignRefused("unavailable", WALLET_DOWN);
   }
+  // A wallet that is full (429) or cannot keep its audit log (503) says why, and nobody was asked: an unavailable refusal,
+  // which reopens the quote, not a refusal of this payment.
+  if (res.status === 429 || res.status === 503) {
+    const { text } = await readBody(res, 200, HTTP_TIMEOUT_MS);
+    let said = text;
+    try {
+      const error = (JSON.parse(text) as { error?: unknown }).error;
+      if (typeof error === "string") said = error;
+    } catch {
+      // cut off at 200 bytes: the raw text is shown
+    }
+    said = untrustedText(said, 200);
+    throw new SignRefused("unavailable", `the wallet refused: ${said || `HTTP ${res.status}`}`);
+  }
   if (res.status === 401 || res.status === 403 || res.status >= 500) {
     throw new SignRefused("unavailable", WALLET_DOWN);
   }
@@ -113,6 +130,11 @@ export class WalletSigner implements Signer {
   private readonly wire: WalletWire;
   private readonly pollMs: number;
   private readonly timeoutMs: number;
+  /** Requests this signer is waiting on, so closing it can cancel them. */
+  private readonly outstanding = new Set<string>();
+  /** One cancel per request, shared by the deadline and by close(). */
+  private readonly cancels = new Map<string, Promise<WalletRequestView | undefined>>();
+  private closed = false;
 
   constructor(options: WalletSignerOptions = {}) {
     this.wire = wireFor(options);
@@ -153,7 +175,8 @@ export class WalletSigner implements Signer {
     if (req.kind !== "eip3009") throw new SignRefused("invalid", LOCAL_WALLET_EVM_ONLY);
     await hooks?.beforeAsk?.();
     const deadline = Date.now() + this.timeoutMs;
-    let view = await walletRequest<WalletRequestView>(this.wire, "POST", "/requests", { sign: req });
+    // The wallet is told how long this wait is, so that it never hands out a signature after it.
+    let view = await walletRequest<WalletRequestView>(this.wire, "POST", "/requests", { sign: req, waitMs: this.timeoutMs });
 
     // The wallet decides twice before a human is involved: is this request well formed, and
     // does the owner's own policy allow it? Both answers come back on the first response.
@@ -168,35 +191,134 @@ export class WalletSigner implements Signer {
     }
     if (view.status === "pending") hooks?.onPending?.(view.id);
 
-    while (view.status !== "signed") {
-      if (Date.now() >= deadline) {
-        throw new SignRefused(
-          "expired",
-          `the wallet did not answer within ${Math.round(this.timeoutMs / 1000)} s`,
-          view.id,
+    const id = view.id;
+    this.outstanding.add(id);
+    try {
+      while (view.status !== "signed") {
+        if (this.closed) throw await this.gaveUp(id, "abandoned");
+        if (Date.now() >= deadline) throw await this.gaveUp(id, "expired");
+        await sleep(Math.max(0, Math.min(this.pollMs, deadline - Date.now())));
+        if (this.closed) throw await this.gaveUp(id, "abandoned");
+        view = await walletRequest<WalletRequestView>(
+          this.wire,
+          "GET",
+          `/requests/${encodeURIComponent(id)}`,
         );
+        if (view.status === "denied") {
+          throw new SignRefused("denied", view.reason ?? "the owner denied this payment in the wallet", view.id);
+        }
+        if (view.status === "expired") {
+          throw new SignRefused("expired", view.reason ?? "the request expired before the owner decided", view.id);
+        }
+        if (view.status === "rejected") {
+          throw new SignRefused("invalid", view.reason ?? "the wallet rejected the request", view.id);
+        }
       }
-      await sleep(Math.max(0, Math.min(this.pollMs, deadline - Date.now())));
-      view = await walletRequest<WalletRequestView>(
-        this.wire,
-        "GET",
-        `/requests/${encodeURIComponent(view.id)}`,
-      );
-      if (view.status === "denied") {
-        throw new SignRefused("denied", view.reason ?? "the owner denied this payment in the wallet", view.id);
-      }
-      if (view.status === "expired") {
-        throw new SignRefused("expired", view.reason ?? "the request expired before the owner decided", view.id);
-      }
-      if (view.status === "rejected") {
-        throw new SignRefused("invalid", view.reason ?? "the wallet rejected the request", view.id);
-      }
+      // Closed while the last answer was on its way: closed means no signature comes back, even this one.
+      if (this.closed) throw await this.gaveUp(id, "abandoned");
+    } finally {
+      this.outstanding.delete(id);
     }
 
     if (!view.result) {
-      throw new SignRefused("invalid", "the wallet reported a signature but returned no payload", view.id);
+      throw new SignRefused("invalid", view.withheld ? (view.reason ?? "the wallet withheld this signature") : "the wallet reported a signature but returned no payload", view.id);
+    }
+    // Whatever answers on that port, the signature is checked before it is believed: it must be the payment that was asked for.
+    const problem = await resultProblem(req, view.result, Date.now());
+    if (problem) {
+      throw new SignRefused("invalid", `the wallet returned an authorization that is not the one asked for (${problem}); it was not sent`, view.id);
     }
     return { kind: "eip3009", payload: view.result.payload, signer: view.result.signer };
+  }
+
+  /** The refusal for a wait that ended without a signature, after the wallet was told to forget the request. */
+  private async gaveUp(id: string, code: "expired" | "abandoned"): Promise<SignRefused> {
+    const answer = await this.cancel(id);
+    const waited = `the wallet did not answer within ${Math.round(this.timeoutMs / 1000)} s`;
+    if (!answer) {
+      return new SignRefused(
+        code,
+        `${code === "expired" ? waited : "the payment stopped waiting"}; this wallet cannot cancel requests, so approving it there later still signs, but this payment will not be sent`,
+        id,
+      );
+    }
+    // Still being signed when the cancel landed is the same as signed and not yet collected: the wallet withholds it.
+    if (answer.status === "signed" || answer.status === "approved") {
+      if (answer.status === "signed" && answer.served) {
+        return new SignRefused("unknown", "the owner approved just as the wait ended and the wallet had already handed the signature out; it may still pay: check `superstables status`", id);
+      }
+      return new SignRefused(code, "the owner approved just as the wait ended; the wallet withheld that signature, so nothing can be paid with it", id);
+    }
+    if (answer.status === "denied") return new SignRefused("denied", answer.reason ?? "the owner denied this payment in the wallet", id);
+    if (answer.status === "rejected") return new SignRefused("invalid", answer.reason ?? "the wallet rejected the request", id);
+    return new SignRefused(
+      code,
+      code === "expired"
+        ? `${waited}; the request was cancelled in the wallet, so approving it there now signs nothing`
+        : "the payment stopped waiting; the wallet request was cancelled",
+      id,
+    );
+  }
+
+  /** Tells the wallet this request is no longer wanted. Once per request; undefined when the wallet did not answer in kind (an older wallet, or none). */
+  async cancel(id: string): Promise<WalletRequestView | undefined> {
+    let done = this.cancels.get(id);
+    if (!done) {
+      done = walletRequest<WalletRequestView>(this.wire, "POST", `/requests/${encodeURIComponent(id)}/cancel`).catch(() => undefined);
+      this.cancels.set(id, done);
+    }
+    return done;
+  }
+
+  /** Stops every wait this signer has open, cancelling its requests in the wallet. */
+  async close(): Promise<void> {
+    this.closed = true;
+    await Promise.all([...this.outstanding].map((id) => this.cancel(id)));
+  }
+}
+
+/**
+ * Whether an authorization the wallet returned is the one asked for: "" when it is, else the name of the field that is
+ * not. The recipient, the amount and the payer are the request's own, the lifetime is the ten minutes a payment is signed
+ * for, and the signature is the payer's over the token's own signing domain.
+ */
+async function resultProblem(req: Eip3009SignRequest, result: NonNullable<WalletRequestView["result"]>, nowMs: number): Promise<string> {
+  if (result.kind !== "eip3009") return "kind";
+  const { signature, authorization: auth } = result.payload ?? {};
+  const text = (value: unknown): string => (typeof value === "string" ? value : "");
+  const requirements = req.requirements as typeof req.requirements & { maxAmountRequired?: string };
+  if (!/^0x[0-9a-fA-F]{130}$/.test(text(signature))) return "signature";
+  if (typeof result.signer !== "string") return "signer";
+  const to = text(auth?.to);
+  if (!to || !isSameAddress(to, String(requirements.payTo))) return "to";
+  const from = text(auth?.from);
+  if (!from || !isSameAddress(from, result.signer)) return "from";
+  if (text(auth?.value) !== String(requirements.amount ?? requirements.maxAmountRequired)) return "value";
+  if (!/^0x[0-9a-fA-F]{64}$/.test(text(auth?.nonce))) return "nonce";
+  if (!/^\d{1,20}$/.test(text(auth?.validBefore)) || !/^\d{1,20}$/.test(text(auth?.validAfter))) return "validBefore";
+  const validBefore = BigInt(text(auth?.validBefore)) * 1000n;
+  if (validBefore <= BigInt(nowMs) || validBefore > BigInt(nowMs) + BigInt(MAX_SIGNED_LIFETIME_S + 30) * 1000n) return "validBefore";
+  const network = evmNetworkFor(String(requirements.network ?? ""));
+  if (!network) return "network";
+  try {
+    const genuine = await verifyTypedData({
+      address: result.signer as `0x${string}`,
+      domain: { name: network.usdc.eip712.name, version: network.usdc.eip712.version, chainId: network.chainId, verifyingContract: requirements.asset as `0x${string}` },
+      types: { TransferWithAuthorization: authorizationTypes.TransferWithAuthorization },
+      primaryType: "TransferWithAuthorization",
+      message: {
+        from: from as `0x${string}`,
+        to: to as `0x${string}`,
+        value: BigInt(text(auth?.value)),
+        validAfter: BigInt(text(auth?.validAfter)),
+        validBefore: BigInt(text(auth?.validBefore)),
+        nonce: text(auth?.nonce) as `0x${string}`,
+      },
+      signature: signature as `0x${string}`,
+    });
+    return genuine ? "" : "signature";
+  } catch {
+    return "signature";
   }
 }
 

@@ -418,8 +418,8 @@ How it runs: pay asks the seller for its price again, then asks the owner. In br
 default) it serves the approval page itself on 127.0.0.1 and prints its approval link; the page
 works only while this command runs, and only in a browser on this machine (over SSH, forward the
 port the approval link names: ssh -L 4412:127.0.0.1:4412). With --wallet local the request goes to
-the wallet process, whose page outlives this command; approving there after pay has stopped pays
-nothing, because nothing is left to submit it.
+the wallet process, whose page outlives this command; when pay stops waiting it cancels the request
+there, so approving it afterwards signs nothing.
 
 Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
 Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet; MPP with

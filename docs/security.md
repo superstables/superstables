@@ -180,8 +180,7 @@ but it would not have to ask for the connection again.
   plus the seller's `maxTimeoutSeconds` (300 seconds unless the seller asks for something else), and
   never more than 600 seconds: a seller may allow up to an hour, and its requirement is sent back
   as offered, but what `pay` signs lasts ten minutes at most. After that, it cannot succeed on
-  chain. A request a program sends to the local wallet directly, not through `pay`, is still signed
-  for the window it names, up to an hour.
+  chain. The local wallet signs the same ten-minute authorization for a request sent to it directly.
 - Closing the client marks pending approval requests `abandoned`, which is not a rejection, and a
   signature that arrives afterwards is never sent. A payment already being sent can end
   `uncertain` instead. If the process is killed, the log may have no final line; pending requests
@@ -228,12 +227,13 @@ including pending, in-flight and uncertain payments; the local wallet counts the
 its own `wallet/audit.jsonl`. Both add up whole token units (millionths of a dollar for the dollar
 stablecoins), never floating-point decimals. On the browser signer's path, from the payment records
 to the policy check, totals and comparisons with the cap are exact, so a cap is reached exactly.
-The local wallet daemon is not exact end to end: it passes its whole-unit total, and the payment's
-amount, to the policy check as decimal numbers, and from about 8.6 billion dollars upward that
-conversion can be off by a unit or more in either direction. That limitation remains for the local
-wallet. For the browser signer, a record whose amount cannot be read makes today's total unknown,
-and the daily cap then refuses every payment until the record is fixed. Neither reads chain
-history: delete those records and the count starts again.
+The local wallet daemon passes its whole-unit total and the payment's amount to the same check as
+whole units, so the cap is reached exactly there too. It reads both policy files again when a
+request arrives and again when you approve it, counts requests still waiting for you, and refuses
+to sign while its audit log cannot be written or read. For the browser signer, a record whose
+amount cannot be read makes today's total unknown, and the daily cap then refuses every payment
+until the record is fixed. Neither reads chain history: delete those records and the count starts
+again.
 
 ## Testnet only
 
@@ -391,7 +391,7 @@ It generates two random 32-byte hex secrets at first start, in `~/.superstables/
 
 | Credential | File | What it can do |
 | --- | --- | --- |
-| Agent token | `wallet/agent-token` | Ask. `POST /requests`, `GET /requests/:id`, `GET /status`, `GET /address` |
+| Agent token | `wallet/agent-token` | Ask. `POST /requests`, `GET /requests/:id`, `POST /requests/:id/cancel`, `GET /status`, `GET /address` |
 | Owner secret | `wallet/owner-secret` | Decide. Everything above, plus `GET /owner/requests`, `POST /owner/requests/:id/approve`, `POST /owner/requests/:id/deny` |
 
 Both are sent as `Authorization: Bearer …` and compared in constant time. A missing or unknown
@@ -408,8 +408,15 @@ it writes no launcher and opens the page without the secret. It deletes the file
 has signed in with the secret, or when the wallet stops, and the folder once it is empty. A URL fragment is not sent to the server. The page keeps
 the secret in that tab's session storage and takes it out of the address bar and the history.
 Anyone opening the page another way, over SSH for example, pastes the secret from
-`wallet/owner-secret`. The wallet verifies the same facts the approval page does and signs the stored requirement byte for
-byte, and every state change goes to `wallet/audit.jsonl`.
+`wallet/owner-secret`. The wallet verifies the same facts the approval page does and signs the same EIP-3009 authorization the
+page builds, at most ten minutes long and never to its own address, and every state change goes to
+`wallet/audit.jsonl`.
+
+At most three requests wait for you at once. A request the client stops waiting for is cancelled,
+and the wallet hands out a signature only until the client's wait ends (plus 15 seconds). A request
+from a web page, with an `Origin` other than the wallet's own, is refused, and requests must be
+JSON. Every state change is flushed to `wallet/audit.jsonl` before the next step, and a failed
+write stops it.
 
 The caveat is the one browser mode removes. This is credential separation inside one operating
 system account, not a hardware boundary: any process running as you can read

@@ -39,7 +39,7 @@ const EIP712_DOMAIN_TYPE = [
  * validAfter by ten minutes and carries its amount as maxAmountRequired, a v2 one does not.
  * validBefore is now plus the seller's window, at most ten minutes (rails/evm.ts).
  */
-export function buildTypedData(record: StepRecord, payer: string): ApprovalTypedData {
+export function buildTypedData(record: Pick<StepRecord, "network" | "requirement" | "x402Version">, payer: string): ApprovalTypedData {
   const network = record.network;
   if (network.rail !== "evm") throw new Error(`${network.label} is not an x402 EVM chain`);
   const requirement = record.requirement as PaymentRequirements & { maxAmountRequired?: string };
