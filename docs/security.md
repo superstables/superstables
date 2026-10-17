@@ -35,7 +35,7 @@ home folder itself may be a link to such a folder. Budget folders (`keys/budget/
 written to them. The client reads the local wallet's agent token
 only from a regular file that only you can read.
 
-When a budget command or `superstables owner settings sign` opens its approval link in your browser, it does not put the link on a command line, where every user on the machine could read it with `ps`. It writes a launcher file, mode 0600, in `~/Superstables-budget-open/` (mode 0700), which sends the browser to the link, and gives the browser only the file's path. The file is deleted when the approval ends or the command stops, and the folder once it is empty; one left by a command that was killed is removed the next time a link is opened. The folder check looks at that folder only, so it assumes your home folder is not writable by other users: in a home folder others can write to, they could swap the launcher folder between the check and the file's creation. The file itself is still created exclusively, with mode 0600. The local wallet's launcher, below, has the same limit.
+When a budget command or `superstables owner settings sign` opens its approval link in your browser, it does not put the link on a command line, where every user on the machine could read it with `ps`. It writes a launcher file, mode 0600, in `~/Superstables-budget-open/` (mode 0700), which sends the browser to the link, and gives the browser only the file's path. The file is deleted when the approval ends or the command exits, and the folder once it is empty; one left by a command stopped by a signal, Ctrl-C included, is removed the next time a link is opened. The folder check looks at that folder only, so it assumes your home folder is not writable by other users: in a home folder others can write to, they could swap the launcher folder between the check and the file's creation. The file itself is still created exclusively, with mode 0600. The local wallet's launcher, below, has the same limit.
 
 Before the owner signs, the client builds an authorization and serves a page that shows its terms.
 After it checks the signature it gets back, it sends the authorization to the seller, which has a
@@ -814,9 +814,10 @@ says "not supported", there is no command for it yet; do not move key files by h
   setup refuses and the old file is untouched. If the process is killed in the moment between the overwrite and the rename, the key
   file holds zeros, the key is in the keychain under the account above, and a hidden file named `.<name>.<pid>.<random>.tmp`
   (mode 0600) beside it holds the address lines. Running the same `setup` again finishes the move: it checks that the keychain
-  gives back the key of the address the hidden file names, then puts that file in place. If the keychain cannot be read, the
-  hidden file is gone, or another setup is still running, setup refuses, changes nothing and says which keychain entry holds the
-  key. Do not start a new agent because of it: the old one may still hold a live budget. A locked keychain makes `buy`, `grant`,
+  gives back the key of the address the hidden file names, then puts that file in place. If the keychain cannot be read or the
+  hidden file is gone, setup refuses, changes nothing and says which keychain entry holds the key. If the hidden file names a
+  different agent than the public file does, it refuses and names both. If another setup is still moving the key, it refuses and
+  asks you to wait for that one to finish. Do not start a new agent because of it: the old one may still hold a live budget. A locked keychain makes `buy`, `grant`,
   `fund-agent`, `recover` and owner requests on chains approved on superstables.com refuse, because the agent key signs
   them; the local `revoke` still works. `tempo` agent keys stay in files in this release.
 - **Budget agent key, `evm` and `solana`.** Supported: `superstables budget rotate --rail evm|solana`

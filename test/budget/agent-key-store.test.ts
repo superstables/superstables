@@ -488,7 +488,7 @@ describe("an interrupted move into the keychain", () => {
     write(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_AGENT_ADDRESS=${c.agent}\n`, 0o644);
     const out = await setupAgain("evm");
     expect(out.code, all(out)).toBe(3);
-    // the RESULT line cuts its words at 300 characters: the warning leads `next`, and the whole text is on stderr
+    // the warning leads `next`; the whole text is also on stderr
     expect(out.result.next).toMatch(/^Do not start a new agent/);
     expect(all(out)).toContain(`account evm:${c.agent}`);
     expect(all(out)).toContain(`secret-tool lookup service superstables-budget-agent account evm:${c.agent}`);
@@ -506,6 +506,24 @@ describe("an interrupted move into the keychain", () => {
     expect(stillZeros(agentFile())).toBe(true);
   }, 120_000);
 
+  it("evm: a replacement for an agent the public file does not name is refused", async () => {
+    const c = crashEvm();
+    const other = privateKeyToAccount(generatePrivateKey()).address;
+    write(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_AGENT_ADDRESS=${other}\n`, 0o644);
+    const out = await setupAgain("evm");
+    expect(out.code, all(out)).toBe(3);
+    expect(all(out)).toContain(`names agent ${c.agent}, but the public file names agent ${other}`);
+    expect(out.result.next).toContain("do not start a new agent");
+    expect(stillZeros(agentFile())).toBe(true);
+    expect(read(c.replacement)).toBe(c.text);
+  }, 120_000);
+
+  it("evm: a locked keychain names the agent in the next step", async () => {
+    const c = crashEvm();
+    const out = await setupAgain("evm", { FAKE_KEYCHAIN_FAIL: "1" });
+    expect(out.result.next).toContain(`agent ${c.agent}`);
+  }, 120_000);
+
   it("evm: a keychain entry of another key is not trusted", async () => {
     const c = crashEvm({ entry: generatePrivateKey() });
     const out = await setupAgain("evm");
@@ -520,6 +538,7 @@ describe("an interrupted move into the keychain", () => {
     const out = await setupAgain("evm");
     expect(out.code, all(out)).toBe(3);
     expect(out.result.reason).toContain("another setup (process");
+    expect(out.result.next).toContain("if no setup is running");
     expect(stillZeros(agentFile())).toBe(true);
     expect(read(c.replacement)).toBe(c.text);
   }, 120_000);

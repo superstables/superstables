@@ -39,7 +39,7 @@ export function resumeKeychainMove(rail, path, o) {
   }
   const other = kept.find((r) => r.pid !== process.pid && alive(r.pid));
   if (other) {
-    return { state: "refused", reason: `another setup (process ${other.pid}) is moving the agent key into the keychain now`, next: "wait for it to finish, then run setup again" };
+    return { state: "refused", reason: `another setup (process ${other.pid}) is moving the agent key into the keychain now`, next: `wait for it to finish, then run setup again; if no setup is running, process ${other.pid} may be an unrelated program that reused the number of one that stopped, so end it or wait for it, then run setup again` };
   }
   const addresses = [];
   for (const r of kept) if (!addresses.some((a) => same(a, r.address))) addresses.push(r.address);
@@ -52,6 +52,19 @@ export function resumeKeychainMove(rail, path, o) {
     };
   }
   const address = addresses[0];
+  let named;
+  try {
+    named = o.publicAddress?.();
+  } catch {
+    named = undefined;
+  }
+  if (typeof named === "string" && ADDRESS_RE[rail].test(named) && !same(named, address)) {
+    return {
+      state: "refused",
+      reason: `${path} holds only zeros, and the replacement beside it (${kept[0].path}) names agent ${address}, but the public file names agent ${named}`,
+      next: `keep the replacement only if ${address} is the agent you mean, then run setup again; ${KEEP}`,
+    };
+  }
   const mine = kept.filter((r) => same(r.address, address));
   const replacement = mine[0];
   let secret;
@@ -63,8 +76,8 @@ export function resumeKeychainMove(rail, path, o) {
       state: "refused",
       reason: `${path} holds only zeros: an earlier setup was moving the agent key into the OS keychain and stopped before it replaced the file. ${replacement.path} holds the replacement, which names agent ${address}, but the keychain did not give its key back (${err.message})`,
       next: unavailable
-        ? `run setup on the machine and account whose keychain holds the key, with secret-tool (Linux) or security (macOS) installed; ${KEEP}`
-        : `unlock the keychain, then run setup again; ${KEEP}`,
+        ? `run setup on the machine and account whose keychain holds the key of agent ${address}, with secret-tool (Linux) or security (macOS) installed; ${KEEP}`
+        : `unlock the keychain (the key of agent ${address}), then run setup again; ${KEEP}`,
     };
   }
   let derived;
@@ -116,7 +129,7 @@ function noReplacement(rail, path, o) {
     reason: known
       ? `${first} The public file names agent ${known}; its key should be in the keychain under service ${SERVICE}, account ${rail}:${known}`
       : `${first} Its key should be in the keychain under service ${SERVICE}, account ${rail}:<the agent's address>`,
-    // the warning comes first: the RESULT line the dispatcher prints cuts a long `next`, and this is the part that must not be lost
+    // the warning comes first, so it is the first thing read in a long next step
     next: `${said(KEEP)}. Look the key up (${lookup}), write ${path} (mode 600) with the two lines ${o.storeVar}=os-keychain and ${o.addressVar}=${A}, then run setup again`,
   };
 }
