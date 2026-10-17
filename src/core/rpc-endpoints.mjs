@@ -6,6 +6,7 @@
 
 import { createHash } from "node:crypto";
 import { readOwnerSettings, rpcFor, sameRpcUrl } from "./owner-settings.js";
+import { setPrerequisiteCheck } from "./chain-gate.js";
 
 /** @typedef {{ url: string, operator: string, domains?: string[] }} TableEndpoint */
 /** @typedef {{ url: string, operator: string, source: "builtin"|"settings"|"env"|"caller", id: string }} Endpoint */
@@ -179,3 +180,10 @@ export function mainnetRpcReady(chainKey) {
   const set = endpointSet(chainKey, "verdict", { testnet: false });
   return !("error" in set) && (set.agreement === "owner-node" || distinct(set.verdict) >= 2);
 }
+
+// The chain gate's RPC prerequisite (src/core/chain-gate.js): the owner chose RPC endpoints for the chain in their settings
+// (which a valid signature covers), and they can decide a mainnet verdict: their own node, or two operators.
+setPrerequisiteCheck("ownerRpc", (chainKey) => {
+  const settings = readOwnerSettings();
+  return Boolean(settings && Object.hasOwn(settings.rpc, chainKey)) && mainnetRpcReady(chainKey);
+});

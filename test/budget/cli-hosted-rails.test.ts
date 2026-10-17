@@ -490,8 +490,8 @@ describe("solana, hosted", () => {
     expect(site.posts[0].ok).toBe(true);
   }, 90_000);
 
-  // docs/security.md: a revoke ends the delegate, not the key. There is no command for a new agent key on solana, and the
-  // owner can grant the same key again, so after a suspected leak the owner does not grant it again.
+  // docs/security.md: a revoke ends the delegate, not the key, so the owner can grant the same key again. Replacing the key is
+  // `budget rotate --rail solana`, which retires the old one first; after a suspected leak, rotate instead of granting it again.
   it("a revoked agent key can be granted again: revoke is not rotation", async () => {
     hostedSolana();
     site.owner = SOL_OWNER;

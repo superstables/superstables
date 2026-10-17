@@ -215,7 +215,7 @@ export function accessKeyAccountForOwner(ownerAddress: Address, privateKey: Hex)
 
 /** The chain gate for this rail's one chain: '' when this build may sign, ask the owner's wallet or send on it, else why not. */
 export function tempoGate(): string {
-  return chainGate({ rail: 'tempo', key: 'tempo-moderato', testnet: TESTNET }, chainGateSettings())
+  return chainGate({ rail: 'tempo', key: 'tempo-moderato', testnet: TESTNET, token: { symbol: TOKEN_LABEL, address: TOKEN_ADDRESS, decimals: TOKEN_DECIMALS } }, chainGateSettings())
 }
 // No Tempo budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a key
 // file or asks an RPC anything.

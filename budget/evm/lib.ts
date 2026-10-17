@@ -391,7 +391,7 @@ let rpcChecked = false;
 /** An RPC URL as an agent may see it: the host only. The path, query and credentials of a URL can hold an access key. */
 export const rpcHost = (url: string): string => { try { return new URL(url).host; } catch { return "(unreadable URL)"; } };
 export async function assertRpcChain() {
-  const gate = chainGate({ rail: "evm", key: CFG.key, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet }, chainGateSettings());
+  const gate = chainGate({ rail: "evm", key: CFG.key, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.testnet, token: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.token }, chainGateSettings());
   if (gate) {
     console.error(`REFUSED: ${gate}. Nothing was signed or sent.`);
     process.exit(3);

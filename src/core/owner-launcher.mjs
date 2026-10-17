@@ -1,4 +1,5 @@
-// Opens a budget owner approval link in the browser without putting it on a command line. The link is a capability
+// Shared by the budget's owner pages and `superstables owner settings sign`: opens an owner approval link in the browser
+// without putting it on a command line. The link is a capability
 // (http://127.0.0.1:P/owner/<id>, or the hosted https://…/approve/budget/<id>#<token>): in the arguments of xdg-open, open
 // or cmd /c start, every user on this machine could read it with ps while the opener ran. So the browser is given only the
 // path of a small launcher file, mode 0600 in a folder only this user can use, which sends it on to the link with
@@ -9,11 +10,21 @@
 // (src/wallet/daemon.ts, writeOwnerLauncher), copied rather than imported: src/wallet/ is the wallet's own code.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, constants, fsyncSync, openSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
+import { closeSync, constants, fsyncSync, openSync, readdirSync, rmdirSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ensurePrivateDir } from "./paths.mjs";
-import { writeAllSync } from "./secret-file.mjs";
+import { ensurePrivateDir } from "./private-dir.mjs";
+
+/** Writes all of `text` to `fd`; a launcher cut short is worse than none, so keep writing, and throw when no progress is made. */
+function writeAllSync(fd, text) {
+  const buf = Buffer.from(text, "utf8");
+  let off = 0;
+  while (off < buf.length) {
+    const n = writeSync(fd, buf, off, buf.length - off);
+    if (!(n > 0)) throw new Error(`short write: ${off} of ${buf.length} bytes written`);
+    off += n;
+  }
+}
 
 /** ~/Superstables-budget-open: not hidden (a Snap browser cannot read hidden folders), exists only while a launcher is in it. */
 export const launcherDir = () => join(homedir(), "Superstables-budget-open");

@@ -42,6 +42,7 @@ import { HOME, ensurePrivateDir } from "../paths.mjs";
 import { KEYCHAIN_UNAVAILABLE, deleteAgentSecret, storeAgentSecret } from "../os-keychain.mjs";
 import { overwriteInPlace } from "../../src/core/secret-overwrite.mjs";
 import { prepareSecretFile } from "../secret-file.mjs";
+import { resumeKeychainMove } from "../keychain-move.mjs";
 import { SETUP_KEYS, agentBinding, bindingLines, signLocalBinding } from "../owner-binding.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
@@ -97,6 +98,16 @@ for (const dir of [dirname(AGENT_ENV), dirname(PUBLIC_ENV)]) {
     process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: `make ${dir} a folder only you can write to (chmod 700), then run setup again` }));
   }
 }
+// a move into the keychain that a killed setup left half done (the key file holds only zeros): finish it, or say where the key is
+const resumed = resumeKeychainMove("evm", AGENT_ENV, {
+  storeVar: "B4_AGENT_KEY_STORE", addressVar: "B4_AGENT_ADDRESS", keyVar: "B4_AGENT_KEY",
+  addressOf: (k) => privateKeyToAccount(k as Hex).address, publicAddress: () => publicEnv().B4_AGENT_ADDRESS,
+});
+if (resumed.state === "refused") {
+  console.log(`REFUSED: ${resumed.reason}. Nothing was changed on this machine.\nNext: ${resumed.next}`);
+  process.exit(emit("setup", 3, { state: "refused_precheck", reason: resumed.reason, next: resumed.next }));
+}
+if (resumed.state === "finished") console.log(`finished moving the agent key into the keychain: an earlier setup stopped after overwriting ${AGENT_ENV} and before replacing it (agent ${resumed.address})`);
 let agentAddr: Address;
 const agentFile = agentFileValues();
 if (agentFile.problem !== undefined) {

@@ -3,6 +3,9 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
+import { agentKeyFile } from "./paths.mjs";
+import { readRegularFile } from "./secret-file.mjs";
+import { setPrerequisiteCheck } from "../src/core/chain-gate.js";
 
 const SERVICE = "superstables-budget-agent";
 /** The `code` of the Error these functions throw when no keychain tool is installed. */
@@ -158,3 +161,28 @@ export function deleteAgentSecret(rail, address, run = execFileSync, platform = 
     throw new Error(`the keychain did not remove the key: ${failure(err)}`);
   }
 }
+
+const STORE_LINES = { evm: ["B4_AGENT_KEY_STORE", "B4_AGENT_KEY"], solana: ["SOLANA_AGENT_KEY_STORE", "SOLANA_AGENT_SECRET_BASE58"] };
+
+/**
+ * How this machine keeps the rail's agent key: "os-keychain" (the file names the keychain and holds no key), "file",
+ * "absent", or "unreadable" (not a regular file, too large, or unreadable). Keeps nothing it read. Tempo is always "file".
+ * @param {string} rail
+ * @param {string} [path]
+ * @returns {"os-keychain" | "file" | "absent" | "unreadable"}
+ */
+export function agentKeyStorage(rail, path = agentKeyFile(rail)) {
+  const names = Object.hasOwn(STORE_LINES, rail) ? STORE_LINES[rail] : undefined;
+  let text;
+  try {
+    text = readRegularFile(path, "agent key file");
+  } catch (err) {
+    return /** @type {any} */ (err)?.code === "ENOENT" ? "absent" : "unreadable";
+  }
+  if (!names) return "file";
+  const lines = new Map(text.split(/\r?\n/).map((l) => l.match(/^([A-Za-z0-9_]+)=(.*)$/)).filter(Boolean).map((m) => [m[1], m[2]]));
+  return lines.get(names[0]) === "os-keychain" && !lines.get(names[1]) ? "os-keychain" : "file";
+}
+
+// The chain gate's key prerequisite (src/core/chain-gate.js): this rail's agent key file names the keychain and holds no key.
+setPrerequisiteCheck("agentKeyStore", (rail) => agentKeyStorage(String(rail)) === "os-keychain");

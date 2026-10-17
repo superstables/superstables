@@ -42,7 +42,7 @@ export class LocalKeySigner implements Signer {
     // refuses it again rather than sign over a domain the client does not know.
     const network = evmNetworkFor(String(req.requirements.network ?? ""));
     if (!network || !x402RailFor(network)) throw new SignRefused("invalid", `this wallet does not sign on ${untrustedText(req.requirements.network ?? "an unnamed chain", 60)}`);
-    const gate = chainGate({ rail: network.rail, key: network.key, testnet: network.testnet }, chainGateSettings()); if (gate) throw new SignRefused("invalid", gate);
+    const gate = chainGate({ rail: network.rail, key: network.key, testnet: network.testnet, token: network.token }, chainGateSettings()); if (gate) throw new SignRefused("invalid", gate);
     // Judged again here, as every signer must: the chain gate, the offer's `extra` allow-list, Permit2, the pinned domain,
     // the amount and the recipient. A request sent straight to the wallet gets no easier a check than one `pay` made.
     const judged = judgeSignRequest(req);

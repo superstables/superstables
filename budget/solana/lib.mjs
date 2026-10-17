@@ -85,8 +85,12 @@ export function rpcUrl(purpose = "read") {
 }
 export const RPC_URL = (() => { try { return rpcUrl("read"); } catch { return DEFAULT_RPC.solana; } })();
 export const EXPLORER_CLUSTER = "?cluster=devnet";
+export const USDC_MINT = new PublicKey(
+  "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+);
+export const USDC_DECIMALS = 6;
 /** The chain gate for this rail's one chain: "" when this build may sign, ask the owner's wallet or send on it, else why not. */
-const solanaGate = () => chainGate({ rail: "solana", key: "solana-devnet", testnet: TESTNET }, chainGateSettings());
+const solanaGate = () => chainGate({ rail: "solana", key: "solana-devnet", testnet: TESTNET, token: { symbol: "USDC", address: USDC_MINT.toBase58(), decimals: USDC_DECIMALS } }, chainGateSettings());
 // No Solana budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a
 // key file or asks an RPC anything.
 if (solanaGate()) {
@@ -95,10 +99,6 @@ if (solanaGate()) {
   console.log(`RESULT ${JSON.stringify({ ok: false, command, rail: "solana", chain: "devnet", state: "refused_precheck", reason: solanaGate(), next: "nothing was signed or sent; this build signs on Solana devnet only" })}`);
   process.exit(3);
 }
-export const USDC_MINT = new PublicKey(
-  "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
-);
-export const USDC_DECIMALS = 6;
 
 export const OWNER_KEY_PATH = ownerKeyFile("solana");
 export const AGENT_KEY_PATH = agentKeyFile("solana");

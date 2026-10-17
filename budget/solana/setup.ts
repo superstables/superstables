@@ -30,6 +30,7 @@ import { retiredProblem } from "../retired.mjs";
 import { HOME, ensurePrivateDir } from "../paths.mjs";
 import { KEYCHAIN_UNAVAILABLE, deleteAgentSecret, storeAgentSecret } from "../os-keychain.mjs";
 import { overwriteInPlace } from "../../src/core/secret-overwrite.mjs";
+import { resumeKeychainMove } from "../keychain-move.mjs";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
@@ -115,6 +116,16 @@ for (const dir of [dirname(AGENT_KEY_PATH), dirname(PUBLIC_PATH)]) {
     process.exit(result(3, { state: "refused_precheck", reason, next: `make ${dir} a folder only you can write to (chmod 700), then run setup again` }));
   }
 }
+// a move into the keychain that a killed setup left half done (the key file holds only zeros): finish it, or say where the key is
+const resumed = resumeKeychainMove("solana", AGENT_KEY_PATH, {
+  storeVar: "SOLANA_AGENT_KEY_STORE", addressVar: "SOLANA_AGENT_ADDRESS", keyVar: "SOLANA_AGENT_SECRET_BASE58",
+  addressOf: (s) => Keypair.fromSecretKey(bs58.decode(s)).publicKey.toBase58(), publicAddress: () => readPublic().agent?.toBase58(),
+});
+if (resumed.state === "refused") {
+  console.log(`REFUSED: ${resumed.reason}. Nothing was changed on this machine.\nNext: ${resumed.next}`);
+  process.exit(result(3, { state: "refused_precheck", reason: resumed.reason, next: resumed.next }));
+}
+if (resumed.state === "finished") console.log(`finished moving the agent key into the keychain: an earlier setup stopped after overwriting ${AGENT_KEY_PATH} and before replacing it (agent ${resumed.address})`);
 const fileNow = agentKeyFileValues();
 if (fileNow.problem !== undefined) {
   console.log(`REFUSED: ${fileNow.problem}. Nothing was changed on this machine.`);

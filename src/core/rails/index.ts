@@ -59,7 +59,7 @@ export function networkRefusal(named: string): string {
  * far as the owner.
  */
 function gateRefusal(network: NetworkInfo): Judged | undefined {
-  const reason = chainGate({ rail: network.rail, key: network.key, testnet: network.testnet }, chainGateSettings());
+  const reason = chainGate({ rail: network.rail, key: network.key, testnet: network.testnet, token: network.token }, chainGateSettings());
   return reason ? { supported: false, reason } : undefined;
 }
 

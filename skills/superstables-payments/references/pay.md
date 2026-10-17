@@ -30,17 +30,17 @@ superstables pay QUOTE_ID [--wait SECONDS] [--json]
 
 Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet, where the wallet signs and `pay` passes the signed payment to the seller; MPP with test pathUSD on Tempo Moderato, where the owner's wallet sends the payment itself and `pay` reads that transaction on chain before it calls the service. On Tempo, once the wallet has been asked to send, an attempt that ends without a transaction report is `uncertain`, a rejection the page reports from the wallet included; `superstables status` then searches the chain for it. `--wallet local` signs on the EVM chains only.
 
-The page works only while `pay` runs, and only in a browser on this machine (over SSH, the owner forwards the port the approval link names, for example `ssh -L 4412:127.0.0.1:4412 user@host`).
+The page works only while `pay` runs, and only in a browser on this machine (over SSH, the owner forwards the port the approval link names, for example `ssh -L PORT:127.0.0.1:PORT user@host`, with the port from the approval link).
 
 ## Ports, and other payments waiting
 
-The page uses port 4412. When another `pay` on this machine is already waiting there for its owner, this `pay` serves its page on a free port and says so under the approval link. Several payments can wait at once; there is nothing to fix.
+Each install keeps one port for the approval page, and the approval link names it. When another `pay` on this machine is already waiting on that port for its owner, this `pay` serves its page on a free port and says so under the approval link. Several payments can wait at once; there is nothing to fix.
 
 Never stop, kill or signal another `pay` process, to free a port or for any other reason. It is a payment waiting for its owner (another agent's, or the owner's own), and stopping it ends that payment as `abandoned`. This holds even when the process looks stuck or left over: only whoever started it stops it.
 
 `SUPERSTABLES_APPROVE_PORT` is an ordinary setting that fixes the port (`0` picks any free one). A fixed port is kept as chosen: if it is busy, `pay` fails at once with `refusal: "approval_page"`, the owner is not asked, and the same quote can still be paid. Unset the variable or choose another port, then run `pay` with the same quote id, as `next` says.
 
-`--wallet local` sends the request to the owner's local wallet process instead. The owner still approves each payment there; it does not let the agent pay alone. Use it only when the owner set it up.
+`--wallet local` sends the request to the owner's local wallet process instead, over a private socket in the wallet's folder. The owner still approves each payment on the wallet's page; it does not let the agent pay alone. Use it only when the owner set it up. The owner runs the wallet (`wallet init`, `wallet serve`, `wallet open`) in their own terminal, and the key is normally encrypted with a passphrase they type there; you never run those commands. If the wallet's page asks for the owner secret again after a reload, the owner runs `superstables --wallet local wallet open` to open it signed in. Never set `SUPERSTABLES_WALLET_URL`: the client sends the wallet's agent token to that address, and only the owner sets it, for a wallet started with `--tcp`.
 
 ## Running `pay` from an agent
 
@@ -57,7 +57,7 @@ Pick one of these:
 
    `setsid` in front of `nohup` also moves it out of your shell's process group, where available. Then:
 
-   - Read `pay.log`. Its first line names the attempt: `Paying quote QUOTE_ID (attempt ATTEMPT_ID).` The approval link follows as soon as it exists: `http://127.0.0.1:PORT/approve/<id>`.
+   - Read `pay.log`. Its first line names the attempt: `Paying quote QUOTE_ID (attempt ATTEMPT_ID).` The approval link follows as soon as it exists: `http://127.0.0.1:PORT/approve/<id>`. This is the only place it is printed: `status` never repeats it and no record holds it. Keep `pay.log` where only you can read it (`umask 077` before starting, or a private folder) and delete it when `pay` ends, since whoever can read the link can open that payment's approval page while `pay` runs (signing still needs the owner's wallet).
    - Show it to the owner (next section).
    - Poll `superstables status ATTEMPT_ID --json` every 15 to 30 seconds until `final` is `true`. It only reads records; it never starts or repeats a payment.
    - When `pay` ends, `pay.json` holds the same object as `status --json`.
@@ -101,7 +101,7 @@ After `settled` or `paid_service_failed`, `chain` says how far the payment is ch
 
 `superstables status` looks for an `uncertain` payment by what ties it to this attempt alone, never by a transaction the seller named: on the EVM chains, the authorization the owner signed (its nonce); on Tempo, the transfer with this payment's memo, mined after the wallet was asked; on Solana devnet, a transaction carrying the owner's signature among the owner's token account's transactions since the payment was built, and, once its blockhash has expired, in each block it could have landed in. A Tempo transfer has no expiry, so on Tempo only finding it resolves the attempt. The Solana search reads a limited number of transactions; when it cannot tell, it says so and the attempt stays `uncertain`. Through the public devnet RPC, which limits how fast blocks can be read, reading those blocks takes several `status` runs; each reads on from where the last stopped.
 
-Report `denied` as the owner's decision. Never report `abandoned` or `expired` as a rejection: nobody decided. Approving through an old approval link after `abandoned` pays nothing.
+Report `denied` as the owner's decision. Never report `abandoned` or `expired` as a rejection: nobody decided. Approving through an old approval link after `abandoned` pays nothing, and neither does approving in the local wallet once its client has stopped waiting: the client cancels that request in the wallet, and a signature nobody collects is never sent.
 
 `abandoned_by` (in `--json`) says what ended an abandoned wait:
 
@@ -123,7 +123,7 @@ The service's answer is printed after the receipt (up to 4,000 characters are ke
 - After `paid_service_failed`: do not pay again. Check `superstables status ATTEMPT_ID` and `superstables receipts`; report the receipt.
 - After `uncertain`: do not pay again, and do not quote the same request again. Run `superstables status ATTEMPT_ID` now and again later (a minute or more apart): it searches the chain. It ends the attempt `settled` or `paid_service_failed` when it finds the payment, and `failed` with `chain: "unpaid"` when the chain shows it was never made and can no longer be. A mismatched seller transaction still triggers this identity search, including records from 0.3.0. The rejected hash itself is never accepted as payment; a different found transaction must match the original payment identity. An earlier matching inclusion that was removed stays uncertain even after expiry and does not authorize paying again. Only after final `unpaid` proof was nothing paid, and only then take a new quote if the owner still wants the service. On Tempo a transfer has no expiry, so nothing but finding it resolves the attempt, and it keeps counting against the daily cap. Ask the owner to check their wallet's activity. If it shows no transfer and no request still waiting, paying again for the same request is the owner's decision, not yours; tell them this attempt keeps counting against the cap (they can raise `caps.per_day` in their policy if it blocks other payments).
 - `pay` with a used or expired quote exits 2 and does nothing.
-- A used quote already started a payment, and the error names it: `A payment for this quote already exists: attempt ATTEMPT_ID, STATE`. Follow that payment with `superstables status ATTEMPT_ID`; do not quote again to get a new one. If it is `awaiting_approval` and the `pay` that started it is still running, its approval link (in that `pay`'s output) is still the one to show the owner. Take a new quote only once `status` says that attempt is final and nothing was paid.
+- A used quote already started a payment, and the error names it: `A payment for this quote already exists: attempt ATTEMPT_ID, STATE`. Follow that payment with `superstables status ATTEMPT_ID`; do not quote again to get a new one. If it is `awaiting_approval` and the `pay` that started it is still running, its approval link (in that `pay`'s output; `status` does not show it) is still the one to show the owner. Take a new quote only once `status` says that attempt is final and nothing was paid.
 
 ## `--json` fields
 

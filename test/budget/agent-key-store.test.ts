@@ -1,7 +1,7 @@
 // `budget setup --key-store os-keychain`: an evm or solana agent key lives in the OS keychain, only its address in the file; and
 // the budget's folders are checked before anything is written. The real dispatcher and rail scripts against a fake chain on
 // 127.0.0.1, with fake `secret-tool` and `security` tools first on PATH. No network, no real keychain, no real key.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -419,4 +419,164 @@ describe("rotate and a key in the keychain", () => {
     expect(rec.at(-1)?.finishedAt).toBeTruthy();
     expect(calls).toEqual([]);
   }, 30_000);
+});
+
+// A move into the keychain that was killed after the key file was overwritten and before the replacement was renamed over it
+// leaves: the key in the keychain, a key file of zeros, and the hidden replacement. `setup` finishes it, or says where the key is.
+describe("an interrupted move into the keychain", () => {
+  const solOwner = Keypair.fromSeed(new Uint8Array(32).fill(4));
+  const solOwnerFile = () => { const p = join(scratch, "owner-sol.env"); write(p, `SOLANA_OWNER_SECRET_BASE58=${bs58.encode(solOwner.secretKey)}\n`); return p; };
+  /** The pid of a process that has ended. */
+  const deadPid = () => spawnSync(process.execPath, ["-e", ""]).pid as number;
+  const keysDir = () => join(home, "keys", "budget");
+  const zeros = (path: string, size: number) => writeFileSync(path, Buffer.alloc(size), { mode: 0o600 });
+  const noKey = new RegExp("B4_AGENT_KEY=|SOLANA_AGENT_SECRET_BASE58=");
+
+  function crashEvm(o: { pid?: number; entry?: string | null } = {}) {
+    const key = generatePrivateKey();
+    const agent = privateKeyToAccount(key).address;
+    const replacement = join(keysDir(), `.evm-agent.env.${o.pid ?? deadPid()}.0123abcd.tmp`);
+    const text = `B4_AGENT_KEY_STORE=os-keychain\nB4_AGENT_ADDRESS=${agent}\nB4_OWNER_SIGNATURE=x\n`;
+    write(replacement, text);
+    zeros(agentFile(), 120);
+    if (o.entry !== null) kc.setStore({ [`evm:${agent}`]: o.entry ?? key });
+    return { key, agent, replacement, text };
+  }
+  function crashSol(o: { pid?: number } = {}) {
+    const kp = Keypair.generate();
+    const agent = kp.publicKey.toBase58();
+    const replacement = join(keysDir(), `.solana-agent.env.${o.pid ?? deadPid()}.0123abcd.tmp`);
+    const text = `# Solana devnet AGENT key, kept in the OS keychain. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_KEY_STORE=os-keychain\nSOLANA_AGENT_ADDRESS=${agent}\nSOLANA_OWNER_ADDRESS=${solOwner.publicKey.toBase58()}\n`;
+    write(replacement, text);
+    zeros(solAgentFile(), 200);
+    kc.setStore({ [`solana:${agent}`]: bs58.encode(kp.secretKey) });
+    return { secret: bs58.encode(kp.secretKey), agent, replacement, text };
+  }
+  const setupAgain = (rail: "evm" | "solana", env: Record<string, string | undefined> = {}) =>
+    run(["setup", "--rail", rail, "--owner-key-file", rail === "evm" ? ownerFile() : solOwnerFile()], { env });
+  const stillZeros = (path: string) => readFileSync(path).every((b) => b === 0) && readFileSync(path).length > 0;
+
+  it("evm: setup finishes a move a killed setup left half done", async () => {
+    const c = crashEvm();
+    const out = await setupAgain("evm");
+    expect(out.code, all(out)).toBe(0);
+    expect(all(out)).toContain("finished moving the agent key into the keychain");
+    expect(all(out)).toContain("the key is in the OS keychain");
+    expect(read(agentFile())).toContain(c.text.split("\n")[2]);
+    expect(read(agentFile()).startsWith(`B4_AGENT_KEY_STORE=os-keychain\nB4_AGENT_ADDRESS=${c.agent}\nB4_OWNER_SIGNATURE=x\n`)).toBe(true);
+    expect(existsSync(c.replacement)).toBe(false);
+    expect(all(out)).not.toContain(c.key);
+  }, 120_000);
+
+  it("evm: a locked keychain: setup refuses, changes nothing, and says where the key is", async () => {
+    const c = crashEvm();
+    const out = await setupAgain("evm", { FAKE_KEYCHAIN_FAIL: "1" });
+    expect(out.code, all(out)).toBe(3);
+    expect(out.result.state).toBe("refused_precheck");
+    // the RESULT line's reason is cut at 300 characters by the dispatcher; the whole of it is on stderr
+    expect(all(out)).toContain(c.replacement);
+    expect(all(out)).toContain(`names agent ${c.agent}`);
+    expect(out.result.next).toMatch(/^unlock the keychain/);
+    expect(out.result.next).toContain("do not start a new agent");
+    expect(stillZeros(agentFile())).toBe(true);
+    expect(read(c.replacement)).toBe(c.text);
+  }, 120_000);
+
+  it("evm: no replacement left: setup names the keychain entry from the public file", async () => {
+    const c = crashEvm();
+    rmSync(c.replacement);
+    write(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_AGENT_ADDRESS=${c.agent}\n`, 0o644);
+    const out = await setupAgain("evm");
+    expect(out.code, all(out)).toBe(3);
+    // the warning leads `next`; the whole text is also on stderr
+    expect(out.result.next).toMatch(/^Do not start a new agent/);
+    expect(all(out)).toContain(`account evm:${c.agent}`);
+    expect(all(out)).toContain(`secret-tool lookup service superstables-budget-agent account evm:${c.agent}`);
+    expect(all(out)).toContain("B4_AGENT_KEY_STORE=os-keychain");
+    expect(stillZeros(agentFile())).toBe(true);
+  }, 120_000);
+
+  it("evm: no replacement and no public file: the entry is named by its pattern", async () => {
+    const c = crashEvm();
+    rmSync(c.replacement);
+    const out = await setupAgain("evm");
+    expect(out.code, all(out)).toBe(3);
+    expect(all(out)).toContain("account evm:<the agent's address>");
+    expect(all(out)).toContain("B4_AGENT_ADDRESS=ADDRESS");
+    expect(stillZeros(agentFile())).toBe(true);
+  }, 120_000);
+
+  it("evm: a replacement for an agent the public file does not name is refused", async () => {
+    const c = crashEvm();
+    const other = privateKeyToAccount(generatePrivateKey()).address;
+    write(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_AGENT_ADDRESS=${other}\n`, 0o644);
+    const out = await setupAgain("evm");
+    expect(out.code, all(out)).toBe(3);
+    expect(all(out)).toContain(`names agent ${c.agent}, but the public file names agent ${other}`);
+    expect(out.result.next).toContain("do not start a new agent");
+    expect(stillZeros(agentFile())).toBe(true);
+    expect(read(c.replacement)).toBe(c.text);
+  }, 120_000);
+
+  it("evm: a locked keychain names the agent in the next step", async () => {
+    const c = crashEvm();
+    const out = await setupAgain("evm", { FAKE_KEYCHAIN_FAIL: "1" });
+    expect(out.result.next).toContain(`agent ${c.agent}`);
+  }, 120_000);
+
+  it("evm: a keychain entry of another key is not trusted", async () => {
+    const c = crashEvm({ entry: generatePrivateKey() });
+    const out = await setupAgain("evm");
+    expect(out.code, all(out)).toBe(3);
+    expect(out.result.reason).toContain("holds the key of another address");
+    expect(stillZeros(agentFile())).toBe(true);
+    expect(read(c.replacement)).toBe(c.text);
+  }, 120_000);
+
+  it("evm: a replacement whose process is alive is left to it", async () => {
+    const c = crashEvm({ pid: process.pid });
+    const out = await setupAgain("evm");
+    expect(out.code, all(out)).toBe(3);
+    expect(out.result.reason).toContain("another setup (process");
+    expect(out.result.next).toContain("if no setup is running");
+    expect(stillZeros(agentFile())).toBe(true);
+    expect(read(c.replacement)).toBe(c.text);
+  }, 120_000);
+
+  it("evm: a stray replacement beside a good key file changes nothing", async () => {
+    const first = await setupEvm();
+    expect(first.code, all(first)).toBe(0);
+    const before = read(agentFile());
+    const stray = join(keysDir(), `.evm-agent.env.${deadPid()}.0123abcd.tmp`);
+    write(stray, `B4_AGENT_KEY_STORE=os-keychain\nB4_AGENT_ADDRESS=${privateKeyToAccount(generatePrivateKey()).address}\n`);
+    const out = await setupAgain("evm");
+    expect(out.code, all(out)).toBe(0);
+    expect(all(out)).toContain("reusing it");
+    expect(read(agentFile())).toBe(before);
+    expect(existsSync(stray)).toBe(true);
+  }, 120_000);
+
+  it("solana: setup finishes a move a killed setup left half done", async () => {
+    const c = crashSol();
+    const out = await setupAgain("solana");
+    expect(out.code, all(out)).toBe(0);
+    expect(all(out)).toContain("finished moving the agent key into the keychain");
+    expect(all(out)).toContain("the key is in the OS keychain");
+    expect(read(solAgentFile())).toBe(c.text);
+    expect(existsSync(c.replacement)).toBe(false);
+    expect(all(out)).not.toContain(c.secret);
+  }, 120_000);
+
+  it("solana: a locked keychain: setup refuses, changes nothing, and never says to start over", async () => {
+    const c = crashSol();
+    const out = await setupAgain("solana", { FAKE_KEYCHAIN_FAIL: "1" });
+    expect(out.code, all(out)).toBe(3);
+    expect(all(out)).toContain(c.replacement);
+    expect(all(out)).toContain(`names agent ${c.agent}`);
+    expect(out.result.next).toMatch(/^unlock the keychain/);
+    expect(all(out)).not.toContain("start over");
+    expect(stillZeros(solAgentFile())).toBe(true);
+    expect(read(c.replacement)).toBe(c.text);
+    expect(noKey.test(read(c.replacement))).toBe(false);
+  }, 120_000);
 });

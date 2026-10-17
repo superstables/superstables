@@ -68,7 +68,7 @@ describe("chainGate", () => {
     for (const testnet of [false, undefined, "true", 1, null]) {
       expect(chainGate({ rail: "evm", key: "base", testnet }, undefined), String(testnet)).toMatch(/^this client does not sign on mainnet chains/);
     }
-    expect(chainGate({ rail: "evm", key: "base", testnet: false }, { enabledChains: ["base"], missing: { base: [] } })).toMatch(/does not sign on mainnet chains/);
+    expect(chainGate({ rail: "evm", key: "base", testnet: false }, { enabledChains: ["base"] })).toMatch(/does not sign on mainnet chains/);
   });
 
   it("passes every chain the client ships", () => {

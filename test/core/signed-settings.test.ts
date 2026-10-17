@@ -8,7 +8,7 @@ import { join } from "node:path";
 import bs58 from "bs58";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { chainGateSettings } from "../../src/core/chain-gate.js";
+import { MAINNET_PREREQUISITES, chainGateSettings, chainPrerequisitesMissing } from "../../src/core/chain-gate.js";
 import { DEFAULT_POLICY } from "../../src/core/policy.js";
 import { PaymentEngine } from "../../src/core/pay.js";
 import { quote } from "../../src/core/quote.js";
@@ -214,15 +214,15 @@ describe("what the approval page says about a connecting wallet", () => {
 });
 
 describe("the chain gate", () => {
-  it("reads the enabled chains from a valid signature, with what each still lacks", async () => {
+  it("reads the enabled chains from a valid signature", async () => {
     expect(chainGateSettings()).toBeUndefined();
     await signEvm(owner, ["base", "arbitrum"]);
     // not checked in this process yet: not enabled
     expect(chainGateSettings()).toBeUndefined();
     await primeSignedSettings();
     const gate = chainGateSettings();
-    expect(gate?.enabledChains).toEqual(["arbitrum", "base"]);
-    expect(gate?.missing.base.length).toBeGreaterThan(0);
+    expect(gate).toEqual({ enabledChains: ["arbitrum", "base"] });
+    expect(chainPrerequisitesMissing({ rail: "evm", key: "base", testnet: false })).toContain(MAINNET_PREREQUISITES[1]);
   });
 
   it("a forged chain list with a broken signature is not enabled", async () => {
