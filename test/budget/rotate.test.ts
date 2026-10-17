@@ -58,6 +58,11 @@ const PUBLIC_EVM = () => file("budget", "public", "evm-base-sepolia.env");
 const ownerEvmKey = generatePrivateKey();
 const OWNER = privateKeyToAccount(ownerEvmKey);
 
+// The chain's verdicts need two endpoints run by different operators (a copy of the client whose endpoint table names the fakes).
+let evmTree: EndpointTree;
+beforeAll(() => { evmTree = endpointTree(); });
+afterAll(() => evmTree.close());
+
 type Evm = { chain: FakeEvm; env: Record<string, string>; agent: ReturnType<typeof privateKeyToAccount>; ownerFile: string; run: (args: string[]) => Promise<Out> };
 /** A base-sepolia chain where the owner granted 1 USDC and the agent holds 0.5 USDC and gas, set up as `setup` leaves it. */
 async function evmCase(opts: { allow?: string; held?: string } = {}): Promise<Evm> {
@@ -75,7 +80,10 @@ async function evmCase(opts: { allow?: string; held?: string } = {}): Promise<Ev
   const ownerFile = file("owner.env");
   write(ownerFile, `B4_OWNER_KEY=${ownerEvmKey}\n`);
   const env = { B4_RPC: chain.url };
-  return { chain, env, agent, ownerFile, run: (args) => budget(args, env) };
+  const mirror = await chain.mirror();
+  cleanups.push(() => mirror.close());
+  evmTree.set({ "base-sepolia": [{ url: chain.url, operator: "fake-a" }, { url: mirror.url, operator: "fake-b" }] });
+  return { chain, env, agent, ownerFile, run: (args) => budget(args, env, 0, evmTree.root) };
 }
 const sendsOf = (chain: FakeEvm) => chain.rpcLog.filter((c) => c.method === "eth_sendRawTransaction").length;
 const retiredList = () => JSON.parse(readFileSync(file("keys", "budget", "retired.json"), "utf8"));
@@ -88,7 +96,7 @@ describe("rotate, evm", () => {
     expect(r.result).toMatchObject({ command: "rotate", rail: "evm", state: "rotated", oldAgent: e.agent.address, retired: true });
     expect(r.result.newAgent).toMatch(/^0x[0-9a-fA-F]{40}$/);
     expect(r.result.newAgent.toLowerCase()).not.toBe(e.agent.address.toLowerCase());
-    expect(r.result.chains).toEqual([{ chain: "base-sepolia", recovered: true, setUp: true, hosted: null }]);
+    expect(r.result.chains).toEqual([{ chain: "base-sepolia", recovered: true, setUp: true, hosted: null, revocation: expect.objectContaining({ final: true }) }]);
     expect(r.result.next).toMatch(/budget grant --rail evm --chain base-sepolia --amount A/);
     // the chain: the allowance is 0, and the 0.5 USDC went back to the owner
     expect(e.chain.allowanceOf(OWNER.address, e.agent.address)).toBe(0n);
@@ -287,6 +295,8 @@ describe("rotate, evm", () => {
     write(file("keys", "budget", "retired.json"), `${JSON.stringify({ version: 1, retired: [{ rail: "evm", address: e.agent.address, retiredAt: "2026-10-01T00:00:00.000Z", reason: "rotate" }] })}\n`);
     const at = "2026-10-01T00:00:01.000Z";
     write(file("budget", "rotations", `evm-${e.agent.address.toLowerCase()}.json`), `${JSON.stringify({ version: 1, rail: "evm", oldAgent: e.agent.address, startedAt: at, retiredAt: at, ...(swapped ? { swappedAt: at } : {}), chains: { "base-sepolia": { recoveredAt: at } } })}\n`);
+    // the revoke the record names was made and marked in the public file before the key file moved
+    write(PUBLIC_EVM(), `${readFileSync(PUBLIC_EVM(), "utf8")}B4_REVOKED_AT=1760000001\n`, 0o644);
     e.chain.setAllowance(OWNER.address, e.agent.address, 0n);
     e.chain.setUsdc(e.agent.address, 0n);
     return e;
@@ -482,6 +492,7 @@ describe("rotate, solana", () => {
     write(file("keys", "budget", "retired.json"), `${JSON.stringify({ version: 1, retired: [{ rail: "solana", address: SOL_AGENT, retiredAt: "2026-10-01T00:00:00.000Z", reason: "rotate" }] })}\n`);
     const at = "2026-10-01T00:00:01.000Z";
     write(file("budget", "rotations", `solana-${SOL_AGENT}.json`), `${JSON.stringify({ version: 1, rail: "solana", oldAgent: SOL_AGENT, startedAt: at, retiredAt: at, chains: { devnet: { revokedAt: at, sweptAt: at } } })}\n`);
+    write(file("budget", "public", "solana-devnet.env"), `SOLANA_OWNER_ADDRESS=${SOL_OWNER}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\nREVOKED_AT=1760000001\n`, 0o644);
     solana.usdc.set(SOL_OWNER, { amount: 5_300_000n, delegate: null, delegated: 0n });
     solana.usdc.set(SOL_AGENT, { amount: 0n, delegate: null, delegated: 0n });
     const r = await run(["rotate", "--rail", "solana", "--owner-key-file", ownerFile(), "--yes"]);
