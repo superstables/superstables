@@ -35,6 +35,8 @@ home folder itself may be a link to such a folder. Budget folders (`keys/budget/
 written to them. The client reads the local wallet's agent token
 only from a regular file that only you can read.
 
+When a budget command opens its owner approval link in your browser, it does not put the link on a command line, where every user on the machine could read it with `ps`. It writes a launcher file, mode 0600, in `~/Superstables-budget-open/` (mode 0700), which sends the browser to the link, and gives the browser only the file's path. The file is deleted when the approval ends or the command stops, and the folder once it is empty.
+
 Before the owner signs, the client builds an authorization and serves a page that shows its terms.
 After it checks the signature it gets back, it sends the authorization to the seller, which has a
 facilitator settle it.

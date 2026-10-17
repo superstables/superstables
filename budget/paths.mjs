@@ -35,5 +35,5 @@ export const approvalsDir = () => join(STATE_DIR, "approvals");
 export const onceDir = () => join(STATE_DIR, "once");
 
 // Private folders (src/core/private-dir.mjs): one rule for both builds. The budget's key, public, ops and approvals folders
-// are created and checked through it before anything is written to them.
+// and the owner-link launcher folder are created and checked through it before anything is written to them.
 export { ensurePrivateDir, privateDirProblem } from "../src/core/private-dir.mjs";

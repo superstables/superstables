@@ -10,9 +10,10 @@
 // transaction when the owner is ready (askSolanaIntent): the command sends only the amount.
 //
 // The link is printed as one stdout line `APPROVE {"action","url","expires","terms"}` (cli.mjs passes it on) and as a sentence
-// on stderr. The default browser opens it too, unless --no-open. --timeout <seconds> sets how long the link stays open
-// (default 600). Each rail binds these helpers to its chain with ownerPageFor (evm/owner.ts, tempo/owner.ts, solana/owner.ts).
-import { spawn } from "node:child_process";
+// on stderr. The default browser opens it too, through a private launcher file (owner-launcher.mjs), unless --no-open.
+// --timeout <seconds> sets how long the link stays open (default 600). Each rail binds these helpers to its chain with
+// ownerPageFor (evm/owner.ts, tempo/owner.ts, solana/owner.ts).
+import { openLink, removeLauncher } from "./owner-launcher.mjs";
 import { existsSync, statSync } from "node:fs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "./secret-file.mjs";
 import {
@@ -98,6 +99,7 @@ function hostedFor(settings: Omit<HostedSettings, "auditPath" | "onRecord">): Ho
 
 /** Keep the page up a moment so it can show the final state, then stop it. A hosted request has no page here to keep up. */
 export async function closeOwnerPage(lingerMs = 4000) {
+  dropLaunchers();
   if (hostedClient) {
     await hostedClient.close();
     hostedClient = undefined;
@@ -127,13 +129,24 @@ const crashed = (err: unknown) => {
   void exitAfterError();
 };
 
-function openBrowser(url: string) {
-  const [cmd, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
-  try {
-    const p = spawn(cmd as string, args as string[], { stdio: "ignore", detached: true });
-    p.on("error", () => {});
-    p.unref();
-  } catch {}
+// The link is a capability: on a command line every user on this machine could read it (ps). The browser gets a launcher
+// file only this user can read, which redirects to the link; it is deleted when the link settles, the page closes or this
+// process exits (one left by a killed command goes the next time a link is opened).
+const launchers = new Set<string>();
+const dropLaunchers = () => {
+  for (const p of launchers) if (removeLauncher(p)) launchers.delete(p);
+};
+process.once("exit", dropLaunchers);
+function openBrowser(url: string, settled?: Promise<unknown>) {
+  const opened = openLink(url);
+  if ("problem" in opened) {
+    console.error(`(The link was not opened in a browser: ${opened.problem}. Open the link above.)`);
+    return;
+  }
+  launchers.add(opened.path);
+  void settled?.finally(() => {
+    if (removeLauncher(opened.path)) launchers.delete(opened.path);
+  });
 }
 
 /** What a rail tells the shared page helpers. */
@@ -178,7 +191,7 @@ export function ownerPageFor(rail: OwnerRail) {
     const minutes = Math.round((expiresAt - Date.now()) / 60000);
     return minutes >= 1 ? `${minutes} minute${minutes === 1 ? "" : "s"}` : `${Math.round((expiresAt - Date.now()) / 1000)} seconds`;
   };
-  function announce(action: string, h: { url: string; expiresAt: number; matchCode?: string; bundle?: unknown }, t: OwnerTerms, site?: string) {
+  function announce(action: string, h: { url: string; expiresAt: number; matchCode?: string; bundle?: unknown; settled?: Promise<unknown> }, t: OwnerTerms, site?: string) {
     // The plain terms travel with the link, so a caller that is not watching stderr can show them next to it.
     const terms = { title: t.title, amount: t.amount, unit: t.unit, summary: t.summary, enforced: t.enforced, notEnforced: t.notEnforced };
     console.log(`APPROVE ${JSON.stringify({ action, url: h.url, expires: new Date(h.expiresAt).toISOString(), terms, ...(h.matchCode ? { matchCode: h.matchCode } : {}) })}`);
@@ -189,7 +202,8 @@ export function ownerPageFor(rail: OwnerRail) {
     } else {
       console.error(`\nWrite this approval link and its terms in your reply to the owner, a visible message, not only in your reasoning or a tool call. Only the owner should use the page, in the browser with their wallet (${rail.walletWords}):\n\n  ${h.url}\n\nIt works on this machine only (over SSH, the owner first forwards the port: ssh -L ${new URL(h.url).port}:127.0.0.1:${new URL(h.url).port} user@this-host) and expires in ${inMinutes(h.expiresAt)}; after that, run the command again for a new one. Setup asks for a message signature. Other actions ask for a transaction approval. Testnet only. Test tokens, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
     }
-    if (!argv.includes("--no-open")) openBrowser(h.url);
+    // tests never open a browser (cli.mjs does the same for a detached worker)
+    if (!argv.includes("--no-open") && process.env.VITEST === undefined) openBrowser(h.url, h.settled);
   }
 
   /** The hosted settings for this action, or undefined for the page on this computer. */
