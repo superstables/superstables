@@ -2,12 +2,12 @@
 // per case (SUPERSTABLES_TEST_ACCOUNT_HOME, test/account-guard.mjs). Changes need a terminal: test/helpers/budget-owner-terminal.mjs
 // stands in for one, as it does for `budget unlock`.
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyChange } from "../../src/cli/owner-settings.js";
-import { defaultOwnerSettings } from "../../src/core/owner-settings.js";
+import { defaultOwnerSettings, settingsPayload, settingsSignedAt, signatureRecord } from "../../src/core/owner-settings.js";
 import { accountHomeWith } from "../helpers/owner-settings.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -50,6 +50,18 @@ describe("changes", () => {
     expect(r.stdout + r.stderr).toContain(`Wrote ${file(h)}.`);
     expect(JSON.parse(readFileSync(file(h), "utf8")).site.allowStaging).toBe(true);
     expect(statSync(file(h)).mode & 0o777).toBe(0o600);
+  }, 60_000);
+
+  it("warn, before and after, that a change breaks the signature on the settings", async () => {
+    const h = account({ version: 1 });
+    const payload = settingsPayload(defaultOwnerSettings(), { policyPath: join(h, "none"), retiredPath: join(h, "none") });
+    writeFileSync(file(h), `${JSON.stringify({ version: 1, signature: signatureRecord({ scheme: "eip712", signer: "0x1111111111111111111111111111111111111111", signedAt: settingsSignedAt(), payload, value: `0x${"1".repeat(130)}` }) })}\n`, { mode: 0o600 });
+    const r = await cli(["allow-staging", "on"], h, { terminal: true, stdin: "yes\n" });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toContain("this breaks your settings signature");
+    expect(r.stderr).toContain("superstables owner settings sign");
+    expect(r.stdout).toContain("it was removed. Run superstables owner settings sign to sign again.");
+    expect(JSON.parse(readFileSync(file(h), "utf8")).signature).toBeUndefined();
   }, 60_000);
 
   it("write nothing for any other answer", async () => {

@@ -23,12 +23,49 @@ export const MAINNET_SIGNING = false;
  */
 
 /**
- * The owner's signed settings for the gate. There are none in this build, so this is undefined; signed owner settings
- * will be its source.
+ * What mainnet signing needs besides the owner's signature, one entry each, all of them still to be built in this build.
+ * A chain's `missing` list names the ones it lacks; a stream that builds one removes it here.
+ */
+export const MAINNET_PREREQUISITES = Object.freeze([
+  "an RPC endpoint the owner chose for the chain",
+  "the chain's token facts, checked",
+  "a finality profile for the chain",
+  "agent keys stored other than as plain text",
+]);
+
+/**
+ * What `chain` still lacks for mainnet signing: one entry per missing item. Every item is missing in this build.
+ * @param {string} _chainKey
+ * @returns {string[]}
+ */
+export function chainPrerequisitesMissing(_chainKey) {
+  return [...MAINNET_PREREQUISITES];
+}
+
+/** @type {() => ChainGateSettings | undefined} */
+let settingsSource = () => undefined;
+
+/**
+ * Where the gate reads the owner's signed settings. owner-settings.js sets it when it loads, so this file stays free of
+ * imports: importing the settings module from here would bring the file system into every bundle that only needs the gate.
+ * @param {(() => ChainGateSettings | undefined) | undefined} source
+ */
+export function setChainGateSource(source) {
+  settingsSource = typeof source === "function" ? source : () => undefined;
+}
+
+/**
+ * The enabled chains in the owner's signed settings, and what each still lacks. Undefined when the settings carry no
+ * signature, the signature is not valid, or it has not been checked in this process (`primeSignedSettings`): a chain
+ * listed without a valid signature is not enabled.
  * @returns {ChainGateSettings | undefined}
  */
 export function chainGateSettings() {
-  return undefined;
+  try {
+    return settingsSource();
+  } catch {
+    return undefined;
+  }
 }
 
 /**

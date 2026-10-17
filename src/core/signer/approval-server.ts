@@ -116,6 +116,24 @@ export interface ApprovalServerOptions {
   recordsDirPath?: string;
   /** Remember the connected account here, so `status` can name a payer later. */
   onAccount?: (address: string, network: string) => void;
+  /**
+   * What the owner's signed settings say about the account that just connected, for the page's "Signed settings" row. Never
+   * throws; undefined when the settings carry no signature.
+   */
+  settingsNote?: (address: string) => Promise<SettingsNote | undefined>;
+  /**
+   * Asked with the account that connects, before anything is prepared for it: the reason to stop (the owner's signed settings
+   * pin a spend policy this wallet's payment does not meet), or undefined to go on. Never throws.
+   */
+  accountRefusal?: (address: string) => Promise<string | undefined>;
+}
+
+/** The "Signed settings" row of the approval page: who signed the owner's settings, and whether that is the connected wallet. */
+export interface SettingsNote {
+  /** "yours": the connected wallet signed them. "other": another wallet did, and they do not apply here. */
+  applies: "yours" | "other";
+  signer: string;
+  signedAt: string;
 }
 
 /** What an approval whose wallet was asked to send ends with, when nothing came back. */
@@ -580,13 +598,37 @@ export class ApprovalServer {
         this.sendJson(res, 409, { error: "your wallet was already asked to send this payment; it is not prepared again" });
         return;
       }
+      const refusal = await this.options.accountRefusal?.(address);
+      if (refusal) {
+        // The wallet that connected is bound by what the owner signed, and the policy in use is not that: nothing is prepared,
+        // nothing is signed, and the approval ends.
+        if (record.status === "pending") {
+          record.status = "refused";
+          record.reason = refusal;
+          this.audit(record);
+          record.finish({ status: "refused", code: "policy", reason: refusal });
+        }
+        this.sendJson(res, 409, { error: refusal, status: record.status, reason: record.reason });
+        return;
+      }
+      // The approval may have ended during that check (the process serving it closed or timed out): nothing is prepared.
+      if (record.status !== "pending") {
+        this.sendJson(res, 409, { error: `this payment is already ${record.status}`, status: record.status, reason: record.reason });
+        return;
+      }
       const answer = await record.step.prepare(record, address);
+      let note: SettingsNote | undefined;
       if (answer.http === 200) {
         // A person may switch accounts before signing, so this rebuilds rather than refusing.
         record.account = address;
         record.verified = { ...record.verified, payer: address };
+        try {
+          note = await this.options.settingsNote?.(address);
+        } catch {
+          note = undefined;
+        }
       }
-      this.sendJson(res, answer.http, answer.body);
+      this.sendJson(res, answer.http, note ? { ...(answer.body as object), signedSettings: note } : answer.body);
       return;
     }
 

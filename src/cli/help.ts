@@ -117,8 +117,11 @@ Who runs what:
 
 Owner settings:
   superstables owner settings show   the approval site and the RPCs that owner actions trust (read only)
+  superstables owner settings sign   your wallet signs these settings, your spend policy and your retired agent keys
   Changes run only in the owner's own terminal. SUPERSTABLES_SITE and the RPC variables count for
-  owner actions only when they name what these settings allow.
+  owner actions only when they name what these settings allow. Signed settings apply only to approvals
+  made with the wallet that signed them; pay and the local wallet refuse a policy file that differs from
+  the signed one until you sign again.
 
 Where state lives:
   SUPERSTABLES_HOME, default ~/.superstables (--home <dir> for one command): policy.yaml,

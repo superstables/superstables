@@ -43,6 +43,9 @@ const WALLET_STYLE = `
   #unlock[hidden] { display: none; }
   #unlock label { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); }
   #unlock input { flex: 1; min-width: 16em; font-family: var(--mono); font-size: 13px; padding: 9px 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg-2); color: var(--ink); }
+  #settings-card { margin-top: 20px; }
+  #settings-card .rows .mono { font-size: 13px; }
+  #settings-card .actions { margin-top: 16px; }
   .status-signed { color: var(--good); }
   .status-denied, .status-rejected, .status-expired { color: var(--bad); }
 `;
@@ -77,6 +80,13 @@ export const WALLET_PAGE_SCRIPT = `
   var decisionNote = false;
   var lastHistory = "";
   var policyAt = 0;
+  var settingsEl = document.getElementById("settings-card");
+  var settingsBody = document.getElementById("settings-body");
+  var settingsActions = document.getElementById("settings-actions");
+  // what the card showed, which a confirmation sends back
+  var settingsShown = null;
+  var settingsConfirming = false;
+  var settingsAt = 0;
 
   function esc(value) {
     return String(value === undefined || value === null ? "" : value)
@@ -305,6 +315,68 @@ export const WALLET_PAGE_SCRIPT = `
       .catch(function () { policyAt = 0; });
   }
 
+
+  // ── the settings card: the wallet's own key signs the owner's settings and policy ─────────────────────────────────
+  function showSettings(view) {
+    settingsShown = null;
+    if (!view || view.problem) {
+      settingsBody.innerHTML = "<p>" + esc(view && view.problem ? view.problem : "The settings could not be read.") + "</p>";
+      settingsActions.innerHTML = "";
+      settingsEl.hidden = false;
+      return;
+    }
+    var preview = view.preview;
+    settingsShown = { settingsHash: preview.settingsHash, policyHash: preview.policyHash, retiredHash: preview.retiredHash };
+    var signed = view.signed;
+    var status;
+    if (!signed) status = "Not signed.";
+    else if (!signed.valid) status = "A signature is there but does not hold: " + esc(signed.why || "") + ". Sign again.";
+    else if (!signed.thisWallet) status = "Signed by " + esc(signed.signer) + ", another wallet: these settings do not apply to this wallet.";
+    else status = "Signed by " + esc(signed.signer) + " on " + esc(String(signed.signedAt || "").slice(0, 10)) + "; " + (signed.policyMatches ? "policy matches." : "policy changed since signing. Sign again.");
+    settingsBody.innerHTML =
+      "<p>" + status + "</p>" +
+      '<dl class="rows">' +
+      "<dt>Site</dt><dd class=\\"mono\\">" + esc(preview.site) + "</dd>" +
+      "<dt>Enabled chains</dt><dd>" + esc(preview.enabledChains.length ? preview.enabledChains.join(", ") : "none: this build signs on testnets only") + "</dd>" +
+      "<dt>Policy</dt><dd class=\\"mono\\">" + esc(view.policyFile) + "<br>" + esc(preview.policyHash) + "</dd>" +
+      "<dt>Retired agents</dt><dd class=\\"mono\\">" + esc(preview.retiredHash) + "</dd>" +
+      "<dt>Settings</dt><dd class=\\"mono\\">" + esc(preview.settingsHash) + "</dd>" +
+      "</dl>";
+    settingsActions.innerHTML = settingsConfirming
+      ? '<p class="confirm">Sign these settings with this wallet\u2019s key, ' + esc(view.wallet) + "?</p>" +
+        '<button class="primary" data-act="settings-confirm">Yes, sign</button><button data-act="settings-back">Back</button>'
+      : '<button class="primary" data-act="settings-sign">Sign these settings with this wallet\u2019s key</button>';
+    settingsEl.hidden = false;
+  }
+
+  function refreshSettings() {
+    if (settingsConfirming) return;
+    ask("/owner/settings").then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (view) { if (view) showSettings(view); })
+      .catch(function () {});
+  }
+
+  // repaint with the hashes already shown, so the confirmation names exactly what a click will send
+  function refreshSettingsNow() {
+    ask("/owner/settings").then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (view) { if (view) showSettings(view); })
+      .catch(function () {});
+  }
+
+  function signSettings() {
+    ask("/owner/settings/sign", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settingsShown) })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (answer) {
+          settingsConfirming = false;
+          if (response.ok) { showSettings(answer); say("Your settings are signed by this wallet\u2019s key."); decisionNote = true; return; }
+          say(answer.error ? "Not signed: " + answer.error + "." : "The wallet refused that (HTTP " + response.status + ").", true);
+          decisionNote = true;
+          refreshSettings();
+        });
+      })
+      .catch(function () { settingsConfirming = false; say("The wallet is not answering. Check that it is still running.", true); });
+  }
+
   function askForSecret(message) {
     unlock.hidden = false;
     say(message, Boolean(secret));
@@ -357,6 +429,7 @@ export const WALLET_PAGE_SCRIPT = `
       if (!decisionNote) clear();
       render(body.requests || []);
       refreshPolicy();
+      if (Date.now() - settingsAt >= 15000) { settingsAt = Date.now(); refreshSettings(); }
     }).catch(function () {
       decisionNote = false;
       say("The wallet is not answering. Check that it is still running.", true);
@@ -394,6 +467,9 @@ export const WALLET_PAGE_SCRIPT = `
     if (!button || button.disabled) return;
     var id = button.getAttribute("data-id");
     var act = button.getAttribute("data-act");
+    if (act === "settings-sign") { settingsConfirming = true; refreshSettingsNow(); return; }
+    if (act === "settings-back") { settingsConfirming = false; refreshSettingsNow(); return; }
+    if (act === "settings-confirm") { signSettings(); return; }
     var entry = cards[id];
     // Approving takes two clicks: the first opens a confirmation in the card, the second sends what the card showed.
     if (act === "approve" && entry) { entry.confirming = true; paint(entry); return; }
@@ -419,6 +495,11 @@ export function walletPage(look: PageLook = pageLook(), nonce?: string): string 
     body: `
   <div id="notice" class="note" hidden></div>
   <p id="policy" class="policy" hidden></p>
+  <div id="settings-card" class="card" hidden>
+    <h2 class="section" style="margin-top:0">Your settings</h2>
+    <div id="settings-body"></div>
+    <div id="settings-actions" class="actions"></div>
+  </div>
   <form id="unlock" hidden autocomplete="off">
     <label for="secret-input">Owner secret</label>
     <input id="secret-input" type="password" autocomplete="off" spellcheck="false">

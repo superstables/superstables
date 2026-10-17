@@ -252,6 +252,28 @@ amount cannot be read makes today's total unknown, and the daily cap then refuse
 until the record is fixed. Neither reads chain history: delete those records and the count starts
 again.
 
+`superstables owner settings sign` has your own wallet sign one payload: the hash of your owner
+settings (which covers your approval site, RPC endpoints and development switches), the hash of your
+account's `~/.superstables/policy.yaml`, the hash of the list of retired agent keys, the chains
+enabled for signing and the approval site. An EVM wallet signs it as EIP-712 typed data with no
+chain id, so it holds on every chain; a Solana wallet signs a fixed seven-line text with
+`signMessage`. The local wallet has a card on its page that does the same with its own key. The
+signature sits in the settings file and every hash is read again from disk each time it is used.
+Signed settings count only for approvals made with the wallet that signed them: `pay` and the local
+wallet refuse a payment when the policy file differs from the signed one, until you sign again. A
+browser wallet is checked when it connects on the approval page, because only then is it known which
+wallet pays; the page refuses before anything is signed and shows "Signed by" only when the policy
+is the signed one. Signing needs a policy file at `~/.superstables/policy.yaml`
+(`superstables policy init` writes one); a signature over no file would pin nothing. For any other
+wallet the settings are ignored and the approval page says so ("Signed settings: signed by ... they
+do not apply to this wallet"). A signature that does not verify, or that no longer covers your
+settings or retired keys, counts as no signature; `pay` warns on stderr, and `owner settings`
+commands that change a signed setting say so. The chain gate reads its list of enabled chains only
+from a valid signature; this build signs on testnets only, so the list is empty. This is evidence,
+not enforcement: an agent that runs as you can still edit the files, and in the local wallet it can
+read the key that signs, so there the signature only makes an edit evident. The signature that
+matters is the one a wallet you keep apart from the agent makes.
+
 ## Testnet only
 
 `pay` supports nine testnets, each with one token pinned in the client: x402 `exact` with test
@@ -616,7 +638,8 @@ owner's setting, not the agent's (see "Which site" below).
   `--site`, `SUPERSTABLES_SITE` and a recorded `SITE` count only when they name an allowed site, so
   an agent told to "use this other site" cannot send the owner's approvals there.
   `SUPERSTABLES_ALLOW_SITE` is no longer read. An agent runs as the same user and could still edit the
-  file itself; a later milestone's owner signature will make that evident. A revoke on a chain whose
+  file itself; `superstables owner settings sign` has the owner's wallet sign them, which makes an edit
+  evident (see "Policy is software"). A revoke on a chain whose
   recorded site is no longer allowed asks on the page on this machine instead. When the site is not
   `www.superstables.com`, the logs and `message_for_owner` name its host, including a site on this machine.
 - **Requests name the site.** Each request the agent key signs names the site's origin and a fresh

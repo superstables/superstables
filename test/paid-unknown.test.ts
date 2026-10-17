@@ -1642,11 +1642,13 @@ const ROWS: Row[] = [
  */
 const SIGNS_ONLY = "the wallet signs and nothing leaves this machine until the payment engine accepts the signature, after this page has closed the approval as signed; every later answer here is 'already signed', and the engine's outcome is what pay and status print (rows: pay with x402)";
 const SIGN_IN = "a sign-in: the wallet signs a message, never a transaction, so no answer on this link is about a payment";
+const SIGN_SETTINGS = "a settings signature: the wallet signs typed data or a message, never a transaction, so no answer on this link is about a payment";
 const NOT_THIS_KIND = "answers 404 for this kind of owner action, before reading anything; it states no outcome";
 const NO_ANSWER_AFTER_BOUNDARY: Record<string, string> = {
   ...Object.fromEntries(["/account", "/signature", "/state", "/reject"].map((r) => [`route eip3009 ${r}`, SIGNS_ONLY])),
   ...Object.fromEntries(["/account", "/prepare", "/signed", "/state", "/reject"].map((r) => [`route solana-transaction ${r}`, SIGNS_ONLY])),
   ...Object.fromEntries(["/state", "/account", "/connect", "/sending", "/sent", "/prepare", "/signed", "/reject", "/cancel"].map((r) => [`route owner:connect ${r}`, SIGN_IN])),
+  ...Object.fromEntries(["/state", "/account", "/connect", "/sending", "/sent", "/prepare", "/signed", "/reject", "/cancel"].map((r) => [`route owner:settings ${r}`, SIGN_SETTINGS])),
   ...Object.fromEntries(["/connect", "/prepare", "/signed"].map((r) => [`route owner:evm-transaction ${r}`, NOT_THIS_KIND])),
   ...Object.fromEntries(["/connect", "/sending", "/sent"].map((r) => [`route owner:solana-transaction ${r}`, NOT_THIS_KIND])),
   "state awaiting_approval": "the state before the boundary: an attempt leaves it for approved when the wallet is asked to send (Tempo) or its signature is accepted (x402), and nothing moves it back",

@@ -31,6 +31,8 @@ import { firstPayable, railFor } from "./rails/index.js";
 import { tokenDomainProblem } from "./token-domain.js";
 import type { ChainReadOptions, Offer, PaymentFacts, PushRail, RailAdapter, X402Rail } from "./rails/types.js";
 import { join } from "node:path";
+import { accountPolicyPath, retiredListPath } from "./home.js";
+import { signedPolicyCheck } from "./owner-settings.js";
 import type { AbandonCause, Attempt, AttemptState, Quote, Receipt, ServiceOutcome } from "./types.js";
 import { FINAL_ATTEMPT_STATES } from "./types.js";
 
@@ -358,6 +360,24 @@ export class PaymentEngine {
     // Whoever was waiting may have stopped while the seller was being asked; then nobody
     // is left to show the owner a link, so the owner is not asked.
     if (isFinal(attempt.state)) return;
+
+    // The owner's signed settings cover the account's spend policy file. When they were signed by the wallet that will pay (or
+    // that wallet is not known yet), a policy file that differs from the signed one stops the payment before anyone is asked.
+    // A signature that does not hold is treated as no signature, with a warning on stderr.
+    let payer: string | undefined;
+    try {
+      payer = await this.signer.address(offer.terms.network);
+    } catch {
+      payer = undefined;
+    }
+    const signedPolicy = await signedPolicyCheck(payer, { policyPath: accountPolicyPath(), retiredPath: retiredListPath() });
+    if (signedPolicy.warn) process.stderr.write(`warning: ${signedPolicy.warn}\n`);
+    // A browser wallet's address is only what an earlier payment remembered: whoever connects on the approval page pays, and
+    // that page runs this check again for them. Here it only warns.
+    if (signedPolicy.refuse && this.signer.kind !== "browser") {
+      this.settleState(attempt, "failed", { refusal: "policy", reason: signedPolicy.refuse });
+      return;
+    }
 
     // A push payment is found on chain by its memo, which the seller's challenge decides. A seller that hands out the
     // same challenge again would make a second transfer indistinguishable from the first, so a memo an earlier attempt

@@ -57,6 +57,7 @@ Owner actions are now reported as final only once the chain says so. A grant, re
 
 - `superstables budget unlock --rail evm --agent-key` lets the owner clear the lock that EVM purchases on one agent key and chain take turns on (see Upgrade and recovery).
 - SDK exports `toAtomicExact`, `fromAtomicString`, `CAP_DECIMALS`, `capUnits` and `policyAmount`, and `Records.spentTodayAtomic` and `Records.skippedLines`.
+- `superstables owner settings sign` has the owner's wallet sign the owner settings, the spend policy and the retired agent keys; the local wallet's page has a card that does the same with its key. Signed settings apply only to approvals made with the wallet that signed them: `pay` and the local wallet refuse a policy file that differs from the signed one until the owner signs again, and the approval page shows who signed.
 
 ### Changed
 

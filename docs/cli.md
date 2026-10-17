@@ -125,8 +125,11 @@ Who runs what:
 
 Owner settings:
   superstables owner settings show   the approval site and the RPCs that owner actions trust (read only)
+  superstables owner settings sign   your wallet signs these settings, your spend policy and your retired agent keys
   Changes run only in the owner's own terminal. SUPERSTABLES_SITE and the RPC variables count for
-  owner actions only when they name what these settings allow.
+  owner actions only when they name what these settings allow. Signed settings apply only to approvals
+  made with the wallet that signed them; pay and the local wallet refuse a policy file that differs from
+  the signed one until you sign again.
 
 Where state lives:
   SUPERSTABLES_HOME, default ~/.superstables (--home <dir> for one command): policy.yaml,
@@ -787,35 +790,44 @@ Usage: superstables owner settings [options] [action] [args...]
 show or change the approval site and the RPCs owner actions trust
 
 Arguments:
-  action        show (default), site, allow-staging, allow-loopback or rpc
-  args          the action's arguments
+  action         show (default), sign, site, allow-staging, allow-loopback or
+                 rpc
+  args           the action's arguments
 
 Options:
-  --own-node    rpc: the first URL is your own node (a quorum of 1 is then
-                enough)
-  --quorum <n>  rpc: how many of the URLs must agree (1 to the number of URLs)
-  --clear       site: back to https://www.superstables.com; rpc <chain>: back to
-                the built-in RPC
-  --json        show: print the settings as JSON (RPC hosts only)
-  -h, --help    display help for command
+  --own-node     rpc: the first URL is your own node (a quorum of 1 is then
+                 enough)
+  --quorum <n>   rpc: how many of the URLs must agree (1 to the number of URLs)
+  --clear        site: back to https://www.superstables.com; rpc <chain>: back
+                 to the built-in RPC
+  --json         show: print the settings as JSON (RPC hosts only)
+  --rail <rail>  sign: the wallet family that signs, evm (default) or solana
+                 (choices: "evm", "solana")
+  --no-open      sign: print the link and do not open the browser
+  -h, --help     display help for command
 
 Actions: show the settings in force (read only; the default) site <origin> | site --clear the
 approval site (default https://www.superstables.com) allow-staging on|off allow
 https://staging.superstables.com allow-loopback site|rpc|sellers on|off development only: a site, an
 RPC variable or a seller on this computer rpc <chain> <url...> [--own-node] [--quorum N] | rpc
-<chain> --clear the RPCs owner actions and verdicts use
+<chain> --clear the RPCs owner actions and verdicts use sign [--rail evm|solana] your wallet signs
+these settings, your spend policy, your retired agent keys and the enabled chains
 
 A change asks for a typed yes and runs only when stdin is a terminal. RPC URLs are never printed
-whole: they can carry an access key.
+whole: they can carry an access key. `sign` opens a page on 127.0.0.1 where your own wallet signs:
+signed settings apply only to approvals made with that wallet, and a policy file that differs from
+the signed one is refused until you sign again.
 
 Moves money: no.
-Run by: the owner, in their own terminal. An agent runs `show` only and never a change.
+Run by: the owner, in their own terminal. An agent runs `show` only and never a change or a
+  signature.
 Example:
   $ superstables owner settings show
   $ superstables owner settings allow-staging on
   $ superstables owner settings rpc base-sepolia https://rpc.example/KEY
+  $ superstables owner settings sign
 Prints: show: the settings, one per line (--json: one JSON object). A change: the before and after
-  lines, then the path written.
+  lines, then the path written. sign: the link, the rows to sign, then the signer.
 Exit codes: 0 done, 1 the settings file cannot be used, 2 bad input, 3 refused (no terminal, or the
   answer was not yes) (the full table: superstables --help)
 ```

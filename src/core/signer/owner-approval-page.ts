@@ -45,8 +45,8 @@ export interface OwnerTerms {
   /** Small print: how to undo it, what the wallet popup will show. */
   notes: string[];
   /**
-   * The exact values the wallet will show for this action, one line each, with the raw value next to the readable one. Left
-   * out (a sign-in) there is no block.
+   * The exact values the wallet will show for this action, one line each, with the raw value next to the readable one; for
+   * settings signing, one line per field the wallet's prompt will show, and what it means. Left out (a sign-in) there is no block.
    */
   walletShows?: string[];
   /** A token approval or transfer: the page offers the token to the wallet first, so it can show amounts in the token's units. */
@@ -75,7 +75,7 @@ export interface OwnerChain {
 /** Everything the page's script needs. */
 export interface OwnerPageFacts {
   id: string;
-  kind: "connect" | "evm-transaction" | "solana-transaction";
+  kind: "connect" | "evm-transaction" | "solana-transaction" | "settings";
   chain: OwnerChain;
   chainIdHex: string;
   /** The only account that may act (a transaction), or undefined (a connect: any account). */
@@ -84,8 +84,10 @@ export interface OwnerPageFacts {
   recordedOwner?: string;
   /** Exactly what the wallet is asked to send. */
   transaction?: { to: string; data: string; value: string };
-  /** The sign-in message a connect asks the wallet to sign. */
+  /** The sign-in message a connect asks the wallet to sign; the text a Solana wallet signs for the settings. */
   message?: string;
+  /** settings, EVM: the EIP-712 typed data (JSON text) eth_signTypedData_v4 is asked to sign. */
+  typedData?: string;
   expiresAt: number;
   /** The address this page is served from, e.g. http://127.0.0.1:41233. */
   origin?: string;
@@ -109,6 +111,7 @@ const OWNER_STYLE = `
   .limits > div:only-child { grid-column: 1 / -1; }
   @media (max-width: 600px) { .limits { grid-template-columns: minmax(0, 1fr); } }
   .owner-box { font-size: 15px; }
+  .rows dd { white-space: pre-line; }
   .owner-box .mono { display: block; margin: 6px 0; font-size: 14px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
   #wallet-list { margin-top: 12px; }
   #wallet-list button { height: 40px; padding: 0 14px; font-size: 14px; background: var(--bg-2); }
@@ -307,6 +310,19 @@ export const OWNER_PAGE_SCRIPT = `
         el("account").textContent = account;
         show("account-row", true);
         show("account", true);
+        if (facts.kind === "settings") {
+          say("Check your wallet: it is asking you to sign your settings. It grants no spending permission and has no network fee.");
+          return provider.request({ method: "eth_signTypedData_v4", params: [account, facts.typedData] })
+            .then(function (signature) { return post("/signed", { address: account, signature: signature }); })
+            .then(function (answer) {
+              if (!answer.ok) throw new Error(answer.data.error || "the command did not accept this signature");
+              document.body.setAttribute("data-state", "connected");
+              show("connect", false);
+              show("reject", false);
+              setBusy(false);
+              say("Signed. The command is checking and recording your settings.");
+            });
+        }
         if (facts.kind === "connect") {
           say("Check your wallet: sign the message to prove this address is yours. It grants no spending permission and has no network fee.");
           return provider.request({ method: "personal_sign", params: [hexOf(facts.message), account] })
@@ -437,7 +453,7 @@ export const OWNER_PAGE_SCRIPT = `
     var f = w && w.features;
     if (!f || !f["standard:connect"]) return false;
     if (w.chains && w.chains.length && w.chains.indexOf(facts.chain.walletChain) < 0) return false;
-    return facts.kind === "connect" ? !!f["solana:signMessage"] : !!f["solana:signTransaction"];
+    return facts.kind === "connect" || facts.kind === "settings" ? !!f["solana:signMessage"] : !!f["solana:signTransaction"];
   }
 
   // ── choosing a wallet: the same list for both families ──────────────────────────────────
@@ -580,6 +596,22 @@ export const OWNER_PAGE_SCRIPT = `
         el("account").textContent = account;
         show("account-row", true);
         show("account", true);
+        if (facts.kind === "settings") {
+          say("Check " + w.name + ": sign the message to sign your settings. It grants no spending permission and has no network fee.");
+          return Promise.resolve(w.features["solana:signMessage"].signMessage({ account: walletAccount, message: new TextEncoder().encode(facts.message) }))
+            .then(function (outputs) {
+              var o = outputs[0];
+              return post("/signed", { address: account, signature: b64(o.signature), signedMessage: b64(o.signedMessage) });
+            })
+            .then(function (answer) {
+              if (!answer.ok) throw new Error(answer.data.error || "the command did not accept this signature");
+              document.body.setAttribute("data-state", "connected");
+              show("connect", false);
+              show("reject", false);
+              setBusy(false);
+              say("Signed. The command is checking and recording your settings.");
+            });
+        }
         if (facts.kind === "connect") {
           say("Check " + w.name + ": sign the message to prove this address is yours. It grants no spending permission and has no network fee.");
           return Promise.resolve(w.features["solana:signMessage"].signMessage({ account: walletAccount, message: new TextEncoder().encode(facts.message) }))
@@ -739,7 +771,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
       ${terms.notEnforced.length ? `<div class="no"><strong>The chain does not enforce</strong>${list(terms.notEnforced)}</div>` : ""}
     </div>`
       : "";
-  const primary = facts.kind === "connect" ? "" : `<button id="send" class="primary" data-act="send" hidden>Review in wallet</button>`;
+  const primary = facts.kind === "connect" || facts.kind === "settings" ? "" : `<button id="send" class="primary" data-act="send" hidden>Review in wallet</button>`;
   const noWallet = solana
     ? `A Solana wallet is needed in this browser (Phantom, Solflare, Backpack, ...). For example, install Phantom from
     <a href="${PHANTOM_DOWNLOAD_URL}" rel="noreferrer noopener">${PHANTOM_DOWNLOAD_URL}</a>, then reload this page.
@@ -749,7 +781,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
     You can still reject without one.`;
   // A Solana wallet cannot be switched to devnet by a page: the owner does it once in the wallet.
   const networkHint =
-    solana && facts.kind !== "connect" && facts.chain.testnet
+    solana && facts.kind !== "connect" && facts.kind !== "settings" && facts.chain.testnet
       ? `<div id="network-hint" class="note">Before you approve: switch your wallet to Solana devnet. For example, in Phantom: open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet. If the wallet cannot simulate the transaction, its effects have not been checked by the wallet. Reject if you cannot verify what you are signing.</div>`
       : "";
   // Who this page acts for. Setup proves control of an address, not who the person is, so the
@@ -760,7 +792,9 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
     ${facts.kind === "connect" ? "Replace it only if you are its owner and mean to move the budget to another wallet." : "This page acts only for that wallet. If this isn't your wallet, stop: reject and do not connect."}</div>`
     : facts.kind === "connect"
       ? `<div class="note owner-box">Setup records the wallet you connect as the budget owner. Only the owner should do this, or someone with the owner watching. If an agent or someone else sent you this approval link and you are not the owner, stop and reject.</div>`
-      : "";
+      : facts.kind === "settings"
+        ? `<div class="note owner-box">Signing records the wallet you connect as the signer of these settings. Only the owner should do this. If an agent or someone else sent you this approval link and you are not the owner, stop and reject.</div>`
+        : "";
   const body = `
   ${ownerBox}
 
@@ -798,7 +832,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
   return framePage({
     look,
     title: terms.title,
-    eyebrow: facts.kind === "connect" ? "Owner sign-in" : "Agent request",
+    eyebrow: facts.kind === "connect" ? "Owner sign-in" : facts.kind === "settings" ? "Owner settings" : "Agent request",
     lede: OWNER_LEDE,
     testnet: facts.chain.testnet,
     style: ownerStyle(look),
