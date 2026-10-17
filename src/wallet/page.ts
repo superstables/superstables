@@ -86,6 +86,8 @@ export const WALLET_PAGE_SCRIPT = `
   // what the card showed, which a confirmation sends back
   var settingsShown = null;
   var settingsConfirming = false;
+  var settingsView = null;
+  var settingsGen = 0;
   var settingsAt = 0;
 
   function esc(value) {
@@ -319,6 +321,7 @@ export const WALLET_PAGE_SCRIPT = `
   // ── the settings card: the wallet's own key signs the owner's settings and policy ─────────────────────────────────
   function showSettings(view) {
     settingsShown = null;
+    settingsView = view;
     if (!view || view.problem) {
       settingsBody.innerHTML = "<p>" + esc(view && view.problem ? view.problem : "The settings could not be read.") + "</p>";
       settingsActions.innerHTML = "";
@@ -349,25 +352,23 @@ export const WALLET_PAGE_SCRIPT = `
     settingsEl.hidden = false;
   }
 
+  // A response counts only if no newer refresh started and no confirmation opened since it was asked for: the card stays
+  // as it was while the owner confirms, so the confirmation names exactly the hashes a click will send.
   function refreshSettings() {
     if (settingsConfirming) return;
+    var gen = ++settingsGen;
     ask("/owner/settings").then(function (response) { return response.ok ? response.json() : null; })
-      .then(function (view) { if (view) showSettings(view); })
-      .catch(function () {});
-  }
-
-  // repaint with the hashes already shown, so the confirmation names exactly what a click will send
-  function refreshSettingsNow() {
-    ask("/owner/settings").then(function (response) { return response.ok ? response.json() : null; })
-      .then(function (view) { if (view) showSettings(view); })
+      .then(function (view) { if (view && !settingsConfirming && gen === settingsGen) showSettings(view); })
       .catch(function () {});
   }
 
   function signSettings() {
+    settingsGen++;
     ask("/owner/settings/sign", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settingsShown) })
       .then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (answer) {
           settingsConfirming = false;
+          settingsGen++;
           if (response.ok) { showSettings(answer); say("Your settings are signed by this wallet\u2019s key."); decisionNote = true; return; }
           say(answer.error ? "Not signed: " + answer.error + "." : "The wallet refused that (HTTP " + response.status + ").", true);
           decisionNote = true;
@@ -467,8 +468,8 @@ export const WALLET_PAGE_SCRIPT = `
     if (!button || button.disabled) return;
     var id = button.getAttribute("data-id");
     var act = button.getAttribute("data-act");
-    if (act === "settings-sign") { settingsConfirming = true; refreshSettingsNow(); return; }
-    if (act === "settings-back") { settingsConfirming = false; refreshSettingsNow(); return; }
+    if (act === "settings-sign") { if (settingsView) { settingsConfirming = true; settingsGen++; showSettings(settingsView); } return; }
+    if (act === "settings-back") { settingsConfirming = false; if (settingsView) showSettings(settingsView); refreshSettings(); return; }
     if (act === "settings-confirm") { signSettings(); return; }
     var entry = cards[id];
     // Approving takes two clicks: the first opens a confirmation in the card, the second sends what the card showed.

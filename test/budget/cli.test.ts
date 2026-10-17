@@ -64,7 +64,7 @@ function checkoutWithoutDevPackages(): string {
   cpSync(resolve(ROOT, "src/core/private-dir.mjs"), join(repo, "src/core/private-dir.mjs"));
   cpSync(resolve(ROOT, "src/core/rpc-endpoints.mjs"), join(repo, "src/core/rpc-endpoints.mjs"));
   cpSync(resolve(ROOT, "src/core/owner-settings.js"), join(repo, "src/core/owner-settings.js"));
-  // owner-settings.js imports these two; it loads viem only when an EIP-712 signature is checked
+  // owner-settings.js imports chain-gate.js and ed25519-verify.mjs (chain-gate.js imports token-facts.js); it loads viem only when an EIP-712 signature is checked
   cpSync(resolve(ROOT, "src/core/chain-gate.js"), join(repo, "src/core/chain-gate.js"));
   cpSync(resolve(ROOT, "src/core/token-facts.js"), join(repo, "src/core/token-facts.js"));
   cpSync(resolve(ROOT, "src/core/ed25519-verify.mjs"), join(repo, "src/core/ed25519-verify.mjs"));

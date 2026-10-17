@@ -892,13 +892,13 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
   enabled for signing, and the gate reads that list only from a valid signature. The list that command offers is empty in this
   build, so this command enables none.
 - **The chain has everything mainnet needs.** The gate checks four things for the chain and names each one that fails:
-  - RPC endpoints your signed settings choose for it that can decide a verdict on their own: your own node, or two operators;
+  - RPC endpoints your signed settings choose for it that can decide a verdict on their own: your own node, or as many operators as your quorum needs (at least two);
   - complete token facts for the token the signing code uses;
   - a measured time to finality for the chain;
   - for the chain's budget rail, an agent key file that names the OS keychain and holds no key.
 
   A check that cannot run counts as missing. Mainnet signing is off in this build and no chain table names a mainnet, so these
-  checks decide nothing yet. `pay` does not load the RPC or keychain checks, so for `pay` those two always read as missing;
+  checks decide nothing yet. `pay` does not load the keychain check, so for `pay` the fourth always reads as missing;
   `tempo` agent keys stay in files, so that rail always misses the fourth; only two chains have a measured finality time; and
   the local wallet's key is not part of the fourth check yet.
 

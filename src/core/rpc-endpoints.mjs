@@ -175,10 +175,10 @@ export function callerSet(url) {
   return { primary: ep, verdict: [ep], quorum: 1, agreement: /** @type {const} */ ("caller") };
 }
 
-/** Whether a chain could leave testnet as far as RPCs go: an owner node, or two operators. */
+/** Whether a chain could leave testnet as far as RPCs go: an owner node, or as many operators as the quorum needs (at least two). */
 export function mainnetRpcReady(chainKey) {
   const set = endpointSet(chainKey, "verdict", { testnet: false });
-  return !("error" in set) && (set.agreement === "owner-node" || distinct(set.verdict) >= 2);
+  return !("error" in set) && (set.agreement === "owner-node" || distinct(set.verdict) >= Math.max(2, set.quorum));
 }
 
 // The chain gate's RPC prerequisite (src/core/chain-gate.js): the owner chose RPC endpoints for the chain in their settings

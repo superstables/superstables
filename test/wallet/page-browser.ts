@@ -78,9 +78,9 @@ export function wallet(options: {
   /** What the browser's sessionStorage holds before the page loads. */
   stored?: Record<string, string>;
   /** The wallet's answers; the default is an empty list and a plain policy. */
-  answer?: (call: Call) => Answer | undefined;
+  answer?: (call: Call) => Answer | Promise<Answer> | undefined;
 }) {
-  const ids = ["unlock", "secret-input", "notice", "policy", "pending", "pending-empty", "history", "status-labels"];
+  const ids = ["unlock", "secret-input", "notice", "policy", "pending", "pending-empty", "history", "status-labels", "settings-card", "settings-body", "settings-actions"];
   const nodes = new Map(ids.map((id) => [id, new El(id === "secret-input" ? "input" : "div")]));
   nodes.get("unlock")!.hidden = true;
   nodes.get("notice")!.hidden = true;
@@ -99,7 +99,7 @@ export function wallet(options: {
   const fetch = async (path: string, init: Call["init"] = {}) => {
     const call = { path, init };
     calls.push(call);
-    const custom = options.answer?.(call);
+    const custom = await options.answer?.(call);
     const answer: Answer =
       custom ??
       (path === "/owner/requests"
@@ -119,8 +119,11 @@ export function wallet(options: {
     },
   };
   const window = { addEventListener: () => undefined };
+  // the page's clock, which a test can move forward to reach its timed refreshes
+  let skew = 0;
+  const PageDate = Object.assign(function (...args: unknown[]) { return new (Date as any)(...args); }, { now: () => Date.now() + skew });
   const context = {
-    window, document, location, history, sessionStorage, fetch, Date, JSON, String, Math, Object, Array, Promise, Boolean,
+    window, document, location, history, sessionStorage, fetch, Date: PageDate, JSON, String, Math, Object, Array, Promise, Boolean,
     encodeURIComponent, parseInt, setInterval: (fn: () => unknown) => { tickFn = fn; return 0; },
   };
   runInNewContext(WALLET_PAGE_SCRIPT, context);
@@ -136,6 +139,19 @@ export function wallet(options: {
       await settle();
     },
     settle,
+    /** Moves the page's clock forward, then lets its timer fire once. */
+    later: async (ms: number) => {
+      skew += ms;
+      tickFn();
+      await settle();
+    },
+    /** Presses a button that is not inside a request card (the settings card's). */
+    press: async (act: string) => {
+      const button = new El("button");
+      button.setAttribute("data-act", act);
+      onClick({ target: button });
+      await settle();
+    },
     /** Presses the button with this `data-act` inside the card, as the document's click handler sees it. */
     click: async (card: El, act: string) => {
       const found = new RegExp(`<button[^>]*data-act="${act}"[^>]*data-id="([^"]*)"`).exec(card.markup);

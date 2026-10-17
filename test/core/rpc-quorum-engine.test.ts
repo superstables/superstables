@@ -334,6 +334,17 @@ describe("endpoint sets", () => {
     pin("arc-testnet", { urls: ["http://127.0.0.1:1"], ownNode: true });
     expect(mainnetRpcReady("arc-testnet")).toBe(true);
   });
+
+  it("is not mainnet-ready when the owner's quorum needs more operators than the urls come from", () => {
+    const three = ["https://a.one.example", "https://b.one.example", "https://a.two.example"];
+    pin("base-sepolia", { urls: three, quorum: 2 });
+    expect(mainnetRpcReady("base-sepolia")).toBe(true);
+    pin("base-sepolia", { urls: three, quorum: 3 });
+    expect(endpointSet("base-sepolia", "verdict", { testnet: false })).toMatchObject({ quorum: 3, agreement: "quorum" });
+    expect(mainnetRpcReady("base-sepolia")).toBe(false);
+    pin("base-sepolia", { urls: [...three, "https://a.three.example"], quorum: 3 });
+    expect(mainnetRpcReady("base-sepolia")).toBe(true);
+  });
 });
 
 // Probes from the round-1 review, kept as permanent tests.

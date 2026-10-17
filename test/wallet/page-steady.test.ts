@@ -267,3 +267,73 @@ describe("the wallet signs only the request that was confirmed", () => {
     expect(await status()).toBe("signed");
   });
 });
+
+describe("the settings card while the owner confirms", () => {
+  const settingsView = (hash: string) => ({
+    wallet: "0xabc",
+    policyFile: "/home/o/.superstables/policy.yaml",
+    preview: { site: "https://www.superstables.com", enabledChains: [], policyHash: `p-${hash}`, retiredHash: `r-${hash}`, settingsHash: `s-${hash}` },
+    signed: null,
+  });
+
+  it("opens the confirmation from the card as shown, and a late refresh changes neither the card nor what is signed", async () => {
+    let release: (a: { status: number; body: unknown }) => void = () => undefined;
+    let served = 0;
+    const page = wallet({
+      hash: "#s",
+      answer: (call) => {
+        if (call.path === "/owner/settings/sign") return { status: 200, body: settingsView("one") };
+        if (call.path !== "/owner/settings") return undefined;
+        served++;
+        if (served === 1) return { status: 200, body: settingsView("one") };
+        return new Promise((done) => { release = done; });
+      },
+    });
+    await page.show([]);
+    expect(page.node("settings-body").innerHTML).toContain("s-one");
+    // the periodic refresh is asked for, and its answer is held
+    await page.later(16_000);
+    expect(served).toBe(2);
+
+    const before = page.calls.length;
+    await page.press("settings-sign");
+    expect(page.calls.length).toBe(before);
+    expect(page.node("settings-actions").innerHTML).toContain("settings-confirm");
+    expect(page.node("settings-body").innerHTML).toContain("s-one");
+
+    // the held answer arrives after the confirmation opened, and shows newer files
+    release({ status: 200, body: settingsView("two") });
+    await page.settle();
+    expect(page.node("settings-body").innerHTML).toContain("s-one");
+    expect(page.node("settings-body").innerHTML).not.toContain("s-two");
+    expect(page.node("settings-actions").innerHTML).toContain("settings-confirm");
+
+    await page.press("settings-confirm");
+    const posted = page.decisions().find((c) => c.path === "/owner/settings/sign");
+    expect(JSON.parse(posted!.init.body!)).toEqual({ settingsHash: "s-one", policyHash: "p-one", retiredHash: "r-one" });
+  });
+
+  it("discards the answer of an older refresh that arrives after a newer one", async () => {
+    const held: ((a: { status: number; body: unknown }) => void)[] = [];
+    let served = 0;
+    const page = wallet({
+      hash: "#s",
+      answer: (call) => {
+        if (call.path !== "/owner/settings") return undefined;
+        if (++served === 1) return { status: 200, body: settingsView("zero") };
+        return new Promise((done) => held.push(done));
+      },
+    });
+    await page.show([]);
+    await page.later(16_000);
+    await page.later(16_000);
+    expect(held).toHaveLength(2);
+    held[1]({ status: 200, body: settingsView("new") });
+    await page.settle();
+    expect(page.node("settings-body").innerHTML).toContain("s-new");
+    held[0]({ status: 200, body: settingsView("old") });
+    await page.settle();
+    expect(page.node("settings-body").innerHTML).toContain("s-new");
+    expect(page.node("settings-body").innerHTML).not.toContain("s-old");
+  });
+});

@@ -8,7 +8,8 @@
 // with its declaration, and scripts/budget-build.mjs bundles it into dist/budget. It imports only ./token-facts.js and
 // ./finality-policy.js, which import nothing, so it still loads no file system code. Two prerequisites need files, so the
 // modules that own those facts register their checks here when they load (rpc-endpoints.mjs, budget/os-keychain.mjs). A
-// check no loaded module registered counts as missing, so `pay`, which loads neither, reads those two as missing.
+// check no loaded module registered counts as missing: `pay` loads rpc-endpoints.mjs (through its RPC reads) but not
+// budget/os-keychain.mjs, so for `pay` the agent-key prerequisite always reads as missing.
 
 import { tokenFactsProblem } from "./token-facts.js";
 import { finalityProfile } from "./finality-policy.js";
