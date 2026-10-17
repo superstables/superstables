@@ -5,7 +5,7 @@ import { KNOWN_NETWORKS } from "../../src/core/chain.js";
 import { EVM_CHAINS } from "../../budget/evm/chains.mjs";
 import { callerSet, endpointId, endpointSet, mainnetRpcReady, operatorOf, providerOf, RPC_ENDPOINTS, RPC_TESTNETS } from "../../src/core/rpc-endpoints.mjs";
 import { defaultOwnerSettings, readOwnerSettings } from "../../src/core/owner-settings.js";
-import { agreeAtFinalEvm, agreeAtFinalSolana, agreementWords, canonical, checkIdentity, forgetIdentities } from "../../src/core/rpc-quorum.mjs";
+import { agreeAtFinalEvm, agreeAtFinalSolana, agreementWords, canonical, endpointSetErrorWords, checkIdentity, forgetIdentities } from "../../src/core/rpc-quorum.mjs";
 
 // The owner's settings reach rpc-endpoints.mjs through owner-settings.js, which is mocked here (readOwnerSettings only).
 vi.mock("../../src/core/owner-settings.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../src/core/owner-settings.js")>()), readOwnerSettings: vi.fn() }));
@@ -401,6 +401,18 @@ describe("a liar can delay a verdict but cannot decide one", () => {
     }
     expect(agreementWords(heads as never)).toContain("gave an unreadable answer");
     expect(agreementWords(genesis as never)).toContain("answers another genesis");
+  });
+
+  it("endpointSetErrorWords: a refused variable gets the way out, unreadable owner settings do not", () => {
+    const refused = "SUPERSTABLES_SOLANA_RPC (http://rpc.example.com/…) is not an RPC the owner set for solana-devnet: owner actions and verdicts read only the owner's RPCs or the built-in ones";
+    const want = "the RPC endpoints could not be read: SUPERSTABLES_SOLANA_RPC (http://rpc.example.com/…) is not an RPC the owner set for solana-devnet; unset it, or ask the owner to add it in the owner settings";
+    expect(endpointSetErrorWords(refused, "SUPERSTABLES_SOLANA_RPC")).toBe(want);
+    expect(agreementWords({ agreed: false, why: "unreadable", reason: refused } as never)).toBe(want);
+    const broken = "the owner settings at /x/settings.json cannot be used: it is not JSON. Nothing was done";
+    const words = endpointSetErrorWords(broken, "SUPERSTABLES_SOLANA_RPC");
+    expect(words).toBe(`the RPC endpoints could not be read: ${broken}; ask the owner to check the owner settings`);
+    expect(words).not.toMatch(/unset it/);
+    expect(agreementWords({ agreed: false, why: "unreadable", reason: broken } as never)).toBe(words);
   });
 
   it("names a timeout and a refusal in fixed words", async () => {

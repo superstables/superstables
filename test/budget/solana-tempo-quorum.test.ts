@@ -471,6 +471,28 @@ describe("tempo: readBudget", () => {
     expect(s.result.next).toMatch(/count it as live/);
   }, 120_000);
 
+  it("0 remaining on an endpoint 50 blocks behind (within 64), the agreed block before the grant: not 'the budget is spent'", async () => {
+    const a = await tempo();
+    a.keys.set(tempoKeyId, LIVE_KEY);
+    let asked = 0n;
+    a.overrides = {
+      eth_getBlockByNumber: (p) => { if (p[0] !== "latest") asked = BigInt(p[0]); return undefined; },
+      eth_call: (p) => (p[1]?.blockHash && asked < 990n ? keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p) : undefined),
+    };
+    const b = track(await a.mirror({ overrides: {
+      eth_getBlockByNumber: (p) => (p[0] === "latest" ? { number: "0x3b6", timestamp: "0x1", hash: `0x${"ab".repeat(32)}`, transactions: [] } : undefined),
+      eth_blockNumber: () => "0x3b6",
+      eth_call: (p) => (p[1]?.blockHash ? keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p) : liveKeyAnswer(p) ?? zeroRemaining(p)),
+    } }));
+    tree.set({ "tempo-moderato": [a.url, b.url] });
+    tempoSetup();
+    const r = await script("budget/tempo/readBudget.ts", ["--owner", OWNER_EVM, "--key", TEMPO_AGENT], tempoEnv(b));
+    expect(r.stdout).toMatch(/remaining:\s+unknown/);
+    const s = await budget(["status", "--rail", "tempo"], tempoEnv(b));
+    expect(s.result, s.stdout + s.stderr).toMatchObject({ remaining: null, atRisk: null });
+    expect(s.result.next).not.toMatch(/spent/);
+  }, 120_000);
+
   it("every endpoint shows the key spent, expired or never granted: believed", async () => {
     const a = await tempo();
     const b = track(await a.mirror());
