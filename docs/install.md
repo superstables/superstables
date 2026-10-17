@@ -169,7 +169,7 @@ index and the facilitators answer:
 ✓ payment records          /home/you/.superstables/records: every line reads
 ✓ spend policy             /home/you/.superstables/policy.yaml: up to 0.05 USDC per payment, 1 USDC per day
 ✓ browser wallet           no account connected yet: MetaMask connects when the first approval link opens
-✓ approval page            http://127.0.0.1:4412 is free; the agent serves the page itself
+✓ approval page            http://127.0.0.1:23817 is free; the agent serves the page itself
 ✓ demo service             https://www.superstables.com/api/demo/market asks for payment (HTTP 402)
 ✓ Superstables index       https://www.superstables.com/api/v1/services answered HTTP 200
 ✓ facilitator.x402.rs      settles exact payments on Base Sepolia (testnet)
@@ -183,9 +183,10 @@ Not having connected an account yet is fine and is not a failure. A budget has i
 see [Budget](budget.md).
 
 In browser mode there is no approval process to start. When a payment needs approval,
-`superstables pay` serves the approval page on `127.0.0.1:4412` and prints an approval link of the
-form `http://127.0.0.1:4412/approve/<id>`. If another payment is already waiting on
-4412, the page takes a free port instead, and the approval link names that port.
+`superstables pay` serves the approval page on `127.0.0.1:<port>` and prints an approval link of the
+form `http://127.0.0.1:<port>/approve/<id>`. The port is this install's own, chosen once between
+20000 and 29999 and kept in `approve-port` in your Superstables folder. If another payment is already
+waiting on it, the page takes a free port instead, and the approval link names that port.
 
 ## Set up your agent app
 
@@ -255,8 +256,9 @@ refuse until it is unlocked (a local `revoke` still works). The key file then ho
 It binds `127.0.0.1:4411` and opens the approval page in your browser, already signed in. It
 does that through a launcher file only you can read, in `~/Superstables-wallet-open/`, and
 prints its path in case the browser does not open; the file, and the folder once empty, are
-deleted once the page is open. It never prints the owner secret itself. The page sends the secret to the wallet process in an Authorization header, so the owner
-can approve.
+deleted when the wallet stops. It never prints the owner secret itself. The page sends the secret to the wallet process in an Authorization header, so the owner
+can approve. The page does not keep the secret: after a reload, run `superstables --wallet local wallet open`
+to open it signed in again.
 
 Over SSH, or with a browser that cannot open the launcher file, forward the port
 (`ssh -L 4411:127.0.0.1:4411 user@host`), open `http://127.0.0.1:4411/` and paste the owner
@@ -265,7 +267,8 @@ secret to yourself: it approves payments.
 
 | Option | Meaning |
 | --- | --- |
-| `--port <n>` | Listen somewhere other than 4411. Set `SUPERSTABLES_WALLET_URL` to match |
+| `--port <n>` | Listen somewhere other than 4411. The agent is not affected: it reaches the wallet on its private socket |
+| `--tcp` | Also serve the agent's routes on the TCP port, for an agent that reaches this wallet over SSH forwarding; set `SUPERSTABLES_WALLET_URL` on the agent's side. Any process on this machine that has the agent token can then use them |
 | `--approval-timeout <seconds>` | How long a request waits for you. Default 120 |
 | `--no-open` | Do not open a browser; print where the page and the launcher are |
 
@@ -284,9 +287,9 @@ wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 | --- | --- | --- |
 | `SUPERSTABLES_HOME` | `~/.superstables` | Where the policy, the records and the remembered account live |
 | `SUPERSTABLES_WALLET` | `browser` | Who signs: `browser` (a browser wallet) or `local` (the local wallet process) |
-| `SUPERSTABLES_APPROVE_PORT` | unset: `4412`, or a free port when 4412 is busy | Fixes the approval page's port, browser mode. A fixed port that is busy fails at once, without asking the owner or using up the quote. `0` picks a free port |
+| `SUPERSTABLES_APPROVE_PORT` | unset: this install's own port (20000-29999, kept in `approve-port`), or a free port when it is busy | Fixes the approval page's port, browser mode. A fixed port that is busy fails at once, without asking the owner or using up the quote. `0` picks a free port |
 | `SUPERSTABLES_POLICY` | `$SUPERSTABLES_HOME/policy.yaml` | Read the policy from somewhere else. `~/.superstables/policy.yaml` still applies when it exists |
-| `SUPERSTABLES_WALLET_URL` | `http://127.0.0.1:4411` | Where the client looks for the local wallet |
+| `SUPERSTABLES_WALLET_URL` | unset: the wallet's socket, `wallet/agent.sock` | The local wallet over TCP, for one started with `wallet serve --tcp` |
 | `SUPERSTABLES_WALLET_AGENT_TOKEN` | read from `wallet/agent-token` | The agent's bearer token for the local wallet, when it is not on this filesystem |
 | `SUPERSTABLES_DEMO_SERVICE_URL` | `https://www.superstables.com/api/demo/market` | Where the built-in catalogue says the paid service is |
 | `SUPERSTABLES_DEMO_PAY_TO` | none | Default recipient for `demo-service` |
@@ -329,13 +332,13 @@ writable by others) stops the commands that need it, and `superstables owner set
 
 | Port | What binds it | When | Bound to |
 | --- | --- | --- | --- |
-| 4412, or a free port when it is busy | the approval page, inside the agent's own process | browser mode, from the first payment | `127.0.0.1` |
-| 4411 | the local wallet | `--wallet local` only | `127.0.0.1` |
+| this install's port (20000-29999), or a free port when it is busy | the approval page, inside the agent's own process | browser mode, from the first payment | `127.0.0.1` |
+| 4411 | the local wallet's owner page (the agent reaches the wallet on `wallet/agent.sock`, not a port) | `--wallet local` only | `127.0.0.1` |
 | 4402 | the demo service | only if you run the seller yourself; the one on superstables.com needs no port | `127.0.0.1` |
 
 With these defaults, none is reachable from another machine; `SUPERSTABLES_DEMO_HOST` can bind
 the demo service to another interface. If a port is busy, move it with the matching
-variable or `--port`. The approval page moves by itself: a busy 4412 usually means another
+variable or `--port`. The approval page moves by itself: a busy approval port usually means another
 payment is waiting there for its owner, so leave that process running.
 
 ## Uninstalling

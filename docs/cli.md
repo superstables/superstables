@@ -10,6 +10,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | [`superstables wallet init`](#superstables-wallet-init) | create this machine's wallet key, or import one |
 | [`superstables wallet encrypt`](#superstables-wallet-encrypt) | encrypt this machine's wallet key with a passphrase |
 | [`superstables wallet serve`](#superstables-wallet-serve) | run the wallet: it asks the owner to approve every payment, in a browser page |
+| [`superstables wallet open`](#superstables-wallet-open) | open the running wallet's page in your browser, signed in |
 | [`superstables wallet status`](#superstables-wallet-status) | ask the running local wallet what it is doing |
 | [`superstables wallet address`](#superstables-wallet-address) | the address that pays, from this machine's wallet key |
 | [`superstables find`](#superstables-find) | search for services that charge per request, and say how each could be paid |
@@ -118,7 +119,7 @@ Start here, budget: superstables budget setup --rail evm
     wait               wait for an owner approval an agent started (--id)
 
 Who runs what:
-  owner   setup, wallet init, wallet serve, policy init, owner settings, and every approval
+  owner   setup, wallet init, wallet serve, wallet open, policy init, owner settings, and every approval
   agent   find, quote, pay, status, receipts, attempts, doctor
   Either may run the read-only commands.
 
@@ -154,8 +155,9 @@ Environment:
                                  unset: the RPC set with superstables owner settings rpc, else the chain's public one
   SUPERSTABLES_SOLANA_RPC        the Solana devnet RPC for pay's chain checks (https, or http on this machine);
                                  unset: the RPC set with superstables owner settings rpc, else the chain's public one
-  SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, 4412 or a free one when busy
-  SUPERSTABLES_WALLET_URL        where the local wallet listens (default http://127.0.0.1:4411)
+  SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, this install's own port or a free one when busy
+  SUPERSTABLES_WALLET_URL        the local wallet over TCP, for one started with wallet serve --tcp (default: its private
+                                 socket in the wallet folder; its page is on http://127.0.0.1:4411)
   SUPERSTABLES_DOCTOR_OFFLINE    1: doctor skips the network checks
   SUPERSTABLES_DEMO_PAY_TO       where demo-service's earnings go
 
@@ -215,6 +217,7 @@ Commands:
   encrypt           encrypt this machine's wallet key with a passphrase
   serve [options]   run the wallet: it asks the owner to approve every payment,
                     in a browser page
+  open              open the running wallet's page in your browser, signed in
   status [options]  ask the running local wallet what it is doing
   address           the address that pays, from this machine's wallet key
   help [command]    display help for command
@@ -294,6 +297,10 @@ Options:
   --approval-timeout <seconds>  how long a request waits for the owner before it
                                 expires (default 120)
   --no-open                     do not open the approval page in a browser
+  --tcp                         also serve the agent's routes on the TCP port,
+                                for an agent that reaches this wallet over SSH
+                                forwarding; any process on this machine that has
+                                the agent token can then use them
   -h, --help                    display help for command
 
 Moves money: yes: it signs a payment when, and only when, the owner approves it on its page.
@@ -301,10 +308,29 @@ Run by: the owner, in a terminal of their own. Agents never run it.
 Example:
   $ superstables --wallet local wallet serve
 Prints: where it listens, the page's address, its launcher file and where the owner secret is (never
-  the secret itself), then runs until Ctrl-C.
+  the secret itself), and the socket the agent asks on, then runs until Ctrl-C.
 Exit codes: 0 stopped, 1 could not start (a port in use, no key: run `superstables wallet init`),
   the passphrase is not right, or no terminal for an encrypted key (the full table: superstables
   --help)
+```
+
+## superstables wallet open
+
+```text
+Usage: superstables wallet open [options]
+
+open the running wallet's page in your browser, signed in
+
+Options:
+  -h, --help  display help for command
+
+Moves money: no. The page it opens is where the owner approves payments.
+Run by: the owner, in a terminal of their own. Agents never run it.
+Example:
+  $ superstables --wallet local wallet open
+Prints: the launcher file it wrote (readable by this user only) and opens it in the browser.
+Exit codes: 0 opened, 1 the wallet is not running or the launcher could not be written (the full
+  table: superstables --help)
 ```
 
 ## superstables wallet status
@@ -460,9 +486,9 @@ Options:
 How it runs: pay asks the seller for its price again, then asks the owner. In browser mode (the
 default) it serves the approval page itself on 127.0.0.1 and prints its approval link; the page
 works only while this command runs, and only in a browser on this machine (over SSH, forward the
-port the approval link names: ssh -L 4412:127.0.0.1:4412). With --wallet local the request goes to
-the wallet process, whose page outlives this command; when pay stops waiting it cancels the request
-there, so approving it afterwards signs nothing.
+port the approval link names: ssh -L <port>:127.0.0.1:<port>). With --wallet local the request goes
+to the wallet process, whose page outlives this command; when pay stops waiting it cancels the
+request there, so approving it afterwards signs nothing.
 
 Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
 Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet; MPP with
@@ -479,7 +505,8 @@ default). After the owner approves, settlement takes up to 2 more minutes. --wai
 for the owner after N seconds; if nobody has decided by then, the attempt ends `abandoned`, which is
 not a rejection. Once the owner has approved, pay waits for the settlement whatever --wait says.
 
-Ports: the page uses port 4412. When another pay on this machine is already waiting there for its
+Ports: each install picks its own port for the page, once, in 20000-29999, and keeps it in
+approve-port in the home folder. When another pay on this machine is already waiting there for its
 owner, this one takes a free port and says so under the approval link; two payments can wait at
 once. Never stop another pay process to free a port: it is someone's payment waiting for an answer.
 SUPERSTABLES_APPROVE_PORT=<port> fixes the port instead (0 picks any free one); a fixed port that is

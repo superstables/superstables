@@ -169,11 +169,18 @@ or if you cannot check them.
 
 ## The same-machine caveat
 
-Any process running as your user can serve a page on loopback, and a browser wallet's permission to
-connect is granted per origin. A hostile local process could serve its own page on
-`127.0.0.1:4412` after this one stops and inherit a connection you granted earlier. It would
-still have to get you to sign, and the wallet would still show it the real amount and recipient,
-but it would not have to ask for the connection again.
+Any process on this machine can serve a page on loopback, and a browser wallet's permission to
+connect is granted per origin. A hostile local process could serve its own page on the approval
+page's port after this one stops and inherit a connection you granted earlier. It would still have
+to get you to sign, and the wallet would still show it the real amount and recipient, but it would
+not have to ask for the connection again.
+
+So that port is not a well-known one. Each install picks its own at random in 20000-29999 the first
+time `pay` runs, and keeps it in `approve-port` in the home folder (mode 0600); when another payment
+is waiting on it, the page takes a free port instead. Another account cannot know the port in
+advance, but one that watches the machine's open ports while a payment page is open can learn it,
+and bind it between payments. `SUPERSTABLES_APPROVE_PORT=0` gives every payment a free port of its
+own, which closes that too, at the cost of a connection prompt in the wallet each time.
 
 
 
@@ -420,17 +427,24 @@ elsewhere (copy-on-write and journalling file systems, flash storage, backups) a
 old key could not be overwritten (it was a symbolic link, say), the command says so on stderr and names the file.
 Client 0.4.0 cannot read an encrypted key file and stops with "that is not a private key"; if you may go back to it,
 keep the key somewhere safe before you encrypt it.
-The client sends the agent token to `SUPERSTABLES_WALLET_URL`, so it accepts only `https`, or
-`http` on `127.0.0.1`, `localhost` or `[::1]`. The wallet daemon accepts only the Host values
-`127.0.0.1:PORT` or `localhost:PORT`, like the approval page.
+The agent reaches the wallet over a socket, `wallet/agent.sock` (mode 0600, in the 0700 wallet
+folder). Before it sends the agent token, the client checks that the socket and its folder belong
+to this user and that no other user can write to the folder, so another account cannot pose as the
+wallet by taking its port. On TCP, `127.0.0.1:4411`, the wallet serves only the owner's page and
+the `/owner/…` routes; the agent token there gets 403, unless the wallet was started with
+`wallet serve --tcp`, for an agent that reaches it over SSH forwarding. Any process on this machine
+that has the agent token can then use those routes. Such an agent sets `SUPERSTABLES_WALLET_URL`,
+and the client sends the agent token there, so it accepts only `https`, or `http` on `127.0.0.1`,
+`localhost` or `[::1]`. On TCP, the wallet daemon accepts only the Host values `127.0.0.1:PORT` or
+`localhost:PORT`, like the approval page. On Windows there is no socket, and everything stays on TCP.
 It exists for a machine with no browser, and it moves the boundary.
 
 It generates two random 32-byte hex secrets at first start, in `~/.superstables/wallet/`:
 
 | Credential | File | What it can do |
 | --- | --- | --- |
-| Agent token | `wallet/agent-token` | Ask. `POST /requests`, `GET /requests/:id`, `POST /requests/:id/cancel`, `GET /status`, `GET /address` |
-| Owner secret | `wallet/owner-secret` | Decide. Everything above, plus `GET /owner/requests`, `POST /owner/requests/:id/approve`, `POST /owner/requests/:id/deny` |
+| Agent token | `wallet/agent-token` | Ask, over the private socket only, unless `wallet serve --tcp`. `POST /requests`, `GET /requests/:id`, `POST /requests/:id/cancel`, `GET /status`, `GET /address` |
+| Owner secret | `wallet/owner-secret` | Decide, on the TCP port only. Everything above, plus `GET /owner/requests`, `POST /owner/requests/:id/approve`, `POST /owner/requests/:id/deny` |
 
 Both are sent as `Authorization: Bearer …` and compared in constant time. A missing or unknown
 token gets 401; the agent token on an `/owner/…` route gets 403 — asking and approving are
@@ -442,11 +456,23 @@ sends the browser to `http://127.0.0.1:4411/#<owner-secret>`, and gives the brow
 file's path. The file goes in `~/Superstables-wallet-open/`, a folder that is not hidden, so a
 browser installed as a Snap (Ubuntu's Firefox) can open it. The wallet creates that folder with
 mode 0700, and refuses one that is a symlink, belongs to someone else or has another mode: then
-it writes no launcher and opens the page without the secret. It deletes the file once the page
-has signed in with the secret, or when the wallet stops, and the folder once it is empty. A URL fragment is not sent to the server. The page keeps
-the secret in that tab's session storage and takes it out of the address bar and the history.
-Anyone opening the page another way, over SSH for example, pastes the secret from
-`wallet/owner-secret`. The wallet verifies the same facts the approval page does and signs the same EIP-3009 authorization the
+it writes no launcher and opens the page without the secret. It keeps the file until the wallet
+stops, then deletes it, and the folder once it is empty: after a reload the page asks for the secret
+again, and the file is how the owner opens it signed in again. It holds the same secret, at the same
+mode in a folder of the same mode, as `wallet/owner-secret`, so keeping it adds no exposure.
+`superstables --wallet local wallet open` writes a fresh one and opens it, for when the tab was closed or the folder
+was cleaned. A URL fragment is not sent to the server. The page takes the secret out of the address
+bar and the history and keeps it in the page's memory only: it is never put in session or local
+storage, so closing or reloading the tab forgets it. Anyone opening the page another way, over SSH for
+example, pastes the secret from `wallet/owner-secret`.
+
+The page lists each request as a card that keeps its place while you read it: a new request goes
+below, and one that ended stays greyed in its slot until the pointer leaves the list. "Approve and
+sign" opens a confirmation in the card that names the amount, the recipient and the chain, and
+shows the amount as the token's raw value. "Yes, sign" posts those three values with the approval,
+and the wallet refuses with 409 when any of them differs from the request it holds, or when the call
+has no confirmation. The page also names the policy file that applies and its caps. Only the page's
+own script runs on it (a per-load nonce in its content security policy). The wallet verifies the same facts the approval page does and signs the same EIP-3009 authorization the
 page builds, at most ten minutes long and never to its own address, and every state change goes to
 `wallet/audit.jsonl`.
 

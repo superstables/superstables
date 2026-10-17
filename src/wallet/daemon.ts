@@ -1,5 +1,6 @@
-// The owner's wallet: a small HTTP server on 127.0.0.1 that holds the key and answers one
-// question, "may this payment be signed?", with the owner in the loop.
+// The owner's wallet: a small HTTP server that holds the key and answers one question, "may this payment be signed?",
+// with the owner in the loop. The agent asks on a socket in the wallet's private folder; the owner's page is on
+// 127.0.0.1.
 //
 // Three properties shape every line below.
 //
@@ -16,15 +17,16 @@
 //     to an audit log that never contains the key or the signature.
 
 import { spawn } from "node:child_process";
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeSync } from "node:fs";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { connect } from "node:net";
 import { join } from "node:path";
 import type { PaymentRequirements } from "@x402/core/types";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { DEFAULT_NETWORK, evmNetworkFor, isSameAddress, networkFor, usdcBalance } from "../core/chain.js";
-import { DEFAULT_WALLET_PORT, accountPolicyPath, ensureDir, policyPath, walletDir } from "../core/home.js";
+import { DEFAULT_WALLET_PORT, accountPolicyPath, ensureDir, policyPath, walletDir, walletSocketPath } from "../core/home.js";
 import { capUnit, capUnits, evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Policy, type Verdict } from "../core/policy.js";
 import { syncDirectory } from "../core/private-dir.mjs";
 import { LocalKeySigner } from "../core/signer/local.js";
@@ -40,6 +42,8 @@ import { termsFor, type RawAccept } from "../core/x402.js";
 import { untrustedText } from "../core/text.js";
 import { spentTodayFromAudit } from "./audit-total.js";
 import { loadAccount, readOrCreateSecret, writeAllSync } from "./keystore.js";
+import { pageCsp, scriptNonce } from "../core/signer/look.js";
+import { signedLifetime } from "../core/rails/evm.js";
 import { walletPage } from "./page.js";
 
 /** The owner approves every payment in this release; there is no unattended mode. */
@@ -60,8 +64,15 @@ const MIN_WAIT_MS = 1_000;
 const MAX_WAIT_MS = 3_600_000;
 
 export interface StartWalletOptions {
-  /** 0 picks a free port (tests). Defaults to DEFAULT_WALLET_PORT. */
+  /** The TCP port of the owner's page: 0 picks a free port (tests). Defaults to DEFAULT_WALLET_PORT. */
   port?: number;
+  /**
+   * Also answer the agent's routes on the TCP port (`wallet serve --tcp`), for an agent that reaches the wallet over SSH
+   * forwarding. Without it they are on the socket only. Windows has no socket, so there they are always on TCP.
+   */
+  tcp?: boolean;
+  /** The agent's socket. Defaults to agent.sock in `dir` (walletSocketPath). */
+  socketPath?: string;
   /** Where the key, the credentials and the audit log live. Defaults to walletDir(). */
   dir?: string;
   /**
@@ -106,13 +117,15 @@ export interface AuditIo {
 export interface WalletHandle {
   port: number;
   url: string;
+  /** The socket the agent's routes are on; undefined on Windows, where they are on TCP. */
+  socketPath?: string;
   agentToken: string;
   ownerSecret: string;
   /** The link the owner opens: the secret is in the fragment, so it never reaches the server. Never printed. */
   ownerUrl: string;
   /**
-   * The launcher file that opens `ownerUrl` in a browser (mode 0600), or undefined when none was written. Deleted once
-   * the page has signed in with the owner secret, and when the wallet stops.
+   * The launcher file that opens `ownerUrl` in a browser (mode 0600), or undefined when none was written. Deleted
+   * when the wallet stops.
    */
   launcherPath?: string;
   address: string;
@@ -149,6 +162,8 @@ class WalletUnavailable extends Error {}
 class PolicyNow extends Error {}
 
 type Caller = "agent" | "owner";
+/** Which of the wallet's two listeners a request came in on: the agent's socket, or the TCP port of the owner's page. */
+type Listener = "socket" | "tcp";
 
 /** Constant-time comparison, so a wrong token cannot be found one character at a time. */
 function secretEquals(a: string, b: string): boolean {
@@ -336,6 +351,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       reported: record.reported,
       reason: record.reason,
     };
+    if (record.requirement) out.validForSeconds = signedLifetime((record.requirement as { maxTimeoutSeconds?: unknown }).maxTimeoutSeconds);
     if (withResult && record.result) out.result = record.result;
     if (record.withheld) out.withheld = true;
     if (forCancel) out.served = record.served === true;
@@ -507,6 +523,30 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
 
   // ── HTTP ─────────────────────────────────────────────────────────────────────────────
 
+  const CHANGED_REQUEST = "the request changed or is not the one you confirmed; nothing was signed";
+
+  /** The JSON the owner's page posts with an approval; undefined when there is none or it is not JSON. */
+  async function readConfirmation(req: IncomingMessage): Promise<unknown> {
+    if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) return undefined;
+    try {
+      return JSON.parse((await readBody(req)) || "null");
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** True when the owner confirmed exactly this request's amount, recipient and chain. */
+  function confirmedByOwner(record: WalletRequestRecord, body: unknown): boolean {
+    if (typeof body !== "object" || body === null) return false;
+    const { amountAtomic, recipient, network } = body as Record<string, unknown>;
+    const terms = record.verified;
+    return (
+      typeof amountAtomic === "string" && amountAtomic === terms.amountAtomic &&
+      typeof recipient === "string" && isSameAddress(recipient, terms.recipient) &&
+      typeof network === "string" && network === terms.network
+    );
+  }
+
   const TOO_MANY_PENDING = "three payment requests are already waiting for the owner; nothing was asked. Wait for the owner to decide one, then ask again";
   const tooManyPending = (): boolean => [...requests.values()].filter((r) => r.status === "pending").length >= MAX_PENDING;
 
@@ -550,6 +590,13 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     }
   }
 
+  /** The file the wallet reads its policy from, when it reads one and the file is there; the page names it. */
+  function selectedPolicyFile(): string | undefined {
+    if (options.policy) return undefined;
+    const file = options.policyFile ?? policyPath();
+    return existsSync(file) ? file : undefined;
+  }
+
   function shape(p: Policy): WalletStatus["policy"] {
     return {
       perCall: formatMoney(p.perCall),
@@ -579,22 +626,29 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       approvalMode: APPROVAL_MODE,
       pending: [...requests.values()].filter((r) => r.status === "pending").length,
       // With no usable policy nothing is signed, which is what a kill switch shows.
-      policy: policy ? shape(policy) : { allow: [], deny: [], stablecoins: [], killSwitch: true },
+      policy: policy ? { ...shape(policy), file: selectedPolicyFile() } : { allow: [], deny: [], stablecoins: [], killSwitch: true },
       also: policy?.also ? { file: policy.also.file, policy: shape(policy.also.policy) } : undefined,
       policyProblem,
     };
   }
 
-  async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  async function handle(req: IncomingMessage, res: ServerResponse, listener: Listener): Promise<void> {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const method = req.method ?? "GET";
+
+    // The socket is the agent's: only this user can connect to it, so its Host header means nothing, and the owner's
+    // page and routes are not on it.
+    if (listener === "socket" && (path === "/" || path.startsWith("/owner/"))) {
+      send(res, 404, { error: "no such route" });
+      return;
+    }
 
     // Answer only to the host this server is bound to, as the two approval servers do. Without it a web
     // page under a DNS name resolving to 127.0.0.1 can reach this one, which is the page that approves
     // payments outright: under `--wallet local` there is no wallet prompt to contradict what it shows.
     const host = String(req.headers.host ?? "");
-    if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
+    if (listener === "tcp" && host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
       res.writeHead(421, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
       res.end("This wallet answers to its own host only.\n");
       return;
@@ -609,29 +663,38 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
 
     // The approval page itself carries no secret: the owner's fragment stays in the browser.
     if (method === "GET" && path === "/") {
+      const nonce = scriptNonce();
+      const proof = url.searchParams.get("proof");
       res.writeHead(200, {
+        ...(proof && /^[0-9a-f]{16,128}$/.test(proof) ? { [PROOF_HEADER]: walletProof(ownerSecret, port, proof) } : {}),
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
         // this page decides money, so it is not framed and not embedded
         "x-frame-options": "DENY",
-        "content-security-policy": "frame-ancestors 'none'",
+        // only the page's own script runs
+        "content-security-policy": pageCsp(nonce),
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
       });
-      res.end(walletPage());
+      res.end(walletPage(undefined, nonce));
       return;
     }
 
     const token = bearer(req);
     let caller: Caller | undefined;
-    if (token && secretEquals(token, ownerSecret)) {
+    // the socket knows the agent token only
+    if (listener === "tcp" && token && secretEquals(token, ownerSecret)) {
       caller = "owner";
-      // the page is open and signed in: the launcher that carried the secret to it has done its job
-      removeLauncher();
     }
     else if (token && secretEquals(token, agentToken)) caller = "agent";
     if (!caller) {
       send(res, 401, { error: "this wallet needs a bearer token: the agent token to ask, the owner secret to decide" });
+      return;
+    }
+    // Any process on this machine can reach the TCP port; the agent token is good only on the socket, which only this
+    // user can, unless the owner opened TCP to it.
+    if (caller === "agent" && listener === "tcp" && !agentOnTcp) {
+      send(res, 403, { error: "agent routes are on the wallet's private socket; start the wallet with --tcp to allow them here" });
       return;
     }
     const ownerOnly = path.startsWith("/owner/");
@@ -762,6 +825,12 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
         send(res, 200, view(record, false));
         return;
       }
+      // The owner confirmed one payment: the amount, the recipient and the chain they saw. A request that is not that
+      // one, or a call that says nothing, signs nothing.
+      if (!confirmedByOwner(record, await readConfirmation(req))) {
+        send(res, 409, { error: CHANGED_REQUEST, request: view(record, false) });
+        return;
+      }
       try {
         await approve(record);
       } catch (err) {
@@ -786,16 +855,37 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     send(res, 404, { error: "no such route" });
   }
 
-  const server: Server = createServer((req, res) => {
-    handle(req, res).catch((err: Error) => {
-      if (res.headersSent) {
-        res.end();
-        return;
-      }
-      send(res, 500, { error: `the wallet could not handle that request: ${err.message}` });
+  const serverFor = (listener: Listener): Server =>
+    createServer((req, res) => {
+      handle(req, res, listener).catch((err: Error) => {
+        if (res.headersSent) {
+          res.end();
+          return;
+        }
+        send(res, 500, { error: `the wallet could not handle that request: ${err.message}` });
+      });
     });
-  });
 
+  // The agent's socket, in the wallet's own folder (0700). Windows has none: there the agent stays on TCP.
+  let socketPath: string | undefined;
+  try {
+    socketPath = options.socketPath ?? walletSocketPath(dir);
+  } catch (err) {
+    // a path too long for a socket: with --tcp the agent has TCP, and the wallet does without the socket
+    if (options.tcp !== true) {
+      clearInterval(sweeper);
+      throw err;
+    }
+  }
+  const agentOnTcp = options.tcp === true || socketPath === undefined;
+  if (socketPath !== undefined) {
+    await clearStaleSocket(socketPath).catch((err: unknown) => {
+      clearInterval(sweeper);
+      throw err;
+    });
+  }
+
+  const server = serverFor("tcp");
   const port = await new Promise<number>((resolve, reject) => {
     server.once("error", reject);
     // 127.0.0.1 only: this wallet is never reachable from another machine.
@@ -805,7 +895,47 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     });
   });
 
+  let agentServer: Server | undefined;
+  if (socketPath !== undefined) {
+    const listening = serverFor("socket");
+    try {
+      await new Promise<void>((resolve, reject) => {
+        listening.once("error", reject);
+        listening.listen(socketPath, () => resolve());
+      });
+      // the folder already keeps other users out; the file does too
+      chmodSync(socketPath, 0o600);
+    } catch (err) {
+      listening.close();
+      server.close();
+      throw err;
+    }
+    agentServer = listening;
+  }
+
   const url = `http://127.0.0.1:${port}`;
+  // where `wallet open` finds the page: written once the wallet is listening, removed when it stops
+  const pagePortFile = join(dir, PAGE_PORT_FILE);
+  try {
+    writeFileSync(pagePortFile, `${port} ${process.pid}\n`, { mode: 0o600 });
+    chmodSync(pagePortFile, 0o600);
+  } catch {
+    // without it `wallet open` says to start the wallet; the wallet itself does not need it
+    // and a file left by an earlier wallet would name the wrong port
+    try {
+      unlinkSync(pagePortFile);
+    } catch {
+      // none there
+    }
+  }
+  const removePagePort = (): void => {
+    try {
+      unlinkSync(pagePortFile);
+    } catch {
+      // gone already
+    }
+  };
+  process.once("exit", removePagePort);
   const ownerUrl = `${url}/#${ownerSecret}`;
   const ownerSecretFile = join(dir, "owner-secret");
 
@@ -823,6 +953,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
   if (!quiet || shouldOpen) {
     try {
       launcherPath = writeOwnerLauncher(launcherDir, ownerUrl, options.launcherIo);
+      heldLaunchers.add(launcherPath);
       launcherReady = true;
     } catch (err) {
       launcherProblem = (err as Error).message;
@@ -832,7 +963,26 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
   }
   /** Deletes the launcher. The path is forgotten only once the file is gone, so a later call (close, exit) can retry. */
   function removeLauncher(): void {
-    if (launcherPath === undefined) return;
+    // the launchers `wallet open` wrote are named after this process and go with it
+    try {
+      for (const name of readdirSync(launcherDir)) {
+        const m = LAUNCHER_NAME.exec(name);
+        // (a launcher another wallet in this same process still holds is left to that wallet)
+        if (m && Number(m[1]) === process.pid && join(launcherDir, name) !== launcherPath && !heldLaunchers.has(join(launcherDir, name))) {
+          try {
+            unlinkSync(join(launcherDir, name));
+          } catch {
+            // gone already
+          }
+        }
+      }
+    } catch {
+      // no folder, nothing to delete
+    }
+    if (launcherPath === undefined) {
+      removeEmptyFolder(launcherDir);
+      return;
+    }
     try {
       unlinkSync(launcherPath);
     } catch (err) {
@@ -841,6 +991,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
         return;
       }
     }
+    heldLaunchers.delete(launcherPath);
     launcherPath = undefined;
     launcherReady = false;
     removeEmptyFolder(launcherDir);
@@ -853,7 +1004,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     console.log(`  network:        ${DEFAULT_NETWORK.label}`);
     console.log(`  approval mode:  ask before every payment`);
     console.log(`  approve here:   ${url}/ (it asks for the owner secret)`);
-    if (launcherReady) console.log(`  open signed in: ${launcherPath} (only you can read it; deleted once the page is open)`);
+    if (launcherReady) console.log(`  open signed in: ${launcherPath} (only you can read it; kept until the wallet stops)`);
     if (launcherProblem) console.log(`  open signed in: no launcher (${launcherProblem}); open the page and paste the secret`);
     console.log(`  owner secret:   ${ownerSecretFile} (paste it into the page; never share it)`);
     console.log(`  over SSH:       ssh -L ${port}:127.0.0.1:${port} <you>@<this machine>, open ${url}/ on your machine, paste the secret`);
@@ -865,6 +1016,8 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       console.log(`  policy:         cannot be used: ${(err as Error).message}`);
     }
     console.log(`  agent token:    ${agentTokenFile}`);
+    if (socketPath !== undefined) console.log(`  agent socket:   ${socketPath}`);
+    if (socketPath !== undefined && agentOnTcp) console.log(`  agent routes also on: ${url} (--tcp)`);
   }
 
   // without a launcher the browser still gets the page, without the secret: it asks for it
@@ -873,6 +1026,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
   return {
     port,
     url,
+    socketPath,
     agentToken,
     ownerSecret,
     ownerUrl,
@@ -884,11 +1038,62 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       new Promise<void>((resolve) => {
         removeLauncher();
         process.off("exit", removeLauncher);
+        removePagePort();
+        process.off("exit", removePagePort);
         clearInterval(sweeper);
+        let open = agentServer ? 2 : 1;
+        const closed = () => {
+          if (--open === 0) resolve();
+        };
         server.closeAllConnections?.();
-        server.close(() => resolve());
+        server.close(closed);
+        if (agentServer) {
+          agentServer.closeAllConnections?.();
+          agentServer.close(() => {
+            // node removes the socket file itself; this is for when it did not
+            try {
+              unlinkSync(socketPath as string);
+            } catch {
+              // gone already
+            }
+            closed();
+          });
+        }
       }),
   };
+}
+
+/**
+ * Makes way for the wallet's socket. A socket of this user's that nothing answers on was left by a wallet that did not
+ * stop cleanly, and is removed. One that answers is another wallet's for this home: starting a second is refused. Anything
+ * else at that path is refused, and never removed.
+ */
+async function clearStaleSocket(path: string): Promise<void> {
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+  const mine = typeof process.getuid !== "function" || st.uid === process.getuid();
+  if (st.isSymbolicLink() || !st.isSocket() || !mine) {
+    throw new Error(`${path} is in the way of the wallet's socket and is not one this wallet left: check what it is, then remove it`);
+  }
+  const answers = await new Promise<boolean>((resolve, reject) => {
+    const probe = connect(path);
+    probe.once("connect", () => {
+      probe.destroy();
+      resolve(true);
+    });
+    probe.once("error", (err: NodeJS.ErrnoException) => {
+      // refused: nothing listens there any more. Anything else is not a socket to remove.
+      if (err.code === "ECONNREFUSED") resolve(false);
+      else reject(new Error(`${path} could not be checked (${err.code ?? err.message}); check what it is, then remove it`));
+    });
+  });
+  if (answers) throw new Error(`another wallet is already running for this home (it answers on ${path})`);
+  unlinkSync(path);
 }
 
 /** One line the owner can check against what they meant to allow. */
@@ -955,6 +1160,8 @@ export interface LauncherIo {
 export type LauncherError = Error & { leftover?: string };
 
 /** owner-<pid of the wallet that wrote it>-<random>.html */
+/** The serve launchers of the wallets running in this process; `wallet open` launchers are the others of its name. */
+const heldLaunchers = new Set<string>();
 const LAUNCHER_NAME = /^owner-(\d+)-[0-9a-f]+\.html$/;
 
 /** Whether a process with this pid exists. EPERM means it does, under another user. */
@@ -977,12 +1184,12 @@ function processAlive(pid: number): boolean {
  * The folder is checked, then used by path. Someone who could swap it in between needs write access to the home
  * folder, which already gives them this account, so the check does not try to close that gap.
  */
-export function writeOwnerLauncher(dir: string, ownerUrl: string, io: LauncherIo = {}): string {
+export function writeOwnerLauncher(dir: string, ownerUrl: string, io: LauncherIo = {}, pid: number = process.pid): string {
   const unlink = io.unlinkSync ?? unlinkSync;
   ensurePrivateFolder(dir);
   for (const name of readdirSync(dir)) {
     const m = LAUNCHER_NAME.exec(name);
-    if (m && Number(m[1]) !== process.pid && !processAlive(Number(m[1]))) {
+    if (m && Number(m[1]) !== pid && Number(m[1]) !== process.pid && !processAlive(Number(m[1]))) {
       try {
         unlinkSync(join(dir, name));
       } catch {
@@ -990,7 +1197,7 @@ export function writeOwnerLauncher(dir: string, ownerUrl: string, io: LauncherIo
       }
     }
   }
-  const path = join(dir, `owner-${process.pid}-${randomBytes(16).toString("hex")}.html`);
+  const path = join(dir, `owner-${pid}-${randomBytes(16).toString("hex")}.html`);
   // JSON is a valid JavaScript string literal; "<" is escaped so the value cannot close the script element
   const target = JSON.stringify(ownerUrl).replace(/</g, "\\u003c");
   const html = `<!doctype html>
@@ -1017,6 +1224,52 @@ export function writeOwnerLauncher(dir: string, ownerUrl: string, io: LauncherIo
   }
   closeSync(fd);
   return path;
+}
+
+/** The header that proves a page's server holds the owner secret: HMAC-SHA256 of the port it was asked on and the caller's nonce. */
+const PROOF_HEADER = "x-superstables-proof";
+function walletProof(secret: string, port: number, nonce: string): string {
+  return createHmac("sha256", secret).update(`wallet-open:127.0.0.1:${port}:${nonce}`).digest("hex");
+}
+
+/** The file in the wallet's folder that names the port its page is on and the wallet's pid, for `wallet open`. */
+const PAGE_PORT_FILE = "page-port";
+
+/**
+ * Opens the running wallet's page signed in: writes a fresh launcher from the owner secret in the wallet's folder and
+ * hands the browser its path. Returns that path. Throws a sentence when no wallet is running for this folder.
+ */
+export async function openWalletPage(options: { dir?: string; launcherDir?: string; opener?: (target: string) => void } = {}): Promise<string> {
+  const dir = options.dir ?? walletDir();
+  const notRunning = new Error("The wallet is not running; start it first with `superstables --wallet local wallet serve`.");
+  let port: number;
+  let walletPid: number;
+  let secret: string;
+  try {
+    const [portText, pidText] = readFileSync(join(dir, PAGE_PORT_FILE), "utf8").trim().split(/\s+/);
+    port = Number(portText);
+    walletPid = Number(pidText);
+    secret = readFileSync(join(dir, "owner-secret"), "utf8").trim();
+  } catch {
+    throw notRunning;
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || !Number.isInteger(walletPid) || walletPid < 1 || secret === "") throw notRunning;
+  // a page-port file outlives a wallet that crashed: only a wallet that answers with its page counts
+  // and the secret goes only to a page whose server shows it knows the secret
+  const nonce = randomBytes(16).toString("hex");
+  const answered = await fetch(`http://127.0.0.1:${port}/?proof=${nonce}`, { signal: AbortSignal.timeout(2000), redirect: "error" })
+    .then(async (res) => {
+      if (!res.ok || !(await res.text()).includes("Local wallet")) return false;
+      const given = res.headers.get(PROOF_HEADER) ?? "";
+      const expected = walletProof(secret, port, nonce);
+      return given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+    })
+    .catch(() => false);
+  if (!answered) throw notRunning;
+  // named after the wallet's process, so the wallet deletes it when it stops
+  const launcher = writeOwnerLauncher(options.launcherDir ?? defaultLauncherDir(), `http://127.0.0.1:${port}/#${secret}`, {}, walletPid);
+  (options.opener ?? openInBrowser)(launcher);
+  return launcher;
 }
 
 /** Best effort, and only that: a browser that will not open is not a wallet failure. */

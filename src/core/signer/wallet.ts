@@ -1,11 +1,15 @@
 // The agent side of signing. This signer holds no key and can approve nothing: it posts the
-// seller's requirement to the owner's wallet on 127.0.0.1 and waits for a human decision.
+// seller's requirement to the owner's wallet, over the wallet's private socket, and waits for a human decision.
 // Every outcome that is not a signature is a refusal with a reason, never an exception the
 // caller has to guess at — "the owner said no" is an answer, and the agent should say it.
 
+import { lstatSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { dirname } from "node:path";
+import { Readable } from "node:stream";
 import { verifyTypedData } from "viem";
 import { authorizationTypes } from "@x402/evm";
-import { agentTokenPath, walletUrl } from "../home.js";
+import { agentTokenPath, walletSocketPath, walletUrl, walletUrlFromEnvironment } from "../home.js";
 import { readBody } from "../http.js";
 import { untrustedText } from "../text.js";
 import { evmNetworkFor, isSameAddress, networkFor } from "../chain.js";
@@ -15,7 +19,10 @@ import { LOCAL_WALLET_EVM_ONLY, SignRefused, type Eip3009SignRequest, type Eip30
 import { readSecretFile } from "../../wallet/keystore.js";
 
 export interface WalletSignerOptions {
-  /** Where the wallet is listening. Loopback only in this release. */
+  /**
+   * The wallet's TCP address, for a wallet started with --tcp (SUPERSTABLES_WALLET_URL). Without it the wallet is reached
+   * on its private socket in the wallet folder.
+   */
   url?: string;
   /** Bearer token for the agent-facing routes. Lets an agent ask; it never approves. */
   agentToken?: string;
@@ -23,13 +30,17 @@ export interface WalletSignerOptions {
   pollMs?: number;
   /** How long to wait for the owner before giving up on this request. */
   timeoutMs?: number;
-  /** Injected in tests; the global fetch otherwise. */
+  /** Injected in tests, for a wallet reached at `url`; the global fetch otherwise. Used only with `url` (or SUPERSTABLES_WALLET_URL): the socket has its own. */
   fetchImpl?: typeof fetch;
 }
 
 /** What the agent is told when the wallet is not there. It names the fix. */
 const WALLET_DOWN =
   "the wallet is not running or the agent token is wrong; start it with `superstables wallet serve`";
+
+/** The same, for a wallet reached on its socket. */
+const walletDownAt = (socketPath: string): string =>
+  `the wallet is not running (no socket at ${socketPath}) or the agent token is wrong; the owner starts it with \`superstables --wallet local wallet serve\` (a wallet from 0.4.0 or earlier listens on TCP only: set SUPERSTABLES_WALLET_URL=http://127.0.0.1:4411)`;
 
 const DEFAULT_POLL_MS = 500;
 /** A little longer than the wallet's own approval timeout, so the wallet decides first. */
@@ -44,12 +55,32 @@ interface WalletWire {
   url: string;
   token: () => string;
   fetchImpl: typeof fetch;
+  /** The wallet's private socket, when the wallet is reached there (the default); `url` is then only a placeholder. */
+  socketPath?: string;
+  /** Why the socket cannot be used (its path is too long); nothing is sent. */
+  socketProblem?: string;
 }
 
 function wireFor(options: WalletSignerOptions): WalletWire {
-  const fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
+  // A TCP address someone chose, for a wallet reached over SSH forwarding; otherwise the socket, where the platform has one.
+  const tcp = options.url ?? walletUrlFromEnvironment();
+  let socketPath: string | undefined;
+  let socketProblem: string | undefined;
+  if (tcp === undefined) {
+    try {
+      socketPath = walletSocketPath();
+    } catch (err) {
+      socketProblem = (err as Error).message;
+    }
+  }
+  const onSocket = socketPath !== undefined || socketProblem !== undefined;
+  const fetchImpl = onSocket
+    ? socketFetch(socketPath ?? "")
+    : options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
   return {
-    url: (options.url ?? walletUrl()).replace(/\/$/, ""),
+    url: onSocket ? "http://localhost" : (tcp ?? walletUrl()).replace(/\/$/, ""),
+    socketPath,
+    socketProblem,
     // Read late: the wallet may have been started after this signer was built.
     token: () => {
       if (options.agentToken !== undefined) return options.agentToken;
@@ -69,10 +100,77 @@ function wireFor(options: WalletSignerOptions): WalletWire {
 }
 
 /**
+ * Why `path` is not this user's wallet socket, or undefined when it is: a socket (not a symlink) owned by this user, in a
+ * real folder owned by this user that no other user can write to. Only someone who can write to that folder could put
+ * another socket in its place, so with these checks the token goes to this user's own wallet process. Throws ENOENT
+ * when there is no socket.
+ */
+function foreignSocket(path: string): string | undefined {
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const st = lstatSync(path);
+  if (st.isSymbolicLink()) return "it is a symlink";
+  if (!st.isSocket()) return "it is not a socket";
+  if (uid !== undefined && st.uid !== uid) return "it belongs to another user";
+  const folder = dirname(path);
+  const dir = lstatSync(folder);
+  if (dir.isSymbolicLink() || !dir.isDirectory()) return `${folder} is not a real folder`;
+  if (uid !== undefined && dir.uid !== uid) return `${folder} belongs to another user`;
+  if ((dir.mode & 0o022) !== 0) return `other users can write to ${folder}`;
+  return undefined;
+}
+
+/**
+ * A fetch that goes to the wallet's socket, after checking it is this user's (foreignSocket). Global fetch cannot reach a
+ * Unix socket without a dispatcher of its own, so this is node:http, with its answer handed back as a Response.
+ */
+function socketFetch(socketPath: string): typeof fetch {
+  return async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    let problem: string | undefined;
+    try {
+      problem = foreignSocket(socketPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") throw new SignRefused("unavailable", walletDownAt(socketPath));
+      problem = (err as Error).message;
+    }
+    if (problem) throw new SignRefused("unavailable", `${socketPath} is not this user's wallet socket (${problem}); the token was not sent`);
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    return await new Promise<Response>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          socketPath,
+          path: `${url.pathname}${url.search}`,
+          method: init.method ?? "GET",
+          headers: init.headers as Record<string, string>,
+          signal: init.signal ?? undefined,
+          timeout: HTTP_TIMEOUT_MS,
+        },
+        (res) => {
+          try {
+            const headers = new Headers();
+            for (const [name, value] of Object.entries(res.headers)) {
+              if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+            }
+            resolve(new Response(Readable.toWeb(res) as ReadableStream, { status: res.statusCode ?? 502, headers }));
+          } catch (err) {
+            res.destroy();
+            reject(err);
+          }
+        },
+      );
+      req.on("timeout", () => req.destroy(new Error("the wallet did not answer in time")));
+      req.on("error", reject);
+      req.end(typeof init.body === "string" ? init.body : undefined);
+    });
+  };
+}
+
+/**
  * One call to the wallet. Anything that means "there is no wallet here, or it will not talk
  * to me" comes back as an unavailable refusal, because that is what the agent must report.
  */
 async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  if (wire.socketProblem) throw new SignRefused("unavailable", `${wire.socketProblem}; the token was not sent`);
+  const down = wire.socketPath ? walletDownAt(wire.socketPath) : WALLET_DOWN;
   let res: Response;
   try {
     res = await wire.fetchImpl(`${wire.url}${path}`, {
@@ -86,7 +184,7 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
     });
   } catch (err) {
     if (err instanceof SignRefused) throw err;
-    throw new SignRefused("unavailable", WALLET_DOWN);
+    throw new SignRefused("unavailable", down);
   }
   // A wallet that is full (429) or cannot keep its audit log (503) says why, and nobody was asked: an unavailable refusal,
   // which reopens the quote, not a refusal of this payment.
@@ -102,8 +200,20 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
     said = untrustedText(said, 200);
     throw new SignRefused("unavailable", `the wallet refused: ${said || `HTTP ${res.status}`}`);
   }
+  if (res.status === 403 && !wire.socketPath) {
+    // The wallet is there and the token may be right: it answers the agent on its private socket only. Fixed text, not the
+    // wallet's own: the TCP side is not authenticated, so nothing it sends is echoed.
+    const { text } = await readBody(res, 200, HTTP_TIMEOUT_MS);
+    if (/private socket/.test(text)) {
+      throw new SignRefused(
+        "unavailable",
+        "the wallet answers the agent on its private socket only: unset SUPERSTABLES_WALLET_URL, or the owner starts it with `superstables --wallet local wallet serve --tcp`",
+      );
+    }
+    throw new SignRefused("unavailable", down);
+  }
   if (res.status === 401 || res.status === 403 || res.status >= 500) {
-    throw new SignRefused("unavailable", WALLET_DOWN);
+    throw new SignRefused("unavailable", down);
   }
   if (!res.ok) {
     const { text } = await readBody(res, 200, HTTP_TIMEOUT_MS);
@@ -112,11 +222,11 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
   }
   // more than the cap, cut off, or late: not an answer from this wallet
   const { text, end } = await readBody(res, WALLET_MAX_BYTES, HTTP_TIMEOUT_MS, WALLET_MAX_BYTES + 1);
-  if (end !== "eof") throw new SignRefused("unavailable", WALLET_DOWN);
+  if (end !== "eof") throw new SignRefused("unavailable", down);
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new SignRefused("unavailable", WALLET_DOWN);
+    throw new SignRefused("unavailable", down);
   }
 }
 

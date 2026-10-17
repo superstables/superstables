@@ -18,7 +18,6 @@ import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from 
 import { isAddress } from "../core/chain.js";
 import { findServices, getService, resolveRequest } from "../core/discovery.js";
 import {
-  DEFAULT_APPROVE_PORT,
   DEFAULT_DEMO_SERVICE_PORT,
   DEFAULT_WALLET_PORT,
   ensureDir,
@@ -38,7 +37,7 @@ import { walletStatus } from "../core/signer/wallet.js";
 import type { Attempt, Quote, Receipt, ServiceListing, WalletStatus } from "../core/types.js";
 import { clientVersion } from "../core/version.js";
 import { startDemoService } from "../demo-service/server.js";
-import { policySummary, startWallet } from "../wallet/daemon.js";
+import { openWalletPage, policySummary, startWallet } from "../wallet/daemon.js";
 import {
   encryptKeyFile,
   initKey,
@@ -311,11 +310,17 @@ explain(
     .option("--port <n>", `port to listen on (default ${DEFAULT_WALLET_PORT})`, toInteger)
     .option("--approval-timeout <seconds>", "how long a request waits for the owner before it expires (default 120)", toNumber)
     .option("--no-open", "do not open the approval page in a browser")
-    .action(async (options: { port?: number; approvalTimeout?: number; open: boolean }) => {
+    .option(
+      "--tcp",
+      "also serve the agent's routes on the TCP port, for an agent that reaches this wallet over SSH forwarding; " +
+        "any process on this machine that has the agent token can then use them",
+    )
+    .action(async (options: { port?: number; approvalTimeout?: number; open: boolean; tcp?: boolean }) => {
       const account = await walletAccount();
       const handle = await startWallet({
         account,
         port: options.port,
+        tcp: options.tcp === true,
         approvalTimeoutMs: options.approvalTimeout === undefined ? undefined : options.approvalTimeout * 1000,
         openBrowser: options.open,
       });
@@ -329,10 +334,33 @@ explain(
     examples: ["superstables --wallet local wallet serve"],
     prints:
       "where it listens, the page's address, its launcher file and where the owner secret is (never the secret " +
-      "itself), then runs until Ctrl-C.",
+      "itself), and the socket the agent asks on, then runs until Ctrl-C.",
     exits:
       "0 stopped, 1 could not start (a port in use, no key: run `superstables wallet init`), the passphrase is not right, " +
       "or no terminal for an encrypted key",
+  },
+);
+
+explain(
+  wallet
+    .command("open")
+    .description("open the running wallet's page in your browser, signed in")
+    .action(async () => {
+      let launcher: string;
+      try {
+        launcher = await openWalletPage();
+      } catch (err) {
+        throw new CliError((err as Error).message);
+      }
+      console.log(field("launcher", launcher));
+      console.log("The page does not keep the owner secret, so a reload asks for it again: run this command to open it signed in.");
+    }),
+  {
+    money: "no. The page it opens is where the owner approves payments.",
+    who: "the owner, in a terminal of their own. Agents never run it.",
+    examples: ["superstables --wallet local wallet open"],
+    prints: "the launcher file it wrote (readable by this user only) and opens it in the browser.",
+    exits: "0 opened, 1 the wallet is not running or the launcher could not be written",
   },
 );
 
@@ -646,7 +674,7 @@ explain(
             // Another payment is most likely waiting on the usual port. Saying so here is what
             // keeps an agent from going looking for that process and stopping it.
             say(
-              `  (port ${movedFrom} is in use, probably by another payment waiting for its owner; leave it running. ` +
+              `  (port ${movedFrom}, the one this install uses, is busy, probably with another payment waiting for its owner; leave it running. ` +
                 `This page is on port ${new URL(attempt.approvalUrl).port}.)`,
             );
           }
@@ -737,7 +765,7 @@ explain(
       "How it runs: pay asks the seller for its price again, then asks the owner. In browser mode " +
         "(the default) it serves the approval page itself on 127.0.0.1 and prints its approval link; the page " +
         "works only while this command runs, and only in a browser on this machine (over SSH, forward " +
-        `the port the approval link names: ssh -L ${DEFAULT_APPROVE_PORT}:127.0.0.1:${DEFAULT_APPROVE_PORT}). With --wallet local the ` +
+        "the port the approval link names: ssh -L <port>:127.0.0.1:<port>). With --wallet local the " +
         "request goes to the wallet process, whose page outlives this command; when pay stops waiting it cancels " +
         "the request there, so approving it afterwards signs nothing.",
       "Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base " +
@@ -754,7 +782,8 @@ explain(
         "to 2 more minutes. --wait N stops waiting for the owner after N seconds; if nobody has decided " +
         "by then, the attempt ends `abandoned`, which is not a rejection. Once the owner has approved, " +
         "pay waits for the settlement whatever --wait says.",
-      `Ports: the page uses port ${DEFAULT_APPROVE_PORT}. When another pay on this machine is already waiting ` +
+      "Ports: each install picks its own port for the page, once, in 20000-29999, and keeps it in approve-port in " +
+        "the home folder. When another pay on this machine is already waiting " +
         "there for its owner, this one takes a free port and says so under the approval link; two payments can " +
         "wait at once. Never stop another pay process to free a port: it is someone's payment waiting " +
         "for an answer. SUPERSTABLES_APPROVE_PORT=<port> fixes the port instead (0 picks any free one); " +
