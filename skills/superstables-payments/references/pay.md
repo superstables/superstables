@@ -101,7 +101,7 @@ After `settled` or `paid_service_failed`, `chain` says how far the payment is ch
 
 `superstables status` looks for an `uncertain` payment by what ties it to this attempt alone, never by a transaction the seller named: on the EVM chains, the authorization the owner signed (its nonce); on Tempo, the transfer with this payment's memo, mined after the wallet was asked; on Solana devnet, a transaction carrying the owner's signature among the owner's token account's transactions since the payment was built, and, once its blockhash has expired, in each block it could have landed in. A Tempo transfer has no expiry, so on Tempo only finding it resolves the attempt. The Solana search reads a limited number of transactions; when it cannot tell, it says so and the attempt stays `uncertain`. Through the public devnet RPC, which limits how fast blocks can be read, reading those blocks takes several `status` runs; each reads on from where the last stopped.
 
-Report `denied` as the owner's decision. Never report `abandoned` or `expired` as a rejection: nobody decided. Approving through an old approval link after `abandoned` pays nothing, and neither does approving in the local wallet once its client has stopped waiting: the wallet cancels that request.
+Report `denied` as the owner's decision. Never report `abandoned` or `expired` as a rejection: nobody decided. Approving through an old approval link after `abandoned` pays nothing, and neither does approving in the local wallet once its client has stopped waiting: the client cancels that request in the wallet, and a signature nobody collects is never sent.
 
 `abandoned_by` (in `--json`) says what ended an abandoned wait:
 

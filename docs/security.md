@@ -35,7 +35,7 @@ home folder itself may be a link to such a folder. Budget folders (`keys/budget/
 written to them. The client reads the local wallet's agent token
 only from a regular file that only you can read.
 
-When a budget command opens its owner approval link in your browser, it does not put the link on a command line, where every user on the machine could read it with `ps`. It writes a launcher file, mode 0600, in `~/Superstables-budget-open/` (mode 0700), which sends the browser to the link, and gives the browser only the file's path. The file is deleted when the approval ends or the command stops, and the folder once it is empty; one left by a command that was killed is removed the next time a link is opened. The folder check looks at that folder only, so it assumes your home folder is not writable by other users: in a home folder others can write to, they could swap the launcher folder between the check and the file's creation. The file itself is still created exclusively, with mode 0600. The local wallet's launcher, below, has the same limit.
+When a budget command or `superstables owner settings sign` opens its approval link in your browser, it does not put the link on a command line, where every user on the machine could read it with `ps`. It writes a launcher file, mode 0600, in `~/Superstables-budget-open/` (mode 0700), which sends the browser to the link, and gives the browser only the file's path. The file is deleted when the approval ends or the command stops, and the folder once it is empty; one left by a command that was killed is removed the next time a link is opened. The folder check looks at that folder only, so it assumes your home folder is not writable by other users: in a home folder others can write to, they could swap the launcher folder between the check and the file's creation. The file itself is still created exclusively, with mode 0600. The local wallet's launcher, below, has the same limit.
 
 Before the owner signs, the client builds an authorization and serves a page that shows its terms.
 After it checks the signature it gets back, it sends the authorization to the seller, which has a
@@ -538,9 +538,10 @@ undo an owner signature or a transaction already sent through setup on superstab
 - **The chain enforces the budget.** On `evm`, the total allowance. On `solana`, the delegated
   amount. On `tempo`, the access key's total or per-period limit, its expiry, and its seller list
   when one was granted. When the owner's account pays the network fee (a push payment, or a pull payment the seller does not
-  sponsor), the fee is paid in pathUSD and counts against that limit, as measured on Tempo Moderato, and a payment the chain
-  refuses still costs its fee; `buy` refuses before signing when the price plus the largest fee the payment can have is more
-  than what is left. No rail enforces a per-payment maximum on chain.
+  sponsor), the fee counts against that limit, and in the runs measured on Tempo Moderato it was paid in pathUSD. A payment the
+  chain refuses still costs its fee. When it can read the key and estimate the fee, `buy` refuses before signing if the price
+  plus the largest fee the payment can have is more than what is left, and otherwise the chain checks the limit. No rail
+  enforces a per-payment maximum on chain.
 - **This CLI checks the rest**, before it signs: `--max`, the expected token, `--pay-to` and one
   purchase per `--op`. On `evm`, before the pull, it has the x402 client build the payment it would
   send and checks it against the option those checks passed, including the token's EIP-712 domain
@@ -812,10 +813,11 @@ says "not supported", there is no command for it yet; do not move key files by h
   overwritten, and only then is the replacement renamed over it; if the replacement cannot be written,
   setup refuses and the old file is untouched. If the process is killed in the moment between the overwrite and the rename, the key
   file holds zeros, the key is in the keychain under the account above, and a hidden file named `.<name>.<pid>.<random>.tmp`
-  (mode 0600) beside it holds the address lines. `setup` does not finish that move by itself, and its message for a missing
-  key does not mention this case. Do not start a new agent because of it: the old one may still hold a live budget. Look the
-  key up in the keychain as above. A locked keychain makes `buy`, `grant`, `fund-agent`,
-  `recover` and owner requests on chains approved on superstables.com refuse, because the agent key signs
+  (mode 0600) beside it holds the address lines. Running the same `setup` again finishes the move: it checks that the keychain
+  gives back the key of the address the hidden file names, then puts that file in place. If the keychain cannot be read, the
+  hidden file is gone, or another setup is still running, setup refuses, changes nothing and says which keychain entry holds the
+  key. Do not start a new agent because of it: the old one may still hold a live budget. A locked keychain makes `buy`, `grant`,
+  `fund-agent`, `recover` and owner requests on chains approved on superstables.com refuse, because the agent key signs
   them; the local `revoke` still works. `tempo` agent keys stay in files in this release.
 - **Budget agent key, `evm` and `solana`.** Supported: `superstables budget rotate --rail evm|solana`
   (`--plan` first shows what it would do and sends nothing). It runs where the agent key file is,
@@ -866,12 +868,17 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
   environment or from a file.
 - **Your signed settings enable the chain.** `superstables owner settings sign` has your wallet sign the list of chains
   enabled for signing, and the gate reads that list only from a valid signature. The list that command offers is empty in this
-  build, so no chain can be enabled.
-- **The chain has everything mainnet needs.** The gate asks, for each chain, for four things: an RPC endpoint you chose for it,
-  the chain's token facts checked, a finality profile for the chain, and agent keys stored other than as plain text. This build
-  reports all four as missing for every chain. The gate does not test them yet. The parts exist (the owner's RPC settings, the
-  token facts every chain table must state, a finality rule per chain, and the OS keychain for `evm` and `solana` agent keys),
-  but a chain added to the tables would still be reported as lacking all four until that check is written.
+  build, so this command enables none.
+- **The chain has everything mainnet needs.** The gate checks four things for the chain and names each one that fails:
+  - RPC endpoints your signed settings choose for it that can decide a verdict on their own: your own node, or two operators;
+  - complete token facts for the token the signing code uses;
+  - a measured time to finality for the chain;
+  - for the chain's budget rail, an agent key file that names the OS keychain and holds no key.
+
+  A check that cannot run counts as missing. Mainnet signing is off in this build and no chain table names a mainnet, so these
+  checks decide nothing yet. `pay` does not load the RPC or keychain checks, so for `pay` those two always read as missing;
+  `tempo` agent keys stay in files, so that rail always misses the fourth; only two chains have a measured finality time; and
+  the local wallet's key is not part of the fourth check yet.
 
 **What is still outside the code.**
 
@@ -889,11 +896,11 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
 
 ### Limits this release leaves in place
 
-These are known, and none of them is planned work for the release that adds mainnet.
+These are known limits of this release.
 
 - **Windows.** Windows is not supported (use WSL), and `superstables budget` refuses to run on native Windows. The code that
-  opens a page in the browser still names Windows' `start`: the budget's opener runs `cmd /c start`, and the wallet and the
-  settings signing page run `start` through a shell. Nothing on this page is claimed for native Windows.
+  opens a page in the browser still names Windows' `start`: the budget's opener and `owner settings sign` run `cmd /c start`,
+  and the wallet runs `start` through a shell. Nothing on this page is claimed for native Windows.
 - **`doctor` contacts other hosts.** `superstables doctor` asks the Superstables index, the demo service and each public
   facilitator whether they answer, so those hosts see this machine's address. That is what it is for.
   `SUPERSTABLES_DOCTOR_OFFLINE=1` skips every one of those checks and says so on each line.
@@ -901,10 +908,6 @@ These are known, and none of them is planned work for the release that adds main
   `owner settings sign` run only when standard input is a terminal, and the first two also ask for a typed confirmation. An
   agent that drives a pseudo-terminal can pass that check. It stops an agent that runs the command carelessly, not one that
   means to. What an owner action is worth rests on the owner's wallet, not on this check.
-- **`owner settings sign` puts its link on the opener's command line.** It opens its page by giving the browser opener the
-  link itself, not a launcher file as the budget commands and the wallet do, so another user on the machine could read the
-  link with `ps` while the opener runs. Run it with `--no-open` to have it print the link and open the link yourself.
-  Signing still needs your wallet.
 - **Old Tempo purchase records stay unknown.** The client does not repair Tempo purchase records written by an earlier version.
   A record with no recorded expiry, or with neither a payment memo nor a transaction hash, stays `unknown`, and
   `superstables budget reconcile` does not report it `not_found` once its expiry passes. Nothing in such a record shows the
