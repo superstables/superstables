@@ -8,4 +8,4 @@ export type Precheck =
 export const precheckCharge = check as (request: ChargeRequest, opts: { maxBase: bigint; payTo?: string; agent?: string; owner?: string }) => Precheck
 export const precheckChallenge = checkChallenge as (challenge: { id?: unknown; realm?: unknown; expires?: unknown }, nowMs?: number) => { ok: true } | { ok: false; code: string; reason: string }
 export { tempoChargeChallenges, MAX_CHALLENGE_LIFETIME_S } from './precheck.mjs'
-export { budgetShortfall, recipientsOutsideScope, TRANSFER_WITH_MEMO_SELECTOR } from './precheck.mjs'
+export { budgetShortfall, maxFeeUnits, ownerPaysFee, recipientsOutsideScope, TRANSFER_WITH_MEMO_SELECTOR } from './precheck.mjs'

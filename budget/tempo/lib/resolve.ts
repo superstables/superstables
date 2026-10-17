@@ -15,7 +15,7 @@ export const EXPIRY_SLACK_S = 10
 /**
  * One pass. Candidates: the seller's receipt hash, the hash we knew before sending, and every
  * transaction on chain carrying this purchase's memo (an indexed event topic). A payment can only be
- * `expired` (no funds moved, ever) when it was signed with an expiring nonce and the chain clock is
+ * `expired` (the price was never paid; a refused payment can still have cost a network fee) when it was signed with an expiring nonce and the chain clock is
  * past its validBefore.
  */
 export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lookup> {

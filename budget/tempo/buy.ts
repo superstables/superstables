@@ -63,12 +63,13 @@ import {
   tempoGate,
   toBaseUnits,
 } from './lib/common.ts'
-import { RPC_CHAIN_NEXT, chainHead, getTxSigner, mppMemo, readKey, readScope, rpcChainProblem } from './lib/chain.ts'
+import { RPC_CHAIN_NEXT, chainHead, estimateMaxFee, getTxSigner, mppMemo, readKey, readScope, rpcChainProblem } from './lib/chain.ts'
 import { judge, waitForOutcome } from './lib/resolve.ts'
+import { failedNext, feeSentence, notFoundFee, notFoundNext } from './lib/words.ts'
 import { BLOCKING, OPS_DIR, newOpId, printResult, readOp, writeOp, type Op, type OpState } from './lib/ops.ts'
 import { readCapped, saveResponse } from '../response.mjs'
 import { markSend } from '../proof.mjs'
-import { budgetShortfall, precheckChallenge, precheckCharge, recipientsOutsideScope } from './lib/precheck.ts'
+import { budgetShortfall, ownerPaysFee, precheckChallenge, precheckCharge, recipientsOutsideScope } from './lib/precheck.ts'
 import { claimChallenge } from './lib/claim.ts'
 import { signedPayment, type Quoted } from './lib/signed.ts'
 import { CHALLENGE_OPTIONS, sellerInit } from './lib/seller.ts'
@@ -289,9 +290,22 @@ async function main() {
     else if (!k.exists) noBudget = 'the agent access key is not authorized: the owner has not granted a budget'
     else if (k.expiry && k.expiry * 1000 <= Date.now()) noBudget = `the budget expired at ${new Date(k.expiry * 1000).toISOString()}`
     // The chain would refuse a payment above what is left (SpendingLimitExceeded): say so before signing, as evm does.
-    // When the seller pays the fee, the payment takes exactly the price from the limit. How an unsponsored payment's fee
-    // affects the limit has not been verified yet; the chain still checks the limit either way.
-    else overBudget = budgetShortfall(k, amount) ?? undefined
+    // Measured on Moderato (16 October 2026): when the seller sponsors the fee the payment takes exactly the price from the
+    // limit; when the owner's account pays it (push, or pull without a sponsor) the fee is paid in the limit's own token and
+    // counts against it. The chain also holds back a reservation above the fee finally charged (42 to 45 units for a fee of 33)
+    // and a payment whose limit falls short of price plus that reservation reverts, still charging its fee. So the check
+    // allows for the largest fee the payment can have, not the fee measured afterwards.
+    else {
+      let maxFee = 0n
+      if (k.spendPolicy !== 'unlimited' && k.remaining >= amount && ownerPaysFee(mode, details)) {
+        try {
+          maxFee = await estimateMaxFee(ownerAddress, [{ to: String(req.recipient), amount: primary, memo: op.memo }, ...check.splits.map((x) => ({ to: x.recipient, amount: BigInt(x.amount), memo: (x as { memo?: string }).memo }))], mode)
+        } catch (err) {
+          console.log(`  (could not estimate the network fee; the chain still checks the limit: ${oneLine((err as Error).message, 120)})`)
+        }
+      }
+      overBudget = budgetShortfall(k, amount, Date.now(), maxFee) ?? undefined
+    }
   } catch (err) {
     console.log(`  (could not read the key state: ${oneLine((err as Error).message, 120)})`)
   }
@@ -441,15 +455,16 @@ async function main() {
       finish('settled', { tx: r.transactionHash, debit: j.debit, remaining: remainingAfter, delivered, next: delivered ? 'none' : 'paid but not delivered; do not pay again, contact the seller with the tx hash' })
     }
     if (j.state === 'failed') {
-      console.log('FAILED: the payment transaction was mined and reverted. No funds moved.')
-      finish('failed', { tx: r.transactionHash, debit: 0n, remaining: remainingAfter, delivered, reason: j.note, next: 'read the tx on the explorer; safe to retry with a new op id' })
+      console.log(`FAILED: the payment transaction was mined and reverted. The price was not paid and the seller received nothing; ${feeSentence(r.fee, r.feePayer, ownerAddress)}`)
+      finish('failed', { tx: r.transactionHash, debit: 0n, remaining: remainingAfter, delivered, reason: j.note, next: failedNext(r.feePayer, ownerAddress) })
     }
     console.log(`UNKNOWN: ${j.note}`)
     finish('unknown', { tx: r.transactionHash, remaining: remainingAfter, delivered, reason: j.note, next: `superstables budget reconcile --rail tempo --op ${opId}` })
   }
   if (outcome.kind === 'expired') {
-    console.log('NOT FOUND: the signed payment expired without landing on chain. No funds moved.')
-    finish('not_found', { debit: 0n, remaining: remainingAfter, delivered, reason: 'signed payment expired unsent; no transfer with this purchase memo on chain', next: 'no funds moved; safe to retry with a new op id' })
+    const spent = remainingBefore !== null && remainingAfter !== null && remainingBefore > remainingAfter ? remainingBefore - remainingAfter : 0n
+    console.log(`NOT FOUND: no transfer to the seller with this purchase memo is on chain and the signed payment has expired. ${notFoundFee(spent, mode)}`)
+    finish('not_found', { debit: 0n, remaining: remainingAfter, delivered, reason: 'signed payment expired; no transfer with this purchase memo on chain', next: notFoundNext(spent, mode) })
   }
   console.log('UNKNOWN: the chain does not show the payment yet and it may still land.')
   finish('unknown', { remaining: remainingAfter, delivered, reason: sendError ?? 'not visible on chain yet', next: `superstables budget reconcile --rail tempo --op ${opId}` })
