@@ -23,7 +23,7 @@ import { readMppReceipt } from "./mpp.js";
 import { sellerUrlProblem } from "./seller-url.mjs";
 import { untrustedText } from "./text.js";
 import type { ChainCheck } from "./settlement.js";
-import { Records, attemptRunner, type AttemptRunner } from "./records.js";
+import { Records, approvalIdHash, attemptRunner, type AttemptRunner } from "./records.js";
 import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
 import { evaluatePolicy, policyAmount, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
@@ -433,12 +433,13 @@ export class PaymentEngine {
           onPending: (walletRequestId, approvalUrl) => {
             asked = true;
             this.transition(attempt, "awaiting_approval", {
-              walletRequestId,
-              // Present when the signer serves the approval page itself; the surfaces pass it
-              // on to the person, because without the link nobody can approve anything.
+              // A browser approval's id is its link's capability: on disk, and in this attempt, only its hash (it matches the id
+              // in approvals.jsonl). The link stays on the live attempt, in memory, for the surfaces to pass on to the person;
+              // Records.saveAttempt never writes it. A local wallet's request id is not a capability (it needs the agent token).
+              walletRequestId: approvalUrl ? approvalIdHash(walletRequestId) : walletRequestId,
               ...(approvalUrl ? { approvalUrl } : {}),
               note: approvalUrl
-                ? `waiting for the owner to approve at ${approvalUrl}`
+                ? "waiting for the owner to approve on the approval page (the link is in the output of this pay)"
                 : "waiting for the owner to approve in the wallet",
             });
           },

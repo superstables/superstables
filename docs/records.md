@@ -114,7 +114,7 @@ awaiting_approval ──┼── the owner says no ─────────�
 
 | State | Final | What it means |
 | --- | --- | --- |
-| `awaiting_approval` | no | The attempt is checking the quote or waiting for the owner. In browser mode, `approvalUrl` appears once the page is ready. **No payment credential has been sent** |
+| `awaiting_approval` | no | The attempt is checking the quote or waiting for the owner. In browser mode, the approval link is printed by `pay` once the page is ready; it is kept only in that process, and `status` does not repeat it. **No payment credential has been sent** |
 | `approved` | no | The owner signed with their wallet. The payment credential has not been sent to the seller yet. On Tempo Moderato: the owner's wallet was asked to send the payment |
 | `submitting` | no | The request is being replayed with the payment credential attached. On Tempo Moderato: the client is checking on chain the transaction the wallet reported, before it calls the seller |
 | `denied` | yes | The owner rejected it — on the approval page, or in MetaMask's own popup — before anything was signed or sent. No payment credential was sent. The seller was only asked for its terms |
@@ -204,7 +204,8 @@ again:
    that recipient around that time, for example on Base Sepolia
    `https://sepolia.basescan.org/address/<the account that paid>` — in browser mode that is the
    wallet account you connected, which `~/.superstables/browser-wallet.json` also names.
-3. Check the approval record for this attempt in `~/.superstables/records/approvals.jsonl`. A
+3. Check the approval record for this attempt in `~/.superstables/records/approvals.jsonl`: its `id` is the
+   attempt's `walletRequestId` (`sha256:…`). A
    `signed` line means the client verified a signature. A missing line does not prove that nothing
    was signed. With the local wallet, `~/.superstables/wallet/audit.jsonl` is the record.
 4. If the transfer is on chain, do not pay again; the service owes you an answer, so take it up
@@ -213,8 +214,8 @@ again:
 ## Approvals
 
 `approvals.jsonl` is the browser signer's own log: one line every time a request the owner was
-asked about changes state. It carries the time, the approval id, the status, the reason, the
-verified terms, the reported context and the account that connected — and never a signature.
+asked about changes state. It carries the time, a hash of the approval id, the status, the reason, the
+verified terms, the reported context and the account that connected — and never a signature or the id itself.
 
 | Approval status | Meaning |
 | --- | --- |

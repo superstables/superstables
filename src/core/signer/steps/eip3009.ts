@@ -143,6 +143,8 @@ export const eip3009Step: WalletStep = {
       rpcUrl: network.defaultRpc,
       explorer: network.explorer,
       nativeCurrency: network.wallet.nativeCurrency,
+      signingName: network.rail === "evm" ? network.usdc.eip712.name : undefined,
+      validity: { kind: "authorization" as const, seconds: signedLifetime((record.requirement as PaymentRequirements).maxTimeoutSeconds) },
     };
   },
 
@@ -150,6 +152,13 @@ export const eip3009Step: WalletStep = {
     lede: "Check the amount and the recipient, then sign with your browser wallet, or reject. Your wallet keeps its key.",
     fineprint: (facts) =>
       `Your wallet shows this amount in the token's smallest unit: ${facts.amountAtomic} is ${facts.amountDecimal} ${facts.asset}. Signing authorises this one transfer and nothing else.`,
+    walletShows: (f) => [
+      `A signature request, not a transaction: "TransferWithAuthorization", for the token contract that signs as "${f.signingName ?? f.asset}". The application asking is this page, at 127.0.0.1 and its port.`,
+      `value: ${f.amountAtomic}, in the token's smallest unit. That is ${f.amountDecimal} ${f.asset}.`,
+      `to: ${f.recipient}`,
+      "validBefore: the time it stops being valid, in seconds since 1970. This page shows it as a time once your wallet is connected.",
+      `verifyingContract: ${f.assetAddress}, the ${f.asset} token.`,
+    ],
   },
 
   script: "",

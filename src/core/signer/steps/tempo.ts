@@ -189,6 +189,7 @@ export const tempoStep: WalletStep = {
       rpcUrl: TEMPO_MODERATO.defaultRpc,
       explorer: TEMPO_MODERATO.explorer,
       nativeCurrency: TEMPO_MODERATO.wallet.nativeCurrency,
+      validity: { kind: "sent-now" as const },
     };
   },
 
@@ -196,6 +197,12 @@ export const tempoStep: WalletStep = {
     lede: "Check the amount and the recipient, then send the payment from your browser wallet, or reject. Your wallet keeps its key.",
     fineprint: (facts) =>
       `Your wallet sends this one transfer itself and shows its network fee. ${facts.amountAtomic} in the token's smallest unit is ${facts.amountDecimal} ${facts.asset}. Nothing else is sent.`,
+    walletShows: (f) => [
+      `A transaction to the ${f.asset} token contract ${f.assetAddress}, not to the recipient: the recipient and the amount are inside the call (transferWithMemo).`,
+      `Amount in the call: ${f.amountAtomic}. That is ${f.amountDecimal} ${f.asset}.`,
+      `Recipient in the call: ${f.recipient}`,
+      "A network fee, which your wallet shows and you pay, in addition to the amount.",
+    ],
   },
 
   script: TEMPO_STEP_SCRIPT,

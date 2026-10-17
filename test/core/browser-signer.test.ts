@@ -185,10 +185,10 @@ describe("the approval page a browser wallet signs on", () => {
     expect(html).toContain(SELLER);
     expect(html).toContain("Base Sepolia");
 
-    // The agent's own account of the payment appears only under its warning.
+    // The seller's own words appear only under their warning, and the agent's own account of the payment under its own.
     expect(html).toContain("Reported by the agent (not verified)");
     const claim = html.indexOf("a free lunch");
-    expect(claim).toBeGreaterThan(html.indexOf("Reported by the agent (not verified)"));
+    expect(claim).toBeGreaterThan(html.indexOf("The seller says (not verified)"));
 
     await postJson(`${link}/reject`, {});
     await pending;

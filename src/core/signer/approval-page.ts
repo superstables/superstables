@@ -23,7 +23,7 @@
 import type { PaymentContext } from "../types.js";
 import { esc, framePage, pageLook, type PageLook } from "./look.js";
 import { eip3009Step } from "./steps/eip3009.js";
-import type { WalletStep } from "./steps/types.js";
+import type { StepPageFacts, WalletStep } from "./steps/types.js";
 
 export { esc };
 
@@ -51,7 +51,39 @@ export interface ApprovalPageFacts {
   /** Solana: the Wallet Standard chain. */
   walletChain?: string;
   reported?: PaymentContext;
+  /** The URL this client asked for the price and will call to pay: its scheme and host. Undefined when the caller named none. */
+  seller?: { scheme: "https" | "http"; host: string };
+  /** Which spend policy decided that this payment may be asked for, as browser.ts read it. */
+  policy?: PagePolicy;
+  /** From the step: how long what the wallet signs stays usable. */
+  validity: StepPageFacts["validity"];
 }
+
+export interface PagePolicy {
+  /** The file path, cleaned of control and format characters. */
+  file: string;
+  /** "file": read from `file`; "defaults": no file there, the built-in defaults; "program": given by the program that asked. */
+  source: "file" | "defaults" | "program";
+  /** The file is not the account's own ~/.superstables/policy.yaml (SUPERSTABLES_POLICY, SUPERSTABLES_HOME or --home chose it). */
+  chosen: boolean;
+  perCall?: string;
+  perDay?: string;
+  killSwitch: boolean;
+  /** The account's own policy, when it applies as well. */
+  also?: { file: string; perCall?: string; perDay?: string };
+}
+
+const APPROVAL_STYLE = `
+  .seller { margin-top: 14px; font-family: var(--mono); font-size: clamp(18px, 4.6vw, 24px); font-weight: 600; overflow-wrap: anywhere; }
+  .seller .scheme { font-weight: 400; color: var(--ink-2); }
+  .seller.plain .scheme { color: var(--bad); }
+  .seller-note { margin-top: 6px; font-size: 14px; color: var(--ink-2); }
+  .wallet-shows { margin-top: 20px; padding: 14px 16px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg-2); font-size: 14.5px; overflow-wrap: anywhere; }
+  .wallet-shows strong, .says strong { display: block; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 6px; }
+  .wallet-shows ul { margin: 0; padding-left: 18px; }
+  .says, .reported { overflow: hidden; }
+  .says { margin-top: 20px; padding: 14px 16px; border: 1px dashed var(--line-2); border-radius: 6px; font-size: 14.5px; color: var(--ink-2); overflow-wrap: anywhere; }
+`;
 
 /** Where a person gets a browser wallet, when the page finds none. */
 export const WALLET_DOWNLOAD_URL = "https://metamask.io/download";
@@ -82,6 +114,24 @@ export const APPROVAL_PAGE_SCRIPT = `
 
   function el(id) { return document.getElementById(id); }
   function show(id, on) { el(id).hidden = !on; }
+
+  // validBefore (seconds since 1970) as the owner's local time, and how far off it is
+  function untilText(validBefore) {
+    var at = new Date(Number(validBefore) * 1000);
+    var minutes = Math.max(0, Math.round((at.getTime() - Date.now()) / 60000));
+    return at.toLocaleTimeString() + " your time (" + minutes + " min from now)";
+  }
+  function showValidity(typed) {
+    var cell = el("valid-until");
+    var raw = el("valid-before-raw");
+    if (typed && typed.message && typed.message.validBefore) {
+      if (cell) cell.textContent = untilText(typed.message.validBefore);
+      if (raw) raw.textContent = " Your wallet shows it as " + typed.message.validBefore + ".";
+    } else {
+      if (cell && cell.getAttribute("data-before")) cell.textContent = cell.getAttribute("data-before");
+      if (raw) raw.textContent = "";
+    }
+  }
 
   function say(message, kind) {
     var box = el("say");
@@ -199,6 +249,7 @@ export const APPROVAL_PAGE_SCRIPT = `
         if (!answer.ok) throw new Error(answer.data.error || "the approval server would not prepare this payment");
         prepared = answer.data;
         typedData = answer.data.typedData || null;
+        showValidity(typedData);
         el("account").textContent = account;
         show("account-label", true);
         show("account", true);
@@ -323,6 +374,7 @@ export const APPROVAL_PAGE_SCRIPT = `
       account = accounts[0];
       typedData = null;
       prepared = null;
+      showValidity(null);
       show("approve", false);
       show("connect", true);
       el("account").textContent = account;
@@ -333,6 +385,7 @@ export const APPROVAL_PAGE_SCRIPT = `
       if (done || locked || Number(chainId) === Number(facts.chainIdHex)) return;
       typedData = null;
       prepared = null;
+      showValidity(null);
       show("approve", false);
       show("connect", true);
       say("Your wallet switched to another chain. Connect again to switch it back to " + facts.chainName + ".");
@@ -345,13 +398,65 @@ export const APPROVAL_PAGE_SCRIPT = `
 })();
 `;
 
+/** The seller's own words: at most 200 characters (already cleaned by the server), labelled as theirs. */
+function sellerSaysBlock(reported?: PaymentContext): string {
+  if (!reported?.description) return "";
+  return `<div class="says"><strong>The seller says (not verified)</strong><div>${esc(reported.description)}</div></div>`;
+}
+
+/** What the agent passed along about the payment: the service's name from the listing. */
 function reportedBlock(reported?: PaymentContext): string {
   const rows: string[] = [];
   if (reported?.serviceName) rows.push(`<div>Service: ${esc(reported.serviceName)}</div>`);
-  if (reported?.target) rows.push(`<div class="mono">${esc(reported.target)}</div>`);
-  if (reported?.description) rows.push(`<div>${esc(reported.description)}</div>`);
   if (rows.length === 0) rows.push("<div>The agent provided no payment details.</div>");
   return `<div class="reported"><strong>Reported by the agent (not verified)</strong>${rows.join("")}</div>`;
+}
+
+function sellerLine(facts: ApprovalPageFacts): string {
+  if (!facts.seller) return `<div class="seller-note">The program that asked for this payment did not say which seller it calls.</div>`;
+  const plain = facts.seller.scheme === "http";
+  return `<div id="seller" class="seller${plain ? " plain" : ""}"><span class="scheme">${facts.seller.scheme}://</span>${esc(facts.seller.host)}</div>
+    <div class="seller-note">${plain
+      ? "The seller this client asked for the price, and will pay. Plain http: not encrypted, which this client allows only for a seller on this machine."
+      : "The seller this client asked for the price, and will pay."}</div>`;
+}
+
+function validityBefore(facts: ApprovalPageFacts): string {
+  const v = facts.validity;
+  if (v.kind === "sent-now") return "Your wallet sends it at once, as one transfer. It grants nothing that can be used again.";
+  const s = v.seconds;
+  const span =
+    s % 60 === 0 ? `${s / 60} minute${s === 60 ? "" : "s"}` :
+    s < 60 ? `${s} second${s === 1 ? "" : "s"}` :
+    `${Math.floor(s / 60)} min ${s % 60} s`;
+  return v.kind === "authorization" ? `${span} after you connect your wallet` : `about ${span} after you press \u201cReview in wallet\u201d`;
+}
+
+function capsText(p: { perCall?: string; perDay?: string }): string {
+  const parts = [p.perCall ? `${p.perCall} a payment` : "no per-payment cap", p.perDay ? `${p.perDay} a day` : "no daily cap"];
+  return parts.join(", ");
+}
+
+function policyRows(p?: PagePolicy): string {
+  if (!p) return "";
+  const where =
+    p.source === "program" ? "set by the program that asked for this payment" :
+    p.source === "defaults" ? `built-in defaults (no file at ${esc(p.file)})` : esc(p.file);
+  const tag = p.chosen && p.source !== "program" ? ' <span class="tag">chosen for this command</span>' : "";
+  const also = p.also ? `<dt>Also applies</dt><dd><span class="mono">${esc(p.also.file)}</span>: ${esc(capsText(p.also))}</dd>` : "";
+  return `<dt>Spend policy</dt><dd class="mono">${where}${tag}</dd>
+      <dt>Caps</dt><dd>${esc(capsText(p))}</dd>
+      ${also}`;
+}
+
+/** What the wallet's own prompt will show, line by line, from the step. */
+function walletShows(facts: ApprovalPageFacts, step: WalletStep): string {
+  const items = step.words.walletShows(facts).map((line) =>
+    facts.validity.kind === "authorization" && line.startsWith("validBefore:")
+      ? `<li id="wallet-valid-before">${esc(line)}<span id="valid-before-raw"></span></li>`
+      : `<li>${esc(line)}</li>`,
+  );
+  return `<div class="wallet-shows"><strong>What your wallet will show</strong><ul>${items.join("")}</ul></div>`;
 }
 
 /** The network's name, without the "(testnet)" the bar's pill already says. */
@@ -361,7 +466,8 @@ function networkCell(facts: ApprovalPageFacts): string {
 }
 
 /** The whole page for one pending approval, facts and all, ready to serve. */
-export function approvalPage(facts: ApprovalPageFacts, step: WalletStep = eip3009Step, look: PageLook = pageLook()): string {
+export function approvalPage(facts: ApprovalPageFacts, step: WalletStep = eip3009Step, look: PageLook = pageLook(), nonce?: string): string {
+  const n = nonce ? ` nonce="${nonce}"` : "";
   const seconds = Math.max(0, Math.round((facts.expiresAt - Date.now()) / 1000));
   const body = `
   <div id="no-wallet" class="note bad" hidden>
@@ -372,14 +478,18 @@ export function approvalPage(facts: ApprovalPageFacts, step: WalletStep = eip300
 
   <div class="card">
     <div class="amount">${esc(facts.amountDecimal)}<span>${esc(facts.asset)}</span></div>
+    ${sellerLine(facts)}
     <dl class="rows">
       <dt>To</dt><dd class="mono">${esc(facts.recipient)}</dd>
       <dt>Network</dt><dd>${networkCell(facts)}</dd>
       <dt>Token</dt><dd class="mono">${esc(facts.assetAddress)}</dd>
-      <dt>Expires in</dt><dd><span id="expiry">${seconds}</span> s</dd>
+      <dt>Valid until</dt><dd id="valid-until" data-before="${esc(validityBefore(facts))}">${esc(validityBefore(facts))}</dd>
+      <dt>Approve within</dt><dd><span id="expiry">${seconds}</span> s</dd>
+      ${policyRows(facts.policy)}
       <dt id="account-label" hidden>Paying from</dt><dd id="account" class="mono" hidden></dd>
     </dl>
-    ${reportedBlock(facts.reported)}
+    ${sellerSaysBlock(facts.reported)}${reportedBlock(facts.reported)}
+    ${walletShows(facts, step)}
     <div id="say" class="note" hidden></div>
     <div class="actions">
       <button id="connect" class="primary" data-act="connect">Connect wallet</button>
@@ -392,13 +502,14 @@ export function approvalPage(facts: ApprovalPageFacts, step: WalletStep = eip300
   </div>
 
 <script id="approval-facts" type="application/json">${inlineJson(facts)}</script>
-${step.script ? `<script>${step.script}</script>\n` : ""}<script>${APPROVAL_PAGE_SCRIPT}</script>`;
+${step.script ? `<script${n}>${step.script}</script>\n` : ""}<script${n}>${APPROVAL_PAGE_SCRIPT}</script>`;
   return framePage({
     look,
     title: "Approve a payment",
     eyebrow: "Payment request",
     lede: step.words.lede,
     testnet: /testnet/i.test(facts.networkLabel || facts.network),
+    style: APPROVAL_STYLE,
     body,
   });
 }
