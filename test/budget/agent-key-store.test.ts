@@ -13,6 +13,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { startFakeEvm, startSeller, usdc, type FakeEvm } from "../helpers/fake-evm.js";
 import { startFakeSolana, type FakeSolana } from "../helpers/fake-chains.js";
 import { fakeKeychain, type FakeKeychain } from "../helpers/fake-keychain.js";
+import { endpointTree } from "../helpers/endpoint-tree.js";
 import { rotate } from "../../budget/rotate.mjs";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -42,14 +43,14 @@ afterEach(async () => {
 });
 
 type Out = { code: number; stdout: string; stderr: string; result: any };
-function run(args: string[], opts: { env?: Record<string, string | undefined>; bare?: boolean; script?: string } = {}): Promise<Out> {
+function run(args: string[], opts: { env?: Record<string, string | undefined>; bare?: boolean; script?: string; root?: string } = {}): Promise<Out> {
   return new Promise((done, fail) => {
     const base: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: chain.url, SUPERSTABLES_SOLANA_RPC: solana.url };
     delete base.SUPERSTABLES_SITE;
     delete base.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const env = opts.bare ? { ...base, PATH: bareBin() } : kc.env(base as Record<string, string>);
     Object.assign(env, opts.env);
-    const child = spawn(process.execPath, [opts.script ?? CLI, ...args], { cwd: ROOT, env });
+    const child = spawn(process.execPath, [opts.root ? join(opts.root, "budget/cli.mjs") : opts.script ?? CLI, ...args], { cwd: opts.root ?? ROOT, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -388,7 +389,13 @@ describe("rotate and a key in the keychain", () => {
     chain.setNative(owner.address, 10n ** 20n);
     chain.setNative(old as `0x${string}`, 10n ** 17n);
     chain.setAllowance(owner.address, old as `0x${string}`, usdc("1"));
-    const r = await run(["rotate", "--rail", "evm", "--owner-key-file", ownerFile(), "--yes"]);
+    // the revoke is final only on two endpoints run by different operators (a copy of the client whose endpoint table names the fakes)
+    const mirror = await chain.mirror();
+    cleanups.push(() => mirror.close());
+    const tree = endpointTree();
+    cleanups.push(() => tree.close());
+    tree.set({ "base-sepolia": [{ url: chain.url, operator: "fake-a" }, { url: mirror.url, operator: "fake-b" }] });
+    const r = await run(["rotate", "--rail", "evm", "--owner-key-file", ownerFile(), "--yes"], { root: tree.root });
     expect(r.code, all(r)).toBe(0);
     expect(r.result).toMatchObject({ state: "rotated", oldAgent: old });
     const fresh = r.result.newAgent as string;
@@ -407,7 +414,7 @@ describe("rotate and a key in the keychain", () => {
     const rec: any[] = [];
     const steps = {
       planChain: async () => ({ code: 0, result: { plan: { unreadable: [], openOps: [] } }, hosted: null }),
-      retire: async () => ({ code: 0 }), recoverChain: async () => ({ code: 0, result: {} }), readStopped: async () => true,
+      retire: async () => ({ code: 0 }), recoverChain: async () => ({ code: 0, result: { revocation: { final: true } } }), readStopped: async () => true,
       swapKey: async () => ({ code: 0 }), clearChain: async () => ({ code: 0 }),
       setupChain: async () => ({ code: 0, result: { agent: "0x5A7E31B9ab6D47Ca3F195Ff737ffe6105bAe3FEd" } }),
       writeRecord: (r: any) => { rec.push(structuredClone(r)); },
