@@ -81,6 +81,18 @@ if (before.delegate && (before.delegatedAmount > 0n || !before.delegate.equals(a
 {
   const fin = await agreedAccount(ata.toBase58(), { purpose: "owner" });
   if (!fin.agreed) refuse(`the owner's USDC account at finalized could not be confirmed (${agreementLine(fin)})`, "check the devnet RPC (superstables budget doctor --rail solana), then grant again");
+  // A recorded revoke that is not finalized yet: a grant waits for it, whatever the finalized view of the account reads (an earlier
+  // grant that is itself not finalized leaves the finalized view with no delegate).
+  const rec = parseEnvFile(PUBLIC_PATH);
+  if (rec.REVOKED_AT !== undefined && /^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(rec.REVOKED_TX ?? "")) {
+    const done = await finalizedOf(conn, rec.REVOKED_TX!, 0);
+    if (!done.final) {
+      refuse(
+        `the previous revoke is not finalized yet: ${rec.REVOKED_TX} has not reached finalized. Grant again once it is finalized`,
+        "superstables budget status --rail solana, then grant again once the revoke is finalized",
+      );
+    }
+  }
   if (fin.value && fin.value.delegate !== null && (fin.value.delegatedAmount > 0n || fin.value.delegate !== agent.toBase58())) {
     refuse(
       `the previous revoke is not finalized yet: the account shows no live delegate on the latest read but delegate ${fin.value.delegate} with ${formatUnits(fin.value.delegatedAmount)} USDC at finalized. Grant again once it is finalized`,

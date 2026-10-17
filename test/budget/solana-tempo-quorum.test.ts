@@ -366,7 +366,7 @@ const liveKeyAnswer = (params: any[]) => {
 describe("tempo: readBudget", () => {
   it("two endpoints disagree on isRevoked: unknown, and status counts the budget as not revoked", async () => {
     const a = await tempo();
-    const b = track(await a.mirror({ overrides: { eth_call: liveKeyAnswer } }));
+    const b = track(await a.mirror({ overrides: { eth_call: (p) => liveKeyAnswer(p) ?? zeroRemaining(p) } }));
     tree.set({ "tempo-moderato": [a.url, b.url] });
     tempoSetup();
     a.keys.set(tempoKeyId, REVOKED_KEY);
