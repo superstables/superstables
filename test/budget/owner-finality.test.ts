@@ -10,7 +10,8 @@ import { join, resolve } from "node:path";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { keccak256, toBytes, encodeFunctionData, parseAbi } from "viem";
+import { keccak256, toBytes, encodeFunctionData, decodeFunctionData, parseAbi } from "viem";
+import { Abis } from "viem/tempo";
 import { generatePrivateKey, privateKeyToAccount, privateKeyToAddress } from "viem/accounts";
 import { startFakeEvm, usdc, type FakeEvm, type FakeMirror } from "../helpers/fake-evm.js";
 import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
@@ -285,7 +286,7 @@ describe("evm: setup --hosted --grant grants only over an allowance it can read"
     const site = await startFakeSite();
     cleanups.push(() => site.close());
     const run = (...more: string[]) => c.run(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", ...more]);
-    return { ...c, site, run };
+    return { ...c, site, run, run0: c.run };
   }
 
   it("a reused key and an allowance read that fails: refused before any request to the site", async () => {
@@ -324,6 +325,19 @@ describe("evm: setup --hosted --grant grants only over an allowance it can read"
     expect(r.result.reason).toMatch(/a budget is live: the owner on record 0x[0-9a-fA-F]{40} still allows the agent 1 /);
     expect(c.site.posts).toEqual([]);
   }, 150_000);
+
+  it("a grant then a revoke that landed but is not final, then setup --grant: refused, no request to the site", async () => {
+    const c = await bundle({ lag: 5, allow: "0" });
+    const g1 = await c.run0(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
+    expect(g1.result, g1.stdout + g1.stderr).toMatchObject({ state: "landed" });
+    const rv = await c.run0(["revoke", "--rail", "evm", ...c.keyArgs]);
+    expect(rv.result, rv.stdout + rv.stderr).toMatchObject({ state: "landed", final: false });
+    const r = await c.run();
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck" });
+    expect(r.result.reason).toMatch(/the previous revoke is not final yet/);
+    expect(c.site.posts).toEqual([]);
+  }, 250_000);
 
   it("a key created in this run: the grant is asked for, as before", async () => {
     const c = await bundle({ lag: 0, allow: "0", agentFile: false, recorded: false });
@@ -443,6 +457,25 @@ describe("solana: confirmed is not finalized", () => {
     expect(sends()).toBe(before + 1);
   }, 250_000);
 
+  it("a grant then a revoke that is not finalized, then setup --grant: refused, no request to the site, nothing sent", async () => {
+    const c = await solanaCase({ delegate: false });
+    const site = await startFakeSite();
+    cleanups.push(() => site.close());
+    statusIs(c.solana, "confirmed");
+    const g1 = await c.run(["grant", "--rail", "solana", "--amount", "0.05", ...c.keyArgs]);
+    expect(g1.result, g1.stdout + g1.stderr).toMatchObject({ state: "landed" });
+    const rv = await c.run(["revoke", "--rail", "solana", ...c.keyArgs]);
+    expect(rv.result, rv.stdout + rv.stderr).toMatchObject({ state: "landed", final: false });
+    const sends = () => c.solana.calls.filter((m) => m === "sendTransaction").length;
+    const before = sends();
+    const r = await c.run(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--grant", "0.05"]);
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck" });
+    expect(r.result.reason).toMatch(/the previous revoke is not finalized yet/);
+    expect(site.posts).toEqual([]);
+    expect(sends()).toBe(before);
+  }, 250_000);
+
   it("rotate --clear-agent drops the agent's grant and revoke records (solana)", async () => {
     const c = await solanaCase();
     const keys = ["REVOKED_AT=1", "REVOKED_TX=sigR", "REVOKED_SLOT=5", "GRANT_TX=sigG", "GRANT_SLOT=4", "LINK_ID=x", "LINK_CODE=y"];
@@ -531,6 +564,22 @@ describe("tempo: a revoked key reads as revoked even though getRemainingLimit re
     const s = await c.run(["status", "--rail", "tempo"]);
     expect(s.result, s.stdout + s.stderr).toMatchObject({ state: "ok", revoked: true });
     expect(s.result.next).not.toMatch(/count it as live/);
+  }, 150_000);
+
+  it("the agreed read uses getRemainingLimitWithPeriod: a chain whose getRemainingLimit always reverts still settles the revoke", async () => {
+    const c = await tempoCase({ mirror: true });
+    const reverts = { eth_call: (p: any[]) => {
+      let call;
+      try { call = decodeFunctionData({ abi: Abis.accountKeychain, data: p[0].data }); } catch { return undefined; }
+      if (call.functionName === "getRemainingLimit") throw Object.assign(new Error("execution reverted"), { rpc: { code: 3, message: "execution reverted", data: "0x" } });
+      return undefined;
+    } };
+    c.mirror!.overrides = reverts;
+    c.tempo.overrides = reverts;
+    const r = await c.run(["revoke", "--rail", "tempo", "--wait", "--no-open"]);
+    expect(r.result, r.stdout + r.stderr).toMatchObject({ state: "settled", revoked: true });
+    const s = await c.run(["status", "--rail", "tempo"]);
+    expect(s.result, s.stdout + s.stderr).toMatchObject({ state: "ok", revoked: true });
   }, 150_000);
 
   it("a revoked key whose confirming endpoints cannot be read stays unknown, never revoked", async () => {
