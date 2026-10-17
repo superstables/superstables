@@ -139,7 +139,7 @@ if (existsSync(AGENT_ENV)) {
       swap.commit();
     } catch (err) {
       swap.discard();
-      console.log(`REFUSED: the key file could not be replaced (${(err as Error).message}). Its old bytes are ${gone === "overwritten" ? "overwritten" : "unchanged"}; the key is in the keychain. Put these lines in ${AGENT_ENV}:\nB4_AGENT_KEY_STORE=os-keychain\nB4_AGENT_ADDRESS=${agentAddr}`);
+      console.log(`REFUSED: the key file could not be replaced (${(err as Error).message}). Its old bytes are ${gone === "overwritten" ? "overwritten" : `not overwritten (${gone})`}; the key is in the keychain. Put these lines in ${AGENT_ENV}:\nB4_AGENT_KEY_STORE=os-keychain\nB4_AGENT_ADDRESS=${agentAddr}`);
       process.exit(emit("setup", 3, { state: "refused_precheck", reason: `the key file could not be replaced (${(err as Error).message})`, next: `write the lines above into ${AGENT_ENV}, then run setup again` }));
     }
     keyStore = "os-keychain";

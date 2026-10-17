@@ -726,7 +726,9 @@ says "not supported", there is no command for it yet; do not move key files by h
   service `superstables-budget-agent`, account `<rail>:<old address>` (`secret-tool lookup service
   superstables-budget-agent account evm:0x...` on Linux; `security find-generic-password -s
   superstables-budget-agent -a evm:0x... -w` on macOS), so funds left at the retired address can
-  still be moved by hand. Moving a key in is ordered so that no step loses it: the keychain takes the
+  still be moved by hand. The account is case-sensitive and EVM entries use the checksummed address,
+  while the retired file's name is lowercase: copy the address from the retired file's
+  `B4_AGENT_ADDRESS` line. Moving a key in is ordered so that no step loses it: the keychain takes the
   key and is read back, the replacement file is written beside the old one, the old file's bytes are
   overwritten, and only then is the replacement renamed over it; if the replacement cannot be written,
   setup refuses and the old file is untouched. A locked keychain makes `buy`, `grant`, `fund-agent`,

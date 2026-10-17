@@ -156,7 +156,7 @@ if (existing.SOLANA_AGENT_SECRET_BASE58) {
       swap.commit();
     } catch (err) {
       swap.discard();
-      console.log(`REFUSED: the key file could not be replaced (${(err as Error).message}). Its old bytes are ${gone === "overwritten" ? "overwritten" : "unchanged"}; the key is in the keychain. Put these lines in ${AGENT_KEY_PATH}:\nSOLANA_AGENT_KEY_STORE=os-keychain\nSOLANA_AGENT_ADDRESS=${agent}`);
+      console.log(`REFUSED: the key file could not be replaced (${(err as Error).message}). Its old bytes are ${gone === "overwritten" ? "overwritten" : `not overwritten (${gone})`}; the key is in the keychain. Put these lines in ${AGENT_KEY_PATH}:\nSOLANA_AGENT_KEY_STORE=os-keychain\nSOLANA_AGENT_ADDRESS=${agent}`);
       process.exit(result(3, { state: "refused_precheck", reason: `the key file could not be replaced (${(err as Error).message})`, next: `write the lines above into ${AGENT_KEY_PATH}, then run setup again` }));
     }
     keyStore = "os-keychain";
