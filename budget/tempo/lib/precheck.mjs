@@ -2,6 +2,9 @@
 // nothing was signed, pulled or sent.
 import { CHAIN_ID, TOKEN_ADDRESS, TOKEN_DECIMALS, TOKEN_LABEL } from './constants.mjs'
 
+/** mppx's payment-memo tag: the first 4 bytes of keccak256("mpp"). Every purchase memo starts with it (chain.ts mppMemo). */
+export const MPP_MEMO_TAG = '0xef1ed712'
+
 const fromBase = (n) => {
   const whole = n / 10n ** BigInt(TOKEN_DECIMALS)
   const frac = (n % 10n ** BigInt(TOKEN_DECIMALS)).toString().padStart(TOKEN_DECIMALS, '0').replace(/0+$/, '')
@@ -81,6 +84,9 @@ export function precheckCharge(request, opts) {
   for (const s of splits) {
     if (BigInt(s.amount) === 0n) return refuse('bad_split', `the payment split to ${s.recipient} is 0`)
     if (s.memo != null && !/^0x[0-9a-fA-F]{64}$/.test(String(s.memo))) return refuse('bad_split', `the payment split to ${s.recipient} names a memo that is not 32 bytes of hex`)
+    // A split memo in mppx's own format could be another purchase's memo: a transfer carrying it would read as that purchase's
+    // payment. This client's purchases never ask for one, so a seller's split never names one.
+    if (s.memo != null && String(s.memo).slice(0, 10).toLowerCase() === MPP_MEMO_TAG) return refuse('bad_split', `the payment split to ${s.recipient} carries a payment memo in the format this client uses to find purchases, so it could be counted as another purchase's payment`)
     splitTotal += BigInt(s.amount)
   }
   if (splitTotal >= amount) return refuse('bad_split', `the payment splits add up to ${fromBase(splitTotal)} ${TOKEN_LABEL}, not less than the price ${fromBase(amount)} ${TOKEN_LABEL}`)
