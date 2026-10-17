@@ -17,7 +17,7 @@
 import { connection, parseStrict, formatUnits, retryRead, EXIT, OPS_DIR, oneLine } from "./lib.mjs";
 import { getAssociatedTokenAddressSync, getAccount } from "./token.mjs";
 import { PublicKey } from "@solana/web3.js";
-import { OP_ID_RE, readOp, updateOp, assessOp, readTransfer } from "./ops.mjs";
+import { OP_ID_RE, readOp, updateOp, assessAgreed, readTransfer } from "./ops.mjs";
 import { USDC_MINT, explorerTx } from "./lib.mjs";
 import { requireRecordLock } from "../op-lock.mjs";
 
@@ -66,7 +66,7 @@ const emit = (r, code) => {
 const alreadyFinal = rec.state === "settled" && rec.final !== false;
 let a;
 try {
-  a = alreadyFinal ? { verdict: "settled", tx: rec.tx, final: true } : await assessOp(conn, rec);
+  a = alreadyFinal ? { verdict: "settled", tx: rec.tx, final: true } : await assessAgreed(conn, rec);
 } catch (e) {
   // A failed read changes no payment evidence already observed.
   if (rec.state === "settled" && rec.inclusionObserved) {
@@ -98,11 +98,11 @@ if (a.verdict === "no_tx") {
 } else if (a.verdict === "failed") {
   updateOp(opId, { state: "failed", tx: a.tx, error: a.err }, "reconcile: own transaction failed on chain");
   console.log(`Failed on chain: ${oneLine(JSON.stringify(a.err), 300)}. Nothing moved.`);
-  emit(result("failed", { tx: a.tx, delivered: false, reason: oneLine(JSON.stringify(a.err), 300), next: "nothing moved; buy again with a new --op" }), EXIT.OK);
+  emit(result("failed", { tx: a.tx, delivered: false, ...(a.agreement ? { agreement: a.agreement } : {}), reason: oneLine(JSON.stringify(a.err), 300), next: "nothing moved; buy again with a new --op" }), EXIT.OK);
 } else if (a.verdict === "not_found" && !rec.inclusionObserved) {
   updateOp(opId, { state: "not_found" }, `reconcile: no transaction and the blockhash expired (height ${a.blockHeight} > ${a.lastValidBlockHeight})`);
-  console.log(`Not found: finalized block height ${a.blockHeight} is past ${a.lastValidBlockHeight}, and final history proves no transaction landed. Nothing was paid.`);
-  emit(result("not_found", { reason: "blockhash expired", delivered: false, next: `nothing was paid; safe to buy again (this --op may be reused)` }), EXIT.OK);
+  console.log(`Not found: finalized block height ${a.blockHeight} is past ${a.lastValidBlockHeight}, and final history proves no transaction landed (agreement: ${a.agreement ?? "single"}). Nothing was paid.`);
+  emit(result("not_found", { reason: "blockhash expired", delivered: false, ...(a.agreement ? { agreement: a.agreement } : {}), next: `nothing was paid; safe to buy again (this --op may be reused)` }), EXIT.OK);
 } else {
   updateOp(opId, { state: "unknown" }, `reconcile: pending, ${a.blocksLeft ?? "?"} blocks until the blockhash is provably dead`);
   console.log(a.reason ?? (a.blocksLeft != null ? `Still unresolved: about ${a.blocksLeft} blocks remain before the blockhash expires. Do not pay again.` : "Still unresolved: no final settlement or final absence proof. Do not pay again."));

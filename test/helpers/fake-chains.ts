@@ -36,10 +36,17 @@ export interface FakeTempo extends TestServer {
   simulations: { from: string; key: string }[];
   /** A simulated revokeKey's answer; default: the keychain's own (no key: KeyNotFound; revoked: KeyAlreadyRevoked; else "ok"). */
   revokeSimulation?: (from: string, key: string) => "ok" | "KeyAlreadyRevoked" | "KeyNotFound" | "unreadable";
+  /** Every JSON-RPC method this server was asked, in order. */
+  calls: string[];
+  /** Per-method answers that replace the chain's own on this server (a mirror's lie), by method; return undefined to fall through. */
+  overrides?: Record<string, (params: any[]) => unknown>;
+  /** A second server over the same chain (same keys, head and transactions); `view` replaces some of its answers or its revokeKey simulation. */
+  mirror(view?: Partial<Pick<FakeTempo, "overrides" | "revokeSimulation">>): Promise<FakeTempo>;
 }
 
 export async function startFakeTempo(): Promise<FakeTempo> {
   const chain = {} as FakeTempo;
+  chain.calls = [];
   chain.head = { number: 1000n, timestamp: Math.floor(Date.now() / 1000) };
   chain.keys = new Map();
   chain.simulations = [];
@@ -63,13 +70,13 @@ export async function startFakeTempo(): Promise<FakeTempo> {
     }
     return hash;
   };
-  const keychain = (data: Hex, from = ""): Hex => {
+  const keychain = (data: Hex, from = "", view: Pick<FakeTempo, "revokeSimulation"> = chain): Hex => {
     const call = decodeFunctionData({ abi: Abis.accountKeychain, data });
     const a = call.args as unknown as any[];
     if (call.functionName === "revokeKey") {
       chain.simulations.push({ from, key: String(a[0]) });
       const k = chain.keys.get(id(from, a[0]));
-      const v = chain.revokeSimulation?.(from, a[0]) ?? (!k ? "KeyNotFound" : k.revoked ? "KeyAlreadyRevoked" : "ok");
+      const v = view.revokeSimulation?.(from, a[0]) ?? (!k ? "KeyNotFound" : k.revoked ? "KeyAlreadyRevoked" : "ok");
       if (v === "ok") return "0x";
       if (v === "unreadable") throw new Error("fake tempo: eth_call failed");
       throw Object.assign(new Error("execution reverted"), { rpc: { code: 3, message: "execution reverted", data: encodeErrorResult({ abi: Abis.accountKeychain, errorName: v }) } });
@@ -85,7 +92,12 @@ export async function startFakeTempo(): Promise<FakeTempo> {
       default: throw new Error(`fake keychain: ${call.functionName}`);
     }
   };
-  const answer = (method: string, params: any[]): unknown => {
+  const answer = (method: string, params: any[], view: Pick<FakeTempo, "overrides" | "revokeSimulation"> = chain): unknown => {
+    const over = view.overrides?.[method];
+    if (over) {
+      const got = over(params);
+      if (got !== undefined) return got;
+    }
     switch (method) {
       case "eth_chainId": return hex(42431);
       case "eth_blockNumber": return hex(chain.head.number);
@@ -95,7 +107,7 @@ export async function startFakeTempo(): Promise<FakeTempo> {
       }
       case "eth_call": {
         const { to, data, from } = params[0];
-        if (String(to).toLowerCase() === KEYCHAIN.toLowerCase()) return keychain(data, from);
+        if (String(to).toLowerCase() === KEYCHAIN.toLowerCase()) return keychain(data, from, view);
         if (String(data).startsWith("0xed498fa8")) return `0x${"0".repeat(64)}`; // FeeManager: no fee token preference
         if (String(data).startsWith("0x70a08231")) return `0x${(1000n * 10n ** 6n).toString(16).padStart(64, "0")}`; // 1000 pathUSD
         return `0x${"0".repeat(64)}`;
@@ -112,18 +124,24 @@ export async function startFakeTempo(): Promise<FakeTempo> {
       default: return null;
     }
   };
-  const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const serve = (view: Pick<FakeTempo, "overrides" | "revokeSimulation" | "calls">) => startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const body = JSON.parse(await readBody(req));
     const one = (c: { id: number; method: string; params?: any[] }) => {
+      view.calls.push(c.method);
       try {
-        return { jsonrpc: "2.0", id: c.id, result: answer(c.method, c.params ?? []) };
+        return { jsonrpc: "2.0", id: c.id, result: answer(c.method, c.params ?? [], view) };
       } catch (e) {
         return { jsonrpc: "2.0", id: c.id, error: (e as any).rpc ?? { code: -32000, message: String((e as Error).message) } };
       }
     };
     json(res, Array.isArray(body) ? body.map(one) : one(body));
   });
-  return Object.assign(chain, server);
+  chain.mirror = async (view = {}) => {
+    const other = { overrides: view.overrides, revokeSimulation: view.revokeSimulation, calls: [] as string[] };
+    const server = await serve(other);
+    return Object.assign(Object.create(chain), other, server) as FakeTempo;
+  };
+  return Object.assign(chain, await serve(chain));
 }
 
 // ── Solana ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -169,6 +187,10 @@ export interface FakeSolana extends TestServer {
   genesis: string | null;
   /** Every RPC method asked, in order. */
   calls: string[];
+  /** Per-method answers that replace the chain's own on this server (a mirror's lie), by method; return undefined to fall through. */
+  overrides?: Record<string, (params: any[]) => unknown>;
+  /** A second server over the same chain (same accounts, slot and transactions); `overrides` replace some of its answers. */
+  mirror(view?: Partial<Pick<FakeSolana, "overrides" | "genesis">>): Promise<FakeSolana>;
 }
 
 /** A compute-budget SetComputeUnitLimit (2) or SetComputeUnitPrice (3) instruction's data. */
@@ -283,16 +305,25 @@ export async function startFakeSolana(opts: { websocket?: boolean } = {}): Promi
     return { data: [d.toString("base64"), "base64"], executable: false, lamports: 2039280, owner: TOKEN_PROGRAM.toBase58(), rentEpoch: 0, space: 165 };
   };
   const ctx = (value: unknown) => ({ context: { slot: chain.slot }, value });
-  const answer = (method: string, params: any[]): unknown => {
+  const answer = (method: string, params: any[], view: Pick<FakeSolana, "overrides" | "genesis"> = chain): unknown => {
+    const over = view.overrides?.[method];
+    if (over) {
+      const got = over(params);
+      if (got !== undefined) return got;
+    }
     switch (method) {
       case "getGenesisHash": {
-        if (chain.genesis === null) throw new Error("fake solana: no genesis hash");
-        return chain.genesis;
+        if (view.genesis === null) throw new Error("fake solana: no genesis hash");
+        return view.genesis;
       }
       case "getSlot": return chain.slot;
+      case "getFirstAvailableBlock": return 0;
       case "getBlockHeight": return chain.slot;
       case "getBalance": return ctx(Number(chain.balances.get(params[0]) ?? 0n));
       case "getAccountInfo": {
+        // a node whose finalized slot has not reached minContextSlot refuses (-32016)
+        const min = params[1]?.minContextSlot;
+        if (typeof min === "number" && min > chain.slot) throw Object.assign(new Error("Minimum context slot has not been reached"), { rpc: { code: -32016, message: "Minimum context slot has not been reached" } });
         const owner = [...chain.usdc.keys()].find((o) => ataOf(o).toBase58() === params[0]);
         return ctx(owner ? tokenAccount(owner) : null);
       }
@@ -343,18 +374,25 @@ export async function startFakeSolana(opts: { websocket?: boolean } = {}): Promi
       default: throw new Error(`fake solana: ${method}`);
     }
   };
-  const handle = async (req: IncomingMessage, res: ServerResponse) => {
+  const handleFor = (view: Pick<FakeSolana, "overrides" | "genesis" | "calls">) => async (req: IncomingMessage, res: ServerResponse) => {
     const body = JSON.parse(await readBody(req));
     const one = (c: { id: number | string; method: string; params?: any[] }) => {
-      chain.calls.push(c.method);
+      view.calls.push(c.method);
       try {
-        return { jsonrpc: "2.0", id: c.id, result: answer(c.method, c.params ?? []) };
+        return { jsonrpc: "2.0", id: c.id, result: answer(c.method, c.params ?? [], view) };
       } catch (e) {
-        return { jsonrpc: "2.0", id: c.id, error: { code: -32601, message: String((e as Error).message) } };
+        return { jsonrpc: "2.0", id: c.id, error: (e as any).rpc ?? { code: -32601, message: String((e as Error).message) } };
       }
     };
     json(res, Array.isArray(body) ? body.map(one) : one(body));
   };
+  // another endpoint over the same chain, with its own overrides, genesis hash and call log
+  chain.mirror = async (view = {}) => {
+    const other = { overrides: view.overrides, genesis: view.genesis === undefined ? chain.genesis : view.genesis, calls: [] as string[] };
+    const server = await startServer(handleFor(other));
+    return Object.assign(Object.create(chain), other, server) as FakeSolana;
+  };
+  const handle = handleFor(chain);
   const server = await startServer(handle);
   if (!opts.websocket) return Object.assign(chain, server);
   // the RPC port + 1 must be free: try a few RPC ports

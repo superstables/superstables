@@ -674,7 +674,7 @@ function resultFacts(fields) {
 }
 
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "agreement", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
   fields = resultFacts(fields);
@@ -1176,6 +1176,9 @@ function hostedSite(f) {
 }
 const modeLine = (f) => { const site = hostedSite(f); return site ? `  approvals: hosted on ${site}: the owner approves there, signed in with their wallet, and picks the match code` : null; };
 
+/** The words in parentheses of the first line a read script printed as "unknown (words)", else null. */
+const unconfirmedWords = (text) => /^\s*[\w ()]+?:\s+unknown \((.*)\)\s*$/m.exec(text)?.[1] ?? null;
+
 // Reads the budget through the rail's read script (no key file, no signature) and parses its text.
 async function readBudget(f) {
   const r = await run(railCommand("read", f));
@@ -1187,19 +1190,22 @@ async function readBudget(f) {
     const exp = Number(pick(/expiry:\s+(\d+)/) ?? 0);
     const revoked = pick(/isRevoked:\s+(true|false)/) === "true";
     const expiry = exp ? new Date(exp * 1000).toISOString() : null;
-    const expired = !!exp && exp * 1000 < Date.now();
+    // the read script says whether the key is expired (agreed by the confirming endpoints), or "unknown": never worked out here
+    const expired = pick(/\bexpired:\s+(true|false)/) === "true";
     const live = !revoked && !expired;
     const pe = Number(pick(/periodEnd:\s+(\d+)/) ?? 0);
     // the next period boundary of a live period budget, before its expiry; null for a one-time limit, a revoked or expired
     // key, or a boundary at or after expiry. It says when the limit refills, not that nothing is left.
     const refillsAt = live && pe && pe * 1000 > Date.now() && (!exp || pe < exp) ? new Date(pe * 1000).toISOString() : null;
     const granted = !/granted:\s+no\b/.test(t);
-    return { ok: true, remaining: remaining ?? null, expiry, revoked, expired, refillsAt, granted, atRisk: remaining === undefined ? null : live ? remaining : "0" };
+    // a line the script printed as "unknown (words)": one endpoint's word was not enough to end the budget, so it stays counted
+    const unconfirmed = unconfirmedWords(t);
+    return { ok: true, remaining: remaining ?? null, expiry, revoked, expired, refillsAt, granted, atRisk: remaining === undefined ? null : live ? remaining : "0", unconfirmed };
   }
   if (f.rail === "solana") {
     const remaining = pick(/delegatedAmount \(remaining\):\s+([\d.]+) USDC/);
     const most = pick(/maximum the delegate can still move:\s+([\d.]+) USDC/);
-    return { ok: true, remaining: remaining ?? null, expiry: null, revoked: pick(/revoked:\s+(true|false)/) === "true", atRisk: most ?? null };
+    return { ok: true, remaining: remaining ?? null, expiry: null, revoked: pick(/revoked:\s+(true|false)/) === "true", atRisk: most ?? null, unconfirmed: unconfirmedWords(t) };
   }
   const rr = railResult(t); // evm: the read script ends with a RESULT line
   return rr ? evmReadFromResult(rr) : { ok: false, code: 2 };
@@ -1273,7 +1279,7 @@ function normalize(cmd, f, rail, code) {
   const amount = state === "unknown" ? null : nothingMoved ? "0" : rail.debit == null ? null : String(rail.debit);
   return {
     code: exitFor(cmd, state, delivered),
-    fields: { ...base, state, paid, delivered, chain_final: rail.chain_final ?? null, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : rail.state === "unknown" && ownWayOut(rail) ? neverPayAgain(rail.next) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.chain_final === false && state === "settled" ? `Run superstables budget reconcile --rail ${f.rail}${f.rail === "evm" ? ` --chain ${f.chain}` : ""} --op ${f.op} later to check finality. Do not pay again.${delivered === false ? " Contact the seller." : ""}` : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
+    fields: { ...base, state, paid, delivered, chain_final: rail.chain_final ?? null, amount, remaining: rail.remaining ?? null, tx, agreement: rail.agreement, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : rail.state === "unknown" && ownWayOut(rail) ? neverPayAgain(rail.next) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.chain_final === false && state === "settled" ? `Run superstables budget reconcile --rail ${f.rail}${f.rail === "evm" ? ` --chain ${f.chain}` : ""} --op ${f.op} later to check finality. Do not pay again.${delivered === false ? " Contact the seller." : ""}` : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
   };
 }
 
@@ -1384,7 +1390,9 @@ async function status({ f, ctx }) {
   const ag = agentFlag(f);
   // Spent, revoked or expired: report it; a new budget is the owner's to ask for, so no grant recipe here (rule 10 of the skill).
   const ownerAsks = "a new budget starts only when the owner explicitly asks for one";
-  const next = s.revoked
+  const next = s.unconfirmed
+    ? `the budget could not be confirmed on chain (${s.unconfirmed}): count it as live; run ${statusCommand(f)} again later`
+    : s.revoked
     ? `the budget is revoked: nothing to spend. Report it; ${ownerAsks}${f.rail === "tempo" ? " (a revoked tempo key can never be granted again)" : ""}`
     : s.expired
       ? `the budget expired at ${s.expiry}: nothing to spend. Report it; ${ownerAsks} (an expired tempo key can never be granted again)`
@@ -1396,7 +1404,7 @@ async function status({ f, ctx }) {
             ? `the budget is spent: nothing to spend. Report it; ${ownerAsks}`
             : empty ? `nothing to spend (spent, never granted, or revoked): the owner grants a budget with superstables budget grant --rail ${f.rail}${chainFlag(f)} --amount A when they ask for one` : "none";
   const tempoFields = f.rail === "tempo" ? { expired: s.expired, refillsAt: s.refillsAt } : {};
-  emit(0, { ...ctx, state: "ok", remaining: s.remaining, expiry: s.expiry, revoked: s.revoked, ...tempoFields, atRisk: s.atRisk, owner: owner ?? undefined, next });
+  emit(0, { ...ctx, state: "ok", remaining: s.remaining, expiry: s.expiry, revoked: s.revoked, ...tempoFields, atRisk: s.atRisk, owner: owner ?? undefined, next, ...(s.unconfirmed ? { reason: s.unconfirmed } : {}) });
 }
 
 const chainFlag = (f) => (f.chain === RAILS[f.rail].chain ? "" : ` --chain ${f.chain}`);
@@ -1732,10 +1740,10 @@ async function revoke({ f, ctx }) {
     return emit(o.code, { ...ctx, state: o.state, proof: o.proof, remaining: now.ok ? now.remaining : null, revoked: false, tx: rr?.tx ? { revoke: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, "none"), reason: o.reason });
   }
   // solana: no USDC account, so no delegate to clear and nothing sent. One read decided it, so revoked is null, not true.
-  if (r.code === 0 && rr?.evidence === "no_token_account") return emit(0, { ...ctx, state: "ok", remaining: "0", revoked: null, tx: {}, next: "none", reason: rr.reason ?? "the owner has no USDC account, so there is no delegate to clear; nothing was sent" });
+  if (r.code === 0 && rr?.evidence === "no_token_account") return emit(0, { ...ctx, state: "ok", remaining: "0", revoked: null, agreement: rr.agreement, tx: {}, next: "none", reason: rr.reason ?? "the owner has no USDC account, so there is no delegate to clear; nothing was sent" });
   const after = await readBudget(f);
   // tempo: the key reads revoked and the keychain refused a simulated revokeKey from the owner, so nothing was sent
-  if (r.code === 0 && rr?.evidence === "simulated_already_revoked" && after.ok && after.revoked) return emit(0, { ...ctx, state: "ok", remaining: after.remaining, revoked: true, tx: {}, next: "none", reason: "already revoked: the key reads revoked, and the keychain refuses a simulated revokeKey from the owner as already done; nothing was sent" });
+  if (r.code === 0 && rr?.evidence === "simulated_already_revoked" && after.ok && after.revoked) return emit(0, { ...ctx, state: "ok", remaining: after.remaining, revoked: true, agreement: rr.agreement, tx: {}, next: "none", reason: "already revoked: the key reads revoked, and the keychain refuses a simulated revokeKey from the owner as already done; nothing was sent" });
   const done = r.code === 0 && after.ok && after.revoked;
   emit(done ? 0 : o.code || 1, {
     ...ctx, state: done ? "settled" : o.code === 0 ? "failed" : o.state, proof: done || o.code === 0 ? undefined : o.proof, remaining: after.ok ? after.remaining : null, revoked: after.ok ? after.revoked : null,

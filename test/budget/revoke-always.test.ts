@@ -8,15 +8,24 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { privateKeyToAddress } from "viem/accounts";
 import { evmOwner, startFakeRpc, startFakeSite, type FakeRequest, type FakeSite } from "../helpers/fake-site.js";
 import { startFakeSolana, startFakeTempo, type FakeSolana, type FakeTempo } from "../helpers/fake-chains.js";
 import type { TestServer } from "../helpers/servers.js";
-import { agreeingCopy, removeAgreeingCopy } from "../helpers/agreeing-copy.js";
 
-const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const CLI = resolve(ROOT, "budget/cli.mjs");
+// The client runs from a copy whose endpoint table names the fake RPCs: the endpoints that confirm a verdict, and the ones an owner
+// command uses, come from that table or the owner's settings, never from an RPC that only the environment names.
+let tree: EndpointTree;
+let ROOT = "";
+let CLI = "";
+beforeAll(() => {
+  tree = endpointTree();
+  ROOT = tree.root;
+  CLI = resolve(ROOT, "budget/cli.mjs");
+});
+afterAll(() => tree.close());
 const OWNER = evmOwner("22");
 const TEMPO_KEY = `0x${"44".repeat(32)}` as const;
 const TEMPO_AGENT = privateKeyToAddress(TEMPO_KEY);
@@ -40,10 +49,10 @@ beforeEach(async () => {
   site = await startFakeSite();
   tempo = await startFakeTempo();
   solana = await startFakeSolana();
+  tree.set({ "tempo-moderato": [tempo.url], "solana-devnet": [solana.url] });
   extraEnv = {};
 });
 afterEach(async () => {
-  removeAgreeingCopy();
   await site.close();
   await tempo.close();
   await solana.close();
@@ -58,7 +67,9 @@ function budget(args: string[]): Promise<Out> {
     const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url, ...extraEnv };
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [env.B4_RPC ? agreeingCopy(env.B4_RPC) : CLI, ...args], { cwd: ROOT, env }); // a fake evm RPC: a copy whose table names it twice, as two operators
+    // a fake evm RPC: the copy's Base Sepolia table names it twice, as two operators
+    if (env.B4_RPC) tree.set({ "tempo-moderato": [tempo.url], "solana-devnet": [solana.url], "base-sepolia": [{ url: env.B4_RPC, operator: "fake-a" }, { url: `${env.B4_RPC}/`, operator: "fake-b" }] });
+    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));

@@ -11,11 +11,14 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret-file.mjs";
-import { DEFAULT_RPC, SOLANA_RPC_MAX_BYTES, cappedRpcFetch, rpcFromEnv } from "../rpc.mjs";
+import { DEFAULT_RPC, SOLANA_RPC_MAX_BYTES, budgetCall, cappedRpcFetch, jsonRpc, rpcFromEnv } from "../rpc.mjs";
 import { markSend } from "../proof.mjs";
 import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
+import { endpointSet } from "../../src/core/rpc-endpoints.mjs";
+import { agreeAtFinalSolana, agreementWords, checkIdentity } from "../../src/core/rpc-quorum.mjs";
+import { TOKEN_PROGRAM_ID, decodeTokenAccount } from "./token.mjs";
 import {
   Connection,
   Keypair,
@@ -55,18 +58,31 @@ const crashHandler = async (err) => {
 crashHandler[RAIL_CRASH_HANDLER] = true;
 process.on("uncaughtException", crashHandler);
 
-// SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL (tests point it at a local fake; you can point it at your own node);
-// with no variable, the RPC the owner set for solana-devnet (superstables owner settings rpc) is read. https, or http on this
-// computer only (../rpc.mjs): anything else is ignored here with a warning, and the dispatcher refuses the command before it
-// runs a script. An owner script (owner.ts) also refuses a variable that is not one of the owner's RPCs, before it does anything.
-export const RPC_URL = (() => {
-  const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana, "read", "solana-devnet");
-  if (r.error) process.stderr.write(`warning: ${r.error}; using ${DEFAULT_RPC.solana}\n`);
-  return r.url;
-})();
-export const EXPLORER_CLUSTER = "?cluster=devnet";
 /** Solana devnet is a testnet. The chain gate (../../src/core/chain-gate.js) signs on nothing else in this build. */
 export const TESTNET = true;
+// SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL for reads (tests point it at a local fake; you can point it at your own node).
+// https, or http on this computer only (../rpc.mjs): anything else is ignored here with a warning, and the dispatcher refuses
+// the command before it runs a script. Owner commands and the verdicts that let an agent pay again do not take the replacement
+// on its word: they use the endpoints the owner set (src/core/rpc-endpoints.mjs), and a replacement that is not one of them is
+// refused there (an owner command exits 3; a verdict stays unknown, with that reason).
+const envRpc = (() => {
+  const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana, "read", "solana-devnet");
+  if (r.error) process.stderr.write(`warning: ${r.error}; using ${DEFAULT_RPC.solana}\n`);
+  // custom is also true for the owner's own URL (source "settings"): that one is not the variable
+  return r.custom && r.source !== "settings" ? r.url : undefined;
+})();
+/** The endpoints for a purpose: "read" (balances, searches, the primary), "verdict" (what lets an agent pay again) or "owner" (what an owner command reads and sends through). */
+export function solanaSet(purpose = "read") {
+  return endpointSet("solana-devnet", purpose, { envUrl: envRpc, envName: "SUPERSTABLES_SOLANA_RPC", testnet: TESTNET });
+}
+/** The URL a connection for `purpose` talks to. Throws (in words) when the owner settings cannot be read. */
+export function rpcUrl(purpose = "read") {
+  const set = solanaSet(purpose === "owner" ? "owner" : "read");
+  if ("error" in set) throw new Error(set.error);
+  return set.primary.url;
+}
+export const RPC_URL = (() => { try { return rpcUrl("read"); } catch { return DEFAULT_RPC.solana; } })();
+export const EXPLORER_CLUSTER = "?cluster=devnet";
 /** The chain gate for this rail's one chain: "" when this build may sign, ask the owner's wallet or send on it, else why not. */
 const solanaGate = () => chainGate({ rail: "solana", key: "solana-devnet", testnet: TESTNET }, chainGateSettings());
 // No Solana budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a
@@ -88,13 +104,18 @@ export const PUBLIC_PATH = publicFile("solana", "devnet");
 export const OPS_DIR = opsDir("solana", "devnet");
 
 const rpcFetch = cappedRpcFetch(SOLANA_RPC_MAX_BYTES);
-export function connection() {
-  // a broadcast prints SENDING before it leaves (../proof.mjs); every answer is read through cappedRpcFetch (../rpc.mjs)
-  return new Connection(RPC_URL, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (url, init) => { markSend(init?.body); return rpcFetch(url, { ...init, signal: AbortSignal.timeout(10_000) }); } });
+/** A connection to `url`: a broadcast prints SENDING before it leaves (../proof.mjs); every answer is read through cappedRpcFetch (../rpc.mjs). */
+export function connectionTo(url) {
+  return new Connection(url, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (u, init) => { markSend(init?.body); return rpcFetch(u, { ...init, signal: AbortSignal.timeout(10_000) }); } });
+}
+/** The connection for reads (the default) or for an owner command, which reads and sends through the owner's endpoints. */
+export function connection(purpose = "read") {
+  return connectionTo(rpcUrl(purpose));
 }
 
 /** The RPC's host, for words: a replacement's path or query can carry an access key, so never the whole URL. */
 export const RPC_HOST = (() => { try { return new URL(RPC_URL).host; } catch { return "the Solana RPC"; } })();
+const hostOf = (url) => { try { return new URL(url).host; } catch { return "the Solana RPC"; } };
 /** What to do when the RPC is on another cluster. */
 export const CLUSTER_NEXT = "unset SUPERSTABLES_SOLANA_RPC, or set it to a Solana devnet RPC, then run the command again";
 /**
@@ -106,15 +127,63 @@ export const CLUSTER_NEXT = "unset SUPERSTABLES_SOLANA_RPC, or set it to a Solan
 export async function clusterProblem(conn) {
   const gate = solanaGate();
   if (gate) return gate;
+  const host = conn?.rpcEndpoint ? hostOf(conn.rpcEndpoint) : RPC_HOST;
   let genesis;
   try {
     genesis = await retryRead(() => conn.getGenesisHash());
   } catch (err) {
-    return `could not read which Solana cluster ${RPC_HOST} is on (${oneLine(err?.message ?? err, 160)})`;
+    return `could not read which Solana cluster ${host} is on (${oneLine(err?.message ?? err, 160)})`;
   }
   if (genesis === SOLANA_DEVNET_GENESIS) return "";
-  return `the Solana RPC ${RPC_HOST} is not on Solana devnet (its genesis hash is ${oneLine(genesis, 60)})`;
+  return `the Solana RPC ${host} is not on Solana devnet (its genesis hash is ${oneLine(genesis, 60)})`;
 }
+
+/** A JSON-RPC call to `url` for the agreement engine: plain data in and out, with a timeout. */
+export const rpcCall = (url, method, params) => budgetCall(url, method, params, 10_000);
+
+/** The confirming endpoints for `purpose` ("read" or "owner"): the engine's verdict set, with the genesis of each checked before it is read. */
+export function solanaVerdictSet(purpose = "read") {
+  return solanaSet(purpose === "owner" ? "owner" : "verdict");
+}
+
+/** A finalized slot a little behind the primary's, for a verdict of absence that has no recorded slot of its own. */
+export async function recentFinalizedSlot(conn, behind = 32) {
+  const slot = await retryRead(() => conn.getSlot("finalized"));
+  return BigInt(Math.max(0, slot - behind));
+}
+
+/**
+ * The owner's token account read from every confirming endpoint at `finalized`, from one common slot on. Resolves to the
+ * engine's answer: { agreed: true, value, slot, agreement } where value is null (the chain says the account does not exist) or
+ * { owner, delegate, delegatedAmount, amount } as strings and bigints, else { agreed: false, why, reason }.
+ * A verdict of absence (no account, no delegate) must pass `atLeast`: the slot from which it has to hold.
+ * @param {string} address the token account
+ * @param {{ minSlot?: bigint, atLeast?: bigint, purpose?: "read"|"owner" }} [o]
+ */
+export function agreedAccount(address, { minSlot, atLeast, purpose = "read" } = {}) {
+  return agreeAtFinalSolana({
+    set: solanaVerdictSet(purpose),
+    call: rpcCall,
+    genesis: SOLANA_DEVNET_GENESIS,
+    minSlot,
+    atLeast,
+    read: async (url, slot) => {
+      const got = await jsonRpc(url, "getAccountInfo", [address, { commitment: "finalized", minContextSlot: Number(slot), encoding: "base64" }], 10_000);
+      const at = got?.context?.slot;
+      if (!Number.isSafeInteger(at)) throw new Error("no context slot");
+      if (got.value === null) return { slot: at, value: null };
+      const info = got.value;
+      const data = Array.isArray(info?.data) && info.data[1] === "base64" && typeof info.data[0] === "string" ? Buffer.from(info.data[0], "base64") : null;
+      if (info.owner !== TOKEN_PROGRAM_ID.toBase58() || !data || data.length < 165) throw new Error("not a token account");
+      const acc = decodeTokenAccount(data);
+      return { slot: at, value: { owner: acc.owner.toBase58(), delegate: acc.delegate ? acc.delegate.toBase58() : null, delegatedAmount: acc.delegatedAmount, amount: acc.amount } };
+    },
+  });
+}
+
+/** How an agreement is said in a line: the label when agreed, else the reason in words. */
+export const agreementLine = (a) => (a.agreed ? a.agreement : agreementWords(a));
+export { checkIdentity };
 
 // Exact decimal parse. Throws on anything that is not a plain non-negative
 // decimal or that has more than `decimals` fractional digits (no rounding).

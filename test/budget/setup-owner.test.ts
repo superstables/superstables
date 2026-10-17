@@ -8,12 +8,22 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { privateKeyToAddress } from "viem/accounts";
 import { KEYCHAIN, startFakeSolana, startFakeTempo, type FakeSolana, type FakeTempo } from "../helpers/fake-chains.js";
 
-const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const CLI = resolve(ROOT, "budget/cli.mjs");
+// The client runs from a copy whose endpoint table names the fake RPCs: the endpoints that confirm a verdict, and the ones an owner
+// command uses, come from that table or the owner's settings, never from an RPC that only the environment names.
+let tree: EndpointTree;
+let ROOT = "";
+let CLI = "";
+beforeAll(() => {
+  tree = endpointTree();
+  ROOT = tree.root;
+  CLI = resolve(ROOT, "budget/cli.mjs");
+});
+afterAll(() => tree.close());
 const SITE = "https://staging.superstables.com";
 const evmKey = (b: string) => `0x${b.repeat(32)}` as const;
 
@@ -24,6 +34,7 @@ beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "ss-setup-owner-"));
   tempo = await startFakeTempo();
   solana = await startFakeSolana();
+  tree.set({ "tempo-moderato": [tempo.url], "solana-devnet": [solana.url] });
 });
 afterEach(async () => {
   await tempo.close();

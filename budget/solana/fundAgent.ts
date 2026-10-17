@@ -44,7 +44,7 @@ function refuse(reason: string, next: string): never {
   process.exit(result(3, { state: "refused_precheck", reason, next }));
 }
 
-const conn = connection();
+const conn = connection("owner");
 const cluster = await clusterProblem(conn);
 if (cluster) refuse(cluster, CLUSTER_NEXT);
 const { owner, agent } = await ownerPlanCtx(refuse); // the public addresses, checked against the owner's setup signature

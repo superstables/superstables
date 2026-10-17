@@ -15,6 +15,8 @@ import { Abis, Addresses } from 'viem/tempo'
 import type { Address } from 'viem'
 import { addressCheck, labelCheck, parseCli } from './lib/args.mjs'
 import { TOKEN_ADDRESS, TOKEN_LABEL, explorerAddress, fromBaseUnits, loadPublicEnv, makeClient, oneLine } from './lib/common.ts'
+import { agreedAtBlock, readKeyAt } from './lib/chain.ts'
+import { agreementWords } from '../../src/core/rpc-quorum.mjs'
 
 const { values: args } = parseCli({
   name: 'readBudget.ts',
@@ -58,25 +60,44 @@ async function main() {
   const iso = (unix: number) => new Date(unix * 1000).toISOString()
   const expiry = Number(metadata.expiry)
   const periodEnd = Number(limit.periodEnd ?? 0)
+  const remaining = BigInt(limit.remaining)
   const granted = expiry > 0 || metadata.isRevoked
   const expired = expiry > 0 && expiry * 1000 <= Date.now()
+  // Four things end a budget in what this prints: the key reads revoked, expired, with 0 remaining, or never granted. Each is a
+  // verdict that could be a lie, and one endpoint's word must not end a budget. When the primary shows any of them, the
+  // confirming endpoints read the key at one block; a fact is printed as true only when that agreed read shows the same. Else it
+  // is printed as unknown, and the amount stays counted as at risk.
+  const primaryEnds = metadata.isRevoked || expired || remaining === 0n || !granted
+  const agreed = primaryEnds ? await agreedAtBlock((url, _block, hash) => readKeyAt(url, ownerAddress!, agentAddress!, hash)).catch(() => null) : null
+  const seen = agreed && agreed.agreed ? (agreed.value as { revoked: boolean; expiry: string; remaining: string }) : null
+  // Revoked and expired never undo, so an old agreed block shows them truly. "Remaining 0" and "never granted" are true before a
+  // grant: they are believed only at a block near the highest head, never one the lowest endpoint's lag has left far behind.
+  const recent = !!agreed && agreed.agreed && agreed.block.highest - agreed.block.number <= 64n
+  const failure = !agreed ? 'the RPC endpoints could not be read' : agreed.agreed ? (recent ? 'the confirming RPC endpoints do not show it' : 'it is not final on chain yet') : agreementWords(agreed)
+  const words = (what: string) => ` (${what} on one RPC, but ${failure})`
+  const agreedWords = ` (agreement: ${agreed && agreed.agreed ? agreed.agreement : ''})`
+  const revoked = metadata.isRevoked && !!seen?.revoked
+  const expiredSure = expired && !!seen && BigInt(seen.expiry) > 0n && Number(seen.expiry) === expiry && BigInt(seen.expiry) <= BigInt(agreed!.block.timestamp)
+  const spent = remaining === 0n && recent && !!seen && seen.remaining === '0' && seen.expiry === String(metadata.expiry) && seen.revoked === metadata.isRevoked
+  const neverGranted = !granted && recent && !!seen && seen.expiry === '0' && !seen.revoked
   console.log(`Budget for agent ${agentAddress} on owner ${ownerAddress}`)
   console.log(`  owner explorer: ${explorerAddress(ownerAddress)}`)
-  console.log(`  remaining:  ${limit.remaining} base units (${fromBaseUnits(limit.remaining)} ${TOKEN_LABEL})`)
+  console.log(`  remaining:  ${remaining === 0n && !spent && !revoked && !neverGranted ? `unknown${words('the remaining limit reads 0')}` : `${limit.remaining} base units (${fromBaseUnits(limit.remaining)} ${TOKEN_LABEL})`}`)
   // A key that was never granted reads as zeros (and "unlimited", "secp256k1"): say that instead of printing them.
-  if (!granted) {
+  if (neverGranted) {
     console.log(`  periodEnd:  0 (no budget)`)
     console.log(`  expiry:     0 (no budget)`)
     console.log(`  isRevoked:  false`)
     console.log(`  granted:    no. This agent key has no budget on chain: the owner has not granted one.`)
     return
   }
-  const live = !metadata.isRevoked && !expired
+  const live = !revoked && !expiredSure
   console.log(`  periodEnd:  ${periodEnd}${periodEnd ? ` (${iso(periodEnd)}: the current period ends${live && periodEnd < expiry ? ', and the limit refills then' : ''}${periodEnd * 1000 > Date.now() ? '' : ', already passed'})` : ' (one-time limit, no refill)'}`)
-  console.log(`  expiry:     ${expiry} (${iso(expiry)}${expired ? ', EXPIRED: a new budget needs a new agent key' : ''})`)
-  console.log(`  expired:    ${expired}`)
+  if (!granted) console.log(`  granted:    unknown${words('the key reads as never granted')}`)
+  console.log(`  expiry:     ${expired && !expiredSure ? `unknown${words('the key reads expired')}` : !granted ? `unknown${words('the key reads as never granted')}` : `${expiry} (${iso(expiry)}${expiredSure ? ', EXPIRED: a new budget needs a new agent key' : ''})`}`)
+  console.log(`  expired:    ${expired && !expiredSure ? `unknown${words('the key reads expired')}` : expiredSure}`)
   console.log(`  spendPolicy: ${metadata.spendPolicy}`)
-  console.log(`  isRevoked:  ${metadata.isRevoked}`)
+  console.log(`  isRevoked:  ${metadata.isRevoked ? (revoked ? `true${agreedWords}` : `unknown${words('the key reads revoked')}`) : 'false'}`)
   console.log(`  keyType:    ${metadata.keyType}`)
   const scopeJson = JSON.stringify(scopesList, (_key, value) => (typeof value === 'bigint' ? value.toString() : value))
   console.log(`  seller scope: ${isScoped ? scopeJson : 'unscoped (any seller)'}`)

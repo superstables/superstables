@@ -22,16 +22,16 @@
 // simulated revoke with KeyNotFound; the owner rejected or the link expired), 5 unknown (the wallet may have sent it but
 // the chain does not show it, or the simulation could not tell).
 
-import { decodeErrorResult, toHex, type Address, type Hex } from 'viem'
-import { Abis } from 'viem/tempo'
+import type { Address, Hex } from 'viem'
 import { addressCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
 import { AGENT_ENV_PATH, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, oneLine, ownerAccount, parseEnvFile } from './lib/common.ts'
-import { chainHead, readKey, sleep } from './lib/chain.ts'
+import { agreedAtBlock, chainHead, keychainError, readKey, simulateRevokeAt, sleep, type Simulated } from './lib/chain.ts'
 import { closeGracePeriod, findOpenChannels, type OpenChannel } from './lib/channels.ts'
 import { OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { readRegularFile } from '../secret-file.mjs'
 import { KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, readSent, revertedReceiptOf, revokeCalldata, revokeTerms, tokenBalance, useHostedAgent } from './owner.ts'
 import { differsFromRequest, mismatchPage, mismatchReason } from '../site.mjs'
+import { agreementWords } from '../../src/core/rpc-quorum.mjs'
 import type { OwnerVerdict } from '../../src/core/signer/owner-approval-server.ts'
 
 const { values: args } = parseCli({
@@ -70,38 +70,6 @@ async function residualScan(owner: Address, key: Address, fromBlock: bigint, gra
   if (channels.length) console.log(`  RESIDUAL EXPOSURE (the seller can still settle up to this until the owner withdraws): ${fromBaseUnits(total)} pathUSD in ${channels.length} channel${channels.length === 1 ? '' : 's'}`)
   console.log(`  Channels older than ${lookback} blocks are not visible to this scan (--lookback-blocks).`)
   return { unclosed, total }
-}
-
-type Simulated = { verdict: 'sends' | 'already_revoked' | 'not_found' | 'unknown'; words: string }
-
-/** The keychain error a failed eth_call names: decoded from its revert data, else named in the RPC's words; null if neither. */
-function keychainError(err: unknown): string | null {
-  let text = ''
-  for (let cur: any = err; cur; cur = cur.cause) {
-    if (typeof cur.data === 'string' && /^0x[0-9a-fA-F]{8}/.test(cur.data)) {
-      try { return decodeErrorResult({ abi: Abis.accountKeychain, data: cur.data as Hex }).errorName } catch { return cur.data.slice(0, 10) }
-    }
-    text += ` ${cur.details ?? ''} ${cur.shortMessage ?? ''}`
-  }
-  return /\bKeyAlreadyRevoked\b/.test(text) ? 'KeyAlreadyRevoked' : /\bKeyNotFound\b/.test(text) ? 'KeyNotFound' : null
-}
-
-/**
- * What the keychain says to revokeKey(key) from the owner, simulated with eth_call at `block` (nothing signed or sent):
- * 'sends' when it would succeed; 'already_revoked' or 'not_found' when the keychain refuses it with KeyAlreadyRevoked or
- * KeyNotFound (a revoked key can be stored with no expiry, so a second revoke may be refused either way); 'unknown' for
- * any other answer, or none.
- */
-async function simulateRevoke(owner: Address, key: Address, block: bigint): Promise<Simulated> {
-  try {
-    await makeClient().request({ method: 'eth_call', params: [{ from: owner, to: KEYCHAIN, data: revokeCalldata(key) }, toHex(block)] })
-    return { verdict: 'sends', words: 'it would succeed' }
-  } catch (err) {
-    const name = keychainError(err)
-    if (name === 'KeyAlreadyRevoked') return { verdict: 'already_revoked', words: 'the keychain refuses it with KeyAlreadyRevoked' }
-    if (name === 'KeyNotFound') return { verdict: 'not_found', words: 'the keychain refuses it with KeyNotFound' }
-    return { verdict: 'unknown', words: name ? `the keychain refuses it with ${oneLine(name, 60)}` : `it could not be simulated (${oneLine((err as any)?.shortMessage ?? 'no answer', 160)})` }
-  }
 }
 
 async function main() {
@@ -147,10 +115,27 @@ async function main() {
   }
 
   let alreadyRevoked = false
+  let simAgreement: string | undefined
   if (before.revoked || !before.exists) {
     const reads = before.revoked ? 'revoked' : 'never authorized'
-    const sim = await simulateRevoke(owner, agentAddress, headStart.number)
-    console.log(`The key reads ${reads}; a simulated revokeKey from the owner at block ${headStart.number}: ${sim.words}.`)
+    // The simulation is believed when every confirming endpoint, at one block, gives the same answer. A revoke that any one of them
+    // says would succeed is sent: sending it is not wrong, and skipping it would leave a live key.
+    const seen = new Map<string, Simulated>()
+    const agreedSim = await agreedAtBlock(async (url, _block, hash) => {
+      const one = await simulateRevokeAt(url, owner, agentAddress, hash)
+      seen.set(url, one)
+      if (one.verdict === 'unknown') throw new Error('unknown')
+      return one.verdict
+    }, headStart.number > 64n ? headStart.number - 64n : 0n).catch(() => null) // KeyNotFound is a verdict of absence: it must hold from about the head read above
+    const answers = [...seen.values()]
+    const anySends = answers.some((x) => x.verdict === 'sends')
+    const sim: Simulated & { agreement?: string } = agreedSim && agreedSim.agreed
+      ? { verdict: agreedSim.value as Simulated['verdict'], words: answers[0]?.words ?? 'it was simulated', agreement: agreedSim.agreement }
+      : anySends
+        ? { verdict: 'sends', words: 'it would succeed on at least one RPC endpoint' }
+        : { verdict: 'unknown', words: answers.find((x) => x.verdict === 'unknown')?.words ?? (agreedSim ? agreementWords(agreedSim) : 'the RPC endpoints could not be read') }
+    simAgreement = sim.agreement
+    console.log(`The key reads ${reads}; a simulated revokeKey from the owner at the confirming block${sim.agreement ? ` (agreement: ${sim.agreement})` : ''}: ${sim.words}.`)
     if (sim.verdict === 'unknown' || (!before.revoked && sim.verdict === 'already_revoked')) {
       const reason = sim.verdict === 'unknown'
         ? `the key reads ${reads}, but ${sim.words}; whether the key is live is unknown`
@@ -257,7 +242,7 @@ async function main() {
   }
   finish?.({ outcome: "confirmed", message: `Done. The chain shows the key as revoked: your agent can spend nothing more with it.${unclosed ? ' The terminal lists payment sessions it left open.' : ''} You can close this page.`, hash: hash ?? undefined })
   await closeOwnerPage()
-  process.exit(emit('revokeBudget', scanFailed ? 1 : 0, { state: scanFailed ? 'failed' : 'revoked', tx: hash, remaining: fromBaseUnits(after.remaining), openSessions: unclosed, ...(alreadyRevoked ? { revoked: true, evidence: 'simulated_already_revoked' } : {}), reason: scanFailed ? 'revoked, but the session scan failed: residual exposure is unknown' : undefined, next: 'none' }))
+  process.exit(emit('revokeBudget', scanFailed ? 1 : 0, { state: scanFailed ? 'failed' : 'revoked', tx: hash, remaining: fromBaseUnits(after.remaining), openSessions: unclosed, ...(alreadyRevoked ? { revoked: true, evidence: 'simulated_already_revoked', ...(simAgreement ? { agreement: simAgreement } : {}) } : {}), reason: scanFailed ? 'revoked, but the session scan failed: residual exposure is unknown' : undefined, next: 'none' }))
 }
 
 main().catch((err) => {

@@ -268,6 +268,20 @@ export async function agreeAtFinalSolana({ set, call, genesis, read, minSlot, at
 }
 
 /**
+ * The words for an endpoint set that could not be built: the one wording every budget rail uses. A refused variable
+ * (named by `envName` when the caller knows it) gets the way out; unreadable owner settings keep their own reason.
+ * @param {string} error the settings module's refusal or read error
+ * @param {string} [envName] the RPC variable, when the caller knows which one it is
+ */
+export function endpointSetErrorWords(error, envName) {
+  const refused = /is not an RPC the owner set/.test(error) && (!envName || error.startsWith(envName));
+  // the long explanation after the colon is the settings module's; the words keep what was refused and the way out
+  return refused
+    ? `the RPC endpoints could not be read: ${error.replace(/: owner actions and verdicts read only.*$/, "")}; unset it, or ask the owner to add it in the owner settings`
+    : `the RPC endpoints could not be read: ${error}; ask the owner to check the owner settings`;
+}
+
+/**
  * The words for a failed agreement, for reasons and RESULT lines.
  * @param {Failed} failed
  */
@@ -275,18 +289,10 @@ export function agreementWords(failed) {
   if (failed.why === "disagree") return "the RPC endpoints disagree";
   if (failed.why === "not_final_yet") return "it is not final on chain yet";
   const left = failed.left?.length ? ` (left out: ${failed.left.join("; ")})` : "";
+  // no endpoint was tried: the set itself was refused (an RPC variable that is not the owner's, or unreadable owner settings)
+  if (failed.why === "unreadable" && failed.reason && !failed.left) {
+    return endpointSetErrorWords(failed.reason);
+  }
   if (failed.why === "unreadable") return `the RPC endpoints could not be read${left}`;
   return `a second RPC endpoint was not available to confirm it${left}`;
-}
-
-/**
- * The words for an endpoint set that could not be built: the engine's `reason` (the owner settings' own refusal), then what to do.
- * A variable the owner did not set: unset it, or have the owner add it. Unreadable owner settings: have the owner check them.
- * @param {string} error the reason the set could not be built
- * @param {string} [envName] the variable that decided, when one did
- */
-export function endpointSetErrorWords(error, envName) {
-  void envName;
-  const todo = /is not an RPC the owner set/.test(error) ? "unset it, or ask the owner to add it in the owner settings" : "ask the owner to check the owner settings";
-  return `the RPC endpoints could not be read: ${error}; ${todo}`;
 }

@@ -342,6 +342,17 @@ set, Tempo Moderato `SUPERSTABLES_TEMPO_RPC` and Solana devnet `SUPERSTABLES_SOL
 HTTPS, or HTTP on this machine, without credentials); otherwise the client uses the chain's
 configured public RPC. Use an RPC you trust when that matters. The budget rails read the chain too.
 
+- **Solana and Tempo budget verdicts.** A verdict that lets an agent pay again or ends a budget (a delegate,
+  a token account or an access key gone, a purchase that never happened or failed) is believed only when
+  the confirming endpoints agree. Each endpoint's genesis hash or chain id is checked first. On Solana they
+  read at `finalized` commitment from one common slot on; on Tempo, at one block they all name. Tempo has a
+  single public RPC, so its verdicts rest on that one, labelled `single`, until the owner pins more. Owner
+  commands on Solana read and send through the endpoints the owner set; an RPC that only
+  `SUPERSTABLES_SOLANA_RPC` names is refused there (exit 3), and a verdict that would rest on it stays
+  unknown, with that reason and the fix (unset it, or ask the owner to add it in the owner settings). When
+  the endpoints disagree or one is missing, the answer is unknown and nothing is treated as revoked or as
+  never paid.
+
 On chains that require finalized evidence, a custom RPC without the `finalized` block tag can
 show a matching paid transaction but cannot make its verification permanent. The payment is
 reported paid and its delivered response is saved; `status` or budget `reconcile` keeps checking

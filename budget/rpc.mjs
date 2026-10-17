@@ -151,9 +151,9 @@ export function budgetVerdictSet(chainKey, envUrl) {
   return endpointSet(chainKey, "verdict", { envUrl, envName: evmEnvNameSet(chainKey) ?? RPC_ENV.evm, testnet: true });
 }
 
-/** The reader the agreement engine calls: one JSON-RPC call, answers capped (jsonRpc). */
-export function budgetCall(url, method, params) {
-  return jsonRpc(url, method, params);
+/** The reader the agreement engine calls: one JSON-RPC call, answers capped (jsonRpc). Every rail's verdict reads use it. */
+export function budgetCall(url, method, params, timeoutMs) {
+  return jsonRpc(url, method, params, timeoutMs);
 }
 
 /**

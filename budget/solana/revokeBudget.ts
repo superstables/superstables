@@ -11,7 +11,8 @@
 //
 // It always sends Revoke when the owner's USDC account exists, even when no delegate reads: one RPC's read is not proof
 // that no delegate is live (Revoke succeeds on an account without one). Only an owner with no USDC account is sent
-// nothing, because a Revoke there fails on chain; that answer rests on one read, so it says revoked: null, not revoked.
+// nothing, because a Revoke there fails on chain; that answer needs the owner's endpoints to agree at finalized commitment (else
+// it is unknown, exit 5), and it says revoked: null, not revoked.
 // A confirmed revoke is recorded in the public file (REVOKED_AT): status reports revoked only while the chain still
 // shows no delegate.
 //
@@ -20,11 +21,12 @@
 // owner rejected or the link expired, no SOL for the fee), 5 unknown (read the chain).
 import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { AGENT_KEY_PATH, CLUSTER_NEXT, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, formatUnits, oneLine, parseEnvText, parseStrict, readPublic, retryRead, sleep, writePublic } from "./lib.mjs";
+import { AGENT_KEY_PATH, CLUSTER_NEXT, agreedAccount, clusterProblem, connection, recentFinalizedSlot, loadOwner, explorerTx, USDC_MINT, formatUnits, oneLine, parseEnvText, parseStrict, readPublic, retryRead, sleep, writePublic } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { readRegularFile } from "../secret-file.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort } from "./owner.ts";
+import { agreementWords } from "../../src/core/rpc-quorum.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/revokeBudget.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
@@ -45,7 +47,7 @@ function refuse(reason: string, next: string): never {
   process.exit(result(3, { state: "refused_precheck", reason, next }));
 }
 
-const conn = connection();
+const conn = connection("owner");
 const cluster = await clusterProblem(conn);
 if (cluster) refuse(cluster, CLUSTER_NEXT);
 const pub = readPublic();
@@ -72,10 +74,19 @@ try {
 }
 console.log(`Before: ${before ? `delegate=${before.delegate?.toBase58() ?? "none"} remaining=${formatUnits(before.delegatedAmount)} USDC` : "the owner has no USDC account (the chain says it does not exist)"}`);
 if (!before) {
-  // No token account: there is no delegate to clear, and a Revoke would fail on chain, so nothing is sent. Until the RPC
-  // endpoints are agreed this rests on one read, so it is not reported as revoked.
+  // No token account: there is no delegate to clear, and a Revoke would fail on chain, so nothing is sent. One endpoint's
+  // answer is not enough: the owner's endpoints must all read, at finalized commitment from one common slot on, that it does
+  // not exist. Otherwise whether a delegate is live is unknown.
+  const from = await recentFinalizedSlot(conn).catch(() => undefined);
+  const agreed = from === undefined ? undefined : await agreedAccount(ata.toBase58(), { atLeast: from, purpose: "owner" });
+  if (!agreed?.agreed || agreed.value !== null) {
+    const words = !agreed ? "the finalized slot could not be read" : agreed.agreed ? "the confirming RPC endpoints read it" : agreementWords(agreed);
+    const reason = `the owner's USDC account reads as absent on one RPC, but ${words}; whether a delegate is live is unknown`;
+    console.log(`UNKNOWN: ${reason}. Nothing was sent.`);
+    process.exit(result(5, { state: "unknown", tx: null, reason, next: "superstables budget status --rail solana, then revoke again" }));
+  }
   console.log("The owner has no USDC account (the chain says it does not exist): there is no delegate to clear. Nothing was sent.");
-  process.exit(result(0, { state: "ok", evidence: "no_token_account", revoked: null, tx: null, remaining: "0", reason: "the owner has no USDC account on Solana devnet, so there is no delegate to clear; nothing was sent", next: "none" }));
+  process.exit(result(0, { state: "ok", evidence: "no_token_account", agreement: agreed.agreement, revoked: null, tx: null, remaining: "0", reason: "the owner has no USDC account on Solana devnet, so there is no delegate to clear; nothing was sent", next: "none" }));
 }
 if (!before.delegate) console.log("No delegate reads on the owner's USDC account; sending Revoke anyway: one read is not proof that no delegate is live.");
 const lamports = BigInt(await retryRead(() => conn.getBalance(owner, "confirmed")));

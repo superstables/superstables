@@ -1,22 +1,25 @@
 // Chain reads for the Tempo scripts. Reads retry with backoff; nothing here sends a transaction, so
 // a retry can never pay twice.
 import { finalityFor } from "../../../src/core/finality-policy.js";
-import { keccak256, toBytes, type Address, type Hex } from 'viem'
-import { Abis, Addresses } from 'viem/tempo'
+import { decodeErrorResult, decodeFunctionResult, encodeFunctionData, keccak256, toBytes, type Address, type Hex } from 'viem'
+import { Abis, Addresses, createClient, http } from 'viem/tempo'
 import { CHAIN_ID, RPC_URL, TOKEN_ADDRESS, fromBaseUnits, makeClient, oneLine } from './common.ts'
-import { readRpcAnswer } from '../../rpc.mjs'
+import { TESTNET } from './constants.mjs'
+import { RPC_MAX_BYTES, budgetCall, cappedRpcFetch, readRpcAnswer } from '../../rpc.mjs'
+import { endpointSet } from '../../../src/core/rpc-endpoints.mjs'
+import { agreeAtFinalEvm } from '../../../src/core/rpc-quorum.mjs'
 
 export const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 export const topicOf = (a: string) => ('0x' + a.toLowerCase().replace('0x', '').padStart(64, '0')) as Hex
 
 /**
- * One JSON-RPC exchange with RPC_URL, its answer read through readRpcAnswer (../../rpc.mjs): at most RPC_MAX_BYTES, and
+ * One JSON-RPC exchange with `url`, its answer read through readRpcAnswer (../../rpc.mjs): at most RPC_MAX_BYTES, and
  * the RPC's error text only as one short line. An HTTP error status, or an answer longer than the cap, cut off, or not
  * JSON, throws an error marked `answer` in this client's words (`overCap` when it was longer than the cap).
  */
-async function exchange(method: string, params: unknown[], timeoutMs: number): Promise<{ result?: any; error?: { message: string; reverted: boolean } }> {
-  const res = await fetch(RPC_URL, {
+async function exchangeAt(url: string, method: string, params: unknown[], timeoutMs: number): Promise<{ result?: any; error?: { message: string; reverted: boolean } }> {
+  const res = await fetch(url, {
     method: 'POST',
     redirect: 'error',
     headers: { 'content-type': 'application/json' },
@@ -34,12 +37,17 @@ async function exchange(method: string, params: unknown[], timeoutMs: number): P
   }
 }
 
+const exchange = (method: string, params: unknown[], timeoutMs: number) => exchangeAt(RPC_URL, method, params, timeoutMs)
+
 /** JSON-RPC read with up to 4 attempts. Throws on transport errors and on JSON-RPC errors. */
-export async function rpcRead(method: string, params: unknown[]): Promise<any> {
+export const rpcRead = (method: string, params: unknown[]): Promise<any> => rpcReadAt(RPC_URL, method, params)
+
+/** `rpcRead` against `url`. */
+export async function rpcReadAt(url: string, method: string, params: unknown[]): Promise<any> {
   let last: unknown
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      const answer = await exchange(method, params, 15_000)
+      const answer = await exchangeAt(url, method, params, 15_000)
       if (!answer.error) return answer.result
       const err = new Error(`${method}: ${answer.error.message}`) as Error & { rpcError?: boolean }
       err.rpcError = true
@@ -71,6 +79,36 @@ export async function rpcChainProblem(): Promise<string> {
   const id = await rpcRead('eth_chainId', []).catch((err: Error) => err)
   if (id instanceof Error) return `could not read which chain the Tempo RPC ${RPC_HOST} is on (${oneLine(id.message, 160)})`
   return Number(id) === CHAIN_ID ? '' : `the Tempo RPC ${RPC_HOST} is not on Tempo Moderato (its chain id is ${oneLine(String(id), 40)}, expected ${CHAIN_ID})`
+}
+
+/** The endpoints that confirm a verdict that lets an agent pay again: the table's, or the owner's. RPC_URL joins only when it is one of them. */
+export function tempoVerdictSet() {
+  return endpointSet('tempo-moderato', 'verdict', { envUrl: RPC_URL, envName: 'SUPERSTABLES_TEMPO_RPC', testnet: TESTNET })
+}
+
+/** One attempt, with a timeout, for the agreement engine: plain data in and out. */
+const callAt = (url: string, method: string, params: unknown[]): Promise<unknown> => budgetCall(url, method, params, 10_000)
+
+/**
+ * `read(url, blockHex, blockHash)` on every confirming endpoint at one block both name (Tempo's finality is instant, so the
+ * latest block is final), agreed when they all return the same plain data. A verdict of ABSENCE must pass `atLeast`.
+ */
+export const agreedAtBlock = (read: (url: string, block: string, hash: string) => Promise<unknown>, atLeast?: bigint) =>
+  agreeAtFinalEvm({ set: tempoVerdictSet(), call: callAt, chainId: CHAIN_ID, finality: 'instant', read, atLeast })
+
+/** A client bound to one endpoint, for a simulation whose revert data is read. */
+const clientAt = (url: string) => createClient({ testnet: true, transport: http(url, { fetchFn: cappedRpcFetch(RPC_MAX_BYTES), maxResponseBodySize: RPC_MAX_BYTES, timeout: 10_000, retryCount: 0 }) })
+
+/** The keychain error a failed eth_call names: decoded from its revert data, else named in the RPC's words; null if neither. */
+export function keychainError(err: unknown): string | null {
+  let text = ''
+  for (let cur: any = err; cur; cur = cur.cause) {
+    if (typeof cur.data === 'string' && /^0x[0-9a-fA-F]{8}/.test(cur.data)) {
+      try { return decodeErrorResult({ abi: Abis.accountKeychain, data: cur.data as Hex }).errorName } catch { return cur.data.slice(0, 10) }
+    }
+    text += ` ${cur.details ?? ''} ${cur.shortMessage ?? ''}`
+  }
+  return /\bKeyAlreadyRevoked\b/.test(text) ? 'KeyAlreadyRevoked' : /\bKeyNotFound\b/.test(text) ? 'KeyNotFound' : null
 }
 
 export type ChainReceipt = {
@@ -175,6 +213,42 @@ export async function readKey(owner: Address, key: Address): Promise<KeyState> {
   throw last
 }
 
+/**
+ * An access key's facts read from `url` at the block named by `hash`: revoked, expiry and the remaining limit, as plain data
+ * (decimal strings). The three are read at the same block, so a verdict that a key ended can be agreed on whole.
+ */
+export async function readKeyAt(url: string, owner: Address, key: Address, hash: string): Promise<{ revoked: boolean; expiry: string; remaining: string }> {
+  const at = async (functionName: 'getKey' | 'getRemainingLimit', args: readonly Address[]) => {
+    const data = encodeFunctionData({ abi: Abis.accountKeychain, functionName, args } as any)
+    const out = await callAt(url, 'eth_call', [{ to: Addresses.accountKeychain, data }, { blockHash: hash }])
+    if (typeof out !== 'string' || !/^0x[0-9a-fA-F]+$/.test(out)) throw new Error('not a keychain answer')
+    return decodeFunctionResult({ abi: Abis.accountKeychain, functionName, data: out as Hex } as any) as any
+  }
+  const [meta, remaining] = await Promise.all([at('getKey', [owner, key]), at('getRemainingLimit', [owner, key, TOKEN_ADDRESS])])
+  return { revoked: Boolean(meta.isRevoked), expiry: String(meta.expiry), remaining: String(remaining) }
+}
+
+export type Simulated = { verdict: 'sends' | 'already_revoked' | 'not_found' | 'unknown'; words: string }
+
+/**
+ * What the keychain at `url` says to revokeKey(key) from the owner, simulated with eth_call at the block named by `hash`
+ * (nothing signed or sent): 'sends' when it would succeed; 'already_revoked' or 'not_found' when the keychain refuses it with
+ * KeyAlreadyRevoked or KeyNotFound (a revoked key can be stored with no expiry, so a second revoke may be refused either way);
+ * 'unknown' for any other answer, or none.
+ */
+export async function simulateRevokeAt(url: string, owner: Address, key: Address, hash: string): Promise<Simulated> {
+  const data = encodeFunctionData({ abi: Abis.accountKeychain, functionName: 'revokeKey', args: [key] })
+  try {
+    await clientAt(url).request({ method: 'eth_call', params: [{ from: owner, to: Addresses.accountKeychain, data }, { blockHash: hash }] } as any)
+    return { verdict: 'sends', words: 'it would succeed' }
+  } catch (err) {
+    const name = keychainError(err)
+    if (name === 'KeyAlreadyRevoked') return { verdict: 'already_revoked', words: 'the keychain refuses it with KeyAlreadyRevoked' }
+    if (name === 'KeyNotFound') return { verdict: 'not_found', words: 'the keychain refuses it with KeyNotFound' }
+    return { verdict: 'unknown', words: name ? `the keychain refuses it with ${oneLine(name, 60)}` : `it could not be simulated (${oneLine((err as any)?.shortMessage ?? 'no answer', 160)})` }
+  }
+}
+
 /** A key's call scope (the seller list): `scoped` false means any call is allowed. */
 export type KeyScope = { scoped: boolean; scopes: { target: string; selectorRules: { selector: string; recipients: string[] }[] }[] }
 
@@ -237,33 +311,37 @@ const hex = (n: bigint) => '0x' + n.toString(16)
  * `reachUntil`: the caller will conclude "nothing found" from an empty answer, so a search that ends at the head must end at
  * a head later than `until` too (a load-balanced RPC can answer from a node that is behind); otherwise it throws the same way.
  */
-async function searchLogs(topics: Hex[], fromBlock: bigint, until?: number, reachUntil = false): Promise<{ transactionHash: Hex }[]> {
-  const { number: head, timestamp } = await chainHead()
+async function searchLogs(topics: Hex[], fromBlock: bigint, until?: number, reachUntil = false, at?: Reading): Promise<{ transactionHash: Hex }[]> {
+  const read = (method: string, params: unknown[]) => (at ? rpcReadAt(at.url, method, params) : rpcRead(method, params))
+  const { number: head, timestamp } = at ? { number: at.toBlock, timestamp: at.timestamp } : await chainHead()
   let last = head
   if (head >= fromBlock + LOG_WINDOW * LOG_WINDOWS) {
     last = fromBlock + LOG_WINDOW * LOG_WINDOWS - 1n
-    const edge = await rpcRead('eth_getBlockByNumber', [hex(last), false])
-    const at = typeof edge?.timestamp === 'string' && /^0x[0-9a-fA-F]+$/.test(edge.timestamp) ? parseInt(edge.timestamp, 16) : NaN
-    if (until === undefined || !(at > until)) throw new Error(`not searched past block ${last}`)
+    const edge = await read('eth_getBlockByNumber', [hex(last), false])
+    const stamp = typeof edge?.timestamp === 'string' && /^0x[0-9a-fA-F]+$/.test(edge.timestamp) ? parseInt(edge.timestamp, 16) : NaN
+    if (until === undefined || !(stamp > until)) throw new Error(`not searched past block ${last}`)
   } else if (reachUntil && (until === undefined || !(timestamp > until))) throw new Error(`not searched past block ${head}`)
   const logs: { transactionHash: Hex }[] = []
   for (let from = fromBlock; from <= last; from += LOG_WINDOW) {
     const to = from + LOG_WINDOW - 1n > last ? last : from + LOG_WINDOW - 1n
-    const got = await rpcRead('eth_getLogs', [{ address: TOKEN_ADDRESS, fromBlock: hex(from), toBlock: hex(to), topics }])
+    const got = await read('eth_getLogs', [{ address: TOKEN_ADDRESS, fromBlock: hex(from), toBlock: hex(to), topics }])
     if (!Array.isArray(got)) throw new Error('eth_getLogs: the RPC answer is not a list of logs')
     logs.push(...got)
   }
   return logs
 }
 
+/** A search pinned to one endpoint and one upper block (whose time is `timestamp`), for a verdict every confirming endpoint must reach alike. */
+type Reading = { url: string; toBlock: bigint; timestamp: number }
+
 /**
  * Transactions with a pathUSD TransferWithMemo owner -> recipient carrying `memo`, from `fromBlock` on (indexed, cheap).
  * `until`: the payment's validBefore plus slack, when it has one. `reachUntil`: true when the caller will treat an empty answer as
  * "not found" (searchLogs).
  */
-export async function findByMemo(owner: Address, recipient: Address, memo: Hex, fromBlock: bigint, until?: number, reachUntil = false): Promise<Hex[]> {
+export async function findByMemo(owner: Address, recipient: Address, memo: Hex, fromBlock: bigint, until?: number, reachUntil = false, at?: Reading): Promise<Hex[]> {
   const hashes: Hex[] = []
-  for (const l of await searchLogs([TRANSFER_WITH_MEMO_TOPIC, topicOf(owner), topicOf(recipient), memo], fromBlock, until, reachUntil))
+  for (const l of await searchLogs([TRANSFER_WITH_MEMO_TOPIC, topicOf(owner), topicOf(recipient), memo], fromBlock, until, reachUntil, at))
     if (!hashes.includes(l.transactionHash)) hashes.push(l.transactionHash)
   return hashes
 }
