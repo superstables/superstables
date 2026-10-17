@@ -290,7 +290,7 @@ describe("a payment is called never made only when the endpoints agree", () => {
 
   it("a testnet with one public RPC is decided by it, labelled single", async () => {
     const a = await chainOf(ARC_TESTNET.chainId);
-    const net = route({ "https://rpc.testnet.arc.network": a.url });
+    const net = route({ "https://rpc.testnet.arc.io": a.url });
     const r = ledger();
     evmAttempt(r, pastValidBefore(a), { network: ARC_TESTNET });
     expect(await recheckChain(r, "a", { fetchImpl: net.fetchImpl })).toMatchObject({ state: "failed", chain: "unpaid", chainAgreement: "single" });

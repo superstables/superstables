@@ -448,7 +448,7 @@ describe("the EVM wallet step on the approval page", () => {
   it("offers the wallet the chain with its own currency when the wallet does not know it", async () => {
     const added: unknown[] = [];
     const page = pageInBrowser({
-      facts: { ...tempoFacts, step: "eip3009", chainIdHex: "0x4cef52", chainName: "Arc Testnet", rpcUrl: "https://rpc.testnet.arc.network", explorer: "https://explorer.testnet.arc.io", nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 } },
+      facts: { ...tempoFacts, step: "eip3009", chainIdHex: "0x4cef52", chainName: "Arc Testnet", rpcUrl: "https://rpc.testnet.arc.io", explorer: "https://explorer.testnet.arc.io", nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 } },
       wallet: async (method, params) => {
         if (method === "eth_requestAccounts") return [OWNER];
         if (method === "wallet_switchEthereumChain") throw Object.assign(new Error("unknown chain"), { code: 4902 });
@@ -459,7 +459,7 @@ describe("the EVM wallet step on the approval page", () => {
     });
     await page.click("connect");
     expect(added).toEqual([
-      { chainId: "0x4cef52", chainName: "Arc Testnet", rpcUrls: ["https://rpc.testnet.arc.network"], nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 }, blockExplorerUrls: ["https://explorer.testnet.arc.io"] },
+      { chainId: "0x4cef52", chainName: "Arc Testnet", rpcUrls: ["https://rpc.testnet.arc.io"], nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 }, blockExplorerUrls: ["https://explorer.testnet.arc.io"] },
     ]);
   });
 });

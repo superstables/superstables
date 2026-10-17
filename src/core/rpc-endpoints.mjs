@@ -20,21 +20,21 @@ export const RPC_ENDPOINTS = /** @type {Record<string, TableEndpoint[]>} */ ({
     { url: "https://sepolia.base.org", operator: "base" },
     { url: "https://base-sepolia-rpc.publicnode.com", operator: "publicnode" },
   ],
-  "arc-testnet": [{ url: "https://rpc.testnet.arc.network", operator: "circle", domains: ["arc.io"] }],
+  "arc-testnet": [{ url: "https://rpc.testnet.arc.io", operator: "circle", domains: ["arc.network"] }],
   "arbitrum-sepolia": [
     { url: "https://sepolia-rollup.arbitrum.io/rpc", operator: "offchain-labs" },
     { url: "https://arbitrum-sepolia-rpc.publicnode.com", operator: "publicnode" },
   ],
   "polygon-amoy": [
     { url: "https://polygon-amoy-bor-rpc.publicnode.com", operator: "publicnode" },
-    { url: "https://rpc-amoy.polygon.technology", operator: "polygon-labs" },
+    { url: "https://polygon-amoy.gateway.tenderly.co", operator: "tenderly" },
   ],
   "skale-base-sepolia": [
     { url: "https://base-sepolia-testnet.skalenodes.com/v1/jubilant-horrible-ancha", operator: "skale" },
   ],
   "ethereum-sepolia": [
     { url: "https://ethereum-sepolia-rpc.publicnode.com", operator: "publicnode" },
-    { url: "https://sepolia.drpc.org", operator: "drpc" },
+    { url: "https://sepolia.gateway.tenderly.co", operator: "tenderly" },
   ],
   "robinhood-testnet": [{ url: "https://rpc.testnet.chain.robinhood.com", operator: "robinhood" }],
   "tempo-moderato": [{ url: "https://rpc.moderato.tempo.xyz", operator: "tempo" }],

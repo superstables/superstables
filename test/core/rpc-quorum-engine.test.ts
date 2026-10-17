@@ -560,7 +560,7 @@ describe("providers", () => {
   it("resolves by exact URL, then the entry's domains, then the URL's own registrable domain", () => {
     expect(providerOf("arc-testnet", RPC_ENDPOINTS["arc-testnet"][0].url)).toBe("circle");
     expect(providerOf("base-sepolia", "https://other.publicnode.com/x")).toBe("publicnode");
-    expect(providerOf("polygon-amoy", "https://x.polygon.technology")).toBe("polygon-labs");
+    expect(providerOf("polygon-amoy", "https://x.tenderly.co")).toBe("tenderly");
     expect(providerOf("nowhere", "https://a.b.example.co.uk")).toBe("example.co.uk");
     expect(providerOf("arc-testnet", "not a url ?key=SECRET")).toMatch(/^[0-9a-f]{12}$/);
   });
