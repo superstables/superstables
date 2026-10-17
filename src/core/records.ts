@@ -181,6 +181,15 @@ export class Records {
     }
   }
 
+  /** The attempt id a quote's claim names, without claiming: undefined with no claim, empty if it is unreadable. */
+  claimHolder(quoteId: string): string | undefined {
+    try {
+      return readFileSync(join(this.dir, "claims", claimName(quoteId)), "utf8").trim();
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === "ENOENT" ? undefined : "";
+    }
+  }
+
   /** Give a claimed quote back, only if `attemptId` holds the claim. */
   releaseQuote(quoteId: string, attemptId: string): boolean {
     const path = join(this.dir, "claims", claimName(quoteId));

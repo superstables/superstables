@@ -579,9 +579,9 @@ explain(
       } catch (err) {
         await closeSigner(signer);
         const quote = records.getQuote(quoteId);
-        if (err instanceof QuoteUsedError && err.attempt) {
+        if (err instanceof QuoteUsedError && (err.attempt || err.attemptId)) {
           // The payment exists already: point at it, so nobody starts a second one to get a link.
-          throw badInput(usedQuoteMessage(err.message, err.attempt, quote));
+          throw badInput(err.attempt ? usedQuoteMessage(err.message, err.attempt, quote) : `${err.message}.`);
         }
         throw badInput(
           quote
