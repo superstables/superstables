@@ -249,18 +249,20 @@ export async function readKey(owner: Address, key: Address): Promise<KeyState> {
  * (decimal strings). The three are read at the same block, so a verdict that a key ended can be agreed on whole.
  */
 export async function readKeyAt(url: string, owner: Address, key: Address, hash: string): Promise<{ revoked: boolean; expiry: string; remaining: string }> {
-  const at = async (functionName: 'getKey' | 'getRemainingLimit', args: readonly Address[]) => {
+  const at = async (functionName: 'getKey' | 'getRemainingLimitWithPeriod', args: readonly Address[]) => {
     const data = encodeFunctionData({ abi: Abis.accountKeychain, functionName, args } as any)
     const out = await callAt(url, 'eth_call', [{ to: Addresses.accountKeychain, data }, { blockHash: hash }])
     if (typeof out !== 'string' || !/^0x[0-9a-fA-F]+$/.test(out)) throw new Error('not a keychain answer')
     return decodeFunctionResult({ abi: Abis.accountKeychain, functionName, data: out as Hex } as any) as any
   }
   const meta = await at('getKey', [owner, key])
-  // getRemainingLimit reverts for a key the keychain reads as revoked (and has nothing to read for one it has no entry for): a revert
-  // there, on such a key, is the chain's definite answer "no authority left", read as 0. A revert for a live key, or any other failure
-  // (an unreachable endpoint, an unreadable answer), is still an unreadable endpoint.
+  // getRemainingLimitWithPeriod (the view this chain's own client reads from T3 on) answers 0 for a revoked key. Should an endpoint still
+  // revert for a key the keychain reads as revoked (or has no entry for), that revert is the chain's definite answer "no authority
+  // left", read as 0. A revert for a live key, or any other failure (an unreachable endpoint, an unreadable answer), is still an
+  // unreadable endpoint.
   const ended = Boolean(meta.isRevoked) || BigInt(meta.expiry) === 0n
-  const remaining = ended ? await at('getRemainingLimit', [owner, key, TOKEN_ADDRESS]).catch((err: Error) => { if (/revert/i.test(String(err?.message))) return 0n; throw err }) : await at('getRemainingLimit', [owner, key, TOKEN_ADDRESS])
+  const readRemaining = async () => BigInt((await at('getRemainingLimitWithPeriod', [owner, key, TOKEN_ADDRESS]))[0])
+  const remaining = ended ? await readRemaining().catch((err: Error) => { if (/revert/i.test(String(err?.message))) return 0n; throw err }) : await readRemaining()
   return { revoked: Boolean(meta.isRevoked), expiry: String(meta.expiry), remaining: String(remaining) }
 }
 

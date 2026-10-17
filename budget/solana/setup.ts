@@ -302,6 +302,11 @@ if (CAP !== undefined || LAMPORTS !== undefined) {
           quiet ? "superstables budget status --rail solana, then grant again once the revoke is finalized" : "revoke first (superstables budget revoke --rail solana), then superstables budget grant --rail solana --amount A",
         );
       }
+      const rec = parseEnvFile(PUBLIC_PATH);
+      if (rec.REVOKED_AT !== undefined && /^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(rec.REVOKED_TX ?? "") && !(await finalizedOf(connection("owner"), rec.REVOKED_TX!, 0)).final) refuseGrant(
+        `the previous revoke is not finalized yet: ${rec.REVOKED_TX} has not reached finalized. Grant again once it is finalized, or run revoke again if that signature can never be found`,
+        "superstables budget status --rail solana, then grant again once the revoke is finalized (or superstables budget revoke --rail solana again)",
+      );
     }
     then.push({ kind: "grant", solana: { amount_atomic: String(CAP) } });
   }

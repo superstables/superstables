@@ -264,6 +264,10 @@ if (BUNDLE) {
           latest === 0n ? `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final` : `revoke first (superstables budget revoke --rail evm${chainFlag}), then superstables budget grant --rail evm${chainFlag} --amount A`,
         );
       }
+      if (/^\d+$/.test(p.B4_REVOKED_BLOCK ?? "") && at.block.number < BigInt(p.B4_REVOKED_BLOCK!)) refuse(
+        `the previous revoke is not final yet: it landed in block ${p.B4_REVOKED_BLOCK} and the final block is ${at.block.number}. Grant again once it is final${usuallyWords()}`,
+        `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final`,
+      );
     }
     const g = grantTx(agentAddr, CAP);
     then.push({ kind: "grant", transaction: { to: g.to, data: g.data, value: "0x0" } });
