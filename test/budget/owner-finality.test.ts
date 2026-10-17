@@ -141,6 +141,26 @@ describe("evm: a revoke is landed until the chain makes it final", () => {
     expect(approvals(c.chain)).toBe(1); // nothing more was sent
   }, 150_000);
 
+  it("a grant then a revoke that landed but is not final, then a regrant: refused, nothing sent; once the revoke is final it is allowed", async () => {
+    // the first grant is itself not final, so the final block reads 0 throughout: only the recorded revoke can tell
+    const c = await evmCase({ lag: 5, allow: "0" });
+    const g1 = await c.run(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
+    expect(g1.result, g1.stdout + g1.stderr).toMatchObject({ state: "landed" });
+    const rv = await c.run(["revoke", "--rail", "evm", ...c.keyArgs]);
+    expect(rv.result, rv.stdout + rv.stderr).toMatchObject({ state: "landed", final: false });
+    expect(approvals(c.chain)).toBe(2);
+    const g2 = await c.run(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
+    expect(g2.code, g2.stdout + g2.stderr).toBe(3);
+    expect(g2.result).toMatchObject({ state: "refused_precheck" });
+    expect(g2.result.reason).toMatch(/the previous revoke is not final yet/);
+    expect(approvals(c.chain)).toBe(2); // nothing more was sent
+    c.chain.finalizedLag = 0;
+    const g3 = await c.run(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
+    expect(g3.code, g3.stdout + g3.stderr).toBe(0);
+    expect(g3.result).toMatchObject({ state: "settled", final: true });
+    expect(approvals(c.chain)).toBe(3);
+  }, 250_000);
+
   it("a grant when the allowance is 0 at the final block: set, final true once the lag clears; landed while it does not", async () => {
     const c = await evmCase({ lag: 5, allow: "0" });
     const landed = await c.run(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
@@ -385,7 +405,11 @@ describe("solana: confirmed is not finalized", () => {
     expect(c.pub()).toMatch(/^REVOKED_SLOT=\d+$/m);
     expect(c.pub()).toMatch(/^REVOKED_AT=\d+$/m);
     statusIs(c.solana, "confirmed");
+    // the revoke is finalized (a grant waits for that); the grant that follows is only confirmed
+    const revokeSig = rv.result.tx.revoke;
+    c.solana.overrides = { getSignatureStatuses: (p) => (p[0][0] === revokeSig ? { context: { slot: c.solana.slot }, value: [{ slot: c.solana.slot, confirmations: null, err: null, confirmationStatus: "finalized" }] } : undefined) };
     const g = await c.run(["grant", "--rail", "solana", "--amount", "0.05", ...c.keyArgs]);
+    c.solana.overrides = undefined;
     expect(g.result, g.stdout + g.stderr).toMatchObject({ state: "landed" });
     expect(c.pub()).not.toMatch(/^REVOKED_(AT|TX|SLOT)=/m);
     expect(c.pub()).toMatch(/^GRANT_TX=\S+$/m);
@@ -397,6 +421,27 @@ describe("solana: confirmed is not finalized", () => {
     expect(c.pub()).not.toMatch(/^GRANT_(TX|SLOT)=/m);
     expect(c.pub()).toMatch(new RegExp(`^REVOKED_TX=${rv2.result.tx.revoke}$`, "m"));
   }, 200_000);
+
+  it("a grant then a revoke that is not finalized, then a regrant: refused, nothing sent; once the revoke is finalized it is allowed", async () => {
+    const c = await solanaCase({ delegate: false });
+    statusIs(c.solana, "confirmed");
+    const g1 = await c.run(["grant", "--rail", "solana", "--amount", "0.05", ...c.keyArgs]);
+    expect(g1.result, g1.stdout + g1.stderr).toMatchObject({ state: "landed" });
+    const rv = await c.run(["revoke", "--rail", "solana", ...c.keyArgs]);
+    expect(rv.result, rv.stdout + rv.stderr).toMatchObject({ state: "landed", final: false });
+    const sends = () => c.solana.calls.filter((m) => m === "sendTransaction").length;
+    const before = sends();
+    const g2 = await c.run(["grant", "--rail", "solana", "--amount", "0.05", ...c.keyArgs]);
+    expect(g2.code, g2.stdout + g2.stderr).toBe(3);
+    expect(g2.result).toMatchObject({ state: "refused_precheck" });
+    expect(g2.result.reason).toMatch(/the previous revoke is not finalized yet/);
+    expect(sends()).toBe(before);
+    expect(c.pub()).toMatch(/^REVOKED_TX=\S+$/m); // the record is kept
+    statusIs(c.solana, "finalized");
+    const g3 = await c.run(["grant", "--rail", "solana", "--amount", "0.05", ...c.keyArgs]);
+    expect(g3.code, g3.stdout + g3.stderr).toBe(0);
+    expect(sends()).toBe(before + 1);
+  }, 250_000);
 
   it("rotate --clear-agent drops the agent's grant and revoke records (solana)", async () => {
     const c = await solanaCase();
@@ -448,6 +493,58 @@ describe("tempo: a receipt whose block is not the chain's is not accepted", () =
     expect(r.result?.state, r.stdout + r.stderr).not.toBe("settled");
     expect(r.result.revoked).not.toBe(true);
     expect(r.result.reason).toMatch(/it is not in a committed block on chain/);
+  }, 150_000);
+});
+
+describe("tempo: a revoked key reads as revoked even though getRemainingLimit reverts for it", () => {
+  async function tempoCase(opts: { mirror?: boolean } = {}) {
+    const OWNER = evmOwner("22");
+    const TEMPO_KEY = `0x${"44".repeat(32)}` as const;
+    const TEMPO_AGENT = privateKeyToAddress(TEMPO_KEY);
+    const tempo: FakeTempo = await startFakeTempo();
+    const site: FakeSite = await startFakeSite();
+    cleanups.push(() => tempo.close(), () => site.close());
+    const urls = [tempo.url];
+    let mirror: FakeTempo | null = null;
+    if (opts.mirror) { mirror = await tempo.mirror(); cleanups.push(() => mirror!.close()); urls.push(mirror.url); }
+    tree.set({ "tempo-moderato": urls });
+    const home = homeDir("owner-finality-tempo-");
+    mkdirSync(join(home, "keys", "budget"), { recursive: true, mode: 0o700 });
+    mkdirSync(join(home, "budget", "public"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, "keys", "budget", "tempo-agent.env"), `AGENT_PRIVATE_KEY=${TEMPO_KEY}\nAGENT_ADDRESS=${TEMPO_AGENT}\nOWNER_ADDRESS=${OWNER}\n`, { mode: 0o600 });
+    writeFileSync(join(home, "budget", "public", "tempo-moderato.env"), `OWNER_ADDRESS=${OWNER}\nAGENT_ADDRESS=${TEMPO_AGENT}\nAPPROVALS=hosted\nSITE=${site.url}\n`);
+    site.owner = OWNER;
+    tempo.keys.set(`${OWNER.toLowerCase()}:${TEMPO_AGENT.toLowerCase()}`, { expiry: BigInt(Math.floor(Date.now() / 1000) + 86400), limit: 1000000n, period: 0n, periodEnd: 0n, revoked: false, scoped: false });
+    site.onPoll = (r: FakeRequest) => {
+      if (r.polls !== 2 || r.kind === "link") return;
+      Object.assign(r, { state: "confirmed", tx_hash: tempo.mine(r.owner!, r.body.transaction.data), wallet_asked: true });
+    };
+    const run = (args: string[]) => cli(args, { SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url });
+    return { tempo, mirror, run };
+  }
+
+  it("revoke: settled, revoked true, and status then says revoked", async () => {
+    const c = await tempoCase({ mirror: true });
+    const r = await c.run(["revoke", "--rail", "tempo", "--wait", "--no-open"]);
+    expect(r.result, r.stdout + r.stderr).toMatchObject({ state: "settled", revoked: true });
+    expect(r.code).toBe(0);
+    const s = await c.run(["status", "--rail", "tempo"]);
+    expect(s.result, s.stdout + s.stderr).toMatchObject({ state: "ok", revoked: true });
+    expect(s.result.next).not.toMatch(/count it as live/);
+  }, 150_000);
+
+  it("a revoked key whose confirming endpoints cannot be read stays unknown, never revoked", async () => {
+    const c = await tempoCase({ mirror: true });
+    const r = await c.run(["revoke", "--rail", "tempo", "--wait", "--no-open"]);
+    expect(r.result, r.stdout + r.stderr).toMatchObject({ state: "settled", revoked: true });
+    const down = () => { throw new Error("fake tempo: endpoint down"); };
+    // every confirming endpoint is unreachable at the agreed block: the key reads revoked on the primary alone
+    const reads = { eth_call: (p: any[]) => (p[1] && typeof p[1] === "object" ? down() : undefined) };
+    c.mirror!.overrides = reads;
+    c.tempo.overrides = reads;
+    const s = await c.run(["status", "--rail", "tempo"]);
+    expect(s.result.revoked).not.toBe(true);
+    expect(s.result.next).toMatch(/count it as live/);
   }, 150_000);
 });
 

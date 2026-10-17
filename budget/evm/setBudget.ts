@@ -23,7 +23,7 @@ import "./cli-guard.mjs";
 // Exit codes: 0 set, 3 refused (live allowance, the owner rejected or the link expired, or the allowance on chain is not
 // exactly the cap), 5 the wallet may have sent it but no hash came back, 1 anything else that failed.
 import { type Hex } from "viem";
-import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, USDC, publicClient, assertRpcChain, tx, allowanceAgreed, agreementWords, finalityOf, usuallyWords, sleep } from "./lib.ts";
+import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, USDC, publicClient, assertRpcChain, tx, allowanceAgreed, agreementWords, finalityOf, usuallyWords, sleep, publicEnv } from "./lib.ts";
 import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, grantMismatchSteps, tokenRow, approveRow, approveShows, capWords, REVOKE_HINT, grantTx, grantSteps, approveResetHostedProblem, grantEnforced, GRANT_NOT_ENFORCED, landedGrant, chainFlag } from "./owner.ts";
 import { differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
@@ -60,6 +60,14 @@ if (!verifyOnly && !(replace && OWNER_KEY_FILE && beforeAllow > 0n) && !(!OWNER_
   }
   if (atFinal.value !== 0n && beforeAllow === 0n) {
     const reason = `the previous revoke is not final yet: the allowance reads 0 at the latest block but ${usdc(atFinal.value as bigint)} ${SYM} at the final block. Grant again once it is final${usuallyWords()}`;
+    console.log(`REFUSED: ${reason}. Nothing was sent.`);
+    process.exit(result(3, { state: "refused_precheck", reason, allowance: usdc(beforeAllow), next: `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final` }));
+  }
+  // A new grant waits until the previous revoke is final, whatever the final block's allowance reads: an earlier grant that is itself
+  // not final yet leaves the final block at 0, so only the recorded revoke (B4_REVOKED_BLOCK) can tell.
+  const recordedRevoke = publicEnv();
+  if (/^\d+$/.test(recordedRevoke.B4_REVOKED_BLOCK ?? "") && atFinal.block.number < BigInt(recordedRevoke.B4_REVOKED_BLOCK!)) {
+    const reason = `the previous revoke is not final yet: it landed in block ${recordedRevoke.B4_REVOKED_BLOCK} and the final block is ${atFinal.block.number}. Grant again once it is final${usuallyWords()}`;
     console.log(`REFUSED: ${reason}. Nothing was sent.`);
     process.exit(result(3, { state: "refused_precheck", reason, allowance: usdc(beforeAllow), next: `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final` }));
   }

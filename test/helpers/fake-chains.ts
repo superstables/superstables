@@ -85,7 +85,10 @@ export async function startFakeTempo(): Promise<FakeTempo> {
     const out = (result: unknown) => encodeFunctionResult({ abi: Abis.accountKeychain, functionName: call.functionName as any, result: result as any });
     switch (call.functionName) {
       case "getKey": return out({ signatureType: 0, keyId: a[1], expiry: k?.expiry ?? 0n, enforceLimits: !!k, isRevoked: k?.revoked ?? false });
-      case "getRemainingLimit": return out(k && !k.revoked ? k.limit : 0n);
+      // the real keychain reverts getRemainingLimit for a revoked key (getRemainingLimitWithPeriod answers 0)
+      case "getRemainingLimit":
+        if (k?.revoked) throw Object.assign(new Error("execution reverted"), { rpc: { code: 3, message: "execution reverted", data: "0x" } });
+        return out(k ? k.limit : 0n);
       case "getRemainingLimitWithPeriod": return out([k && !k.revoked ? k.limit : 0n, k?.periodEnd ?? 0n]);
       case "getAllowedCalls": return out([k?.scoped ?? false, []]);
       case "isAdminKey": return out(false);
