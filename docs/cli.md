@@ -8,6 +8,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | --- | --- |
 | [`superstables setup`](#superstables-setup) | for pay: create the home directory and the policy file, then say what to do next |
 | [`superstables wallet init`](#superstables-wallet-init) | create this machine's wallet key, or import one |
+| [`superstables wallet encrypt`](#superstables-wallet-encrypt) | encrypt this machine's wallet key with a passphrase |
 | [`superstables wallet serve`](#superstables-wallet-serve) | run the wallet: it asks the owner to approve every payment, in a browser page |
 | [`superstables wallet status`](#superstables-wallet-status) | ask the running local wallet what it is doing |
 | [`superstables wallet address`](#superstables-wallet-address) | the address that pays, from this machine's wallet key |
@@ -200,6 +201,7 @@ Options:
 
 Commands:
   init [options]    create this machine's wallet key, or import one
+  encrypt           encrypt this machine's wallet key with a passphrase
   serve [options]   run the wallet: it asks the owner to approve every payment,
                     in a browser page
   status [options]  ask the running local wallet what it is doing
@@ -228,16 +230,45 @@ Options:
   --import-key-file <path>  import a private key from a file (mode 600)
   --force                   replace an existing key (the old key cannot be
                             recovered)
+  --no-passphrase           store the key unencrypted (testnet only; anyone who
+                            can read the file can sign)
   -h, --help                display help for command
+
+It asks for a passphrase twice, and stores the key encrypted with it; `wallet serve` asks for it
+again. With --force, the old key file's bytes are overwritten in place before it is replaced.
 
 Moves money: no. The key file it writes can sign payments, so it is created readable by this user
   only.
 Run by: the owner.
 Example:
   $ superstables wallet init
-Prints: the address and the key file's path.
+  $ superstables wallet init --no-passphrase
+Prints: the address, the key file's path and whether the key is encrypted.
 Exit codes: 0 written, 1 a key exists already (pass --force to replace it) or the key could not be
-  read, 2 bad input (the full table: superstables --help)
+  read, 2 bad input, or no terminal to ask for a passphrase and no --no-passphrase (the full table:
+  superstables --help)
+```
+
+## superstables wallet encrypt
+
+```text
+Usage: superstables wallet encrypt [options]
+
+encrypt this machine's wallet key with a passphrase
+
+Options:
+  -h, --help  display help for command
+
+A running wallet keeps the key it loaded; restart it. The old file's bytes are overwritten in place,
+but copies a backup, a copy-on-write file system or a flash disk keeps elsewhere are not erased.
+
+Moves money: no.
+Run by: the owner, once.
+Example:
+  $ superstables wallet encrypt
+Prints: the address and the key file's path.
+Exit codes: 0 encrypted, 1 already encrypted or no key, 2 no terminal (the full table: superstables
+  --help)
 ```
 
 ## superstables wallet serve
@@ -260,8 +291,9 @@ Example:
   $ superstables --wallet local wallet serve
 Prints: where it listens, the page's address, its launcher file and where the owner secret is (never
   the secret itself), then runs until Ctrl-C.
-Exit codes: 0 stopped, 1 could not start (a port in use, no key: run `superstables wallet init`)
-  (the full table: superstables --help)
+Exit codes: 0 stopped, 1 could not start (a port in use, no key: run `superstables wallet init`),
+  the passphrase is not right, or no terminal for an encrypted key (the full table: superstables
+  --help)
 ```
 
 ## superstables wallet status
