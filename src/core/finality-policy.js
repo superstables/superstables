@@ -5,7 +5,8 @@ export function finalityFor(rail, chain) {
 }
 
 /**
- * Seconds a chain usually takes to make a block final: for wording only ("final in about N minutes"). Never decides.
+ * Seconds a chain usually takes to make a block final: for wording only ("final in about N minutes"). Never decides a
+ * verdict or a wait. The mainnet gate (chain-gate.js) asks that a chain have one before it can be signed on.
  * Filled from measured runs in the same sitting as the website's table; a chain left out has no number. The two
  * instant-finality chains are final the moment a block is canonical.
  */

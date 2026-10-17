@@ -86,7 +86,7 @@ if (argv.includes("--mainnet") || (chainValue && !String(chainValue).startsWith(
 // before a key file, an RPC or a seller is touched.
 const gateKey = chainValue && !String(chainValue).startsWith("--") ? String(chainValue) : EVM_DEFAULT_CHAIN;
 const gateEntry = Object.hasOwn(EVM_CHAINS, gateKey) ? EVM_CHAINS[gateKey] : undefined;
-const gate = gateEntry ? chainGate({ rail: "evm", key: gateKey, testnet: gateEntry.testnet }, chainGateSettings()) : "";
+const gate = gateEntry ? chainGate({ rail: "evm", key: gateKey, testnet: gateEntry.testnet, token: gateEntry.token }, chainGateSettings()) : "";
 if (gate) {
   process.stderr.write(`REFUSED: ${gate}. Nothing was signed or sent.\n`);
   process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: gateKey, state: "refused_precheck", reason: gate, next: "nothing was signed or sent; use a testnet chain" })}\n`);

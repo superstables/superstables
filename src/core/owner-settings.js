@@ -24,7 +24,7 @@ import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { ensurePrivateDir, privateDirProblem, syncDirectory } from "./private-dir.mjs";
 import { isSolanaAddress, verifyEd25519 } from "./ed25519-verify.mjs";
-import { chainPrerequisitesMissing, setChainGateSource } from "./chain-gate.js";
+import { setChainGateSource } from "./chain-gate.js";
 
 export const OWNER_SETTINGS_VERSION = 1;
 /** Production: the only approval site with no setting. superstables.com (the apex) is the same site. */
@@ -715,5 +715,5 @@ export async function signedPolicyCheck(wallet, options = {}) {
 setChainGateSource(() => {
   const s = signedSettingsChecked();
   if (!s?.valid) return undefined;
-  return { enabledChains: [...s.payload.enabledChains], missing: Object.fromEntries(s.payload.enabledChains.map((k) => [k, chainPrerequisitesMissing(k)])) };
+  return { enabledChains: [...s.payload.enabledChains] };
 });
