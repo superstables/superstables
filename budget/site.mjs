@@ -110,7 +110,7 @@ export const SITE_WORDS = {
     "owner_wallet_required", "proof_reused", "rate_limited", "request_open", "sign_in_required", "solana_owner_unproven", "tx_hash_used",
     "unknown_chain", "unknown_parameter", "unlimited_refused", "unsupported_chain", "unsupported_media_type", "unsupported_rail",
     "value_not_zero", "wallet_asked", "wrong_account", "wrong_amount", "wrong_call", "wrong_recipient", "wrong_signer", "wrong_spender", "wrong_target",
-    "wallet_changed_transaction",
+    "wallet_changed_transaction", "invalid_owner_proof_version", "token_expired",
     // reasons a request or step ended (flow.ts REASONS)
     "agent_cancelled", "agent_removed", "another_open", "approval_expired", "earlier_step", "link_not_done", "mismatch", "no_start_block",
     "not_landed", "not_requested", "not_signed", "owner_rejected", "owner_stopped", "page_stopped_before_send", "reverted", "stale_tx", "wallet_timeout",
