@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWalletClient, decodeFunctionData, encodeEventTopics, http, parseAbi, erc20Abi, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { guardedNode } from "../helpers/guarded-process.js";
+import { agreedFromClient } from "../helpers/agree-from-client.js";
 
 const OWNER = "0x1111111111111111111111111111111111111111";
 const AGENT = "0x2222222222222222222222222222222222222222";
@@ -85,7 +86,7 @@ const harnessA = () => {
     rpc.getTransactionCount.mockResolvedValue(8);
     rpc.getTransaction.mockRejectedValue(new Error("not found"));
     chain({ finalized: 90n });
-    vi.doMock("../../budget/evm/lib.js", async (original) => ({ ...await original<object>(), OPS_DIR: dir, publicClient: rpc, sendJournaled, usdcBalance, allowanceOf: async () => 10000n, USDC: TOKEN, sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), readUntil: async <T,>(read: () => Promise<T>) => read() }));
+    vi.doMock("../../budget/evm/lib.js", async (original) => ({ ...await original<object>(), OPS_DIR: dir, publicClient: rpc, ...agreedFromClient(rpc, TOKEN), sendJournaled, usdcBalance, allowanceOf: async () => 10000n, USDC: TOKEN, sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), readUntil: async <T,>(read: () => Promise<T>) => read() }));
   });
   afterEach(() => { vi.doUnmock("../../budget/evm/lib.js"); });
 };
@@ -172,9 +173,9 @@ describe("scanJournals", () => {
     const why = Object.fromEntries(own.unreadable.map((u: { file: string; why: string }) => [u.file, u.why]));
     expect(why["broken.json"]).toMatch(/not valid JSON/);
     expect(why["arr.json"]).toMatch(/does not hold a journal/);
-    expect(why["other.json"]).toMatch(/not an evm budget/);
+    expect(why["other.json"]).toMatch(/not an evm purchase journal/);
     expect(why["named.json"]).toMatch(/another operation/);
-    expect(why["noagent.json"]).toMatch(/no agent/);
+    expect(why["noagent.json"]).toMatch(/owner or agent is not an address/);
     expect(why["exp.json"]).toMatch(/pulled amount/);
     expect(why["dir.json"]).toMatch(/not a regular file/);
     expect(why["big.json"]).toMatch(/larger than a journal/);
@@ -285,8 +286,10 @@ describe("sweepBlockers", () => {
     expect(r.undecided).toEqual([]);
     expect(r.unreadable).toEqual([{ file: "broken.json", why: expect.stringMatching(/not valid JSON/) }]);
   });
-  it("blocks on a state recover does not know", async () => {
-    expect((await run(journal({ op: "w1", state: "weird" }))).undecided).toEqual([{ op: "w1", why: expect.stringMatching(/not one recover knows/) }]);
+  it("blocks on a state recover does not know: the scan lists the file as unreadable", async () => {
+    const r = await run(journal({ op: "w1", state: "weird" }));
+    expect(r.undecided).toEqual([]);
+    expect(r.unreadable).toEqual([{ file: "w1.json", why: expect.stringMatching(/state is missing or is not one this rail records/) }]);
   });
 });
 

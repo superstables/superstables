@@ -1,7 +1,8 @@
 // The RPC each rail reads, and the environment variables that replace it. Plain JavaScript with Node built-ins only (and
 // response.mjs, site.mjs and ../src/core/owner-settings.js, which have the same), so the dispatcher (cli.mjs), doctor, buy-once and the rail scripts share it.
 //
-//   B4_RPC                    evm: the selected chain's RPC (buy-once: Base Sepolia's)
+//   B4_RPC_<CHAIN>            evm: that chain's RPC (B4_RPC_BASE_SEPOLIA, B4_RPC_ARC_TESTNET, ...); wins over B4_RPC
+//   B4_RPC                    evm: the selected chain's RPC, whichever it is (buy-once: Base Sepolia's); older, prefer the above
 //   SUPERSTABLES_TEMPO_RPC    tempo: Moderato's
 //   SUPERSTABLES_SOLANA_RPC   solana: devnet's
 //
@@ -9,9 +10,10 @@
 // be read or answered by anyone on the way, and every check the commands make reads the chain through it. The dispatcher
 // refuses a command when one of them is set to anything else (exit 2), and every RESULT names a replacement in use (`rpc`).
 
-import { SETTINGS_COMMAND, budgetChainKey, rpcFor } from "../src/core/owner-settings.js";
+import { SETTINGS_COMMAND, budgetChainKey, rpcFor, shownUrl } from "../src/core/owner-settings.js";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { readCapped } from "./response.mjs";
+import { endpointSet } from "../src/core/rpc-endpoints.mjs";
 import { siteText } from "./site.mjs";
 
 /** The most read of one answer by jsonRpc and the Tempo rail: far more than a receipt, a block without its transactions or a filtered log search returns. */
@@ -53,7 +55,7 @@ export function rpcFromEnv(name, fallback, purpose = "read", chainKey) {
   const v = process.env[name]?.trim();
   if (v) {
     const problem = rpcUrlProblem(v);
-    if (problem) return { url: fallback, custom: false, error: `${name} is refused: ${problem} (got "${v.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").slice(0, 120)}")` };
+    if (problem) return { url: fallback, custom: false, error: `${name} is refused: ${problem} (got ${shownUrl(v)})` };
   }
   if (chainKey === undefined) {
     if (purpose !== "read") throw new TypeError(`rpcFromEnv: purpose "${purpose}" needs the chain key`);
@@ -64,38 +66,94 @@ export function rpcFromEnv(name, fallback, purpose = "read", chainKey) {
   return { url: r.url, custom: r.source !== "default", source: r.source };
 }
 
+/** The environment variable that replaces one EVM chain's RPC: base-sepolia is B4_RPC_BASE_SEPOLIA. */
+export function evmRpcEnvName(chainKey) {
+  return `B4_RPC_${String(chainKey).toUpperCase().replace(/-/g, "_")}`;
+}
+
+/**
+ * The EVM RPC variable that is set and so decides this chain's RPC: B4_RPC_<CHAIN> when it is set, else B4_RPC, else null.
+ * Presence only: whether the value is usable is for rpcFromEnv and the owner settings' judgement.
+ */
+export function evmEnvNameSet(chainKey) {
+  for (const name of [evmRpcEnvName(chainKey), RPC_ENV.evm]) if (process.env[name]?.trim()) return name;
+  return null;
+}
+
+/** The variable that decides a rail's RPC on a chain: for evm the one evmEnvNameSet names (else B4_RPC), else the rail's own. */
+function rpcEnvNameFor(rail, chain) {
+  if (rail === "evm" && chain) return evmEnvNameSet(chain) ?? RPC_ENV.evm;
+  return RPC_ENV[rail];
+}
+
+/**
+ * One EVM chain's RPC, in this order: B4_RPC_<CHAIN>, then B4_RPC, then the owner's settings for the chain, then `fallback`.
+ * The two variables are looked up by presence first, and the owner settings are consulted only when neither is set, so the
+ * owner's URL never hides a variable. { url, custom, name }, `name` being the variable that decided it (B4_RPC when none is
+ * set); { ..., error } when it is refused (rpcFromEnv's words, and for "owner" and "verdict" the owner settings').
+ */
+export function evmRpcFromEnv(chainKey, fallback, purpose = "read") {
+  const name = evmEnvNameSet(chainKey) ?? RPC_ENV.evm;
+  return { ...rpcFromEnv(name, fallback, purpose, budgetChainKey("evm", chainKey)), name };
+}
+
 /**
  * Why an RPC variable stops an owner action on this rail and chain, in words, or "" when none does: the variable is set to
  * something other than one of the owner's RPCs for the chain (or one on this computer while the owner allows that). The
  * dispatcher checks it before an owner command starts, and each rail's owner.ts before its script does anything.
  */
 export function ownerRpcProblem(rail, chain) {
-  const name = RPC_ENV[rail];
+  const name = rpcEnvNameFor(rail, chain);
   if (!name) return "";
   const builtin = rail === "evm" ? EVM_CHAINS[chain]?.rpc : DEFAULT_RPC[rail];
   return rpcFor(budgetChainKey(rail, chain), "owner", process.env[name], { envName: name, fallback: builtin }).error ?? "";
 }
 /** What to do about it. */
 export function ownerRpcNext(rail, chain) {
-  return `unset ${RPC_ENV[rail]}, or ask the owner to run ${SETTINGS_COMMAND} rpc ${budgetChainKey(rail, chain)} <url> in their own terminal; nothing was asked or sent`;
+  return `unset ${rpcEnvNameFor(rail, chain)}, or ask the owner to run ${SETTINGS_COMMAND} rpc ${budgetChainKey(rail, chain)} <url> in their own terminal; nothing was asked or sent`;
 }
 
-/** The first RPC variable that is set to something refused, as { name, error }, or null. Only the rail's own when given. */
-export function refusedRpcEnv(rail) {
+/**
+ * The first RPC variable that is set to something refused, as { name, error }, or null. Only the rail's own when given;
+ * for evm with a `chain`, that chain's own variable and B4_RPC. Without a chain every B4_RPC_<CHAIN> is checked too.
+ */
+export function refusedRpcEnv(rail, chain) {
   for (const [r, name] of Object.entries(RPC_ENV)) {
     if (rail && r !== rail) continue;
-    const e = rpcFromEnv(name, "").error;
-    if (e) return { name, error: e };
+    const names = [name];
+    if (r === "evm") {
+      if (chain) names.unshift(evmRpcEnvName(chain));
+      else if (!rail || rail === "evm") names.unshift(...Object.keys(process.env).filter((k) => /^B4_RPC_[A-Z0-9_]+$/.test(k)).sort());
+    }
+    for (const n of names) {
+      const e = rpcFromEnv(n, "").error;
+      if (e) return { name: n, error: e };
+    }
   }
   return null;
 }
 
-/** The replacement RPC this rail uses, for the RESULT (`rpc`), or undefined on the default one. */
-export function customRpc(rail) {
+/** The replacement RPC this rail uses, for the RESULT (`rpc`), or undefined on the default one. For evm, the chain's own variable first. */
+export function customRpc(rail, chain) {
   const name = RPC_ENV[rail];
   if (!name) return undefined;
-  const r = rpcFromEnv(name, "");
+  const set = rail === "evm" && chain ? evmEnvNameSet(chain) : null;
+  const r = rpcFromEnv(set ?? name, ""); // the variables only: the owner's own RPC is not a replacement the agent set, and is not echoed
   return r.custom ? r.url : undefined;
+}
+
+/**
+ * The endpoints that decide a budget EVM verdict (allowance 0, a pull that reverted, nothing found, an authorization
+ * that can no longer settle). Every budget chain is a testnet in this build, and the chain gate refuses any other.
+ * The environment URL is the primary only: it joins the confirming set when it is one of the built-in endpoints.
+ */
+export function budgetVerdictSet(chainKey, envUrl) {
+  return endpointSet(chainKey, "verdict", { envUrl, envName: evmEnvNameSet(chainKey) ?? RPC_ENV.evm, testnet: true });
+}
+
+/** The reader the agreement engine calls: one JSON-RPC call, answers capped (jsonRpc). */
+export function budgetCall(url, method, params) {
+  return jsonRpc(url, method, params);
 }
 
 /**

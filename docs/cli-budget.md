@@ -117,8 +117,9 @@ budget status.
 (exit 2); where it does not matter, it is ignored. For an owner action a site is
 https://www.superstables.com, or one the owner allows with superstables owner settings in their own terminal (an agent never does); a read
 (find, wait) also accepts any superstables.com host and 127.0.0.1.
-B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
-http on this machine only; RESULT names one in use as rpc. A wallet adding the chain through an approval page
+B4_RPC_<CHAIN> (B4_RPC_BASE_SEPOLIA, ...) replaces one evm chain's RPC and wins over B4_RPC, which replaces the selected evm
+chain's; SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
+http on this machine only; every evm command that reads checks the chain id the RPC answers first; RESULT names one in use as rpc. A wallet adding the chain through an approval page
 on this machine is offered the chain's public RPC.
 
 Output: logs go to stderr. stdout ends with one line

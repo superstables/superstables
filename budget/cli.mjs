@@ -42,7 +42,7 @@ import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-fi
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
-import { ownerSettingsProblem, siteFor } from "../src/core/owner-settings.js";
+import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
 import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, unshownNext, waitOnce } from "./once.mjs";
@@ -591,8 +591,9 @@ budget status.
 (exit 2); where it does not matter, it is ignored. For an owner action a site is
 ${DEFAULT_SITE}, or one the owner allows with superstables owner settings in their own terminal (an agent never does); a read
 (find, wait) also accepts any superstables.com host and 127.0.0.1.
-B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
-http on this machine only; RESULT names one in use as rpc. A wallet adding the chain through an approval page
+B4_RPC_<CHAIN> (B4_RPC_BASE_SEPOLIA, ...) replaces one evm chain's RPC and wins over B4_RPC, which replaces the selected evm
+chain's; SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
+http on this machine only; every evm command that reads checks the chain id the RPC answers first; RESULT names one in use as rpc. A wallet adding the chain through an approval page
 on this machine is offered the chain's public RPC.
 
 Output: logs go to stderr. stdout ends with one line
@@ -678,7 +679,8 @@ function emit(code, fields) {
   if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
   fields = resultFacts(fields);
   // an RPC other than the rail's default (B4_RPC, SUPERSTABLES_TEMPO_RPC, SUPERSTABLES_SOLANA_RPC) is named in every RESULT
-  if (fields.rpc === undefined && fields.rail) fields.rpc = customRpc(fields.rail);
+  // by scheme and host only: a path or query can hold an access key, and "/…" says there is one
+  if (fields.rpc === undefined && fields.rail) { const u = customRpc(fields.rail, fields.chain); fields.rpc = u === undefined ? undefined : shownUrl(u); }
   const out = { ok: code === 0 };
   for (const k of order) if (fields[k] !== undefined) out[k] = k === "reason" ? clean(fields[k]) : fields[k];
   if (APPROVAL_ID) recordFinal(APPROVAL_ID, code, out); // frees the chain
@@ -795,7 +797,7 @@ function parse(argv) {
   f.chain ??= rail.chain;
   ctx.chain = f.chain;
   // a replacement RPC must be https, or http on this computer: every check reads the chain through it
-  const badRpc = refusedRpcEnv(f.rail);
+  const badRpc = refusedRpcEnv(f.rail, f.chain);
   if (badRpc) return badInput(ctx, `${badRpc.error}. Unset it, or point it at an https RPC (or one on 127.0.0.1)`);
   // an owner command reads and sends only through an RPC the owner set: a variable naming another stops it before any approval
   if (OWNER_COMMANDS_LIST.includes(cmd)) {
@@ -999,7 +1001,7 @@ function evmCommand(verb, f, extra = {}) {
     case "rotate-clear": return E("rotate", ["--clear-agent", extra.agent]);
   }
 }
-const evmReadFromResult = (r) => ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null });
+const evmReadFromResult = (r) => r.state !== "ok" ? { ok: false, code: 1 } : ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null });
 // ---- end of EVM section -----------------------------------------------------------------------------
 
 // ---- running a rail script --------------------------------------------------------------------------

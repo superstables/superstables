@@ -41,6 +41,8 @@ import { startFakeSolana, startFakeTempo } from "./helpers/fake-chains.js";
 import { evmOwner, evmOwnerKey, startFakeRpc, startFakeSite, type FakeRequest, type FakeSite } from "./helpers/fake-site.js";
 import { startFakeMppSeller, startFakeTempoPay } from "./helpers/fake-tempo-pay.js";
 import { startFacilitator, startPaidEndpoint, startWallet, type TestServer } from "./helpers/servers.js";
+import { agreedFromClient } from "./helpers/agree-from-client.js";
+import { agreeingCopy, removeAgreeingCopy } from "./helpers/agreeing-copy.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const MAIN = resolve(ROOT, "src/cli/main.ts");
@@ -209,6 +211,7 @@ afterEach(async () => {
   while (opened.length) await opened.pop()!.close();
 });
 afterAll(() => {
+  removeAgreeingCopy();
   for (const home of homes) rmSync(home, { recursive: true, force: true });
 });
 
@@ -231,7 +234,7 @@ const payEnv = (home: string, env: Record<string, string> = {}) => ({
 /** `superstables ...` in one process, as the installed command runs (a signal reaches the process that pays). */
 const superstables = (home: string, args: string[], env: Record<string, string> = {}) => exec(["--import", "tsx", MAIN, ...args], payEnv(home, env));
 const budgetEnv = (home: string, env: Record<string, string> = {}) => ({ SUPERSTABLES_HOME: home, SUPERSTABLES_SITE: undefined, SUPERSTABLES_BUDGET_APPROVAL_ID: undefined, ...env });
-const budget = (home: string, args: string[], env: Record<string, string> = {}, onChild?: (child: ReturnType<typeof spawn>) => void) => exec([BUDGET, ...args], budgetEnv(home, env), onChild);
+const budget = (home: string, args: string[], env: Record<string, string> = {}, onChild?: (child: ReturnType<typeof spawn>) => void) => exec([env.B4_RPC ? agreeingCopy(env.B4_RPC) : BUDGET, ...args], budgetEnv(home, env), onChild); // with a fake evm RPC: a copy whose table has it twice, as two operators
 const resultOf = (stdout: string) => {
   const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));
   return line ? JSON.parse(line.slice(7)) : null;
@@ -550,13 +553,16 @@ function rpcChain(receipts: Record<string, unknown>, held = 10000n) {
     return undefined;
   };
 }
+
 /** `budget reconcile` on one journal, through the dispatcher, as an agent runs it. */
 async function reconcileCli(at: string, receipts: Record<string, unknown>, journal: Record<string, unknown>, held?: bigint) {
   const b = await hostedBudget(rpcChain(receipts, held));
   const dir = join(b.home, "budget", "ops", "evm-base-sepolia");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${journal.op}.json`), JSON.stringify({ ...journal, token: BASE_USDC }));
-  return { b, seen: seenBudget(at, "reconcile", await budget(b.home, ["reconcile", "--rail", "evm", "--chain", "base-sepolia", "--op", String(journal.op)], b.env)) };
+  // A verdict needs two agreeing endpoints: a copy of the client whose Base Sepolia table names the fake RPC twice, as two operators.
+  const cli = agreeingCopy(b.env.B4_RPC);
+  return { b, seen: seenBudget(at, "reconcile", await exec([cli, "reconcile", "--rail", "evm", "--chain", "base-sepolia", "--op", String(journal.op)], budgetEnv(b.home, b.env))) };
 }
 
 /** The chain at finalized block 90, time 2000 (past every authorization here), as the evm rail reads it. */
@@ -576,7 +582,7 @@ async function evmOps(chain: ReturnType<typeof evmChain>, lib: Record<string, un
   vi.resetModules();
   vi.doMock("../budget/evm/lib.js", async (original) => ({
     ...(await original<object>()), OPS_DIR: dir, publicClient: chain, usdcBalance: async () => 10000n, allowanceOf: async () => 10000n, USDC: TOKEN,
-    sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), ...lib,
+    ...agreedFromClient(chain, TOKEN), sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), ...lib,
   }));
   opened.push({ close: () => void vi.doUnmock("../budget/evm/lib.js") });
   return import(new URL("../budget/evm/ops.ts", import.meta.url).href);
@@ -1072,7 +1078,7 @@ const ROWS: Row[] = [
     timeout: 150_000,
   },
   {
-    path: "budget revoke on this machine: the allowance already reads 0, and the owner's revoke is still sent and read from the chain",
+    path: "budget revoke on this machine: the allowance already reads 0, and the owner's revoke is still sent; until it is final the answer is unknown (interim)",
     covers: [],
     run: async () => {
       const REVOKE: Hex = `0x${"cf".repeat(32)}`;
@@ -1085,7 +1091,9 @@ const ROWS: Row[] = [
     expect: [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
       { verdict: "paid", match: { http: 200, status: "confirmed", sending: true, hash: `0x${"cf".repeat(32)}` } },
-      { verdict: "paid", match: { exit: 0, command: "revoke", state: "settled", revoked: true, tx: { revoke: `0x${"cf".repeat(32)}` } } },
+      // Interim (until the owner-action finality change in this same release resolves it as landed): the final block the endpoints agree on
+      // is older than the revoke this machine just recorded, so the revoke is not yet called seen. The answer is unknown (exit 5), never settled.
+      { verdict: "unknown", match: { exit: 5, command: "revoke", state: "unknown", tx: { revoke: `0x${"cf".repeat(32)}` } } },
     ],
     timeout: 150_000,
   },

@@ -62,6 +62,7 @@ function checkoutWithoutDevPackages(): string {
   cpSync(resolve(ROOT, "src/core/proofs.mjs"), join(repo, "src/core/proofs.mjs"));
   cpSync(resolve(ROOT, "src/core/seller-url.mjs"), join(repo, "src/core/seller-url.mjs"));
   cpSync(resolve(ROOT, "src/core/private-dir.mjs"), join(repo, "src/core/private-dir.mjs"));
+  cpSync(resolve(ROOT, "src/core/rpc-endpoints.mjs"), join(repo, "src/core/rpc-endpoints.mjs"));
   cpSync(resolve(ROOT, "src/core/owner-settings.js"), join(repo, "src/core/owner-settings.js"));
   writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "checkout", version: "9.9.9" }));
   return repo;

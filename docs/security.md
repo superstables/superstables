@@ -657,6 +657,14 @@ owner's setting, not the agent's (see "Which site" below).
   or asks for `--fund` or `--grant`, first check that the RPC answers Solana devnet's genesis hash. On
   another cluster, or when the hash can't be read, they refuse (exit 3) before a blockhash is fetched
   or anything is signed or sent. `status` then says the budget could not be read (exit 1).
+- **Budget EVM commands check the chain, and decide on agreement.** Every `evm` command that reads
+  checks the chain id its RPC answers before it reads anything (`read` and `reconcile` included), and
+  `B4_RPC_<CHAIN>` sets one chain's RPC without touching the others. An allowance of 0 shown as a
+  revoke, a pull that reverted, a purchase that never happened (another transaction took the pull's
+  nonce) and an authorization that can no longer settle are believed only when the configured RPC
+  endpoints, run by different operators, show the same final block and the same value there, each read
+  bound to that block. If they disagree, or a second endpoint is not available, the answer stays
+  unknown, with the reason in words: do not pay again.
 
 What a compatible site must serve, with both proofs spelled out:
 [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).

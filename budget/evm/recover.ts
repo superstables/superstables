@@ -29,7 +29,7 @@ import { requireRecordLock, requireKeyLock } from "../op-lock.mjs";
 import { existsSync } from "node:fs";
 import { encodeFunctionData, parseUnits, type Hex } from "viem";
 import { pendingJournalsFor, makeSafe, readJournal, checkOpId, scanJournals, sweepBlockers, atomicUsdc, type Journal, type SweepBlockers } from "./ops.ts";
-import { OPS_DIR, SYM, CFG, GAS, AGENT_ENV, OWNER_KEY_FILE, arg, flag, cmd, emit, agentCtx, ownerCtx, escrowCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, usdc, oneLine, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC, assertRpcChain, agentGas, gasWords, gasRound, GasShort, type Wallet, type SelfRevoke, type GasOp, type GasNeed } from "./lib.ts";
+import { OPS_DIR, SYM, CFG, GAS, AGENT_ENV, OWNER_KEY_FILE, arg, flag, cmd, emit, agentCtx, ownerCtx, escrowCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, usdc, oneLine, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC, assertRpcChain, assertReadChain, agentGas, gasWords, gasRound, GasShort, type Wallet, type SelfRevoke, type GasOp, type GasNeed } from "./lib.ts";
 import { revokeInWallet, fundInWallet } from "./owner.ts";
 
 const plan = flag("plan");
@@ -42,6 +42,7 @@ const atomic = (v?: string) => atomicUsdc(v ?? "0") ?? 0n; // only for the swept
 // public addresses, checked against the owner's setup signature. A retired key is accepted here only: recovering its funds to the signed
 // owner is what `budget rotate` needs. The key file and signature checks still apply.
 const pub = await ownerPlanCtx({ retiredOk: true });
+await assertReadChain("recover"); // --plan included: no plan is printed from another chain
 const held = await usdcBalance(pub.agent);
 const allowance = await allowanceOf(pub.owner, pub.agent);
 const agentNativeBefore = await nativeBalance(pub.agent);

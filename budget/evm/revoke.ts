@@ -12,11 +12,12 @@ import "./cli-guard.mjs";
 // Exit codes: 0 revoked (or planned), 1 the allowance still reads above 0, 3 the owner rejected or the link expired,
 // 5 the wallet may have sent it but no hash came back.
 import { encodeFunctionData } from "viem";
-import { SYM, flag, emit, readCtx, ownerCtx, OWNER_KEY_FILE, allowanceOf, usdcBalance, usdc, readUntil, send, writePublic, erc20Abi, USDC, assertRpcChain, tx } from "./lib.ts";
+import { SYM, flag, emit, readCtx, ownerCtx, OWNER_KEY_FILE, allowanceOf, usdcBalance, usdc, readUntil, send, writePublic, erc20Abi, USDC, assertRpcChain, assertReadChain, tx } from "./lib.ts";
 import { revokeInWallet } from "./owner.ts";
 
 const p = readCtx();
 if (flag("plan")) {
+  await assertReadChain("revoke");
   const a = await allowanceOf(p.owner, p.agent);
   console.log(a === 0n ? `PLAN: the allowance reads 0; revoke still sends ${SYM}.approve(agent, 0), because one read is not proof that nothing is live. Nothing is sent now.` : `PLAN: the owner sends ${SYM}.approve(agent, 0): the allowance ${usdc(a)} ${SYM} goes to 0. Nothing is sent now.`);
   process.exit(emit("revoke", 0, { state: "planned", allowanceBefore: usdc(a), allowance: usdc(a), next: "run revoke to send it (the owner approves in their wallet)" }));

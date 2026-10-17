@@ -8,8 +8,8 @@ import "./cli-guard.mjs";
 //      verdict of buy's precheck, and name the chosen one: price, token, payTo, network, scheme, x402 version. Its RESULT carries
 //      the price (`price`) and the recipient (`payTo`) for buy's --max and --pay-to.
 // npx tsx budget/evm/preflight.ts --chain <name> [--url <seller url>] [--max <usdc>] [--pay-to <address>]
-import { parseAbi, formatUnits, type Address } from "viem";
-import { SYM, CFG, GAS, emit, oneLine, USDC, NETWORK, usdc, gasFmt, publicClient, nativeBalance, usdcBalance, arg, toUsdc, publicEnv, usageError, cmd } from "./lib.ts";
+import { domainSeparator, parseAbi, formatUnits, type Address } from "viem";
+import { SYM, CFG, GAS, emit, oneLine, USDC, NETWORK, usdc, gasFmt, publicClient, nativeBalance, usdcBalance, arg, toUsdc, publicEnv, usageError, cmd, rpcHost } from "./lib.ts";
 import { checkAccept, MIN_AUTH_LIFETIME_S, MAX_AUTH_LIFETIME_S } from "./purchase.ts";
 import { EVM_CHAINS } from "./chains.mjs";
 import { readCapped } from "../response.mjs";
@@ -27,7 +27,7 @@ const url = arg("url");
 const urlProblem = url === undefined ? undefined : sellerUrlProblem(url);
 if (urlProblem) usageError(`--url ${urlProblem}`);
 
-console.log(`chain ${CFG.key}: ${CFG.label}, rpc ${CFG.rpc}, ${SYM} ${USDC}`);
+console.log(`chain ${CFG.key}: ${CFG.label}, rpc ${rpcHost(CFG.rpc)}, ${SYM} ${USDC}`);
 const id = await publicClient.request({ method: "eth_chainId" });
 ok(Number(id) === CFG.chainId, `eth_chainId ${id} = ${Number(id)} (expected ${CFG.chainId}); block ${await publicClient.getBlockNumber()}`);
 const rd = (fn: string) => publicClient.readContract({ address: USDC, abi, functionName: fn as any }) as Promise<any>;

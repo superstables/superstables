@@ -12,6 +12,7 @@ import { readSettlement as hostedSettlement } from "../../budget/settlement.mjs"
 import { sendJson, readBody, startServer } from "../helpers/servers.js";
 import { SOLANA_MARKET, SOLANA_PAYER, startFakePurchaseSite } from "../helpers/fake-purchase-site.js";
 import { assessOp, refusalIsFinal } from "../../budget/solana/ops.mjs";
+import { agreedFromClient } from "../helpers/agree-from-client.js";
 
 const OWNER = "0x1111111111111111111111111111111111111111";
 const AGENT = "0x2222222222222222222222222222222222222222";
@@ -51,7 +52,7 @@ beforeEach(() => {
   rpc.getTransaction.mockRejectedValue(new Error("not found"));
   rpc.getLogs.mockImplementation(async ({ event }) => event.name === "AuthorizationUsed" ? [used()] : []);
   rpc.getTransactionReceipt.mockResolvedValue(receipt());
-  vi.doMock("../../budget/evm/lib.js", async (original) => ({ ...await original<object>(), OPS_DIR: dir, publicClient: rpc, sendJournaled, usdcBalance, allowanceOf: async () => 10000n, USDC: TOKEN, sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), readUntil: async <T,>(read: () => Promise<T>) => read() }));
+  vi.doMock("../../budget/evm/lib.js", async (original) => ({ ...await original<object>(), OPS_DIR: dir, publicClient: rpc, ...agreedFromClient(rpc, TOKEN), sendJournaled, usdcBalance, allowanceOf: async () => 10000n, USDC: TOKEN, sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), readUntil: async <T,>(read: () => Promise<T>) => read() }));
 });
 afterEach(() => { vi.doUnmock("../../budget/evm/lib.js"); rmSync(dir, { recursive: true, force: true }); });
 const ops = () => import(new URL("../../budget/evm/ops.ts", import.meta.url).href);

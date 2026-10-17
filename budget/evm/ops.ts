@@ -18,11 +18,11 @@ import { readJournalFile, writeJournalFile } from "../journal.mjs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { evmJournalProblem } from "../journal.mjs";
-import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, BlockNotFoundError, TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
+import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, toEventSelector, pad, BlockNotFoundError, TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
 import {
   SYM,
   OPS_DIR, USDC, CFG, RAIL, cmd, erc20Abi, publicClient, usdc, sleep, tx, retry, allowanceOf, usdcBalance, readUntil, feeOf, sendJournaled, receiptOf,
-  GasShort, gasWords, oneLine,
+  GasShort, gasWords, oneLine, receiptAgreed, txAgreed, authorizationStateAgreed, agreementWords,
   type Wallet,
 } from "./lib.ts";
 import { searchLogs } from "../../src/core/log-windows.mjs";
@@ -370,7 +370,7 @@ export type Settlement =
   | { kind: "unused"; used: false; canceled: false }
   | { kind: "unread"; used: false; canceled: false; reason: string }
   | { kind: "pending"; used: false; canceled: false; reason: string }
-  | { kind: "canceled"; used: false; canceled: boolean; final: boolean }
+  | { kind: "canceled"; used: false; canceled: boolean; final: boolean; cancelTx?: Hex }
   | { kind: "used"; used: true; canceled: false; settleTx: Hex; status: "success"; transferOk: boolean; final: boolean; block: bigint };
 
 /** Latest use, canonical inclusion, and finality are separate observations. Read errors never imply use. */
@@ -406,7 +406,7 @@ export async function readSettlement(j: Journal): Promise<Settlement> {
       if (matches("AuthorizationCanceled")) {
         const finalCanceled = final && head !== null && await publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: "authorizationState", args: [j.agent, auth.nonce], blockNumber: head.number ?? undefined });
         if (final && !finalCanceled) return { kind: "pending", used: false, canceled: false, reason: "the cancellation's final nonce state could not be verified" };
-        return { kind: "canceled", used: false, canceled: finalCanceled, final: finalCanceled };
+        return { kind: "canceled", used: false, canceled: finalCanceled, final: finalCanceled, cancelTx: hash };
       }
       if (!matches("AuthorizationUsed")) return undefined;
       const transferOk = parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: "Transfer" }).some((l) => l.address.toLowerCase() === USDC.toLowerCase() && l.args.from.toLowerCase() === auth.from.toLowerCase() && l.args.to.toLowerCase() === auth.to.toLowerCase() && l.args.value === BigInt(auth.value));
@@ -443,19 +443,50 @@ export async function readSettlement(j: Journal): Promise<Settlement> {
   }
 }
 
-/** Signed expiry requires a final block and an unused nonce read at that exact block. */
+const CANCELED = toEventSelector("AuthorizationCanceled(address,bytes32)");
+/** Whether an agreed receipt holds this operation's own AuthorizationCanceled(agent, nonce) log from the token. */
+function cancelsAuth(receipt: any, j: Journal): boolean {
+  const nonce = j.auth?.nonce.toLowerCase();
+  return Array.isArray(receipt?.logs) && receipt.logs.some((l: any) => Array.isArray(l?.topics) && String(l.topics[0]).toLowerCase() === CANCELED
+    && String(l.topics[1]).toLowerCase() === pad(j.agent.toLowerCase() as Hex, { size: 32 }) && String(l.topics[2]).toLowerCase() === nonce);
+}
+
+/**
+ * Whether the signed authorization can no longer settle. Believed only when the configured endpoints agree at a final block:
+ *   expired    the nonce reads unused at a final block whose own time is at or past validBefore
+ *   cancelled  the cancel's receipt (status 1, this agent's AuthorizationCanceled for this nonce) is at or below the agreed
+ *              block, and the nonce reads used-or-cancelled there
+ * Anything short of agreement is "not dead": a lying or lagging endpoint can delay this, never decide it.
+ */
 export async function authDead(j: Journal, s: Settlement): Promise<boolean> {
   const auth = j.auth;
   if (!auth) return true;
-  if (s.canceled) return true;
-  if (s.kind !== "unused") return false;
-  try {
-    const b = await finalHead();
-    if (b.number === null || Number(b.timestamp) < auth.validBefore) return false;
-    return !(await publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: "authorizationState", args: [j.agent, auth.nonce], blockNumber: b.number }));
-  } catch {
-    return false;
+  const since = j.pullBlock ? BigInt(j.pullBlock) : undefined;
+  if (s.canceled) {
+    const hash = j.cancelTx ?? (s.kind === "canceled" ? s.cancelTx : undefined);
+    if (!hash) return false;
+    const c = await receiptAgreed(hash);
+    const v: any = c.agreed ? c.value : null;
+    if (!v || v.status !== "0x1" || !cancelsAuth(v, j)) return false;
+    const st = await authorizationStateAgreed(j.agent, auth.nonce);
+    return st.agreed && st.value === true && BigInt(v.blockNumber) <= st.block.number;
   }
+  if (s.kind !== "unused") return false;
+  const st = await authorizationStateAgreed(j.agent, auth.nonce, since);
+  return st.agreed && st.value === false && st.block.timestamp >= auth.validBefore;
+}
+
+/** "" when the final transaction that took the pull's nonce is agreed, and the pull itself is nowhere on chain; else why not, in words. */
+async function replacementNotAgreed(j: Journal, replacement: Hex): Promise<string> {
+  const t = await txAgreed(replacement);
+  if (!t.agreed) return agreementWords(t);
+  const v: any = t.value;
+  let sameNonce = false;
+  try { sameNonce = !!v && typeof v.from === "string" && v.from.toLowerCase() === j.agent.toLowerCase() && BigInt(v.nonce) === BigInt(j.pullNonce!) && v.blockNumber !== undefined; } catch {}
+  if (!sameNonce) return "the endpoints do not show it as a final transaction of the agent at the pull's nonce";
+  const p = await receiptAgreed(j.pullTx!, BigInt(v.blockNumber));
+  if (!p.agreed) return agreementWords(p);
+  return p.value === null ? "" : "an endpoint shows the pull itself on chain";
 }
 
 /**
@@ -494,6 +525,11 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   }
   if (!pull.found) {
     const replacement = !pull.unknown && !pull.pendingInPool ? await differentFinalNonceTransaction(j) : undefined;
+    const notAgreed = replacement ? await replacementNotAgreed(j, replacement) : "";
+    if (replacement && notAgreed) {
+      save("unknown", `a different transaction used the pull's nonce on one RPC, but ${notAgreed}`, `run "${cmd("reconcile.ts", `--op ${j.op}`)}" again later. Do not pay again.`, "unknown (replacement transaction not agreed)");
+      return { j, verdict: "unknown" };
+    }
     if (replacement) {
       save("not_found", `a different final transaction ${replacement} consumed the pull nonce ${j.pullNonce}`, "nothing moved for this op. A new purchase needs a new --op.", "not_found (different final nonce-consuming transaction identified)");
       return { j, verdict: "not_found" };
@@ -508,6 +544,12 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
     return { j, verdict: "unknown" };
   }
   if (pull.status === "reverted") {
+    const r = await receiptAgreed(j.pullTx!);
+    if (!(r.agreed && r.value && (r.value as any).status === "0x0")) {
+      const why = r.agreed ? "the endpoints do not show it as a reverted transaction in a final block" : agreementWords(r);
+      save("unknown", `the pull reads as reverted on one RPC, but ${why}`, `${cmd("reconcile.ts", `--op ${j.op}`)}. Do not pay again.`, "pull failure not agreed");
+      return { j, verdict: "unknown" };
+    }
     j.pulled = "0";
     save("failed", `the pull reverted on chain (${tx(j.pullTx)}); no funds moved`, "nothing moved. A new purchase needs a new --op.", "failed (pull reverted)");
     return { j, verdict: "failed" };
@@ -733,13 +775,11 @@ export function atomicUsdc(v: unknown): bigint | null {
 }
 
 const codeOf = (e: any) => (/^[A-Z0-9_]+$/.test(String(e?.code)) ? String(e.code) : "error");
-/** The lightweight shape check of the scan (S4's evmJournalProblem is wired in here later). "" when the value can be used. */
+/** Why a file in the journal folder cannot be used, or "": the field checks of reading one record (journal.mjs), then the scan's own. */
 function scanProblem(v: any, file: string): string {
   if (!v || typeof v !== "object" || Array.isArray(v)) return "it does not hold a journal";
-  if (v.path !== "approve") return "it is not an evm budget purchase journal";
-  if (typeof v.op !== "string" || `${v.op}.json` !== file) return "it names another operation than its file name";
-  if (typeof v.agent !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(v.agent)) return "it names no agent address";
-  if (typeof v.state !== "string") return "it has no state";
+  const s4 = evmJournalProblem(v, file.replace(/\.json$/, ""));
+  if (s4) return s4;
   for (const k of ["pullTx", "cancelTx", "returnTx"]) if (v[k] !== undefined && typeof v[k] !== "string") return `its ${k} is not a transaction hash`;
   for (const k of ["pulled", "returned"]) if (v[k] !== undefined && atomicUsdc(v[k]) === null) return `its ${k} amount is not a decimal ${SYM} amount`;
   return "";

@@ -278,3 +278,15 @@ export function agreementWords(failed) {
   if (failed.why === "unreadable") return `the RPC endpoints could not be read${left}`;
   return `a second RPC endpoint was not available to confirm it${left}`;
 }
+
+/**
+ * The words for an endpoint set that could not be built: the engine's `reason` (the owner settings' own refusal), then what to do.
+ * A variable the owner did not set: unset it, or have the owner add it. Unreadable owner settings: have the owner check them.
+ * @param {string} error the reason the set could not be built
+ * @param {string} [envName] the variable that decided, when one did
+ */
+export function endpointSetErrorWords(error, envName) {
+  void envName;
+  const todo = /is not an RPC the owner set/.test(error) ? "unset it, or ask the owner to add it in the owner settings" : "ask the owner to check the owner settings";
+  return `the RPC endpoints could not be read: ${error}; ${todo}`;
+}
