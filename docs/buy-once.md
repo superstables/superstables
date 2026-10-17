@@ -41,14 +41,13 @@ own wallet, from a device where they are signed in and have a compatible wallet.
 `setup` command, budget or agent key. It pays on the chain the service's listing names, for the
 services the site lists: Base Sepolia (test USDC), Arc Testnet (test USDC), Robinhood Chain Testnet
 (test USDG), Tempo Moderato (test pathUSD) or Solana devnet (test USDC). It needs a superstables.com account, which you create by
-signing in with an Ethereum or Solana wallet, or a compatible deployment the owner names with `--site` or
+signing in with an Ethereum or Solana wallet or an email address, or a compatible deployment the owner names with `--site` or
 `SUPERSTABLES_SITE`; a site other than www.superstables.com also needs the owner to allow it with
 `superstables owner settings` (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
 The installed CLI runs on your own machine, but the site coordinates this single purchase after
-the owner approves. This differs from a budget, whose client pays sellers directly. A Solana account supports only Solana
-purchases. The owner pays from the Solana wallet they signed in with. Purchases on EVM chains or Tempo
-require signing in with an Ethereum wallet. With an Ethereum account, a Solana
-purchase also needs a Solana wallet on the owner's device to sign the payment transaction. Signing in does not approve a purchase. The
+the owner approves. This differs from a budget, whose client pays sellers directly. The owner pays from a
+wallet their account holds: an Ethereum wallet on EVM chains and Tempo, a Solana wallet on Solana devnet, with
+that wallet on the owner's device to sign. An account admin adds wallets on the account page. Signing in does not approve a purchase. The
 [owner guide](https://www.superstables.com/docs/owner) covers the link/code handoff, sign-in
 and account checkpoints.
 

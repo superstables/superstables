@@ -535,7 +535,7 @@ function termsOf(service, created, net) {
   const how = net.rail === "tempo"
     ? { enforced: `Your wallet sends one transfer of exactly ${amount} ${net.unit} to ${to}.`, note: "The first approval link you open asks you to sign in with your wallet (a message, no fee). Your wallet may first ask to add Tempo Moderato; you pay the network fee there." }
     : net.rail === "solana"
-      ? { enforced: `Your Solana wallet signs one transfer of exactly ${amount} USDC to ${to}.`, note: "The first approval link you open asks you to sign in with a Solana wallet such as Phantom or an Ethereum wallet such as MetaMask. Signing in signs a message and has no network fee. With a Solana account, pay from the Solana wallet you signed in with. With an Ethereum account, connect a separate Solana wallet. For this purchase on Solana devnet, you don't need SOL: the seller's facilitator pays the network fee." }
+      ? { enforced: `Your Solana wallet signs one transfer of exactly ${amount} USDC to ${to}.`, note: "The first approval link you open asks you to sign in, with a wallet (a message, no network fee) or an email address. Pay from a Solana wallet your account holds, such as Phantom; an account admin adds one on the account page. For this purchase on Solana devnet, you don't need SOL: the seller's facilitator pays the network fee." }
       : { enforced: `Your wallet signs one authorization for exactly ${amount} ${net.unit} to ${to}, usable once.`, note: `The first approval link you open asks you to sign in with your wallet (a message, no fee).${net.chain === ONCE_CHAIN ? "" : ` Your wallet may first ask to add ${net.label}.`} No gas is needed: ${net.gasPaidBy ?? "the seller's facilitator"} pays it.` };
   return {
     title: `Buy once: ${service.id}`,

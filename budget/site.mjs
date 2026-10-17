@@ -121,15 +121,16 @@ export const SITE_WORDS = {
 /** A value the site sent, as one of the words its API documents for `kind`, or "unexpected". */
 export const siteWord = (kind, v) => (typeof v === "string" && SITE_WORDS[kind].has(v) ? v : "unexpected");
 const ACCOUNT_REFUSALS = new Map([
-  ["ethereum_account_required", "ask the owner to sign out, then sign in with an Ethereum wallet and retry"],
-  ["owner_proof_owner_mismatch", "ask the owner to sign the owner-proof message with the Solana wallet they signed in with, then retry"],
-  ["wrong_account", "ask the owner to select the Solana wallet account they signed in with, or sign out and sign in with the paying Solana wallet, then retry"],
+  ["ethereum_account_required", "ask the owner to approve from an account that holds an Ethereum wallet (an account admin adds one on the account page), then retry"],
+  ["owner_proof_owner_mismatch", "ask the owner to sign the owner-proof message with a wallet their account holds for this chain, then retry"],
+  ["owner_wallet_required", "ask an account admin to add this budget's Solana owner wallet to the account on its account page, then request the budget again"],
+  ["wrong_account", "ask the owner to pay from a Solana wallet their account holds (an account admin adds one on the account page), then retry"],
 ]);
 /** Recovery for an account refusal, or null for other errors. */
 export const accountRefusalNext = (code) => ACCOUNT_REFUSALS.get(code) ?? null;
 /** What an open request's reason code says while it still waits for the owner: the site refused an account, not the request. */
 const ACCOUNT_WAITING = new Map([
-  ["ethereum_account_required", "an owner signed in with a Solana account tried to approve, and this chain needs an Ethereum account; the request is still open"],
+  ["ethereum_account_required", "the owner tried to approve from an account that holds no Ethereum wallet, and this chain needs one; the request is still open"],
 ]);
 /** The words for an open request the site refused an account on, with the recovery step, or null. */
 export const accountWaitingWords = (code) => (ACCOUNT_WAITING.has(code) ? `${ACCOUNT_WAITING.get(code)}: ${ACCOUNT_REFUSALS.get(code)}` : null);

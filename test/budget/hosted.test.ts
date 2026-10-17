@@ -25,9 +25,10 @@ const HASH = `0x${"ab".repeat(32)}`;
 const TERMS = { title: "Grant a spending budget", summary: "test", rows: [], enforced: [], notEnforced: [], notes: [] };
 const GRANT_TX = { to: USDC, data: "0x095ea7b3", value: "0x0" };
 const ACCOUNT_REFUSALS = [
-  [403, "ethereum_account_required", /sign in with an Ethereum wallet/],
-  [400, "owner_proof_owner_mismatch", /sign the owner-proof message with the Solana wallet they signed in with/],
-  [403, "wrong_account", /sign in with the paying Solana wallet/],
+  [403, "ethereum_account_required", /approve from an account that holds an Ethereum wallet/],
+  [400, "owner_proof_owner_mismatch", /sign the owner-proof message with a wallet their account holds for this chain/],
+  [403, "wrong_account", /pay from a Solana wallet their account holds/],
+  [403, "owner_wallet_required", /add this budget's Solana owner wallet to the account/],
 ] as const;
 
 describe("agent proof v2", () => {
@@ -795,6 +796,10 @@ describe("hosted approvals", () => {
       expect(new HostedRefusal("x", "y sspt_abc").next).toBe("y [token]");
       expect(siteWord("state", "linked")).toBe("linked");
       expect(siteWord("code", "anything else")).toBe("unexpected");
+    });
+
+    it("the codes a site with wallets held by accounts sends are its own words", () => {
+      for (const code of ["owner_wallet_required", "owner_unknown", "page_stopped_before_send"]) expect(siteWord("code", code)).toBe(code);
     });
   });
 

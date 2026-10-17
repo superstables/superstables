@@ -84,7 +84,7 @@ function revokeWithoutAgentKey(site: string, reason: string): never {
 export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved } = ownerPageFor({
   chain: SOLANA_OWNER_CHAIN,
   walletWords: "any Solana wallet, such as Phantom, Solflare or Backpack",
-  hostedWalletWords: "a Solana wallet such as Phantom or an Ethereum wallet such as MetaMask to sign in; with a Solana account, use the Solana wallet you signed in with to add this agent; with an Ethereum account, also connect a Solana wallet for this agent",
+  hostedWalletWords: "a Solana wallet such as Phantom, held by their account, to add this agent; an account admin adds wallets on the account page",
   statusCommand: "superstables budget status --rail solana",
   emit,
   railFlag: "--rail solana",

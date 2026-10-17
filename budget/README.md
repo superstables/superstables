@@ -41,7 +41,7 @@ The owner approves in one of two places. Local approvals are the default and nee
 | | Local (default) | On superstables.com (`setup --rail R --hosted`) |
 | --- | --- | --- |
 | Where the owner approves | A page on `127.0.0.1`, in the browser with their wallet on the machine that runs the command | superstables.com, on any device where they are signed in with their wallet |
-| Account | None | A superstables.com account, created by signing in with an Ethereum or Solana wallet; for now, a Solana account supports only Solana agents, Solana budgets and Solana single purchases |
+| Account | None | A superstables.com account. The owner signs in with an Ethereum or Solana wallet or an email address; the account holds the wallets that approve (Ethereum for `evm` and `tempo`, Solana for `solana`), which an account admin adds on the account page |
 | Rails | `evm`, `tempo`, `solana` | `evm`, `tempo`, `solana` |
 | Owner on record | The wallet that signs the setup message | The wallet that signs the owner-proof message on superstables.com (on `solana`, the Solana wallet the owner connects there); the command checks that signature before it records anyone |
 | What the agent shows the owner | The approval link and the terms | The approval link, the terms and a match code, which the owner picks on the page |
@@ -50,9 +50,9 @@ In both modes the agent key stays on this machine, the owner's key stays in thei
 
 Budget approvals on superstables.com support Base Sepolia, Arc Testnet, Arbitrum Sepolia,
 Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet. Approval on superstables.com keeps the CLI, agent key and journals on your own runtime; it lets the
-owner use a wallet on another device. The owner signs in with an Ethereum or Solana wallet. For
-now, a Solana account supports only Solana agents, Solana budgets and Solana single purchases. With an Ethereum
-account, Solana actions also need a Solana wallet to sign transactions.
+owner use a wallet on another device. The owner signs in with an Ethereum or Solana wallet or an
+email address. Their account holds the wallets that approve: an Ethereum wallet for the EVM chains and Tempo
+Moderato, a Solana wallet for Solana devnet. An account admin adds wallets on the account page.
 Linking an agent does not grant a budget.
 
 Approvals on superstables.com, `buy-once` and `budget find` need superstables.com, or a compatible deployment the owner names with `--site` or `SUPERSTABLES_SITE`. A site other than www.superstables.com is used only when the owner allows it with `superstables owner settings` in their own terminal; an agent never does. Everything else works with no account: local approvals, budgets on every rail, `buy`, `reconcile` and `pay`. What a compatible site must do is in [CLI.md](CLI.md#hosted-approvals-what-a-compatible-site-must-do).
@@ -242,7 +242,7 @@ An SPL token account has one delegate slot. A new grant would overwrite a live o
 
 ## Single purchase on superstables.com
 
-`superstables budget buy-once` asks superstables.com for one purchase of a service it lists for this, and the owner approves it there, signed in with an Ethereum or Solana wallet. On Solana devnet, an owner with a Solana account pays from the Solana wallet they signed in with; with an Ethereum account, they also connect a Solana wallet to sign the payment transaction. There is no setup, no budget or agent key: the owner's wallet approves one payment of exactly the amount, to the recipient, the page shows. It runs on the chain the service's listing names: Base Sepolia, Arc Testnet or Solana devnet (test USDC, from faucet.circle.com; the seller's facilitator pays the fee), or Tempo Moderato (test pathUSD; the owner pays the fee).
+`superstables budget buy-once` asks superstables.com for one purchase of a service it lists for this, and the owner approves it there, signed in to their account. They pay from a wallet the account holds: an Ethereum wallet on the EVM chains and Tempo Moderato, a Solana wallet on Solana devnet. There is no setup, no budget or agent key: the owner's wallet approves one payment of exactly the amount, to the recipient, the page shows. It runs on the chain the service's listing names: Base Sepolia, Arc Testnet or Solana devnet (test USDC, from faucet.circle.com; the seller's facilitator pays the fee), or Tempo Moderato (test pathUSD; the owner pays the fee).
 
 ```
 superstables budget find --once                                          # what can be bought this way, with inputs and prices
