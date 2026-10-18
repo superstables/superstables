@@ -2,7 +2,7 @@
 // requirement sent back to the seller as offered; EIP-3009 offers only, with known `extra` fields; and a recipient that
 // is not the zero address, the token or mint itself, or the account paying.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodePaymentSignatureHeader, encodePaymentRequiredHeader, encodePaymentResponseHeader } from "@x402/core/http";
@@ -10,7 +10,7 @@ import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { Challenge } from "mppx";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it } from "vitest";
-import { BASE_SEPOLIA, SOLANA_DEVNET, TEMPO_MODERATO, usdcRequirement, type EvmNetwork } from "../../src/core/chain.js";
+import { BASE_SEPOLIA, ETHEREUM_SEPOLIA, SOLANA_DEVNET, TEMPO_MODERATO, usdcRequirement, type EvmNetwork } from "../../src/core/chain.js";
 import { settleWith, verifyWith } from "../../src/core/facilitator.js";
 import { parseMppChallenges } from "../../src/core/mpp.js";
 import { PaymentEngine } from "../../src/core/pay.js";
@@ -162,6 +162,64 @@ describe("EIP-3009 offers only, with known fields", () => {
       expect(judged, String(method)).toMatchObject({ supported: false, reason: expect.stringMatching(/signs EIP-3009 transfers only/) });
     }
     expect(termsFor(offer({ extra: { name: "USDC", version: "2", assetTransferMethod: "eip3009" } }), 2).supported).toBe(true);
+  });
+
+  it("takes a seller's display-only fields and ignores them", () => {
+    const brickken = (over: Record<string, unknown> = {}): RawAccept => {
+      const base = usdcRequirement(0.01, PAY_TO, ETHEREUM_SEPOLIA) as unknown as RawAccept;
+      return { ...base, extra: { ...base.extra, tokenSymbol: "USDC", displayPrice: "$0.01", chainId: 11155111, ...over } };
+    };
+    const judged = termsFor(brickken(), 2);
+    expect(judged.supported).toBe(true);
+    if (judged.supported) {
+      expect(judged.terms.asset).toBe("USDC");
+      expect(judged.terms.amountDecimal).toBe(0.01);
+      // The requirement goes back to the seller as offered.
+      expect(judged.requirement.extra).toMatchObject({ tokenSymbol: "USDC", displayPrice: "$0.01", chainId: 11155111 });
+    }
+    // The chain id may be a numeric string or CAIP-2 form.
+    expect(termsFor(brickken({ chainId: "11155111" }), 2).supported).toBe(true);
+    expect(termsFor(brickken({ chainId: "eip155:11155111" }), 2).supported).toBe(true);
+    // These fields are not shown on approval pages, so their content does not affect the terms.
+    expect(termsFor(brickken({ displayPrice: "\u001b[31m free \u001b[0m" }), 2).supported).toBe(true);
+    expect(termsFor(brickken({ displayPrice: { nested: true } }), 2)).toMatchObject({ supported: false, reason: expect.stringMatching(/displayPrice/) });
+    expect(termsFor(brickken({ tokenSymbol: 1 }), 2)).toMatchObject({ supported: false, reason: expect.stringMatching(/tokenSymbol/) });
+  });
+
+  // The offer as Brickken sent it on 16 Oct 2026 (captured in a live run): every `extra` key it carries.
+  const captured = JSON.parse(readFileSync(new URL("./fixtures/brickken-ethereum-sepolia-offer.json", import.meta.url), "utf8")) as { requirement: RawAccept; terms: Record<string, unknown> };
+  const withExtra = (over: Record<string, unknown>): RawAccept => ({ ...captured.requirement, extra: { ...captured.requirement.extra, ...over } });
+
+  it("takes the real captured Brickken offer", () => {
+    const judged = termsFor(captured.requirement, 2);
+    expect(judged).toMatchObject({ supported: true });
+    if (!judged.supported) return;
+    expect(judged.terms).toMatchObject({ amountAtomic: "1", asset: "USDC", assetAddress: ETHEREUM_SEPOLIA.usdc.address, recipient: captured.requirement.payTo, network: "eip155:11155111" });
+    expect(judged.requirement.extra).toEqual(captured.requirement.extra);
+  });
+
+  it("refuses a payment or operation chain id that is not the offer's chain, and routeKey with control characters", () => {
+    for (const key of ["paymentChainId", "operationChainId"]) {
+      for (const value of [1, 84532, "84532", "eip155:1", "0x aa", "", null, 11155111.5, true, { id: 11155111 }]) {
+        expect(termsFor(withExtra({ [key]: value }), 2), `${key} ${JSON.stringify(value)}`).toMatchObject({ supported: false, reason: expect.stringMatching(/chain id/) });
+      }
+      for (const value of [11155111, "11155111", "eip155:11155111"]) expect(termsFor(withExtra({ [key]: value }), 2).supported, `${key} ${value}`).toBe(true);
+    }
+    for (const value of [1, true, null, ["GET /x"], { path: "/x" }, "x".repeat(201), "GET /a\u0000b", "GET /a\nb", "\u001b[31mGET /x", "GET /a\u007fb"]) {
+      expect(termsFor(withExtra({ routeKey: value }), 2), `routeKey ${JSON.stringify(value)}`).toMatchObject({ supported: false, reason: expect.stringMatching(/routeKey/) });
+    }
+    expect(termsFor(withExtra({ routeKey: "x".repeat(200) }), 2).supported).toBe(true);
+    expect(termsFor(withExtra({ routeKey: "POST /v1/agents/{id}" }), 2).supported).toBe(true);
+    // The list stays closed.
+    expect(termsFor(withExtra({ routeKeys: "GET /x" }), 2)).toMatchObject({ supported: false, reason: expect.stringMatching(/routeKeys/) });
+  });
+
+  it("refuses a chain id that is not the offer's chain", () => {
+    for (const chainId of [1, 84532, "84532", "eip155:1", "0x aa", "", null, 11155111.5, true, { toString: "not callable" }]) {
+      const base = usdcRequirement(0.01, PAY_TO, ETHEREUM_SEPOLIA) as unknown as RawAccept;
+      const judged = termsFor({ ...base, extra: { ...base.extra, chainId } }, 2);
+      expect(judged, JSON.stringify(chainId)).toMatchObject({ supported: false, reason: expect.stringMatching(/chain id/) });
+    }
   });
 
   it("refuses unknown or malformed extra fields, and decimals that are not the token's", () => {

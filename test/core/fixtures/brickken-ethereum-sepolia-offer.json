@@ -1,0 +1,33 @@
+{
+  "_note": "Public x402 offer captured from Brickken sandbox (Ethereum Sepolia) on 2026-10-16: the requirement as sent and the terms read from it. No credentials.",
+  "requirement": {
+    "scheme": "exact",
+    "network": "eip155:11155111",
+    "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+    "amount": "1",
+    "payTo": "0x6b0173489007dE9E2e619eccd98E8fa9c610849a",
+    "maxTimeoutSeconds": 300,
+    "extra": {
+      "name": "USDC",
+      "version": "2",
+      "tokenSymbol": "USDC",
+      "displayPrice": "0.000001000000000000 USDC",
+      "assetTransferMethod": "eip3009",
+      "chainId": "11155111",
+      "paymentChainId": "11155111",
+      "operationChainId": "11155111",
+      "routeKey": "GET /get-agents"
+    }
+  },
+  "terms": {
+    "amountDecimal": 0.000001,
+    "amountAtomic": "1",
+    "asset": "USDC",
+    "assetAddress": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+    "network": "eip155:11155111",
+    "networkLabel": "Ethereum Sepolia (testnet)",
+    "recipient": "0x6b0173489007dE9E2e619eccd98E8fa9c610849a",
+    "scheme": "exact",
+    "x402Version": 2
+  }
+}
