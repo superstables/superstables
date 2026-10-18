@@ -19,7 +19,8 @@ import {
   resolveRequest,
 } from "../../src/core/discovery.js";
 import { startServer } from "../helpers/servers.js";
-import { formatListingCommands } from "../../src/cli/next.js";
+import { formatListingCommands, listingCommands } from "../../src/cli/next.js";
+import { describeBudgetRoutes } from "../../src/core/routes.js";
 
 /** A response shaped like the public index: a testnet service and a mainnet one. */
 const INDEX_FIXTURE = {
@@ -260,6 +261,9 @@ describe("findServices", () => {
         expect(row?.routes?.pay, id).toBe(true);
       } else {
         expect(row?.routes?.pay, id).toBe(false);
+        // No budget route either: a budget buy would send the same credential over the same plain http.
+        expect(row?.routes?.budget, id).toEqual([]);
+        expect(listingCommands(row!).map((c) => c.way), id).not.toContain("budget");
         expect(row?.notActionableReason, id).toMatch(/not https|usable endpoint/);
       }
     }
@@ -492,6 +496,10 @@ describe("the hosted catalogue", () => {
     });
     // `pay` is off for it, as for an index row: the field the CLI gates a payment on.
     expect(listings.find((s) => s.id === "hosted-plain-http")?.routes?.pay).toBe(false);
+    expect(listings.find((s) => s.id === "hosted-plain-http")?.routes?.budget).toEqual([]);
+    expect(listingCommands(listings.find((s) => s.id === "hosted-plain-http")!).map((c) => c.way)).not.toContain("budget");
+    expect(describeBudgetRoutes(listings.find((s) => s.id === "hosted-plain-http")?.routes)).toBe("no");
+    expect(listings.find((s) => s.id === "hosted-local-http")?.routes?.budget.length).toBeGreaterThan(0);
     expect(listings.find((s) => s.id === "hosted-local-http")?.routes?.pay).toBe(true);
     expect(listings.find((s) => s.id === "hosted-local-http")?.actionable).toBe(true);
     // No operator is invented for a row that names none.
@@ -711,6 +719,7 @@ describe("seller URLs in discovery", () => {
     expect(demo.actionable).toBe(false);
     expect(demo.notActionableReason).toMatch(/^SUPERSTABLES_DEMO_SERVICE_URL is plain http/);
     expect(demo.routes?.pay).toBe(false);
+    expect(demo.routes?.budget).toEqual([]);
   });
 
   it("does not probe a demo service that is not payable, not even for its status", async () => {
@@ -778,5 +787,24 @@ describe("seller URLs in discovery", () => {
     } finally {
       await server.close();
     }
+  });
+
+  it("words the index warning by what was read: the catalogue was read, so it is named", async () => {
+    const big = { services: [], pad: "x".repeat(2_100_000) };
+    stubIndex(big);
+    const { warnings } = await findServices({ includeIndex: true, demoServices: true });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/^The Superstables index could not be read \(.*more than 2 MB.*\); its listings are missing below\./);
+    expect(warnings[0]).toContain("service catalogue");
+  });
+
+  it("does not claim the catalogue was shown when it could not be read either", async () => {
+    stubIndex({ error: "gateway" }, { status: 502, catalogueStatus: 503 });
+    const { warnings } = await findServices({ includeIndex: true, demoServices: true });
+    expect(warnings).toHaveLength(2);
+    const index = warnings.find((w) => w.startsWith("The Superstables index"));
+    expect(index).toContain("The built-in listings are shown.");
+    expect(index).not.toContain("service catalogue");
+    expect(warnings.some((w) => w.startsWith("The service catalogue could not be read"))).toBe(true);
   });
 });

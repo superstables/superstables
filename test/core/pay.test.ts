@@ -856,14 +856,18 @@ describe("PaymentEngine", () => {
     expect(await a.until("final")).toMatchObject({ state: "denied" });
     expect(s.records.spentToday("USDC")).toBe(0); // released
 
-    // A process that stops while its owner decides leaves its reservation, which counts for that UTC day only.
+    // A process that stops while its owner decides leaves a record nobody can decide any more: once its process is
+    // verifiably gone, the reservation stops counting at once, and `status` ends the attempt as abandoned.
     const qC = await quote({ url: s.url }, { records: s.records, policy: cap });
     const c = pay(qC.id);
     await c.until("asked");
     c.child.kill("SIGKILL");
     await new Promise((r) => c.child.once("exit", r));
-    expect(s.records.spentToday("USDC")).toBe(0.01);
-    expect(s.records.spentToday("USDC", new Date(Date.now() + 24 * 60 * 60 * 1000))).toBe(0);
+    expect(s.records.spentToday("USDC")).toBe(0);
+    const left = s.records.listAttempts().find((x) => x.quoteId === qC.id)!;
+    expect(left.state).toBe("awaiting_approval"); // nothing has read it yet
+    expect(await recheckChain(s.records, left.id)).toMatchObject({ state: "abandoned", abandonedBy: "stopped" });
+    expect(s.records.spentToday("USDC")).toBe(0);
   }, 60_000);
 
   it("renews a lapsed reservation before the owner is asked, or refuses when the cap is now used", async () => {

@@ -7,7 +7,8 @@ import { appendFileSync, mkdtempSync, readdirSync, readFileSync, statSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Records, attemptRunner } from "../../src/core/records.js";
+import { Records, attemptRunner, settleStaleAwaiting, staleAwaiting } from "../../src/core/records.js";
+import { thisProcess } from "../../src/core/lock.js";
 import type { Attempt, PaymentTerms, Quote, Receipt } from "../../src/core/types.js";
 
 const dirs: string[] = [];
@@ -491,5 +492,62 @@ describe("Records", () => {
     const r = records();
     expect(r.newId()).not.toBe(r.newId());
     expect(r.newId()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+  });
+});
+
+describe("an attempt left waiting by a pay process that is gone", () => {
+  const now = new Date();
+  const at = now.toISOString();
+  const until = new Date(now.getTime() + 5 * 60_000).toISOString();
+  const waiting = (id: string): Attempt => ({
+    id,
+    quoteId: `q-${id}`,
+    createdAt: at,
+    updatedAt: at,
+    state: "awaiting_approval",
+    url: "https://seller.example/x",
+    terms: terms(0.01),
+    history: [{ at, state: "awaiting_approval" }],
+    reservedAt: at,
+    reservedUntil: until,
+  });
+  const save = (r: Records, id: string, runner: Record<string, unknown>) => r.saveAttempt({ ...waiting(id), runner } as Attempt);
+  /** A pid no process has, on this machine and this boot. */
+  const gone = { ...thisProcess(), pid: 2 ** 30 + 7, start: "linux:gone:1" };
+
+  it("becomes abandoned by stopped, and stops counting toward today's spend", () => {
+    const r = records();
+    save(r, "dead", gone);
+    expect(r.spentToday("USDC", now)).toBe(0); // already not counted while it is judged
+    expect(r.spentTodayHasOpen("USDC", now)).toBe(false);
+    expect(staleAwaiting(r, r.getAttempt("dead")!)).toBe(true);
+    const settled = settleStaleAwaiting(r, r.getAttempt("dead")!);
+    expect(settled).toMatchObject({ state: "abandoned", abandonedBy: "stopped" });
+    expect(settled.reason).toContain("no longer running; nobody decided and nothing was submitted");
+    expect(r.getAttempt("dead")?.history.map((h) => h.state)).toEqual(["awaiting_approval", "abandoned"]);
+    // a second reading changes nothing
+    settleStaleAwaiting(r, r.getAttempt("dead")!);
+    expect(r.getAttempt("dead")?.history).toHaveLength(2);
+  });
+
+  it("leaves an attempt whose runner is alive (this process, another id) alone, and counts it as open", () => {
+    const r = records();
+    save(r, "live", thisProcess());
+    expect(staleAwaiting(r, r.getAttempt("live")!)).toBe(false);
+    expect(settleStaleAwaiting(r, r.getAttempt("live")!).state).toBe("awaiting_approval");
+    expect(r.spentToday("USDC", now)).toBe(0.01);
+    expect(r.spentTodayHasOpen("USDC", now)).toBe(true);
+  });
+
+  it("ends an attempt from an earlier boot of this machine, and leaves one whose host cannot be told", () => {
+    const r = records();
+    const here = thisProcess();
+    save(r, "earlier-boot", { ...here, pid: process.pid, bootId: "11111111-2222-3333-4444-555555555555" });
+    expect(staleAwaiting(r, r.getAttempt("earlier-boot")!)).toBe(here.bootId !== null);
+    save(r, "other-host", { ...here, pid: 2 ** 30 + 9, bootId: "11111111-2222-3333-4444-555555555555", hostId: "f".repeat(32), hostname: "elsewhere" });
+    if (here.hostId) expect(staleAwaiting(r, r.getAttempt("other-host")!)).toBe(false);
+    // no runner recorded at all: nothing proves it is gone
+    r.saveAttempt(waiting("no-runner"));
+    expect(staleAwaiting(r, r.getAttempt("no-runner")!)).toBe(false);
   });
 });

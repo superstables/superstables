@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { DeadlineError, UnsupportedX402Version, detect, detectPayment, parseChallenge, readSellerChallenge, sameTerms, termsFor, type RawAccept } from "../../src/core/x402.js";
+import { DeadlineError, SellerUnreachableError, UnsupportedX402Version, detect, detectPayment, parseChallenge, readSellerChallenge, sameTerms, termsFor, type RawAccept } from "../../src/core/x402.js";
 import { encodePaymentRequiredHeader } from "@x402/core/http";
 import { usdcRequirement } from "../../src/core/chain.js";
 
@@ -223,6 +223,27 @@ describe("detect", () => {
       await expect(detect("http://example.com/x")).rejects.toThrow(/^the seller URL is plain http/);
       await expect(detectPayment("http://127.0.0.2:9/x")).rejects.toThrow(/^the seller URL is plain http/);
       expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("names the host and the cause when the seller cannot be reached at all, and says nothing was paid", async () => {
+    // A refused connection, for real: a port that was open a moment ago.
+    const probe: Server = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const refused = await detect(`http://127.0.0.1:${port}/paid`).catch((err: unknown) => err);
+    expect(refused).toBeInstanceOf(SellerUnreachableError);
+    expect((refused as Error).message).toBe(`could not reach 127.0.0.1:${port} (ECONNREFUSED); nothing was paid`);
+    expect((refused as Error).message).not.toBe("fetch failed");
+
+    // A name that does not resolve
+    const dns = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("getaddrinfo ENOTFOUND nope.example"), { code: "ENOTFOUND" }) });
+    vi.stubGlobal("fetch", vi.fn(async () => { throw dns; }));
+    try {
+      await expect(detect("https://nope.example/x")).rejects.toThrow("could not reach nope.example (ENOTFOUND); nothing was paid");
     } finally {
       vi.unstubAllGlobals();
     }

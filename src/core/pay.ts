@@ -23,7 +23,7 @@ import { readMppReceipt } from "./mpp.js";
 import { sellerUrlProblem } from "./seller-url.mjs";
 import { untrustedText } from "./text.js";
 import type { ChainCheck } from "./settlement.js";
-import { Records, approvalIdHash, attemptRunner, type AttemptRunner } from "./records.js";
+import { Records, approvalIdHash, attemptRunner, settleStaleAwaiting, type AttemptRunner } from "./records.js";
 import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
 import { evaluatePolicy, policyAmount, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
@@ -254,6 +254,7 @@ export class PaymentEngine {
       asset: quote.terms.asset,
       ...policyAmount(quote.terms),
       spentTodayAtomic: this.records.spentTodayAtomic(quote.terms.asset, new Date(now), { exclude: attempt.id }),
+      spentTodayHasOpen: this.records.spentTodayHasOpen(quote.terms.asset, new Date(now), { exclude: attempt.id }),
     });
     if (judged.allowed) {
       attempt.reservedAt = new Date(now).toISOString();
@@ -335,6 +336,7 @@ export class PaymentEngine {
       asset: quote.terms.asset,
       ...policyAmount(quote.terms),
       spentTodayAtomic: this.records.spentTodayAtomic(quote.terms.asset, new Date(this.now()), { exclude: attempt.id }),
+      spentTodayHasOpen: this.records.spentTodayHasOpen(quote.terms.asset, new Date(this.now()), { exclude: attempt.id }),
     });
     if (!currentPolicy.allowed) {
       this.settleState(attempt, "failed", {
@@ -1083,6 +1085,8 @@ function readSettlement(res: Response, version: 1 | 2): SettleResponse | undefin
 export async function recheckChain(records: Records, id: string, rpc?: string | ChainReadOptions): Promise<Attempt | undefined> {
   let attempt = records.getAttempt(id);
   if (!attempt) return undefined;
+  // Waiting for an owner whose pay process is gone: nobody can decide, and nothing was submitted.
+  if (attempt.state === "awaiting_approval") return settleStaleAwaiting(records, attempt);
   const options = typeof rpc === "string" ? chainReadOptions(rpc) : (rpc ?? chainReadOptions());
   const rail = railFor(attempt.terms?.network);
   if (!rail) return records.getAttempt(attempt.id) ?? attempt;

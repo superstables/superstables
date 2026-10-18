@@ -185,6 +185,12 @@ describe("exact at the daily cap", () => {
     }
   });
 
+  it("says \"paid or still open\" when the total includes an attempt that is not resolved", () => {
+    const a = { ...pay, amountAtomic: 100000n, spentTodayAtomic: 200000n, spentTodayHasOpen: true };
+    expect(perDayCheck(p, a)?.detail).toBe("0.2 USDC paid or still open today (UTC) + this 0.1 = 0.3, at most 0.3 USDC");
+    expect(perDayCheck(p, { ...a, spentTodayHasOpen: false })?.detail).toBe("0.2 USDC paid today (UTC) + this 0.1 = 0.3, at most 0.3 USDC");
+  });
+
   it("refuses one unit over, with the exact figures", () => {
     const expected = { allowed: false, reason: "today's payments (0.2 USDC) plus 0.100001 exceed caps.per_day (0.3 USDC)" };
     for (const a of forms(200000n, 100001n)) expect(evaluatePolicy(p, a)).toEqual(expected);
