@@ -29,16 +29,17 @@ superstables budget: on-chain budgets for an agent. The owner grants a budget on
 agent then buys on its own, purchase by purchase, until the budget is spent or revoked. The chain enforces the limit.
 Testnet only. No real money moves.
 
-Start here, the owner (once per rail and chain; each step prints an approval link; the owner approves in their own
-wallet):
+Start here, the owner (once per rail and chain; each step prints an approval link that opens on a page on this
+computer, no account needed (the default); the owner approves in their own wallet):
   superstables budget setup --rail evm              connect the owner's wallet (a free signature); creates the agent key
-                                                    (--hosted: the owner approves on superstables.com, on any device)
-  superstables budget setup --rail evm --hosted --grant 5 --fund
-                                                    all of it with one approval link on superstables.com: add agent,
-                                                    gas, budget
   superstables budget fund-agent --rail evm         send the agent key gas for its own transactions (evm and solana)
   superstables budget doctor --rail evm             check keys, addresses and balances; says what to top up
   superstables budget grant --rail evm --amount 5   an allowance of 5 USDC from the owner's wallet; the USDC stays there
+
+Or approve from any device on superstables.com (needs an account there; the owner signs in with their wallet):
+  superstables budget setup --rail evm --hosted --grant 5 --fund
+                                                    one approval link for all of it: add agent, gas, budget
+Use this one when the owner asks for it.
 An agent may run these to start them and hand the owner the approval link. Only the owner approves.
 
 Start here, the agent:
@@ -106,8 +107,8 @@ first (ssh -L PORT:127.0.0.1:PORT user@this-host, PORT from the approval link). 
 buy-once), the approval link is on superstables.com instead: it opens on any device where the owner is signed in, and
 their account must hold the wallet the chain needs (an Ethereum wallet for EVM chains and Tempo, a Solana wallet for
 Solana); an account admin adds wallets on the account page. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
-command returns at once with state waiting_owner and final false. Write the approval link, the match code and the terms
-in your reply to the owner and end your turn; when they say they've approved, run
+command returns at once with state waiting_owner and final false. Reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn; when they say they've approved, run
 superstables budget wait --id ID --shown. The approval link expires after --timeout seconds (default 600): if the wallet
 was not asked to send by then, the command ends refused (exit 3) and that approval sent nothing; run it again. In
 setup --hosted with --grant or --fund, and in recover, an earlier step may already have completed: read steps, tx and
@@ -218,8 +219,8 @@ this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
 agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
-yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
-in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+yet, and the owner still has to approve the rest. Either way, reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn. When they say they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
 link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
@@ -291,8 +292,8 @@ this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
 agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
-yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
-in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+yet, and the owner still has to approve the rest. Either way, reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn. When they say they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
 link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
@@ -373,8 +374,8 @@ this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
 agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
-yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
-in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+yet, and the owner still has to approve the rest. Either way, reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn. When they say they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
 link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
@@ -582,8 +583,8 @@ this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
 agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
-yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
-in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+yet, and the owner still has to approve the rest. Either way, reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn. When they say they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
 link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
@@ -635,8 +636,8 @@ Recovery always uses this machine's local approval page, including on a chain se
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
 agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
-yet, and the owner still has to approve the rest. Either way, write the approval link and the terms
-in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+yet, and the owner still has to approve the rest. Either way, reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn. When they say they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
 link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
@@ -713,13 +714,13 @@ an approval. Once the owner's wallet was asked to send and there is no final res
 exit 5; tell the owner the outcome is unknown and run wait --shown again later. Once it ended: final true, and the owner
 command's (or purchase's) own final RESULT and exit code, the same on every later call.
 Scripts test final, not the exit code.
---shown means: I have written the approval link (and the match code) and the terms in a reply the owner can read.
+--shown means: message_for_owner was sent in a reply the owner can read.
 Without it, wait refuses (exit 2, state show_owner_first) and polls nothing, so that answer says nothing about whether the
 owner approved or paid; once the approval has ended, or this machine already saw the owner act on it (the page log shows
 the wallet was asked; for buy-once, an earlier read showed payment evidence), it reads it without --shown.
-An agent writes the approval link, ends its turn, and runs wait when the owner says they've approved; while still
+An agent replies to the owner with message_for_owner, ends its turn, and runs wait when the owner says they've approved; while still
 waiting_owner it says so in one line and ends its turn again. unknown with final false and message_for_owner (recover,
-after the agent's own revoke) also means the owner has not finished: write the approval link again if url changed, and
+after the agent's own revoke) also means the owner has not finished: send the new message_for_owner if url changed, and
 end the turn.
 --site is checked against the site the approval was made on, and refused if it differs.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
@@ -785,8 +786,8 @@ you accept, in the service's token (USDC, or pathUSD on Tempo); a service that c
 created.
 --param K=V (repeatable) or --params JSON give the service's inputs.
 The command asks the site for the purchase and prints the owner's approval link and match code as an APPROVE line, the
-same as the owner commands. Write the approval link, the code and the terms in your reply to the owner, a visible
-message, not only in your reasoning or a tool call, and end your turn there. The first approval link the owner opens
+same as the owner commands. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one
+short line before it), and end your turn. The first approval link the owner opens
 asks them to sign in, with an Ethereum or Solana wallet (a message, no fee) or an email address. The owner pays
 from a wallet their account holds: an Ethereum wallet on EVM chains and Tempo, a Solana wallet on Solana devnet.
 An account admin adds wallets on the account page.

@@ -618,7 +618,7 @@ undo an owner signature or a transaction already sent through setup on superstab
   failed `buy`, or from `recover`) only once its payment authorization can no longer settle at a final
   block: never signed, cancelled in a final block, or expired by a final block's time. A cancellation
   that is mined but not final leaves the price in the agent key and the outcome unknown (exit 5);
-  `recover --op ID` returns it once the cancellation is final. `recover` asks the owner for
+  `recover --op ID` returns it once the cancellation is final; until its return and the owner's revoke are final it answers unknown (exit 5) even if the price was already swept, and `reconcile` reports it returned after finality. `recover` asks the owner for
   `approve(agent, 0)` unless the agent's own revoke in that run brought the allowance to 0 and a later
   read shows 0. Without `--op` it sweeps the rest of the agent key only when every journal of that
   chain can be read and no operation of the agent can still move money; otherwise it names them,
@@ -638,7 +638,7 @@ undo an owner signature or a transaction already sent through setup on superstab
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds
   already transferred. On `evm`, a purchase whose price was already pulled can still settle, and
   `recover` returns the USDC it can, leaving up to 2 USDC of gas on Arc Testnet. On `tempo`, it does
-  not close payment sessions the key opened elsewhere. `revoke` sends its transaction every time it
+  not close payment sessions the key opened elsewhere. An access key signs with the owner's account nonce, so while a stolen key keeps sending transactions the owner's wallet can refuse a revoke with "nonce too low"; the command answers unknown, and the owner reads `status` and retries the revoke. The key's limit still bounds what it can spend. `revoke` sends its transaction every time it
   is asked, even when the budget already reads empty or revoked: one RPC's read is not proof that
   nothing is live. On `solana` it sends nothing only when the owner has no USDC account, and on
   `tempo` only when the keychain refuses a simulated `revokeKey` from the owner as already done; a

@@ -1790,6 +1790,7 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/tempo/preflight.ts", has: "no tempo.charge offer", why: READ_ONLY },
   { file: "budget/tempo/preflight.ts", has: "offer cannot be paid", why: READ_ONLY },
   { file: "budget/tempo/preflight.ts", has: "main().catch((err) => result('failed'", why: READ_ONLY },
+  { file: "budget/cli.mjs", has: "this home has no approval with that id", why: "wait found no approval record under that id: nothing in this home was approved, sent or paid, and the answer says so" },
   { file: "budget/tempo/reconcile.ts", has: "done('failed'", why: TEMPO_PURCHASE },
   { file: "budget/tempo/revokeBudget.ts", has: "The chain still shows the key as live", why: AFTER_SEND_UNPROVEN },
   { file: "budget/tempo/revokeBudget.ts", has: "the key still reads as live on chain", why: AFTER_SEND_UNPROVEN },

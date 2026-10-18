@@ -70,10 +70,11 @@ describe("messageFor", () => {
     expect(said).toContain("nothing was paid");
   });
 
-  it("names `superstables status` as the next step, and leaves the approval link to its own line", () => {
+  it("says to wait for the pay command (status of a waiting approval does not move it), and leaves the approval link to its own line", () => {
     const waiting = attempt("awaiting_approval", { approvalUrl: "http://127.0.0.1:4412/approve/abc" });
     const said = messageFor(waiting);
-    expect(said).toContain("superstables status a-1");
+    expect(said).toContain("Wait for the `superstables pay` command that started it");
+    expect(said).toContain("will not move it");
     expect(said).not.toContain("payment_status");
     // pay prints the link once on its own line; the sentence does not repeat it.
     expect(said).not.toContain("http://127.0.0.1:4412/approve/abc");
