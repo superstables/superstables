@@ -35,17 +35,19 @@ export const MAX_SIGNED_LIFETIME_S = 600;
  */
 const EXTRA_KEYS = new Set(["name", "version", "decimals", "assetTransferMethod"]);
 /**
- * Display-only keys that sellers send beside them, as on Brickken's Ethereum Sepolia offer captured on 16 Oct 2026 (kept whole
- * in test/core/fixtures): `tokenSymbol`, `displayPrice` and `routeKey` (plain text), and `chainId`, `paymentChainId` and
+ * Display-only keys that sellers send beside them, as on Brickken's Ethereum Sepolia offer captured on 16 Oct 2026 (kept
+ * whole in test/core/fixtures): `tokenSymbol`, `displayPrice` and `routeKey` (short strings; `routeKey` has no control
+ * characters), and `chainId`, `paymentChainId` and
  * `operationChainId` (each must name the offer's own chain). Nothing here or in the SDK's exact scheme reads them: the amount
- * and token come from `amount` and `asset`, so they are never shown to the owner and never signed over. (`quote --json` does
- * print the stored offer to the agent, cleaned.) The requirement still goes back to the seller as offered. This is a named
- * list, not "ignore everything unknown", so a field a future SDK starts to read stays refused. Keep it in step with the fixture.
+ * and token come from `amount` and `asset`, so these fields are not shown on approval pages and are not signed over.
+ * `quote --json` prints the stored offer to the agent, cleaned. The requirement still goes back to the seller as offered.
+ * This is a named list, not "ignore everything unknown", so a field a future SDK starts to read stays refused. Keep it in
+ * step with the fixture.
  */
 const DISPLAY_KEYS = new Set(["tokenSymbol", "displayPrice", "routeKey", "chainId", "paymentChainId", "operationChainId"]);
 /** The display keys that must name the offer's chain. */
 const CHAIN_KEYS = ["chainId", "paymentChainId", "operationChainId"] as const;
-/** The display keys that must be short plain text. */
+/** The display keys that must be strings of at most 200 characters. */
 const TEXT_KEYS = ["tokenSymbol", "displayPrice", "routeKey"] as const;
 const DISPLAY_TEXT_MAX = 200;
 
@@ -97,12 +99,12 @@ export const evmRail: X402Rail = {
     for (const key of TEXT_KEYS) {
       const text = extraFields[key];
       if (text !== undefined && (typeof text !== "string" || text.length > DISPLAY_TEXT_MAX)) {
-        return { supported: false, reason: `the offer's ${key} is not short plain text` };
+        return { supported: false, reason: `the offer's ${key} is not a short string` };
       }
     }
     // `routeKey` is the only one a seller may expect to be read by something: no control characters at all.
     if (typeof extraFields.routeKey === "string" && /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(extraFields.routeKey)) {
-      return { supported: false, reason: "the offer's routeKey is not short plain text" };
+      return { supported: false, reason: "the offer's routeKey contains control characters" };
     }
     const unknown = Object.keys(extraFields).filter((key) => !EXTRA_KEYS.has(key) && !DISPLAY_KEYS.has(key));
     if (unknown.length > 0) {

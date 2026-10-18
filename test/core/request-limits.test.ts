@@ -176,7 +176,7 @@ describe("EIP-3009 offers only, with known fields", () => {
     // The chain id may be a numeric string or CAIP-2 form.
     expect(termsFor(brickken({ chainId: "11155111" }), 2).supported).toBe(true);
     expect(termsFor(brickken({ chainId: "eip155:11155111" }), 2).supported).toBe(true);
-    // Their text is never shown, so what it says does not matter; but it must be text.
+    // These fields are not shown on approval pages, so their content does not affect the terms.
     expect(termsFor(brickken({ displayPrice: "\u001b[31m free \u001b[0m" }), 2).supported).toBe(true);
     expect(termsFor(brickken({ displayPrice: { nested: true } }), 2)).toMatchObject({ supported: false, reason: expect.stringMatching(/displayPrice/) });
     expect(termsFor(brickken({ tokenSymbol: 1 }), 2)).toMatchObject({ supported: false, reason: expect.stringMatching(/tokenSymbol/) });
@@ -194,7 +194,7 @@ describe("EIP-3009 offers only, with known fields", () => {
     expect(judged.requirement.extra).toEqual(captured.requirement.extra);
   });
 
-  it("refuses a payment or operation chain id that is not the offer's chain, and routeKey that is not short plain text", () => {
+  it("refuses a payment or operation chain id that is not the offer's chain, and routeKey with control characters", () => {
     for (const key of ["paymentChainId", "operationChainId"]) {
       for (const value of [1, 84532, "84532", "eip155:1", "0x aa", "", null, 11155111.5, true, { id: 11155111 }]) {
         expect(termsFor(withExtra({ [key]: value }), 2), `${key} ${JSON.stringify(value)}`).toMatchObject({ supported: false, reason: expect.stringMatching(/chain id/) });
