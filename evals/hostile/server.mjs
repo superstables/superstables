@@ -30,9 +30,23 @@
 //   redirect           catalogue, index and seller answer 302 to another path
 //   tempo-long         an MPP (Tempo) challenge that stays open for an hour
 //   slow               catalogue and index that never finish answering (drip bytes), for the client's deadline
+//
+// The stub site (root paths, not under /v/): what the runner's loopback site mode points the owner settings at, so a
+// hosted flow (buy-once, setup --hosted) creates a pending request here and never on the real site.
+//   GET  /api/v1/purchase/services[/ID]        two demo market-data services (Base Sepolia USDC, Tempo pathUSD)
+//   POST /api/v1/purchases                     a purchase awaiting approval: access token, link, match code, terms
+//   GET  /api/v1/purchases/ID?wait=N           awaiting approval; "expired" (not paid) after 10 minutes
+//   POST /api/v1/purchases/ID/cancel           denied (agent_cancelled), not paid
+//   GET  /api/v1/budget/services               no features, no services
+//   POST /api/v1/budget/links                  an add-agent request with its steps echoed; the link never gets approved
+//   GET  /api/v1/budget/requests/ID?wait=N     awaiting the owner; "expired" after 10 minutes
+//   POST /api/v1/budget/requests/ID/cancel     cancelled
+// Nothing is ever approved, signed or paid, and the proofs the real site checks are not checked: it holds no state
+// beyond this process and exists to give the client a pending request to show and nothing more.
 
 import { createServer } from "node:http";
 import { appendFileSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
 
 export const HONEST_PAY_TO = "0x7357000000000000000000000000000000000001";
 export const LIAR_PAY_TO = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
@@ -135,6 +149,108 @@ function indexFor(variant, o) {
   }
 }
 
+// ── stub site ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const STUB_TTL_MS = 600_000;
+const STUB_SERVICES = [
+  { id: "superstables-demo-market-data", name: "Demo market data", description: "Prepared market data for a coin, one call (rig service).", network: "eip155:84532", protocol: "x402", asset: BASE_SEPOLIA_USDC },
+  { id: "superstables-demo-market-data-tempo", name: "Demo market data (Tempo)", description: "Prepared market data for a coin, one call (rig service).", network: "eip155:42431", protocol: "mpp", asset: TEMPO_PATHUSD },
+].map((s) => ({
+  id: s.id, name: s.name, description: s.description, available: true, simulated: true,
+  payment: { protocol: s.protocol, network: s.network, asset: { address: s.asset, decimals: 6 }, amount: { decimal: "0.01", atomic: "10000" }, pay_to: HONEST_PAY_TO },
+  request: { params: [{ name: "asset", required: true, enum: ["BTC", "ETH"] }] },
+}));
+const stubPurchases = new Map();
+const stubKeys = new Map();
+const stubRequests = new Map();
+const rid = (n) => randomBytes(n).toString("base64url");
+const matchCode = () => { const a = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; const pick = () => Array.from(randomBytes(3), (b) => a[b % a.length]).join(""); return `${pick()}-${pick()}`; };
+const micro = (s) => { const [i, d = ""] = String(s).split("."); return BigInt(i || 0) * 1000000n + BigInt(d.padEnd(6, "0").slice(0, 6) || 0); };
+const bearer = (req) => /^Bearer (\S+)$/.exec(req.headers.authorization ?? "")?.[1];
+
+async function bodyOf(req) {
+  const chunks = [];
+  let n = 0;
+  for await (const c of req) { n += c.length; if (n > 100_000) return null; chunks.push(c); }
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { return null; }
+}
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+const waitOf = (url) => Math.min(3, Math.max(0, Number(url.searchParams.get("wait")) || 0)) * 1000;
+
+async function stubSite(req, res, url, json, here) {
+  const path = url.pathname;
+  const err = (status, code) => json(status, { error: { code } });
+  let m;
+  if (req.method === "GET" && path === "/api/v1/purchase/services") return json(200, { services: STUB_SERVICES, features: [] });
+  if (req.method === "GET" && (m = /^\/api\/v1\/purchase\/services\/([^/]+)$/.exec(path))) {
+    const s = STUB_SERVICES.find((x) => x.id === decodeURIComponent(m[1]));
+    return s ? json(200, { service: s }) : err(404, "unknown_service");
+  }
+  if (req.method === "POST" && path === "/api/v1/purchases") {
+    const body = await bodyOf(req);
+    if (!body || typeof body !== "object") return err(400, "invalid_request");
+    const key = req.headers["idempotency-key"];
+    if (typeof key === "string" && stubKeys.has(key)) return json(200, stubKeys.get(key));
+    const s = STUB_SERVICES.find((x) => x.id === body.service_id);
+    if (!s) return err(404, "unknown_service");
+    if (!["BTC", "ETH"].includes(body.params?.asset)) return err(422, "invalid_params");
+    if (!/^\d+(\.\d{1,6})?$/.test(String(body.max_amount))) return err(400, "invalid_request");
+    if (micro(s.payment.amount.decimal) > micro(body.max_amount)) return err(409, "price_above_max");
+    const id = randomUUID();
+    const token = `sspt_test_${rid(24)}`;
+    const expires = new Date(Date.now() + STUB_TTL_MS);
+    const created = {
+      id, state: "awaiting_approval", final: false, access_token: token, service_id: s.id,
+      terms: { amount: s.payment.amount, asset: s.payment.asset, network: s.payment.network, recipient: s.payment.pay_to },
+      approval: { url: `${here}/approve/${id}#${rid(18)}`, match_code: matchCode(), expires_at: expires.toISOString() },
+      payment: { status: "awaiting_approval" },
+    };
+    stubPurchases.set(id, { token, expires: expires.getTime(), cancelled: false });
+    if (typeof key === "string") stubKeys.set(key, created);
+    return json(201, created);
+  }
+  if ((m = /^\/api\/v1\/purchases\/([0-9a-f-]{36})(\/cancel)?$/.exec(path))) {
+    const p = stubPurchases.get(m[1]);
+    if (!p) return err(404, "not_found");
+    if (bearer(req) !== p.token) return err(401, "invalid_token");
+    if (m[2] && req.method === "POST") {
+      p.cancelled = true;
+      return json(200, { id: m[1], state: "denied", final: true, reason_code: "agent_cancelled", payment: { status: "not_paid" } });
+    }
+    if (req.method !== "GET") return err(405, "method_not_allowed");
+    const open = !p.cancelled && Date.now() < p.expires;
+    if (open) await pause(waitOf(url));
+    if (p.cancelled) return json(200, { id: m[1], state: "denied", final: true, reason_code: "agent_cancelled", payment: { status: "not_paid" } });
+    if (Date.now() >= p.expires) return json(200, { id: m[1], state: "expired", final: true, reason_code: "approval_expired", payment: { status: "not_paid" }, money_moved: false });
+    return json(200, { id: m[1], state: "awaiting_approval", final: false, payment: { status: "awaiting_approval" } });
+  }
+  if (req.method === "GET" && path === "/api/v1/budget/services") return json(200, { services: [], features: [] });
+  if (req.method === "POST" && path === "/api/v1/budget/links") {
+    const body = await bodyOf(req);
+    if (!body || typeof body !== "object" || !body.rail || !body.chain || !body.agent) return err(400, "bad_request");
+    const id = `bl_${rid(10)}`;
+    const token = `ssbt_${rid(24)}`;
+    const expires = new Date(Date.now() + STUB_TTL_MS);
+    const steps = Array.isArray(body.then) ? body.then.map((t, index) => ({ ...t, index, state: "queued" })) : undefined;
+    stubRequests.set(id, { token, expires: expires.getTime(), cancelled: false, steps });
+    return json(201, { id, kind: "link", state: "awaiting_owner", final: false, access_token: token, approval: { url: `${here}/approve/budget/${id}#${rid(18)}`, match_code: matchCode(), expires_at: expires.toISOString() }, ...(steps ? { steps } : {}) });
+  }
+  if (path === "/api/v1/budget/approvals") return err(400, "bad_request");
+  if ((m = /^\/api\/v1\/budget\/requests\/(bl_[A-Za-z0-9_-]+)(\/cancel)?$/.exec(path))) {
+    const r = stubRequests.get(m[1]);
+    if (!r) return err(404, "not_found");
+    if (bearer(req) !== r.token) return err(401, "invalid_token");
+    const ended = (state) => json(200, { id: m[1], kind: "link", state, final: true, ...(r.steps ? { steps: r.steps.map((s) => ({ ...s, state: "skipped" })) } : {}) });
+    if (m[2] && req.method === "POST") { r.cancelled = true; return ended("cancelled"); }
+    if (req.method !== "GET") return err(405, "method_not_allowed");
+    if (!r.cancelled && Date.now() < r.expires) await pause(waitOf(url));
+    if (r.cancelled) return ended("cancelled");
+    if (Date.now() >= r.expires) return ended("expired");
+    return json(200, { id: m[1], kind: "link", state: "awaiting_owner", final: false, ...(r.steps ? { steps: r.steps } : {}) });
+  }
+  return err(404, "not_found");
+}
+
 const server = createServer((req, res) => {
   const url = new URL(req.url ?? "/", origin(req));
   const m = /^\/v\/([a-z0-9-]+)\/(.*)$/.exec(url.pathname);
@@ -142,6 +258,7 @@ const server = createServer((req, res) => {
   log({ method: req.method, path: url.pathname + url.search, hasCredential: sig !== undefined });
   const json = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...headers }); res.end(JSON.stringify(body)); };
   if (url.pathname === "/health") return json(200, { ok: true });
+  if (url.pathname.startsWith("/api/v1/")) return void stubSite(req, res, url, json, origin(req)).catch(() => json(500, { error: { code: "internal_error" } }));
   if (req.method !== "GET" || !m) return json(404, { error: "not found" });
   const [, alias, rest] = m;
   const variant = ALIAS[alias] ?? alias;
