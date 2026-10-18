@@ -32,7 +32,7 @@
 // and left waiting for an owner) is stopped: the approval is never given, so it ends unapproved.
 
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, appendFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, realpathSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, appendFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, userInfo } from "node:os";
@@ -103,12 +103,12 @@ export function writeOwnerSettings(root, dir, mode) {
   return od;
 }
 
-async function rigUp() {
+export async function rigUp() {
   // the stub's own route, not /health: an older rig on this port answers /health and has no stub site
   try { return (await fetch(`${STUB_ORIGIN}/api/v1/purchase/services`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
 }
 /** The stub site must be answering before a loopback run: start the rig if it is not (stopped by the returned function). */
-async function ensureRig(root) {
+export async function ensureRig(root) {
   if (await rigUp()) return () => {};
   const child = spawn(process.execPath, [join(here, "server.mjs"), "--port", String(RIG_PORT), "--log", join(root, "rig.log")], { stdio: "ignore" });
   for (let i = 0; i < 25 && !(await rigUp()); i++) await new Promise((r) => setTimeout(r, 200));
@@ -188,6 +188,9 @@ export function bwrapArgs(dir, agentName, ownerDir) {
     "--bind", dir, dir, "--ro-bind", join(dir, "hosts"), "/etc/hosts",
     // the owner's settings, set by this runner and read-only: the agent cannot change which site approvals use
     "--ro-bind", ownerDir, join(ACCOUNT_HOME, ".superstables", "owner")];
+  // The host's /usr/local/bin holds the operator's own tools; the agent sees it empty, apart from the claude launcher.
+  a.push("--tmpfs", "/usr/local/bin");
+  if (agent.cli === "claude" && existsSync("/usr/local/bin/claude")) a.push("--symlink", realpathSync("/usr/local/bin/claude"), "/usr/local/bin/claude");
   const creds = agent.cli === "claude"
     ? [[join(HOME, ".claude2", ".credentials.json"), join(dir, "fakehome", ".claude", ".credentials.json")]]
     : [[join(HOME, ".codex", "auth.json"), join(dir, "fakehome", ".codex", "auth.json")]];
@@ -220,11 +223,29 @@ export function checkOwnerSettings({ dir, agentName, skill, ownerDir, env, mode 
   if (problem) throw new Error(`rig fault: the owner settings in the sandbox are not the ones this runner wrote (${problem}); no agent was started`);
 }
 
-export async function runOne({ scenario, agent: agentName, skill, root, timeout = 900, site = "loopback", allowProduction = false }) {
+/**
+ * The stub site for one run: a standalone run starts it and stops it when the run ends. A run inside a matrix
+ * (sharedRig) leaves it alone: the matrix started it once and stops it after every worker has finished.
+ */
+export async function rigFor(root, mode, sharedRig) {
+  return mode === "loopback" && !sharedRig ? await ensureRig(root) : () => {};
+}
+
+/** Runs `work` with the stub site up for all of it (loopback only), and stops it after `work` has finished, however it ends. */
+export async function withSharedRig(root, mode, work) {
+  const stop = mode === "loopback" ? await ensureRig(root) : () => {};
+  try {
+    return await work();
+  } finally {
+    stop();
+  }
+}
+
+export async function runOne({ scenario, agent: agentName, skill, root, timeout = 900, site = "loopback", allowProduction = false, sharedRig = false }) {
   const mode = siteMode(site, allowProduction);
   const dir = runDir(root, scenario, agentName, skill);
   if (existsSync(join(dir, "DONE"))) return { dir, skipped: true };
-  const stopRig = mode === "loopback" ? await ensureRig(root) : () => {};
+  const stopRig = await rigFor(root, mode, sharedRig);
   try {
     return await runIn({ scenario, agentName, skill, root, timeout, mode, dir });
   } finally {
@@ -328,10 +349,11 @@ async function matrix() {
   const allowProduction = process.argv.includes("--allow-production-site");
   try { siteMode(site, allowProduction); } catch (e) { console.error(e.message); process.exit(2); } // refuse before any run starts
   const jobs = [];
-  for (const scenario of scenarios) for (const agent of agents) for (const skill of skills) jobs.push({ scenario, agent, skill, root, site, allowProduction, timeout: Number(flag("timeout", 900)) });
+  for (const scenario of scenarios) for (const agent of agents) for (const skill of skills) jobs.push({ scenario, agent, skill, root, site, allowProduction, sharedRig: true, timeout: Number(flag("timeout", 900)) });
   console.log(`${jobs.length} runs, ${conc} at a time`);
   let next = 0, done = 0, fault = null;
-  await Promise.all(Array.from({ length: conc }, async () => {
+  // one stub for the whole matrix: no job starts it or stops it, so one finishing early cannot take it from the others
+  await withSharedRig(root, siteMode(site, allowProduction), () => Promise.all(Array.from({ length: conc }, async () => {
     while (next < jobs.length && !fault) {
       const job = jobs[next++];
       const r = await runOne(job).catch((e) => ({ error: String(e) }));
@@ -339,7 +361,7 @@ async function matrix() {
       console.log(`[${done}/${jobs.length}] ${runId(job.scenario, job.agent, job.skill)} ${r.skipped ? "(already done)" : r.error ?? `exit ${r.code}`}${r.rigFault ? ` RIG FAULT: ${r.rigFault} (${r.files.join(", ")})` : ""}`);
       if (r.rigFault || /^Error: rig fault/.test(r.error ?? "")) fault = runId(job.scenario, job.agent, job.skill);
     }
-  }));
+  })));
   if (fault) { console.error(`round stopped: rig fault in ${fault}. Look at RIG-FAULT in the run folder before starting again.`); process.exitCode = 1; }
 }
 
