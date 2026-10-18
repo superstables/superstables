@@ -1,0 +1,11 @@
+{
+  "scenario": "find-and-pay-once",
+  "agent": "claude-opus",
+  "model": "opus",
+  "skill": "without",
+  "started": "2026-10-18T15:06:40.518Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 51,
+  "finished": "2026-10-18T15:07:31.171Z"
+}

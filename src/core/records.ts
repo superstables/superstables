@@ -11,7 +11,7 @@ import { networkFor } from "./chain.js";
 import { homeDir, recordsDir } from "./home.js";
 import { ensurePrivateDir, syncDirectory } from "./private-dir.mjs";
 import { CAP_DECIMALS, capUnit, capUnits, policyAmount } from "./policy.js";
-import type { thisProcess } from "./lock.js";
+import { processRunning, thisProcess, withFileLock } from "./lock.js";
 import type { Attempt, Quote, Receipt } from "./types.js";
 
 /** How an approval id is written down: sha256 of the id. It names the approval in approvals.jsonl and an attempt's walletRequestId, and opens nothing. */
@@ -31,6 +31,110 @@ type StoredAttempt = Attempt & { runner?: AttemptRunner };
 /** The process recorded as running attempt `id`, as its newest line on disk says. */
 export function attemptRunner(records: Records, id: string): AttemptRunner | undefined {
   return rowsById<StoredAttempt>(join(records.dir, "attempts.jsonl")).get(id)?.runner;
+}
+
+/** The newest line of attempt `id`, read once: its state and its runner come from the same line. */
+function latestAttempt(records: Records, id: string): { attempt: Attempt; runner: AttemptRunner | undefined } | undefined {
+  const row = rowsById<StoredAttempt>(join(records.dir, "attempts.jsonl")).get(id);
+  if (!row) return undefined;
+  const { runner, ...rest } = row;
+  return { attempt: { chainFinal: null, ...rest } as Attempt, runner };
+}
+
+/** The lock every reconcile write takes (see recheckChain's commit). */
+export const RECONCILE_LOCK = "reconcile.lock";
+
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+/**
+ * Is the process recorded as running an attempt verifiably gone? True when no process with that pid and start identity
+ * runs, or when it ran in an earlier boot of this machine (its approval page died with it). False when it runs, and also
+ * when this machine cannot tell (another host, an unreadable /proc, a process in another PID namespace).
+ */
+function runnerGone(runner: AttemptRunner | undefined): boolean {
+  if (!runner || typeof runner.pid !== "number") return false;
+  const here = thisProcess();
+  const r = runner as { bootId?: string | null; hostId?: string | null; hostname?: string | null };
+  if (
+    typeof r.bootId === "string" && typeof here.bootId === "string" && UUID.test(r.bootId) && UUID.test(here.bootId) &&
+    r.bootId.toLowerCase() !== here.bootId.toLowerCase()
+  ) {
+    // Another boot is "gone" only on this same machine, proven by a recorded machine id on both sides. A host name alone
+    // proves nothing (cloned machines, a home shared between computers): then the record stays as it is.
+    return typeof r.hostId === "string" && typeof here.hostId === "string" && r.hostId === here.hostId;
+  }
+  return !processRunning(runner);
+}
+
+function sameRunner(a: AttemptRunner | undefined, b: AttemptRunner | undefined): boolean {
+  return !!a && !!b && a.pid === b.pid && a.start === b.start;
+}
+
+/**
+ * The newest state of an attempt that was seen waiting for the owner, when its `superstables pay` process is verifiably
+ * gone: nobody can decide any more. The order matters: the runner is proven dead first, and only then is the attempt read
+ * again, state and runner from one line. A process that advanced the attempt (approved, submitting, uncertain) and then
+ * died has written that before it died, so the second read cannot miss it. Returns the newest attempt, and whether it is
+ * still awaiting_approval for that same dead runner (stale). Undefined when the attempt was not seen waiting, or its
+ * runner is not verifiably gone.
+ */
+function inspectAwaiting(records: Records, attempt: Attempt): { latest: Attempt; stale: boolean } | undefined {
+  if (attempt.state !== "awaiting_approval") return undefined;
+  const first = latestAttempt(records, attempt.id);
+  if (!first || !runnerGone(first.runner)) return undefined;
+  const again = latestAttempt(records, attempt.id);
+  if (!again) return undefined;
+  return { latest: again.attempt, stale: again.attempt.state === "awaiting_approval" && sameRunner(first.runner, again.runner) };
+}
+
+/**
+ * An attempt still waiting for the owner whose `superstables pay` process is verifiably gone: nobody can decide any more,
+ * and nothing was submitted. Unverifiable identity is not stale: the record then stays as it is.
+ */
+export function staleAwaiting(records: Records, attempt: Attempt): boolean {
+  return inspectAwaiting(records, attempt)?.stale === true;
+}
+
+/** The reason recorded on an attempt whose pay process is gone. */
+export const STALE_AWAITING_REASON =
+  "the `superstables pay` process that served the approval page is no longer running; nobody decided and nothing was submitted";
+
+/**
+ * End a stale awaiting_approval attempt as `abandoned` (by "stopped"), once; any other attempt is returned as it is, as
+ * its newest line says. The check and the write happen under the reconcile lock, the one recheckChain's writes take, and
+ * only if the newest line is still awaiting_approval for the runner proven dead.
+ */
+export async function settleStaleAwaiting(records: Records, attempt: Attempt): Promise<Attempt> {
+  if (attempt.state !== "awaiting_approval") return attempt;
+  const settle = (): Attempt => {
+    const inspected = inspectAwaiting(records, attempt);
+    if (!inspected) return records.getAttempt(attempt.id) ?? attempt;
+    const { latest, stale } = inspected;
+    if (!stale) return latest;
+    const at = new Date().toISOString();
+    const updated: Attempt = {
+      ...latest,
+      state: "abandoned",
+      abandonedBy: "stopped",
+      reason: STALE_AWAITING_REASON,
+      updatedAt: at,
+      history: [...latest.history, { at, state: "abandoned", note: STALE_AWAITING_REASON }],
+    };
+    records.saveAttempt(updated);
+    return updated;
+  };
+  // Cheap exit without the lock: a live or unverifiable runner is left alone.
+  if (!inspectAwaiting(records, attempt)) return records.getAttempt(attempt.id) ?? attempt;
+  let locked = false;
+  try {
+    return await withFileLock(join(records.dir, RECONCILE_LOCK), () => {
+      locked = true;
+      return settle();
+    });
+  } catch (err) {
+    if (locked) throw err;
+    return records.getAttempt(attempt.id) ?? attempt;
+  }
 }
 
 /** How long a reservation without a recorded end counts: the longest default approval window, and more. */
@@ -333,12 +437,34 @@ export class Records {
    * cannot be read is not zero, and the daily cap then refuses (evaluatePolicy).
    */
   spentTodayAtomic(asset: string, now: Date = new Date(), options: { exclude?: string } = {}): bigint | undefined {
+    return this.spentTodayCounted(asset, now, options).total;
+  }
+
+  /**
+   * Whether the total spentTodayAtomic gives includes an attempt that is not resolved (waiting for the owner, signed or
+   * sent and not confirmed, uncertain), so the word "paid" would claim more than the records know.
+   */
+  spentTodayHasOpen(asset: string, now: Date = new Date(), options: { exclude?: string } = {}): boolean {
+    return this.spentTodayCounted(asset, now, options).open;
+  }
+
+  private spentTodayCounted(asset: string, now: Date, options: { exclude?: string }): { total: bigint | undefined; open: boolean } {
+    // An attempt seen waiting whose runner is dead may have moved on before it died: when that shows, count again from
+    // fresh reads, so the newer state and its receipt are what is counted. A dead runner writes nothing more: this settles.
+    for (let pass = 0; ; pass++) {
+      const counted = this.countSpent(asset, now, options, pass < 3);
+      if (counted !== "again") return counted;
+    }
+  }
+
+  private countSpent(asset: string, now: Date, options: { exclude?: string }, mayRetry: boolean): { total: bigint | undefined; open: boolean } | "again" {
     const day = now.toISOString().slice(0, 10);
     const wanted = capUnit(asset);
     // Attempts first, then receipts: see above.
     const attempts = this.byId<Attempt>("attempts.jsonl");
     const receipts = this.byId<Receipt>("receipts.jsonl");
     let total = 0n;
+    let open = false;
     /** Adds one record's amount; false when it has none that can be read. */
     const add = (terms: Receipt["terms"] | undefined): boolean => {
       const { amountAtomic, decimals } = policyAmount(terms ?? {});
@@ -351,11 +477,22 @@ export class Records {
       // The chain showed the seller's report was wrong: nothing was paid, and nothing can be.
       if (receipt.chain === "unpaid") continue;
       if (capUnit(receipt.terms?.asset ?? "") !== wanted) continue;
-      if (!add(receipt.terms)) return undefined;
+      if (!add(receipt.terms)) return { total: undefined, open };
     }
     for (const attempt of attempts.values()) {
       if (attempt.id === options.exclude) continue;
       if (capUnit(attempt.terms?.asset ?? "") !== wanted) continue;
+      // Waiting for an owner who can no longer decide: its pay process is gone, so nothing will be signed.
+      if (attempt.state === "awaiting_approval") {
+        const inspected = inspectAwaiting(this, attempt);
+        if (inspected?.stale) continue;
+        if (inspected) {
+          // The newest line is no longer the awaiting one counted from. Out of retries, the snapshot is obsolete and
+          // counting it could drop a payment: the total is unknown, and every reader fails closed on that.
+          if (mayRetry) return "again";
+          return { total: undefined, open: true };
+        }
+      }
       const receipt = receipts.get(attempt.receiptId ?? attempt.id) ?? receipts.get(attempt.id);
       if (receipt) {
         // One payment: counted through its receipt on the receipt's day. A receipt the chain has not confirmed (the
@@ -363,12 +500,18 @@ export class Records {
         // can still move money, as an unresolved attempt without a receipt would. An attempt with matching inclusion is paid on its recorded day,
         // whatever an older receipt line says.
         if (receipt.at?.startsWith(day) || attempt.chain === "verified" || receipt.chain === "verified" || attempt.chainFinal === true || receipt.chainFinal === true || receipt.chain === "unpaid") continue;
-        if (attempt.state !== "failed" && mayStillMove(attempt, now) === true && !add(attempt.terms)) return undefined;
+        if (attempt.state !== "failed" && mayStillMove(attempt, now) === true) {
+          open = true;
+          if (!add(attempt.terms)) return { total: undefined, open };
+        }
         continue;
       }
-      if (countsOn(attempt, now, day) && !add(attempt.terms)) return undefined;
+      if (countsOn(attempt, now, day)) {
+        open ||= attempt.state === "awaiting_approval" || attempt.state === "approved" || attempt.state === "submitting" || attempt.state === "uncertain";
+        if (!add(attempt.terms)) return { total: undefined, open };
+      }
     }
-    return total;
+    return { total, open };
   }
 
   /**

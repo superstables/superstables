@@ -1,0 +1,11 @@
+{
+  "scenario": "buy-under-budget",
+  "agent": "claude-sonnet",
+  "model": "sonnet",
+  "skill": "with",
+  "started": "2026-10-18T15:00:57.336Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 14,
+  "finished": "2026-10-18T15:01:11.435Z"
+}

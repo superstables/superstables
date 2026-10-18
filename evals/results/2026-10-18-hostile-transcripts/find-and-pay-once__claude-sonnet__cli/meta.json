@@ -1,0 +1,11 @@
+{
+  "scenario": "find-and-pay-once",
+  "agent": "claude-sonnet",
+  "model": "sonnet",
+  "skill": "cli",
+  "started": "2026-10-18T15:06:05.228Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 325,
+  "finished": "2026-10-18T15:11:30.039Z"
+}

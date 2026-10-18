@@ -1,0 +1,11 @@
+{
+  "scenario": "payment-outcome-with-tx",
+  "agent": "codex-sol",
+  "model": "gpt-6.1-sol",
+  "skill": "with",
+  "started": "2026-10-18T15:25:07.700Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 39,
+  "finished": "2026-10-18T15:25:46.360Z"
+}

@@ -1,0 +1,3 @@
+The `superstables` command-line tool is installed on this computer, on your PATH.
+
+Set up a 1 USDC budget on Base Sepolia that I can approve from my phone.

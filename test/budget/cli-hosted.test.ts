@@ -156,7 +156,7 @@ describe("setup --hosted", () => {
     expect(r.approve.url).toMatch(/\/approve\/budget\/bl_test0001#ssba_/);
     expect(r.stderr).toMatch(/match code: ABC-DEF/);
     expect(r.stderr).toMatch(/any device where the owner is signed in to/);
-    expect(r.stderr).toMatch(/Write this approval link, the match code ABC-DEF and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call/);
+    expect(r.stderr).toMatch(/Reply to the owner with message_for_owner from the RESULT, word for word \(you may add one short line before it\), and end your turn/);
     const pub = publicFile();
     expect(pub).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
     expect(pub).toMatch(/^APPROVALS=hosted$/m);

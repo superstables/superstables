@@ -48,6 +48,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
     asset,
     ...policyAmount(chosen.terms),
     spentTodayAtomic: deps.records.spentTodayAtomic(asset),
+    spentTodayHasOpen: deps.records.spentTodayHasOpen(asset),
   };
   const verdict = evaluatePolicy(deps.policy, payment);
 

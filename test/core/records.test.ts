@@ -6,8 +6,27 @@ import { createHash } from "node:crypto";
 import { appendFileSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { Records, attemptRunner } from "../../src/core/records.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Records, attemptRunner, settleStaleAwaiting, staleAwaiting } from "../../src/core/records.js";
+import { thisProcess } from "../../src/core/lock.js";
+import { DEFAULT_POLICY, evaluatePolicy } from "../../src/core/policy.js";
+
+// A hook run inside the "is the runner still running" check, to put a write between reading an attempt and judging its runner.
+const runnerCheck: { hook?: () => void } = {};
+vi.mock("../../src/core/lock.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../src/core/lock.js")>();
+  return {
+    ...real,
+    processRunning: (runner: Parameters<typeof real.processRunning>[0]) => {
+      const hook = runnerCheck.hook;
+      if (hook) {
+        runnerCheck.hook = undefined;
+        hook();
+      }
+      return real.processRunning(runner);
+    },
+  };
+});
 import type { Attempt, PaymentTerms, Quote, Receipt } from "../../src/core/types.js";
 
 const dirs: string[] = [];
@@ -491,5 +510,153 @@ describe("Records", () => {
     const r = records();
     expect(r.newId()).not.toBe(r.newId());
     expect(r.newId()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+  });
+});
+
+describe("an attempt left waiting by a pay process that is gone", () => {
+  const now = new Date();
+  const at = now.toISOString();
+  const until = new Date(now.getTime() + 5 * 60_000).toISOString();
+  const waiting = (id: string): Attempt => ({
+    id,
+    quoteId: `q-${id}`,
+    createdAt: at,
+    updatedAt: at,
+    state: "awaiting_approval",
+    url: "https://seller.example/x",
+    terms: terms(0.01),
+    history: [{ at, state: "awaiting_approval" }],
+    reservedAt: at,
+    reservedUntil: until,
+  });
+  const save = (r: Records, id: string, runner: Record<string, unknown>) => r.saveAttempt({ ...waiting(id), runner } as Attempt);
+  /** A pid no process has, on this machine and this boot. */
+  const gone = { ...thisProcess(), pid: 2 ** 30 + 7, start: "linux:gone:1" };
+
+  it("becomes abandoned by stopped, and stops counting toward today's spend", async () => {
+    const r = records();
+    save(r, "dead", gone);
+    expect(r.spentToday("USDC", now)).toBe(0); // already not counted while it is judged
+    expect(r.spentTodayHasOpen("USDC", now)).toBe(false);
+    expect(staleAwaiting(r, r.getAttempt("dead")!)).toBe(true);
+    const settled = await settleStaleAwaiting(r, r.getAttempt("dead")!);
+    expect(settled).toMatchObject({ state: "abandoned", abandonedBy: "stopped" });
+    expect(settled.reason).toContain("no longer running; nobody decided and nothing was submitted");
+    expect(r.getAttempt("dead")?.history.map((h) => h.state)).toEqual(["awaiting_approval", "abandoned"]);
+    // a second reading changes nothing
+    await settleStaleAwaiting(r, r.getAttempt("dead")!);
+    expect(r.getAttempt("dead")?.history).toHaveLength(2);
+  });
+
+  it("leaves an attempt whose runner is alive (this process, another id) alone, and counts it as open", async () => {
+    const r = records();
+    save(r, "live", thisProcess());
+    expect(staleAwaiting(r, r.getAttempt("live")!)).toBe(false);
+    expect((await settleStaleAwaiting(r, r.getAttempt("live")!)).state).toBe("awaiting_approval");
+    expect(r.spentToday("USDC", now)).toBe(0.01);
+    expect(r.spentTodayHasOpen("USDC", now)).toBe(true);
+  });
+
+  it("ends an attempt from an earlier boot of this machine, and leaves one whose host cannot be told", () => {
+    const r = records();
+    const here = thisProcess();
+    save(r, "earlier-boot", { ...here, pid: process.pid, bootId: "11111111-2222-3333-4444-555555555555" });
+    expect(staleAwaiting(r, r.getAttempt("earlier-boot")!)).toBe(here.bootId !== null && here.hostId !== null);
+    save(r, "other-host", { ...here, pid: 2 ** 30 + 9, bootId: "11111111-2222-3333-4444-555555555555", hostId: "f".repeat(32), hostname: "elsewhere" });
+    if (here.hostId) expect(staleAwaiting(r, r.getAttempt("other-host")!)).toBe(false);
+    // no runner recorded at all: nothing proves it is gone
+    r.saveAttempt(waiting("no-runner"));
+    expect(staleAwaiting(r, r.getAttempt("no-runner")!)).toBe(false);
+  });
+
+  it("never takes a host name alone as the same machine: a missing machine id on either side leaves it", () => {
+    const r = records();
+    const here = thisProcess();
+    const boot = "11111111-2222-3333-4444-555555555555";
+    // same host name, no machine id recorded
+    save(r, "no-host-id-there", { ...here, pid: process.pid, bootId: boot, hostId: null });
+    expect(staleAwaiting(r, r.getAttempt("no-host-id-there")!)).toBe(false);
+    save(r, "no-host-id-at-all", { ...here, pid: process.pid, bootId: boot, hostId: undefined });
+    expect(staleAwaiting(r, r.getAttempt("no-host-id-at-all")!)).toBe(false);
+    // a different machine id with the same host name
+    save(r, "other-id", { ...here, pid: process.pid, bootId: boot, hostId: "e".repeat(32) });
+    expect(staleAwaiting(r, r.getAttempt("other-id")!)).toBe(false);
+  });
+
+  describe("when the attempt moves on between the first read and the death check", () => {
+    const advance = (r: Records, id: string, state: "submitting" | "uncertain") => {
+      const current = r.getAttempt(id)!;
+      r.saveAttempt({
+        ...current,
+        state,
+        updatedAt: new Date().toISOString(),
+        paymentIncluded: state === "uncertain" ? true : undefined,
+        history: [...current.history, { at: new Date().toISOString(), state: "approved" }, { at: new Date().toISOString(), state }],
+      });
+    };
+
+    for (const state of ["submitting", "uncertain"] as const) {
+      it(`settleStaleAwaiting keeps the newer ${state} state`, async () => {
+        const r = records();
+        save(r, "race", gone);
+        const seen = r.getAttempt("race")!; // read while awaiting
+        runnerCheck.hook = () => advance(r, "race", state); // the pay process moves on, then is killed
+        const result = await settleStaleAwaiting(r, seen);
+        expect(runnerCheck.hook).toBeUndefined();
+        expect(result.state).toBe(state);
+        expect(r.getAttempt("race")?.state).toBe(state);
+        expect(r.getAttempt("race")?.history.map((h) => h.state)).not.toContain("abandoned");
+        expect(r.spentToday("USDC", now)).toBe(0.01);
+        expect(r.spentTodayHasOpen("USDC", now)).toBe(true);
+      });
+    }
+
+    it("the spend count keeps the charge of an attempt that moved on", () => {
+      const r = records();
+      save(r, "race", gone);
+      runnerCheck.hook = () => advance(r, "race", "submitting");
+      expect(r.spentToday("USDC", now)).toBe(0.01);
+      expect(r.getAttempt("race")?.state).toBe("submitting");
+    });
+
+    it("four successive races with expired reservations leave the total unknown, and a policy check refuses", () => {
+      const ids = ["a", "b", "c", "d"];
+      /** Four expired reservations; each pass finds the next one moved on to submitting (renewed, approved, sent, runner died). */
+      const racing = (): { r: Records; raced: () => number } => {
+        const r = records();
+        const expired = new Date(now.getTime() - 60_000).toISOString();
+        for (const id of ids) r.saveAttempt({ ...waiting(id), runner: gone, reservedUntil: expired } as Attempt);
+        let next = 0;
+        const arm = () => {
+          runnerCheck.hook = () => {
+            advance(r, ids[next++]!, "submitting");
+            if (next < ids.length) arm();
+          };
+        };
+        arm();
+        return { r, raced: () => next };
+      };
+      const first = racing();
+      const total = first.r.spentTodayAtomic("USDC", now);
+      expect(total).toBeUndefined(); // not 0.03: the obsolete snapshot of the fourth is not counted
+      expect(first.raced()).toBe(4);
+      const verdict = evaluatePolicy(DEFAULT_POLICY, { domain: "api.example.com", asset: "USDC", amountDecimal: 0.01, spentTodayAtomic: total });
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.reason).toContain("could not count today's spending; try again");
+      expect(racing().r.spentToday("USDC", now)).toBeNaN();
+      // With nothing left to race, the count is known again and includes all four.
+      expect(first.r.spentToday("USDC", now)).toBe(0.04);
+    });
+
+    it("the spend count keeps a charge that has a receipt", () => {
+      const r = records();
+      save(r, "race", gone);
+      runnerCheck.hook = () => {
+        r.saveReceipt(receipt("race", new Date().toISOString(), 0.01));
+        const current = r.getAttempt("race")!;
+        r.saveAttempt({ ...current, state: "settled", receiptId: "race", history: [...current.history, { at: new Date().toISOString(), state: "settled" }] });
+      };
+      expect(r.spentToday("USDC", now)).toBe(0.01);
+    });
   });
 });

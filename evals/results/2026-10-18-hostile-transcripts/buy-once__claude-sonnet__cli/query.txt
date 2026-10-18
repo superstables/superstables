@@ -1,0 +1,3 @@
+The `superstables` command-line tool is installed on this computer, on your PATH.
+
+I'd like to buy the BTC market data once, with my approval. Don't spend more than 0.02.

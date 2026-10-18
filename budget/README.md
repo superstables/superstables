@@ -13,7 +13,7 @@ Three ideas hold it together:
 
 - **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes and funding transfers, on a page on their own machine or on superstables.com. The agent signs each purchase with its own key. The client sends each budget purchase directly to the seller; no site approval is needed per purchase. Any owner steps in EVM recovery always use the local approval page, including after setup on superstables.com.
 - **The CLI checks each purchase.** Before it signs anything, `superstables budget buy` checks the price against `--max`, the token and, when `--pay-to` is supplied, the expected recipient. The agent must read the result and the exit code.
-- **Every purchase has an ID and a journal.** If a run dies half way, `superstables budget reconcile` reads the chain and says what happened. It never pays.
+- **Every purchase has an ID and a journal.** If a run dies half way, `superstables budget reconcile` reads the chain and says what happened. It never pays. On `solana`, a buy that straddled a revoke may need several `reconcile` runs: each run scans a window of finalized blocks, so run it again until it answers.
 
 `superstables budget --help` is the short version of this page: where the owner and the agent start, which rail and `--chain` serve each chain, the owner's steps per rail, the exit codes and where state lives. Every command's `--help` says what it does, whether it can move money, who runs it, an example, what it prints and its exit codes.
 
@@ -44,7 +44,7 @@ The owner approves in one of two places. Local approvals are the default and nee
 | Account | None | A superstables.com account. The owner signs in with an Ethereum or Solana wallet or an email address; the account holds the wallets that approve (Ethereum for `evm` and `tempo`, Solana for `solana`), which an account admin adds on the account page |
 | Rails | `evm`, `tempo`, `solana` | `evm`, `tempo`, `solana` |
 | Owner on record | The wallet that signs the setup message | The wallet that signs the owner-proof message on superstables.com (on `solana`, the Solana wallet the owner connects there); the command checks that signature before it records anyone |
-| What the agent shows the owner | The approval link and the terms | The approval link, the terms and a match code, which the owner picks on the page |
+| What the agent shows the owner | `message_for_owner`, word for word: the approval link and the terms | `message_for_owner`, word for word: the approval link, the terms and a match code, which the owner picks on the page |
 
 In both modes the agent key stays on this machine, the owner's key stays in their wallet, and the command reads the chain itself before it reports success. Budget purchases need no site approval and go directly to the seller, which may itself be Superstables.
 
@@ -61,7 +61,7 @@ With approvals on superstables.com, `setup` adds the agent to the owner's accoun
 
 ### The approval page
 
-Owner actions use the same approval page on every rail. The rest of this section describes local approvals; the page for approvals on superstables.com is on the site. Setup asks for a free message signature; grants, revokes and funding ask for transactions with network fees. The command builds the transaction and the terms, starts a page on `127.0.0.1` on a random port, and prints the approval link. It holds a one-time random id and expires after 10 minutes (`--timeout SECONDS` changes it). The command opens it in the default browser, through a launcher file only you can read, unless you pass `--no-open`; in detached mode, not over SSH. In detached mode, the agent also shows you the approval link. The owner:
+Owner actions use the same approval page on every rail. The rest of this section describes local approvals; the page for approvals on superstables.com is on the site. Setup asks for a free message signature; grants, revokes and funding ask for transactions with network fees. The command builds the transaction and the terms, starts a page on `127.0.0.1` on a random port, and prints the approval link. It holds a one-time random id and expires after 10 minutes (`--timeout SECONDS` changes it). The command opens it in the default browser, through a launcher file only you can read, unless you pass `--no-open`; in detached mode, not over SSH. In detached mode, the agent also sends you `message_for_owner`, which has the approval link. The owner:
 
 1. Opens the approval link in the browser that has their wallet. The page shows the terms, written by the command from its own plan. The plan uses the command arguments, including the amount and recipients. Check them against what you intended to authorize.
 2. Presses **Connect wallet**. If more than one wallet is installed, the page asks which one to use, and then uses only that one. For transactions on `evm` and `tempo`, the page asks the wallet to switch to the selected testnet or add it. Setup only records your address.
@@ -79,7 +79,7 @@ The approval link works on the machine running the command. Use a browser with y
 
 If the approval link expires before your wallet is asked to send, the command ends with `state: "refused_precheck"` (exit 3) and that approval sent nothing. `recover` and a setup on superstables.com with `--grant` or `--fund` can ask more than once: an earlier step may have completed, so read `steps`, `tx` and `superstables budget status`. Run the same command again for a new one. Running `setup` again reuses the agent key it created.
 
-In a terminal the command waits for you, as above. Run by an agent (stdout is not a terminal), it returns as soon as the approval link exists, with `state: "waiting_owner"` and an approval id. The page keeps waiting in a background process, and `superstables budget wait --id <id> --shown` reports how it ended (`--shown`: the agent has written the approval link, the code and the terms in a reply you can read; without it `wait` refuses). `--wait` and `--detach` force either mode. See [Use it from an agent](#use-it-from-an-agent).
+In a terminal the command waits for you, as above. Run by an agent (stdout is not a terminal), it returns as soon as the approval link exists, with `state: "waiting_owner"` and an approval id. The page keeps waiting in a background process, and `superstables budget wait --id <id> --shown` reports how it ended (`--shown`: the agent has sent `message_for_owner` in a reply you can read; without it `wait` refuses). `--wait` and `--detach` force either mode. See [Use it from an agent](#use-it-from-an-agent).
 
 ## The rails
 
@@ -175,7 +175,7 @@ In each block, run `doctor` first: it lists what is missing and which address to
    superstables budget revoke --rail evm                         # approve it in your wallet
    ```
 
-   In a terminal, `grant` and `revoke` wait until you approve or reject in your wallet. Run by an agent, they return at once with the approval link and an approval id, and the agent polls `superstables budget wait --id <id> --shown`.
+   In a terminal, `grant` and `revoke` wait until you approve or reject in your wallet. Run by an agent, they return at once with the approval link and an approval id, and the agent runs `superstables budget wait --id <id> --shown` once each time you say you have approved.
 
    Your wallet may offer to change the spending cap on the grant. Keep the requested cap. A changed cap may take effect on chain even if `grant` refuses to record it locally. If that happens, revoke the allowance before granting again.
 
@@ -280,12 +280,12 @@ The last line of stdout is always `RESULT {json}` (fields: `ok`, `command`, `rai
 
 | Exit | Meaning | What the agent must do |
 | --- | --- | --- |
-| 0 | Done. Or `state: "waiting_owner"`: the command has no final result yet | Continue. On `waiting_owner`, write the approval link, the code and the terms in your reply to the owner, then poll `superstables budget wait --id ID --shown` until the state is final. |
+| 0 | Done. Or `state: "waiting_owner"`: the command has no final result yet | Continue. On `waiting_owner`, reply to the owner with `message_for_owner` from the `RESULT`, word for word (you may add one short line before it), and end your turn; run `superstables budget wait --id ID --shown` once each time the owner says they've approved. |
 | 1 | Failed, including a refusal by the chain | Read `reason` and `next`. Do not retry blindly. |
 | 2 | Bad input | Fix the command. Nothing was signed. |
 | 3 | Refused: no budget set up here, no grant, over `--max`, the owner rejected it or the approval link expired. Owner commands can also report this after a transaction changed the on-chain terms, or after an earlier step completed (`recover`; a setup on superstables.com with `--grant` or `--fund`: read `steps`, `tx` and `superstables budget status`) | Respect it. Never raise `--max` or drop `--pay-to` to get past it. Tell the owner. |
 | 4 | Paid, seller did not deliver | Never pay again. Report the `tx` hash. |
-| 5 | Outcome unknown | For a purchase, run `superstables budget reconcile --rail R --op ID` on the same chain. Never pay again for that purchase. For an owner action, check `status` and wallet activity. |
+| 5 | Outcome unknown | For a purchase, run `superstables budget reconcile --rail R --op ID` on the same chain. Never pay again for that purchase. For an owner action, check `status` and wallet activity. On `tempo`, an access key signs with the owner's account nonce, so while a stolen key keeps sending transactions the owner's wallet can refuse a revoke with "nonce too low" and the command answers unknown. Read `status`; if the key is not yet revoked, the owner retries the revoke. What the key can still spend stays bounded by its limit. On `evm`, `recover --op ID` also answers unknown while its return and the owner's revoke are not final, even when the price was already swept; `reconcile --op ID` reports it returned once they are final. |
 
 Always pass `--max`, and `--pay-to` when you know the seller's address. It comes from the seller's own 402 answer. `superstables budget preflight --rail R --url URL` sends one unpaid request and prints the seller's price (`amount`) and address (`payTo`), signing nothing, on every rail (on `tempo` and `solana`, with the purchase's `--method` and `--body`). On Arc add `--chain arc-testnet`: a seller on another chain fails, and `next` names the chain it offers. The price is what the seller asks, not a ceiling: set `--max` to what you accept. `--pay-to` from the same 402 catches a seller that changes its address before the buy; it does not prove who the seller is. Use one new `--op ID` per purchase; keep that ID for reconciliation. Do not use a new ID to retry an uncertain or already paid purchase.
 

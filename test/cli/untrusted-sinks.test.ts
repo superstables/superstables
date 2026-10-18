@@ -139,7 +139,7 @@ describe("find", () => {
   it("an index answer that is not JSON is reported in the client's words", async () => {
     const { url } = await catalogue(() => []);
     const env = { SUPERSTABLES_DEMO_SERVICES: "off", SUPERSTABLES_INDEX_URL: `${url}/badindex`, SUPERSTABLES_CATALOGUE_URL: "off" };
-    const warning = "The Superstables index could not be read (the index answer is not valid JSON); showing the built-in catalogue only.";
+    const warning = "The Superstables index could not be read (the index answer is not valid JSON); its listings are missing below. The built-in listings are shown.";
     const json = await run(["find", "zzqx", "--json"], env);
     expect(json.code, json.stderr).toBe(0);
     expect((JSON.parse(json.stdout) as { warnings: string[] }).warnings).toEqual([warning]);

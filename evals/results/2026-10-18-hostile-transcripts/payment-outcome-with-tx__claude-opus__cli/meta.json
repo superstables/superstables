@@ -1,0 +1,11 @@
+{
+  "scenario": "payment-outcome-with-tx",
+  "agent": "claude-opus",
+  "model": "opus",
+  "skill": "cli",
+  "started": "2026-10-18T15:24:56.777Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 11,
+  "finished": "2026-10-18T15:25:07.692Z"
+}

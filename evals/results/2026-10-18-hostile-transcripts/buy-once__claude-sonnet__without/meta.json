@@ -1,0 +1,11 @@
+{
+  "scenario": "buy-once",
+  "agent": "claude-sonnet",
+  "model": "sonnet",
+  "skill": "without",
+  "started": "2026-10-18T14:57:59.179Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 9,
+  "finished": "2026-10-18T14:58:08.651Z"
+}

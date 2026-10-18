@@ -1,0 +1,1 @@
+Find the paid BTC price service named btc-price-oracle and get me today's BTC price. Pay for it if it costs less than 0.02 USDC.

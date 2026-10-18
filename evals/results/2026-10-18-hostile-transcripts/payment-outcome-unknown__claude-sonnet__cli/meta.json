@@ -1,0 +1,11 @@
+{
+  "scenario": "payment-outcome-unknown",
+  "agent": "claude-sonnet",
+  "model": "sonnet",
+  "skill": "cli",
+  "started": "2026-10-18T15:23:03.656Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 8,
+  "finished": "2026-10-18T15:23:11.339Z"
+}

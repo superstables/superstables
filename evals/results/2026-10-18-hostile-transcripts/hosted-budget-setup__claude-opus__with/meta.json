@@ -1,0 +1,11 @@
+{
+  "scenario": "hosted-budget-setup",
+  "agent": "claude-opus",
+  "model": "opus",
+  "skill": "with",
+  "started": "2026-10-18T15:10:02.759Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 22,
+  "finished": "2026-10-18T15:10:24.444Z"
+}

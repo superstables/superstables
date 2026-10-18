@@ -1,0 +1,11 @@
+{
+  "scenario": "hosted-budget-setup",
+  "agent": "codex-astra",
+  "model": "gpt-6-astra",
+  "skill": "with",
+  "started": "2026-10-18T15:10:36.457Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 37,
+  "finished": "2026-10-18T15:11:13.696Z"
+}

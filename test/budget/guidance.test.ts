@@ -4,7 +4,7 @@
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -286,6 +286,24 @@ describe("help", () => {
     ]) expect(r.stdout).toContain(part);
   });
 
+  it("budget --help lists the steps on this computer before --hosted, and --hosted says it needs an account", async () => {
+    const r = await budget(["--help"]);
+    const local = r.stdout.indexOf("superstables budget setup --rail evm ");
+    const hosted = r.stdout.indexOf("setup --rail evm --hosted");
+    expect(local).toBeGreaterThan(-1);
+    expect(hosted).toBeGreaterThan(local);
+    expect(r.stdout.slice(0, hosted)).toContain("no account needed");
+    expect(r.stdout.slice(hosted - 260, hosted)).toContain("needs an account");
+  });
+
+  it("no help, source or stderr tells the agent to write the link and the terms itself", async () => {
+    const old = /and the terms in your reply/;
+    const helps = await Promise.all([[], ["setup"], ["grant"], ["wait"], ["buy-once"]].map((a) => budget([...a, "--help"])));
+    for (const h of helps) expect(h.stdout).not.toMatch(old);
+    expect(helps[0].stdout).toContain("message_for_owner");
+    for (const file of ["cli.mjs", "once.mjs", "owner-page.ts"]) expect(readFileSync(join(REPO, "budget", file), "utf8")).not.toMatch(old);
+  });
+
   it("buy --help says what --max is and what a buy needs first", async () => {
     const r = await budget(["buy", "--help"]);
     expect(r.stdout).toContain("--max 0.02 means 0.02 USDC");
@@ -303,6 +321,16 @@ describe("help", () => {
     const r = await budget(["doctor", "--rail", "evm"]);
     expect(`${r.stdout}${r.stderr}`).not.toMatch(/superstables budget \S+ \((checkout|standalone)/);
   }, 60_000);
+});
+
+describe("wait with an id this home does not have", () => {
+  it("is bad input that names the home and says nothing about whether anything was approved or paid", async () => {
+    const r = await budget(["wait", "--id", "oa-20260930120000-1a2b3c4d", "--shown"]);
+    expect(r.code).toBe(2);
+    expect(r.result).toMatchObject({ command: "wait", state: "failed", id: "oa-20260930120000-1a2b3c4d", home });
+    expect(r.result.next).toMatch(/says nothing about whether anything was approved or paid/);
+    expect(r.result.next).toMatch(/which home/);
+  });
 });
 
 describe("one RESULT line", () => {

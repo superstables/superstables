@@ -1,0 +1,11 @@
+{
+  "scenario": "hosted-budget-setup",
+  "agent": "codex-sol",
+  "model": "gpt-6.1-sol",
+  "skill": "cli",
+  "started": "2026-10-18T15:12:08.561Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 34,
+  "finished": "2026-10-18T15:12:42.493Z"
+}

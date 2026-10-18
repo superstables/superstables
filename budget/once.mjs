@@ -581,6 +581,13 @@ export function messageForOwner(r) {
   try { origin = new URL(r.url).origin; } catch {}
   // a link on a site other than www.superstables.com says which site it is, before anything else
   const other = origin && (hostedOn || !local) && isOtherSite(origin) ? `This approval link is on ${siteName(origin)}${local ? ", a site on this computer," : ","} not www.superstables.com.` : null;
+  // the account note: a link on a site asks the owner to sign in with their wallet first
+  const account = hostedOn || !local ? `This needs a ${origin ? siteName(origin) : "superstables.com"} account: the link asks you to sign in with your wallet first (a message, no fee).` : null;
+  const minutes = r.expires ? Math.round((Date.parse(r.expires) - Date.now()) / 60000) : NaN;
+  const expiry = Number.isFinite(minutes) && minutes >= 1 ? `The link expires in ${minutes} minute${minutes === 1 ? "" : "s"}.` : null;
+  let port = null;
+  try { port = local && !hostedOn ? new URL(r.url).port : null; } catch {}
+  const ssh = local && port ? `Over SSH, forward the port first: ssh -L ${port}:127.0.0.1:${port} user@this-host` : null;
   return [
     `Review and approve in your wallet: ${what}`,
     other,
@@ -590,9 +597,36 @@ export function messageForOwner(r) {
     r.url,
     r.matchCode ? `Match code: ${r.matchCode} (pick it on the page)` : null,
     `${hasAmount ? `${t.amount} ${unit} on ${network}.` : `On ${network}.`} ${TESTNET_LINE}`,
+    account,
+    r.command === "buy-once" ? null : enforcementLine(r, t),
+    expiry,
     local ? "Open it in the browser that has your wallet, on this machine." : null,
+    ssh,
     "Tell me when you've approved.",
   ].filter(Boolean).join("\n");
+}
+
+/**
+ * What the chain enforces for a step that allows money, in this client's words, built from the rail and the step's own
+ * terms (the client's tables, never seller or listing text). Null for a step that allows nothing (setup, revoke).
+ */
+function enforcementLine(r, t) {
+  // only a step that lets the agent spend: revoke, recover and fund-agent have an amount but allow nothing
+  if (r.command !== "grant" && r.command !== "setup") return null;
+  const enforced = Array.isArray(t.enforced) ? t.enforced.filter((x) => typeof x === "string") : [];
+  if (t.amount == null || t.amount === "" || enforced.length === 0) return null;
+  if (r.rail === "tempo") {
+    const total = /^A total limit of (.+?)\.(?: |$)/.exec(enforced[0])?.[1];
+    const perPeriod = /^A limit of (.+?) per period/.exec(enforced[0])?.[1];
+    if (!total && !perPeriod) return null; // not a grant's terms: say nothing rather than guess
+    const expiry = enforced.find((x) => /^The expiry\./.test(x))?.match(/After (\S+) /)?.[1];
+    const sellers = enforced.some((x) => /^The seller list\./.test(x));
+    const parts = [total ? `a total cap of ${total}` : `a cap of ${perPeriod} per period`, ...(expiry ? [`an expiry (${expiry})`] : []), ...(sellers ? ["a seller list"] : [])];
+    return `The chain enforces ${parts.length > 2 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts.join(" and ")}; no per-payment limit.`;
+  }
+  const cap = /total at most (.+?)\.(?: |$)/.exec(enforced[0])?.[1];
+  if (!cap) return null;
+  return `The chain enforces a total cap of ${cap} only: no expiry, no seller list and no per-payment limit.`;
 }
 
 // ---- records ---------------------------------------------------------------------------------------------------------
@@ -1169,7 +1203,7 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
       return refused(`buy-once purchase ${open.id} could not be cancelled and may still be open on ${siteName(open.hosted.site)}: one at a time`, `nothing was started. Its approval link was never shown, so do not send the owner anything for it. Run superstables budget wait --id ${open.id} --shown until the site says it ended, or rerun with --replace to ask the site to cancel it again; ${ABANDON(open.id)}`, 3, { pending: open });
     }
     if (!replace) {
-      return refused(`buy-once purchase ${open.id} is still waiting for the owner: one at a time`, `nothing was started. Write the pending approval link, the code and the terms in your reply to the owner and end your turn there. When they say they've approved, run superstables budget wait --id ${open.id} --shown. Only if the owner asks to replace it and has not started approving: rerun with --replace`, 3, { pending: open });
+      return refused(`buy-once purchase ${open.id} is still waiting for the owner: one at a time`, `nothing was started. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run superstables budget wait --id ${open.id} --shown. Only if the owner asks to replace it and has not started approving: rerun with --replace`, 3, { pending: open });
     }
     // a purchase that ever named a transaction, said paid or said money may have moved is never replaced
     if (!mayBeUnpaid(open.seen)) return refused(`the pending purchase ${open.id} may already have been paid (${siteName(open.hosted.site)} named a transaction or a payment for it), so it is not replaced`, `superstables budget wait --id ${open.id} --shown`, 3, { pending: open });

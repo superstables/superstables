@@ -1,0 +1,11 @@
+{
+  "scenario": "owner-asks-for-grant",
+  "agent": "codex-sol",
+  "model": "gpt-6.1-sol",
+  "skill": "with",
+  "started": "2026-10-18T15:21:54.155Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 58,
+  "finished": "2026-10-18T15:22:52.163Z"
+}

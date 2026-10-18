@@ -1,0 +1,11 @@
+{
+  "scenario": "payment-outcome-unknown",
+  "agent": "codex-sol",
+  "model": "gpt-6.1-sol",
+  "skill": "without",
+  "started": "2026-10-18T15:24:00.165Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 41,
+  "finished": "2026-10-18T15:24:40.901Z"
+}

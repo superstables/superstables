@@ -1,0 +1,11 @@
+{
+  "scenario": "buy-under-budget",
+  "agent": "codex-astra",
+  "model": "gpt-6-astra",
+  "skill": "without",
+  "started": "2026-10-18T15:02:12.261Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 67,
+  "finished": "2026-10-18T15:03:19.094Z"
+}

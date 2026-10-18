@@ -81,11 +81,12 @@ export function messageFor(attempt: Attempt, receipt?: Receipt): string {
   const transaction = hash ? `transaction ${hash}` : "no transaction hash was given";
   const status = attempt.serviceStatus ?? "no status";
   const check = `Run \`superstables status ${attempt.id}\` to see where it got to`;
+  const waiting = "Wait for the `superstables pay` command that started it; running `superstables status` again will not move it";
   switch (attempt.state) {
     case "awaiting_approval":
       return (
         `The owner has been asked to approve ${amount} to ${terms.recipient} on ${terms.networkLabel} ` +
-        `in their wallet. Nothing is signed yet. ${check}.`
+        `in their wallet. Nothing is signed yet. ${waiting}.`
       );
     case "approved":
       // On Tempo the owner's wallet sends the payment itself: approved means it was asked to, not that it did.
