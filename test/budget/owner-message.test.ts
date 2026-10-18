@@ -71,4 +71,58 @@ describe("message_for_owner", () => {
   it("is null without a link", () => {
     expect(messageForOwner({ state: "failed" })).toBeNull();
   });
+
+  const url = "http://127.0.0.1:4413/approve/x";
+  const AGENT = "0x1563915e194D8CfBA1943570603F7606A3115508";
+  const OWNER = "0x6dB2c4b9C1a8F6a0E1a5b9F0f5D2f1C7e8A94a31";
+
+  it("a revoke or recover says nothing about what the chain enforces", () => {
+    for (const [rail, command, enforced] of [
+      ["evm", "revoke", "Once this revoke takes effect, the agent cannot withdraw more under this allowance, even if its key is stolen."],
+      ["evm", "recover", "Once this revoke takes effect, the agent cannot withdraw more under this allowance, even if its key is stolen."],
+      ["solana", "revoke", "Once this revoke takes effect, transactions using this delegation fail, including ones signed earlier. The key cannot use this delegation even if stolen."],
+      ["tempo", "revoke", "Once this revoke takes effect, transactions using this access key fail, including ones signed earlier. The key remains revoked even if stolen."],
+    ]) expect(messageForOwner({ command, rail, url, chain: "base-sepolia", terms: { title: "Revoke spending permission", amount: "3", unit: "USDC", enforced: [enforced] } })).not.toContain("The chain enforces");
+  });
+
+  it("a tempo grant with a period says a cap per period, not a total cap", () => {
+    const m = messageForOwner({ command: "grant", rail: "tempo", url, chain: "moderato", terms: { title: "Grant", amount: "2", unit: "pathUSD", enforced: ["A limit of 2 pathUSD per period until expiry.", "The expiry. After 2026-11-01T00:00:00.000Z every payment the key signs is refused."] } })!;
+    expect(m).toContain("The chain enforces a cap of 2 pathUSD per period and an expiry (2026-11-01T00:00:00.000Z); no per-payment limit.");
+    expect(m).not.toContain("total cap");
+  });
+
+  it("works from the terms each rail really generates, fractional amounts, periods, sellers and expiry", async () => {
+    const t = (await import(new URL("../../budget/tempo/owner.ts", import.meta.url).href)) as any;
+    const expiry = 1_792_000_000;
+    const plan = { agent: AGENT, owner: OWNER, expiry, expirySeconds: 604_800, held: 9_000_000n, feeToken: t.KEYCHAIN, label: "" };
+    const msg = (rail: string, chain: string, terms: any, command = "grant") => messageForOwner({ command, rail, url, chain, terms })!;
+    const day = new Date(expiry * 1000).toISOString().replace(".000Z", "Z");
+
+    const total = msg("tempo", "moderato", t.grantTerms({ ...plan, limit: 2_500_000n, period: 0, sellers: undefined }));
+    expect(total).toContain(`The chain enforces a total cap of 2.5 pathUSD and an expiry (${day}); no per-payment limit.`);
+    const period = msg("tempo", "moderato", t.grantTerms({ ...plan, limit: 1_250_000n, period: 86_400, sellers: undefined }));
+    expect(period).toContain(`The chain enforces a cap of 1.25 pathUSD per period and an expiry (${day}); no per-payment limit.`);
+    expect(period).not.toContain("total cap");
+    const sellers = msg("tempo", "moderato", t.grantTerms({ ...plan, limit: 1_000_000n, period: 3600, sellers: [OWNER] }));
+    expect(sellers).toContain(`The chain enforces a cap of 1 pathUSD per period, an expiry (${day}) and a seller list; no per-payment limit.`);
+    expect(msg("tempo", "moderato", t.grantTerms({ ...plan, limit: 3_000_000n, period: 0, sellers: [OWNER] }), "setup"))
+      .toContain(`a total cap of 3 pathUSD, an expiry (${day}) and a seller list; no per-payment limit.`);
+    expect(msg("tempo", "moderato", t.revokeTerms({ owner: OWNER, agent: AGENT, remaining: 4_000_000n, expiry, feeToken: t.KEYCHAIN, label: "" }), "revoke")).not.toContain("The chain enforces");
+
+    const s = (await import(new URL("../../budget/solana/owner.ts", import.meta.url).href)) as any;
+    const ata = "11111111111111111111111111111111";
+    expect(msg("solana", "solana-devnet", s.grantTerms({ owner: OWNER, agent: AGENT, ata, cap: 2_500_000n, held: 9_000_000n })))
+      .toContain("The chain enforces a total cap of 2.5 USDC only: no expiry, no seller list and no per-payment limit.");
+    expect(msg("solana", "solana-devnet", s.revokeTerms({ owner: OWNER, agent: AGENT, ata, remaining: 1_000_000n }), "revoke")).not.toContain("The chain enforces");
+
+    const evm = await import(new URL("../../budget/evm/owner.ts", import.meta.url).href) as any;
+    expect(msg("evm", "base-sepolia", { title: "Grant", amount: "0.75", unit: "USDC", enforced: evm.grantEnforced(750_000n) }))
+      .toContain("The chain enforces a total cap of 0.75 USDC only: no expiry, no seller list and no per-payment limit.");
+  });
+
+  it("a hosted link on a loopback site has the account note and no ssh line", () => {
+    const m = messageForOwner({ command: "setup", rail: "evm", url: "http://127.0.0.1:47811/approve/budget/b#t", hosted: { site: "http://127.0.0.1:47811" }, chain: "base-sepolia", terms: { title: "Add agent" } })!;
+    expect(m).toContain("This needs a 127.0.0.1:47811 account");
+    expect(m).not.toContain("ssh -L");
+  });
 });
