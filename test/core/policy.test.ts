@@ -70,7 +70,7 @@ describe("evaluatePolicy", () => {
     const p = policy({ perDay: { amount: 0.001, asset: "USDC" } });
     expect(evaluatePolicy(p, { domain: "x.example.com", amountDecimal: 0.01, asset: "USDC" })).toEqual({
       allowed: false,
-      reason: "today's spending is unknown, so caps.per_day (0.001 USDC) cannot be checked",
+      reason: "could not count today's spending; try again (caps.per_day is 0.001 USDC)",
     });
   });
 });

@@ -368,7 +368,7 @@ export function evaluatePolicy(policy: Policy, a: Attempt): Verdict {
     if (cap === undefined) return { allowed: false, reason: unusableCap("caps.per_day", policy.perDay) };
     if (x.amount === undefined) return { allowed: false, reason: UNKNOWN_AMOUNT };
     // An unknown total is not zero: a library caller that passes none is refused, never waved through.
-    if (x.spent === undefined) return { allowed: false, reason: `today's spending is unknown, so caps.per_day (${formatMoney(policy.perDay)}) cannot be checked` };
+    if (x.spent === undefined) return { allowed: false, reason: `could not count today's spending; try again (caps.per_day is ${formatMoney(policy.perDay)})` };
     if (x.spent + x.amount > cap) {
       return { allowed: false, reason: `today's payments (${shown(x.spent)} ${a.asset}) plus ${shown(x.amount)} exceed caps.per_day (${formatMoney(policy.perDay)})` };
     }
@@ -414,7 +414,7 @@ export function policyChecks(policy: Policy, a: Attempt): PolicyCheck[] {
   if (!policy.perDay) {
     checks.push({ rule: "caps.per_day", ok: true, detail: "not set" });
   } else if (x.spent === undefined) {
-    checks.push({ rule: "caps.per_day", ok: false, detail: `at most ${formatMoney(policy.perDay)}; today's spending unknown` });
+    checks.push({ rule: "caps.per_day", ok: false, detail: `at most ${formatMoney(policy.perDay)}; could not count today's spending; try again` });
   } else if (x.amount === undefined) {
     checks.push({ rule: "caps.per_day", ok: false, detail: `at most ${formatMoney(policy.perDay)}; the payment's amount unknown` });
   } else {

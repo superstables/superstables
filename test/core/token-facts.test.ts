@@ -129,6 +129,6 @@ describe("terms on a chain the table does not name", () => {
     expect(store.spentTodayAtomic("USDC")).toBeUndefined();
     const q = await quote({ url: await seller("10000000000000000") }, { records: store, policy: DEFAULT_POLICY });
     expect(q.policy.allowed).toBe(false);
-    expect(q.policy.reason).toMatch(/today's spending is unknown/);
+    expect(q.policy.reason).toMatch(/could not count today's spending; try again/);
   });
 });

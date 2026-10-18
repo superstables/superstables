@@ -351,18 +351,25 @@ async function matrix() {
   const jobs = [];
   for (const scenario of scenarios) for (const agent of agents) for (const skill of skills) jobs.push({ scenario, agent, skill, root, site, allowProduction, sharedRig: true, timeout: Number(flag("timeout", 900)) });
   console.log(`${jobs.length} runs, ${conc} at a time`);
+  const loopback = siteMode(site, allowProduction) === "loopback";
   let next = 0, done = 0, fault = null;
   // one stub for the whole matrix: no job starts it or stops it, so one finishing early cannot take it from the others
   await withSharedRig(root, siteMode(site, allowProduction), () => Promise.all(Array.from({ length: conc }, async () => {
     while (next < jobs.length && !fault) {
       const job = jobs[next++];
+      // the stub is shared and nobody restarts it: if it died, a job would only fail as an infrastructure error
+      if (loopback && !(await rigUp())) {
+        fault = `the stub site at ${STUB_ORIGIN} is down before ${runId(job.scenario, job.agent, job.skill)}`;
+        console.error(`RIG FAULT: ${fault}`);
+        break;
+      }
       const r = await runOne(job).catch((e) => ({ error: String(e) }));
       done++;
       console.log(`[${done}/${jobs.length}] ${runId(job.scenario, job.agent, job.skill)} ${r.skipped ? "(already done)" : r.error ?? `exit ${r.code}`}${r.rigFault ? ` RIG FAULT: ${r.rigFault} (${r.files.join(", ")})` : ""}`);
       if (r.rigFault || /^Error: rig fault/.test(r.error ?? "")) fault = runId(job.scenario, job.agent, job.skill);
     }
   })));
-  if (fault) { console.error(`round stopped: rig fault in ${fault}. Look at RIG-FAULT in the run folder before starting again.`); process.exitCode = 1; }
+  if (fault) { console.error(`round stopped: rig fault in ${fault}. Look at RIG-FAULT in the run folder (or the stub site) before starting again.`); process.exitCode = 1; }
 }
 
 // ── dry run ────────────────────────────────────────────────────────────────────────────────────────────────────────────

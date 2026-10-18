@@ -486,7 +486,12 @@ export class Records {
       if (attempt.state === "awaiting_approval") {
         const inspected = inspectAwaiting(this, attempt);
         if (inspected?.stale) continue;
-        if (inspected && mayRetry) return "again"; // the newest line is no longer the awaiting one counted from
+        if (inspected) {
+          // The newest line is no longer the awaiting one counted from. Out of retries, the snapshot is obsolete and
+          // counting it could drop a payment: the total is unknown, and every reader fails closed on that.
+          if (mayRetry) return "again";
+          return { total: undefined, open: true };
+        }
       }
       const receipt = receipts.get(attempt.receiptId ?? attempt.id) ?? receipts.get(attempt.id);
       if (receipt) {

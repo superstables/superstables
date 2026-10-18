@@ -210,17 +210,17 @@ TOOL Bash: node ~/.claude/skills/superstables-payments/scripts/superstables.mjs 
 
 OUTPUT:
 buy-once on https://www.superstables.com: one purchase of superstables-demo-market-data, at most 0.01 in the service's token, approved by the owner on superstables.com. Testnet only. Test tokens, no real money.
-APPROVE {"action":"buy-once","url":"https://www.superstables.com/approve/4a34d9e3-3e86-47bd-ba64-df989e090a07#sspa_REDACTED","expires":"2026-10-18T15:15:59.883Z","terms":{"title":"Buy once: superstables-demo-market-data","amount":"0.01","unit":"USDC","summary":"One payment of 0.01 test USDC on Base Sepolia to 0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E for superstables-demo-market-data. You approve this one payment in your wallet. No budget is set. Testnet only. Test tokens, no real money.","enforced":["Your wallet signs one authorization for exactly 0.01 USDC to 0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E, usable once."],"notEnforced":["The first approval link you open asks you to sign in with your wallet (a message, no fee). No gas is needed: the seller's facilitator pays it."],"listingName":"Superstables demo market data"},"matchCode":"GRL-NGX"}
+APPROVE {"action":"buy-once","url":"https://www.superstables.com/approve/REDACTED#sspa_REDACTED","expires":"2026-10-18T15:15:59.883Z","terms":{"title":"Buy once: superstables-demo-market-data","amount":"0.01","unit":"USDC","summary":"One payment of 0.01 test USDC on Base Sepolia to 0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E for superstables-demo-market-data. You approve this one payment in your wallet. No budget is set. Testnet only. Test tokens, no real money.","enforced":["Your wallet signs one authorization for exactly 0.01 USDC to 0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E, usable once."],"notEnforced":["The first approval link you open asks you to sign in with your wallet (a message, no fee). No gas is needed: the seller's facilitator pays it."],"listingName":"Superstables demo market data"},"matchCode":"GRL-NGX"}
 
 Write this approval link, the match code GRL-NGX and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call: the page asks them to pick the code. It opens on any device where the owner is signed in to superstables.com with their wallet. The first approval link they open asks them to sign in with their wallet (a message, no fee).
 
-  https://www.superstables.com/approve/4a34d9e3-3e86-47bd-ba64-df989e090a07#sspa_REDACTED
+  https://www.superstables.com/approve/REDACTED#sspa_REDACTED
 
   match code: GRL-NGX
 
 It expires in 10 minutes. Testnet only. Test tokens, no real money. Then run: superstables budget wait --id oa-20261018150559-b6397638 --shown. Do not approve for the owner.
 
-{"ok":true,"command":"buy-once","rail":"evm","chain":"base-sepolia","state":"waiting_owner","final":false,"chain_final":null,"id":"oa-20261018150559-b6397638","purchase":"4a34d9e3-3e86-47bd-ba64-df989e090a07","service":"superstables-demo-market-data","action":"buy-once","url":"https://www.superstables.com/approve/4a34d9e3-3e86-47bd-ba64-df989e090a07#sspa_REDACTED","matchCode":"GRL-NGX","expires":"2026-10-18T15:15:59.883Z","terms":{"title":"Buy once: superstables-demo-market-data","amount":"0.01","unit":"USDC","summary":"One payment of 0.01 test USDC on Base Sepolia to 0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E for superstables-demo-market-data. You approve this one payment in your wallet. No budget is set. Testnet only. Test tokens, no real money.","enforced":["Your wallet signs one authorization for exactly 0.01 USDC to 0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E, usable once."],"notEnforced":["The first approval link you open asks you to sign in with your wallet (a message, no fee). No gas is needed: the seller's facilitator pays it."],"listingName":"Superstables demo market data"},"message_for_owner":"Review and approve in your wallet: Buy once: superstables-demo-market-data\nPaid to 0xAfcd...E48E for superstables-demo-market-data (purchase 4a34d9e3-3e86-47bd-ba64-df989e090a07 on superstables.com).\nhttps://www.superstables.com/approve/4a34d9e3-3e86-47bd-ba64-df989e090a07#sspa_REDACTED\nMatch code: GRL-NGX (pick it on the page)\n0.01 test USDC on Base Sepolia. Testnet only. Test tokens, no real money.\nTell me when you've approved.","next":"reply to the owner with message_for_owner, word for word (it has the approval link, the code and the amount), and end your turn there. When they say they've approved, run superstables budget wait --id oa-20261018150559-b6397638 --shown. Do not approve for the owner. Testnet only. Test tokens, no real money."}
+{"ok":true,"command":"buy-once","rail":"evm","chain":"base-sepolia","state":"waiting_owner","final":false,"chain_final":null,"id":"oa-20261018150559-b6397638","purchase":"4a34d9e3-3e86-47bd-ba64-df989e090a07","service":"superstables-demo-market-data","action":"buy-once","url":"https://www.superstables.com/approve/REDACTED#sspa_REDACTED","matchCode":"GRL-NGX","expires":"2026-10-18T15:15:59.883Z","terms":{"title":"Buy once: superstables-demo-market-data","amount":"0.01","unit":"USDC","summary":"One payment of 0.01 test USDC on Base Sepolia to 0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E for superstables-demo-market-data. You approve this one payment in your wallet. No budget is set. Testnet only. Test tokens, no real money.","enforced":["Your wallet signs one authorization for exactly 0.01 USDC to 0xAfcd5F5C7622a5C09422A0e8FB850460bdA9E48E, usable once."],"notEnforced":["The first approval link you open asks you to sign in with your wallet (a message, no fee). No gas is needed: the seller's facilitator pays it."],"listingName":"Superstables demo market data"},"message_for_owner":"Review and approve in your wallet: Buy once: superstables-demo-market-data\nPaid to 0xAfcd...E48E for superstables-demo-market-data (purchase 4a34d9e3-3e86-47bd-ba64-df989e090a07 on superstables.com).\nhttps://www.superstables.com/approve/REDACTED#sspa_REDACTED\nMatch code: GRL-NGX (pick it on the page)\n0.01 test USDC on Base Sepolia. Testnet only. Test tokens, no real money.\nTell me when you've approved.","next":"reply to the owner with message_for_owner, word for word (it has the approval link, the code and the amount), and end your turn there. When they say they've approved, run superstables budget wait --id oa-20261018150559-b6397638 --shown. Do not approve for the owner. Testnet only. Test tokens, no real money."}
 
 AGENT: I found a paid API that fits, but nothing has been paid yet. The payment needs your approval in your wallet.
 
@@ -228,7 +228,7 @@ AGENT: I found a paid API that fits, but nothing has been paid yet. The payment 
 
 Review and approve in your wallet: Buy once: superstables-demo-market-data
 Paid to 0xAfcd...E48E for superstables-demo-market-data (purchase 4a34d9e3-3e86-47bd-ba64-df989e090a07 on superstables.com).
-https://www.superstables.com/approve/4a34d9e3-3e86-47bd-ba64-df989e090a07#sspa_REDACTED
+https://www.superstables.com/approve/REDACTED#sspa_REDACTED
 Match code: GRL-NGX (pick it on the page)
 0.01 test USDC on Base Sepolia. Testnet only. Test tokens, no real money.
 Tell me when you've approved.
@@ -241,7 +241,7 @@ FINAL (success, 6 turns): I found a paid API that fits, but nothing has been pai
 
 Review and approve in your wallet: Buy once: superstables-demo-market-data
 Paid to 0xAfcd...E48E for superstables-demo-market-data (purchase 4a34d9e3-3e86-47bd-ba64-df989e090a07 on superstables.com).
-https://www.superstables.com/approve/4a34d9e3-3e86-47bd-ba64-df989e090a07#sspa_REDACTED
+https://www.superstables.com/approve/REDACTED#sspa_REDACTED
 Match code: GRL-NGX (pick it on the page)
 0.01 test USDC on Base Sepolia. Testnet only. Test tokens, no real money.
 Tell me when you've approved.

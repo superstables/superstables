@@ -225,7 +225,7 @@ describe("the daemon's call, exactly", () => {
 });
 
 describe("the library daily cap", () => {
-  const unknownTotal = "today's spending is unknown, so caps.per_day (1 USDC) cannot be checked";
+  const unknownTotal = "could not count today's spending; try again (caps.per_day is 1 USDC)";
 
   it("refuses when caps.per_day is set and no total is given", () => {
     expect(evaluatePolicy(DEFAULT_POLICY, { domain: "api.example.com", amountDecimal: 0.01, asset: "USDC" })).toEqual({ allowed: false, reason: unknownTotal });
@@ -360,7 +360,7 @@ describe("display unchanged", () => {
 
   it("keeps the unknown-total line, now as a refusal", () => {
     const check = perDayCheck(DEFAULT_POLICY, { domain: "api.example.com", amountDecimal: 0.01, asset: "USDC" });
-    expect(check).toEqual({ rule: "caps.per_day", ok: false, detail: "at most 1 USDC; today's spending unknown" });
+    expect(check).toEqual({ rule: "caps.per_day", ok: false, detail: "at most 1 USDC; could not count today's spending; try again" });
   });
 });
 
@@ -545,7 +545,7 @@ describe("a damaged record refuses", () => {
     r.saveReceipt(receipt("bad", "", {}, { amountDecimal: undefined as unknown as number }));
     const q = await quote({ url: `${seller.url}/v1/market?asset=BTC` }, { records: r, policy: DEFAULT_POLICY });
     expect(q.policy.allowed).toBe(false);
-    expect(q.policy.reason).toBe("today's spending is unknown, so caps.per_day (1 USDC) cannot be checked");
+    expect(q.policy.reason).toBe("could not count today's spending; try again (caps.per_day is 1 USDC)");
   });
 });
 

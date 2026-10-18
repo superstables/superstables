@@ -209,6 +209,7 @@ own, which closes that too, at the cost of a connection prompt in the wallet eac
   signature that arrives afterwards is never sent. A payment already being sent can end
   `uncertain` instead. If the process is killed, the log may have no final line; pending requests
   are not restored after a restart.
+- A payment left waiting by a `pay` process that is gone is ended as `abandoned` only when the client can prove the process is gone: the same machine, shown by its boot id and `/etc/machine-id`. Virtual machines cloned without a new `/etc/machine-id` share that id, so a record from a clone is not taken as proven; give each clone its own.
 
 ## The approvals log
 

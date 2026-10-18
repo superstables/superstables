@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Records, attemptRunner, settleStaleAwaiting, staleAwaiting } from "../../src/core/records.js";
 import { thisProcess } from "../../src/core/lock.js";
+import { DEFAULT_POLICY, evaluatePolicy } from "../../src/core/policy.js";
 
 // A hook run inside the "is the runner still running" check, to put a write between reading an attempt and judging its runner.
 const runnerCheck: { hook?: () => void } = {};
@@ -616,6 +617,35 @@ describe("an attempt left waiting by a pay process that is gone", () => {
       runnerCheck.hook = () => advance(r, "race", "submitting");
       expect(r.spentToday("USDC", now)).toBe(0.01);
       expect(r.getAttempt("race")?.state).toBe("submitting");
+    });
+
+    it("four successive races with expired reservations leave the total unknown, and a policy check refuses", () => {
+      const ids = ["a", "b", "c", "d"];
+      /** Four expired reservations; each pass finds the next one moved on to submitting (renewed, approved, sent, runner died). */
+      const racing = (): { r: Records; raced: () => number } => {
+        const r = records();
+        const expired = new Date(now.getTime() - 60_000).toISOString();
+        for (const id of ids) r.saveAttempt({ ...waiting(id), runner: gone, reservedUntil: expired } as Attempt);
+        let next = 0;
+        const arm = () => {
+          runnerCheck.hook = () => {
+            advance(r, ids[next++]!, "submitting");
+            if (next < ids.length) arm();
+          };
+        };
+        arm();
+        return { r, raced: () => next };
+      };
+      const first = racing();
+      const total = first.r.spentTodayAtomic("USDC", now);
+      expect(total).toBeUndefined(); // not 0.03: the obsolete snapshot of the fourth is not counted
+      expect(first.raced()).toBe(4);
+      const verdict = evaluatePolicy(DEFAULT_POLICY, { domain: "api.example.com", asset: "USDC", amountDecimal: 0.01, spentTodayAtomic: total });
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.reason).toContain("could not count today's spending; try again");
+      expect(racing().r.spentToday("USDC", now)).toBeNaN();
+      // With nothing left to race, the count is known again and includes all four.
+      expect(first.r.spentToday("USDC", now)).toBe(0.04);
     });
 
     it("the spend count keeps a charge that has a receipt", () => {
