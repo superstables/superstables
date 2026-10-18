@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_NETWORK } from "../../src/core/chain.js";
 import { Records, attemptRunner } from "../../src/core/records.js";
+import { formatReport } from "../../src/cli/doctor.js";
 import { sendJson, startFacilitator, startPaidEndpoint, startServer, type TestServer } from "../helpers/servers.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -183,7 +184,24 @@ describe("the superstables CLI", () => {
     expect(result.stdout).toContain("✓ wallet key");
     expect(result.stdout).toContain("✗ wallet");
     expect(result.stdout).toContain("superstables wallet serve");
-    expect(result.stdout).toContain("Everything this machine needs is in place.");
+    // The wallet process is optional, and it failed: the summary says what is in place and what is not.
+    expect(result.stdout).toContain(
+      "Everything pay needs is in place. 1 optional check failed (marked ✗): wallet (the owner's wallet may not be ready).",
+    );
+    expect(result.stdout).not.toContain("Everything this machine needs is in place.");
+  });
+
+  it("keeps the plain summary when every check passed, and names what a failed facilitator affects", () => {
+    const base = { ok: true, offline: false, mode: "browser" as const, version: "0.0.0", home: "/h" };
+    const pass = { name: "home directory", ok: true, detail: "fine", essential: true };
+    expect(formatReport({ ...base, checks: [pass] })).toMatch(/Everything this machine needs is in place\.$/);
+    const failed = formatReport({
+      ...base,
+      checks: [pass, { name: "x402.org", ok: false, detail: "no", essential: false }, { name: "Superstables index", ok: false, detail: "no", essential: false }],
+    });
+    expect(failed).toContain("Everything pay needs is in place. 2 optional checks failed (marked ✗): ");
+    expect(failed).toContain("Superstables index (find may miss listings from the index)");
+    expect(formatReport({ ...base, ok: false, checks: [{ ...pass, ok: false }] })).toContain("Something essential is missing");
   });
 
   it("needs no key and no wallet process in browser mode, and says so", async () => {
@@ -545,24 +563,6 @@ describe("quote, pay and status against a local seller", () => {
     expect(String(outcome.message)).not.toMatch(/owner rejected/i);
     expect(String(outcome.next)).toContain("leave pay running until it ends");
   }, 90_000);
-});
-
-// ── The account's own policy, which an agent's environment cannot lift ─────────────────
-
-describe("the account's own spend policy", () => {
-  const servers: TestServer[] = [];
-  let url = "";
-  let account = "";
-  let other = "";
-
-  beforeAll(async () => {
-    const facilitator = await startFacilitator();
-    const seller = await startPaidEndpoint(facilitator.url, { price: 0.5 });
-    servers.push(facilitator, seller);
-    url = `${seller.url}/v1/market?asset=BTC`;
-  });
-
-  afterAll(async () => {
 
   it("quote names the host that did not answer, says nothing was paid, and what to do next", async () => {
     // A port that was open a moment ago, so the refusal is real.
@@ -606,6 +606,24 @@ describe("the account's own spend policy", () => {
     expect(status).toMatchObject({ state: "abandoned", abandoned_by: "stopped", final: true });
     expect(String(status.reason)).toContain("no longer running; nobody decided and nothing was submitted");
   }, 90_000);
+});
+
+// ── The account's own policy, which an agent's environment cannot lift ─────────────────
+
+describe("the account's own spend policy", () => {
+  const servers: TestServer[] = [];
+  let url = "";
+  let account = "";
+  let other = "";
+
+  beforeAll(async () => {
+    const facilitator = await startFacilitator();
+    const seller = await startPaidEndpoint(facilitator.url, { price: 0.5 });
+    servers.push(facilitator, seller);
+    url = `${seller.url}/v1/market?asset=BTC`;
+  });
+
+  afterAll(async () => {
     await Promise.all(servers.map((server) => server.close()));
   });
 

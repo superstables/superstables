@@ -115,12 +115,34 @@ export function formatReport(report: DoctorReport): string {
     ...checkLines,
   ];
   lines.push("");
+  const optional = report.checks.filter((check) => !check.ok && !check.essential);
   lines.push(
-    report.ok
-      ? "Everything this machine needs is in place."
-      : "Something essential is missing; the lines marked ✗ above say what.",
+    !report.ok
+      ? "Something essential is missing; the lines marked ✗ above say what."
+      : optional.length === 0
+        ? "Everything this machine needs is in place."
+        : `Everything pay needs is in place. ${optional.length === 1 ? "1 optional check" : `${optional.length} optional checks`} failed (marked ✗): ${optional.map(optionalEffect).join("; ")}.`,
   );
   return lines.join("\n");
+}
+
+/** What a failed optional check puts at risk, in a few words. */
+function optionalEffect(check: Check): string {
+  const facilitators = FACILITATORS.map(hostOf);
+  if (facilitators.includes(check.name)) return `${check.name} (sellers that settle through it may not complete a payment)`;
+  switch (check.name) {
+    case "demo service":
+      return "demo service (the built-in market data listing may not answer)";
+    case "Superstables index":
+      return "Superstables index (find may miss listings from the index)";
+    case "payment records":
+      return "payment records (some history may not read back)";
+    case "wallet":
+    case "browser wallet":
+      return `${check.name} (the owner's wallet may not be ready)`;
+    default:
+      return check.name;
+  }
 }
 
 // ── This machine ───────────────────────────────────────────────────────────────────────
