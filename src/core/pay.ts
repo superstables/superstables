@@ -23,7 +23,7 @@ import { readMppReceipt } from "./mpp.js";
 import { sellerUrlProblem } from "./seller-url.mjs";
 import { untrustedText } from "./text.js";
 import type { ChainCheck } from "./settlement.js";
-import { Records, approvalIdHash, attemptRunner, settleStaleAwaiting, type AttemptRunner } from "./records.js";
+import { Records, approvalIdHash, attemptRunner, settleStaleAwaiting, RECONCILE_LOCK, type AttemptRunner } from "./records.js";
 import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
 import { evaluatePolicy, policyAmount, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
@@ -1086,7 +1086,7 @@ export async function recheckChain(records: Records, id: string, rpc?: string | 
   let attempt = records.getAttempt(id);
   if (!attempt) return undefined;
   // Waiting for an owner whose pay process is gone: nobody can decide, and nothing was submitted.
-  if (attempt.state === "awaiting_approval") return settleStaleAwaiting(records, attempt);
+  if (attempt.state === "awaiting_approval") return await settleStaleAwaiting(records, attempt);
   const options = typeof rpc === "string" ? chainReadOptions(rpc) : (rpc ?? chainReadOptions());
   const rail = railFor(attempt.terms?.network);
   if (!rail) return records.getAttempt(attempt.id) ?? attempt;
@@ -1575,7 +1575,6 @@ const DEFAULT_APPROVAL_WINDOW_MS = 10 * 60_000;
 /** The lock file, in the records directory, under which an attempt checks the daily cap and reserves its amount. */
 const CAP_LOCK = "cap.lock";
 /** The lock file under which a status writes what a chain read decided (see commit). */
-const RECONCILE_LOCK = "reconcile.lock";
 
 function hostOf(url: string): string {
   try {

@@ -969,10 +969,10 @@ explain(
     .description("every payment attempt, paid or not, newest first")
     .option("--limit <n>", "how many to show", toInteger, 20)
     .option("--json", "print the attempt records as a JSON array")
-    .action((options: { limit: number; json?: boolean }) => {
+    .action(async (options: { limit: number; json?: boolean }) => {
       const { records } = context();
       // An attempt left waiting by a `pay` that has since stopped is ended here, as `status` would end it.
-      const attempts = records.listAttempts(options.limit).map((a) => (a.state === "awaiting_approval" ? settleStaleAwaiting(records, a) : a));
+      const attempts = await Promise.all(records.listAttempts(options.limit).map((a) => settleStaleAwaiting(records, a)));
       if (options.json) {
         console.log(json(attempts.map((a) => outsideJson(shownAttempt(a)))));
         return;
