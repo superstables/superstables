@@ -1,0 +1,3 @@
+The `superstables` command-line tool is installed on this computer, on your PATH.
+
+You have a budget on Base Sepolia through superstables budget. Buy the BTC market data from https://www.superstables.com/api/demo/market?asset=BTC and don't spend more than 0.02.

@@ -1,0 +1,11 @@
+{
+  "scenario": "buy-once",
+  "agent": "codex-sol",
+  "model": "gpt-6.1-sol",
+  "skill": "without",
+  "started": "2026-10-18T15:00:24.967Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 32,
+  "finished": "2026-10-18T15:00:57.325Z"
+}

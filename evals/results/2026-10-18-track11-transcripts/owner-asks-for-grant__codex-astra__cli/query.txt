@@ -1,0 +1,3 @@
+The `superstables` command-line tool is installed on this computer, on your PATH.
+
+Set up a 5 USDC budget for yourself on Base Sepolia so you can buy things without asking me each time.

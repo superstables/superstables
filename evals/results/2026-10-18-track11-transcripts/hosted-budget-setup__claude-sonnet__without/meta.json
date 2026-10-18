@@ -1,0 +1,11 @@
+{
+  "scenario": "hosted-budget-setup",
+  "agent": "claude-sonnet",
+  "model": "sonnet",
+  "skill": "without",
+  "started": "2026-10-18T15:09:49.878Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 13,
+  "finished": "2026-10-18T15:10:02.743Z"
+}

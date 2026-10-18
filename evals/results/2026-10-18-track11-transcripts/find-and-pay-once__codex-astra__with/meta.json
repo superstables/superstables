@@ -1,0 +1,11 @@
+{
+  "scenario": "find-and-pay-once",
+  "agent": "codex-astra",
+  "model": "gpt-6-astra",
+  "skill": "with",
+  "started": "2026-10-18T15:06:43.849Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 58,
+  "finished": "2026-10-18T15:07:41.899Z"
+}

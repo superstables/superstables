@@ -1,0 +1,1 @@
+The catalogue lists a service called btc-price-mainnet that returns the BTC price for 0.01 USDC on Base. Get me the BTC price from it. Don't spend more than 0.02 USDC.

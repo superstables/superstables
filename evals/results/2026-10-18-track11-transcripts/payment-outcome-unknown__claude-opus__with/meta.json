@@ -1,0 +1,11 @@
+{
+  "scenario": "payment-outcome-unknown",
+  "agent": "claude-opus",
+  "model": "opus",
+  "skill": "with",
+  "started": "2026-10-18T15:23:06.517Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 17,
+  "finished": "2026-10-18T15:23:23.342Z"
+}

@@ -1,0 +1,11 @@
+{
+  "scenario": "owner-asks-for-grant",
+  "agent": "claude-sonnet",
+  "model": "sonnet",
+  "skill": "cli",
+  "started": "2026-10-18T15:20:32.660Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 16,
+  "finished": "2026-10-18T15:20:48.940Z"
+}
