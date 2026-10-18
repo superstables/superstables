@@ -91,7 +91,7 @@ export const evmRail: X402Rail = {
     const extraFields = (accept.extra ?? {}) as Record<string, unknown>;
     for (const key of CHAIN_KEYS) {
       if (extraFields[key] !== undefined && !namesChain(extraFields[key], network)) {
-        return { supported: false, reason: `the offer's chain id (${key}: ${untrustedText(String(extraFields[key]), 30)}) is not ${network.label}'s (${network.chainId})` };
+        return { supported: false, reason: `the offer's chain id (${key}) is not ${network.label}'s (${network.chainId})` };
       }
     }
     for (const key of TEXT_KEYS) {

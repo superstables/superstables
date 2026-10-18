@@ -211,10 +211,10 @@ describe("EIP-3009 offers only, with known fields", () => {
   });
 
   it("refuses a chain id that is not the offer's chain", () => {
-    for (const chainId of [1, 84532, "84532", "eip155:1", "0x aa", "", null, 11155111.5, true]) {
+    for (const chainId of [1, 84532, "84532", "eip155:1", "0x aa", "", null, 11155111.5, true, { toString: "not callable" }]) {
       const base = usdcRequirement(0.01, PAY_TO, ETHEREUM_SEPOLIA) as unknown as RawAccept;
       const judged = termsFor({ ...base, extra: { ...base.extra, chainId } }, 2);
-      expect(judged, String(chainId)).toMatchObject({ supported: false, reason: expect.stringMatching(/chain id/) });
+      expect(judged, JSON.stringify(chainId)).toMatchObject({ supported: false, reason: expect.stringMatching(/chain id/) });
     }
   });
 
