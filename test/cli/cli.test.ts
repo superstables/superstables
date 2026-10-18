@@ -867,6 +867,13 @@ describe("find against a local index", () => {
     expect((await run(["quote", "--help"])).stdout.replace(/\s+/g, " ")).toContain(note);
   });
 
+  it("does not add the listing-text note to a list of only the built-in listing", async () => {
+    const r = await run(["find", "btc", "--json"], { SUPERSTABLES_INDEX_URL: "off", SUPERSTABLES_DEMO_SERVICES: "off", SUPERSTABLES_DEMO_SERVICE_URL: `${index.url}/paid/market` });
+    const parsed = JSON.parse(r.stdout) as { services: unknown[]; warnings: string[] };
+    expect(parsed.services.length).toBeGreaterThan(0);
+    expect(parsed.warnings.some((w) => /the listing's own words/.test(w))).toBe(false);
+  });
+
   it("gives each service commands and next in --json, and none for a mainnet listing", async () => {
     const { code, stdout } = await find("--all", "--json");
     expect(code).toBe(0);

@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { Command, CommanderError, InvalidArgumentError, Option } from "commander";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { isAddress } from "../core/chain.js";
-import { findServices, getService, resolveRequest } from "../core/discovery.js";
+import { catalogue, findServices, getService, resolveRequest } from "../core/discovery.js";
 import {
   DEFAULT_DEMO_SERVICE_PORT,
   DEFAULT_WALLET_PORT,
@@ -466,8 +466,10 @@ explain(
               : `${matching} \`superstables pay\` cannot call ${hidden === 1 ? "it" : "them"} (for example on a mainnet, or not https); \`find --all\` lists ${hidden === 1 ? "it" : "them"} with the reason.`,
           );
         }
-        // Names, descriptions and parameters of listings come from whoever listed them.
-        if (services.length > 0) found.warnings.push(LISTING_TEXT_NOTE);
+        // Names, descriptions and parameters of index and catalogue listings come from whoever listed them. The built-in
+        // listing is this client's own, so a list of only that carries no such note.
+        const ownIds = new Set(catalogue().map((c) => c.id));
+        if (services.some((s) => s.source === "superstables-index" || !ownIds.has(s.id))) found.warnings.push(LISTING_TEXT_NOTE);
         if (options.json) {
           console.log(
             json({

@@ -217,6 +217,7 @@ Owner request progress:
 
 ```
 - [ ] The steps still to come
+- [ ] Check that the page shows your own wallet address
 ```
 
 `setup`'s `terms` have only `title` and `summary`; its `enforced` and `notEnforced` are empty because it moves no money (with `--grant`, they are the grant's). Say what the budget will enforce from this table instead:

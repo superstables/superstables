@@ -2293,7 +2293,7 @@ async function buyOnce({ f, ctx }) {
   Object.assign(ctx, { rail: rec.rail, chain: rec.chain });
   writeApprove(`APPROVE ${JSON.stringify(r.approve)}`);
   const host = new URL(f.site).host.replace(/^www\./, "");
-  log(`\nReply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn; the page asks them to pick the code. It opens on any device where the owner is signed in to ${host} with their wallet. The first approval link they open asks them to sign in with their wallet (a message, no fee).\n\n  ${rec.url}\n\n  match code: ${rec.matchCode}\n\nIt expires in ${inMinutes(rec.expires)}. ${TESTNET_LINE} Then run: superstables budget wait --id ${rec.id} --shown. Do not approve for the owner.\n`);
+  log(`\nReply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn; the page asks them to pick the code. It opens on any device where the owner is signed in to ${host} with their wallet. The first approval link they open asks them to sign in with their wallet (a message, no fee).\n\n  ${rec.url}\n\n  match code: ${rec.matchCode}\n\nIt expires in ${inMinutes(rec.expires)}. ${TESTNET_LINE} When they say they've approved, run: superstables budget wait --id ${rec.id} --shown. Do not approve for the owner.\n`);
   if (detach) return emit(0, { ...ctx, service: f.service, state: "waiting_owner", purchase: rec.hosted.requestId, ...approvalFields(rec), next: showFirst(rec.id) });
   // blocking: read the purchase until it ends
   const s = await waitOnce(rec, Math.max(60_000, Date.parse(rec.expires) + 25 * 60_000 - Date.now()));
