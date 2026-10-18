@@ -1,7 +1,7 @@
 // The x402 exact rail on EVM chains. The owner's wallet signs one EIP-3009 TransferWithAuthorization over the chain's
 // USDC domain; the seller's facilitator submits it and pays the gas; the chain is then read for that authorization's
 // use (settlement.ts). The chains, their USDC and its signing domain are pinned in src/core/chain.ts: a seller whose
-// token, chain or domain differs is refused before the owner is asked. Only EIP-3009 offers with known `extra` fields are
+// token, chain or domain differs is refused before the owner is asked. Only EIP-3009 offers with known `extra` fields (plus display-only ones, ignored) are
 // taken, and what is signed lasts ten minutes at most.
 
 import { encodePaymentSignatureHeader } from "@x402/core/http";
@@ -27,8 +27,36 @@ const MAX_TIMEOUT_SECONDS = 3_600;
  * left as offered (its server matches it exactly; its facilitator checks only that validBefore has not passed).
  */
 export const MAX_SIGNED_LIFETIME_S = 600;
-/** The `extra` keys an EVM offer may carry: the token's signing domain and decimals (checked against the pinned ones), and the transfer method. */
+/**
+ * The `extra` keys an EVM offer may carry that the signing path reads or that are checked here: the token's signing domain
+ * and decimals (checked against the pinned ones), and the transfer method. The x402 SDK's exact scheme reads only `name`,
+ * `version` and `assetTransferMethod`; any other key (the escrow, voucher and fee fields of other schemes, `paymentFlow`)
+ * changes what is signed or how, so it is refused.
+ */
 const EXTRA_KEYS = new Set(["name", "version", "decimals", "assetTransferMethod"]);
+/**
+ * Display-only keys that sellers send beside them, as on Brickken's Ethereum Sepolia offer captured on 16 Oct 2026 (kept
+ * whole in test/core/fixtures): `tokenSymbol`, `displayPrice` and `routeKey` (short strings; `routeKey` has no control
+ * characters), and `chainId`, `paymentChainId` and
+ * `operationChainId` (each must name the offer's own chain). Nothing here or in the SDK's exact scheme reads them: the amount
+ * and token come from `amount` and `asset`, so these fields are not shown on approval pages and are not signed over.
+ * `quote --json` prints the stored offer to the agent, cleaned. The requirement still goes back to the seller as offered.
+ * This is a named list, not "ignore everything unknown", so a field a future SDK starts to read stays refused. Keep it in
+ * step with the fixture.
+ */
+const DISPLAY_KEYS = new Set(["tokenSymbol", "displayPrice", "routeKey", "chainId", "paymentChainId", "operationChainId"]);
+/** The display keys that must name the offer's chain. */
+const CHAIN_KEYS = ["chainId", "paymentChainId", "operationChainId"] as const;
+/** The display keys that must be strings of at most 200 characters. */
+const TEXT_KEYS = ["tokenSymbol", "displayPrice", "routeKey"] as const;
+const DISPLAY_TEXT_MAX = 200;
+
+/** Whether an offer's `chainId` names this chain: the number, its decimal string, or the CAIP-2 form. */
+function namesChain(value: unknown, network: NetworkInfo): boolean {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value === network.chainId;
+  if (typeof value !== "string") return false;
+  return value === network.caip2 || (/^[0-9]{1,15}$/.test(value) && Number(value) === network.chainId);
+}
 
 /** How long the authorization signed for a requirement lasts, in seconds: the seller's window, at most MAX_SIGNED_LIFETIME_S. */
 export function signedLifetime(maxTimeoutSeconds: unknown): number {
@@ -62,7 +90,23 @@ export const evmRail: X402Rail = {
     if (accept.extra?.decimals !== undefined && Number(accept.extra.decimals) !== network.usdc.decimals) {
       return { supported: false, reason: `the offer's token decimals are not ${network.token.symbol}'s (${network.usdc.decimals})` };
     }
-    const unknown = Object.keys(accept.extra ?? {}).filter((key) => !EXTRA_KEYS.has(key));
+    const extraFields = (accept.extra ?? {}) as Record<string, unknown>;
+    for (const key of CHAIN_KEYS) {
+      if (extraFields[key] !== undefined && !namesChain(extraFields[key], network)) {
+        return { supported: false, reason: `the offer's chain id (${key}) is not ${network.label}'s (${network.chainId})` };
+      }
+    }
+    for (const key of TEXT_KEYS) {
+      const text = extraFields[key];
+      if (text !== undefined && (typeof text !== "string" || text.length > DISPLAY_TEXT_MAX)) {
+        return { supported: false, reason: `the offer's ${key} is not a short string` };
+      }
+    }
+    // `routeKey` is the only one a seller may expect to be read by something: no control characters at all.
+    if (typeof extraFields.routeKey === "string" && /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(extraFields.routeKey)) {
+      return { supported: false, reason: "the offer's routeKey contains control characters" };
+    }
+    const unknown = Object.keys(extraFields).filter((key) => !EXTRA_KEYS.has(key) && !DISPLAY_KEYS.has(key));
     if (unknown.length > 0) {
       return { supported: false, reason: `the offer carries signing fields this client does not use (${unknown.slice(0, 3).map((key) => untrustedText(key, 30)).join(", ")}${unknown.length > 3 ? ", and more" : ""})` };
     }

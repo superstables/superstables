@@ -57,9 +57,12 @@ payment core uses, and shown as fact:
 
 A payment requirement that fails these checks is refused before an approval link exists. So is an
 EVM offer that asks for a transfer method other than EIP-3009 (`extra.assetTransferMethod`), or
-whose `extra` holds anything but the token's signing domain, its decimals and that method; and a
-Tempo challenge that enables the machine-token route (`methodDetails.machineTokenEnabled`). The
-payer's signature is checked later, as described below.
+whose `extra` holds anything but the token's signing domain, its decimals, that method and the
+display-only fields `tokenSymbol`, `displayPrice` and `routeKey` (short strings; `routeKey` without
+control characters) and `chainId`, `paymentChainId` and `operationChainId` (each must be the offer's chain);
+or a Tempo challenge that enables the machine-token route (`methodDetails.machineTokenEnabled`). The
+display fields are not shown on approval pages, included in the signature or used for the amount
+(`quote --json` prints the stored offer, cleaned). The payer's signature is checked later, as described below.
 
 **Reported — what the agent says the payment is for**, stored under `reported` and labelled
 unverified wherever it is shown:
