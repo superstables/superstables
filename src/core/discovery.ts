@@ -163,7 +163,7 @@ export function demoService(): ServiceListing {
     actionable: problem === undefined,
     ...(problem !== undefined ? { notActionableReason: `SUPERSTABLES_DEMO_SERVICE_URL ${problem}` } : {}),
     ...BASE_SEPOLIA_X402,
-    routes: problem === undefined ? BASE_SEPOLIA_X402.routes : { ...BASE_SEPOLIA_X402.routes!, pay: false },
+    routes: problem === undefined ? BASE_SEPOLIA_X402.routes : { pay: false, budget: [] },
   };
 }
 
@@ -220,12 +220,12 @@ export function catalogue(): ServiceListing[] {
  */
 export async function allListings(
   options: { includeHosted?: boolean; demoServices?: boolean } = {},
-): Promise<{ listings: ServiceListing[]; warnings: string[] }> {
+): Promise<{ listings: ServiceListing[]; warnings: string[]; catalogueRead: boolean }> {
   const { includeHosted = true, demoServices = demoServicesEnabled() } = options;
   const builtIn = catalogue();
   const url = hostedCatalogueUrl();
   // The hosted catalogue holds Superstables' testnet services, most of them simulated: it is read only for the demo.
-  if (!includeHosted || !demoServices || !url) return { listings: builtIn, warnings: [] };
+  if (!includeHosted || !demoServices || !url) return { listings: builtIn, warnings: [], catalogueRead: false };
 
   const warnings: string[] = [];
   let hosted: ServiceListing[];
@@ -233,7 +233,7 @@ export async function allListings(
     hosted = await fetchHostedCatalogue(url);
   } catch (err) {
     warnings.push(`The service catalogue could not be read (${message(err)}); showing the built-in listings only.`);
-    return { listings: builtIn, warnings };
+    return { listings: builtIn, warnings, catalogueRead: false };
   }
 
   const known = new Set(builtIn.map((s) => s.id));
@@ -243,7 +243,7 @@ export async function allListings(
     merged.push(listing);
     known.add(listing.id);
   }
-  return { listings: merged, warnings };
+  return { listings: merged, warnings, catalogueRead: true };
 }
 
 /**
@@ -255,14 +255,16 @@ export async function findServices(options: FindServicesOptions = {}): Promise<D
 
   // Network sources (the hosted catalogue and the index) are both behind includeIndex, so a
   // caller that asked for no network gets none. They are read side by side.
-  const [{ listings, warnings }, index] = await Promise.all([
+  const [{ listings, warnings, catalogueRead }, index] = await Promise.all([
     allListings({ includeHosted: includeIndex, demoServices }),
     includeIndex && indexUrl()
       ? fetchIndex(query, limit).then((rows) => ({ rows, error: undefined })).catch((err: unknown) => ({ rows: [] as ServiceListing[], error: message(err) }))
       : Promise.resolve({ rows: [] as ServiceListing[], error: undefined }),
   ]);
   if (index.error !== undefined) {
-    warnings.push(`The Superstables index could not be read (${index.error}); showing the built-in catalogue only.`);
+    // Worded by what was read: the index listings are missing, whatever else did load.
+    const shown = catalogueRead ? "The built-in listings and the service catalogue are shown." : "The built-in listings are shown.";
+    warnings.push(`The Superstables index could not be read (${index.error}); its listings are missing below. ${shown}`);
   }
 
   // Catalogue listings that plausibly match, best match first: with a dozen prepared services
@@ -615,7 +617,7 @@ function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing
     // With `pay` off where the endpoint cannot carry a credential safely: the field the CLI gates a payment on.
     routes: secure
       ? routesFor([row.payment.rail], [chainName(network)])
-      : { ...routesFor([row.payment.rail], [chainName(network)]), pay: false },
+      : { pay: false, budget: [] },
   };
 }
 
@@ -714,9 +716,9 @@ function fromIndexRow(row: IndexRow): ServiceListing {
             : `this client does not pay ${describeOffer(rails, chains)}`,
     rails,
     chains,
-    // routes, with `pay` off where the endpoint cannot carry a credential safely. This is the field
+    // routes, with `pay` and the budget routes off where the endpoint cannot carry a credential safely. This is the field
     // the CLI gates a payment on, so it is where the rule belongs.
-    routes: secure ? routes : { ...routes, pay: false },
+    routes: secure ? routes : { pay: false, budget: [] },
   };
 }
 
