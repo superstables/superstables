@@ -26,6 +26,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import bs58 from "bs58";
 import { PROOFS } from "../budget/proof.mjs";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { endpointTree, type Entry } from "./helpers/endpoint-tree.js";
 import { PaymentEngine } from "../src/core/pay.js";
 import { DEFAULT_POLICY } from "../src/core/policy.js";
 import { quote } from "../src/core/quote.js";
@@ -41,10 +42,23 @@ import { startFakeSolana, startFakeTempo } from "./helpers/fake-chains.js";
 import { evmOwner, evmOwnerKey, startFakeRpc, startFakeSite, type FakeRequest, type FakeSite } from "./helpers/fake-site.js";
 import { startFakeMppSeller, startFakeTempoPay } from "./helpers/fake-tempo-pay.js";
 import { startFacilitator, startPaidEndpoint, startWallet, type TestServer } from "./helpers/servers.js";
+import { agreedFromClient } from "./helpers/agree-from-client.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const MAIN = resolve(ROOT, "src/cli/main.ts");
 const BUDGET = resolve(ROOT, "budget/cli.mjs");
+// The budget commands run from a copy whose endpoint table names the fake RPCs: the endpoints that confirm a verdict, and the ones
+// an owner command uses, come from that table or the owner's settings, never from an RPC that only the environment names.
+const tree = endpointTree();
+const TREE_BUDGET = resolve(tree.root, "budget/cli.mjs");
+/** The rows set so far: `tree.set` rewrites the whole table, so a later row keeps the earlier ones. */
+const rows: Record<string, Entry[]> = {};
+const setRows = (table: Record<string, Entry[]>) => tree.set(Object.assign(rows, table));
+/** With a fake evm RPC, Base Sepolia's table names it twice, as two operators, so a verdict that needs two agreeing endpoints can be reached. */
+const evmTable = (url: string | undefined) => {
+  if (url) setRows({ "base-sepolia": [{ url, operator: "fake-a" }, { url: `${url}/`, operator: "fake-b" }] });
+  return TREE_BUDGET;
+};
 
 // ---- what a user or agent sees, and the one check every row's outputs go through --------------------------------------
 
@@ -209,13 +223,14 @@ afterEach(async () => {
   while (opened.length) await opened.pop()!.close();
 });
 afterAll(() => {
+  tree.close();
   for (const home of homes) rmSync(home, { recursive: true, force: true });
 });
 
 type Ran = { code: number; stdout: string; stderr: string };
-function exec(args: string[], env: Record<string, string | undefined>, onChild?: (child: ReturnType<typeof spawn>) => void): Promise<Ran> {
+function exec(args: string[], env: Record<string, string | undefined>, onChild?: (child: ReturnType<typeof spawn>) => void, cwd = ROOT): Promise<Ran> {
   return new Promise((done, fail) => {
-    const child = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, ...env } as NodeJS.ProcessEnv });
+    const child = spawn(process.execPath, args, { cwd, env: { ...process.env, ...env } as NodeJS.ProcessEnv });
     onChild?.(child);
     let stdout = "";
     let stderr = "";
@@ -231,7 +246,7 @@ const payEnv = (home: string, env: Record<string, string> = {}) => ({
 /** `superstables ...` in one process, as the installed command runs (a signal reaches the process that pays). */
 const superstables = (home: string, args: string[], env: Record<string, string> = {}) => exec(["--import", "tsx", MAIN, ...args], payEnv(home, env));
 const budgetEnv = (home: string, env: Record<string, string> = {}) => ({ SUPERSTABLES_HOME: home, SUPERSTABLES_SITE: undefined, SUPERSTABLES_BUDGET_APPROVAL_ID: undefined, ...env });
-const budget = (home: string, args: string[], env: Record<string, string> = {}, onChild?: (child: ReturnType<typeof spawn>) => void) => exec([BUDGET, ...args], budgetEnv(home, env), onChild);
+const budget = (home: string, args: string[], env: Record<string, string> = {}, onChild?: (child: ReturnType<typeof spawn>) => void) => exec([evmTable(env.B4_RPC), ...args], budgetEnv(home, env), onChild);
 const resultOf = (stdout: string) => {
   const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));
   return line ? JSON.parse(line.slice(7)) : null;
@@ -474,6 +489,7 @@ async function otherRail(rail: "tempo" | "solana", opts: { local?: boolean; fres
   const tempo = rail === "tempo" ? await startFakeTempo() : undefined;
   const solana = rail === "solana" ? await startFakeSolana() : undefined;
   opened.push(site, (tempo ?? solana)!);
+  setRows(tempo ? { "tempo-moderato": [tempo.url] } : { "solana-devnet": [solana!.url] });
   const owner = rail === "tempo" ? OWNER : SOL_OWNER.publicKey.toBase58();
   site.owner = owner;
   const put = (path: string[], text: string, mode: number) => {
@@ -482,7 +498,7 @@ async function otherRail(rail: "tempo" | "solana", opts: { local?: boolean; fres
   };
   const bound = opts.fresh ? "" : rail === "tempo" ? `OWNER_ADDRESS=${owner}\n` : `SOLANA_OWNER_ADDRESS=${owner}\n`;
   if (rail === "tempo") put(["keys", "budget", "tempo-agent.env"], `AGENT_PRIVATE_KEY=${TEMPO_KEY}\nAGENT_ADDRESS=${TEMPO_AGENT}\n${bound}`, 0o600);
-  else put(["keys", "budget", "solana-agent.env"], `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT.publicKey.toBase58()}\n${bound}`, 0o600);
+  else if (!opts.fresh) put(["keys", "budget", "solana-agent.env"], `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT.publicKey.toBase58()}\n${bound}`, 0o600);
   const hosted = opts.local ? "" : `APPROVALS=hosted\nSITE=${site.url}\n`;
   if (!opts.fresh && rail === "tempo") put(["budget", "public", "tempo-moderato.env"], `OWNER_ADDRESS=${owner}\nAGENT_ADDRESS=${TEMPO_AGENT}\n${hosted}`, 0o644);
   if (!opts.fresh && rail === "solana") put(["budget", "public", "solana-devnet.env"], `SOLANA_OWNER_ADDRESS=${owner}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT.publicKey.toBase58()}\n${hosted}`, 0o644);
@@ -550,13 +566,16 @@ function rpcChain(receipts: Record<string, unknown>, held = 10000n) {
     return undefined;
   };
 }
+
 /** `budget reconcile` on one journal, through the dispatcher, as an agent runs it. */
 async function reconcileCli(at: string, receipts: Record<string, unknown>, journal: Record<string, unknown>, held?: bigint) {
   const b = await hostedBudget(rpcChain(receipts, held));
   const dir = join(b.home, "budget", "ops", "evm-base-sepolia");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${journal.op}.json`), JSON.stringify({ ...journal, token: BASE_USDC }));
-  return { b, seen: seenBudget(at, "reconcile", await budget(b.home, ["reconcile", "--rail", "evm", "--chain", "base-sepolia", "--op", String(journal.op)], b.env)) };
+  // A verdict needs two agreeing endpoints: the copy's Base Sepolia table names the fake RPC twice, as two operators.
+  const cli = evmTable(b.env.B4_RPC);
+  return { b, seen: seenBudget(at, "reconcile", await exec([cli, "reconcile", "--rail", "evm", "--chain", "base-sepolia", "--op", String(journal.op)], budgetEnv(b.home, b.env))) };
 }
 
 /** The chain at finalized block 90, time 2000 (past every authorization here), as the evm rail reads it. */
@@ -576,7 +595,7 @@ async function evmOps(chain: ReturnType<typeof evmChain>, lib: Record<string, un
   vi.resetModules();
   vi.doMock("../budget/evm/lib.js", async (original) => ({
     ...(await original<object>()), OPS_DIR: dir, publicClient: chain, usdcBalance: async () => 10000n, allowanceOf: async () => 10000n, USDC: TOKEN,
-    sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), ...lib,
+    ...agreedFromClient(chain, TOKEN), sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), ...lib,
   }));
   opened.push({ close: () => void vi.doUnmock("../budget/evm/lib.js") });
   return import(new URL("../budget/evm/ops.ts", import.meta.url).href);
@@ -695,7 +714,12 @@ const ROWS: Row[] = [
       }));
       const open = await status("status while the authorization is valid", x.home, x.attempt.id, x.env);
       x.chain.advance(300 + 180);
-      return [open, await status("status after it expired unused", x.home, x.attempt.id, x.env)];
+      // "Never paid" needs two operators at the same final block: this status reads a copy of the client whose table names the
+      // fake chain twice (an RPC named only in the environment, as SUPERSTABLES_RPC_URL is here, never decides it).
+      setRows({ "base-sepolia": [{ url: x.chain.url, operator: "fake-a" }, { url: `${x.chain.url}/`, operator: "fake-b" }] });
+      const treeMain = resolve(tree.root, "src/cli/main.ts");
+      const expired = seenPay("status after it expired unused", "status", await exec(["--import", "tsx", treeMain, "status", x.attempt.id, "--json"], payEnv(x.home, x.env), undefined, tree.root));
+      return [open, expired];
     },
     expect: [
       { verdict: "unknown", match: { ...UNCERTAIN_PAY(), chain_reason: expect.stringMatching(/^the chain shows the owner's authorization unused so far; it can still be used until /) } },
@@ -1072,7 +1096,7 @@ const ROWS: Row[] = [
     timeout: 150_000,
   },
   {
-    path: "budget revoke on this machine: the allowance already reads 0, and the owner's revoke is still sent and read from the chain",
+    path: "budget revoke on this machine: the allowance already reads 0, and the owner's revoke is still sent, and is settled once the chain's final block is past it",
     covers: [],
     run: async () => {
       const REVOKE: Hex = `0x${"cf".repeat(32)}`;
@@ -1085,7 +1109,8 @@ const ROWS: Row[] = [
     expect: [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
       { verdict: "paid", match: { http: 200, status: "confirmed", sending: true, hash: `0x${"cf".repeat(32)}` } },
-      { verdict: "paid", match: { exit: 0, command: "revoke", state: "settled", revoked: true, tx: { revoke: `0x${"cf".repeat(32)}` } } },
+      // The endpoints agree on a final block past the revoke, so the revoke is final and the answer is done.
+      { verdict: "paid", match: { exit: 0, command: "revoke", state: "settled", tx: { revoke: `0x${"cf".repeat(32)}` } } },
     ],
     timeout: 150_000,
   },
@@ -1622,11 +1647,13 @@ const ROWS: Row[] = [
  */
 const SIGNS_ONLY = "the wallet signs and nothing leaves this machine until the payment engine accepts the signature, after this page has closed the approval as signed; every later answer here is 'already signed', and the engine's outcome is what pay and status print (rows: pay with x402)";
 const SIGN_IN = "a sign-in: the wallet signs a message, never a transaction, so no answer on this link is about a payment";
+const SIGN_SETTINGS = "a settings signature: the wallet signs typed data or a message, never a transaction, so no answer on this link is about a payment";
 const NOT_THIS_KIND = "answers 404 for this kind of owner action, before reading anything; it states no outcome";
 const NO_ANSWER_AFTER_BOUNDARY: Record<string, string> = {
   ...Object.fromEntries(["/account", "/signature", "/state", "/reject"].map((r) => [`route eip3009 ${r}`, SIGNS_ONLY])),
   ...Object.fromEntries(["/account", "/prepare", "/signed", "/state", "/reject"].map((r) => [`route solana-transaction ${r}`, SIGNS_ONLY])),
   ...Object.fromEntries(["/state", "/account", "/connect", "/sending", "/sent", "/prepare", "/signed", "/reject", "/cancel"].map((r) => [`route owner:connect ${r}`, SIGN_IN])),
+  ...Object.fromEntries(["/state", "/account", "/connect", "/sending", "/sent", "/prepare", "/signed", "/reject", "/cancel"].map((r) => [`route owner:settings ${r}`, SIGN_SETTINGS])),
   ...Object.fromEntries(["/connect", "/prepare", "/signed"].map((r) => [`route owner:evm-transaction ${r}`, NOT_THIS_KIND])),
   ...Object.fromEntries(["/connect", "/sending", "/sent"].map((r) => [`route owner:solana-transaction ${r}`, NOT_THIS_KIND])),
   "state awaiting_approval": "the state before the boundary: an attempt leaves it for approved when the wallet is asked to send (Tempo) or its signature is accepted (x402), and nothing moves it back",
@@ -1640,12 +1667,14 @@ const NO_ANSWER_AFTER_BOUNDARY: Record<string, string> = {
   "command demo-service": "a seller on this machine; it reports no payment of the client's",
   "command doctor": "checks what pay needs; no payment",
   "command policy": "the spend policy file; no payment",
+  "command owner": "the owner's settings file (owner settings): it refuses to run without the owner at a terminal and moves no money",
   "command budget": "a group: each of its commands is listed as budget <command>",
   "budget doctor": "keys, addresses, RPC and balances; no payment outcome",
   "budget status": "the budget's allowance, expiry and revocation; no purchase outcome",
   "budget preflight": "reads a seller's price; signs nothing",
   "budget find": "lists services; no payment",
   "budget unlock": "clears locks after the owner stopped every process; it reports lock state only, and its next for an operation is reconcile",
+  "budget rotate": "rotate runs recover, revoke, reconcile and setup as child commands; each answers for itself",
 };
 
 const REASONS: Record<string, string> = NO_ANSWER_AFTER_BOUNDARY;
@@ -1742,11 +1771,13 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/evm/recover.ts", has: 'const state = done ? "ok"', why: AFTER_SEND_UNPROVEN },
   { file: "budget/evm/revoke.ts", has: '"not_revoked"', why: AFTER_SEND_UNPROVEN },
   { file: "budget/evm/setup.ts", has: "That is the agent's own address", why: SIGN_IN_ONLY },
+  { file: "budget/evm/setup.ts", has: "not this wallet. Nothing was changed.", why: SIGN_IN_ONLY },
   { file: "budget/solana/buy.mjs", has: '"own transaction failed on chain"', why: SOLANA_PURCHASE },
   { file: "budget/solana/buy.mjs", has: "{ tx: own.sig, delivered: false, next:", why: SOLANA_PURCHASE },
   { file: "budget/solana/buy.mjs", has: '"own transaction landed and failed"', why: SOLANA_PURCHASE },
   { file: "budget/solana/buy.mjs", has: "reason: oneLine(JSON.stringify(assessment.err), 300)", why: SOLANA_PURCHASE },
   { file: "budget/solana/reconcile.mjs", has: "reconcile: own transaction failed on chain", why: SOLANA_PURCHASE },
+  { file: "budget/solana/rotate.mjs", has: 'if (seen.some((st) => st?.err))', why: "a sweep, not a purchase: the chain's own signature statuses show an error on a transfer and every transfer, the one with the error included, is finalized, so nothing of it moved and the funds are swept again; a status that is not final is pending, never failed" },
   { file: "budget/solana/reconcile.mjs", has: 'emit(result("failed"', why: SOLANA_PURCHASE },
   { file: "budget/solana/revokeBudget.ts", has: "The chain still shows delegate", why: AFTER_SEND_UNPROVEN },
   { file: "budget/solana/revokeBudget.ts", has: "a delegate still reads on chain", why: AFTER_SEND_UNPROVEN },
@@ -1765,6 +1796,8 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/tempo/revokeBudget.ts", has: "scanFailed ? 'failed'", why: "the chain shows the key revoked, but the scan of its payment sessions failed: with no proof the dispatcher answers unknown (budget/proof.mjs afterSend), which is what the exposure is" },
   { file: "budget/tempo/setup.ts", has: "That is the agent's own address", why: SIGN_IN_ONLY },
   { file: "budget/tempo/setup.ts", has: "This machine records another owner for this agent", why: SIGN_IN_ONLY },
+  { file: "budget/tempo/setup.ts", has: "not this wallet. Nothing was changed.", why: SIGN_IN_ONLY },
+  { file: "budget/tempo/setup.ts", has: "The owner's signature did not come back", why: SIGN_IN_ONLY },
   { file: "budget/tempo/lib/resolve.ts", has: "payment transaction reverted on chain", why: TEMPO_PURCHASE },
   { file: "budget/evm/ops.ts", has: 'return { j, verdict: "failed" };', why: "a purchase's verdict inside ops.ts, after it saved one of the agreed chain proofs evm-pull-reverted or evm-funds-returned (the two places above)" },
   { file: "budget/solana/ops.mjs", has: '{ verdict: "failed", tx: t.sig, err: t.err', why: SOLANA_PURCHASE },

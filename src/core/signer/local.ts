@@ -3,15 +3,17 @@
 //
 // It signs x402 exact payments on the EVM chains `pay` supports, and nothing else: on Tempo the owner's wallet sends the
 // payment itself, and on Solana it is a Solana key that signs, so those are approved in a browser wallet on the approval
-// page.
+// page. What it signs is the client's own EIP-3009 typed data, the one the approval page builds: it judges the request
+// again, pins the token's signing domain, signs for ten minutes at most, never pays the account itself, and checks its own
+// signature before it returns one.
 
-import { ExactEvmScheme } from "@x402/evm";
-import { ExactEvmSchemeV1 } from "@x402/evm/v1";
+import { verifyTypedData } from "viem";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { chainGate, chainGateSettings } from "../chain-gate.js";
-import { evmNetworkFor, networkFor } from "../chain.js";
-import { x402RailFor } from "../rails/index.js";
+import { evmNetworkFor, isSameAddress, networkFor } from "../chain.js";
+import { judgeSignRequest, x402RailFor } from "../rails/index.js";
 import { untrustedText } from "../text.js";
+import { buildTypedData } from "./steps/eip3009.js";
 import { LOCAL_WALLET_EVM_ONLY, SignRefused, type Eip3009SignResult, type SignHooks, type SignRequest, type Signer } from "./types.js";
 
 export class LocalKeySigner implements Signer {
@@ -34,28 +36,37 @@ export class LocalKeySigner implements Signer {
       const kind = (req as { kind: unknown }).kind;
       throw new SignRefused("invalid", kind === "tempo-transfer" || kind === "solana-transaction" ? LOCAL_WALLET_EVM_ONLY : `cannot sign ${String(kind)}`);
     }
-    // v1 requirements carry maxAmountRequired and a vernacular network name; the SDK has a
-    // separate scheme for them. Both produce the same {signature, authorization} payload.
-    const scheme = req.x402Version === 1 ? new ExactEvmSchemeV1(this.account) : new ExactEvmScheme(this.account);
     // The signing domain is USDC's own, from this client's chain table, never the seller's `extra`: quoting already
     // refuses an offer that names another one, and an offer that names none is signed with USDC's, as the approval page
-    // does. Only the signature is taken from what the SDK builds; the requirement sent back to the seller is unchanged.
-    // `pay` pays on the chains its rails name only; quoting refuses any other before the owner is asked, and this refuses
-    // it again rather than sign over a domain the client does not know.
+    // does. `pay` pays on the chains its rails name only; quoting refuses any other before the owner is asked, and this
+    // refuses it again rather than sign over a domain the client does not know.
     const network = evmNetworkFor(String(req.requirements.network ?? ""));
     if (!network || !x402RailFor(network)) throw new SignRefused("invalid", `this wallet does not sign on ${untrustedText(req.requirements.network ?? "an unnamed chain", 60)}`);
-    const gate = chainGate({ rail: network.rail, key: network.key, testnet: network.testnet }, chainGateSettings()); if (gate) throw new SignRefused("invalid", gate);
-    const requirements = {
-      ...req.requirements,
-      // The x402 v1 SDK knows a chain by its v1 name only; a v1 offer that names the chain by CAIP-2 is signed under it.
-      ...(req.x402Version === 1 && network.v1Name ? { network: network.v1Name } : {}),
-      extra: { ...(req.requirements.extra ?? {}), name: network.usdc.eip712.name, version: network.usdc.eip712.version },
-    } as typeof req.requirements;
+    const gate = chainGate({ rail: network.rail, key: network.key, testnet: network.testnet, token: network.token }, chainGateSettings()); if (gate) throw new SignRefused("invalid", gate);
+    // Judged again here, as every signer must: the chain gate, the offer's `extra` allow-list, Permit2, the pinned domain,
+    // the amount and the recipient. A request sent straight to the wallet gets no easier a check than one `pay` made.
+    const judged = judgeSignRequest(req);
+    if (!judged.supported) throw new SignRefused("invalid", judged.reason);
     if (req.x402Version === 1 && !network.v1Name) throw new SignRefused("invalid", `x402 v1 has no name for ${network.label}, so this wallet does not sign a v1 payment there`);
-    const created = await scheme.createPaymentPayload(req.x402Version, requirements);
+    if (isSameAddress(judged.offer.terms.recipient, this.account.address)) throw new SignRefused("invalid", "the recipient is the account paying, so this payment was not signed");
+    // The seller's window is clamped to ten minutes in there, and validAfter is backdated for v1, as the page does.
+    const typed = buildTypedData({ network, requirement: judged.offer.requirement, x402Version: req.x402Version }, this.account.address);
+    const domain = { ...typed.domain, verifyingContract: typed.domain.verifyingContract as `0x${string}` };
+    const message = {
+      from: typed.message.from as `0x${string}`,
+      to: typed.message.to as `0x${string}`,
+      value: BigInt(typed.message.value),
+      validAfter: BigInt(typed.message.validAfter),
+      validBefore: BigInt(typed.message.validBefore),
+      nonce: typed.message.nonce as `0x${string}`,
+    };
+    const types = { TransferWithAuthorization: typed.types.TransferWithAuthorization };
+    const signature = await this.account.signTypedData({ domain, types, primaryType: "TransferWithAuthorization", message });
+    const genuine = await verifyTypedData({ address: this.account.address, domain, types, primaryType: "TransferWithAuthorization", message, signature });
+    if (!genuine) throw new SignRefused("invalid", "the wallet's signature did not verify; nothing was returned");
     return {
       kind: "eip3009",
-      payload: created.payload as { signature: string; authorization: Record<string, unknown> },
+      payload: { signature, authorization: { ...typed.message } },
       signer: this.account.address,
     };
   }

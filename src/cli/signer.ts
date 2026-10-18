@@ -1,6 +1,6 @@
 // Which signer asks the owner to approve a payment: chosen by --wallet, or SUPERSTABLES_WALLET.
 
-import { approvePortFromEnvironment } from "../core/home.js";
+import { DEFAULT_APPROVE_PORT, approvePort, approvePortFromEnvironment } from "../core/home.js";
 import { BrowserWalletSigner } from "../core/signer/browser.js";
 import type { Signer } from "../core/signer/types.js";
 import { WalletSigner } from "../core/signer/wallet.js";
@@ -20,7 +20,18 @@ export function walletModeFromEnvironment(): WalletMode {
  */
 export function signerFor(mode: WalletMode = walletModeFromEnvironment()): Signer & { status(): Promise<WalletStatus> } {
   if (mode === "local") return new WalletSigner();
-  // A port the owner chose is kept as chosen; with none, the default, or a free port when
-  // another payment is already waiting on the default.
-  return new BrowserWalletSigner({ port: approvePortFromEnvironment() });
+  // A port the owner chose is kept as chosen; with none, the port this home uses, or a free port when another payment is
+  // already waiting on it.
+  const port = approvePortFromEnvironment();
+  return new BrowserWalletSigner({ port, preferredPort: port === undefined ? homeApprovePort() : undefined });
+}
+
+/** This home's approval port; DEFAULT_APPROVE_PORT, with a note on stderr, when its file cannot be used. */
+function homeApprovePort(): number {
+  try {
+    return approvePort();
+  } catch (err) {
+    console.error(`note: the approval page's port could not be kept for this home (${(err as Error).message}); using ${DEFAULT_APPROVE_PORT}`);
+    return DEFAULT_APPROVE_PORT;
+  }
 }

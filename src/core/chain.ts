@@ -6,10 +6,11 @@
 // The seven EVM chains are the budget's (budget/evm/chains.mjs, its own program with its own build); a test checks that
 // this table agrees with that one field by field.
 
-import { chainRpc } from "./rpc.js";
+import { verifiedRpc } from "./rpc.js";
 import { finalityFor, SOLANA_DEVNET_GENESIS } from "./finality-policy.js";
 import { createPublicClient, http } from "viem";
 import type { PaymentRequirements } from "@x402/core/types";
+import { tokenFactsProblem, type EvmTokenFacts, type TokenFacts } from "./token-facts.js";
 
 export type Rail = "evm" | "tempo" | "solana";
 
@@ -36,20 +37,22 @@ interface NetworkCommon {
   explorer: string;
   /** Added after a transaction or address in an explorer link, e.g. "?cluster=devnet". */
   explorerQuery?: string;
-  /** The RPC an EVM chain's balances are read through. Browser wallets are offered `defaultRpc` instead. */
+  /** The public RPC of this chain. Balances and payment checks are read through chainRpc (src/core/rpc.ts), which may name another one. */
   rpc: string;
   /** The public RPC offered to a browser wallet, and the one a settlement is read through when `rpcEnv` names no other (see chainRpc in src/core/rpc.ts). */
   defaultRpc: string;
   /** The environment variable that replaces this chain's RPC for chain reads, when it has one. */
   rpcEnv?: string;
-  /** The token `pay` pays in on this chain. */
-  token: { symbol: string; address: string; decimals: number };
+  /** The token `pay` pays in on this chain, as its one table entry states it (./token-facts.js): nothing about it is assumed. */
+  token: TokenFacts;
   wallet: WalletChain;
 }
 
 /** An x402 exact chain on EVM: the owner signs an EIP-3009 authorization over the token's own EIP-712 domain. */
 export interface EvmNetwork extends NetworkCommon {
   rail: "evm";
+  token: EvmTokenFacts & { address: `0x${string}` };
+  /** @deprecated The same facts as `token` (address, decimals, domain) in the older shape, built from it: read `token`. */
   usdc: { address: `0x${string}`; decimals: number; eip712: { name: string; version: string } };
   /** About how many seconds pass between blocks: where a search for a block by its time starts, and how many blocks a log search reads (a day's worth). A wrong value costs a search time or reach, never a wrong answer. */
   blockSeconds: number;
@@ -90,15 +93,15 @@ function evm(input: {
   defaultRpc?: string;
   rpcEnv?: string;
   explorer: string;
-  usdc: `0x${string}`;
-  /** The token's symbol, when it is not USDC. */
-  symbol?: string;
-  eip712: { name: string; version: string };
+  /** The token `pay` pays in here, every fact stated (./token-facts.js). */
+  token: EvmTokenFacts & { address: `0x${string}` };
   chainName: string;
   nativeCurrency: { name: string; symbol: string; decimals: number };
   blockSeconds: number;
   logRange?: number;
 }): EvmNetwork {
+  const problem = tokenFactsProblem(input.token, "evm");
+  if (problem) throw new Error(`chain table: ${input.key}: ${problem}`);
   return {
     rail: "evm",
     key: input.key,
@@ -111,8 +114,8 @@ function evm(input: {
     rpc: input.rpc,
     defaultRpc: input.defaultRpc ?? input.rpc,
     ...(input.rpcEnv ? { rpcEnv: input.rpcEnv } : {}),
-    token: { symbol: input.symbol ?? "USDC", address: input.usdc, decimals: 6 },
-    usdc: { address: input.usdc, decimals: 6, eip712: input.eip712 },
+    token: input.token,
+    usdc: { address: input.token.address, decimals: input.token.decimals, eip712: input.token.domain },
     wallet: { chainName: input.chainName, nativeCurrency: input.nativeCurrency },
     blockSeconds: input.blockSeconds,
     logRange: input.logRange ?? 1_000,
@@ -126,12 +129,11 @@ export const BASE_SEPOLIA: EvmNetwork = evm({
   label: "Base Sepolia (testnet)",
   testnet: true,
   v1Name: "base-sepolia",
-  rpc: process.env.SUPERSTABLES_RPC_URL ?? "https://sepolia.base.org",
+  rpc: "https://sepolia.base.org",
   defaultRpc: "https://sepolia.base.org",
   rpcEnv: "SUPERSTABLES_RPC_URL",
   explorer: "https://sepolia.basescan.org",
-  usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-  eip712: { name: "USDC", version: "2" },
+  token: { address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" }, approveReset: false },
   chainName: "Base Sepolia",
   nativeCurrency: ETHER,
   blockSeconds: 2,
@@ -145,10 +147,9 @@ export const ARC_TESTNET: EvmNetwork = evm({
   chainId: 5042002,
   label: "Arc Testnet",
   testnet: true,
-  rpc: "https://rpc.testnet.arc.network",
+  rpc: "https://rpc.testnet.arc.io",
   explorer: "https://explorer.testnet.arc.io",
-  usdc: "0x3600000000000000000000000000000000000000",
-  eip712: { name: "USDC", version: "2" },
+  token: { address: "0x3600000000000000000000000000000000000000", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" }, approveReset: false },
   chainName: "Arc Testnet",
   nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
   blockSeconds: 0.5,
@@ -161,8 +162,7 @@ export const ARBITRUM_SEPOLIA: EvmNetwork = evm({
   testnet: true,
   rpc: "https://sepolia-rollup.arbitrum.io/rpc",
   explorer: "https://sepolia.arbiscan.io",
-  usdc: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
-  eip712: { name: "USD Coin", version: "2" },
+  token: { address: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", symbol: "USDC", decimals: 6, domain: { name: "USD Coin", version: "2" }, approveReset: false },
   chainName: "Arbitrum Sepolia",
   nativeCurrency: ETHER,
   blockSeconds: 0.25,
@@ -176,8 +176,7 @@ export const POLYGON_AMOY: EvmNetwork = evm({
   v1Name: "polygon-amoy",
   rpc: "https://polygon-amoy-bor-rpc.publicnode.com",
   explorer: "https://amoy.polygonscan.com",
-  usdc: "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582",
-  eip712: { name: "USDC", version: "2" },
+  token: { address: "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" }, approveReset: false },
   chainName: "Polygon Amoy",
   nativeCurrency: { name: "POL", symbol: "POL", decimals: 18 },
   blockSeconds: 2,
@@ -192,8 +191,7 @@ export const SKALE_BASE_SEPOLIA: EvmNetwork = evm({
   v1Name: "skale-base-sepolia",
   rpc: "https://base-sepolia-testnet.skalenodes.com/v1/jubilant-horrible-ancha",
   explorer: "https://base-sepolia-testnet-explorer.skalenodes.com",
-  usdc: "0x2e08028E3C4c2356572E096d8EF835cD5C6030bD",
-  eip712: { name: "Bridged USDC (SKALE Bridge)", version: "2" },
+  token: { address: "0x2e08028E3C4c2356572E096d8EF835cD5C6030bD", symbol: "USDC", decimals: 6, domain: { name: "Bridged USDC (SKALE Bridge)", version: "2" }, approveReset: false },
   chainName: "SKALE Base Sepolia",
   nativeCurrency: { name: "CREDIT", symbol: "CREDIT", decimals: 18 },
   blockSeconds: 1,
@@ -209,8 +207,7 @@ export const ETHEREUM_SEPOLIA: EvmNetwork = evm({
   v1Name: "sepolia",
   rpc: "https://ethereum-sepolia-rpc.publicnode.com",
   explorer: "https://sepolia.etherscan.io",
-  usdc: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-  eip712: { name: "USDC", version: "2" },
+  token: { address: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" }, approveReset: false },
   chainName: "Ethereum Sepolia",
   nativeCurrency: ETHER,
   blockSeconds: 12,
@@ -225,9 +222,7 @@ export const ROBINHOOD_TESTNET: EvmNetwork = evm({
   testnet: true,
   rpc: "https://rpc.testnet.chain.robinhood.com",
   explorer: "https://explorer.testnet.chain.robinhood.com",
-  usdc: "0x7E955252E15c84f5768B83c41a71F9eba181802F",
-  symbol: "USDG",
-  eip712: { name: "Global Dollar", version: "1" },
+  token: { address: "0x7E955252E15c84f5768B83c41a71F9eba181802F", symbol: "USDG", decimals: 6, domain: { name: "Global Dollar", version: "1" }, approveReset: false },
   chainName: "Robinhood Chain Testnet",
   nativeCurrency: ETHER,
   blockSeconds: 0.15,
@@ -236,6 +231,9 @@ export const ROBINHOOD_TESTNET: EvmNetwork = evm({
 
 /** The seven x402 EVM chains, in the budget's order. */
 export const EVM_NETWORKS: readonly EvmNetwork[] = [BASE_SEPOLIA, ARC_TESTNET, ARBITRUM_SEPOLIA, POLYGON_AMOY, SKALE_BASE_SEPOLIA, ETHEREUM_SEPOLIA, ROBINHOOD_TESTNET];
+
+/** How each EVM entry above is built (it refuses an entry with a fact missing); for tests. Not part of the SDK. */
+export { evm as evmNetwork };
 
 /**
  * Tempo Moderato. pathUSD is Tempo's reference USD stablecoin, a TIP-20 token at a fixed address with 6 decimals; the
@@ -283,6 +281,11 @@ export const SOLANA_DEVNET: SolanaNetwork = {
  * SUPPORTED_NETWORKS there is the list it pays on.
  */
 export const KNOWN_NETWORKS: readonly NetworkInfo[] = [...EVM_NETWORKS, TEMPO_MODERATO, SOLANA_DEVNET];
+
+for (const n of [TEMPO_MODERATO, SOLANA_DEVNET]) {
+  const problem = tokenFactsProblem(n.token, n.rail);
+  if (problem) throw new Error(`chain table: ${n.key}: ${problem}`);
+}
 
 export const DEFAULT_NETWORK = BASE_SEPOLIA;
 
@@ -381,13 +384,21 @@ export function addressUrl(network: string, address: string): string {
   return known ? `${known.explorer}/address/${address}${known.explorerQuery ?? ""}` : address;
 }
 
-/** Rounds through floating point: for display and the demo seller's price only. Limits use toAtomicExact. */
-export function toAtomic(amountDecimal: number, decimals = 6): string {
+/**
+ * Rounds through floating point: for display and the demo seller's price only. Limits use toAtomicExact.
+ * `decimals`: the token's, from its chain entry (`network.token.decimals`); there is no default.
+ */
+export function toAtomic(amountDecimal: number, decimals: number): string {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 77) throw new Error("not a number of decimals");
   return String(Math.round(amountDecimal * 10 ** decimals));
 }
 
-/** Rounds through floating point: for display and the demo seller's price only. Limits use toAtomicExact. */
-export function fromAtomic(amountAtomic: string, decimals = 6): number {
+/**
+ * Rounds through floating point: for display and the demo seller's price only. Limits use toAtomicExact.
+ * `decimals`: the token's, from its chain entry (`network.token.decimals`); there is no default.
+ */
+export function fromAtomic(amountAtomic: string, decimals: number): number {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 77) throw new Error("not a number of decimals");
   return Number(amountAtomic) / 10 ** decimals;
 }
 
@@ -427,7 +438,7 @@ const ERC20_BALANCE_OF = [
  */
 export async function usdcBalance(address: string, network: NetworkInfo = DEFAULT_NETWORK): Promise<number> {
   if (network.rail === "solana") throw new Error("balances on Solana are not read by this function");
-  const rpc = network.rail === "tempo" ? chainRpc(network) : { url: network.rpc };
+  const rpc = await verifiedRpc(network);
   if ("error" in rpc) throw new Error(rpc.error);
   const client = createPublicClient({ transport: http(rpc.url) });
   const raw = await client.readContract({
@@ -444,10 +455,10 @@ export function usdcRequirement(amountDecimal: number, payTo: string, network: E
   return {
     scheme: "exact",
     network: network.caip2 as PaymentRequirements["network"],
-    asset: network.usdc.address,
-    amount: toAtomic(amountDecimal, network.usdc.decimals),
+    asset: network.token.address,
+    amount: toAtomic(amountDecimal, network.token.decimals),
     payTo,
     maxTimeoutSeconds: 300,
-    extra: { name: network.usdc.eip712.name, version: network.usdc.eip712.version },
+    extra: { name: network.token.domain.name, version: network.token.domain.version },
   };
 }

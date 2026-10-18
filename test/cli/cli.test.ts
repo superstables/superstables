@@ -103,7 +103,7 @@ describe("the superstables CLI", () => {
   });
 
   it("creates a wallet key only its owner can read", async () => {
-    const result = await run(["wallet", "init"]);
+    const result = await run(["wallet", "init", "--no-passphrase"]);
     expect(result.code).toBe(0);
     expect(result.stdout).toMatch(/0x[0-9a-fA-F]{40}/);
     expect(result.stdout).toContain("faucet.circle.com");
@@ -116,7 +116,7 @@ describe("the superstables CLI", () => {
     expect(address.stdout.trim()).toMatch(/^0x[0-9a-fA-F]{40}$/);
 
     // The same key twice would be a silently lost wallet.
-    const twice = await run(["wallet", "init"]);
+    const twice = await run(["wallet", "init", "--no-passphrase"]);
     expect(twice.code).toBe(1);
     expect(twice.stderr).toContain("--force");
   });
@@ -126,7 +126,7 @@ describe("the superstables CLI", () => {
     const file = join(home, "import.key");
     writeFileSync(file, `${key}\n`, { mode: 0o600 });
     chmodSync(file, 0o644);
-    const readable = await run(["wallet", "init", "--import-key-file", file]);
+    const readable = await run(["wallet", "init", "--no-passphrase", "--import-key-file", file]);
     expect(readable.code).toBe(1);
     expect(readable.stderr).toMatch(/can be read by other users on this machine: chmod 600/);
     expect(existsSync(join(home, "wallet", "key"))).toBe(false);
@@ -134,12 +134,12 @@ describe("the superstables CLI", () => {
     // a FIFO would make a plain read wait for a writer forever
     const fifo = join(home, "import.fifo");
     execFileSync("mkfifo", ["-m", "600", fifo]);
-    const piped = await run(["wallet", "init", "--import-key-file", fifo]);
+    const piped = await run(["wallet", "init", "--no-passphrase", "--import-key-file", fifo]);
     expect(piped.code).toBe(1);
     expect(piped.stderr).toMatch(/is not a regular file/);
 
     chmodSync(file, 0o600);
-    const imported = await run(["wallet", "init", "--import-key-file", file]);
+    const imported = await run(["wallet", "init", "--no-passphrase", "--import-key-file", file]);
     expect(imported.code, imported.stderr).toBe(0);
     expect(imported.stdout).toContain("The wallet key was imported.");
     expect(statSync(join(home, "wallet", "key")).mode & 0o777).toBe(0o600);
@@ -167,6 +167,8 @@ describe("the superstables CLI", () => {
   });
 
   it("reports a set-up machine as healthy apart from the wallet not running", async () => {
+    // Without a terminal, setup cannot ask for a passphrase and creates no key; the owner makes one first.
+    expect((await run(["wallet", "init", "--no-passphrase"])).code).toBe(0);
     expect((await run(["--wallet", "local", "setup"])).code).toBe(0);
 
     const result = await run(["--wallet", "local", "doctor"]);
@@ -275,6 +277,7 @@ const COMMANDS = [
   ["setup"],
   ["wallet"],
   ["wallet", "init"],
+  ["wallet", "encrypt"],
   ["wallet", "serve"],
   ["wallet", "status"],
   ["wallet", "address"],

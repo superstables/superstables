@@ -10,7 +10,8 @@
 import { defineChain, parseUnits, type Address, type Chain } from "viem";
 import * as viemChains from "viem/chains";
 import { EVM_CHAINS, EVM_DEFAULT_CHAIN } from "./chains.mjs";
-import { rpcFromEnv } from "../rpc.mjs";
+import { evmRpcFromEnv } from "../rpc.mjs";
+import { tokenFactsProblem } from "../../src/core/token-facts.js";
 
 /** Gas limit of each transaction on this chain (chains.mjs `gas.limits`): the agent's pull, cancel, return and selfRevoke, the owner's approve and revoke. */
 export type GasOp = "pull" | "cancel" | "return" | "selfRevoke" | "approve" | "revoke";
@@ -30,6 +31,7 @@ export type ChainCfg = {
   network: string; // x402 network id, eip155:<chainId>
   legacyNetworks: string[]; // x402 v1 names to accept as the same chain
   domain: { name: string; version: string };
+  approveReset: boolean; // a new allowance above 0 needs approve(spender, 0) first (chains.mjs)
   gas: { symbol: string; decimals: number; isUsdc: boolean; limits: GasLimits; minAgent: bigint; topUp: bigint; reserveMax?: bigint };
   logRange?: number; // the RPC's eth_getLogs block-range cap, when it has one
   blockSeconds: number; // about how many seconds pass between blocks: how many blocks a day of log search reads
@@ -37,6 +39,8 @@ export type ChainCfg = {
 
 function build(key: string, rpcOverride?: string): ChainCfg {
   const t = { ...(EVM_CHAINS as Record<string, any>)[key], ...(rpcOverride ? { rpc: rpcOverride } : {}) };
+  const tokenProblem = tokenFactsProblem(t.token, "evm");
+  if (tokenProblem) throw new Error(`chains.mjs: ${key}: ${tokenProblem}`);
   const preset = (viemChains as Record<string, Chain>)[t.viem];
   if (!preset || preset.id !== t.chainId) throw new Error(`chains.mjs: viem preset ${t.viem} is not chain ${t.chainId}`);
   const g = t.gas;
@@ -49,7 +53,7 @@ function build(key: string, rpcOverride?: string): ChainCfg {
   return {
     key, label: t.label, rail: key, chain, chainId: t.chainId, rpc: t.rpc, explorer: t.explorer,
     usdc: t.token.address, symbol: t.token.symbol, decimals: t.token.decimals, network: `eip155:${t.chainId}`,
-    legacyNetworks: t.legacy, domain: t.token.domain, ...(t.logRange ? { logRange: t.logRange } : {}), blockSeconds: t.blockSeconds,
+    legacyNetworks: t.legacy, domain: t.token.domain, approveReset: t.token.approveReset, ...(t.logRange ? { logRange: t.logRange } : {}), blockSeconds: t.blockSeconds,
     gas: {
       symbol: g.symbol, decimals: g.decimals, isUsdc: g.isToken,
       limits: Object.fromEntries(Object.entries(g.limits).map(([k, v]) => [k, BigInt(v as number)])) as GasLimits,
@@ -72,19 +76,21 @@ export function selectedChainKey(): string {
   }
   return key;
 }
+const KEY = selectedChainKey();
 /**
- * B4_RPC replaces the selected chain's RPC URL (tests point it at a local fake; you can point it at your own node): https, or
- * http on this computer only (../rpc.mjs). Every script that signs still checks the chain id it answers with first (lib.ts
- * assertRpcChain).
+ * B4_RPC_<CHAIN> (B4_RPC_BASE_SEPOLIA, ...) replaces that chain's RPC URL, and B4_RPC, older, replaces the selected chain's whichever
+ * it is; the chain's own variable wins, then B4_RPC, then the RPC the owner set for the chain (superstables owner settings rpc), then
+ * the built-in one (../rpc.mjs evmRpcFromEnv). https, or http on this computer only. Every script that reads or signs checks
+ * the chain id it answers with first (lib.ts assertRpcChain, assertReadChain). The environment names the RPC that is read; the
+ * endpoints that decide a verdict follow the owner settings, with the environment's URL joining only when it is a built-in one.
  */
-function rpcOverride(): string | undefined {
-  const r = rpcFromEnv("B4_RPC", "");
+function rpcOverride(key: string): string | undefined {
+  const r = evmRpcFromEnv(key, "");
   if (r.error) {
     console.error(`error: ${r.error}`);
     process.exit(2);
   }
   return r.custom ? r.url : undefined;
 }
-const KEY = selectedChainKey();
-const OVERRIDE = rpcOverride();
+const OVERRIDE = rpcOverride(KEY);
 export const CFG: ChainCfg = OVERRIDE ? build(KEY, OVERRIDE) : CHAINS[KEY];

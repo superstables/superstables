@@ -1,7 +1,9 @@
 // JSON-RPC stand-ins for Tempo Moderato and Solana devnet, for the hosted approval tests: just enough of each chain for the
 // rail scripts to read what the owner's wallet sent (a transaction, its receipt, the keychain or the token account) after the
 // site reports it. A test changes the chain by calling the helpers below, as the owner's wallet would. No network.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
 import { decodeFunctionData, encodeErrorResult, encodeFunctionResult, type Hex } from "viem";
@@ -34,10 +36,17 @@ export interface FakeTempo extends TestServer {
   simulations: { from: string; key: string }[];
   /** A simulated revokeKey's answer; default: the keychain's own (no key: KeyNotFound; revoked: KeyAlreadyRevoked; else "ok"). */
   revokeSimulation?: (from: string, key: string) => "ok" | "KeyAlreadyRevoked" | "KeyNotFound" | "unreadable";
+  /** Every JSON-RPC method this server was asked, in order. */
+  calls: string[];
+  /** Per-method answers that replace the chain's own on this server (a mirror's lie), by method; return undefined to fall through. */
+  overrides?: Record<string, (params: any[]) => unknown>;
+  /** A second server over the same chain (same keys, head and transactions); `view` replaces some of its answers or its revokeKey simulation. */
+  mirror(view?: Partial<Pick<FakeTempo, "overrides" | "revokeSimulation">>): Promise<FakeTempo>;
 }
 
 export async function startFakeTempo(): Promise<FakeTempo> {
   const chain = {} as FakeTempo;
+  chain.calls = [];
   chain.head = { number: 1000n, timestamp: Math.floor(Date.now() / 1000) };
   chain.keys = new Map();
   chain.simulations = [];
@@ -61,13 +70,13 @@ export async function startFakeTempo(): Promise<FakeTempo> {
     }
     return hash;
   };
-  const keychain = (data: Hex, from = ""): Hex => {
+  const keychain = (data: Hex, from = "", view: Pick<FakeTempo, "revokeSimulation"> = chain): Hex => {
     const call = decodeFunctionData({ abi: Abis.accountKeychain, data });
     const a = call.args as unknown as any[];
     if (call.functionName === "revokeKey") {
       chain.simulations.push({ from, key: String(a[0]) });
       const k = chain.keys.get(id(from, a[0]));
-      const v = chain.revokeSimulation?.(from, a[0]) ?? (!k ? "KeyNotFound" : k.revoked ? "KeyAlreadyRevoked" : "ok");
+      const v = view.revokeSimulation?.(from, a[0]) ?? (!k ? "KeyNotFound" : k.revoked ? "KeyAlreadyRevoked" : "ok");
       if (v === "ok") return "0x";
       if (v === "unreadable") throw new Error("fake tempo: eth_call failed");
       throw Object.assign(new Error("execution reverted"), { rpc: { code: 3, message: "execution reverted", data: encodeErrorResult({ abi: Abis.accountKeychain, errorName: v }) } });
@@ -76,14 +85,22 @@ export async function startFakeTempo(): Promise<FakeTempo> {
     const out = (result: unknown) => encodeFunctionResult({ abi: Abis.accountKeychain, functionName: call.functionName as any, result: result as any });
     switch (call.functionName) {
       case "getKey": return out({ signatureType: 0, keyId: a[1], expiry: k?.expiry ?? 0n, enforceLimits: !!k, isRevoked: k?.revoked ?? false });
-      case "getRemainingLimit": return out(k && !k.revoked ? k.limit : 0n);
+      // the real keychain reverts getRemainingLimit for a revoked key (getRemainingLimitWithPeriod answers 0)
+      case "getRemainingLimit":
+        if (k?.revoked) throw Object.assign(new Error("execution reverted"), { rpc: { code: 3, message: "execution reverted", data: "0x" } });
+        return out(k ? k.limit : 0n);
       case "getRemainingLimitWithPeriod": return out([k && !k.revoked ? k.limit : 0n, k?.periodEnd ?? 0n]);
       case "getAllowedCalls": return out([k?.scoped ?? false, []]);
       case "isAdminKey": return out(false);
       default: throw new Error(`fake keychain: ${call.functionName}`);
     }
   };
-  const answer = (method: string, params: any[]): unknown => {
+  const answer = (method: string, params: any[], view: Pick<FakeTempo, "overrides" | "revokeSimulation"> = chain): unknown => {
+    const over = view.overrides?.[method];
+    if (over) {
+      const got = over(params);
+      if (got !== undefined) return got;
+    }
     switch (method) {
       case "eth_chainId": return hex(42431);
       case "eth_blockNumber": return hex(chain.head.number);
@@ -93,7 +110,7 @@ export async function startFakeTempo(): Promise<FakeTempo> {
       }
       case "eth_call": {
         const { to, data, from } = params[0];
-        if (String(to).toLowerCase() === KEYCHAIN.toLowerCase()) return keychain(data, from);
+        if (String(to).toLowerCase() === KEYCHAIN.toLowerCase()) return keychain(data, from, view);
         if (String(data).startsWith("0xed498fa8")) return `0x${"0".repeat(64)}`; // FeeManager: no fee token preference
         if (String(data).startsWith("0x70a08231")) return `0x${(1000n * 10n ** 6n).toString(16).padStart(64, "0")}`; // 1000 pathUSD
         return `0x${"0".repeat(64)}`;
@@ -104,24 +121,30 @@ export async function startFakeTempo(): Promise<FakeTempo> {
       }
       case "eth_getTransactionReceipt": {
         const t = txs.get(params[0]);
-        return t ? { transactionHash: params[0], status: t.reverted ? "0x0" : "0x1", blockNumber: hex(t.block), from: t.from, to: KEYCHAIN, logs: [], gasUsed: "0x1" } : null;
+        return t ? { transactionHash: params[0], status: t.reverted ? "0x0" : "0x1", blockNumber: hex(t.block), blockHash: `0x${"ab".repeat(32)}`, from: t.from, to: KEYCHAIN, logs: [], gasUsed: "0x1" } : null;
       }
       case "eth_getLogs": return [];
       default: return null;
     }
   };
-  const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const serve = (view: Pick<FakeTempo, "overrides" | "revokeSimulation" | "calls">) => startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const body = JSON.parse(await readBody(req));
     const one = (c: { id: number; method: string; params?: any[] }) => {
+      view.calls.push(c.method);
       try {
-        return { jsonrpc: "2.0", id: c.id, result: answer(c.method, c.params ?? []) };
+        return { jsonrpc: "2.0", id: c.id, result: answer(c.method, c.params ?? [], view) };
       } catch (e) {
         return { jsonrpc: "2.0", id: c.id, error: (e as any).rpc ?? { code: -32000, message: String((e as Error).message) } };
       }
     };
     json(res, Array.isArray(body) ? body.map(one) : one(body));
   });
-  return Object.assign(chain, server);
+  chain.mirror = async (view = {}) => {
+    const other = { overrides: view.overrides, revokeSimulation: view.revokeSimulation, calls: [] as string[] };
+    const server = await serve(other);
+    return Object.assign(Object.create(chain), other, server) as FakeTempo;
+  };
+  return Object.assign(chain, await serve(chain));
 }
 
 // ── Solana ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -144,23 +167,35 @@ export interface FakeSolana extends TestServer {
    * real instruction (ApproveChecked, Revoke or a SystemProgram transfer, for `amount`), then `extra` instructions (a lying
    * site), and `budget` compute-budget instruction datas first (a wallet's fee). `instructionAmount` puts another amount in
    * the instruction than the one applied. `signers` requires more signatures than the owner's; `lookupTable` makes it a
-   * version 0 transaction that loads accounts from that address lookup table.
+   * version 0 transaction that loads accounts from that address lookup table. `usdc_transfer` is a TransferChecked of `amount`
+   * from the USDC account of the wallet `owner` to the one of the wallet `agent` (a key sweeping its own tokens back).
    */
-  land(t: { kind: "grant" | "revoke" | "fund_agent"; owner: string; agent: string; amount?: bigint; signer?: string; slot?: number; extra?: { program: string; accounts: string[]; data: Buffer }[]; budget?: Buffer[]; instructionAmount?: bigint; signers?: number; lookupTable?: string; signature?: string }): string;
+  land(t: { kind: "grant" | "revoke" | "fund_agent" | "usdc_transfer"; owner: string; agent: string; amount?: bigint; signer?: string; slot?: number; extra?: { program: string; accounts: string[]; data: Buffer }[]; budget?: Buffer[]; instructionAmount?: bigint; signers?: number; lookupTable?: string; signature?: string }): string;
   /**
    * sendTransaction: a SOL transfer the command sent (the owner page on this computer) lands under its own signature;
    * any other transaction is refused. Then `afterSend` runs with that signature, before the RPC answers.
    */
   afterSend?: (signature: string) => void;
+  /**
+   * sendTransaction also lands a single Revoke or TransferChecked from the token program (an owner key file revoking, an agent
+   * key returning its tokens). Off by default: then it refuses everything but a SOL transfer, as before.
+   */
+  acceptTokenTransactions?: boolean;
   /** sendTransaction takes the transfer but does not land it until `landHeld` (a transaction still on its way). */
   hold?: boolean;
   landHeld?: () => string | undefined;
   /** The slot getSignatureStatuses answers from (default: the current slot): a node lagging behind answers from an earlier one. */
   statusSlot?: () => number;
+  /** The commitment getSignatureStatuses reports for every landed signature (default "finalized": a test sets "confirmed" for a transaction the chain has not finalized). */
+  confirmationStatus?: "confirmed" | "finalized";
   /** What getGenesisHash answers (default: Solana devnet's); null makes it fail. */
   genesis: string | null;
   /** Every RPC method asked, in order. */
   calls: string[];
+  /** Per-method answers that replace the chain's own on this server (a mirror's lie), by method; return undefined to fall through. */
+  overrides?: Record<string, (params: any[]) => unknown>;
+  /** A second server over the same chain (same accounts, slot and transactions); `overrides` replace some of its answers. */
+  mirror(view?: Partial<Pick<FakeSolana, "overrides" | "genesis">>): Promise<FakeSolana>;
 }
 
 /** A compute-budget SetComputeUnitLimit (2) or SetComputeUnitPrice (3) instruction's data. */
@@ -169,8 +204,14 @@ export const computeUnitPrice = (microLamports: bigint) => { const b = Buffer.al
 export const COMPUTE_BUDGET = "ComputeBudget111111111111111111111111111111";
 export const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
-export async function startFakeSolana(): Promise<FakeSolana> {
+/**
+ * `websocket`: also answer `signatureSubscribe` on the RPC port + 1, where @solana/web3.js looks for it, so
+ * `sendAndConfirmTransaction` (an owner key file's revoke) can confirm. Off by default: then nothing listens there.
+ */
+export async function startFakeSolana(opts: { websocket?: boolean } = {}): Promise<FakeSolana> {
   const chain = {} as FakeSolana;
+  /** signature -> the subscriptions waiting for it */
+  const subscribers = new Map<string, ((slot: number) => void)[]>();
   chain.slot = 5000;
   chain.balances = new Map();
   chain.usdc = new Map();
@@ -200,6 +241,14 @@ export async function startFakeSolana(): Promise<FakeSolana> {
       main = { program: SYSTEM_PROGRAM, accounts: [t.owner, t.agent], data: d };
       pre = [10n ** 9n, had];
       post = [10n ** 9n - t.amount! - 5000n, had + t.amount!];
+    } else if (t.kind === "usdc_transfer") {
+      const from = chain.usdc.get(t.owner)!;
+      const to = chain.usdc.get(t.agent)!;
+      from.amount -= t.amount!;
+      to.amount += t.amount!;
+      main = { program: TOKEN_PROGRAM.toBase58(), accounts: [ata, USDC_MINT.toBase58(), ataOf(t.agent).toBase58(), t.owner], data: Buffer.concat([Buffer.from([12]), u64(ixAmount), Buffer.from([6])]) };
+      pre = [];
+      post = [];
     } else {
       if (t.kind === "grant") Object.assign(acc, { delegate: t.agent, delegated: t.amount! });
       else Object.assign(acc, { delegate: null, delegated: 0n });
@@ -241,6 +290,8 @@ export async function startFakeSolana(): Promise<FakeSolana> {
         },
       },
     });
+    for (const notify of subscribers.get(sig) ?? []) notify(slot);
+    subscribers.delete(sig);
     return sig;
   };
   const tokenAccount = (owner: string) => {
@@ -259,28 +310,76 @@ export async function startFakeSolana(): Promise<FakeSolana> {
     return { data: [d.toString("base64"), "base64"], executable: false, lamports: 2039280, owner: TOKEN_PROGRAM.toBase58(), rentEpoch: 0, space: 165 };
   };
   const ctx = (value: unknown) => ({ context: { slot: chain.slot }, value });
-  const answer = (method: string, params: any[]): unknown => {
+  const answer = (method: string, params: any[], view: Pick<FakeSolana, "overrides" | "genesis"> = chain): unknown => {
+    const over = view.overrides?.[method];
+    if (over) {
+      const got = over(params);
+      if (got !== undefined) return got;
+    }
     switch (method) {
       case "getGenesisHash": {
-        if (chain.genesis === null) throw new Error("fake solana: no genesis hash");
-        return chain.genesis;
+        if (view.genesis === null) throw new Error("fake solana: no genesis hash");
+        return view.genesis;
       }
       case "getSlot": return chain.slot;
+      case "getFirstAvailableBlock": return 0;
       case "getBlockHeight": return chain.slot;
       case "getBalance": return ctx(Number(chain.balances.get(params[0]) ?? 0n));
       case "getAccountInfo": {
+        // a node whose finalized slot has not reached minContextSlot refuses (-32016)
+        const min = params[1]?.minContextSlot;
+        if (typeof min === "number" && min > chain.slot) throw Object.assign(new Error("Minimum context slot has not been reached"), { rpc: { code: -32016, message: "Minimum context slot has not been reached" } });
         const owner = [...chain.usdc.keys()].find((o) => ataOf(o).toBase58() === params[0]);
         return ctx(owner ? tokenAccount(owner) : null);
       }
       case "getTransaction": return txs.get(params[0]) ?? null;
       case "getEpochInfo": return { absoluteSlot: chain.slot, blockHeight: chain.slot, epoch: 0, slotIndex: chain.slot, slotsInEpoch: 432000 };
-      case "getSignatureStatuses": return { context: { slot: chain.statusSlot?.() ?? chain.slot }, value: params[0].map((s: string) => (txs.has(s) ? { slot: txs.get(s).slot, confirmations: null, err: null, confirmationStatus: "confirmed" } : null)) };
+      case "getSignatureStatuses": return { context: { slot: chain.statusSlot?.() ?? chain.slot }, value: params[0].map((s: string) => (txs.has(s) ? { slot: txs.get(s).slot, confirmations: null, err: null, confirmationStatus: chain.confirmationStatus ?? "finalized" } : null)) };
       case "getLatestBlockhash": return ctx({ blockhash: bs58.encode(Buffer.alloc(32, 9)), lastValidBlockHeight: chain.slot + 150 });
       case "sendTransaction": {
         const tx = Transaction.from(Buffer.from(params[0], "base64"));
+        // a node refuses a transaction whose signatures do not verify
+        if (!tx.signature || !tx.verifySignatures()) throw new Error("Transaction signature verification failure");
+        const signature = bs58.encode(tx.signature);
+        // a key signing for itself (acceptTokenTransactions): one Revoke, ApproveChecked or TransferChecked, checked as the token program does
+        const token = chain.acceptTokenTransactions && tx.instructions.length === 1 && tx.instructions[0].programId.equals(TOKEN_PROGRAM) ? tx.instructions[0] : undefined;
+        const walletOf = (account: string) => [...chain.usdc.keys()].find((o) => ataOf(o).toBase58() === account);
+        const signs = (k: { pubkey: PublicKey; isSigner: boolean }) => k.isSigner && tx.signatures.some((s) => s.publicKey.equals(k.pubkey) && s.signature !== null);
+        if (token && token.data[0] === 5) {
+          // Revoke: [source token account, owner (signer)]
+          const owner = token.keys[1].pubkey.toBase58();
+          if (token.keys[0].pubkey.toBase58() !== ataOf(owner).toBase58() || !chain.usdc.has(owner)) throw new Error("fake solana: Revoke: the source is not the token account of its owner");
+          if (!signs(token.keys[1])) throw new Error("fake solana: Revoke: the owner has not signed");
+          chain.land({ kind: "revoke", owner, agent: "", signature });
+          chain.afterSend?.(signature);
+          return signature;
+        }
+        if (token && token.data[0] === 13) {
+          // ApproveChecked: [source, mint, delegate, owner (signer)], amount, decimals
+          const owner = walletOf(token.keys[0].pubkey.toBase58());
+          if (!owner) throw new Error("fake solana: ApproveChecked: a token account that does not exist");
+          if (token.keys[1].pubkey.toBase58() !== USDC_MINT.toBase58() || token.data[9] !== 6) throw new Error("fake solana: ApproveChecked: not the USDC mint's decimals");
+          if (token.keys[3].pubkey.toBase58() !== owner || !signs(token.keys[3])) throw new Error("fake solana: ApproveChecked: the owner has not signed");
+          chain.land({ kind: "grant", owner, agent: token.keys[2].pubkey.toBase58(), amount: token.data.readBigUInt64LE(1), signature });
+          chain.afterSend?.(signature);
+          return signature;
+        }
+        if (token && token.data[0] === 12) {
+          // TransferChecked: [source, mint, destination, authority (signer)], amount, decimals
+          const from = walletOf(token.keys[0].pubkey.toBase58());
+          const to = walletOf(token.keys[2].pubkey.toBase58());
+          if (!from || !to) throw new Error("fake solana: a token account that does not exist");
+          if (token.keys[1].pubkey.toBase58() !== USDC_MINT.toBase58()) throw new Error("fake solana: TransferChecked: the mint is not the USDC mint");
+          if (token.data[9] !== 6) throw new Error("fake solana: TransferChecked: the decimals are not the mint's");
+          if (token.keys[3].pubkey.toBase58() !== from || !signs(token.keys[3])) throw new Error("fake solana: TransferChecked: the authority is not the signing owner of the source");
+          const amount = token.data.readBigUInt64LE(1);
+          if (amount > chain.usdc.get(from)!.amount) throw new Error("fake solana: TransferChecked: insufficient funds");
+          chain.land({ kind: "usdc_transfer", owner: from, agent: to, amount, signature });
+          chain.afterSend?.(signature);
+          return signature;
+        }
         const transfer = tx.instructions.find((ix) => ix.programId.toBase58() === SYSTEM_PROGRAM);
         if (!transfer || tx.instructions.length !== 1) throw new Error("fake solana: sendTransaction lands one SOL transfer only");
-        const signature = bs58.encode(tx.signature!);
         const landIt = () => chain.land({ kind: "fund_agent", owner: transfer.keys[0].pubkey.toBase58(), agent: transfer.keys[1].pubkey.toBase58(), amount: transfer.data.readBigUInt64LE(4), signature });
         if (chain.hold) chain.landHeld = () => { chain.landHeld = undefined; return landIt(); };
         else landIt();
@@ -290,17 +389,87 @@ export async function startFakeSolana(): Promise<FakeSolana> {
       default: throw new Error(`fake solana: ${method}`);
     }
   };
-  const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const handleFor = (view: Pick<FakeSolana, "overrides" | "genesis" | "calls">) => async (req: IncomingMessage, res: ServerResponse) => {
     const body = JSON.parse(await readBody(req));
     const one = (c: { id: number | string; method: string; params?: any[] }) => {
-      chain.calls.push(c.method);
+      view.calls.push(c.method);
       try {
-        return { jsonrpc: "2.0", id: c.id, result: answer(c.method, c.params ?? []) };
+        return { jsonrpc: "2.0", id: c.id, result: answer(c.method, c.params ?? [], view) };
       } catch (e) {
-        return { jsonrpc: "2.0", id: c.id, error: { code: -32601, message: String((e as Error).message) } };
+        return { jsonrpc: "2.0", id: c.id, error: (e as any).rpc ?? { code: -32601, message: String((e as Error).message) } };
       }
     };
     json(res, Array.isArray(body) ? body.map(one) : one(body));
+  };
+  // another endpoint over the same chain, with its own overrides, genesis hash and call log
+  chain.mirror = async (view = {}) => {
+    const other = { overrides: view.overrides, genesis: view.genesis === undefined ? chain.genesis : view.genesis, calls: [] as string[] };
+    const server = await startServer(handleFor(other));
+    return Object.assign(Object.create(chain), other, server) as FakeSolana;
+  };
+  const handle = handleFor(chain);
+  const server = await startServer(handle);
+  if (!opts.websocket) return Object.assign(chain, server);
+  // the RPC port + 1 must be free: try a few RPC ports
+  for (let attempt = 0; ; attempt += 1) {
+    const rpc = attempt === 0 ? server : await startServer(handle);
+    const port = Number(new URL(rpc.url).port) + 1;
+    const ws = createServer((_, res) => res.writeHead(426).end());
+    const sockets = new Set<Duplex>();
+    ws.on("upgrade", (req, socket) => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); solanaSignatureSocket(req, socket, txs, subscribers, () => chain.slot); });
+    const ok = await new Promise<boolean>((resolve) => { ws.once("error", () => resolve(false)); ws.listen(port, "127.0.0.1", () => resolve(true)); });
+    if (ok) return Object.assign(chain, rpc, { close: async () => { for (const s of sockets) s.destroy(); await new Promise((r) => ws.close(r)); await rpc.close(); } });
+    await rpc.close();
+    if (attempt >= 20) throw new Error("fake solana: no free port pair for the websocket");
+  }
+}
+
+/**
+ * The few frames of a WebSocket that @solana/web3.js's confirmation needs: signatureSubscribe answers a subscription id, and
+ * a signatureNotification follows once the signature has landed (at once when it already has). Text frames only.
+ */
+function solanaSignatureSocket(req: IncomingMessage, socket: Duplex, txs: Map<string, any>, subscribers: Map<string, ((slot: number) => void)[]>, slot: () => number) {
+  const accept = createHash("sha1").update(`${req.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+  socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  const frame = (opcode: number, payload: Buffer) => {
+    const head = payload.length < 126 ? Buffer.from([0x80 | opcode, payload.length]) : Buffer.from([0x80 | opcode, 126, payload.length >> 8, payload.length & 255]);
+    if (!socket.destroyed) socket.write(Buffer.concat([head, payload]));
+  };
+  const send = (o: unknown) => frame(1, Buffer.from(JSON.stringify(o)));
+  let next = 1;
+  const onMessage = (text: string) => {
+    let m: any;
+    try { m = JSON.parse(text); } catch { return; }
+    if (m?.id === undefined) return; // a notification (web3.js's ping)
+    if (m.method === "signatureSubscribe") {
+      const id = next++;
+      send({ jsonrpc: "2.0", id: m.id, result: id });
+      const notify = (s: number) => send({ jsonrpc: "2.0", method: "signatureNotification", params: { result: { context: { slot: s }, value: { err: null } }, subscription: id } });
+      const sig = m.params?.[0];
+      if (txs.has(sig)) notify(slot());
+      else subscribers.set(sig, [...(subscribers.get(sig) ?? []), notify]);
+    } else if (/Unsubscribe$/.test(m.method)) send({ jsonrpc: "2.0", id: m.id, result: true });
+    else send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: `fake solana websocket: ${m.method}` } });
+  };
+  let buf = Buffer.alloc(0);
+  socket.on("data", (d: Buffer) => {
+    buf = Buffer.concat([buf, d]);
+    for (;;) {
+      if (buf.length < 2) return;
+      const opcode = buf[0] & 15;
+      let len = buf[1] & 127;
+      let at = 2;
+      if (len === 126) { if (buf.length < 4) return; len = buf.readUInt16BE(2); at = 4; } else if (len === 127) { if (buf.length < 10) return; len = Number(buf.readBigUInt64BE(2)); at = 10; }
+      const masked = (buf[1] & 128) !== 0;
+      const end = at + (masked ? 4 : 0) + len;
+      if (buf.length < end) return;
+      const payload = Buffer.from(buf.subarray(end - len, end));
+      if (masked) for (let i = 0; i < len; i += 1) payload[i] ^= buf[at + (i % 4)];
+      buf = buf.subarray(end);
+      if (opcode === 1) onMessage(payload.toString("utf8"));
+      else if (opcode === 9) frame(10, payload);
+      else if (opcode === 8) { frame(8, Buffer.alloc(0)); socket.end(); return; }
+    }
   });
-  return Object.assign(chain, server);
+  socket.on("error", () => {});
 }

@@ -10,6 +10,7 @@ import { paymentOutput, SERVICE_BODY_LIMIT, shownPayer, shownTransaction } from 
 import { railFor } from "../core/rails/index.js";
 import type { Records } from "../core/records.js";
 import type { Attempt, Receipt } from "../core/types.js";
+import { termsMoney } from "./format.js";
 
 /** Everything there is to say about an attempt, including the sentence to say it with. */
 export function attemptView(deps: { records: Records }, attempt: Attempt): Record<string, unknown> {
@@ -73,7 +74,7 @@ function receiptView(receipt: Receipt): object {
  */
 export function messageFor(attempt: Attempt, receipt?: Receipt): string {
   const terms = attempt.terms;
-  const amount = `${terms.amountDecimal} ${terms.asset}`;
+  const amount = termsMoney(terms);
   // Only a well-formed hash is ever kept as the transaction (pay.ts), so this repeats nothing the seller wrote.
   // Checked here too, not only when written: a record from an earlier version may hold whatever a seller sent.
   const hash = shownTransaction(attempt.transaction, terms.network).hash ?? shownTransaction(receipt?.transaction, terms.network).hash;

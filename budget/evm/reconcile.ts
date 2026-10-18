@@ -10,7 +10,7 @@ import { requireRecordLock } from "../op-lock.mjs";
 //   not_found  nothing can land: no pull was signed, or the agent's nonce at the pull's position was used by a different transaction
 // npx tsx budget/evm/reconcile.ts [--chain <name>] --op <id>
 // Exit codes: 0 settled and delivered, 1 failed or not_found, 4 settled on chain but delivery not confirmed, 5 unknown.
-import { OPS_DIR, SYM, CFG, tx, usdc, usdcBalance, emit } from "./lib.ts";
+import { OPS_DIR, SYM, CFG, tx, usdc, usdcBalance, emit, assertReadChain } from "./lib.ts";
 import { checkOpId, readJournal, reconcileJournal, resultLine, exitCodeFor, journalPath } from "./ops.ts";
 
 const op = checkOpId(process.argv[process.argv.indexOf("--op") + 1]);
@@ -21,6 +21,7 @@ if (!j) {
   process.exit(emit("reconcile", 1, { path: "approve", op, state: "not_found", paid: false, delivered: null, amount: null, remaining: null, tx: { pull: null, settle: null, cancel: null, return: null }, debit: null, next: "no such operation on this chain; check --chain and --op. Nothing to reconcile" }));
 }
 console.log(`operation ${op}: journal says ${j.state} (${j.url}) on ${CFG.label}`);
+await assertReadChain("reconcile"); // before the first chain read or write; a journal that cannot be read stops above, with no network
 const { j: after, verdict } = await reconcileJournal(j);
 console.log(`pull:        ${after.pullTx ? `${after.pullStatus ?? "?"} ${tx(after.pullTx)}` : "none recorded"}`);
 console.log(`settlement:  ${after.settleTx ? `${after.settleStatus} ${tx(after.settleTx)}` : "none on chain"}`);

@@ -39,7 +39,7 @@ if (action === 'reconcile') {
       getSignatureStatuses: { context: { slot: 1000 }, value: Array.isArray(req.params[0]) ? req.params[0].map(() => null) : [null] },
       getSignaturesForAddress: [], getBlockHeight: 1000,
       getFirstAvailableBlock: 0,
-      eth_getTransactionReceipt: null, eth_getTransactionByHash: null,
+      eth_chainId: '0x14a34', eth_getTransactionReceipt: null, eth_getTransactionByHash: null,
       eth_getTransactionCount: '0x0', eth_getLogs: [], eth_blockNumber: '0x100',
       eth_getBlockByNumber: { number: '0x100', timestamp: '0xffffffff' },
     };

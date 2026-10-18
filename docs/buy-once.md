@@ -42,8 +42,8 @@ own wallet, from a device where they are signed in and have a compatible wallet.
 services the site lists: Base Sepolia (test USDC), Arc Testnet (test USDC), Robinhood Chain Testnet
 (test USDG), Tempo Moderato (test pathUSD) or Solana devnet (test USDC). It needs a superstables.com account, which you create by
 signing in with an Ethereum or Solana wallet or an email address, or a compatible deployment the owner names with `--site` or
-`SUPERSTABLES_SITE`; an origin outside superstables.com and its subdomains also needs the owner to set
-`SUPERSTABLES_ALLOW_SITE` to it (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
+`SUPERSTABLES_SITE`; a site other than www.superstables.com also needs the owner to allow it with
+`superstables owner settings` (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
 The installed CLI runs on your own machine, but the site coordinates this single purchase after
 the owner approves. This differs from a budget, whose client pays sellers directly. The owner pays from a
 wallet their account holds: an Ethereum wallet on EVM chains and Tempo, a Solana wallet on Solana devnet, with
@@ -51,7 +51,8 @@ that wallet on the owner's device to sign. An account admin adds wallets on the 
 [owner guide](https://www.superstables.com/docs/owner) covers the link/code handoff, sign-in
 and account checkpoints.
 
-A purchase is reported paid only once the command has read the payment on chain. To list the
+A purchase is reported paid only once the command has read the payment on chain, and only for the payment
+the site first showed for it. To list the
 services and buy one:
 
 ```bash
@@ -63,7 +64,8 @@ superstables budget buy-once --service superstables-demo-market-data --param ass
 created. The command prints an `APPROVE` line with the approval link and a match code. Run by an agent (stdout is not
 a terminal), or with `--detach`, it then returns with `state: "waiting_owner"` and an approval `id`; in
 a terminal it waits for the purchase to end. Send the `RESULT`'s `message_for_owner` (the approval link, the
-code and the price) as a reply the owner can read, and end your turn there. The owner opens it, signs in with an Ethereum or Solana wallet the
+code and the price) as a reply the owner can read, and end your turn there. When this machine records a hosted owner for the
+chain and the site supports naming the payer, the message also says which wallet to pay from ("Pay from 0x1234...abcd."). The owner opens it, signs in with an Ethereum or Solana wallet the
 first time (a message, no fee), picks the same code on the page and approves the payment in their
 wallet. When they say they have, run:
 
@@ -79,6 +81,9 @@ do not buy again, and run `wait` again later. The final `RESULT` reports `paid` 
 do not pay again if it was paid or its outcome is unknown. The site's side of this purchase
 is the HTTP purchase API; the endpoints the client calls, and what it checks in each answer, are in
 [budget/CLI.md](../budget/CLI.md#buy-once).
+
+A paid purchase whose payment is not final on chain yet holds the next `buy-once` until
+`wait --id <id> --shown` reads it final.
 
 For an unresolved outcome, [check the original request](records.md#check-an-unresolved-outcome).
 Single purchase requests made on superstables.com appear in the [site account](https://www.superstables.com/account);
@@ -194,7 +199,7 @@ Paying quote b54cdbae-339a-4c84-965c-2d146ee5a945 (attempt b65773de-a08b-4c91-b5
   awaiting_approval: waiting for the owner on the approval page (it closes when this command stops)
 
 Open this approval link and approve the payment in your browser wallet:
-  http://127.0.0.1:4412/approve/324a415688aa0b48d2ee25a8a1e9326e
+  http://127.0.0.1:24817/approve/324a415688aa0b48d2ee25a8a1e9326e
 ```
 
 `pay` asks the seller for its terms again and refuses if they changed. The client checks the spend
@@ -275,7 +280,10 @@ must keep running until the owner decides, so start it detached and read the app
 nohup superstables pay <quote-id> --json > pay.json 2> pay.log < /dev/null &
 ```
 
-Read `pay.log` for the attempt id (its first line) and the approval link. Write it exactly
+Read `pay.log` for the attempt id (its first line) and the approval link. It is the only place the
+link is printed: `status` does not repeat it and no record holds it. Whoever can read `pay.log` can open
+that payment's approval page while `pay` runs, though signing still needs the owner's wallet, so keep the
+file where only you can read it (`umask 077` before starting) and delete it when `pay` ends. Write the link exactly
 as printed, with the price and the recipient, in a reply to the owner, and end your turn there:
 some agent hosts show the owner nothing of a turn until it ends, and `pay` keeps the page open in
 the background. When the owner says they have approved or rejected it, run

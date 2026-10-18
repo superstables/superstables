@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, linkSync, lstatSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, fsyncSync, linkSync, lstatSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createIdentitySource, inspectProcess, inspectLegacyCap } from './process-identity.mjs';
@@ -48,8 +48,14 @@ export function withRecoveryMutex(path, work, options) {
   const me = JSON.stringify({ ...identity.record(), owner: randomUUID() });
   const mine = `${path}.${randomUUID()}.tmp`;
   const inspect = text => inspectLockText(text, path.endsWith('cap.lock.break'));
-  writeFileSync(mine, me, { mode: 0o600, flag: 'wx' });
   try {
+    // On disk before it can become the lock: a lock that survives a crash must hold its holder in full.
+    const fd = openSync(mine, 'wx', 0o600);
+    try {
+      const bytes = Buffer.from(me);
+      for (let at = 0; at < bytes.length;) at += writeSync(fd, bytes, at);
+      fsyncSync(fd);
+    } finally { closeSync(fd); }
     try { linkSync(mine, path); }
     catch (err) {
       if (err.code !== 'EEXIST') throw err;
@@ -64,7 +70,7 @@ export function withRecoveryMutex(path, work, options) {
     return work();
   } finally {
     try { if (readFileSync(path, 'utf8') === me) unlinkSync(path); } catch (err) { if (err.code !== 'ENOENT') throw err; }
-    unlinkSync(mine);
+    try { unlinkSync(mine); } catch (err) { if (err.code !== 'ENOENT') throw err; }
   }
 }
 export function clearFileLock(path, options, inspect = inspectLockText) {

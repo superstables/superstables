@@ -15,6 +15,7 @@ Every rail's main path follows these rules.
   - Approvals on superstables.com (`setup --hosted`, every rail): on EVM and Tempo the same transaction goes to superstables.com, and the owner's wallet sends it from there. On Solana the request carries the amount only: the site builds the transaction when the owner is ready, the owner's wallet signs it and the site sends it. The agent key signs each request to the site (ed25519 on Solana), so these owner commands open the agent key file; it never leaves this machine. The command verifies on chain as above (on Solana also that the owner signed it, after the request started), and refuses a request the site would put to another address than the recorded owner.
   - EVM and Tempo: an EIP-1193 browser wallet (for example MetaMask) sends exactly the transaction the command built. On Tempo that is a plain type-2 call to the AccountKeychain precompile, and the owner pays its own fee.
   - Solana: a Wallet Standard wallet (for example Phantom) only signs. The command builds the transaction when the owner presses Approve and sends it itself, only if the signed message is byte for byte the one it built, or that message with one compute unit limit and one unit price put first (a priority fee of at most 0.001 SOL), and the signature is the owner's.
+- Owner plans (`grant`, `fund-agent`, `recover`) are built only for an agent address the owner's stored setup signature names; a public file without one is accepted on testnet with a warning.
 - `setup` is a trusted step. Its approval link is the only credential, and the page's origin check stops cross-site requests, not local programs: anyone holding it, the agent included, can complete it with a key they control. So the owner runs it, and setup's result and its page both name the connected owner address for the owner to check it is their wallet.
 - Agent commands (`buy`, `reconcile`) open only the agent file. They must work with no owner key file anywhere.
 - Read commands (`read`/`readBudget`/`status`) need no secret file.
@@ -31,6 +32,8 @@ Every rail's main path follows these rules.
 The README says which owner action stops the agent even if the agent key is stolen, and what exposure remains after it. Tested on testnet, not only read from source.
 
 `revoke` never skips its transaction on one read: on `evm` and `solana` it always sends (on `solana` unless the owner has no USDC account, where the transaction would fail), and on `tempo` it skips only when the keychain refuses a simulated `revokeKey` from the owner. `status` reports `revoked: true` only for a revoke this machine recorded that the chain still shows (on `tempo`, the keychain's revoked flag).
+
+An owner action is final only at a final block: `revoke`, `grant`, `fund-agent` and `recover` report `landed` (exit 0, `final: false`) until the transaction's block is final on the chain's rule and the agreeing endpoints read the effect there. A grant waits for the previous revoke to be final, and a setup that bundles a grant never grants over an allowance or delegate it cannot read at a final block, unless the agent key was created in that same setup.
 
 ## 4. Every purchase is checked before anything is signed
 

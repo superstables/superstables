@@ -23,13 +23,17 @@ import { requireRecordLock, requireKeyLock } from "../op-lock.mjs";
 // --plan prints these steps for the current chain state and sends nothing (no key file, no page).
 //
 // npx tsx budget/evm/recover.ts [--chain <name>] [--op <id>] [--plan] [--timeout <s>] [--no-open] [--owner-key-file <path>]
+// The RESULT says where each revoke is and whether it is final, for both ways of stopping the authority: selfRevokeTx/Block/Final
+// (the agent's own transferFrom) and ownerRevokeTx/Block/Final (the owner's approve 0), and revokeFinal: the allowance is 0 at a
+// final block, as the endpoints agree, at or after the revoke that ended it (the owner's when there is one, else the agent's).
+// `budget rotate` goes on only on revokeFinal: true.
 // Exit codes: 0 recovered (or planned), 1 incomplete or failed, 3 refused before anything was sent (unknown --op, the owner
 // rejected or the link expired), 5 an operation is still unknown, or the sweep was skipped (a journal cannot be read, or an
 // operation can still move money).
 import { existsSync } from "node:fs";
 import { encodeFunctionData, parseUnits, type Hex } from "viem";
 import { pendingJournalsFor, makeSafe, readJournal, checkOpId, scanJournals, sweepBlockers, atomicUsdc, type Journal, type SweepBlockers } from "./ops.ts";
-import { OPS_DIR, SYM, CFG, GAS, AGENT_ENV, OWNER_KEY_FILE, arg, flag, cmd, emit, agentCtx, ownerCtx, escrowCtx, readCtx, allowanceOf, usdcBalance, nativeBalance, usdc, oneLine, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC, assertRpcChain, agentGas, gasWords, gasRound, GasShort, type Wallet, type SelfRevoke, type GasOp, type GasNeed } from "./lib.ts";
+import { OPS_DIR, SYM, CFG, GAS, AGENT_ENV, OWNER_KEY_FILE, arg, flag, cmd, emit, agentCtx, ownerCtx, escrowCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, usdc, oneLine, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC, assertRpcChain, assertReadChain, allowanceAgreed, finalityOf, agentGas, gasWords, gasRound, GasShort, type Wallet, type SelfRevoke, type GasOp, type GasNeed } from "./lib.ts";
 import { revokeInWallet, fundInWallet } from "./owner.ts";
 
 const plan = flag("plan");
@@ -39,7 +43,10 @@ const KEEP = GAS.isUsdc ? GAS.reserveMax! : 0n; // the agent keeps this much USD
 const topUpFor = (g: GasNeed) => { const missing = parseUnits(gasRound(g.need - g.have, "up"), GAS.decimals); return missing > GAS.topUp ? missing : GAS.topUp; };
 const atomic = (v?: string) => atomicUsdc(v ?? "0") ?? 0n; // only for the swept total, which is reporting and a wait, never a transfer: a pending journal is re-read through readJournal, without the scan's check on its amounts
 
-const pub = readCtx(); // public addresses, no secret
+// public addresses, checked against the owner's setup signature. A retired key is accepted here only: recovering its funds to the signed
+// owner is what `budget rotate` needs. The key file and signature checks still apply.
+const pub = await ownerPlanCtx({ retiredOk: true });
+await assertReadChain("recover"); // --plan included: no plan is printed from another chain
 const held = await usdcBalance(pub.agent);
 const allowance = await allowanceOf(pub.owner, pub.agent);
 const agentNativeBefore = await nativeBalance(pub.agent);
@@ -116,22 +123,55 @@ if (allowance > 0n && agentHasGas) {
 }
 let allowanceAfter = await allowanceOf(pub.owner, pub.agent);
 let ownerRevokeTx: string | null = null;
+let ownerRevokeBlock: bigint | null = null;
+// whether the owner's revoke is final on the chain (null: the owner sent none in this run)
+let ownerRevokeFinal: boolean | null = null;
+let agreedAbove = 0n;
+const selfRevokeBlock = sr?.block ?? null;
+const selfRevokeFinal = sr?.tx ? sr.final === true : null;
 // The owner's approve(agent, 0) is skipped only when the agent's own revoke in this run was mined and brought the
 // allowance to 0 (selfRevokeCore read 0 after it), and this later read shows 0 too.
 const selfRevokeProven = !!sr?.tx && sr.state === "revoked" && allowanceAfter === 0n;
 if (!selfRevokeProven) {
   console.log(allowanceAfter > 0n ? `the allowance still reads ${usdc(allowanceAfter)} ${SYM}: the owner closes it (approve 0)` : "the allowance reads 0 on this RPC, and no revoke in this run proves it: the owner approves 0 anyway");
-  if (ownerKey) ownerRevokeTx = (await send(ownerKey.wallet, USDC, encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [pub.agent, 0n] }), "recover: owner approve(agent, 0) for the rest")).hash;
-  else ownerRevokeTx = await revokeInWallet("recover", pub.owner, pub.agent, "Revoke before recovering funds", sr?.tx
+  if (ownerKey) {
+    const sent = await send(ownerKey.wallet, USDC, encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [pub.agent, 0n] }), "recover: owner approve(agent, 0) for the rest");
+    ownerRevokeTx = sent.hash;
+    ownerRevokeBlock = sent.blockNumber;
+    const fin = await finalityOf(sent.hash, { blockNumber: sent.blockNumber, blockHash: sent.blockHash });
+    const at = await allowanceAgreed(pub.owner, pub.agent, sent.blockNumber);
+    // an agreed value above 0 at a final block at or after the revoke is not a revoke: stop below, before any funds move
+    if (at.agreed && at.value !== 0n) agreedAbove = at.value as bigint;
+    ownerRevokeFinal = fin.final && at.agreed && at.value === 0n;
+  } else {
+    const sent = await revokeInWallet("recover", pub.owner, pub.agent, "Revoke before recovering funds", sr?.tx
     ? { result: { selfRevokeTx: sr.tx }, done: `the agent's own revoke ${sr.tx} landed (${sr.state}) and lowered the allowance; only the rest needs the owner`, stepTx: "ownerRevokeTx" }
     : { result: {}, stepTx: "ownerRevokeTx" });
+    ownerRevokeTx = sent.hash;
+    ownerRevokeBlock = sent.block;
+    ownerRevokeFinal = sent.final;
+  }
   allowanceAfter = await readUntil(() => allowanceOf(pub.owner, pub.agent), (v) => v === 0n);
+  if (agreedAbove > 0n) {
+    console.log(`the endpoints agree that the allowance reads ${usdc(agreedAbove)} ${SYM} at a final block at or after the owner's revoke`);
+    allowanceAfter = agreedAbove;
+  }
 }
 if (allowanceAfter !== 0n) {
   console.log(`the allowance still reads ${usdc(allowanceAfter)} ${SYM}; stopping before any funds are moved`);
   process.exit(emit("recover", 1, { state: "failed", op: opId ?? null, allowance: usdc(allowanceAfter), selfRevokeTx: sr?.tx ?? null, ownerRevokeTx, reason: "the allowance could not be lowered to 0", next: "run recover again, or the owner's revoke" }));
 }
-writePublic({ B4_REVOKED_AT: String(Math.floor(Date.now() / 1000)) }, ["B4_CAP", "B4_EXPIRY", "B4_SET_AT"]);
+// No owner revoke in this run (the agent's own did the work): drop the revoke's tx and block so a stale pair from an earlier
+// revoke cannot vouch for this one, and status falls back to the time bound.
+const ownerRevoked = !!ownerRevokeTx && ownerRevokeBlock !== null;
+// The revoke that ended the authority is the one the public file records, so status can call the budget revoked only once that
+// transaction is final: the owner's when there is one (it came last), else the agent's own.
+const selfRevoked = !ownerRevoked && !!sr?.tx && sr.block !== undefined;
+const boundTx = ownerRevoked ? ownerRevokeTx! : selfRevoked ? sr!.tx! : null;
+const boundBlock = ownerRevoked ? ownerRevokeBlock : selfRevoked ? sr!.block! : null;
+writePublic({ B4_REVOKED_AT: String(Math.floor(Date.now() / 1000)), ...(boundTx ? { B4_REVOKED_TX: boundTx, B4_REVOKED_BLOCK: String(boundBlock), B4_REVOKED_BY: ownerRevoked ? "owner" : "agent" } : {}) }, ["B4_CAP", "B4_EXPIRY", "B4_SET_AT", "B4_SET_TX", "B4_SET_BLOCK", ...(boundTx ? [] : ["B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_REVOKED_BY"])]);
+const revokeFinal = ownerRevoked ? ownerRevokeFinal === true : selfRevoked ? selfRevokeFinal === true : false;
+if (!revokeFinal) console.log(`${ownerRevoked ? "the owner's" : "the agent's own"} revoke is in a block and the allowance reads 0, but the chain has not made it final yet: superstables budget status shows when it is`);
 
 // gas for the agent-side returns
 let topUp = 0n;
@@ -139,7 +179,8 @@ let gasTx: Hex | null = null;
 // What the revoke step completed, said in the past tense: a later step can't vouch for the allowance now (a wallet may have
 // sent something else), only for what was read before it.
 const revokes = [sr?.tx && `the agent's own revoke ${sr.tx}`, ownerRevokeTx && `the owner's revoke ${ownerRevokeTx}`].filter(Boolean).join(" and ");
-const revoked = { selfRevokeTx: sr?.tx ?? null, ownerRevokeTx, allowanceAfterRevoke: usdc(allowanceAfter) };
+const blockWord = (b: bigint | null) => (b === null ? null : String(b));
+const revoked = { selfRevokeTx: sr?.tx ?? null, selfRevokeBlock: blockWord(selfRevokeBlock), selfRevokeFinal, ownerRevokeTx, ownerRevokeBlock: blockWord(ownerRevokeBlock), ownerRevokeFinal, revokeFinal, allowanceAfterRevoke: usdc(allowanceAfter) };
 const revokedWords = `the allowance read 0${revokes ? ` after ${revokes}` : ""} before this step. No funds were returned yet`;
 try {
   const returnGas = returnOps.length ? await agentGas(pub.agent, returnOps) : null;
@@ -147,7 +188,7 @@ try {
     topUp = topUpFor(returnGas);
     console.log(`${gasWords(returnGas, "returning the funds")}; the owner sends ${gasFmt(topUp)} ${GAS.symbol}`);
     if (ownerKey) gasTx = (await sendNative(ownerKey.wallet, pub.agent, topUp, "gas top-up owner -> agent")).hash;
-    else gasTx = await fundInWallet("recover", pub.owner, pub.agent, topUp, gasFmt(topUp), returnGas.have, { result: revoked, done: revokedWords, stepTx: "gasTx" });
+    else gasTx = (await fundInWallet("recover", pub.owner, pub.agent, topUp, gasFmt(topUp), returnGas.have, { result: revoked, done: revokedWords, stepTx: "gasTx" })).hash;
     await readUntil(() => nativeBalance(pub.agent), (v) => v >= returnGas.have + topUp);
   }
 } catch (e) {
@@ -224,6 +265,6 @@ console.log(`recover: ${state}`);
 process.exit(emit("recover", exit, {
   state, op: opId ?? null, swept: usdc(returnedNow + sweptNow), // journaled returns plus the plain sweep (on a gas-in-USDC chain the reserve is not swept)
   sweepTx: sweepTx ?? madeSafe.find((m) => m.returnTx)?.returnTx ?? null, sweepBy: sweepTx ? "transfer" : madeSafe.some((m) => m.returnTx) ? "journaled return" : "none",
-  madeSafe, selfRevokeTx: sr?.tx ?? null, ownerRevokeTx, gasTx, agentHolds: usdc(heldAfter), allowance: usdc(allowanceAfter),
+  madeSafe, selfRevokeTx: sr?.tx ?? null, selfRevokeBlock: blockWord(selfRevokeBlock), selfRevokeFinal, ownerRevokeTx, ownerRevokeBlock: blockWord(ownerRevokeBlock), ownerRevokeFinal, revokeFinal, gasTx, agentHolds: usdc(heldAfter), allowance: usdc(allowanceAfter),
   unreadable: (blockers ?? scan).unreadable, undecided: blockers?.undecided ?? [], ...(sweepSkipped ? { reason: `sweep skipped: ${sweepSkipped}` } : {}), next,
 }));

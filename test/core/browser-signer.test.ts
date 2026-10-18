@@ -185,10 +185,10 @@ describe("the approval page a browser wallet signs on", () => {
     expect(html).toContain(SELLER);
     expect(html).toContain("Base Sepolia");
 
-    // The agent's own account of the payment appears only under its warning.
+    // The seller's own words appear only under their warning, and the agent's own account of the payment under its own.
     expect(html).toContain("Reported by the agent (not verified)");
     const claim = html.indexOf("a free lunch");
-    expect(claim).toBeGreaterThan(html.indexOf("Reported by the agent (not verified)"));
+    expect(claim).toBeGreaterThan(html.indexOf("The seller says (not verified)"));
 
     await postJson(`${link}/reject`, {});
     await pending;
@@ -776,7 +776,7 @@ describe("the owner approval page", () => {
     const handle = server.request(ownerAction());
     const stranger = privateKeyToAccount(generatePrivateKey()).address;
     const wrong = await postJson(`${handle.url}/account`, { address: stranger });
-    expect(wrong.status).toBe(403);
+    expect(wrong.status).toBe(409);
     expect(String(wrong.body.error)).toContain(OWNER.address);
     const right = await postJson(`${handle.url}/account`, { address: OWNER.address });
     expect(right.status).toBe(200);
@@ -907,7 +907,7 @@ describe("the owner approval page", () => {
     expect((await getJson(`${handle.url}/state`)).body.status).toBe("pending");
     const real = await postJson(`${handle.url}/connect`, { address: OWNER.address, signature: await OWNER.signMessage({ message }) });
     expect(real.status).toBe(200);
-    expect(await handle.settled).toEqual({ status: "connected", address: OWNER.address });
+    expect(await handle.settled).toEqual({ status: "connected", address: OWNER.address, proof: { message, signature: await OWNER.signMessage({ message }) } });
   });
 
   it("answers only on 127.0.0.1, and nothing under an unknown link", async () => {
@@ -1010,7 +1010,7 @@ describe("the owner approval page with a Solana wallet", () => {
     expect((await getJson(`${handle.url}/state`)).body.status).toBe("pending");
     const real = await postJson(`${handle.url}/connect`, { address: SOL_OWNER.address, signature: SOL_OWNER.sign(message).toString("base64"), signedMessage: message.toString("base64") });
     expect(real.status).toBe(200);
-    expect(await handle.settled).toEqual({ status: "connected", address: SOL_OWNER.address });
+    expect(await handle.settled).toEqual({ status: "connected", address: SOL_OWNER.address, proof: { message: message.toString("utf8"), signature: `0x${SOL_OWNER.sign(message).toString("hex")}` } });
   });
 
   it("builds nothing before the owner's account is connected, and asks only that account", async () => {
@@ -1020,7 +1020,7 @@ describe("the owner approval page with a Solana wallet", () => {
     expect((await postJson(`${handle.url}/prepare`, { address: SOL_OWNER.address })).status).toBe(409);
     expect((await postJson(`${handle.url}/account`, { address: "not-an-address" })).status).toBe(400);
     const stranger = await postJson(`${handle.url}/account`, { address: ed25519Wallet().address });
-    expect(stranger.status).toBe(403);
+    expect(stranger.status).toBe(409);
     expect(String(stranger.body.error)).toContain(SOL_OWNER.address);
     expect(calls.prepared).toBe(0);
     expect((await postJson(`${handle.url}/account`, { address: SOL_OWNER.address })).status).toBe(200);
@@ -2261,7 +2261,7 @@ describe("the owner commands' words on an evm chain", () => {
     }
   });
 
-  it("fund-agent's done page shows the agent's balance read after the transfer", async () => {
+  it("fund-agent's page says landed, not done, while no endpoint agrees the transfer is final", async () => {
     const value = POL / 100n; // 0.01 POL
     const { env } = amoyBudget(POL / 50n, POL / 50n + value, value);
     let url = "";
@@ -2287,8 +2287,8 @@ describe("the owner commands' words on an evm chain", () => {
     });
     await driving;
     expect(r.code).toBe(0);
-    expect(message).toBe("Done. Your agent received 0.01 POL and now has 0.03 POL. You can close this page.");
-    expect(r.result).toMatchObject({ command: "fund-agent", state: "settled", tx: { fundAgent: hash } });
+    expect(message).toBe("Sent and included on chain. Your agent's balance shows the transfer, but the chain has not made it final yet. You can close this page.");
+    expect(r.result).toMatchObject({ command: "fund-agent", state: "landed", final: false, tx: { fundAgent: hash } });
   });
 });
 

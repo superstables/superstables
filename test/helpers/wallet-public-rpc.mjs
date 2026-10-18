@@ -17,7 +17,7 @@ if (mode === 'reads') {
     reads.push({ path: req.url, method: call.method });
     res.setHeader('content-type', 'application/json');
     const result = call.method === 'getBalance' ? { context: { slot: 1 }, value: 123 }
-      : call.method === 'getBlockHeight' ? 123 : call.method === 'eth_call' ? `0x${'7b'.padStart(64, '0')}` : '0x7b';
+      : call.method === 'getBlockHeight' ? 123 : call.method === 'eth_call' ? `0x${'7b'.padStart(64, '0')}` : call.method === 'eth_chainId' ? '0x14a34' : '0x7b';
     res.end(JSON.stringify({ jsonrpc: '2.0', id: call.id, result }));
   });
   await new Promise(resolve => stub.listen(0, '127.0.0.1', resolve));
@@ -54,9 +54,10 @@ try {
     pages.push({ name: `pay-${network.key}`, publicRpc: network.defaultRpc, html: await response.text() });
   }
   if (mode !== 'pay') {
-    const [evm, { TEMPO_OWNER_CHAIN }, { SOLANA_OWNER_CHAIN }] = await Promise.all([
-      mode === 'other-owners' ? undefined : source('../../budget/evm/owner.ts'), source('../../budget/tempo/owner.ts'), source('../../budget/solana/owner.ts'),
-    ]);
+    // one after the other: each owner script refuses an RPC the owner has not set when it loads, and the first to load decides what is reported
+    const evm = mode === 'other-owners' ? undefined : await source('../../budget/evm/owner.ts');
+    const { TEMPO_OWNER_CHAIN } = await source('../../budget/tempo/owner.ts');
+    const { SOLANA_OWNER_CHAIN } = await source('../../budget/solana/owner.ts');
     for (const [key, ownerChain] of [...(evm ? [[chain, evm.OWNER_CHAIN]] : []), ['tempo-moderato', TEMPO_OWNER_CHAIN], ['solana-devnet', SOLANA_OWNER_CHAIN]]) {
       const handle = owner.request({ kind: 'connect', chain: ownerChain, signIn: 'Connect your wallet to set up a budget.', timeoutMs: 300_000,
         terms: { title: 'Connect your wallet', summary: 'Prove this wallet is yours. This signature grants no spending permission.', rows: [], enforced: [], notEnforced: [], notes: [] },

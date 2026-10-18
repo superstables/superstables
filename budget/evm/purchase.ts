@@ -26,7 +26,7 @@ import { refusedChainWords } from "../next-steps.mjs";
 import {
   OPS_DIR, SYM, oneLine,
   sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, chainReason, publicClient, sleep,
-  agentGas, gasWords, fundAgentNext, GasShort, ChainRefused,
+  agentGas, gasWords, fundAgentNext, GasShort, ChainRefused, assertRpcChain,
   type AgentCtx, type Wallet, type GasNeed, type GasOp,
 } from "./lib.ts";
 import {
@@ -255,6 +255,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
   const agent = o.agent ?? c.wallet;
   const precheck = o.precheck ?? true;
   const httpTimeoutMs = o.httpTimeoutMs ?? 60_000;
+  await assertRpcChain(); // a wrong chain is refused here, before any record exists
 
   const j = newJournal({ op: o.op, url, owner: c.owner, agent: agent.account.address, token: USDC, max: usdc(max), expectPayTo: o.payTo });
   const res: PurchaseResult = { state: "quoted", ok: false, journal: j, pulled: 0n, signedPayment: false, exitCode: 0 };

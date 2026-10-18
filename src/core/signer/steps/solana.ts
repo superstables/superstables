@@ -333,6 +333,7 @@ export const solanaStep: WalletStep = {
       explorer: network.explorer,
       nativeCurrency: network.wallet.nativeCurrency,
       walletChain: network.wallet.walletChain ?? SOLANA_DEVNET.wallet.walletChain,
+      validity: { kind: "blockhash" as const, seconds: SIGNED_WITHIN_MS / 1000 },
     };
   },
 
@@ -341,6 +342,11 @@ export const solanaStep: WalletStep = {
     fineprint: (facts) =>
       `Signing approves this one transfer of ${facts.amountDecimal} ${facts.asset} and nothing else; the seller pays the network fee and sends it. ` +
       "Before you sign, switch your wallet to Solana devnet. For example, in Phantom: open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet.",
+    walletShows: (f) => [
+      "A transaction to sign, not to send: the seller's fee payer signs it after you and sends it.",
+      `A transfer of ${f.amountDecimal} ${f.asset} to ${f.recipient}. Wallets that simulate show it as −${f.amountDecimal} ${f.asset}.`,
+      "No network fee for you: the seller pays it.",
+    ],
   },
 
   script: SOLANA_STEP_SCRIPT,

@@ -148,10 +148,11 @@ describe("readOrCreateSecret", () => {
     expect(ownerOnly(path)).toBe(true);
   });
 
-  it("tightens the permissions of a secret that was left readable", () => {
+  it("refuses a secret that was left readable, and leaves it as it is", () => {
     const path = join(dir, "owner-secret");
     writeFileSync(path, "abc123\n", { mode: 0o644 });
-    expect(readOrCreateSecret(path)).toBe("abc123");
-    expect(ownerOnly(path)).toBe(true);
+    chmodSync(path, 0o644);
+    expect(() => readOrCreateSecret(path)).toThrow(/can be read by other users on this machine: chmod 600/);
+    expect(ownerOnly(path)).toBe(false);
   });
 });

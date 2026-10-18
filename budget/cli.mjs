@@ -24,22 +24,25 @@
 import { afterPurchase, ownerCheck } from "./next-steps.mjs";
 import { SENDING_LINE, afterSend } from "./proof.mjs";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync, writeSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HOME, agentKeyFile, approvalsDir, opsDir, publicFile } from "./paths.mjs";
+import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
 import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, recordMayHaveSent, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
-import { journalProblem } from "./journal.mjs";
+import { journalProblem, writeJournalFile } from "./journal.mjs";
+import { readRetired, retire, retiredProblem } from "./retired.mjs";
+import { rotate as rotateKey, stoppedFinal, sweepSignatures } from "./rotate.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
-import { DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
-import { customRpc, refusedRpcEnv } from "./rpc.mjs";
+import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
+import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
+import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
 import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, unshownNext, waitOnce } from "./once.mjs";
@@ -172,9 +175,9 @@ this machine).`,
 const OWNER_PRINTS = "the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final\n  false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), tx, next.";
 const COMMANDS = {
   setup: {
-    flags: { agent: "v", "new-owner": "b", hosted: "b", grant: "v", fund: "o", "fund-only": "b", ...OWNER_FLAGS }, required: [],
+    flags: { agent: "v", "new-owner": "b", hosted: "b", grant: "v", fund: "o", "fund-only": "b", "key-store": "v", ...OWNER_FLAGS }, required: [],
     help: helpText({
-      usage: "superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--hosted [--site URL] [--grant A] [--fund [AMOUNT]]]\n  [--fund-only] [--timeout S] [--no-open] [--detach|--wait]",
+      usage: "superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--hosted [--site URL] [--grant A] [--fund [AMOUNT]]]\n  [--fund-only] [--key-store file|os-keychain] [--timeout S] [--no-open] [--detach|--wait]",
       about: `The owner's first step on a rail and chain. Creates the agent key on this machine if there is none (it never
 overwrites one: running setup again reuses it), then asks the owner to connect their own wallet and sign a free sign-in
 message (no transaction). Records both addresses in the public file and prints the next steps. No owner key is created
@@ -187,10 +190,16 @@ owner-proof message), checks the owner's signature over that message, records th
 APPROVALS=hosted, SITE, LINK_ID and LINK_CODE in the public file: grant, revoke and fund-agent on this chain use it from
 then on (recover stays on this machine). solana: the owner also connects a Solana wallet there, and that address is the
 owner. Needs a superstables.com account. --site URL picks another site (default ${DEFAULT_SITE}, or SUPERSTABLES_SITE):
-a superstables.com subdomain, or another origin only when the owner set SUPERSTABLES_ALLOW_SITE to it. Without --hosted:
+only one the owner allows in their settings (superstables owner settings allow-staging, allow-loopback, site). Without --hosted:
 the page on 127.0.0.1, no account. An agent already added to an account is taken only for the owner recorded here, with
 that owner's signed proof; otherwise the owner removes the agent on the site's account page and adds it again.
 setup --new-owner without --hosted moves a chain with approvals on superstables.com back to the page on this machine.
+--key-store file|os-keychain (evm and solana; default file): os-keychain keeps the agent key in this computer's keychain
+(macOS security, Linux secret-tool from libsecret-tools) and only its address in the key file; the key is passed to the
+keychain on standard input and never written to a file. A key already in the key file is moved there and the file's old
+bytes are overwritten. A locked keychain makes buy, grant, fund-agent, recover and owner requests on chains approved on
+superstables.com refuse; a local revoke still works. Rotate keeps the retired key's keychain entry. It does not protect
+the key from code running as you while the keychain is unlocked. Not for tempo.
 --grant A and --fund [AMOUNT] (with --hosted): one approval link for the whole set-up. After the owner adds this agent,
 the same page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain; not on
 tempo) and then the grant of A (tempo: for 24 hours), in that order. The command reads each transaction from the chain
@@ -199,7 +208,7 @@ grant, say), the agent is still added and recorded, and state is that step's. Th
 agent is added. An agent already added on the chain is refused (exit 3): ask for gas and a budget
 with fund-agent and grant. Without --hosted, --grant and --fund are refused: run fund-agent and grant after setup.
 tempo: also tops up the owner from the Moderato faucet when it holds less than 1 pathUSD. --agent LABEL adds a new agent
-key for the next budget (a revoked or expired key can never be granted again); it needs no page, except on a chain with approvals on superstables.com, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
+key for the next budget (a revoked or expired key can never be granted again); the owner signs a message naming the new key (on this computer's page, or with --owner-key-file in tests), except on a chain with approvals on superstables.com, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
 nothing else; it needs no page either.
 
 ${OWNER_HELP}
@@ -278,7 +287,8 @@ Prints the terms first: the cap, the true maximum, and what the chain enforces a
   solana  makes the agent the delegate of the owner's USDC account up to A, in total. Run fund-agent first.
 evm and solana refuse --expiry, --period and --sellers: the chain cannot enforce them. A live budget is never replaced
 silently: revoke it first. tempo: --agent LABEL picks the access key (a revoked key can never be granted again).
-Check the result with superstables budget status.
+On evm and solana a grant is refused while the previous revoke is not final, and the result is state landed (exit 0,
+final false) until the grant itself is final. Check the result with superstables budget status.
 
 ${OWNER_HELP}`,
       money: "not at once: it lets the agent spend up to A from the owner's wallet, purchase by purchase, once the owner\n  approves it. The owner pays the transaction fee.",
@@ -298,11 +308,12 @@ first, names the home it checked (SUPERSTABLES_HOME, default ~/.superstables; ho
 command. If the budget is elsewhere, ask the user for the path: do not point SUPERSTABLES_HOME at another home yourself.
 remaining 0 means there is nothing to spend: the owner grants one.
 revoked is true only for a revoke this machine recorded that the chain still shows (tempo: the key reads revoked); an
-allowance or delegate that reads 0 without that record is remaining 0 and revoked false.`,
+allowance or delegate that reads 0 without that record is remaining 0 and revoked false. A revoke that landed but is not
+final yet is not revoked: lastOwnerAction says which action is waiting and whether it is final.`,
       money: "no. It reads files and the chain only; no secret is opened.",
       who: "anyone.",
       example: "superstables budget status --rail evm",
-      prints: "the owner on record on stderr, then a RESULT line: remaining, expiry, revoked, atRisk, owner, next.",
+      prints: "the owner on record on stderr, then a RESULT line: remaining, expiry, revoked, atRisk, lastOwnerAction, owner, next.",
       exits: "Exit codes: 0 read, 1 failed (no budget set up here, or the chain could not be read: read reason and next), 2 bad input",
     }),
   },
@@ -378,6 +389,39 @@ ${RECOVER_OWNER_HELP}`,
       exits: EXITS_OWNER,
     }),
   },
+  rotate: {
+    flags: { plan: "b", timeout: "v", "no-open": "b", "owner-key-file": "v", yes: "b" }, required: [],
+    help: helpText({
+      usage: "superstables budget rotate --rail evm|solana [--plan] [--timeout S] [--no-open] [--owner-key-file <path> --yes]",
+      about: `evm and solana. Replaces the agent key and retires the old one for good. The old address is retired first: from then on this
+machine never grants, funds, sets up or buys with it again. Then, on every chain where the old key is set up, the owner ends
+its allowance (evm) or delegate (solana) in their wallet, its open purchases are settled or returned, and its funds go back
+to the owner. Only then is the old key file moved to keys/budget/retired/, and a new key created and connected on the same
+chains, with the same owner. It runs recover, revoke, reconcile and setup as commands of their own, so each step asks the
+owner as that command does; run it where the owner is, because it stays in the foreground and waits for each approval.
+A rotation that stops can be run again: it continues where it stopped and repeats no approval it recorded as done.
+Nothing is replaced until the chain has made the revoke final: on every chain, endpoints that agree must show at a final block
+(solana: a finalized slot) that the old agent has no allowance or delegate left, and on solana the sweep's transfers must be
+finalized too. A revoke that is only in a block leaves the rotation incomplete (state incomplete, final false, exit 5): the old
+key file and its records stay, and the transactions are recorded. Run it again once superstables budget status says the revoke is
+final; rotate then checks the recorded transactions and does not send them again.
+--plan reads the chains and sends nothing. The retired list is a file on this machine: the owner's revoke on chain is
+what stops a stolen key. On a chain approved on superstables.com, the old agent is also removed on the account page.
+tempo has no rotation: setup --rail tempo --agent LABEL adds a new key (a revoked or expired tempo key is never granted again).
+
+How the owner approves: every step is the command of the same name, so each asks the owner as that command does, one approval
+link at a time (the APPROVE line on stdout, the words on stderr; recover and revoke on a page on 127.0.0.1, and on a chain
+set up with --hosted the revoke and setup links are on superstables.com). The link expires after --timeout seconds (default
+600), as for those commands; then the rotation stops and can be run again.
+Unattended tests only: --owner-key-file PATH --yes signs the owner's steps with that key file.
+rotate has no --detach, --wait or --replace: it runs in the foreground.`,
+      money: "yes: the old key's funds go back to the owner, and its allowance or delegate is ended by the owner.",
+      who: "the owner, with the agent key on this machine.",
+      example: "superstables budget rotate --rail evm --plan",
+      prints: "the plan per chain on stderr, each approval link as it comes (APPROVE line), then one RESULT: state (planned, rotated or incomplete), oldAgent, newAgent, retired, chains (chain, recovered, setUp, hosted, revocation), next.",
+      exits: "Exit codes: 0 rotated or planned, 1 a step failed, 2 bad input, 3 refused before anything was sent, 5 a step's outcome is unknown, a revoke is not final yet or a journal cannot be read (read next, then run it again)",
+    }),
+  },
   wait: {
     flags: { id: "v", timeout: "v", shown: "b", abandon: "b" }, required: ["id"],
     help: helpText({
@@ -402,7 +446,8 @@ approval sent nothing; after setup --hosted with --grant or --fund, or recover, 
 steps, tx and budget status). Run the owner command again for a new one (setup reuses the agent key it created).
 --abandon (the owner only, for a buy-once purchase the site never ends): reads the site once; if the purchase still has
 no final answer, keeps its record, marks it given up with the time, and returns state unknown, exit 5, final true. The
-payment stays unknown; buy-once can start a new purchase. An agent never runs it.`,
+payment stays unknown; buy-once can start a new purchase. A purchase read as paid whose payment is not final keeps its
+paid result, is marked finalityAbandonedAt, and no longer holds the next buy-once. An agent never runs it.`,
       money: "no. It never approves, signs or sends anything.",
       who: "anyone, usually the agent that started the owner command, after the owner says they've approved.",
       example: "superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60",
@@ -432,7 +477,7 @@ superstables budget wait --id ID --shown. In a terminal, or with --wait: blocks 
 purchase open at a time; --replace cancels the open one, only while the owner has not signed. Paid is never the site's
 word alone: the command reads the payment from the chain (exactly the amount, to the listed recipient, in the listed
 token); one the chain does not show is unknown (exit 5).
---site: the site (default ${DEFAULT_SITE}, or SUPERSTABLES_SITE, or the SITE that setup --hosted recorded).`,
+--site: the site (default ${DEFAULT_SITE}, or SUPERSTABLES_SITE, or the SITE that setup --hosted recorded): only ${DEFAULT_SITE} unless the owner allows another in their settings (superstables owner settings).`,
       money: "yes: the service's price, at most --max, from the owner's wallet, once the owner approves it on superstables.com.",
       who: "the agent starts it; only the owner approves.",
       example: "superstables budget buy-once --service superstables-demo-market-data --param asset=BTC --max 0.01",
@@ -454,7 +499,7 @@ simulated is yes when the listing marks the output as prepared sample output (mo
 services), no when it marks it as not sample output (Superstables' market data service, which returns live prices; no
 does not verify that the data is real), and not said when the listing does not say.
 The site is --site, else SUPERSTABLES_SITE, else the SITE recorded by setup --hosted (for --rail and --chain when given,
-else the first chain that has one), else ${DEFAULT_SITE}. Any other seller URL works too:
+else the first chain that has one), else ${DEFAULT_SITE}. A listing read also accepts staging and sites on this computer. Any other seller URL works too:
 superstables budget preflight --rail R --url U reads its price.
 --once: lists the services available for Single purchase on superstables.com, with no budget
 (GET /api/v1/purchase/services): id, price, simulated, network and inputs (* marks a required one). --rail and --chain
@@ -478,6 +523,7 @@ back what was already spent; on evm, superstables budget recover returns strande
 It always sends the revoke, even when the budget already reads empty or revoked: one read is not proof that nothing is
 live. It sends nothing only where the chain would refuse the transaction: on solana when the owner has no USDC account
 (revoked null), and on tempo when a simulated revokeKey from the owner is refused as already done (revoked true, tx {}).
+On evm and solana the result is state landed (exit 0, revoked false, final false) until the revoke is final.
 
 ${OWNER_HELP}`,
       money: "no funds move. The owner pays the transaction fee.",
@@ -535,6 +581,7 @@ Commands (each takes --help):
   unlock      owner   clear abandoned operation locks after stopping their processes     moves no money
   revoke      owner   end the budget on chain                                            moves no money
   recover     owner   evm: stop the allowance, return stranded USDC to the owner          moves money back
+  rotate      owner   evm, solana: replace the agent key, retire the old one              moves money back
   wait        anyone  the state of an owner approval an agent started (--id, --shown)    read only
   find        anyone  services a budget can pay (--once: buy-once services)              read only
   buy-once    agent   one purchase the owner approves on superstables.com                moves money
@@ -555,10 +602,12 @@ setup --hosted with --grant or --fund, and in recover, an earlier step may alrea
 budget status.
 
 --site URL is accepted by every command. Where a site is recorded (setup --hosted) and it differs, the command refuses
-(exit 2); where it does not matter, it is ignored. A site is superstables.com, one of its subdomains or 127.0.0.1;
-another origin only when the owner sets SUPERSTABLES_ALLOW_SITE to it in their own environment (an agent never does).
-B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
-http on this machine only; RESULT names one in use as rpc. A wallet adding the chain through an approval page
+(exit 2); where it does not matter, it is ignored. For an owner action a site is
+${DEFAULT_SITE}, or one the owner allows with superstables owner settings in their own terminal (an agent never does); a read
+(find, wait) also accepts any superstables.com host and 127.0.0.1.
+B4_RPC_<CHAIN> (B4_RPC_BASE_SEPOLIA, ...) replaces one evm chain's RPC and wins over B4_RPC, which replaces the selected evm
+chain's; SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
+http on this machine only; every evm command that reads checks the chain id the RPC answers first; RESULT names one in use as rpc. A wallet adding the chain through an approval page
 on this machine is offered the chain's public RPC.
 
 Output: logs go to stderr. stdout ends with one line
@@ -639,12 +688,13 @@ function resultFacts(fields) {
 }
 
 function emit(code, fields) {
-  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "owner", "agent", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "agreement", "lastOwnerAction", "ownerRevokeFinal", "revocation", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
   fields = resultFacts(fields);
   // an RPC other than the rail's default (B4_RPC, SUPERSTABLES_TEMPO_RPC, SUPERSTABLES_SOLANA_RPC) is named in every RESULT
-  if (fields.rpc === undefined && fields.rail) fields.rpc = customRpc(fields.rail);
+  // by scheme and host only: a path or query can hold an access key, and "/…" says there is one
+  if (fields.rpc === undefined && fields.rail) { const u = customRpc(fields.rail, fields.chain); fields.rpc = u === undefined ? undefined : shownUrl(u); }
   const out = { ok: code === 0 };
   for (const k of order) if (fields[k] !== undefined) out[k] = k === "reason" ? clean(fields[k]) : fields[k];
   if (APPROVAL_ID) recordFinal(APPROVAL_ID, code, out); // frees the chain
@@ -682,6 +732,15 @@ function parse(argv) {
     emit(2, { command: cmd, state: "failed", next: `run npm ci at ${REPO} (it installs the dev packages and builds), then rerun`, reason: "a checkout without dev packages needs its dist/budget build" });
   }
   if (rest.includes("--mainnet")) return refuse({ command: cmd }, "mainnet is refused: superstables budget is testnet only");
+  // SUPERSTABLES_ALLOW_SITE used to let an environment variable allow another approval site: the owner's settings do that now
+  if (process.env[ALLOW_SITE_ENV]?.trim()) log(`superstables budget: warning: ${ALLOW_SITE_ENV} is no longer read. To use another approval site, the owner runs superstables owner settings site <origin> in their own terminal.`);
+  // The owner's settings file, when there is one, must be usable by every command that depends on it. A file that exists and
+  // cannot be used never falls back to the defaults: doctor reports it, unlock and wait go on (they hold no anchor).
+  const unusable = ownerSettingsProblem();
+  if (unusable) {
+    if (cmd === "doctor") log(`superstables budget: warning: ${unusable}`);
+    else if (!["unlock", "wait"].includes(cmd)) return refuse({ command: cmd }, unusable, "the owner runs superstables owner settings show in their own terminal, and fixes or moves the file; nothing was read or sent");
+  }
 
   // --json is accepted everywhere: it changes only how the RESULT is printed (JSON_OUT). --site is accepted by every command.
   const allowed = { rail: "v", chain: "v", json: "b", site: "v", ...spec.flags };
@@ -735,7 +794,7 @@ function parse(argv) {
     if (!isApprovalId(f.id)) return badInput(ctx, `--id must be an approval id like oa-20260930120000-1a2b3c4d (got "${f.id}")`);
     if (f.timeout !== undefined && !(/^\d+$/.test(f.timeout) && Number(f.timeout) <= 300)) badInput(ctx, "--timeout must be a whole number of seconds from 0 to 300");
     if (f.site !== undefined) {
-      const site = siteOrigin(f.site);
+      const site = siteOrigin(f.site, "read");
       if (site.error) badInput(ctx, `--site: ${site.error}`);
       f.site = site.origin;
     }
@@ -752,17 +811,22 @@ function parse(argv) {
   f.chain ??= rail.chain;
   ctx.chain = f.chain;
   // a replacement RPC must be https, or http on this computer: every check reads the chain through it
-  const badRpc = refusedRpcEnv(f.rail);
+  const badRpc = refusedRpcEnv(f.rail, f.chain);
   if (badRpc) return badInput(ctx, `${badRpc.error}. Unset it, or point it at an https RPC (or one on 127.0.0.1)`);
+  // an owner command reads and sends only through an RPC the owner set: a variable naming another stops it before any approval
+  if (OWNER_COMMANDS_LIST.includes(cmd)) {
+    const problem = ownerRpcProblem(f.rail, f.chain);
+    if (problem) return refuse(ctx, problem, ownerRpcNext(f.rail, f.chain));
+  }
   for (const r of spec.required) if (f[r] === undefined) return badInput(ctx, `missing required flag --${r}`);
   if (f.site !== undefined && !f.hosted) {
     // --site is accepted by every command. Nothing else here depends on it, so it only has to be a site, and the one this chain's
     // approvals are hosted on when there is one: another site is a mistake in the command, not a second place to ask the owner.
-    const site = siteOrigin(f.site);
+    const site = siteOrigin(f.site, OWNER_COMMANDS_LIST.includes(cmd) ? "owner" : "read");
     if (site.error) badInput(ctx, `--site: ${site.error}`);
     f.site = site.origin;
     const recorded = hostedSite(f);
-    const recordedOrigin = recorded ? siteOrigin(recorded).origin : null;
+    const recordedOrigin = recorded ? siteOrigin(recorded, "read").origin : null;
     if (recordedOrigin && recordedOrigin !== f.site) badInput(ctx, `--site ${f.site} is not the site this chain's approvals happen on (${recordedOrigin}): use --site ${recordedOrigin}, or leave --site out`);
   }
 
@@ -779,9 +843,13 @@ function parse(argv) {
   if (f.method !== undefined && !/^(GET|POST|PUT|PATCH|DELETE)$/.test(f.method.toUpperCase())) badInput(ctx, "--method must be GET, POST, PUT, PATCH or DELETE");
   if (f.agent !== undefined) {
     if (f.rail !== "tempo") badInput(ctx, "--agent is for tempo only (it picks the access key)");
-    if (cmd === "setup" && (f["owner-key-file"] !== undefined)) badInput(ctx, "setup --agent adds a key for an owner already recorded: it takes no --owner-key-file");
     if (cmd === "setup" && f["new-owner"]) badInput(ctx, "setup --agent adds a key for the recorded owner; --new-owner replaces the owner: run them separately");
     if (!new RegExp(`^${LABEL}$`).test(f.agent)) badInput(ctx, `--agent must be ${LABEL_WORDS}`);
+  }
+  if (f["key-store"] !== undefined) {
+    if (cmd !== "setup") badInput(ctx, "--key-store goes with setup");
+    if (f.rail === "tempo") badInput(ctx, "--key-store is for evm and solana; tempo's agent keys stay in the key file (they are limited on chain)");
+    if (f["key-store"] !== "file" && f["key-store"] !== "os-keychain") badInput(ctx, "--key-store must be file or os-keychain");
   }
   if (f["fund-only"]) {
     if (f.rail !== "tempo") badInput(ctx, "--fund-only is for tempo only (it tops up the owner from the Moderato faucet)");
@@ -802,6 +870,10 @@ function parse(argv) {
   }
   if (cmd === "preflight" && f.rail === "evm") {
     for (const k of ["method", "body"]) if (f[k] !== undefined && !(k === "method" && f.method.toUpperCase() === "GET")) badInput(ctx, `evm preflight is GET only (no --${k})`);
+  }
+  if (cmd === "rotate") {
+    if (f.rail === "tempo") badInput(ctx, "rotate is for evm and solana; on tempo, add a new key with superstables budget setup --rail tempo --agent LABEL");
+    if (rest.some((a) => a === "--chain" || a.startsWith("--chain="))) badInput(ctx, "rotate covers every chain the key is set up on; --chain is not taken");
   }
   if (cmd === "recover" && f.rail !== "evm") badInput(ctx, "recover is EVM only (tempo and solana have no stranded funds: the agent never holds the budget)");
   if (cmd === "fund-agent" && f.rail === "tempo") badInput(ctx, "tempo's agent needs no gas: its access key spends the owner's pathUSD, and the fees come from the owner");
@@ -830,8 +902,8 @@ function parse(argv) {
   if (f.hosted) {
     if (f.agent !== undefined) badInput(ctx, "setup --agent on a chain with approvals on superstables.com adds the new key there by itself: drop --hosted");
     if (f["owner-key-file"] !== undefined) badInput(ctx, "--hosted asks the owner on superstables.com; with --owner-key-file there is no owner to ask");
-    const site = chosenSite(f.site);
-    if (site.error) badInput(ctx, `--site: ${site.error}`);
+    const site = chosenSite(f.site, "owner");
+    if (site.error) badInput(ctx, site.error);
     f.site = site.origin;
   }
   const pageOnly = ["detach", "replace"].find((k) => f[k]);
@@ -880,8 +952,8 @@ function parseBuyOnce(cmd, f) {
   // buy-once reads the payment from the chain of the listing's network: every replacement RPC must be usable
   const badRpc = refusedRpcEnv();
   if (badRpc) return badInput(ctx, `${badRpc.error}. Unset it, or point it at an https RPC (or one on 127.0.0.1)`);
-  const site = resolveSite(f.site);
-  if (site.error) return badInput(ctx, `--site: ${site.error}`);
+  const site = resolveSite(f.site, {}, "owner");
+  if (site.error) return badInput(ctx, site.error);
   f.site = site.origin;
   f.params = params;
   return { cmd, f, ctx };
@@ -920,8 +992,13 @@ function railCommand(verb, f, extra = {}) {
       case "read": return S("readBudget", []);
       case "grant": return O("setBudget", ["--amount", f.amount]);
       case "revoke": return O("revokeBudget", []);
-      case "setup": return O("setup", [...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...(f.fund === undefined ? [] : f.fund === true ? ["--fund"] : ["--fund-amount", f.fund])]);
+      case "setup": return O("setup", [...opt("key-store", f["key-store"]), ...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...(f.fund === undefined ? [] : f.fund === true ? ["--fund"] : ["--fund-amount", f.fund])]);
       case "fund-agent": return O("fundAgent", opt("amount", f.amount));
+      case "rotate-address": return S("rotate", ["--address"]);
+      case "rotate-balances": return S("rotate", ["--balances"]);
+      case "rotate-sweep": return S("rotate", ["--sweep"]);
+      case "rotate-confirm-sweep": return S("rotate", ["--confirm", extra.signatures]);
+      case "rotate-clear": return S("rotate", ["--clear-agent", extra.agent]);
     }
   }
   return evmCommand(verb, f, extra);
@@ -938,11 +1015,13 @@ function evmCommand(verb, f, extra = {}) {
     case "grant": return E("setBudget", ["--cap", f.amount, ...ownerOpts(f)]);
     case "revoke": return E("revoke", ownerOpts(f));
     case "recover": return E("recover", [...opt("op", f.op), ...(extra.plan ? ["--plan"] : ownerOpts(f))]);
-    case "setup": return E("setup", [...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...(f.fund === undefined ? [] : ["--fund", ...(f.fund === true ? [] : ["--fund-amount", f.fund])]), ...ownerOpts(f)]);
+    case "setup": return E("setup", [...opt("key-store", f["key-store"]), ...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...(f.fund === undefined ? [] : ["--fund", ...(f.fund === true ? [] : ["--fund-amount", f.fund])]), ...ownerOpts(f)]);
     case "fund-agent": return E("fundAgent", [...opt("amount", f.amount), ...ownerOpts(f)]);
+    case "rotate-address": return E("rotate", ["--address"]);
+    case "rotate-clear": return E("rotate", ["--clear-agent", extra.agent]);
   }
 }
-const evmReadFromResult = (r) => ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null });
+const evmReadFromResult = (r) => r.state !== "ok" ? { ok: false, code: 1 } : ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null, agent: r.agent ?? null, lastOwnerAction: r.lastOwnerAction ?? null });
 // ---- end of EVM section -----------------------------------------------------------------------------
 
 // ---- running a rail script --------------------------------------------------------------------------
@@ -1076,19 +1155,34 @@ const ownerLine = (owner) => owner ? `  owner (recorded): ${owner}. If this isn'
  * The site recorded by `setup --hosted` for --chain, or for the first chain of --rail that has one, or for the first chain
  * that has one: the evm chains in order, then tempo, then solana. An origin, or null.
  */
-function recordedSite(f) {
+function recordedSite(f, purpose = "owner") {
   const all = Object.entries(RAILS).flatMap(([rail, r]) => r.chains.map((chain) => ({ rail, chain })));
   const chains = all.filter((c) => (!f.rail || c.rail === f.rail) && (!f.chain || c.chain === f.chain));
   for (const c of chains) {
     const site = hostedSite(c);
-    if (site && !siteOrigin(site).error) return siteOrigin(site).origin;
+    if (!site) continue;
+    const checked = siteOrigin(site, purpose);
+    if (!checked.error) return checked.origin;
+    // a recorded site the owner does not allow is skipped (the public file is the agent's to write), and said once
+    if (checked.ownerCommand && !SKIPPED_SITES.has(site)) {
+      SKIPPED_SITES.add(site);
+      log(`superstables budget: the site recorded for ${c.rail} ${c.chain} (${siteText(site, 120)}) is not an approval site the owner allows; it is not used`);
+    }
   }
   return null;
 }
-/** The site for find and buy-once: --site, else SUPERSTABLES_SITE, else the site `setup --hosted` recorded, else the default. */
-function resolveSite(flag, f = {}) {
-  const recorded = flag === undefined && !process.env.SUPERSTABLES_SITE?.trim() ? recordedSite(f) : null;
-  return recorded ? { origin: recorded } : chosenSite(flag);
+const SKIPPED_SITES = new Set();
+/**
+ * The site for find and buy-once: --site, else SUPERSTABLES_SITE (each only when it is a site the owner allows for `purpose`),
+ * else the owner's own site setting, else the site `setup --hosted` recorded, else the default.
+ */
+function resolveSite(flag, f = {}, purpose = "owner") {
+  if (flag !== undefined || process.env.SUPERSTABLES_SITE?.trim()) return chosenSite(flag, purpose);
+  const own = siteFor(purpose, undefined);
+  if (own.error) return { error: own.error };
+  if (own.source === "settings") return { origin: own.origin };
+  const recorded = recordedSite(f, purpose);
+  return { origin: recorded ?? own.origin };
 }
 /** Hosted approvals recorded for this rail and chain: the site's origin, or null (the page on this computer). */
 function hostedSite(f) {
@@ -1102,6 +1196,9 @@ function hostedSite(f) {
 }
 const modeLine = (f) => { const site = hostedSite(f); return site ? `  approvals: hosted on ${site}: the owner approves there, signed in with their wallet, and picks the match code` : null; };
 
+/** The words in parentheses of the first line a read script printed as "unknown (words)", else null. */
+const unconfirmedWords = (text) => /^\s*[\w ()]+?:\s+unknown \((.*)\)\s*$/m.exec(text)?.[1] ?? null;
+
 // Reads the budget through the rail's read script (no key file, no signature) and parses its text.
 async function readBudget(f) {
   const r = await run(railCommand("read", f));
@@ -1113,19 +1210,24 @@ async function readBudget(f) {
     const exp = Number(pick(/expiry:\s+(\d+)/) ?? 0);
     const revoked = pick(/isRevoked:\s+(true|false)/) === "true";
     const expiry = exp ? new Date(exp * 1000).toISOString() : null;
-    const expired = !!exp && exp * 1000 < Date.now();
+    // the read script says whether the key is expired (agreed by the confirming endpoints), or "unknown": never worked out here
+    const expired = pick(/\bexpired:\s+(true|false)/) === "true";
     const live = !revoked && !expired;
     const pe = Number(pick(/periodEnd:\s+(\d+)/) ?? 0);
     // the next period boundary of a live period budget, before its expiry; null for a one-time limit, a revoked or expired
     // key, or a boundary at or after expiry. It says when the limit refills, not that nothing is left.
     const refillsAt = live && pe && pe * 1000 > Date.now() && (!exp || pe < exp) ? new Date(pe * 1000).toISOString() : null;
     const granted = !/granted:\s+no\b/.test(t);
-    return { ok: true, remaining: remaining ?? null, expiry, revoked, expired, refillsAt, granted, atRisk: remaining === undefined ? null : live ? remaining : "0" };
+    // a line the script printed as "unknown (words)": one endpoint's word was not enough to end the budget, so it stays counted
+    const unconfirmed = unconfirmedWords(t);
+    return { ok: true, remaining: remaining ?? null, expiry, revoked, expired, refillsAt, granted, atRisk: remaining === undefined ? null : live ? remaining : "0", unconfirmed };
   }
   if (f.rail === "solana") {
     const remaining = pick(/delegatedAmount \(remaining\):\s+([\d.]+) USDC/);
     const most = pick(/maximum the delegate can still move:\s+([\d.]+) USDC/);
-    return { ok: true, remaining: remaining ?? null, expiry: null, revoked: pick(/revoked:\s+(true|false)/) === "true", atRisk: most ?? null };
+    const agent = pick(/^\s*agent:\s+(\S+)/m);
+    const last = /last owner action:\s+(revoke|grant)\s+(\S+)\s+\((final|landed, not final yet)\)/.exec(t);
+    return { ok: true, agent: agent ?? null, remaining: remaining ?? null, expiry: null, revoked: pick(/revoked:\s+(true|false)/) === "true", atRisk: most ?? null, unconfirmed: unconfirmedWords(t), lastOwnerAction: last ? { action: last[1], tx: last[2], final: last[3] === "final" } : null };
   }
   const rr = railResult(t); // evm: the read script ends with a RESULT line
   return rr ? evmReadFromResult(rr) : { ok: false, code: 2 };
@@ -1150,11 +1252,12 @@ const newOp = () => { const d = new Date().toISOString().replace(/\D/g, "").slic
 const txOf = (text) => [...text.matchAll(/(?:tx hash|signature):\s*(\S+)|\/tx\/(0x[0-9a-fA-F]{64})/gi)].map((m) => m[1] ?? m[2]).pop();
 
 // ---- state -> exit code (from the rail's RESULT state, never from the rail's own exit code) ---------
-const STATES = ["planned", "sent", "settled", "failed", "refused_precheck", "refused_chain", "unknown", "not_found", "ok", "waiting_owner"];
+// landed: an owner action that is in a block but not final yet (exit 0, final: false); status says when it is final
+const STATES = ["planned", "sent", "settled", "failed", "refused_precheck", "refused_chain", "unknown", "not_found", "ok", "waiting_owner", "landed"];
 function exitFor(cmd, state, delivered) {
   switch (state) {
     case "settled": return delivered === true ? 0 : delivered === false || cmd === "buy" ? 4 : 0;
-    case "planned": case "sent": case "ok": case "waiting_owner": return 0;
+    case "planned": case "sent": case "ok": case "waiting_owner": case "landed": return 0;
     case "refused_precheck": return 3;
     case "unknown": return 5;
     default: return 1; // failed, refused_chain, not_found
@@ -1199,7 +1302,7 @@ function normalize(cmd, f, rail, code) {
   const amount = state === "unknown" ? null : nothingMoved ? "0" : rail.debit == null ? null : String(rail.debit);
   return {
     code: exitFor(cmd, state, delivered),
-    fields: { ...base, state, paid, delivered, chain_final: rail.chain_final ?? null, amount, remaining: rail.remaining ?? null, tx, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : rail.state === "unknown" && ownWayOut(rail) ? neverPayAgain(rail.next) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.chain_final === false && state === "settled" ? `Run superstables budget reconcile --rail ${f.rail}${f.rail === "evm" ? ` --chain ${f.chain}` : ""} --op ${f.op} later to check finality. Do not pay again.${delivered === false ? " Contact the seller." : ""}` : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
+    fields: { ...base, state, paid, delivered, chain_final: rail.chain_final ?? null, amount, remaining: rail.remaining ?? null, tx, agreement: rail.agreement, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : rail.state === "unknown" && ownWayOut(rail) ? neverPayAgain(rail.next) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : state === "not_found" && f.rail === "tempo" && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.chain_final === false && state === "settled" ? `Run superstables budget reconcile --rail ${f.rail}${f.rail === "evm" ? ` --chain ${f.chain}` : ""} --op ${f.op} later to check finality. Do not pay again.${delivered === false ? " Contact the seller." : ""}` : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
   };
 }
 
@@ -1211,8 +1314,10 @@ function budgetSpent(f, rail) {
   const why = `${rail.reason ?? ""}`;
   const net = f.rail === "tempo" ? "Tempo testnet (Moderato)" : f.rail === "solana" ? "Solana devnet" : EVM_CHAINS[f.chain]?.label ?? f.chain;
   const unit = f.rail === "tempo" ? "pathUSD" : "test USDC";
-  const m = /price ([0-9.]+)(?: [A-Za-z]+)? exceeds the (?:allowance|remaining budget) ([0-9.]+)/.exec(why);
-  if (m) return { budget_spent: true, message_for_owner: `The budget left on ${net} (${m[2]} ${unit}) doesn't cover this purchase (${m[1]} ${unit}). Nothing was paid. ${TESTNET_LINE}` };
+  const m = /price ([0-9.]+)(?: [A-Za-z]+)?(?: plus up to ([0-9.]+)(?: [A-Za-z]+)? for the network fee)? exceeds the (?:allowance|remaining budget) ([0-9.]+)/.exec(why);
+  if (m) return { budget_spent: true, message_for_owner: m[2]
+    ? `The budget left on ${net} (${m[3]} ${unit}) doesn't cover this purchase (${m[1]} ${unit}) and its network fee (up to ${m[2]} ${unit}), which counts against the budget. Nothing was paid. ${TESTNET_LINE}`
+    : `The budget left on ${net} (${m[3]} ${unit}) doesn't cover this purchase (${m[1]} ${unit}). Nothing was paid. ${TESTNET_LINE}` };
   if (/allowance is 0|no delegate|no_budget/i.test(why)) return { budget_spent: true, message_for_owner: `There is no budget left on ${net} (it is spent, revoked or was never granted). Nothing was paid. ${TESTNET_LINE}` };
   return {};
 }
@@ -1310,7 +1415,14 @@ async function status({ f, ctx }) {
   const ag = agentFlag(f);
   // Spent, revoked or expired: report it; a new budget is the owner's to ask for, so no grant recipe here (rule 10 of the skill).
   const ownerAsks = "a new budget starts only when the owner explicitly asks for one";
-  const next = s.revoked
+  const lastNotFinal = s.lastOwnerAction && s.lastOwnerAction.final === false ? s.lastOwnerAction : null;
+  const next = s.unconfirmed
+    ? `the budget could not be confirmed on chain (${s.unconfirmed}): count it as live; run ${statusCommand(f)} again later`
+    : lastNotFinal
+    ? lastNotFinal.action === "revoke"
+      ? `the ${lastNotFinal.by === "agent" ? "agent's own revoke" : "revoke"} ${lastNotFinal.tx} landed but the chain has not made it final yet: count the budget as live, and run ${statusCommand(f)} again later`
+      : `the grant ${lastNotFinal.tx} landed but the chain has not made it final yet: do not rely on the budget until ${statusCommand(f)} says it is final`
+    : s.revoked
     ? `the budget is revoked: nothing to spend. Report it; ${ownerAsks}${f.rail === "tempo" ? " (a revoked tempo key can never be granted again)" : ""}`
     : s.expired
       ? `the budget expired at ${s.expiry}: nothing to spend. Report it; ${ownerAsks} (an expired tempo key can never be granted again)`
@@ -1322,7 +1434,7 @@ async function status({ f, ctx }) {
             ? `the budget is spent: nothing to spend. Report it; ${ownerAsks}`
             : empty ? `nothing to spend (spent, never granted, or revoked): the owner grants a budget with superstables budget grant --rail ${f.rail}${chainFlag(f)} --amount A when they ask for one` : "none";
   const tempoFields = f.rail === "tempo" ? { expired: s.expired, refillsAt: s.refillsAt } : {};
-  emit(0, { ...ctx, state: "ok", remaining: s.remaining, expiry: s.expiry, revoked: s.revoked, ...tempoFields, atRisk: s.atRisk, owner: owner ?? undefined, next });
+  emit(0, { ...ctx, state: "ok", remaining: s.remaining, expiry: s.expiry, revoked: s.revoked, ...tempoFields, atRisk: s.atRisk, lastOwnerAction: s.lastOwnerAction ?? null, owner: owner ?? undefined, next, ...(s.unconfirmed ? { reason: s.unconfirmed } : {}) });
 }
 
 const chainFlag = (f) => (f.chain === RAILS[f.rail].chain ? "" : ` --chain ${f.chain}`);
@@ -1354,6 +1466,8 @@ function journalAnswer(f, ctx) {
 async function buy({ f, ctx }) {
   const earlier = f.op ? journalAnswer(f, ctx) : undefined;
   if (earlier) return earlier();
+  const retired = retiredAgentProblem(f) || await retiredKeyFileProblem(f);
+  if (retired) return refuseRetired(ctx, f, retired, { op: f.op, paid: false, delivered: false, amount: "0", tx: {} });
   // No setup on this computer (no agent key, or no owner connected): refused before the lock, the journal or a rail script,
   // so nothing is signed and nothing is left behind that looks like a purchase. The grant itself is on chain: the rail
   // reads it before it signs.
@@ -1556,7 +1670,7 @@ async function reconcile({ f, ctx }) {
 // unknown, or a failure whose RESULT names the chain's proof, and makes every other one unknown.
 // mismatch: a transaction the owner's wallet sent landed and did something other than the plan (another amount, recipient
 // or call), so it moved something: unknown, never a refusal that says nothing was sent
-const OWNER_STATES = { set: "settled", revoked: "settled", ok: "settled", planned: "planned", refused_precheck: "refused_precheck", mismatch: "unknown", not_revoked: "failed", failed: "failed", unknown: "unknown" };
+const OWNER_STATES = { landed: "landed", set: "settled", revoked: "settled", ok: "settled", planned: "planned", refused_precheck: "refused_precheck", mismatch: "unknown", not_revoked: "failed", failed: "failed", unknown: "unknown" };
 const carriesTx = (tx) => (typeof tx === "string" ? tx !== "" : Boolean(tx) && typeof tx === "object" && Object.values(tx).some(Boolean));
 /**
  * Whether this owner command may have sent: its rail was about to broadcast, a signal stopped it once a link existed, its
@@ -1579,6 +1693,8 @@ function ownerOutcome(code, rr = null) {
   const c = [0, 2, 3, 5].includes(code) ? code : 1;
   const byCode = { 0: "settled", 2: "failed", 3: "refused_precheck", 5: "unknown" }[c] ?? "failed";
   const mapped = OWNER_STATES[rr?.state];
+  // in a block, not final yet: the rail says so with exit 0 and its own `landed`
+  if (c === 0 && rr?.state === "landed") return { code: 0, state: "landed", reason: rr?.reason, proof: undefined };
   return { code: c, state: c !== 0 && mapped && mapped !== "settled" && mapped !== "planned" ? mapped : byCode, reason: rr?.reason, proof: rr?.proof };
 }
 // Owner transaction hashes: the evm RESULT carries them; the other rails print an explorer line.
@@ -1593,6 +1709,8 @@ const notSentNext = (f) => walletFlow(f) ? undefined : "rerun the same command w
 const ownerNext = (o, rr, fallback) => (["refused_precheck", "unknown"].includes(o.state) && rr?.next ? rr.next : fallback);
 
 async function grant({ f, ctx }) {
+  const retired = retiredAgentProblem(f);
+  if (retired) return refuseRetired(ctx, f, retired, { amount: f.amount, tx: {} });
   const secs = f.expiry ? Math.ceil((Date.parse(f.expiry) - Date.now()) / 1000) : 86400;
   const now = await readBudget(f);
   const unit = unitOf(f);
@@ -1625,6 +1743,8 @@ async function grant({ f, ctx }) {
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
   if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, amount: f.amount, tx: rr?.tx ? { grant: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, o.state === "refused_precheck" ? "read reason and tx; a changed wallet transaction may already be on chain. Check status before granting again" : `${statusCommand(f)}: the chain may or may not have changed`), reason: o.reason ?? `the rail script exited ${r.code}` });
+  // in a block, not final yet: the rail says landed, and the readback below (which counts only what is final) is skipped
+  if (o.state === "landed") return emit(0, { ...ctx, state: "landed", final: false, amount: f.amount, remaining: null, tx: { grant: ownerTx(rr, r.stdout) ?? null }, url: approvalUrl, next: rr?.next ?? `${statusCommand(f)} later: the grant is final when status says so` });
   const after = await readBudget(f);
   emit(0, { ...ctx, state: "settled", amount: f.amount, remaining: after.ok ? after.remaining : null, tx: { grant: ownerTx(rr, r.stdout) ?? null }, expiry: after.ok ? after.expiry : null, url: approvalUrl, next: "none" });
 }
@@ -1654,27 +1774,40 @@ async function revoke({ f, ctx }) {
     return emit(o.code, { ...ctx, state: o.state, proof: o.proof, remaining: now.ok ? now.remaining : null, revoked: false, tx: rr?.tx ? { revoke: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, "none"), reason: o.reason });
   }
   // solana: no USDC account, so no delegate to clear and nothing sent. One read decided it, so revoked is null, not true.
-  if (r.code === 0 && rr?.evidence === "no_token_account") return emit(0, { ...ctx, state: "ok", remaining: "0", revoked: null, tx: {}, next: "none", reason: rr.reason ?? "the owner has no USDC account, so there is no delegate to clear; nothing was sent" });
+  if (r.code === 0 && rr?.evidence === "no_token_account") return emit(0, { ...ctx, state: "ok", remaining: "0", revoked: null, revocation: { final: true, tx: null, evidence: "no_token_account" }, agreement: rr.agreement, tx: {}, next: "none", reason: rr.reason ?? "the owner has no USDC account, so there is no delegate to clear; nothing was sent" });
   const after = await readBudget(f);
+  // in a block, not final yet: revoked stays false until status can say it is final
+  if (o.state === "landed") return emit(0, { ...ctx, state: "landed", final: false, remaining: after.ok ? after.remaining : null, revoked: false, revocation: revocationOf(rr, r.stdout, false), tx: { revoke: ownerTx(rr, r.stdout) ?? null }, url: approvalUrl, next: rr?.next ?? `${statusCommand(f)} later: the revoke is final when status says so` });
   // tempo: the key reads revoked and the keychain refused a simulated revokeKey from the owner, so nothing was sent
-  if (r.code === 0 && rr?.evidence === "simulated_already_revoked" && after.ok && after.revoked) return emit(0, { ...ctx, state: "ok", remaining: after.remaining, revoked: true, tx: {}, next: "none", reason: "already revoked: the key reads revoked, and the keychain refuses a simulated revokeKey from the owner as already done; nothing was sent" });
+  if (r.code === 0 && rr?.evidence === "simulated_already_revoked" && after.ok && after.revoked) return emit(0, { ...ctx, state: "ok", remaining: after.remaining, revoked: true, agreement: rr.agreement, tx: {}, next: "none", reason: "already revoked: the key reads revoked, and the keychain refuses a simulated revokeKey from the owner as already done; nothing was sent" });
   const done = r.code === 0 && after.ok && after.revoked;
   emit(done ? 0 : o.code || 1, {
-    ...ctx, state: done ? "settled" : o.code === 0 ? "failed" : o.state, proof: done || o.code === 0 ? undefined : o.proof, remaining: after.ok ? after.remaining : null, revoked: after.ok ? after.revoked : null,
+    ...ctx, state: done ? "settled" : o.code === 0 ? "failed" : o.state, proof: done || o.code === 0 ? undefined : o.proof, remaining: after.ok ? after.remaining : null, revoked: after.ok ? after.revoked : null, ...(done ? { revocation: revocationOf(rr, r.stdout, true) } : {}),
     tx: { revoke: ownerTx(rr, r.stdout) ?? null }, url: approvalUrl, next: done ? "none" : `${statusCommand(f)}: confirm whether the revoke landed, then run superstables budget revoke again`, reason: done ? undefined : o.reason ?? `the rail script exited ${r.code}`,
   });
 }
 
+/** Where an owner's revoke is, for the rotation record: its transaction, its block (evm) or slot (solana), and whether it is final. */
+function revocationOf(rr, stdout, final) {
+  const tx = ownerTx(rr, stdout);
+  return { final, tx: typeof tx === "string" ? tx : null, ...(rr?.block !== undefined ? { block: rr.block } : {}), ...(rr?.slot !== undefined ? { slot: rr.slot } : {}) };
+}
+
 async function recover({ f, ctx }) {
   const plan = await run(railCommand("recover", f, { plan: true })); // the script's own --plan sends nothing
-  if (plan.code !== 0) { const o = ownerOutcome(plan.code, railResult(plan.stdout)); return emit(o.code, { ...ctx, state: o.state, tx: {}, next: "read the plan output above", reason: o.reason ?? `the recover plan exited ${plan.code}` }); }
+  if (plan.code !== 0) { const o = ownerOutcome(plan.code, railResult(plan.stdout)); return emit(o.code, { ...ctx, state: o.state, tx: {}, next: railResult(plan.stdout)?.next ?? "read the plan output above", reason: o.reason ?? `the recover plan exited ${plan.code}` }); }
   if (!sendsNow(f)) return emit(0, { ...ctx, state: "planned", tx: {}, next: "rerun the same command with --yes to send (the owner key file signs the owner's steps)" });
   const r = await run(railCommand("recover", f));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
   const tx = {};
   for (const [k, v] of [["selfRevoke", rr?.selfRevokeTx], ["ownerRevoke", rr?.ownerRevokeTx], ["gas", rr?.gasTx], ["sweep", rr?.sweepTx]]) if (v) tx[k] = v;
-  emit(o.code, { ...ctx, state: o.state, proof: o.proof, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, url: approvalUrl, next: o.code === 0 ? "none" : ownerNext(o, rr, `superstables budget status --rail ${f.rail}; then superstables budget recover again`), reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
+  // both ways of stopping the authority say where they are and whether they are final; a recover that says nothing is not final
+  const revokeNotFinal = rr?.revokeFinal === false || rr?.ownerRevokeFinal === false;
+  const revocation = rr && (rr.selfRevokeTx || rr.ownerRevokeTx || typeof rr.revokeFinal === "boolean")
+    ? { final: rr.revokeFinal === true, selfTx: rr.selfRevokeTx ?? null, selfBlock: rr.selfRevokeBlock ?? null, ownerTx: rr.ownerRevokeTx ?? null, ownerBlock: rr.ownerRevokeBlock ?? null } : undefined;
+  const whose = rr?.ownerRevokeFinal === false || rr?.ownerRevokeTx ? "the owner's revoke" : "the agent's own revoke";
+  emit(o.code, { ...ctx, state: o.state, ...(revokeNotFinal ? { final: false } : {}), ...(typeof rr?.ownerRevokeFinal === "boolean" ? { ownerRevokeFinal: rr.ownerRevokeFinal } : {}), ...(revocation ? { revocation } : {}), proof: o.proof, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, url: approvalUrl, next: o.code === 0 ? (revokeNotFinal ? `${statusCommand(f)} later: ${whose} is final when status says so` : "none") : ownerNext(o, rr, `superstables budget status --rail ${f.rail}; then superstables budget recover again`), reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
 }
 
 async function setup({ f, ctx }) {
@@ -1706,17 +1839,253 @@ async function setup({ f, ctx }) {
   const owner = rr?.owner ? ownerCheck({ rail: f.rail, chain: f.chain, owner: rr.owner, site }) : null;
   const check = owner?.next;
   if (owner) log(`\n${owner.words}`);
-  emit(0, { ...ctx, state: "ok", owner: rr?.owner, agent: rr?.agent, approvals: site ? "hosted" : "local", site: site ?? undefined, ...steps, url: approvalUrl, next: check ? `${check}. Then: ${rr?.next ?? "none"}` : rr?.next ?? "none" });
+  emit(0, { ...ctx, state: "ok", ...(rr?.final === false ? { final: false } : {}), owner: rr?.owner, agent: rr?.agent, approvals: site ? "hosted" : "local", site: site ?? undefined, ...steps, url: approvalUrl, next: check ? `${check}. Then: ${rr?.next ?? "none"}` : rr?.next ?? "none" });
 }
 
 async function fundAgent({ f, ctx }) {
+  const retired = retiredAgentProblem(f);
+  if (retired) return refuseRetired(ctx, f, retired, { tx: {} });
   log(`\nfund-agent on ${f.rail} (${f.chain}): the owner sends the agent ${f.rail === "solana" ? "SOL for fees" : "gas"}. ${waitLine(f)}`);
   if (!sendsNow(f)) return emit(0, { ...ctx, state: "planned", tx: {}, next: notSentNext(f) });
   const r = await run(railCommand("fund-agent", f));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
   if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, `superstables budget doctor --rail ${f.rail}`), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
+  if (o.state === "landed") return emit(0, { ...ctx, state: "landed", final: false, amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: rr?.next ?? `landed, not final yet. Nothing to do: the transfer is final once its block is. superstables budget doctor --rail ${f.rail}${chainFlag(f)} reads the balance` });
   emit(0, { ...ctx, state: "settled", amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: f.rail === "solana" ? "superstables budget doctor --rail solana, then superstables budget grant --rail solana --amount A" : `superstables budget doctor --rail evm${chainFlag(f)}, then superstables budget grant --rail evm${chainFlag(f)} --amount A` });
+}
+
+// ---- rotate: replace the agent key and retire the old one (rotate.mjs holds the order) --------------------------------
+const AGENT_VAR = { evm: "B4_AGENT_ADDRESS", solana: "SOLANA_AGENT_ADDRESS" };
+/**
+ * Every agent address the public file names for this rail and chain, read the way the rail scripts read it (an `export `
+ * prefix on evm, quotes on evm, every line: the last one is the one the rail uses). `problem` when the file exists and cannot
+ * be read: no cap on its size, as the rails have none. Any mode: the line is public.
+ */
+function publicAgents(f) {
+  const path = publicFile(f.rail, f.chain);
+  let text;
+  try {
+    // O_NONBLOCK: a FIFO would otherwise wait for a writer forever; no size cap, as the rails have none
+    const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+    try {
+      if (!fstatSync(fd).isFile()) throw new Error("not a regular file");
+      text = readFileSync(fd, "utf8");
+    } finally { closeSync(fd); }
+  } catch (err) {
+    return err?.code === "ENOENT" ? { values: [] } : { values: [], problem: `the public file ${path} cannot be read (${err?.message ?? err}), so the agent it names cannot be checked against the retired list` };
+  }
+  const values = f.rail === "evm"
+    ? [...text.matchAll(/^(?:export\s+)?B4_AGENT_ADDRESS=(.*)$/gm)].map((m) => m[1].trim().replace(/^['"]|['"]$/g, ""))
+    : [...text.matchAll(/^SOLANA_AGENT_ADDRESS=(.*)$/gm)].map((m) => m[1].trim());
+  return { values: values.filter(Boolean) };
+}
+/** The agent address the rail uses from the public file (the last line), or null. */
+const publicAgent = (f) => publicAgents(f).values.at(-1) ?? null;
+/**
+ * Why this chain's agent may not be used, or "": the public file names (on any line) an agent that `budget rotate` retired
+ * here. A public file or a retired list that cannot be read is a reason too. Only evm and solana have a rotation. The owner's
+ * revoke on chain is what stops a retired key; this stops this client from arming or using it again.
+ */
+function retiredAgentProblem(f) {
+  if (!AGENT_VAR[f.rail]) return "";
+  const { values, problem } = publicAgents(f);
+  if (problem) return problem;
+  for (const address of values) {
+    const retired = retiredProblem(f.rail, address);
+    if (retired) return retired;
+  }
+  return "";
+}
+/** As retiredAgentProblem, for the address of the agent key file (read by the rail script; the key is never printed). */
+async function retiredKeyFileProblem(f) {
+  if (!AGENT_VAR[f.rail]) return "";
+  const who = railResult((await run(railCommand("rotate-address", { rail: f.rail, chain: RAILS[f.rail].chain }))).stdout);
+  return who?.agent ? retiredProblem(f.rail, who.agent) : "";
+}
+/** The refusal for a command that would arm, fund or use a retired agent. Nothing is signed or sent. */
+const refuseRetired = (ctx, f, reason, more = {}) => {
+  log(`superstables budget: refused: ${reason}`);
+  return emit(3, { ...ctx, state: "refused_precheck", ...more, reason, next: ctx.command === "buy" ? "ask the owner: this agent key was replaced" : `superstables budget status --rail ${f.rail}${chainFlag(f)}; the owner connects and grants the new agent` });
+};
+
+const ROTATIONS_DIR = join(STATE_DIR, "rotations");
+const recordName = (rail, address) => `${rail}-${rail === "evm" ? address.toLowerCase() : address}.json`;
+const retiredKeyFile = (rail, address) => join(KEYS_DIR, "retired", `${rail}-${rail === "evm" ? address.toLowerCase() : address}.env`);
+
+const sameAgent = (rail, a, b) => (rail === "solana" ? a === b : String(a).toLowerCase() === String(b).toLowerCase());
+/**
+ * The unfinished rotation record for this rail (with its path), null if none. Throws when a record cannot be read. `current`
+ * is the address of the key file; null when there is none, and then only a rotation that moved the key file is returned.
+ */
+function unfinishedRotation(rail, current) {
+  let names;
+  try { names = readdirSync(ROTATIONS_DIR); } catch (err) { if (err?.code === "ENOENT") return null; throw err; }
+  const open = [];
+  for (const name of names.filter((n) => n.startsWith(`${rail}-`) && n.endsWith(".json")).sort()) {
+    const path = join(ROTATIONS_DIR, name);
+    let r;
+    try { r = JSON.parse(readRegularFile(path, "the rotation record")); } catch (err) { throw new Error(`the rotation record ${path} cannot be read (${err?.message ?? err})`); }
+    if (!r || typeof r !== "object" || r.version !== 1 || r.rail !== rail || typeof r.oldAgent !== "string" || !r.chains || typeof r.chains !== "object") throw new Error(`the rotation record ${path} does not hold a rotation of the ${rail} key`);
+    if (!r.finishedAt) open.push({ ...r, path });
+  }
+  if (current === null) {
+    // A key file aside with no swap recorded counts as moved by rotate only when every chain was recovered already; otherwise
+    // the owner moved it by hand, and recover still needs it.
+    const recovered = (r) => Object.values(r.chains).every((e) => (rail === "evm" ? e?.recoveredAt : e?.revokedAt && e?.sweptAt));
+    const aside = (r) => existsSync(retiredKeyFile(rail, r.oldAgent));
+    const moved = open.filter((r) => r.swappedAt || (aside(r) && recovered(r)));
+    const byHand = open.find((r) => !r.swappedAt && aside(r) && !recovered(r));
+    if (!moved.length && byHand) {
+      const kept = retiredKeyFile(rail, byHand.oldAgent);
+      throw Object.assign(new Error(`the key file of ${byHand.oldAgent} was moved to ${kept} before its rotation recovered the funds, and recover needs it`), { next: `move ${kept} back to ${agentKeyFile(rail)}, then run rotate again. Nothing was sent` });
+    }
+    return moved.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))[0] ?? null;
+  }
+  // the one that belongs to the key file as it is now, else the newest
+  return open.find((r) => !r.swappedAt && sameAgent(rail, r.oldAgent, current)) ?? open.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))[0] ?? null;
+}
+
+/**
+ * Runs one command of this CLI as a child process and waits for it: its approval links are passed on at once, its logs go to
+ * stderr, and its last RESULT line is returned with its exit code. Each rotation step is an existing command, so each keeps
+ * its own owner approval, its records and its checks.
+ */
+function runChild(args) {
+  return new Promise((resolve) => {
+    const p = spawnIdentified(process.execPath, [fileURLToPath(import.meta.url), ...args], { stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    currentChild = p;
+    let partial = "";
+    let result = null;
+    const line = (l) => {
+      if (/^APPROVE \{/.test(l)) { try { approvalUrl = JSON.parse(l.slice(8)).url; } catch {} writeApprove(l); } else if (/^RESULT \{/.test(l)) result = railResult(l);
+    };
+    p.stdout.on("data", (d) => {
+      const lines = (partial + d).split("\n");
+      partial = lines.pop();
+      lines.forEach(line);
+    });
+    const errScrub = agentTokenScrubber();
+    p.stderr.on("data", (d) => { const t = errScrub.push(String(d)); if (t) process.stderr.write(t); });
+    // passed on to the child while it runs; removed after, as rotate runs one child per step
+    const stop = Object.fromEntries(["SIGINT", "SIGTERM"].map((s) => [s, () => { interrupted = true; try { p.kill(s); } catch {} }]));
+    for (const [s, fn] of Object.entries(stop)) process.on(s, fn);
+    const unhook = () => { for (const [s, fn] of Object.entries(stop)) process.off(s, fn); };
+    p.on("error", (e) => { unhook(); log(`superstables budget: could not start ${args[0]}: ${e.message}`); resolve({ code: p.pid === undefined ? 2 : 1, result: null }); });
+    p.on("close", (code, sig) => {
+      unhook();
+      if (partial) line(partial);
+      const t = errScrub.end();
+      if (t) process.stderr.write(t);
+      resolve({ code: code ?? (sig ? 130 : 1), result });
+    });
+  });
+}
+
+async function rotate({ f, ctx }) {
+  delete ctx.chain; // rotate covers every chain the key is set up on
+  const rail = f.rail;
+  // one rotation at a time per rail: both would write the same record. Taken before anything is read, so a run that waited
+  // never works from state an earlier run is about to change.
+  let lock = null;
+  if (!(f.plan === true || !sendsNow(f))) {
+    const lockPath = join(ROTATIONS_DIR, `${rail}.lock`);
+    const refuse = (reason, next) => {
+      log(`superstables budget: refused: ${reason}`);
+      return emit(3, { ...ctx, state: "refused_precheck", retired: false, reason, next });
+    };
+    try {
+      ensurePrivateDir(ROTATIONS_DIR, { root: HOME });
+      lock = lockFile(lockPath);
+    } catch (err) { return refuse(`the rotation lock could not be taken (${err.message})`, "nothing was sent; fix the folder, then run rotate again"); }
+    if (!lock.ok) return refuse(`another rotate of the ${rail} key is running (${lock.details})`, `wait for its RESULT, or stop it, then run rotate again. If none is running and this stays, remove ${lockPath} after stopping every rotate. Nothing was sent`);
+  }
+  try { return await rotateLocked({ f, ctx }); } finally { lock?.release(); }
+}
+
+async function rotateLocked({ f, ctx }) {
+  const rail = f.rail;
+  const refusal = (reason, next) => {
+    log(`superstables budget: refused: ${reason}`);
+    return emit(3, { ...ctx, state: "refused_precheck", retired: false, reason, next });
+  };
+  try { readRetired(); } catch (err) { return refusal(err.message, "repair that file or move it away, then run rotate again. Nothing was sent"); }
+
+  // the old agent: the address of the key file now
+  const who = await run(railCommand("rotate-address", { rail, chain: RAILS[rail].chain }));
+  let current = railResult(who.stdout);
+  let existing;
+  if (who.code !== 0 || !current?.agent) {
+    // a rotation that stopped after the key file moved aside has no key file now: its record says where it stopped
+    let moved = null;
+    if (!existsSync(agentKeyFile(rail))) {
+      try { moved = unfinishedRotation(rail, null); } catch (err) { return refusal(err.message, err.next ?? "repair that file or move it away, then run rotate again. Nothing was sent"); }
+    }
+    if (!moved) return refusal(current?.reason ?? `there is no agent key to rotate (${agentKeyFile(rail)})`, `superstables budget setup --rail ${rail} creates one. Nothing was changed`);
+    existing = moved;
+    current = { agent: moved.oldAgent };
+    log(`superstables budget: the key file of ${moved.oldAgent} was already moved to ${retiredKeyFile(rail, moved.oldAgent)}: finishing that rotation`);
+  } else {
+    try { existing = unfinishedRotation(rail, current.agent); } catch (err) { return refusal(err.message, "repair that file or move it away, then run rotate again. Nothing was sent"); }
+  }
+  // a chain whose public file cannot be read is not known to be free of the old key: its allowance could be left standing
+  for (const c of RAILS[rail].chains) {
+    const { problem } = publicAgents({ rail, chain: c });
+    if (problem) return refusal(problem, `fix that file (or move it away if ${c} is not set up), then run rotate again. Nothing was sent`);
+  }
+  const oldAgent = existing?.swappedAt ? existing.oldAgent : current.agent;
+  // an old key that lives in the OS keychain: the new one goes there too, and the old entry stays, as the retired key file does
+  let oldInKeychain = false;
+  try {
+    const oldFile = existsSync(agentKeyFile(rail)) ? agentKeyFile(rail) : retiredKeyFile(rail, oldAgent);
+    oldInKeychain = new RegExp(`^${rail === "evm" ? "B4" : "SOLANA"}_AGENT_KEY_STORE=os-keychain$`, "m").test(readRegularFile(oldFile, "the agent key file"));
+  } catch {}
+  const names = (c) => { const a = publicAgent({ rail, chain: c }); return Boolean(a) && sameAgent(rail, a, oldAgent); };
+  for (const c of RAILS[rail].chains) if (publicAgent({ rail, chain: c }) && !names(c)) log(`superstables budget: ${rail} ${c} names another agent (${publicAgent({ rail, chain: c })}): left as it is`);
+  const chains = [...new Set([...Object.keys(existing?.chains ?? {}), ...RAILS[rail].chains.filter(names)])];
+  if (!chains.length) return refusal(`no ${rail} chain's public file names the agent key ${current.agent}`, `superstables budget setup --rail ${rail} connects it to an owner first. Nothing was changed`);
+
+  // The owner's steps are the commands of the same name, run in the foreground so each approval is waited for. A test key file
+  // signs them (setup takes none for a chain approved on the site: there the owner signs in).
+  const timing = [...opt("timeout", f.timeout), ...(f["no-open"] ? ["--no-open"] : [])];
+  const signing = (yes) => (f["owner-key-file"] ? [...opt("owner-key-file", f["owner-key-file"]), ...(yes ? ["--yes"] : [])] : ["--wait"]);
+  const chainArgs = (c) => (rail === "evm" ? ["--chain", c] : []);
+  const quiet = (r) => ({ code: r.code, result: railResult(r.stdout) });
+  const steps = {
+    planChain: async (c) => ({ ...quiet(await run(railCommand(rail === "evm" ? "recover" : "rotate-balances", { rail, chain: c }, { plan: true }))), hosted: hostedSite({ rail, chain: c }) }),
+    retire: async () => { try { retire(rail, oldAgent, "rotate"); return { code: 0 }; } catch (err) { return { code: 1, result: { reason: err.message } }; } },
+    readStopped: async (c, entry) => stoppedFinal(await readBudget({ rail, chain: c }), entry?.revocation, rail, oldAgent),
+    recoverChain: (c) => runChild(["recover", "--rail", rail, ...chainArgs(c), ...timing, ...signing(true)]),
+    revoke: () => runChild(["revoke", "--rail", rail, ...timing, ...signing(true)]),
+    reconcile: (op) => runChild(["reconcile", "--rail", rail, "--op", op]),
+    sweep: async (c) => quiet(await run(railCommand("rotate-sweep", { rail, chain: c }))),
+    confirmSweep: async (c, tx) => quiet(await run(railCommand("rotate-confirm-sweep", { rail, chain: c }, { signatures: sweepSignatures(tx).join(",") }))),
+    swapKey: async () => {
+      const target = retiredKeyFile(rail, oldAgent);
+      try {
+        ensurePrivateDir(dirname(target), { root: HOME });
+        // an earlier run may have moved the file and stopped before it wrote that down
+        if (existsSync(target)) return existsSync(agentKeyFile(rail)) ? { code: 1, result: { reason: `${target} exists already: move it away` } } : { code: 0 };
+        renameSync(agentKeyFile(rail), target);
+        return { code: 0 };
+      } catch (err) {
+        return { code: 1, result: { reason: `the old key file could not be moved to ${target} (${err.message})` } };
+      }
+    },
+    clearChain: async (c) => quiet(await run(railCommand("rotate-clear", { rail, chain: c }, { agent: oldAgent }))),
+    setupChain: (c, entry) => runChild(["setup", "--rail", rail, ...chainArgs(c), ...(oldInKeychain ? ["--key-store", "os-keychain"] : []), ...(entry.hosted ? ["--hosted", "--site", entry.hosted, ...timing, "--wait"] : [...timing, ...signing(false)])]),
+    writeRecord: (record) => writeJournalFile(join(ROTATIONS_DIR, recordName(rail, record.oldAgent)), `${JSON.stringify(record, null, 2)}\n`),
+  };
+  const planOnly = f.plan === true || !sendsNow(f);
+  // the folder the old key file moves to is checked now, not after the owner has approved the revoke
+  if (!planOnly) {
+    try { ensurePrivateDir(dirname(retiredKeyFile(rail, oldAgent)), { root: HOME }); } catch (err) { return refusal(`the folder for the old key file is not private (${err.message})`, "nothing was sent; fix the folder, then run rotate again"); }
+  }
+  log(`\nPLAN rotate on ${rail}: replace the agent key ${oldAgent} (chains: ${chains.join(", ")}). ${planOnly ? "Nothing is sent." : waitLine(f)}`);
+  log("  the old address is retired first; then, on each chain, the owner ends its allowance or delegate, open purchases are settled or returned, and its funds go back to the owner; then the key file moves to keys/budget/retired/ and a new key is connected on the same chains.");
+  const done = await rotateKey({ rail, currentAgent: current.agent, existing, chains, steps, plan: planOnly, keyMoved: !existsSync(agentKeyFile(rail)), log });
+  const { code, fields } = done;
+  emit(code, { ...ctx, ...fields, ...(fields.state === "incomplete" ? { final: false } : {}), url: approvalUrl, ...(planOnly && !f.plan && fields.state === "planned" ? { next: notSentNext(f) } : {}) });
 }
 
 // ---- detached owner approvals (approvals.mjs) -------------------------------------------------------
@@ -1770,7 +2139,7 @@ async function ownerGate({ cmd, f, ctx }) {
     // revoke acts for the public file's owner: while the agent key file names another, it reports on neither
     const disagree = ownerFilesDisagree(f);
     if (disagree) {
-      const site = recordedSite({ rail: f.rail, chain: f.chain });
+      const site = recordedSite({ rail: f.rail, chain: f.chain }, "read");
       return emit(3, { ...ctx, state: "refused_precheck", reason: `${disagree}. revoke would act for the first only, so it does not say whether a budget is live on either; nothing was sent`, next: `superstables budget setup --rail ${f.rail}${site ? ` --hosted --site ${site}` : ""} --new-owner checks both owners for a live budget and names the owner who must revoke it, and how; it records one owner again once neither has one` });
     }
   }
@@ -1836,7 +2205,7 @@ async function ownerGate({ cmd, f, ctx }) {
 async function wait({ f }) {
   const once = readApproval(f.id);
   // --site names the site the approval was made on: another one is a mistake, not a different request
-  const madeOn = once?.hosted?.site ? siteOrigin(once.hosted.site).origin : null;
+  const madeOn = once?.hosted?.site ? siteOrigin(once.hosted.site, "read").origin : null;
   if (f.site !== undefined && madeOn && madeOn !== f.site) return badInput({ command: "wait" }, `--site ${f.site} is not the site this approval was made on (${madeOn}): use --site ${madeOn}, or leave --site out`);
   if (f.abandon) {
     // the owner gives up a buy-once purchase the site does not end: the record stays, marked, and the payment stays unknown
@@ -1856,6 +2225,12 @@ async function wait({ f }) {
     log(`superstables budget: wait refused without reading the approval: write the approval link, the code and the terms in your reply to the owner first, then run: superstables budget wait --id ${f.id} --shown`);
     return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", ...approvalFields(once), next: unshownNext(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
   }
+  // the record is the agent's to write, and the site's "not paid" ends a purchase: a site the owner does not allow is not read
+  const madeOnAllowed = once?.command === "buy-once" && once.hosted?.site && !once.final ? siteOrigin(once.hosted.site, "verdict") : null;
+  if (madeOnAllowed?.error) return emit(5, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id,
+    id: f.id, state: "unknown", paid: null, delivered: null, final: false,
+    reason: `this purchase was made on ${siteText(once.hosted.site, 120)}, which is not an approval site the owner allows now; nothing was read from it`,
+    next: `do not buy this again. Ask the owner: ${madeOnAllowed.ownerCommand ?? "superstables owner settings show"} in their own terminal, then run superstables budget wait --id ${f.id} --shown` });
   if (once?.command === "buy-once") return waitBuyOnce(once, f);
   const r = await waitFor(f.id, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);
   if (!r) return badInput({ command: "wait" }, `no owner approval with id ${f.id} under ${approvalsDir()}`);
@@ -1905,7 +2280,7 @@ async function buyOnce({ f, ctx }) {
       const p = r.pending;
       // the open purchase's state comes from its own evidence: one the site named a payment for is never waiting_owner
       const state = r.pendingState ?? (p.cancelUnconfirmed || !mayBeUnpaid(p.seen) ? "unknown" : "waiting_owner");
-      return emit(3, { ...ctx, service: f.service, state: "refused_pending", paid: null, delivered: null, amount: null, tx: {}, pending: { id: p.id, purchase: p.hosted?.requestId, service: p.service?.id, state, ...(p.url && state !== "unknown" ? { url: p.url, matchCode: p.matchCode, expires: p.expires, terms: p.terms, message_for_owner: messageForOwner(p) } : {}) }, next: r.next, reason: `no new purchase was started: ${r.reason}` });
+      return emit(3, { ...ctx, service: f.service, state: "refused_pending", paid: null, delivered: null, amount: null, tx: {}, pending: { id: p.id, purchase: p.hosted?.requestId, service: p.service?.id, state, ...(p.url && state === "waiting_owner" ? { url: p.url, matchCode: p.matchCode, expires: p.expires, terms: p.terms, message_for_owner: messageForOwner(p) } : {}) }, next: r.next, reason: `no new purchase was started: ${r.reason}` });
     }
     return emit(r.code, { ...ctx, service: f.service, state: r.state, paid: false, delivered: false, amount: "0", tx: {}, next: r.next, reason: r.reason });
   }
@@ -1955,8 +2330,8 @@ const SIMULATED_NOTE = "simulated: yes when the listing marks the output as prep
 
 /** find --once: the services that can be bought with one approval, no budget. Names and prices are the site's listing: data. */
 async function findOnce({ f, ctx }) {
-  const site = resolveSite(f.site);
-  if (site.error) return badInput(ctx, `--site: ${site.error}`);
+  const site = resolveSite(f.site, {}, "read");
+  if (site.error) return badInput(ctx, site.error);
   Object.assign(ctx, f.rail ? { rail: f.rail } : {}, f.chain ? { chain: f.chain } : {});
   const r = await listOnceServices({ site: site.origin });
   if (!r.ok) {
@@ -1982,8 +2357,8 @@ const shellWord = (w) => (/^[A-Za-z0-9_./:=@%+,-]+$/.test(w) ? w : `'${String(w)
 async function find({ f, ctx }) {
   if (f.once) return findOnce({ f, ctx });
   // --site, else SUPERSTABLES_SITE, else the site `setup --hosted` recorded (for --rail and --chain when given), else the default
-  const site = resolveSite(f.site, f);
-  if (site.error) return badInput(ctx, `--site: ${site.error}`);
+  const site = resolveSite(f.site, f, "read");
+  if (site.error) return badInput(ctx, site.error);
   Object.assign(ctx, f.rail ? { rail: f.rail } : {}, f.chain ? { chain: f.chain } : {});
   const chainByNetwork = { ...Object.fromEntries(Object.entries(EVM_CHAINS).map(([k, c]) => [`eip155:${c.chainId}`, k])), "eip155:42431": "moderato", "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1": "devnet" };
   const r = await listSiteServices({ site: site.origin, chainByNetwork });
@@ -2013,7 +2388,7 @@ async function find({ f, ctx }) {
 }
 
 // ---- main -------------------------------------------------------------------------------------------
-const HANDLERS = { unlock, setup, "fund-agent": fundAgent, doctor, preflight, status, buy, "buy-once": buyOnce, reconcile, grant, revoke, recover, wait, find };
+const HANDLERS = { unlock, setup, "fund-agent": fundAgent, doctor, preflight, status, buy, "buy-once": buyOnce, reconcile, grant, revoke, recover, rotate, wait, find };
 const parsed = parse(process.argv.slice(2));
 if (WORKER_ID) {
   // the worker's backstop: nothing it runs may outlive the link, the send grace and the chain reads. It stops the rail

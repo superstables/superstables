@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
+import { tokenFactsProblem } from "../../src/core/token-facts.js";
 
 const gate = vi.hoisted(() => ({ refuse: false }));
 vi.mock("../../src/core/chain-gate.js", async (importOriginal) => {
@@ -20,6 +21,9 @@ vi.mock("../../src/core/chain-gate.js", async (importOriginal) => {
   return { ...real, chainGate: vi.fn((chain: Parameters<typeof real.chainGate>[0], settings: Parameters<typeof real.chainGate>[1]) => (gate.refuse ? "the test's gate refuses" : real.chainGate(chain, settings))) };
 });
 import { chainGate } from "../../src/core/chain-gate.js";
+
+/** The token the latest gate call was given. */
+const lastGateToken = () => (vi.mocked(chainGate).mock.calls.at(-1)?.[0] as { token?: unknown }).token;
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const REFUSED = /^this client does not sign on mainnet chains: the (evm|solana|tempo) chain /;
@@ -99,7 +103,8 @@ describe("each rail's chokepoint asks the gate first", () => {
       gate.refuse = false;
       await evm.assertRpcChain();
       expect(rpc.methods).toContain("eth_chainId");
-      expect(chainGate).toHaveBeenCalledWith({ rail: "evm", key: "base-sepolia", testnet: true }, undefined);
+      expect(chainGate).toHaveBeenCalledWith(expect.objectContaining({ rail: "evm", key: "base-sepolia", testnet: true, token: expect.objectContaining({ symbol: "USDC", decimals: 6 }) }), undefined);
+      expect(tokenFactsProblem(lastGateToken(), "evm")).toBe("");
     } finally {
       exit.mockRestore();
       vi.unstubAllEnvs();
@@ -114,7 +119,8 @@ describe("each rail's chokepoint asks the gate first", () => {
     expect(conn.getGenesisHash).not.toHaveBeenCalled();
     gate.refuse = false;
     expect(await sol.clusterProblem(conn)).toBe("");
-    expect(chainGate).toHaveBeenCalledWith({ rail: "solana", key: "solana-devnet", testnet: true }, undefined);
+    expect(chainGate).toHaveBeenCalledWith(expect.objectContaining({ rail: "solana", key: "solana-devnet", testnet: true, token: expect.objectContaining({ symbol: "USDC", decimals: 6 }) }), undefined);
+    expect(tokenFactsProblem(lastGateToken(), "solana")).toBe("");
   });
 
   it("tempo makeClient: throws instead of building a client", async () => {
@@ -123,7 +129,8 @@ describe("each rail's chokepoint asks the gate first", () => {
     expect(() => tempo.makeClient()).toThrow("the test's gate refuses; nothing was signed or sent");
     gate.refuse = false;
     expect(tempo.makeClient()).toBeTruthy();
-    expect(chainGate).toHaveBeenCalledWith({ rail: "tempo", key: "tempo-moderato", testnet: true }, undefined);
+    expect(chainGate).toHaveBeenCalledWith(expect.objectContaining({ rail: "tempo", key: "tempo-moderato", testnet: true, token: expect.objectContaining({ symbol: "pathUSD", decimals: 6 }) }), undefined);
+    expect(tokenFactsProblem(lastGateToken(), "tempo")).toBe("");
   });
 });
 
@@ -164,7 +171,7 @@ describe("a copy of the client whose chain tables name chains that are not testn
     edit("budget/evm/chains.mjs", "};\n\nexport const EVM_CHAIN_KEYS", `  "gated-base": {
     label: "Gated Base", chainId: 8453, viem: "base", testnet: false,
     rpc: "https://mainnet.base.org", explorer: "https://basescan.org",
-    token: { address: "${BASE_SEPOLIA_USDC}", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
+    token: { address: "${BASE_SEPOLIA_USDC}", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" }, approveReset: false },
     legacy: [],
     gas: { symbol: "ETH", decimals: 18, isToken: false, limits: FIAT_TOKEN_GAS, minAgent: "0.000002", topUp: "0.00003" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "none", gasFaucet: "none" },
@@ -172,6 +179,8 @@ describe("a copy of the client whose chain tables name chains that are not testn
 };
 
 export const EVM_CHAIN_KEYS`);
+    // the owner settings name the chains an RPC can be set for: the copy names this one too
+    edit("src/core/owner-settings.js", '"robinhood-testnet",', '"robinhood-testnet", "gated-base",');
     edit("budget/solana/lib.mjs", "export const TESTNET = true;", "export const TESTNET = false;");
     edit("budget/tempo/lib/constants.mjs", "export const TESTNET = true", "export const TESTNET = false");
   }, 60_000);

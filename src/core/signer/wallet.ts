@@ -1,18 +1,28 @@
 // The agent side of signing. This signer holds no key and can approve nothing: it posts the
-// seller's requirement to the owner's wallet on 127.0.0.1 and waits for a human decision.
+// seller's requirement to the owner's wallet, over the wallet's private socket, and waits for a human decision.
 // Every outcome that is not a signature is a refusal with a reason, never an exception the
 // caller has to guess at — "the owner said no" is an answer, and the agent should say it.
 
-import { agentTokenPath, walletUrl } from "../home.js";
+import { lstatSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { dirname } from "node:path";
+import { Readable } from "node:stream";
+import { verifyTypedData } from "viem";
+import { authorizationTypes } from "@x402/evm";
+import { agentTokenPath, walletSocketPath, walletUrl, walletUrlFromEnvironment } from "../home.js";
 import { readBody } from "../http.js";
 import { untrustedText } from "../text.js";
-import { evmNetworkFor, networkFor } from "../chain.js";
+import { evmNetworkFor, isSameAddress, networkFor } from "../chain.js";
+import { MAX_SIGNED_LIFETIME_S } from "../rails/evm.js";
 import type { WalletRequestView, WalletStatus } from "../types.js";
-import { LOCAL_WALLET_EVM_ONLY, SignRefused, type Eip3009SignResult, type SignHooks, type SignRequest, type Signer } from "./types.js";
+import { LOCAL_WALLET_EVM_ONLY, SignRefused, type Eip3009SignRequest, type Eip3009SignResult, type SignHooks, type SignRequest, type Signer } from "./types.js";
 import { readSecretFile } from "../../wallet/keystore.js";
 
 export interface WalletSignerOptions {
-  /** Where the wallet is listening. Loopback only in this release. */
+  /**
+   * The wallet's TCP address, for a wallet started with --tcp (SUPERSTABLES_WALLET_URL). Without it the wallet is reached
+   * on its private socket in the wallet folder.
+   */
   url?: string;
   /** Bearer token for the agent-facing routes. Lets an agent ask; it never approves. */
   agentToken?: string;
@@ -20,13 +30,17 @@ export interface WalletSignerOptions {
   pollMs?: number;
   /** How long to wait for the owner before giving up on this request. */
   timeoutMs?: number;
-  /** Injected in tests; the global fetch otherwise. */
+  /** Injected in tests, for a wallet reached at `url`; the global fetch otherwise. Used only with `url` (or SUPERSTABLES_WALLET_URL): the socket has its own. */
   fetchImpl?: typeof fetch;
 }
 
 /** What the agent is told when the wallet is not there. It names the fix. */
 const WALLET_DOWN =
   "the wallet is not running or the agent token is wrong; start it with `superstables wallet serve`";
+
+/** The same, for a wallet reached on its socket. */
+const walletDownAt = (socketPath: string): string =>
+  `the wallet is not running (no socket at ${socketPath}) or the agent token is wrong; the owner starts it with \`superstables --wallet local wallet serve\` (a wallet from 0.4.0 or earlier listens on TCP only: set SUPERSTABLES_WALLET_URL=http://127.0.0.1:4411)`;
 
 const DEFAULT_POLL_MS = 500;
 /** A little longer than the wallet's own approval timeout, so the wallet decides first. */
@@ -41,12 +55,32 @@ interface WalletWire {
   url: string;
   token: () => string;
   fetchImpl: typeof fetch;
+  /** The wallet's private socket, when the wallet is reached there (the default); `url` is then only a placeholder. */
+  socketPath?: string;
+  /** Why the socket cannot be used (its path is too long); nothing is sent. */
+  socketProblem?: string;
 }
 
 function wireFor(options: WalletSignerOptions): WalletWire {
-  const fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
+  // A TCP address someone chose, for a wallet reached over SSH forwarding; otherwise the socket, where the platform has one.
+  const tcp = options.url ?? walletUrlFromEnvironment();
+  let socketPath: string | undefined;
+  let socketProblem: string | undefined;
+  if (tcp === undefined) {
+    try {
+      socketPath = walletSocketPath();
+    } catch (err) {
+      socketProblem = (err as Error).message;
+    }
+  }
+  const onSocket = socketPath !== undefined || socketProblem !== undefined;
+  const fetchImpl = onSocket
+    ? socketFetch(socketPath ?? "")
+    : options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
   return {
-    url: (options.url ?? walletUrl()).replace(/\/$/, ""),
+    url: onSocket ? "http://localhost" : (tcp ?? walletUrl()).replace(/\/$/, ""),
+    socketPath,
+    socketProblem,
     // Read late: the wallet may have been started after this signer was built.
     token: () => {
       if (options.agentToken !== undefined) return options.agentToken;
@@ -65,11 +99,90 @@ function wireFor(options: WalletSignerOptions): WalletWire {
   };
 }
 
+/** A refusal for an HTTP answer that is not ok, with its status kept as a number, not only in the text. */
+class WalletHttpError extends SignRefused {
+  constructor(
+    readonly httpStatus: number,
+    reason: string,
+    /** The request view a 409 carries, when the body was whole and said so. */
+    readonly request?: WalletRequestView,
+  ) {
+    super("invalid", reason);
+  }
+}
+
+/**
+ * Why `path` is not this user's wallet socket, or undefined when it is: a socket (not a symlink) owned by this user, in a
+ * real folder owned by this user that no other user can write to. Only someone who can write to that folder could put
+ * another socket in its place, so with these checks the token goes to this user's own wallet process. Throws ENOENT
+ * when there is no socket.
+ */
+function foreignSocket(path: string): string | undefined {
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const st = lstatSync(path);
+  if (st.isSymbolicLink()) return "it is a symlink";
+  if (!st.isSocket()) return "it is not a socket";
+  if (uid !== undefined && st.uid !== uid) return "it belongs to another user";
+  const folder = dirname(path);
+  const dir = lstatSync(folder);
+  if (dir.isSymbolicLink() || !dir.isDirectory()) return `${folder} is not a real folder`;
+  if (uid !== undefined && dir.uid !== uid) return `${folder} belongs to another user`;
+  if ((dir.mode & 0o022) !== 0) return `other users can write to ${folder}`;
+  return undefined;
+}
+
+/**
+ * A fetch that goes to the wallet's socket, after checking it is this user's (foreignSocket). Global fetch cannot reach a
+ * Unix socket without a dispatcher of its own, so this is node:http, with its answer handed back as a Response.
+ */
+function socketFetch(socketPath: string): typeof fetch {
+  return async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    let problem: string | undefined;
+    try {
+      problem = foreignSocket(socketPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") throw new SignRefused("unavailable", walletDownAt(socketPath));
+      problem = (err as Error).message;
+    }
+    if (problem) throw new SignRefused("unavailable", `${socketPath} is not this user's wallet socket (${problem}); the token was not sent`);
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    return await new Promise<Response>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          socketPath,
+          path: `${url.pathname}${url.search}`,
+          method: init.method ?? "GET",
+          headers: init.headers as Record<string, string>,
+          signal: init.signal ?? undefined,
+          timeout: HTTP_TIMEOUT_MS,
+        },
+        (res) => {
+          try {
+            const headers = new Headers();
+            for (const [name, value] of Object.entries(res.headers)) {
+              if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+            }
+            resolve(new Response(Readable.toWeb(res) as ReadableStream, { status: res.statusCode ?? 502, headers }));
+          } catch (err) {
+            res.destroy();
+            reject(err);
+          }
+        },
+      );
+      req.on("timeout", () => req.destroy(new Error("the wallet did not answer in time")));
+      req.on("error", reject);
+      req.end(typeof init.body === "string" ? init.body : undefined);
+    });
+  };
+}
+
 /**
  * One call to the wallet. Anything that means "there is no wallet here, or it will not talk
  * to me" comes back as an unavailable refusal, because that is what the agent must report.
  */
 async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  if (wire.socketProblem) throw new SignRefused("unavailable", `${wire.socketProblem}; the token was not sent`);
+  const down = wire.socketPath ? walletDownAt(wire.socketPath) : WALLET_DOWN;
   let res: Response;
   try {
     res = await wire.fetchImpl(`${wire.url}${path}`, {
@@ -83,25 +196,67 @@ async function walletRequest<T>(wire: WalletWire, method: "GET" | "POST", path: 
     });
   } catch (err) {
     if (err instanceof SignRefused) throw err;
-    throw new SignRefused("unavailable", WALLET_DOWN);
+    throw new SignRefused("unavailable", down);
+  }
+  // A wallet that is full (429) or cannot keep its audit log (503) says why, and nobody was asked: an unavailable refusal,
+  // which reopens the quote, not a refusal of this payment.
+  if (res.status === 429 || res.status === 503) {
+    const { text } = await readBody(res, 200, HTTP_TIMEOUT_MS);
+    let said = text;
+    try {
+      const error = (JSON.parse(text) as { error?: unknown }).error;
+      if (typeof error === "string") said = error;
+    } catch {
+      // cut off at 200 bytes: the raw text is shown
+    }
+    said = untrustedText(said, 200);
+    throw new SignRefused("unavailable", `the wallet refused: ${said || `HTTP ${res.status}`}`);
+  }
+  if (res.status === 403 && !wire.socketPath) {
+    // The wallet is there and the token may be right: it answers the agent on its private socket only. Fixed text, not the
+    // wallet's own: the TCP side is not authenticated, so nothing it sends is echoed.
+    const { text } = await readBody(res, 200, HTTP_TIMEOUT_MS);
+    if (/private socket/.test(text)) {
+      throw new SignRefused(
+        "unavailable",
+        "the wallet answers the agent on its private socket only: unset SUPERSTABLES_WALLET_URL, or the owner starts it with `superstables --wallet local wallet serve --tcp`",
+      );
+    }
+    throw new SignRefused("unavailable", down);
   }
   if (res.status === 401 || res.status === 403 || res.status >= 500) {
-    throw new SignRefused("unavailable", WALLET_DOWN);
+    throw new SignRefused("unavailable", down);
   }
   if (!res.ok) {
-    const { text } = await readBody(res, 200, HTTP_TIMEOUT_MS);
+    const { text } = await readBody(res, res.status === 409 ? 4096 : 200, HTTP_TIMEOUT_MS);
     const said = untrustedText(text, 200);
-    throw new SignRefused("invalid", `the wallet refused the request (HTTP ${res.status})${said ? `: ${said}` : ""}`);
+    let request: WalletRequestView | undefined;
+    if (res.status === 409) {
+      try {
+        const view = (JSON.parse(text) as { request?: WalletRequestView } | null)?.request;
+        if (view && typeof view === "object" && typeof view.status === "string") request = view;
+      } catch {
+        // not a whole JSON body: the status alone says what it says
+      }
+    }
+    throw new WalletHttpError(res.status, `the wallet refused the request (HTTP ${res.status})${said ? `: ${said}` : ""}`, request);
   }
   // more than the cap, cut off, or late: not an answer from this wallet
   const { text, end } = await readBody(res, WALLET_MAX_BYTES, HTTP_TIMEOUT_MS, WALLET_MAX_BYTES + 1);
-  if (end !== "eof") throw new SignRefused("unavailable", WALLET_DOWN);
+  if (end !== "eof") throw new SignRefused("unavailable", down);
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new SignRefused("unavailable", WALLET_DOWN);
+    throw new SignRefused("unavailable", down);
   }
 }
+
+/** What the wallet answered to a cancel: the request's view, "already closed" (409), no such route (404, a 0.4.0 wallet), or nothing usable. */
+type CancelOutcome =
+  | { kind: "answered"; view: WalletRequestView }
+  | { kind: "closed" }
+  | { kind: "unsupported" }
+  | { kind: "failed" };
 
 export class WalletSigner implements Signer {
   readonly kind = "wallet" as const;
@@ -113,6 +268,13 @@ export class WalletSigner implements Signer {
   private readonly wire: WalletWire;
   private readonly pollMs: number;
   private readonly timeoutMs: number;
+  /** Requests this signer is waiting on, so closing it can cancel them. */
+  private readonly outstanding = new Set<string>();
+  /** One cancel per request, shared by the deadline and by close(); a cancel that could not be confirmed is dropped, so close() tries again. */
+  private readonly cancels = new Map<string, Promise<CancelOutcome>>();
+  /** Requests whose cancel was not confirmed: still the wallet's to sign, so they stay in `outstanding` for close(). */
+  private readonly unconfirmed = new Set<string>();
+  private closed = false;
 
   constructor(options: WalletSignerOptions = {}) {
     this.wire = wireFor(options);
@@ -153,7 +315,8 @@ export class WalletSigner implements Signer {
     if (req.kind !== "eip3009") throw new SignRefused("invalid", LOCAL_WALLET_EVM_ONLY);
     await hooks?.beforeAsk?.();
     const deadline = Date.now() + this.timeoutMs;
-    let view = await walletRequest<WalletRequestView>(this.wire, "POST", "/requests", { sign: req });
+    // The wallet is told how long this wait is, so that it never hands out a signature after it.
+    let view = await walletRequest<WalletRequestView>(this.wire, "POST", "/requests", { sign: req, waitMs: this.timeoutMs });
 
     // The wallet decides twice before a human is involved: is this request well formed, and
     // does the owner's own policy allow it? Both answers come back on the first response.
@@ -168,35 +331,187 @@ export class WalletSigner implements Signer {
     }
     if (view.status === "pending") hooks?.onPending?.(view.id);
 
-    while (view.status !== "signed") {
-      if (Date.now() >= deadline) {
-        throw new SignRefused(
-          "expired",
-          `the wallet did not answer within ${Math.round(this.timeoutMs / 1000)} s`,
-          view.id,
-        );
+    const id = view.id;
+    this.outstanding.add(id);
+    try {
+      while (view.status !== "signed") {
+        if (this.closed) throw await this.gaveUp(id, "abandoned");
+        if (Date.now() >= deadline) throw await this.gaveUp(id, "expired");
+        await sleep(Math.max(0, Math.min(this.pollMs, deadline - Date.now())));
+        if (this.closed) throw await this.gaveUp(id, "abandoned");
+        try {
+          view = await walletRequest<WalletRequestView>(this.wire, "GET", `/requests/${encodeURIComponent(id)}`);
+          // JSON that is not a request view (null, a number) is no answer either, and must not escape as a TypeError
+          if (!view || typeof view !== "object" || typeof view.status !== "string") throw new SignRefused("unavailable", WALLET_DOWN);
+        } catch (err) {
+          // The request exists in the wallet and this wait is over without an answer (network, HTTP error, cut-off body):
+          // it is cancelled before its id is forgotten, and what is said depends on what the cancel answered.
+          throw await this.afterCancel(id, "unavailable", `lost contact with the wallet while waiting for the owner (${(err as Error).message})`);
+        }
+        if (view.status === "denied") {
+          throw new SignRefused("denied", view.reason ?? "the owner denied this payment in the wallet", view.id);
+        }
+        if (view.status === "expired") {
+          throw new SignRefused("expired", view.reason ?? "the request expired before the owner decided", view.id);
+        }
+        if (view.status === "rejected") {
+          throw new SignRefused("invalid", view.reason ?? "the wallet rejected the request", view.id);
+        }
       }
-      await sleep(Math.max(0, Math.min(this.pollMs, deadline - Date.now())));
-      view = await walletRequest<WalletRequestView>(
-        this.wire,
-        "GET",
-        `/requests/${encodeURIComponent(view.id)}`,
-      );
-      if (view.status === "denied") {
-        throw new SignRefused("denied", view.reason ?? "the owner denied this payment in the wallet", view.id);
-      }
-      if (view.status === "expired") {
-        throw new SignRefused("expired", view.reason ?? "the request expired before the owner decided", view.id);
-      }
-      if (view.status === "rejected") {
-        throw new SignRefused("invalid", view.reason ?? "the wallet rejected the request", view.id);
-      }
+      // Closed while the last answer was on its way: closed means no signature comes back, even this one.
+      if (this.closed) throw await this.gaveUp(id, "abandoned");
+    } finally {
+      if (!this.unconfirmed.has(id)) this.outstanding.delete(id);
     }
 
     if (!view.result) {
-      throw new SignRefused("invalid", "the wallet reported a signature but returned no payload", view.id);
+      throw new SignRefused("invalid", view.withheld ? (view.reason ?? "the wallet withheld this signature") : "the wallet reported a signature but returned no payload", view.id);
+    }
+    // Whatever answers on that port, the signature is checked before it is believed: it must be the payment that was asked for.
+    const problem = await resultProblem(req, view.result, Date.now());
+    if (problem) {
+      throw new SignRefused("invalid", `the wallet returned an authorization that is not the one asked for (${problem}); it was not sent`, view.id);
     }
     return { kind: "eip3009", payload: view.result.payload, signer: view.result.signer };
+  }
+
+  /** The refusal for a wait that ended without a signature, after the wallet was told to forget the request. */
+  private async gaveUp(id: string, code: "expired" | "abandoned"): Promise<SignRefused> {
+    const waited = `the wallet did not answer within ${Math.round(this.timeoutMs / 1000)} s`;
+    return this.afterCancel(id, code, code === "expired" ? waited : "the payment stopped waiting");
+  }
+
+  /**
+   * Cancels the request, then says what is known. `lead` is why the wait ended. Only a cancel the wallet answered (or a
+   * request it reports already closed) can say that nothing was signed; an answer that a signature was handed out, or no
+   * answer at all, is unknown, because a signature may have reached whoever holds the agent token.
+   */
+  private async afterCancel(id: string, code: "expired" | "abandoned" | "unavailable", lead: string): Promise<SignRefused> {
+    const outcome = await this.cancelOutcome(id);
+    if (outcome.kind === "unsupported") {
+      // A 0.4.0 wallet has no /cancel. Waiting there ended by deadline or close keeps its earlier answer; a wait lost to a
+      // failure cannot say whether the owner approved, so that one is unknown.
+      const tail = "this wallet does not know this request or cannot cancel requests (0.4.0 and earlier), so approving it there later still signs, but this payment will not be sent";
+      return code === "unavailable"
+        ? new SignRefused("unknown", `${lead}; ${tail}; whether it was signed is unknown: check \`superstables status\``, id)
+        : new SignRefused(code, `${lead}; ${tail}`, id);
+    }
+    if (outcome.kind === "failed") {
+      return new SignRefused(
+        "unknown",
+        `${lead}; the wallet could not be reached to cancel the request, so it may still sign it, or may already have: this payment will not be sent, but check \`superstables status\``,
+        id,
+      );
+    }
+    if (outcome.kind === "closed") {
+      return new SignRefused(code, `${lead}; the wallet reports the request already ended (denied, expired or rejected), so it signs nothing more`, id);
+    }
+    const answer = outcome.view;
+    // Still being signed when the cancel landed is the same as signed and not yet collected: the wallet withholds it.
+    if (answer.status === "signed" || answer.status === "approved") {
+      if (answer.status === "signed" && answer.served) {
+        return new SignRefused("unknown", "the owner approved just as the wait ended and the wallet had already handed the signature out; it may still pay: check `superstables status`", id);
+      }
+      return new SignRefused(code, "the owner approved just as the wait ended; the wallet withheld that signature, so nothing can be paid with it", id);
+    }
+    if (answer.status === "denied") return new SignRefused("denied", answer.reason ?? "the owner denied this payment in the wallet", id);
+    if (answer.status === "rejected") return new SignRefused("invalid", answer.reason ?? "the wallet rejected the request", id);
+    if (code !== "abandoned") return new SignRefused(code, `${lead}; the request was cancelled in the wallet, so approving it there now signs nothing`, id);
+    return new SignRefused(code, "the payment stopped waiting; the wallet request was cancelled", id);
+  }
+
+  /** Tells the wallet this request is no longer wanted. Once per request; undefined when the wallet did not answer in kind (an older wallet, or none). */
+  async cancel(id: string): Promise<WalletRequestView | undefined> {
+    const outcome = await this.cancelOutcome(id);
+    return outcome.kind === "answered" ? outcome.view : undefined;
+  }
+
+  private cancelOutcome(id: string): Promise<CancelOutcome> {
+    let done = this.cancels.get(id);
+    if (!done) {
+      done = walletRequest<WalletRequestView>(this.wire, "POST", `/requests/${encodeURIComponent(id)}/cancel`).then(
+        // only a status that says the request is no longer signable confirms the cancel
+        (view): CancelOutcome => (view && ["expired", "approved", "signed", "denied", "rejected"].includes(view.status) ? { kind: "answered", view } : { kind: "failed" }),
+        (err: unknown): CancelOutcome => {
+          // 404 is a wallet with no such route (0.4.0) or no such request, 409 is a request that is no longer pending or
+          // signable: an owner denial comes back as denied when the answer says so.
+          const status = err instanceof WalletHttpError ? err.httpStatus : undefined;
+          if (status === 404) return { kind: "unsupported" };
+          if (status === 409) {
+            const request = (err as WalletHttpError).request;
+            return request?.status === "denied" ? { kind: "answered", view: request } : { kind: "closed" };
+          }
+          return { kind: "failed" };
+        },
+      ).then((outcome) => {
+        if (outcome.kind === "failed") {
+          // Not confirmed: keep the id for close(), and let the next cancel ask again.
+          this.unconfirmed.add(id);
+          this.cancels.delete(id);
+        } else {
+          this.unconfirmed.delete(id);
+        }
+        return outcome;
+      });
+      this.cancels.set(id, done);
+    }
+    return done;
+  }
+
+  /** Stops every wait this signer has open, cancelling its requests in the wallet. */
+  async close(): Promise<void> {
+    this.closed = true;
+    const ids = [...this.outstanding];
+    // A cancel already in flight is shared with this call: when it fails, nobody has asked a second time yet.
+    const inFlight = ids.filter((id) => this.cancels.has(id));
+    await Promise.all(ids.map((id) => this.cancelOutcome(id)));
+    await Promise.all(inFlight.filter((id) => this.unconfirmed.has(id)).map((id) => this.cancelOutcome(id)));
+    for (const id of [...this.outstanding]) if (!this.unconfirmed.has(id)) this.outstanding.delete(id);
+  }
+}
+
+/**
+ * Whether an authorization the wallet returned is the one asked for: "" when it is, else the name of the field that is
+ * not. The recipient, the amount and the payer are the request's own, the lifetime is the ten minutes a payment is signed
+ * for, and the signature is the payer's over the token's own signing domain.
+ */
+async function resultProblem(req: Eip3009SignRequest, result: NonNullable<WalletRequestView["result"]>, nowMs: number): Promise<string> {
+  if (result.kind !== "eip3009") return "kind";
+  const { signature, authorization: auth } = result.payload ?? {};
+  const text = (value: unknown): string => (typeof value === "string" ? value : "");
+  const requirements = req.requirements as typeof req.requirements & { maxAmountRequired?: string };
+  if (!/^0x[0-9a-fA-F]{130}$/.test(text(signature))) return "signature";
+  if (typeof result.signer !== "string") return "signer";
+  const to = text(auth?.to);
+  if (!to || !isSameAddress(to, String(requirements.payTo))) return "to";
+  const from = text(auth?.from);
+  if (!from || !isSameAddress(from, result.signer)) return "from";
+  if (text(auth?.value) !== String(requirements.amount ?? requirements.maxAmountRequired)) return "value";
+  if (!/^0x[0-9a-fA-F]{64}$/.test(text(auth?.nonce))) return "nonce";
+  if (!/^\d{1,20}$/.test(text(auth?.validBefore)) || !/^\d{1,20}$/.test(text(auth?.validAfter))) return "validBefore";
+  const validBefore = BigInt(text(auth?.validBefore)) * 1000n;
+  if (validBefore <= BigInt(nowMs) || validBefore > BigInt(nowMs) + BigInt(MAX_SIGNED_LIFETIME_S + 30) * 1000n) return "validBefore";
+  const network = evmNetworkFor(String(requirements.network ?? ""));
+  if (!network) return "network";
+  try {
+    const genuine = await verifyTypedData({
+      address: result.signer as `0x${string}`,
+      domain: { name: network.usdc.eip712.name, version: network.usdc.eip712.version, chainId: network.chainId, verifyingContract: requirements.asset as `0x${string}` },
+      types: { TransferWithAuthorization: authorizationTypes.TransferWithAuthorization },
+      primaryType: "TransferWithAuthorization",
+      message: {
+        from: from as `0x${string}`,
+        to: to as `0x${string}`,
+        value: BigInt(text(auth?.value)),
+        validAfter: BigInt(text(auth?.validAfter)),
+        validBefore: BigInt(text(auth?.validBefore)),
+        nonce: text(auth?.nonce) as `0x${string}`,
+      },
+      signature: signature as `0x${string}`,
+    });
+    return genuine ? "" : "signature";
+  } catch {
+    return "signature";
   }
 }
 

@@ -50,7 +50,7 @@ describe("the EVM chain table", () => {
       expect(network.defaultRpc, network.key).toBe(b.rpc);
       expect(network.explorer, network.key).toBe(b.explorer);
       expect(network.usdc, network.key).toEqual({ address: b.token.address, decimals: b.token.decimals, eip712: b.token.domain });
-      expect(network.token, network.key).toEqual({ symbol: b.token.symbol, address: b.token.address, decimals: b.token.decimals });
+      expect(network.token, network.key).toEqual(b.token);
       expect(network.v1Name, network.key).toBe(b.legacy[0] ?? "");
       expect(network.wallet.nativeCurrency.symbol, network.key).toBe(b.gas.symbol);
       expect(network.wallet.nativeCurrency.decimals, network.key).toBe(b.gas.decimals);
@@ -165,7 +165,7 @@ describe("what the owner's wallet signs on each EVM chain", () => {
   it("offers the wallet each chain with its own currency: ETH, Arc's 18-decimal USDC, POL, SKALE's CREDIT", () => {
     for (const network of EVM_NETWORKS) {
       const facts = eip3009Step.pageFacts(record(network));
-      expect(facts, network.key).toEqual({
+      expect(facts, network.key).toMatchObject({
         chainIdHex: `0x${VECTORS[network.key].chainId.toString(16)}`,
         chainName: budget[network.key].label,
         rpcUrl: budget[network.key].rpc,
@@ -195,6 +195,8 @@ describe("reading a settlement on each EVM chain", () => {
     chain = await startFakeBaseSepolia();
     for (const network of EVM_NETWORKS) {
       const input = { transaction: tx, payer, recipient: PAY_TO, amountAtomic: "10000", nonce, network: network.caip2 };
+      // one fake serves every chain, and says which one it is each time (the identity check)
+      chain.chainId = network.chainId;
       chain.receipts.set(tx, paymentReceipt({ payer, to: PAY_TO, value: 10000n, nonce, token: network.usdc.address }));
       expect(await checkSettlement(input, { rpcUrl: chain.url }), network.key).toEqual({ chain: "verified" });
       // The same logs from another chain's USDC contract are not this payment.

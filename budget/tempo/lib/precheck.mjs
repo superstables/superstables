@@ -2,6 +2,9 @@
 // nothing was signed, pulled or sent.
 import { CHAIN_ID, TOKEN_ADDRESS, TOKEN_DECIMALS, TOKEN_LABEL } from './constants.mjs'
 
+/** mppx's payment-memo tag: the first 4 bytes of keccak256("mpp"). Every purchase memo starts with it (chain.ts mppMemo). */
+export const MPP_MEMO_TAG = '0xef1ed712'
+
 const fromBase = (n) => {
   const whole = n / 10n ** BigInt(TOKEN_DECIMALS)
   const frac = (n % 10n ** BigInt(TOKEN_DECIMALS)).toString().padStart(TOKEN_DECIMALS, '0').replace(/0+$/, '')
@@ -81,6 +84,9 @@ export function precheckCharge(request, opts) {
   for (const s of splits) {
     if (BigInt(s.amount) === 0n) return refuse('bad_split', `the payment split to ${s.recipient} is 0`)
     if (s.memo != null && !/^0x[0-9a-fA-F]{64}$/.test(String(s.memo))) return refuse('bad_split', `the payment split to ${s.recipient} names a memo that is not 32 bytes of hex`)
+    // A split memo in mppx's own format could be another purchase's memo: a transfer carrying it would read as that purchase's
+    // payment. This client's purchases never ask for one, so a seller's split never names one.
+    if (s.memo != null && String(s.memo).slice(0, 10).toLowerCase() === MPP_MEMO_TAG) return refuse('bad_split', `the payment split to ${s.recipient} carries a payment memo in the format this client uses to find purchases, so it could be counted as another purchase's payment`)
     splitTotal += BigInt(s.amount)
   }
   if (splitTotal >= amount) return refuse('bad_split', `the payment splits add up to ${fromBase(splitTotal)} ${TOKEN_LABEL}, not less than the price ${fromBase(amount)} ${TOKEN_LABEL}`)
@@ -124,16 +130,47 @@ export function precheckChallenge(challenge, nowMs = Date.now()) {
 /**
  * Whether an access key can cover `amount`, read before signing. Null when it can (or has no limit); otherwise the words for the
  * refusal, with the end of the current period when the limit refills before the key expires. Pure: `key` is what readKey returned.
+ * `maxFee` is the most the network fee can be when the owner's account pays it (0n when the seller pays): the fee is paid in the
+ * limit's own token and counts against the limit, and the chain holds back a reservation larger than the fee finally charged.
  * @param {{ spendPolicy: string, remaining: bigint, periodEnd: number, expiry?: number }} key
  * @param {bigint} amount
  * @param {number} [nowMs]
+ * @param {bigint} [maxFee]
  * @returns {string | null}
  */
-export function budgetShortfall(key, amount, nowMs = Date.now()) {
-  if (key.spendPolicy === 'unlimited' || key.remaining >= amount) return null
+export function budgetShortfall(key, amount, nowMs = Date.now(), maxFee = 0n) {
+  if (key.spendPolicy === 'unlimited' || key.remaining >= amount + maxFee) return null
   const refills = key.periodEnd && key.periodEnd * 1000 > nowMs && (!key.expiry || key.periodEnd < key.expiry)
   const refill = refills ? `; the current period ends at ${new Date(key.periodEnd * 1000).toISOString()}, when the limit refills` : ''
-  return `price ${fromBase(amount)} ${TOKEN_LABEL} exceeds the remaining budget ${fromBase(key.remaining)} ${TOKEN_LABEL}${refill}`
+  const fee = maxFee > 0n ? ` plus up to ${fromBase(maxFee)} ${TOKEN_LABEL} for the network fee` : ''
+  return `price ${fromBase(amount)} ${TOKEN_LABEL}${fee} exceeds the remaining budget ${fromBase(key.remaining)} ${TOKEN_LABEL}${refill}`
+}
+
+/**
+ * Whether the owner's account pays the network fee. The mode decides, not the challenge alone: a push payment is always sent
+ * by the client, so a seller's `feePayer` claim does not sponsor it. Only a pull payment with a fee payer is sponsored.
+ * @param {string} mode
+ * @param {{ feePayer?: unknown }} details
+ */
+export function ownerPaysFee(mode, details) {
+  return mode === 'push' || !details?.feePayer
+}
+
+/**
+ * A ceiling for a payment's network fee, in base units: the estimated gas of a plain transfer (with a 1.2 margin) times 2.5
+ * times the node's gas price, rounded up. Measured on Moderato: the fee is ceil(gasUsed * effectiveGasPrice / 1e12), and the
+ * chain reserves ceil(gasLimit * effectiveGasPrice / 1e12) against the key's limit before it runs: 42 units (push) or 45
+ * (pull) for a payment that finally costs 33. The estimate is of a plain call, which carries no access-key check, so it sits
+ * below the transaction's gas limit; what keeps the bound above the reservation is its 3x headroom over gas times price.
+ * Each transfer is estimated as its own call, so a payment with many splits is over-refused; that is the safe side.
+* @param {bigint} gas
+ * @param {bigint} gasPrice
+ * @returns {bigint}
+ */
+export function maxFeeUnits(gas, gasPrice) {
+  const top = gas * 12n * gasPrice * 5n
+  const bottom = 10n * 2n * 10n ** 12n
+  return (top + bottom - 1n) / bottom
 }
 
 /** transferWithMemo(address,uint256,bytes32): what an MPP tempo.charge payment calls on the token. */

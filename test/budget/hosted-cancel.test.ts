@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { HostedApprovals, HostedRefusal } from "../../budget/hosted.js";
 import { cancelSiteRequest } from "../../budget/site.mjs";
@@ -15,6 +16,10 @@ import type { TestServer } from "../helpers/servers.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
+// a grant is asked for only when the endpoints agree, at a final block, that the allowance is 0: a copy names the fake twice
+let tree: EndpointTree;
+beforeAll(() => { tree = endpointTree(); });
+afterAll(() => tree.close());
 const KEY = `0x${"11".repeat(32)}` as const;
 const AGENT = privateKeyToAccount(KEY).address;
 const OWNER = evmOwner("22");
@@ -1077,7 +1082,8 @@ describe("through the CLI", () => {
       const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: rpc.url };
       delete env.SUPERSTABLES_SITE;
       delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
-      const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+      tree.set({ "base-sepolia": [{ url: rpc.url, operator: "fake-a" }, { url: `${rpc.url}/`, operator: "fake-b" }] });
+      const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (c) => (stdout += String(c)));

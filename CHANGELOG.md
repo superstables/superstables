@@ -51,10 +51,13 @@ For scripts: Tempo `budget buy` has new refusal reasons, all given before anythi
 
 This upgrade doesn't repair Tempo purchase journals written by earlier versions. If the client sent the payment itself and no expiry was recorded, the purchase may stay `unknown`. A journal with neither a payment memo nor a transaction hash, for example from a seller challenge that named no realm, now stays `unknown`, and `budget reconcile` no longer reports it `not_found` once its expiry passes. Don't pay again on that basis.
 
+Owner actions are now reported as final only once the chain says so. A grant, revoke, gas transfer or recover revoke is `landed` (exit 0, `final: false`) until its block is final on that chain, and `budget status` names the last owner action and whether it is final. A new grant waits for the previous revoke to be final. `budget setup --grant` on an agent key that already exists now links first when no owner is on record for it: it refuses, saying to set up first (link), then grant, and it grants only when it can read, at a final block, that no older allowance is live. A key created in the same setup is granted as before.
+
 ### Added
 
 - `superstables budget unlock --rail evm --agent-key` lets the owner clear the lock that EVM purchases on one agent key and chain take turns on (see Upgrade and recovery).
 - SDK exports `toAtomicExact`, `fromAtomicString`, `CAP_DECIMALS`, `capUnits` and `policyAmount`, and `Records.spentTodayAtomic` and `Records.skippedLines`.
+- `superstables owner settings sign` has the owner's wallet sign the owner settings, the spend policy and the retired agent keys; the local wallet's page has a card that does the same with its key. Signed settings apply only to approvals made with the wallet that signed them: `pay` and the local wallet refuse a policy file that differs from the signed one until the owner signs again, and the approval page shows who signed.
 
 ### Changed
 

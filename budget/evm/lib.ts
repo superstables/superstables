@@ -4,7 +4,7 @@
 //   owner  approve(agent, cap)               (setBudget), approve(agent, 0) (revokeBudget)
 //   agent  USDC.transferFrom(owner, agent, price), then pays the seller with its own EIP-3009 signature
 //   agent  USDC.transferFrom(owner, owner, n)  (selfRevoke): lowers its own allowance without moving money
-import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import {
   createPublicClient, createWalletClient, http, parseAbi, encodeFunctionData, formatUnits, parseUnits, keccak256, isAddress,
@@ -13,11 +13,16 @@ import {
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { CFG, type GasOp } from "./chains.ts";
 import { EVM_CHAINS } from "./chains.mjs";
-import { EVM_RPC_MAX_BYTES, cappedRpcFetch } from "../rpc.mjs";
-import { agentKeyFile, publicFile, opsDir } from "../paths.mjs";
+import { EVM_RPC_MAX_BYTES, cappedRpcFetch, budgetCall, budgetVerdictSet, customRpc, evmEnvNameSet } from "../rpc.mjs";
+import { HOME, agentKeyFile, ensurePrivateDir, publicFile, opsDir } from "../paths.mjs";
+import { readAgentSecret } from "../os-keychain.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
+import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
+import { noteBinding } from "../page-facts.mjs";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
+import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
+import { finalityFor, finalWords } from "../../src/core/finality-policy.js";
 
 export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
@@ -128,11 +133,25 @@ export function agentFileValues(): { env: Record<string, string>; problem?: unde
   }
 }
 /** The agent key file. Every reader of the key goes through here, so each one refuses a file other users can read. */
-export const agentEnv = () =>
+export const agentEnv = (): Record<string, string> => {
   // Mode 600 is set when the file is written, but that is a fact about that moment: a restore, a `cp` without -p, or
   // an editor can leave it readable by other users, and every signature from here on (a purchase, or a hosted request
   // to the site) would then be made with a key this machine no longer keeps to itself. Refuse rather than re-tighten.
-  parseSecretLines(AGENT_ENV, "the agent key file");
+  const env = parseSecretLines(AGENT_ENV, "the agent key file");
+  const store = env.B4_AGENT_KEY_STORE;
+  if (store === undefined) return env;
+  // The file names the OS keychain instead of holding the key: the key is read from there, for the caller that signs.
+  const refuse = (message: string) => Object.assign(new Error(message), { code: UNSAFE_SECRET_FILE });
+  if (store !== "os-keychain") throw refuse(`the agent key file ${AGENT_ENV} names an unknown key store "${store.slice(0, 40)}"`);
+  if (env.B4_AGENT_KEY) throw refuse(`the agent key file ${AGENT_ENV} names the keychain and also holds a key`);
+  if (!env.B4_AGENT_ADDRESS) throw refuse(`the agent key file ${AGENT_ENV} names the keychain but no agent address`);
+  try {
+    env.B4_AGENT_KEY = readAgentSecret("evm", env.B4_AGENT_ADDRESS);
+  } catch (err) {
+    throw refuse(`${(err as Error).message} (the agent key file ${AGENT_ENV} says it is there)`);
+  }
+  return env;
+};
 export const publicEnv = () => parseLines(PUBLIC_ENV);
 export function need(env: Record<string, string>, k: string, file: string): string {
   if (!env[k]) {
@@ -143,7 +162,7 @@ export function need(env: Record<string, string>, k: string, file: string): stri
 }
 /** Set B4_* keys in the public state file (no secrets), keeping every other line. Atomic. */
 export function writePublic(updates: Record<string, string>, drop: string[] = []) {
-  mkdirSync(dirname(PUBLIC_ENV), { recursive: true, mode: 0o700 });
+  ensurePrivateDir(dirname(PUBLIC_ENV), { root: HOME });
   const lines = existsSync(PUBLIC_ENV) ? readFileSync(PUBLIC_ENV, "utf8").split("\n").filter((l) => l !== "") : [`# ${CFG.label} public state (no secrets). B4_* = plain approve path.`];
   const seen = new Set<string>();
   const out = lines
@@ -369,8 +388,10 @@ export async function agentGasFor(from: Address, to: Address, data: Hex, op: Gas
 // ---- sending ----
 /** Refuse to sign anything when the RPC does not answer for the chain in chains.ts (a mainnet RPC behind a testnet name, a wrong URL). Read once. */
 let rpcChecked = false;
+/** An RPC URL as an agent may see it: the host only. The path, query and credentials of a URL can hold an access key. */
+export const rpcHost = (url: string): string => { try { return new URL(url).host; } catch { return "(unreadable URL)"; } };
 export async function assertRpcChain() {
-  const gate = chainGate({ rail: "evm", key: CFG.key, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet }, chainGateSettings());
+  const gate = chainGate({ rail: "evm", key: CFG.key, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.testnet, token: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.token }, chainGateSettings());
   if (gate) {
     console.error(`REFUSED: ${gate}. Nothing was signed or sent.`);
     process.exit(3);
@@ -378,11 +399,137 @@ export async function assertRpcChain() {
   if (rpcChecked) return;
   const id = Number(await retry(() => publicClient.request({ method: "eth_chainId" })));
   if (id !== CFG.chainId) {
-    console.error(`REFUSED: the RPC ${RPC} answers chain id ${id}, not ${CFG.chainId} (${CFG.label}). Nothing was signed or sent.`);
+    console.error(`REFUSED: the RPC ${rpcHost(RPC)} answers chain id ${id}, not ${CFG.chainId} (${CFG.label}). Nothing was signed or sent.`);
     process.exit(3);
   }
   rpcChecked = true;
 }
+
+/**
+ * The chain-id check of a command that only reads (read, reconcile): the same as assertRpcChain without the chain gate, which the
+ * load-time gate already ran. A wrong chain exits 3 with nothing read from it.
+ */
+let readChainChecked = false;
+/**
+ * Why the RPC read cannot be used for this chain, in words, or "" when it answers the pinned chain id or does not answer at all
+ * (one attempt, no retries: an RPC that does not answer is not a wrong chain, and no verdict rests on this endpoint without the
+ * engine's own identity check). Only a 0x quantity equal to the pinned id passes; anything else that answered ("zz", "0x", a
+ * decimal string) is not this chain.
+ */
+export async function readChainProblem(): Promise<string> {
+  let raw: unknown;
+  try { raw = await budgetCall(RPC, "eth_chainId", []); } catch { return ""; }
+  const id = typeof raw === "string" && /^0x[0-9a-f]+$/i.test(raw) ? Number(BigInt(raw)) : NaN;
+  if (id === CFG.chainId) return "";
+  const shown = Number.isNaN(id) ? "an unreadable chain id" : `chain id ${id}`;
+  return `the RPC ${rpcHost(RPC)} answers ${shown}, not ${CFG.chainId} (${CFG.label}). Nothing was read from another chain`;
+}
+/** What to do about a wrong-chain RPC: name the variable that is actually set, or the owner's settings when the RPC is the owner's. */
+export function wrongChainNext(): string {
+  const set = evmEnvNameSet(CFG.key);
+  return set ? `check ${set}, or unset it` : `the owner's RPC for ${CFG.key} answers another chain: ask the owner to fix it with \`superstables owner settings rpc ${CFG.key} <url>\` in the owner's own terminal`;
+}
+export async function assertReadChain(command: string) {
+  if (readChainChecked || rpcChecked) return;
+  const reason = await readChainProblem();
+  if (reason) {
+    console.error(`REFUSED: ${reason}.`);
+    process.exit(emit(command, 3, { state: "refused_precheck", reason, next: wrongChainNext() }));
+  }
+  readChainChecked = true;
+}
+
+// ---- verdicts that need agreement ----
+// A verdict that lets the agent pay again or reads as "revoked" is believed only when the configured endpoints, run by different
+// operators, show the same final block and the same value there (src/core/rpc-quorum.mjs). Every read below is bound to the
+// compared block by its hash, and none of them throws: a failure is the engine's { agreed: false } with the reason in words.
+/**
+ * The engine's words for a failed agreement. A set that could not be built at all (an RPC variable the owner's settings do not
+ * allow, an unreadable settings file) says why in the refusal's own words, which the engine keeps as `reason`.
+ */
+export const agreementWords = (failed: Parameters<typeof engineWords>[0] & { reason?: string }): string =>
+  failed.why === "unreadable" && failed.reason && !failed.left?.length ? endpointSetErrorWords(failed.reason, evmEnvNameSet(CFG.key) ?? undefined) : engineWords(failed);
+/** The endpoints that decide a verdict on this chain. */
+export const verdictSet = () => budgetVerdictSet(CFG.key, customRpc("evm", CFG.key));
+type Agreed<T> = Awaited<ReturnType<typeof agreeAtFinalEvm>> & { value?: T };
+const agree = (read: (url: string, hexF: string, hash: string) => Promise<unknown>, atLeast?: bigint) =>
+  agreeAtFinalEvm({ set: verdictSet(), call: budgetCall, chainId: CFG.chainId, finality: finalityFor("evm", CFG.key), read, atLeast });
+const callAt = (data: Hex) => (url: string, _hexF: string, hash: string) => budgetCall(url, "eth_call", [{ to: USDC, data }, { blockHash: hash }]);
+
+/** allowance(owner, spender) at an agreed final block. `atLeast`: the block an allowance of 0 has to be proven at or after. */
+export async function allowanceAgreed(owner: Address, spender: Address, atLeast?: bigint): Promise<Agreed<bigint>> {
+  const data = encodeFunctionData({ abi: erc20Abi, functionName: "allowance", args: [owner, spender] });
+  return agree(async (...a) => BigInt(String(await callAt(data)(...a))), atLeast);
+}
+/** authorizationState(authorizer, nonce) at an agreed final block (true: used or cancelled). `atLeast` for an "unused". */
+export async function authorizationStateAgreed(authorizer: Address, nonce: Hex, atLeast?: bigint): Promise<Agreed<boolean>> {
+  const data = encodeFunctionData({ abi: erc20Abi, functionName: "authorizationState", args: [authorizer, nonce] });
+  return agree(async (...a) => BigInt(String(await callAt(data)(...a))) !== 0n, atLeast);
+}
+
+const isHash = (v: unknown) => typeof v === "string" && /^0x[0-9a-fA-F]{64}$/.test(v);
+/** What one endpoint says about the block a transaction is in, as plain data: null (not mined), pending, later than F, or off the chain. */
+async function placed(url: string, number: unknown, hash: unknown, hexF: string): Promise<"ok" | { state: "pending" | "later" | "off-chain" }> {
+  if (number === null || number === undefined || hash === null || hash === undefined) return { state: "pending" };
+  if (typeof number !== "string" || !/^0x[0-9a-fA-F]+$/.test(number) || !isHash(hash)) throw new Error("not a placement");
+  if (BigInt(number) > BigInt(hexF)) return { state: "later" };
+  const b: any = await budgetCall(url, "eth_getBlockByNumber", [number, false]);
+  if (!b || typeof b.hash !== "string" || b.hash.toLowerCase() !== String(hash).toLowerCase()) return { state: "off-chain" };
+  return "ok";
+}
+
+/**
+ * A transaction receipt at an agreed final block: null when no endpoint has one, { state } when it is pending, later than the
+ * agreed block or in a block that is not the chain's, else { status, blockNumber, blockHash, from, to, logs } with the token's
+ * own logs. `atLeast` for a "no receipt" verdict.
+ */
+export async function receiptAgreed(hash: Hex, atLeast?: bigint): Promise<Agreed<any>> {
+  return agree(async (url, hexF) => {
+    const r: any = await budgetCall(url, "eth_getTransactionReceipt", [hash]);
+    if (r === null || r === undefined) return null;
+    if (typeof r !== "object" || typeof r.transactionHash !== "string" || r.transactionHash.toLowerCase() !== hash.toLowerCase()) throw new Error("not this receipt");
+    const where = await placed(url, r.blockNumber, r.blockHash, hexF);
+    if (where !== "ok") return where;
+    const logs = (Array.isArray(r.logs) ? r.logs : []).filter((l: any) => typeof l?.address === "string" && l.address.toLowerCase() === USDC.toLowerCase()).map((l: any) => ({ topics: l.topics, data: l.data }));
+    return { status: r.status, blockNumber: r.blockNumber, blockHash: r.blockHash, from: r.from, to: r.to, logs };
+  }, atLeast);
+}
+/** A transaction (its sender and nonce) at an agreed final block: null, { state } as for a receipt, or { from, nonce, blockNumber, blockHash }. */
+export async function txAgreed(hash: Hex, atLeast?: bigint): Promise<Agreed<any>> {
+  return agree(async (url, hexF) => {
+    const t: any = await budgetCall(url, "eth_getTransactionByHash", [hash]);
+    if (t === null || t === undefined) return null;
+    if (typeof t !== "object" || typeof t.hash !== "string" || t.hash.toLowerCase() !== hash.toLowerCase()) throw new Error("not this transaction");
+    const where = await placed(url, t.blockNumber, t.blockHash, hexF);
+    if (where !== "ok") return where;
+    return { from: t.from, nonce: t.nonce, blockNumber: t.blockNumber, blockHash: t.blockHash };
+  }, atLeast);
+}
+
+/**
+ * Whether the block a transaction landed in is final on this chain, as the endpoints agree: the receipt read at the agreed final
+ * block names the block hash the first read saw, and its block is at or below that final block. A read that does not agree, a block
+ * not yet final, a missing endpoint or an unreadable answer is `final: false`: this never says final on a doubt, and never throws.
+ * `finalBlock` is the agreed final block when the read agreed.
+ */
+export async function finalityOf(hash: Hex, landed: { blockNumber: bigint | string; blockHash?: string }): Promise<{ landed: true; final: boolean; finalBlock?: bigint }> {
+  try {
+    const block = BigInt(landed.blockNumber);
+    const got = await receiptAgreed(hash, block);
+    if (!got.agreed) return { landed: true, final: false };
+    const v: any = got.value;
+    if (!v || typeof v !== "object" || v.state !== undefined || typeof v.blockHash !== "string") return { landed: true, final: false, finalBlock: got.block.number };
+    const sameHash = landed.blockHash === undefined || v.blockHash.toLowerCase() === String(landed.blockHash).toLowerCase();
+    return { landed: true, final: sameHash && BigInt(v.blockNumber) <= got.block.number, finalBlock: got.block.number };
+  } catch {
+    return { landed: true, final: false };
+  }
+}
+
+/** " (usually about N minutes)" when the chain's typical time is known, else "". */
+export const usuallyWords = (): string => { const w = finalWords("evm", CFG.key); return w ? ` (usually ${w})` : ""; };
+/** "; that usually takes about N minutes" when the chain's typical time is known, else "". */
+export const thatTakes = (): string => { const w = finalWords("evm", CFG.key); return w ? `; that usually takes ${w}` : ""; };
 
 /** Total fee a receipt paid: execution fee plus the L1 data fee Base adds (not in gasUsed; Arc has none). */
 export function feeOf(r: any): bigint {
@@ -404,7 +551,7 @@ export async function sendNative(w: Wallet, to: Address, value: bigint, label: s
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
   if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber });
-  return { hash, feeWei: feeOf(r) };
+  return { hash, blockNumber: r.blockNumber, blockHash: r.blockHash as string, feeWei: feeOf(r) };
 }
 /** `agent`: an agent transaction (selfRevoke, sweep): its gas is checked first (agentGasFor), and it is signed with that gas and fee. */
 export async function send(w: Wallet, to: Address, data: Hex, label: string, agent?: { op: GasOp; then?: GasOp[] }) {
@@ -415,7 +562,7 @@ export async function send(w: Wallet, to: Address, data: Hex, label: string, age
   console.log(`${label}: ${r.status} ${tx(hash)}`);
   await sleep(3500);
   if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber });
-  return { hash, blockNumber: r.blockNumber, feeWei: feeOf(r) };
+  return { hash, blockNumber: r.blockNumber, blockHash: r.blockHash as string, feeWei: feeOf(r) };
 }
 /**
  * Sign the transaction locally, hand its hash to `onHash` (the caller writes it to the operation journal), and only
@@ -508,7 +655,9 @@ export async function escrowCtx() {
 // ---- self revoke (the agent lowers its own allowance without moving money) ----
 // transferFrom(owner, owner, n) spends n of the agent's allowance and moves n from the owner to the owner. It needs the owner's
 // balance to be at least n, so n = min(remaining allowance, owner balance); whatever is left is reported.
-export type SelfRevoke = { state: "nothing" | "revoked" | "partial" | "blocked"; before: bigint; after: bigint; used: bigint; ownerBalance: bigint; tx?: Hex; note: string };
+// `block` and `final` say where the transaction is and whether the chain made it final: final only when its block is final on the
+// chain's rule and the endpoints agree the allowance is 0 at a final block at or after it (as the owner's revoke is judged).
+export type SelfRevoke = { state: "nothing" | "revoked" | "partial" | "blocked"; before: bigint; after: bigint; used: bigint; ownerBalance: bigint; tx?: Hex; block?: bigint; final?: boolean; note: string };
 export async function selfRevokeCore(w: Wallet, owner: Address, log: (s: string) => void = console.log): Promise<SelfRevoke> {
   const agent = w.account.address;
   const before = await allowanceOf(owner, agent);
@@ -520,8 +669,45 @@ export async function selfRevokeCore(w: Wallet, owner: Address, log: (s: string)
   const data = encodeFunctionData({ abi: erc20Abi, functionName: "transferFrom", args: [owner, owner, n] });
   const sent = await send(w, USDC, data, "selfRevoke transferFrom(owner, owner)", { op: "selfRevoke" });
   const after = await readUntil(() => allowanceOf(owner, agent), (v) => v === before - n);
+  let final = false;
+  if (after === 0n) {
+    const fin = await finalityOf(sent.hash, { blockNumber: sent.blockNumber, blockHash: sent.blockHash });
+    const at = await allowanceAgreed(owner, agent, sent.blockNumber);
+    final = fin.final && at.agreed && at.value === 0n;
+  }
   return {
-    state: after === 0n ? "revoked" : "partial", before, after, used: n, ownerBalance, tx: sent.hash,
+    state: after === 0n ? "revoked" : "partial", before, after, used: n, ownerBalance, tx: sent.hash, block: sent.blockNumber, final,
     note: after === 0n ? "allowance is 0" : `owner balance covered only ${usdc(n)} ${SYM}; ${usdc(after)} ${SYM} of allowance remains. The owner revokes the rest`,
   };
+}
+
+// ---- the owner plans: grant, fund-agent, recover ----
+/**
+ * The public addresses for a command that builds an owner plan (grant, fund-agent, recover). Before it returns, the owner's setup
+ * signature in the public file must name this agent address for the owner on record, the address must be the agent key on this
+ * machine when that key file is here, and it must not be retired (../owner-binding.mjs). Otherwise the command ends here with exit 3,
+ * before any page, request or send. A public file from before the signature was kept goes on, with one warning line on stderr, on a
+ * testnet only. `retiredOk` skips the retired list: only recover sets it, because returning a retired key's funds to the signed owner is
+ * what `budget rotate` needs; the key file and signature checks still apply.
+ */
+export async function ownerPlanCtx({ retiredOk = false }: { retiredOk?: boolean } = {}): Promise<Pub> {
+  const pub = readCtx();
+  let keyAgent: string | null = null;
+  if (existsSync(AGENT_ENV)) {
+    const file = agentFileValues();
+    if (file.problem !== undefined) return refusePlan(pub, file.problem);
+    const key = file.env.B4_AGENT_KEY;
+    if (!key) return refusePlan(pub, `${AGENT_ENV} has no B4_AGENT_KEY`);
+    try { keyAgent = privateKeyToAccount(key as Hex).address; } catch { return refusePlan(pub, `${AGENT_ENV} holds a B4_AGENT_KEY that is not a key`); }
+  }
+  const b = await agentBinding("evm", { owner: pub.owner, agent: pub.agent, lines: publicEnv() }, { keyAgent, file: PUBLIC_ENV, retiredOk, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet === true });
+  if (b.state === "refused") return refusePlan(pub, b.problem);
+  noteBinding(b); // the page this plan opens says whether the owner signed this agent
+  if (b.state === "legacy") console.error(legacyWarning("evm", PUBLIC_ENV, pub.agent, `${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}${hostedFlags(publicEnv())}`));
+  return pub;
+}
+function refusePlan(pub: Pub, problem: string): never {
+  console.log(`REFUSED: ${problem}. Nothing was asked or sent.`);
+  const chainFlag = CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`;
+  process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 3, { state: "refused_precheck", reason: problem, agent: pub.agent, next: `check ${PUBLIC_ENV}: run superstables budget setup --rail evm${chainFlag}${hostedFlags(publicEnv())} where the agent key is, to record the owner's signature again. The owner can still end the allowance from any machine: superstables budget revoke --rail evm${chainFlag}` }));
 }

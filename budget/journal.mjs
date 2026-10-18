@@ -1,20 +1,23 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
+import { HOME, ensurePrivateDir } from './paths.mjs';
 
 function syncDirectory(path) {
   const fd = openSync(path, 'r');
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
+/**
+ * Makes `path` a private folder of this user (src/core/private-dir.mjs: a real folder, not writable by others, every missing
+ * one created 0700, checked before anything is written into it), and flushes each folder it created and its parent so the
+ * new names survive a crash. Throws an Error with code UNSAFE_PRIVATE_DIR naming the first folder that is not private.
+ */
 export function durableDirectory(path) {
-  if (existsSync(path)) return;
-  const parent = dirname(path);
-  durableDirectory(parent);
-  try { mkdirSync(path, { mode: 0o700 }); }
-  catch (err) { if (err.code !== 'EEXIST') throw err; }
-  syncDirectory(path);
-  syncDirectory(parent);
+  for (const dir of ensurePrivateDir(path, { root: HOME })) {
+    syncDirectory(dir);
+    syncDirectory(dirname(dir));
+  }
 }
 
 /** Return only after both the JSON contents and its directory entry survive power loss. */

@@ -55,6 +55,8 @@ export interface FakeEvm {
   logs: Log[];
   rpcLog: { method: string; params: any[] }[];
   sentRaw: { from: string; to: string; data: string; hash: string; nonce: number; status: string }[];
+  /** approve(spender, v > 0) reverts while the allowance is above 0 (a USDT-style token) */
+  approveReset?: boolean;
   /** hooks a test sets */
   hook?: (method: string, params: any[]) => { result?: unknown; error?: { code: number; message: string; data?: unknown } } | undefined;
   /** drop sendRawTransaction without mining (returns hash) */
@@ -71,10 +73,23 @@ export interface FakeEvm {
   settle(auth: { from: string; to: string; value: string | bigint; validAfter: string | bigint; validBefore: string | bigint; nonce: Hex }, sig: Hex): Promise<{ hash: string }>;
   advance(seconds: number): void;
   now(): number;
+  /** Mine a block with no transaction: it keeps a copy of the state as it is now, which eth_call at that block reads later. */
+  mineEmpty(): void;
+  /** How many blocks the `finalized` tag trails the head (default 0). Settable at any time. */
+  finalizedLag: number;
+  /** A second server over this chain's state and blocks (another operator): its own `hook` can lie per method. */
+  mirror(): Promise<FakeMirror>;
+  close(): Promise<void>;
+}
+export interface FakeMirror {
+  url: string;
+  port: number;
+  rpcLog: { method: string; params: any[] }[];
+  hook?: FakeEvm["hook"];
   close(): Promise<void>;
 }
 
-export type FakeEvmOpts = { port?: number; chainId?: number; usdc?: Address; domain?: { name: string; version: string }; gasIsToken?: boolean };
+export type FakeEvmOpts = { port?: number; chainId?: number; usdc?: Address; domain?: { name: string; version: string }; gasIsToken?: boolean; finalizedLag?: number };
 
 export async function startFakeEvm(opts: FakeEvmOpts = {}): Promise<FakeEvm> {
   const CHAIN_ID = opts.chainId ?? 84532;
@@ -125,7 +140,9 @@ export async function startFakeEvm(opts: FakeEvmOpts = {}): Promise<FakeEvm> {
       case "version": return enc("version", DOMAIN.version);
       case "DOMAIN_SEPARATOR": return enc("DOMAIN_SEPARATOR", DOMAIN_SEPARATOR);
       case "authorizationState": return enc("authorizationState", s.used.has(key(a[0], a[1])));
-      case "approve": s.allow.set(key(from, a[0]), a[1]); emit([T_APPROVAL, topicAddr(from), topicAddr(a[0])], pad(toHex(a[1]), { size: 32 })); return enc("approve", true);
+      case "approve":
+        if ((fake as FakeEvm).approveReset && a[1] > 0n && (s.allow.get(key(from, a[0])) ?? 0n) > 0n) throw new Error("revert: approve from a live allowance");
+        s.allow.set(key(from, a[0]), a[1]); emit([T_APPROVAL, topicAddr(from), topicAddr(a[0])], pad(toHex(a[1]), { size: 32 })); return enc("approve", true);
       case "transfer": move(from, a[0], a[1]); return enc("transfer", true);
       case "transferFrom": {
         const k = key(a[0], from);
@@ -155,20 +172,23 @@ export async function startFakeEvm(opts: FakeEvmOpts = {}): Promise<FakeEvm> {
     const n = prev.number + 1n;
     const ts = Math.max(now(), prev.timestamp + 1);
     const blockHash = keccak256(toBytes(`block:${n}:${txHash}:${Math.random()}`));
-    const b = { number: n, hash: blockHash, timestamp: ts, txs: [txHash], parent: prev.hash };
+    const b: any = { number: n, hash: blockHash, timestamp: ts, txs: txHash ? [txHash] : [], parent: prev.hash };
     blocks.push(b);
+    b.state = clone(st);
     const lgs: Log[] = txLogs.map((l, i) => ({ address: USDC_ADDR, topics: l.topics, data: l.data, blockNumber: hex(n), blockHash, transactionHash: txHash, logIndex: hex(i), transactionIndex: "0x0", removed: false }));
     logs.push(...(ok ? lgs : []));
-    receipts.set(lc(txHash), {
-      transactionHash: txHash, transactionIndex: "0x0", blockHash, blockNumber: hex(n), from, to, cumulativeGasUsed: hex(GAS_USED), gasUsed: hex(GAS_USED),
-      effectiveGasPrice: hex(GAS_PRICE), contractAddress: null, logs: ok ? lgs : [], logsBloom: "0x" + "00".repeat(256), status: ok ? "0x1" : "0x0", type: "0x2",
-    });
-    txs.set(lc(txHash), { hash: txHash, from, to, input: data, nonce: hex(nonce), blockHash, blockNumber: hex(n), transactionIndex: "0x0", value: "0x0", gas: hex(200000), gasPrice: hex(GAS_PRICE), type: "0x2" });
+    if (txHash) {
+      receipts.set(lc(txHash), {
+        transactionHash: txHash, transactionIndex: "0x0", blockHash, blockNumber: hex(n), from, to, cumulativeGasUsed: hex(GAS_USED), gasUsed: hex(GAS_USED),
+        effectiveGasPrice: hex(GAS_PRICE), contractAddress: null, logs: ok ? lgs : [], logsBloom: "0x" + "00".repeat(256), status: ok ? "0x1" : "0x0", type: "0x2",
+      });
+      txs.set(lc(txHash), { hash: txHash, from, to, input: data, nonce: hex(nonce), blockHash, blockNumber: hex(n), transactionIndex: "0x0", value: "0x0", gas: hex(200000), gasPrice: hex(GAS_PRICE), type: "0x2" });
+    }
     return b;
   }
 
-  async function runTx(from: string, to: string | null, data: Hex, value: bigint, commit: boolean, nonce?: number): Promise<{ ok: boolean; ret: Hex; err?: string; logs: { topics: Hex[]; data: Hex }[]; s: State }> {
-    const s = commit ? st : clone(st);
+  async function runTx(from: string, to: string | null, data: Hex, value: bigint, commit: boolean, nonce?: number, base?: State): Promise<{ ok: boolean; ret: Hex; err?: string; logs: { topics: Hex[]; data: Hex }[]; s: State }> {
+    const s = commit ? st : clone(base ?? st);
     const work = clone(s);
     const out: { topics: Hex[]; data: Hex }[] = [];
     try {
@@ -187,9 +207,9 @@ export async function startFakeEvm(opts: FakeEvmOpts = {}): Promise<FakeEvm> {
     }
   }
 
-  async function handle(method: string, params: any[]): Promise<unknown> {
-    rpcLog.push({ method, params });
-    const hk = (fake as FakeEvm).hook?.(method, params);
+  async function handle(method: string, params: any[], log: FakeEvm["rpcLog"] = rpcLog, hookOf: () => FakeEvm["hook"] = () => (fake as FakeEvm).hook): Promise<unknown> {
+    log.push({ method, params });
+    const hk = hookOf()?.(method, params);
     if (hk) { if (hk.error) throw Object.assign(new Error(hk.error.message), { rpc: hk.error }); return hk.result; }
     const head = () => blocks[blocks.length - 1];
     const blockView = (b: any, full = false) => ({
@@ -199,7 +219,8 @@ export async function startFakeEvm(opts: FakeEvmOpts = {}): Promise<FakeEvm> {
       size: "0x1", uncles: [], transactions: full ? b.txs.map((h: string) => txs.get(lc(h))) : b.txs,
     });
     const blockByTag = (tag: any) => {
-      if (tag === "latest" || tag === "pending" || tag === "safe" || tag === "finalized" || tag === undefined) return head();
+      if (tag === "finalized") return blocks[Math.max(0, blocks.length - 1 - Math.max(0, fake.finalizedLag))];
+      if (tag === "latest" || tag === "pending" || tag === "safe" || tag === undefined) return head();
       const n = BigInt(tag);
       return blocks.find((b) => b.number === n) ?? null;
     };
@@ -223,7 +244,11 @@ export async function startFakeEvm(opts: FakeEvmOpts = {}): Promise<FakeEvm> {
       }
       case "eth_call": {
         const c = params[0];
-        const r = await runTx(c.from ?? "0x" + "00".repeat(20), c.to, (c.data ?? c.input ?? "0x") as Hex, BigInt(c.value ?? 0), false);
+        // the state as of the block named by params[1] (a tag, a number, or { blockHash } / { blockNumber }): the head reads the live state
+        const at = params[1];
+        const b = at && typeof at === "object" ? (at.blockHash ? blocks.find((x) => lc(x.hash) === lc(at.blockHash)) : blockByTag(at.blockNumber)) : blockByTag(at);
+        if (!b) throw Object.assign(new Error("header not found"), { rpc: { code: -32000, message: "header not found" } });
+        const r = await runTx(c.from ?? "0x" + "00".repeat(20), c.to, (c.data ?? c.input ?? "0x") as Hex, BigInt(c.value ?? 0), false, undefined, b === head() ? undefined : b.state);
         if (!r.ok) throw Object.assign(new Error(r.err!), { rpc: { code: 3, message: "execution reverted: " + r.err, data: "0x" } });
         return r.ret;
       }
@@ -265,21 +290,23 @@ export async function startFakeEvm(opts: FakeEvmOpts = {}): Promise<FakeEvm> {
     }
   }
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const serve = (log: FakeEvm["rpcLog"], hookOf: () => FakeEvm["hook"]) => createServer(async (req: IncomingMessage, res: ServerResponse) => {
     let body = "";
     for await (const c of req) body += c;
     let msg: any;
     try { msg = JSON.parse(body); } catch { res.writeHead(400); res.end(); return; }
     const one = async (m: any) => {
-      try { return { jsonrpc: "2.0", id: m.id, result: await handle(m.method, m.params ?? []) }; }
+      try { return { jsonrpc: "2.0", id: m.id, result: await handle(m.method, m.params ?? [], log, hookOf) }; }
       catch (e: any) { return { jsonrpc: "2.0", id: m.id, error: e.rpc ?? { code: -32000, message: String(e.message) } }; }
     };
     const out = Array.isArray(msg) ? await Promise.all(msg.map(one)) : await one(msg);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(out, (_k, v) => (typeof v === "bigint" ? hex(v) : v)));
   });
+  const server = serve(rpcLog, () => (fake as FakeEvm).hook);
   await new Promise<void>((r) => server.listen(opts.port ?? 0, "127.0.0.1", r));
   const port = (server.address() as any).port;
+  const mirrors: ReturnType<typeof createServer>[] = [];
   const fake: FakeEvm = {
     url: `http://127.0.0.1:${port}`, port, usdcAddress: USDC_ADDR, domain: DOMAIN, st, txs, receipts, blocks, logs, rpcLog, sentRaw, blackhole: false,
     setUsdc: (a, v) => setBal(st, a, v), setNative: (a, v) => st.native.set(lc(a), v),
@@ -307,7 +334,19 @@ export async function startFakeEvm(opts: FakeEvmOpts = {}): Promise<FakeEvm> {
       ]);
       return { hash };
     },
-    close: () => new Promise<void>((r) => server.close(() => r())),
+    finalizedLag: opts.finalizedLag ?? 0,
+    mineEmpty: () => { mine("", "0x" + "00".repeat(20), null, "0x", 0, true, []); },
+    async mirror() {
+      const log: FakeEvm["rpcLog"] = [];
+      const m: FakeMirror = { url: "", port: 0, rpcLog: log, close: () => new Promise<void>((r) => srv.close(() => r())) };
+      const srv = serve(log, () => m.hook);
+      mirrors.push(srv);
+      await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+      m.port = (srv.address() as any).port;
+      m.url = `http://127.0.0.1:${m.port}`;
+      return m;
+    },
+    close: () => Promise.all([server, ...mirrors].map((x) => new Promise<void>((r) => { x.closeAllConnections?.(); x.close(() => r()); }))).then(() => undefined),
   };
   return fake;
 }

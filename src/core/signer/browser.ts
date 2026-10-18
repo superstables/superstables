@@ -10,15 +10,18 @@
 // open. What the wallet is then asked to do is the rail's: sign an EIP-3009 authorization
 // (EVM), send a pathUSD transfer (Tempo), or sign a token transfer (Solana).
 
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { DEFAULT_NETWORK, networkFor, usdcBalance, type Rail } from "../chain.js";
-import { browserWalletPath, ensureDir, homeDir, recordsDir } from "../home.js";
-import { evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Policy } from "../policy.js";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { DEFAULT_NETWORK, fromAtomicString, networkFor, usdcBalance, type Rail } from "../chain.js";
+import { accountPolicyPath, browserWalletPath, ensureDir, homeDir, policyPath, recordsDir, retiredListPath } from "../home.js";
+import { signedBy, signedPolicyCheck, signedSettings } from "../owner-settings.js";
+import { CAP_DECIMALS, evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Money, type Policy } from "../policy.js";
 import { Records } from "../records.js";
 import { judgeSignRequest } from "../rails/index.js";
+import { untrustedText } from "../text.js";
 import type { VerifiedTerms, WalletStatus } from "../types.js";
-import { ApprovalServer } from "./approval-server.js";
+import { ApprovalServer, type SettingsNote } from "./approval-server.js";
+import type { PagePolicy } from "./approval-page.js";
 import { SignRefused, type Eip3009SignRequest, type Eip3009SignResult, type SignHooks, type SignRequest, type SignResult, type Signer } from "./types.js";
 
 /** How long an approval page waits for the person before the request expires. */
@@ -80,6 +83,8 @@ export class BrowserWalletSigner implements Signer {
       preferredPort: options.preferredPort,
       recordsDirPath: dir,
       onAccount: (address, network) => this.remember(address, network),
+      settingsNote: (address) => settingsNoteFor(address),
+      accountRefusal: (address) => accountRefusalFor(address),
     });
     this.remembered = this.readRemembered();
   }
@@ -198,6 +203,7 @@ export class BrowserWalletSigner implements Signer {
       verified,
       reported: req.context,
       requirement,
+      policy: pagePolicy(policy, this.options.policy !== undefined),
       x402Version: req.kind === "eip3009" && req.x402Version === 1 ? 1 : 2,
       timeoutMs: this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       ...(hooks?.beforeWalletSends ? { beforeWalletSends: hooks.beforeWalletSends } : {}),
@@ -264,6 +270,32 @@ export class BrowserWalletSigner implements Signer {
   }
 }
 
+/** What the owner's signed settings say about the account that connected: undefined when unsigned or not valid. */
+export async function settingsNoteFor(address: string): Promise<SettingsNote | undefined> {
+  try {
+    const signed = await signedSettings({ policyPath: accountPolicyPath(), retiredPath: retiredListPath() });
+    if (!signed?.valid || !signed.signer || !signed.signedAt) return undefined;
+    // "Signed by" only for a signature that holds and covers the policy in use.
+    const yours = signedBy(signed, address);
+    if (yours && !signed.policyMatches) return undefined;
+    return { applies: yours ? "yours" : "other", signer: signed.signer, signedAt: signed.signedAt };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Why the wallet that just connected may not go on: the owner's signed settings bind it and the account policy file in use is
+ * not the one signed. The address remembered from an earlier payment only guesses who will connect; this is the check on who did.
+ */
+async function accountRefusalFor(address: string): Promise<string | undefined> {
+  try {
+    return (await signedPolicyCheck(address, { policyPath: accountPolicyPath(), retiredPath: retiredListPath() })).refuse;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The hostname the policy judges: the URL the agent says it is calling, when it is a URL. */
 function policyDomain(target?: string): string {
   if (!target) return "";
@@ -273,4 +305,31 @@ function policyDomain(target?: string): string {
   } catch {
     return "";
   }
+}
+
+/** A cap as the page says it: exact, from the cap's whole units (S7), in the asset the owner wrote. */
+function capText(m?: Money): string | undefined {
+  if (!m) return undefined;
+  try {
+    return `${fromAtomicString(m.atomic ?? "", CAP_DECIMALS)} ${m.asset}`;
+  } catch {
+    return formatMoney(m);
+  }
+}
+
+/**
+ * Which spend policy decided that this payment may be asked for, for the page: the file (or "the program", when a caller
+ * passed its own policy object), whether it is the account's own file, and the caps. Read now, at the gate, as policy() is.
+ */
+function pagePolicy(policy: Policy, fromProgram: boolean): PagePolicy {
+  const file = policyPath();
+  return {
+    file: untrustedText(file, 300),
+    source: fromProgram ? "program" : existsSync(file) ? "file" : "defaults",
+    chosen: !fromProgram && resolve(file) !== resolve(accountPolicyPath()),
+    perCall: capText(policy.perCall),
+    perDay: capText(policy.perDay),
+    killSwitch: policy.killSwitch,
+    ...(policy.also ? { also: { file: untrustedText(policy.also.file, 300), perCall: capText(policy.also.policy.perCall), perDay: capText(policy.also.policy.perDay) } } : {}),
+  };
 }

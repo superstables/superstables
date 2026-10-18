@@ -26,12 +26,13 @@
 // sign-in is checked with node:crypto, and building, checking and sending a Solana transaction
 // is the caller's SolanaTransactionPort.
 
-import { createPublicKey, randomBytes, verify as verifySignature } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { isProof, type PROOFS } from "../proofs.mjs";
+import { pageCsp, scriptNonce } from "./look.js";
 import { dirname } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { getAddress, isAddress, verifyMessage } from "viem";
+import { getAddress, isAddress, verifyMessage, verifyTypedData } from "viem";
 import {
   ownerApprovalPage,
   ownerNotFoundPage,
@@ -40,6 +41,8 @@ import {
   type OwnerTerms,
 } from "./owner-approval-page.js";
 import { untrustedText } from "../text.js";
+import { base58Decode, isSolanaAddress, verifyEd25519 } from "../ed25519-verify.mjs";
+import { settingsMessage, settingsTypedData, settingsTypedDataJson } from "../owner-settings.js";
 
 export type { OwnerChain, OwnerTerms, OwnerTermRow } from "./owner-approval-page.js";
 
@@ -93,7 +96,7 @@ export interface OwnerVerdict {
 }
 
 /** The kinds of owner action, and the routes under an approval link (each kind answers some of them; the rest are 404). */
-export const OWNER_ACTION_KINDS = ["connect", "evm-transaction", "solana-transaction"] as const;
+export const OWNER_ACTION_KINDS = ["connect", "evm-transaction", "solana-transaction", "settings"] as const;
 export const OWNER_ROUTES = ["/state", "/account", "/connect", "/sending", "/sent", "/prepare", "/signed", "/reject", "/cancel"] as const;
 const OWNER_PATH = new RegExp(`^/owner/([0-9a-f]{32})(${OWNER_ROUTES.join("|")})?$`);
 
@@ -110,15 +113,39 @@ export interface OwnerActionInput {
   /** connect: the sign-in text. The server adds the approval id and the address to it. */
   signIn?: string;
   /**
+   * settings: what the owner's wallet signs. The server builds the typed data (EVM) or the text (Solana) itself, and believes
+   * a signature only if it is the connected wallet's over exactly that. `account`, when given, is the only wallet that may sign.
+   */
+  settingsSigning?: { payload: SettingsPayload; signedAt: string };
+  /**
    * The owner address the command has on record, shown prominently on the page so a person who
    * is not that owner stops. A transaction defaults to `account`; a first connect has none.
    */
   recordedOwner?: string;
+  /** The RPC hosts the command reads, and where they come from: shown on the page. */
+  rpc?: OwnerPageFacts["rpc"];
+  /** The budget token. The page offers it to the wallet only when the terms say so (`watchToken`). */
+  token?: OwnerPageFacts["token"];
+  /** Whether the owner signed the agent address at setup: shown on the page when the action names an agent. */
+  binding?: OwnerPageFacts["binding"];
   timeoutMs: number;
 }
 
+/** The facts the owner's settings signature covers (owner-settings.js). */
+export interface SettingsPayload {
+  settingsHash: string;
+  policyHash: string;
+  retiredHash: string;
+  enabledChains: string[];
+  site: string;
+}
+
 export type OwnerActionOutcome =
-  | { status: "connected"; address: string }
+  /**
+   * `proof` (sign-in): the exact text the wallet signed and the signature (0x hex; a Solana signature is its 64 bytes as hex).
+   * `signature` (settings): the wallet's signature, which the server has already checked.
+   */
+  | { status: "connected"; address: string; proof?: { message: string; signature: string }; signature?: string }
   /**
    * `siteFailed` (hosted approvals only): the site reported this transaction as failed, in words. The command still reads the
    * chain, but never reports such a step as settled.
@@ -146,6 +173,8 @@ interface OwnerRecord extends OwnerActionInput {
   hash?: string;
   /** A failed verdict's proof (OwnerVerdict). */
   proof?: string;
+  /** settings: the signature the server checked. Never in the audit log or on a page. */
+  signature?: string;
   sending: boolean;
   /** solana: a signed transaction is being checked or sent; a second one is refused meanwhile. */
   submitting?: boolean;
@@ -166,41 +195,7 @@ export function signInMessage(signIn: string, id: string): string {
   return `${signIn}\n\nApproval id: ${id}\nThis signature grants no spending permission and has no network fee.`;
 }
 
-const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-/** Bytes of a base58 string (Solana addresses), or undefined if it is not base58. */
-export function base58Decode(text: string): Uint8Array | undefined {
-  if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(text)) return undefined;
-  let n = 0n;
-  for (const ch of text) n = n * 58n + BigInt(BASE58.indexOf(ch));
-  const bytes: number[] = [];
-  while (n > 0n) {
-    bytes.unshift(Number(n & 0xffn));
-    n >>= 8n;
-  }
-  for (const ch of text) {
-    if (ch !== "1") break;
-    bytes.unshift(0);
-  }
-  return Uint8Array.from(bytes);
-}
-
-/** A Solana address: base58 of 32 bytes. */
-export function isSolanaAddress(text: unknown): text is string {
-  return typeof text === "string" && text.length >= 32 && text.length <= 44 && base58Decode(text)?.length === 32;
-}
-
-/** Whether `signature` (64 bytes) is `address`'s ed25519 signature over `message`. */
-export function verifyEd25519(address: string, message: Uint8Array, signature: Uint8Array): boolean {
-  const key = base58Decode(address);
-  if (key?.length !== 32 || signature.length !== 64) return false;
-  try {
-    const publicKey = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: Buffer.from(key).toString("base64url") }, format: "jwk" });
-    return verifySignature(null, message, publicKey, signature);
-  } catch {
-    return false;
-  }
-}
+export { base58Decode, isSolanaAddress, verifyEd25519 };
 
 const isSolana = (chain: OwnerChain) => chain.family === "solana";
 /** The account in its one canonical spelling, or undefined if it is not an account of this family. */
@@ -262,6 +257,7 @@ export class OwnerApprovalServer {
       throw new Error("a solana-transaction needs a Solana chain, its port and the one account allowed to sign it");
     }
     if (input.kind === "connect" && !input.signIn) throw new Error("a connect needs its sign-in text");
+    if (input.kind === "settings" && !input.settingsSigning) throw new Error("a settings signature needs the payload and the time it is signed at");
     const id = randomBytes(16).toString("hex");
     let resolve!: (outcome: OwnerActionOutcome) => void;
     const settled = new Promise<OwnerActionOutcome>((done) => {
@@ -366,8 +362,19 @@ export class OwnerApprovalServer {
       account: record.account,
       recordedOwner: record.recordedOwner ?? record.account,
       transaction: record.transaction,
-      message: record.kind === "connect" ? signInMessage(record.signIn!, record.id) : undefined,
+      message: record.kind === "connect"
+        ? signInMessage(record.signIn!, record.id)
+        : record.kind === "settings" && isSolana(record.chain)
+          ? settingsMessage(record.settingsSigning!.payload, record.settingsSigning!.signedAt)
+          : undefined,
+      typedData: record.kind === "settings" && !isSolana(record.chain)
+        ? settingsTypedDataJson(record.settingsSigning!.payload, record.settingsSigning!.signedAt)
+        : undefined,
       expiresAt: record.expiresAt,
+      origin: this.url,
+      rpc: record.rpc,
+      binding: record.binding,
+      token: record.terms.watchToken ? record.token : undefined,
     };
   }
 
@@ -378,13 +385,13 @@ export class OwnerApprovalServer {
     res.end(JSON.stringify(body));
   }
 
-  private html(res: ServerResponse, status: number, html: string): void {
+  private html(res: ServerResponse, status: number, html: string, nonce?: string): void {
     res.writeHead(status, {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
       "x-frame-options": "DENY",
-      // Framing only. A stricter connect-src would break wallets whose injected provider calls RPC from the page.
-      "content-security-policy": "frame-ancestors 'none'",
+      // Only this page's own script runs (pageCsp); connect-src stays open, because a wallet's injected provider may call RPC from the page.
+      "content-security-policy": pageCsp(nonce),
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
     });
@@ -432,7 +439,10 @@ export class OwnerApprovalServer {
       if (!leaf && method === "GET") return this.html(res, 404, ownerNotFoundPage());
       return this.json(res, 404, { error: "nothing is waiting under this approval link" });
     }
-    if (!leaf && method === "GET") return this.html(res, 200, ownerApprovalPage(this.facts(record), record.terms));
+    if (!leaf && method === "GET") {
+      const nonce = scriptNonce();
+      return this.html(res, 200, ownerApprovalPage(this.facts(record), record.terms, undefined, nonce), nonce);
+    }
     if (leaf === "/state" && method === "GET") {
       return this.json(res, 200, {
         status: record.status,
@@ -520,18 +530,22 @@ export class OwnerApprovalServer {
       record.address = address;
       record.status = "connected";
       this.audit(record);
-      record.resolve({ status: "connected", address });
+      record.resolve({ status: "connected", address, proof: { message, signature: isSolana(record.chain) ? `0x${Buffer.from(signature, "base64").toString("hex")}` : signature } });
       return this.json(res, 200, { status: record.status });
     }
+
+    if (leaf === "/signed" && record.kind === "settings") return this.settingsRoute(record, address, body, res);
+    if (record.kind === "settings") return this.json(res, 404, { error: "no such route for a settings signature" });
 
     if (record.kind === "connect") return this.json(res, 404, { error: "no such route for a connect" });
 
     if (leaf === "/account") {
       if (record.status !== "pending" && record.status !== "ready") return this.json(res, 409, { error: `this is already ${record.status}` });
       if (!address) return this.json(res, 400, { error: "that is not an account address" });
+      // Another account changes nothing: an owner account already connected stays ready, so whoever else holds the link
+      // cannot undo it. The page shows the same words as before.
       if (address !== record.account) {
-        record.status = "pending";
-        return this.json(res, 403, { error: `this must be sent from ${record.account}, the owner address this budget was set up with. Switch to that account in your wallet and connect again.` });
+        return this.json(res, 409, { error: `this must be sent from ${record.account}, the owner address this budget was set up with. Switch to that account in your wallet and connect again.`, status: record.status });
       }
       record.address = address;
       record.status = "ready";
@@ -561,6 +575,43 @@ export class OwnerApprovalServer {
     }
 
     this.json(res, 404, { error: "no such route" });
+  }
+
+  /**
+   * /signed for a settings signature: the wallet signed the typed data (EVM) or the text (Solana) the server built from the
+   * caller's payload. A signature from any other account, or over anything else, is a mistake: the link stays open and nothing
+   * is recorded. The caller writes the settings only from what this resolves.
+   */
+  private async settingsRoute(record: OwnerRecord, address: string | undefined, body: Record<string, unknown>, res: ServerResponse): Promise<void> {
+    if (record.status !== "pending") return this.json(res, 409, { error: `this is already ${record.status}` });
+    const { payload, signedAt } = record.settingsSigning!;
+    const signature = typeof body.signature === "string" ? body.signature : "";
+    if (!address) return this.json(res, 400, { error: "that is not an address and a signature" });
+    if (record.account && address !== record.account) {
+      return this.json(res, 403, { error: `these settings must be signed by ${record.account}; nothing was recorded, and you can sign again with that account` });
+    }
+    let valid = false;
+    if (isSolana(record.chain)) {
+      const signed = typeof body.signedMessage === "string" ? Buffer.from(body.signedMessage, "base64") : Buffer.alloc(0);
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(signature)) return this.json(res, 400, { error: "that is not an address and a signature" });
+      if (!signed.equals(Buffer.from(settingsMessage(payload, signedAt), "utf8"))) return this.json(res, 400, { error: "the wallet signed a different message; nothing was recorded, and you can sign again" });
+      valid = verifyEd25519(address, signed, Buffer.from(signature, "base64"));
+    } else {
+      if (!/^0x[0-9a-fA-F]+$/.test(signature)) return this.json(res, 400, { error: "that is not an address and a signature" });
+      try {
+        valid = await verifyTypedData({ address: address as `0x${string}`, ...settingsTypedData(payload, signedAt), signature: signature as `0x${string}` });
+      } catch {
+        valid = false;
+      }
+    }
+    if (!valid) return this.json(res, 400, { error: `that signature was not made by ${address} over these settings; nothing was recorded, and you can sign again` });
+    if (record.status !== "pending") return this.json(res, 409, { error: `this is already ${record.status}` });
+    record.address = address;
+    record.signature = signature;
+    record.status = "connected";
+    this.audit(record);
+    record.resolve({ status: "connected", address, signature });
+    return this.json(res, 200, { status: record.status });
   }
 
   /** /prepare and /signed: the server builds on each Approve, the wallet only signs, the caller checks and sends. */

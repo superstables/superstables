@@ -8,7 +8,7 @@
 import { detectPayment, type SellerChallenge } from "./x402.js";
 import { judgeOffers } from "./rails/index.js";
 import type { Offer } from "./rails/types.js";
-import { SellerTextError } from "./text.js";
+import { SellerTextError, untrustedText } from "./text.js";
 import { chainName, payNetworkFor } from "./routes.js";
 import { evaluatePolicy, policyAmount, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
@@ -60,7 +60,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
     url,
     serviceId: service?.id,
     serviceName: service?.name,
-    description: challenge.description || undefined,
+    description: untrustedText(challenge.description, 500) || undefined,
     request,
     terms: chosen.terms,
     requirement: chosen.requirement,

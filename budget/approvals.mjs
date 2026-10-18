@@ -30,9 +30,9 @@
 // Nothing here kills a process group it did not start. `--replace` first asks the running page to cancel
 // (POST /cancel): only a page that confirms the wallet was never asked is stopped.
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
+import { HOME, approvalsDir, ensurePrivateDir, ownerApprovalsLog } from "./paths.mjs";
 import { writeJournalFile } from "./journal.mjs";
 import { spawnIdentified } from './child-identity.mjs';
 import { createIdentitySource, inspectProcess, visiblePid } from '../src/core/process-identity.mjs';
@@ -67,7 +67,7 @@ const activeFile = (rail, chain) => join(approvalsDir(), `active-${rail}-${chain
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function ensureDir() {
-  mkdirSync(approvalsDir(), { recursive: true, mode: 0o700 });
+  ensurePrivateDir(approvalsDir(), { root: HOME });
 }
 
 export function readApproval(id) {
@@ -129,8 +129,8 @@ const LOCK_RETRY_MS = 10;
 // ── locks held for a moment (a record's read and write, the break of a dead holder's lock) ──────────────────
 // The design of src/core/lock.ts, synchronous here because every caller writes a record synchronously (a RESULT is
 // recorded and the process exits). A lock or mutex file holds { pid, pidStart, owner }: the holder's pid, that process's
-// start identity and a random owner id, written whole to a temporary file and hard-linked into place, so it exists
-// complete or not at all. It is taken over only from a holder that is gone (no process with that pid and start runs),
+// start identity and a random owner id, written whole to a temporary file, flushed to disk and hard-linked into place, so
+// it exists complete or not at all. It is taken over only from a holder that is gone (no process with that pid and start runs),
 // never because it is old: a live holder may be paused for any time. A dead holder's lock is broken under a mutex that
 // follows the same rules, and only if it is still that exact lock; a lock is released only by its owner. A file that
 // cannot be read as a holder (the whole-file write does not make one) is waited for, never taken, and named in the
@@ -157,6 +157,18 @@ function removeIfSame(path, text) {
   } catch {}
 }
 
+/** Write a new holder file whole and flush it, before it can be linked into place as a lock: a lock that survives a crash must hold its holder in full. */
+function writeHolderFile(path, text) {
+  const fd = openSync(path, "wx", 0o600);
+  try {
+    const bytes = Buffer.from(text);
+    for (let at = 0; at < bytes.length;) at += writeSync(fd, bytes, at);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * Create `path` holding `me` (temp file + hard link), waiting until `deadline`. A file there whose holder is gone is
  * removed first: by `breakDead` (a lock, broken under its mutex), else only if it still holds the text judged dead (the
@@ -164,8 +176,8 @@ function removeIfSame(path, text) {
  */
 function acquireSync(path, me, deadline, breakDead) {
   const mine = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(mine, me, { mode: 0o600, flag: "wx" });
   try {
+    writeHolderFile(mine, me);
     for (;;) {
       try {
         linkSync(mine, path);
@@ -432,15 +444,15 @@ function breakStale(rail, chain, stale) {
 
 /**
  * Take the rail and chain for `id`, held by `pid` (the claiming process) until the approval's own processes run. One
- * exclusive step: the lock is written in full to a private file and hard-linked to its name, so it exists complete or
- * not at all. { ok: false, pending } when another approval holds them.
+ * exclusive step: the lock is written in full to a private file, flushed to disk and hard-linked to its name, so it
+ * exists complete or not at all. { ok: false, pending } when another approval holds them.
  */
 export function claim(rail, chain, id, { pid = process.pid } = {}) {
   ensureDir();
   const path = activeFile(rail, chain);
   const mine = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(mine, JSON.stringify({ id, pid, ...startOf(pid), createdAt: Date.now() }), { mode: 0o600, flag: "wx" });
   try {
+    writeHolderFile(mine, JSON.stringify({ id, pid, ...startOf(pid), createdAt: Date.now() }));
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         linkSync(mine, path);
