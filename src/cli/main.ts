@@ -29,7 +29,8 @@ import {
 import { PaymentEngine, QuoteUsedError, SERVICE_BODY_LIMIT, paymentOutput, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
 import { POLICY_EXAMPLE, loadPaymentPolicy, loadPolicy, type Policy } from "../core/policy.js";
 import { QUOTE_TTL_MS, getQuote, quote as takeQuote } from "../core/quote.js";
-import { Records } from "../core/records.js";
+import { Records, settleStaleAwaiting } from "../core/records.js";
+import { SellerUnreachableError } from "../core/x402.js";
 import { describeBudgetRoutes } from "../core/routes.js";
 import { BrowserWalletSigner } from "../core/signer/browser.js";
 import type { Signer } from "../core/signer/types.js";
@@ -961,7 +962,9 @@ explain(
     .option("--limit <n>", "how many to show", toInteger, 20)
     .option("--json", "print the attempt records as a JSON array")
     .action((options: { limit: number; json?: boolean }) => {
-      const attempts = context().records.listAttempts(options.limit);
+      const { records } = context();
+      // An attempt left waiting by a `pay` that has since stopped is ended here, as `status` would end it.
+      const attempts = records.listAttempts(options.limit).map((a) => (a.state === "awaiting_approval" ? settleStaleAwaiting(records, a) : a));
       if (options.json) {
         console.log(json(attempts.map((a) => outsideJson(shownAttempt(a)))));
         return;

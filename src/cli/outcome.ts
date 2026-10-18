@@ -126,6 +126,8 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
   const requote = requoteCommand(quote);
   switch (attempt.state) {
     case "awaiting_approval":
+      // Nothing is signed, and only the pay command that started it moves this record: another status changes nothing.
+      return "Nothing is signed yet. This record changes only while the `superstables pay` command that started it keeps running, so running `superstables status` again will not move it. Wait for that command, or ask the owner whether the approval is still open.";
     case "approved":
     case "submitting":
       return `Run \`superstables status ${attempt.id}\` to see where it got to.`;

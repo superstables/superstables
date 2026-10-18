@@ -180,6 +180,7 @@ export class BrowserWalletSigner implements Signer {
       // checked again here, at the gate, and not only when the quote was taken.
       // The attempt being signed has already reserved its amount (pay.ts): it is left out, so it does not count twice.
       spentTodayAtomic: this.records.spentTodayAtomic(terms.asset, new Date(), { exclude: req.context?.attemptId }),
+      spentTodayHasOpen: this.records.spentTodayHasOpen(terms.asset, new Date(), { exclude: req.context?.attemptId }),
     });
     // A payment the owner's policy refuses never becomes an approval: nobody is asked, and
     // there is no link to open.

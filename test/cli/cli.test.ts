@@ -563,6 +563,49 @@ describe("the account's own spend policy", () => {
   });
 
   afterAll(async () => {
+
+  it("quote names the host that did not answer, says nothing was paid, and what to do next", async () => {
+    // A port that was open a moment ago, so the refusal is real.
+    const closed = await startServer((_req, res) => sendJson(res, 200, {}));
+    const port = new URL(closed.url).port;
+    await closed.close();
+    const result = await run(["quote", `http://127.0.0.1:${port}/paid`], env);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(`could not reach 127.0.0.1:${port} (ECONNREFUSED); nothing was paid.`);
+    expect(result.stderr).toContain("Next: check the network, or pick another listing; `superstables doctor` checks what pay needs.");
+    expect(result.stderr).not.toContain("fetch failed");
+  });
+
+  it("ends an attempt whose pay was killed outright: status says abandoned by stopped, and it stops counting", async () => {
+    const quote = JSON.parse((await run(["quote", url, "--json"], env)).stdout) as { id: string };
+    const child = spawn(process.execPath, ["--import", "tsx", CLI, "pay", quote.id, "--json"], {
+      cwd: ROOT,
+      env: { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_DOCTOR_OFFLINE: "1", SUPERSTABLES_WALLET_URL: "http://127.0.0.1:1", ...env },
+    });
+    let stderr = "";
+    const closed = new Promise<void>((done) => child.once("close", () => done()));
+    await new Promise<void>((done, fail) => {
+      const timer = setTimeout(() => fail(new Error(`no link: ${stderr}`)), 60_000);
+      child.stderr.on("data", (chunk) => {
+        stderr += String(chunk);
+        if (/approve\/[0-9a-f]+/.test(stderr)) {
+          clearTimeout(timer);
+          done();
+        }
+      });
+    });
+    const attemptId = String(/\(attempt ([0-9a-f-]+)\)/.exec(stderr)?.[1]);
+    // While pay runs, the record is left as it is.
+    const waiting = JSON.parse((await run(["status", attemptId, "--json"], env)).stdout) as Record<string, unknown>;
+    expect(waiting).toMatchObject({ state: "awaiting_approval", final: false });
+    expect(String(waiting.next)).toContain("changes only while the `superstables pay` command that started it keeps running");
+
+    child.kill("SIGKILL"); // no handler runs
+    await closed;
+    const status = JSON.parse((await run(["status", attemptId, "--json"], env)).stdout) as Record<string, unknown>;
+    expect(status).toMatchObject({ state: "abandoned", abandoned_by: "stopped", final: true });
+    expect(String(status.reason)).toContain("no longer running; nobody decided and nothing was submitted");
+  }, 90_000);
     await Promise.all(servers.map((server) => server.close()));
   });
 

@@ -253,6 +253,8 @@ export interface Attempt {
   decimals?: number;
   /** Already spent today in this asset's cap unit, in millionths (Records.spentTodayAtomic). Needed when caps.per_day is set. */
   spentTodayAtomic?: bigint;
+  /** True when that total includes an attempt that is not resolved yet (Records.spentTodayHasOpen): the check then says "paid or still open". */
+  spentTodayHasOpen?: boolean;
   /** @deprecated Pass amountAtomic. Read exactly at six decimals: a value with more places, or not finite, refuses. */
   amountDecimal?: number;
   /** @deprecated Pass spentTodayAtomic. Read as amountDecimal is. Omitting both refuses when caps.per_day is set. */
@@ -421,7 +423,7 @@ export function policyChecks(policy: Policy, a: Attempt): PolicyCheck[] {
     checks.push({
       rule: "caps.per_day",
       ok: cap !== undefined && total <= cap,
-      detail: `${shown(x.spent)} ${a.asset} paid today (UTC) + this ${shown(x.amount)} = ${shown(total)}, at most ${formatMoney(policy.perDay)}`,
+      detail: `${shown(x.spent)} ${a.asset} ${a.spentTodayHasOpen ? "paid or still open today" : "paid today"} (UTC) + this ${shown(x.amount)} = ${shown(total)}, at most ${formatMoney(policy.perDay)}`,
     });
   }
   if (policy.also) {
