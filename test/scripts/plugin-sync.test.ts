@@ -2,9 +2,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { syncPlugin } from "../../scripts/plugin-sync.mjs";
+import { refuseSymlinkPath, syncPlugin } from "../../scripts/plugin-sync.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const scratch: string[] = [];
@@ -37,6 +37,24 @@ afterEach(() => {
 describe("plugin synchronization", () => {
   it("checks the committed package's skill copy and client versions", () => {
     expect(() => syncPlugin({ root: repo, check: true })).not.toThrow();
+  });
+
+  it("imports without running when argv names a missing entry point", () => {
+    const root = fixture();
+    const script = pathToFileURL(join(repo, "scripts/plugin-sync.mjs")).href;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(script)})`, join(root, "missing.mjs")], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+    expect(existsSync(join(root, bundle))).toBe(false);
+    expect(JSON.parse(readFileSync(join(root, manifests[0]), "utf8")).version).toBe("0.0.0");
+  });
+
+  it("refuses a path outside the root with a containment error", () => {
+    const root = fixture();
+    expect(() => refuseSymlinkPath(dirname(root), root)).toThrow("Not under root:");
+    expect(existsSync(join(root, bundle))).toBe(false);
+    expect(JSON.parse(readFileSync(join(root, manifests[0]), "utf8")).version).toBe("0.0.0");
   });
 
   it("synchronizes a repository reached through a symlinked ancestor", () => {
@@ -73,7 +91,7 @@ describe("plugin synchronization", () => {
     expect(bundled).toContain("the `superstables` skill");
     expect(bundled).toContain("npx --yes @superstables/client@1.2.3 find weather");
     expect(bundled).toContain("npx --yes @superstables/client@1.2.3 budget doctor --rail evm");
-    expect(bundled).toContain("budget doctor --rail evm`. In the commands below, `superstables` stands for that command. If `superstables` is already installed");
+    expect(bundled).toContain("budget doctor --rail evm`. In the commands below, `superstables` is shorthand for `npx --yes @superstables/client@1.2.3`. If `superstables` is already installed");
     expect(bundled).toContain("Never run unscoped `npx superstables`");
     expect(bundled).not.toContain("<!--");
     expect(bundled).toMatch(/^---\nname: superstables-payments\n---\n\nBefore\.\n[\s\S]*\nAfter\.\n$/);

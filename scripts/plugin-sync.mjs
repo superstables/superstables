@@ -12,7 +12,7 @@ function runInPlugin(version) {
   const cli = `npx --yes @superstables/client@${version}`;
   return `**This skill needs an agent that can run commands.** In a chat app without a terminal, use the Superstables tools from this plugin instead: the \`superstables\` skill.
 
-Run the CLI as \`${cli} <command>\`, for example \`${cli} find weather\` or \`${cli} budget doctor --rail evm\`. In the commands below, \`superstables\` stands for that command. If \`superstables\` is already installed at version ${version}, that works too. Node 22 or newer is required. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine. Never run unscoped \`npx superstables\`: it can download a different package. Use the scoped, pinned package above.`;
+Run the CLI as \`${cli} <command>\`, for example \`${cli} find weather\` or \`${cli} budget doctor --rail evm\`. In the commands below, \`superstables\` is shorthand for \`${cli}\`. If \`superstables\` is already installed at version ${version}, that works too. Node 22 or newer is required. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine. Never run unscoped \`npx superstables\`: it can download a different package. Use the scoped, pinned package above.`;
 }
 
 function statIfPresent(path) {
@@ -24,8 +24,9 @@ function statIfPresent(path) {
   }
 }
 
-function refuseSymlinkPath(path, root) {
+export function refuseSymlinkPath(path, root) {
   if (path === root) return;
+  if (dirname(path) === path) throw new Error(`Not under root: ${path}`);
   refuseSymlinkPath(dirname(path), root);
   if (statIfPresent(path)?.isSymbolicLink()) throw new Error(`Symlinks are not allowed: ${path}`);
 }
@@ -110,7 +111,15 @@ export function syncPlugin({ root, check = false }) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+function isEntryPoint(path) {
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(path)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (process.argv[1] && isEntryPoint(process.argv[1])) {
   try {
     const args = process.argv.slice(2);
     if (args.some((arg) => arg !== "--check")) throw new Error("Usage: node scripts/plugin-sync.mjs [--check]");
