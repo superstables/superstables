@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -209,8 +210,11 @@ describe("evm: records of the owner's last action, and the other paths that must
     expect(r.result).toMatchObject({ state: "landed", final: false, revoked: false });
   }, 150_000);
 
-  it("a stale revoke record after a grant: status is not revoked while a later zeroing is not final", async () => {
+  // The fake chain's blocks run ahead of the wall clock whenever several are mined in one second (each is at least a second after
+  // the one before), so how the chain's clock compares with the machine's is not fixed: the case runs with it level and an hour ahead.
+  it.each([[0], [3600]])("a stale revoke record after a grant: status is not revoked while a later zeroing is not final (chain clock %i s ahead)", async (skew) => {
     const c = await evmCase({ lag: 0 });
+    c.chain.advance(skew);
     const rv = await c.run(["revoke", "--rail", "evm", ...c.keyArgs]);
     expect(rv.result.state).toBe("settled");
     expect(c.pub()).toMatch(/^B4_REVOKED_TX=/m);
@@ -223,7 +227,10 @@ describe("evm: records of the owner's last action, and the other paths that must
     // the owner then zeroes the allowance above the final head; the revoke time is recorded the way recover's own revoke writes it
     const raw = await c.owner.signTransaction({ chainId: 84532, nonce: c.chain.sentRaw.filter((t) => t.from.toLowerCase() === c.owner.address.toLowerCase()).length, to: c.chain.usdcAddress as `0x${string}`, data: encodeFunctionData({ abi: approveAbi, functionName: "approve", args: [c.agent.address, 0n] }), gas: 100000n, maxFeePerGas: 10n ** 9n, maxPriorityFeePerGas: 10n ** 9n, type: "eip1559" });
     await rawSend(c.chain.url, raw);
-    writeFileSync(join(c.home, "budget", "public", "evm-base-sepolia.env"), `${c.pub()}B4_REVOKED_AT=${Math.floor(Date.now() / 1000)}\n`);
+    // the revoke is recorded at the time of the block that zeroed the allowance, which is after the final block whatever the chain's
+    // clock says (the machine's clock is not comparable with a chain whose blocks can run ahead of it)
+    const zeroedAt = c.chain.blocks[c.chain.blocks.length - 1].timestamp;
+    writeFileSync(join(c.home, "budget", "public", "evm-base-sepolia.env"), `${c.pub()}B4_REVOKED_AT=${zeroedAt}\n`);
     const s = await c.run(["status", "--rail", "evm"]);
     expect(s.result.revoked).toBe(false);
     // and a new revoke drops the grant's record
@@ -384,7 +391,9 @@ async function solanaCase(o: { delegate?: boolean } = {}) {
   writeFileSync(join(home, "owner.env"), `SOLANA_OWNER_SECRET_BASE58=${bs58.encode(SOL_OWNER_KP.secretKey)}\n`, { mode: 0o600 });
   solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: o.delegate === false ? null : SOL_AGENT, delegated: o.delegate === false ? 0n : 50_000n });
   solana.balances.set(SOL_OWNER, 1_000_000_000n);
-  const run = (args: string[]) => cli(args, { SUPERSTABLES_HOME: home, SUPERSTABLES_SOLANA_RPC: solana.url });
+  // The client process does not spend the real minute `finalizedOf` waits for a signature that is only confirmed (see the helper).
+  const NODE_OPTIONS = [process.env.NODE_OPTIONS, `--import ${fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url))}`].filter(Boolean).join(" ");
+  const run = (args: string[]) => cli(args, { SUPERSTABLES_HOME: home, SUPERSTABLES_SOLANA_RPC: solana.url, NODE_OPTIONS });
   const keyArgs = ["--owner-key-file", join(home, "owner.env"), "--yes"];
   return { solana, home, run, keyArgs, pub: () => readFileSync(pubFile, "utf8") };
 }
@@ -400,6 +409,8 @@ describe("solana: confirmed is not finalized", () => {
     expect(c.pub()).toMatch(/^REVOKED_TX=\S+$/m);
     expect(c.pub()).toMatch(/^REVOKED_SLOT=\d+$/m);
     expect(c.pub()).toMatch(/^REVOKED_AT=\d+$/m);
+    // the client polled for the whole minute it waits (every two seconds, skipped in time by the helper), not once
+    expect(c.solana.calls.filter((m) => m === "getSignatureStatuses").length).toBeGreaterThanOrEqual(30);
   }, 150_000);
 
   it("revoke finalized: revoked, final true", async () => {
