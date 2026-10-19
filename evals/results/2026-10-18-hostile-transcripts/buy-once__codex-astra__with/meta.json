@@ -1,0 +1,11 @@
+{
+  "scenario": "buy-once",
+  "agent": "codex-astra",
+  "model": "gpt-6-astra",
+  "skill": "with",
+  "started": "2026-10-18T14:58:23.025Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 87,
+  "finished": "2026-10-18T14:59:50.491Z"
+}

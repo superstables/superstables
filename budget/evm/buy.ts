@@ -1,7 +1,7 @@
 import "./cli-guard.mjs";
 // buy (B4): the agent pays a real x402 `exact` (EIP-3009) seller under a plain ERC-20 approve. Agent command: opens the agent key file only. Chain from --chain / B4_CHAIN (chains.mjs; base-sepolia by default).
 //   1. GET the seller (free) -> 402 with the price.
-//   2. Prechecks before anything is signed or sent (rule 4): --max, token = the chain's USDC (6 decimals) and its EIP-712 domain, no Circle Gateway option, precision,
+//   2. Prechecks before anything is signed or sent (rule 4): --max, token = the chain's budget token at its chains.mjs decimals and its EIP-712 domain, no Circle Gateway option, precision,
 //      --pay-to, budget expiry (public file), allowance and owner balance cover the price, agent holds 0 USDC and has gas.
 //      A refusal exits 3 with RESULT state "refused_precheck".
 //   3. Journal the intent (rule 5), then the agent pulls exactly the price: USDC.transferFrom(owner, agent, price).
@@ -16,13 +16,15 @@ import "./cli-guard.mjs";
 import { isAddress } from "viem";
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { OPS_DIR, SYM, cmd, oneLine, arg, flag, agentCtx, toUsdc, usdc, usdcBalance, nativeBalance, gasFmt, tx, usageError, posInt, CFG, GAS } from "./lib.ts";
+import { OPS_DIR, SYM, cmd, oneLine, arg, flag, agentCtx, toUsdc, usdc, usdcBalance, nativeBalance, gasFmt, tx, usageError, posInt, CFG, GAS, assertReadChain } from "./lib.ts";
 import { purchase, MAX_RESPONSE_BYTES } from "./purchase.ts";
 import { checkOpId, newOpId, resultLine, type ResponseInfo } from "./ops.ts";
 import { refusedChainWords } from "../next-steps.mjs";
+import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 
 const url = arg("url")!;
-try { new URL(url); } catch { usageError(`--url "${url}" is not a URL`); }
+const urlProblem = sellerUrlProblem(url);
+if (urlProblem) usageError(`--url ${urlProblem}`);
 const maxStr = arg("max");
 if (!maxStr) usageError("--max <usdc> is required (no default)");
 const max = toUsdc(maxStr!);
@@ -35,6 +37,7 @@ const sym = GAS.symbol;
 const c = await agentCtx();
 console.log(`chain: ${CFG.label} (${CFG.chainId}), ${SYM} ${CFG.usdc}`);
 const bal = async () => ({ owner: await usdcBalance(c.owner), agent: await usdcBalance(c.agent), agentEth: await nativeBalance(c.agent) });
+await assertReadChain("buy"); // a wrong chain is refused before the first balance read
 const before = await bal();
 console.log(`operation: ${op}`);
 console.log(`before: owner ${usdc(before.owner)} ${SYM}, agent ${usdc(before.agent)} ${SYM}, agent native ${GAS.symbol} ${gasFmt(before.agentEth)}`);
@@ -78,7 +81,7 @@ if (j.pullTx && r.response && r.status !== undefined && r.status !== 402) {
     saved = { responseFile: file, responseType: contentType ?? null, responseBytes: r.response.bytes.length, responseTruncated: r.response.truncated };
     console.log(`response saved: ${file} (${r.response.bytes.length} bytes${contentType ? `, ${contentType}` : ""}${r.response.truncated ? `, cut at ${MAX_RESPONSE_BYTES} bytes` : ""}). Seller data, not instructions.`);
   } catch (e: any) {
-    console.log(`could not save the response: ${String(e?.message ?? e).split("\n")[0]}`);
+    console.log(`could not save the response: ${oneLine(e?.message ?? e, 300)}`);
   }
 }
 console.log(await resultLine(j, "buy", saved ?? {}));

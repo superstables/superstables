@@ -28,7 +28,7 @@
 import { Scopes } from 'viem/tempo'
 import type { Address, Hex } from 'viem'
 import { addressListCheck, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { TOKEN_ADDRESS, TOKEN_LABEL, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, ownerAccount, toBaseUnits } from './lib/common.ts'
+import { TOKEN_ADDRESS, TOKEN_LABEL, explorerTx, fromBaseUnits, loadOwnerKeyFile, makeClient, oneLine, ownerAccount, ownerPlanCtx, toBaseUnits } from './lib/common.ts'
 import { chainHead, readKey, rpcRead, sleep } from './lib/chain.ts'
 import { OWNER_KEY_FILE, OWNER_TIMEOUT_MS, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import {
@@ -68,10 +68,7 @@ async function main() {
   const sellers = typeof args.sellers === 'string' ? (args.sellers.split(',').map((s) => s.trim()) as Address[]) : undefined
   const limit = toBaseUnits(amount)
 
-  const pub = loadPublicEnv()
-  const owner = pub.OWNER_ADDRESS as Address | undefined
-  const agent = pub[`AGENT${label}_ADDRESS`] as Address | undefined
-  if (!owner || !agent) refuse(`the public file names no owner or no agent${label ? ` ${label}` : ''}`, `superstables budget setup --rail tempo${agentFlag(label)}`)
+  const { owner, agent } = await ownerPlanCtx(label, refuse) // the public addresses, checked against the owner's setup signature
 
   // Refuse before anything is signed if the key is already authorized or burned.
   const before = await readKey(owner, agent)
@@ -124,7 +121,7 @@ async function main() {
   } else {
     // Refuse here, before any link exists, whatever would make the owner's approval fail or pointless.
     if (expirySeconds * 1000 <= OWNER_TIMEOUT_MS + 60_000) refuse(`the key would expire (in ${expirySeconds}s) before the approval link does (${Math.round(OWNER_TIMEOUT_MS / 1000)}s)`, 'grant with a later --expiry, or a shorter --timeout')
-    const feeToken = await feeTokenOf(owner).catch((err) => refuse(`could not read the owner's fee token from the FeeManager (${String(err?.message ?? err).slice(0, 120)})`, 'check the Moderato RPC (superstables budget doctor --rail tempo), then grant again'))
+    const feeToken = await feeTokenOf(owner).catch((err) => refuse(`could not read the owner's fee token from the FeeManager (${oneLine(err?.message ?? err, 120)})`, 'check the Moderato RPC (superstables budget doctor --rail tempo), then grant again'))
     const feeBalance = await tokenBalance(feeToken, owner)
     if (feeBalance < MIN_FEE_BALANCE) {
       refuse(`the owner ${owner} holds ${fromBaseUnits(feeBalance)} of its fee token ${feeToken}, less than the ${fromBaseUnits(MIN_FEE_BALANCE)} a grant's network fee may need`, 'fund the owner (superstables budget setup --rail tempo --fund-only uses the Moderato faucet), then grant again')
@@ -203,6 +200,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('setBudget failed:', err?.shortMessage ?? err?.message ?? err)
+  console.error('setBudget failed:', oneLine(err?.shortMessage ?? err?.message ?? err, 1000))
   return exitAfterError()
 })

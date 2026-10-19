@@ -87,20 +87,15 @@ describe("LocalKeySigner", () => {
     expect(auth).toMatchObject({ from: account.address, to: `0x${"22".repeat(20)}`, value: "10000", validAfter: "0" });
   });
 
-  it("leaves a Permit2 offer to the x402 SDK: a Permit2 authorization with a nonce of its own, as before", async () => {
-    const account = privateKeyToAccount(generatePrivateKey());
-    const signer = new LocalKeySigner(account);
+  it("refuses a Permit2 offer, even with a marked nonce in hand: only EIP-3009 is signed", async () => {
+    const signer = new LocalKeySigner(privateKeyToAccount(generatePrivateKey()));
     const base = usdcRequirement(0.01, `0x${"22".repeat(20)}`);
     const requirements = { ...base, extra: { ...base.extra, assetTransferMethod: "permit2" } };
     const nonce = referralNonce("ref_AAECAwQFBgcICQoLDA0ODw", (size) => Buffer.alloc(size, 0xaa));
 
-    const signed = await signer.sign({ kind: "eip3009", x402Version: 2, requirements, nonce } as Parameters<LocalKeySigner["sign"]>[0]);
-
-    expect(signed.kind).toBe("eip3009");
-    expect(Object.keys(signed.payload).sort()).toEqual(["permit2Authorization", "signature"]);
-    const permit = (signed.payload as unknown as { permit2Authorization: Record<string, unknown> }).permit2Authorization;
-    expect(permit).toMatchObject({ from: account.address, permitted: { token: DEFAULT_NETWORK.usdc.address, amount: "10000" } });
-    expect(String(permit.nonce)).not.toContain("53535246");
+    await expect(
+      signer.sign({ kind: "eip3009", x402Version: 2, requirements, nonce } as Parameters<LocalKeySigner["sign"]>[0]),
+    ).rejects.toThrow(/EIP-3009 transfers only/);
   });
 
   it("refuses a network outside this client's table rather than sign over a domain it does not know", async () => {

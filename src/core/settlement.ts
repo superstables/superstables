@@ -21,9 +21,11 @@
 
 import { decodeFunctionResult, encodeFunctionData, keccak256, toBytes } from "viem";
 import { BASE_SEPOLIA, evmNetworkFor, isAddress, type EvmNetwork } from "./chain.js";
-import { chainRpc, rpcCall, type RpcOptions } from "./rpc.js";
+import { chainRpc, rpcCall, rpcCaller, verdictSet, verifiedRpc, type EndpointChoice, type RpcOptions } from "./rpc.js";
+import { agreeAtFinalEvm, agreementWords } from "./rpc-quorum.mjs";
+import { searchLogs, type LogSearchOptions } from "./log-windows.mjs";
 import { inclusion } from "./finality.js";
-import type { ChainMismatch } from "./types.js";
+import type { ChainAgreedAt, ChainAgreement, ChainMismatch } from "./types.js";
 import type { FoundPayment } from "./rails/types.js";
 
 /** "unpaid": the chain shows this payment was never made and can no longer be (recorded by a later check). */
@@ -77,7 +79,7 @@ interface RpcLog {
 /** Read the transaction's receipt and say whether it is this payment. Never throws. */
 export async function checkSettlement(
   input: SettlementToCheck,
-  options: { rpcUrl?: string; fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  options: { rpcUrl?: string; endpointsFor?: EndpointChoice["endpointsFor"]; fetchImpl?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<ChainCheck> {
   if (!isHash(input.transaction)) return { chain: "unchecked", reason: "no transaction hash was given" };
   const network = input.network === undefined ? BASE_SEPOLIA : evmNetworkFor(input.network);
@@ -85,8 +87,8 @@ export async function checkSettlement(
   if (!input.nonce || !/^0x[0-9a-fA-F]{64}$/.test(input.nonce) || !isAddress(input.payer) || !isAddress(input.recipient)) {
     return { chain: "unchecked", reason: "this payment's signed authorization was not recorded, so it cannot be matched" };
   }
-  const rpc = options.rpcUrl ? { url: options.rpcUrl } : chainRpc(network);
-  if ("error" in rpc) return { chain: "unchecked", reason: `the chain was not read: ${rpc.error}` };
+  const rpc = await verifiedRpc(network, { ...options, ...(options.rpcUrl ? { rpcUrlFor: () => options.rpcUrl } : {}) });
+  if ("error" in rpc) return { chain: "unchecked", reason: rpc.error };
 
   let receipt: { status?: string; transactionHash?: string; blockNumber?: string; blockHash?: string; logs?: RpcLog[] } | null;
   try {
@@ -140,9 +142,8 @@ const AUTHORIZATION_STATE_ABI = [
 ] as const;
 
 
-/** A log search starts this long before the attempt began (clocks differ), and reads at most this many windows. */
+/** A log search starts this long before the attempt began (clocks differ). How far it reads: src/core/log-windows.mjs. */
 const SEARCH_MARGIN_S = 600;
-const MAX_LOG_WINDOWS = 100;
 
 export interface AuthorizationToFind {
   network: string;
@@ -182,7 +183,7 @@ interface Block {
  *
  * Never throws: a chain that cannot be read is `unreadable`, and decides nothing.
  */
-export async function findAuthorization(input: AuthorizationToFind, options: { rpcUrl?: string } & RpcOptions = {}): Promise<FoundPayment> {
+export async function findAuthorization(input: AuthorizationToFind, options: { rpcUrl?: string; endpointsFor?: EndpointChoice["endpointsFor"]; logSearch?: LogSearchOptions } & RpcOptions = {}): Promise<FoundPayment> {
   const network = evmNetworkFor(input.network);
   if (!network || !input.nonce || !/^0x[0-9a-fA-F]{64}$/.test(input.nonce) || !isAddress(input.payer) || !isAddress(input.recipient)) {
     return { found: false, reason: "this payment's signed authorization was not recorded, so it cannot be looked for" };
@@ -192,8 +193,10 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
     if (named.chain === "verified") return { found: true, transaction: input.transaction };
     if (named.included) return { found: true, transaction: input.transaction, final: false, paymentBlock: named.paymentBlock };
   }
-  const rpc = options.rpcUrl ? { url: options.rpcUrl } : chainRpc(network);
-  if ("error" in rpc) return { found: false, unreadable: true, reason: `the chain was not read: ${rpc.error}` };
+  // An RPC the calling code passed is believed alone, labelled "caller"; the environment never is (src/core/rpc-endpoints.mjs).
+  const choice = { ...options, ...(options.rpcUrl ? { rpcUrlFor: () => options.rpcUrl } : {}) };
+  const rpc = await verifiedRpc(network, choice);
+  if ("error" in rpc) return { found: false, unreadable: true, reason: rpc.error };
   const unreadable: FoundPayment = { found: false, unreadable: true, reason: "the chain could not be read: the RPC did not give a usable answer" };
   let authorizationUsed = false;
   try {
@@ -214,6 +217,7 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
       const validBefore = Date.parse(input.validBefore ?? "") / 1000;
       if (!Number.isFinite(validBefore)) return { found: false, reason: "the chain shows the owner's authorization unused so far" };
       const priorBlock = typeof input.paymentBlock === "string" && /^0x[0-9a-fA-F]+$/.test(input.paymentBlock) ? BigInt(input.paymentBlock) : undefined;
+      // (this one never releases a hold: the payment turns uncertain, and stays counted, on one endpoint's word)
       if (priorBlock !== undefined) {
         const final = await finalBlock(rpc.url, network, head, options);
         if (final && final.number > priorBlock && !(await usedAt(final.number))) return { found: false, inclusionGone: true, reason: "the authorization is unused at a final head past the earlier payment block" };
@@ -226,11 +230,19 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
         return { found: false, reason: `the chain shows the owner's authorization unused, and past its expiry at ${iso(validBefore)}, but no final block confirms that yet` };
       }
       if (await usedAt(final.number)) return unreadable;
-      return {
-        found: false,
-        never: true,
-        reason: `the chain shows the owner's authorization was never used, and it can no longer be: it expired at ${iso(validBefore)}, and the chain's final block is dated ${iso(final.timestamp)}`,
-      };
+      // One RPC shows it. A "never" that releases the hold needs the verdict set to agree at a final block of its own.
+      const dead = await confirmAuthorizationDead(network, { payer: input.payer, nonce: input.nonce, validBefore }, choice);
+      if (dead.dead) {
+        return {
+          found: false,
+          never: true,
+          reason: `the chain shows the owner's authorization was never used, and it can no longer be: it expired at ${iso(validBefore)}, and the chain's final block is dated ${iso(final.timestamp)}`,
+          agreement: dead.agreement,
+          agreedAt: dead.agreedAt,
+        };
+      }
+      if ("used" in dead) return { ...unreadable, authorizationUsed: true, reason: "the chain shows the owner's authorization unused on one RPC, but the RPC endpoints show it used" };
+      return { found: false, reason: `the chain shows the owner's authorization unused and past its expiry on one RPC, but ${dead.reason}` };
     }
     authorizationUsed = true;
     // Used: by a transfer (this payment) or, never through this client, a cancellation. Its log names the transaction.
@@ -245,35 +257,131 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
     };
     const since = Date.parse(input.since ?? "") / 1000;
     const start = Number.isFinite(since) ? await firstBlockFrom(rpc.url, since - SEARCH_MARGIN_S, head, network, options) : 0n;
-    const window = BigInt(network.logRange);
-    for (let from = start, i = 0; from <= head.number && i < MAX_LOG_WINDOWS; i += 1) {
-      const to = from + window - 1n > head.number ? head.number : from + window - 1n;
-      const logs = await rpcCall<{ topics?: string[]; transactionHash?: string; blockNumber?: string; blockHash?: string; removed?: boolean }[]>(
-        rpc.url,
-        "eth_getLogs",
-        [{ address: network.usdc.address, fromBlock: hex(from), toBlock: hex(to), topics: [[AUTHORIZATION_USED_TOPIC, AUTHORIZATION_CANCELED_TOPIC], topicOf(input.payer), input.nonce.toLowerCase()] }],
-        options,
-      );
-      for (const log of Array.isArray(logs) ? logs : []) {
-        if (!same(log.topics?.[2], input.nonce) || !same(log.topics?.[1], topicOf(input.payer))) continue;
-        if (same(log.topics?.[0], AUTHORIZATION_CANCELED_TOPIC)) {
-          if (await finalCancellation(log)) {
-            return { found: false, never: true, reason: "the chain shows the owner's authorization was cancelled, in a final block, so it can never be used" };
+    const nonce = input.nonce;
+    type Log = { topics?: string[]; transactionHash?: string; blockNumber?: string; blockHash?: string; removed?: boolean };
+    const search = await searchLogs<Log, FoundPayment>(
+      async (from, to) => {
+        const logs = await rpcCall<Log[]>(
+          rpc.url,
+          "eth_getLogs",
+          [{ address: network.usdc.address, fromBlock: hex(from), toBlock: hex(to), topics: [[AUTHORIZATION_USED_TOPIC, AUTHORIZATION_CANCELED_TOPIC], topicOf(input.payer), nonce.toLowerCase()] }],
+          options,
+        );
+        return Array.isArray(logs) ? logs : [];
+      },
+      { from: start, to: head.number, window: network.logRange, blockSeconds: network.blockSeconds },
+      async (logs) => {
+        for (const log of logs) {
+          if (!same(log.topics?.[2], nonce) || !same(log.topics?.[1], topicOf(input.payer))) continue;
+          if (same(log.topics?.[0], AUTHORIZATION_CANCELED_TOPIC)) {
+            if ((await finalCancellation(log)) && isHash(log.transactionHash)) {
+              const dead = await confirmCancellationFinal(network, { payer: input.payer, nonce, transaction: log.transactionHash }, choice);
+              if (dead.dead) {
+                return { found: false, never: true, reason: "the chain shows the owner's authorization was cancelled, in a final block, so it can never be used", agreement: dead.agreement, agreedAt: dead.agreedAt };
+              }
+              return { found: false, reason: `the chain shows the owner's authorization cancelled in a final block on one RPC, but ${"reason" in dead ? dead.reason : "it is not final on every endpoint"}` };
+            }
+            return { found: false, reason: "the chain shows the owner's authorization cancelled, but the client could not confirm that the cancellation is final" };
           }
-          return { found: false, reason: "the chain shows the owner's authorization cancelled, but the client could not confirm that the cancellation is final" };
+          if (!same(log.topics?.[0], AUTHORIZATION_USED_TOPIC) || !isHash(log.transactionHash)) continue;
+          const check = await checkSettlement({ ...input, network: network.caip2, transaction: log.transactionHash }, options);
+          if (check.chain === "verified") return { found: true, transaction: log.transactionHash };
+          if (check.included) return { found: true, transaction: log.transactionHash, final: false, paymentBlock: check.paymentBlock };
+          if (check.chain === "unchecked") return { ...unreadable, authorizationUsed: true };
         }
-        if (!same(log.topics?.[0], AUTHORIZATION_USED_TOPIC) || !isHash(log.transactionHash)) continue;
-        const check = await checkSettlement({ ...input, network: network.caip2, transaction: log.transactionHash }, options);
-        if (check.chain === "verified") return { found: true, transaction: log.transactionHash };
-        if (check.included) return { found: true, transaction: log.transactionHash, final: false, paymentBlock: check.paymentBlock };
-        if (check.chain === "unchecked") return { ...unreadable, authorizationUsed: true };
-      }
-      from = to + 1n;
-    }
-    return { found: false, unreadable: true, authorizationUsed: true, reason: "the chain shows the owner's authorization was used, but its transaction was not found in the blocks searched" };
+        return undefined;
+      },
+      options.logSearch,
+    );
+    if (search.found) return search.found;
+    return {
+      found: false,
+      unreadable: true,
+      authorizationUsed: true,
+      reason: search.covered
+        ? "the chain shows the owner's authorization was used, but its transaction was not found in the blocks searched"
+        : `the chain shows the owner's authorization was used, but its logs could not be searched past block ${search.searchedTo}`,
+    };
   } catch {
     return authorizationUsed ? { ...unreadable, authorizationUsed: true } : unreadable;
   }
+}
+
+/** What the verdict set says about an authorization that can no longer be used. */
+export type Dead =
+  | { dead: true; agreement: ChainAgreement; agreedAt: ChainAgreedAt }
+  | { dead: false; used: true }
+  | { dead: false; reason: string };
+
+const agreedAtOf = (r: { agreement: ChainAgreement; operators: string[]; block: { number: bigint; hash: string } }) => ({
+  agreement: r.agreement,
+  agreedAt: { operators: r.operators, block: String(r.block.number), blockHash: r.block.hash } satisfies ChainAgreedAt,
+});
+
+/**
+ * Whether the endpoints that decide a verdict agree, at one final block, that the authorization is unused and that block is
+ * dated at or past `validBefore` (unix seconds): then nothing can use it any more. Each endpoint's value is read bound to
+ * the block by its hash. Never throws. A disagreement, a missing endpoint or an unapproved environment RPC is `reason`, in words.
+ */
+export async function confirmAuthorizationDead(
+  network: EvmNetwork,
+  authorization: { payer: string; nonce: string; validBefore: number },
+  options: EndpointChoice & RpcOptions = {},
+): Promise<Dead> {
+  const data = encodeFunctionData({ abi: AUTHORIZATION_STATE_ABI, functionName: "authorizationState", args: [authorization.payer as `0x${string}`, authorization.nonce as `0x${string}`] });
+  const agreed = await agreeAtFinalEvm({
+    set: verdictSet(network, options),
+    call: rpcCaller(options),
+    chainId: network.chainId,
+    finality: network.finality,
+    read: async (url, _final, hash) =>
+      decodeFunctionResult({ abi: AUTHORIZATION_STATE_ABI, functionName: "authorizationState", data: await rpcCall<`0x${string}`>(url, "eth_call", [{ to: network.usdc.address, data }, { blockHash: hash }], options) }),
+  });
+  if (!agreed.agreed) return { dead: false, reason: agreementWords(agreed) };
+  if (agreed.value === true) return { dead: false, used: true };
+  if (agreed.block.timestamp < authorization.validBefore) return { dead: false, reason: "no agreed final block is past its expiry yet" };
+  return { dead: true, ...agreedAtOf(agreed) };
+}
+
+/**
+ * Whether the endpoints that decide a verdict agree, at one final block, that the authorization is used by a successful
+ * transaction in a block at or below it that logged its cancellation: the cancellation is the chain's, and nothing can use the
+ * authorization any more. Never throws.
+ */
+export async function confirmCancellationFinal(
+  network: EvmNetwork,
+  cancellation: { payer: string; nonce: string; transaction: string },
+  options: EndpointChoice & RpcOptions = {},
+): Promise<Dead> {
+  const data = encodeFunctionData({ abi: AUTHORIZATION_STATE_ABI, functionName: "authorizationState", args: [cancellation.payer as `0x${string}`, cancellation.nonce as `0x${string}`] });
+  const agreed = await agreeAtFinalEvm({
+    set: verdictSet(network, options),
+    call: rpcCaller(options),
+    chainId: network.chainId,
+    finality: network.finality,
+    read: async (url, hexFinal, hash) => {
+      const used = decodeFunctionResult({ abi: AUTHORIZATION_STATE_ABI, functionName: "authorizationState", data: await rpcCall<`0x${string}`>(url, "eth_call", [{ to: network.usdc.address, data }, { blockHash: hash }], options) });
+      const r = await rpcCall<{ transactionHash?: string; status?: string; blockNumber?: string; blockHash?: string; logs?: { address?: string; topics?: string[] }[] } | null>(url, "eth_getTransactionReceipt", [cancellation.transaction], options);
+      if (r === null || r === undefined) return { used, receipt: null };
+      if (typeof r !== "object" || !isHash(r.transactionHash) || r.transactionHash.toLowerCase() !== cancellation.transaction.toLowerCase()) throw new Error("not this receipt");
+      // pending, later than the agreed block, or in a block that is not the chain's: a state, never a status
+      if (typeof r.blockNumber !== "string" || !/^0x[0-9a-fA-F]+$/.test(r.blockNumber) || !isHash(r.blockHash)) return { used, receipt: { state: "pending" } };
+      if (BigInt(r.blockNumber) > BigInt(hexFinal)) return { used, receipt: { state: "later" } };
+      const block = await rpcCall<{ hash?: string } | null>(url, "eth_getBlockByNumber", [r.blockNumber, false], options);
+      if (!block || typeof block.hash !== "string" || block.hash.toLowerCase() !== r.blockHash.toLowerCase()) return { used, receipt: { state: "off-chain" } };
+      const cancels = (Array.isArray(r.logs) ? r.logs : []).some(
+        (l) => same(l?.address, network.usdc.address) && Array.isArray(l.topics) && same(l.topics[0], AUTHORIZATION_CANCELED_TOPIC) && same(l.topics[1], topicOf(cancellation.payer)) && same(l.topics[2], cancellation.nonce),
+      );
+      return { used, receipt: { status: r.status, blockNumber: r.blockNumber, blockHash: r.blockHash, cancels } };
+    },
+  });
+  if (!agreed.agreed) return { dead: false, reason: agreementWords(agreed) };
+  const v = agreed.value as { used?: boolean; receipt?: { status?: string; blockNumber?: string; cancels?: boolean } | null };
+  const receipt = v.receipt;
+  if (v.used === true && receipt && receipt.status === "0x1" && receipt.cancels === true && typeof receipt.blockNumber === "string" && BigInt(receipt.blockNumber) <= agreed.block.number) {
+    return { dead: true, ...agreedAtOf(agreed) };
+  }
+  return { dead: false, reason: "the RPC endpoints do not show the cancellation in a final block" };
 }
 
 /**

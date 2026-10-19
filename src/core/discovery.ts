@@ -19,8 +19,10 @@
 
 import { z } from "zod";
 import { describeNetwork, networkFor, toCaip2 } from "./chain.js";
+import { readBody } from "./http.js";
 import { SUPPORTED_NETWORKS } from "./rails/index.js";
 import { chainName, isKnownChainName, isKnownRail, payNetworkFor, routesFor } from "./routes.js";
+import { sellerUrlProblem } from "./seller-url.mjs";
 import { SellerTextError, untrustedText } from "./text.js";
 import { isReferralToken } from "../seller/referral.js";
 import { rememberReferrals } from "./referrals.js";
@@ -88,6 +90,8 @@ const INDEX_TIMEOUT_MS = 5_000;
 const CATALOGUE_TIMEOUT_MS = 5_000;
 const CATALOGUE_CACHE_MS = 5 * 60_000;
 const PROBE_TIMEOUT_MS = 3_000;
+/** The most a discovery answer (the index, the hosted catalogue) may be: past it, the answer is refused. */
+const DISCOVERY_MAX_BYTES = 2_000_000;
 const DEFAULT_LIMIT = 20;
 
 /** Words that should surface the demo service even though its text does not contain them. */
@@ -130,6 +134,8 @@ const BASE_SEPOLIA_X402: Pick<ServiceListing, "rails" | "chains" | "routes"> = {
 /** The one service this release can discover, quote and pay without any further setup. */
 export function demoService(): ServiceListing {
   const endpoint = process.env.SUPERSTABLES_DEMO_SERVICE_URL ?? HOSTED_DEMO_SERVICE_URL;
+  // The override names where a payment goes, so it gets the rule every seller URL gets.
+  const problem = sellerUrlProblem(endpoint);
   const params: ServiceParam[] = [
     {
       name: "asset",
@@ -162,8 +168,10 @@ export function demoService(): ServiceListing {
     testnet: true,
     // Live spot prices, not prepared output: the payment is the demo, the data is real.
     mock: false,
-    actionable: true,
+    actionable: problem === undefined,
+    ...(problem !== undefined ? { notActionableReason: `SUPERSTABLES_DEMO_SERVICE_URL ${problem}` } : {}),
     ...BASE_SEPOLIA_X402,
+    routes: problem === undefined ? BASE_SEPOLIA_X402.routes : { pay: false, budget: [] },
   };
 }
 
@@ -220,12 +228,12 @@ export function catalogue(): ServiceListing[] {
  */
 export async function allListings(
   options: { includeHosted?: boolean; demoServices?: boolean } = {},
-): Promise<{ listings: ServiceListing[]; warnings: string[] }> {
+): Promise<{ listings: ServiceListing[]; warnings: string[]; catalogueRead: boolean }> {
   const { includeHosted = true, demoServices = demoServicesEnabled() } = options;
   const builtIn = catalogue();
   const url = hostedCatalogueUrl();
   // The hosted catalogue holds Superstables' testnet services, most of them simulated: it is read only for the demo.
-  if (!includeHosted || !demoServices || !url) return { listings: builtIn, warnings: [] };
+  if (!includeHosted || !demoServices || !url) return { listings: builtIn, warnings: [], catalogueRead: false };
 
   const warnings: string[] = [];
   let hosted: ServiceListing[];
@@ -233,7 +241,7 @@ export async function allListings(
     hosted = await fetchHostedCatalogue(url);
   } catch (err) {
     warnings.push(`The service catalogue could not be read (${message(err)}); showing the built-in listings only.`);
-    return { listings: builtIn, warnings };
+    return { listings: builtIn, warnings, catalogueRead: false };
   }
 
   const known = new Set(builtIn.map((s) => s.id));
@@ -243,7 +251,7 @@ export async function allListings(
     merged.push(listing);
     known.add(listing.id);
   }
-  return { listings: merged, warnings };
+  return { listings: merged, warnings, catalogueRead: true };
 }
 
 /**
@@ -255,14 +263,16 @@ export async function findServices(options: FindServicesOptions = {}): Promise<D
 
   // Network sources (the hosted catalogue and the index) are both behind includeIndex, so a
   // caller that asked for no network gets none. They are read side by side.
-  const [{ listings, warnings }, index] = await Promise.all([
+  const [{ listings, warnings, catalogueRead }, index] = await Promise.all([
     allListings({ includeHosted: includeIndex, demoServices }),
     includeIndex && indexUrl()
       ? fetchIndex(query, limit).then((rows) => ({ rows, error: undefined })).catch((err: unknown) => ({ rows: [] as ServiceListing[], error: message(err) }))
       : Promise.resolve({ rows: [] as ServiceListing[], error: undefined }),
   ]);
   if (index.error !== undefined) {
-    warnings.push(`The Superstables index could not be read (${index.error}); showing the built-in catalogue only.`);
+    // Worded by what was read: the index listings are missing, whatever else did load.
+    const shown = catalogueRead ? "The built-in listings and the service catalogue are shown." : "The built-in listings are shown.";
+    warnings.push(`The Superstables index could not be read (${index.error}); its listings are missing below. ${shown}`);
   }
 
   // Catalogue listings that plausibly match, best match first: with a dozen prepared services
@@ -432,9 +442,12 @@ async function probeDemo(service: ServiceListing): Promise<ServiceListing> {
   const url = service.params.some((p) => p.required && p.example)
     ? withExamples(service)
     : service.endpoint;
+  // A seller URL that is not https (or this machine) is not asked, not even for its status.
+  if (sellerUrlProblem(url) !== undefined) return { ...service, live: false };
   for (const method of ["HEAD", "GET"] as const) {
     try {
-      const res = await fetch(url, { method, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+      const res = await fetch(url, { method, redirect: "error", signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+      res.body?.cancel().catch(() => undefined);
       if (method === "HEAD" && (res.status === 405 || res.status === 501)) continue; // try GET
       const live = res.status === 402;
       return live ? { ...service, live, lastSeenLive: new Date().toISOString() } : { ...service, live };
@@ -517,9 +530,11 @@ export async function fetchHostedCatalogue(url?: string): Promise<ServiceListing
     throw new Error(catalogueFailure.error);
   }
   try {
-    const res = await fetch(target, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(CATALOGUE_TIMEOUT_MS) });
+    const problem = sellerUrlProblem(target);
+    if (problem) throw new Error(`${process.env.SUPERSTABLES_CATALOGUE_URL !== undefined ? "SUPERSTABLES_CATALOGUE_URL" : "the catalogue URL"} ${problem}`);
+    const res = await fetch(target, { headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(CATALOGUE_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const parsed = HostedCatalogueSchema.safeParse(await res.json());
+    const parsed = HostedCatalogueSchema.safeParse(await readDiscoveryJson(res, CATALOGUE_TIMEOUT_MS, "catalogue"));
     if (!parsed.success) throw new Error("the response is not a catalogue");
     const listings: ServiceListing[] = [];
     for (const row of parsed.data.services) {
@@ -537,17 +552,28 @@ export async function fetchHostedCatalogue(url?: string): Promise<ServiceListing
   }
 }
 
-function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing | undefined {
-  let endpoint: URL;
+/** An answer of the index or the catalogue as JSON, read under a cap and a deadline; throws when it is cut or broken. */
+async function readDiscoveryJson(res: Response, ms: number, what: "index" | "catalogue"): Promise<unknown> {
+  const { text, end } = await readBody(res, DISCOVERY_MAX_BYTES, ms, DISCOVERY_MAX_BYTES + 1);
+  if (end === "cap") throw new Error("answered with more than 2 MB");
+  if (end === "deadline") throw new Error("did not finish answering in time");
+  if (end === "error") throw new Error("the answer broke off");
   try {
-    endpoint = new URL(row.endpoint);
+    return JSON.parse(text);
+  } catch {
+    // JSON.parse quotes the bytes it stopped at, and they are the server's: say what went wrong in the client's own words
+    throw new Error(`the ${what} answer is not valid JSON`);
+  }
+}
+
+function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing | undefined {
+  try {
+    new URL(row.endpoint);
   } catch {
     return undefined;
   }
   // A payment credential travels to the endpoint: only https, or plain http on this machine.
-  const secure =
-    endpoint.protocol === "https:" ||
-    (endpoint.protocol === "http:" && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(endpoint.hostname));
+  const secure = sellerUrlProblem(row.endpoint) === undefined;
   const network = toCaip2(row.payment.network);
   const networkLabel = row.payment.networkLabel ?? describeNetwork(row.payment.network);
   // A chain `pay` pays on, in that chain's token, over the protocol its rail speaks (MPP on Tempo, x402 elsewhere).
@@ -600,7 +626,10 @@ function fromHostedRow(row: z.infer<typeof HostedListingSchema>): ServiceListing
     ...(row.example_prompts && row.example_prompts.length > 0 ? { examplePrompts: row.example_prompts } : {}),
     rails: [row.payment.rail],
     chains: [chainName(network)],
-    routes: routesFor([row.payment.rail], [chainName(network)]),
+    // With `pay` off where the endpoint cannot carry a credential safely: the field the CLI gates a payment on.
+    routes: secure
+      ? routesFor([row.payment.rail], [chainName(network)])
+      : { pay: false, budget: [] },
   };
 }
 
@@ -623,16 +652,20 @@ interface IndexRow {
 }
 
 async function fetchIndex(query: string, limit: number): Promise<ServiceListing[]> {
-  const url = new URL(indexUrl() ?? DEFAULT_INDEX_URL);
+  const target = indexUrl() ?? DEFAULT_INDEX_URL;
+  const problem = sellerUrlProblem(target);
+  if (problem) throw new Error(`${process.env.SUPERSTABLES_INDEX_URL !== undefined ? "SUPERSTABLES_INDEX_URL" : "the index URL"} ${problem}`);
+  const url = new URL(target);
   url.searchParams.set("q", query);
   url.searchParams.set("live", "true");
   url.searchParams.set("limit", String(limit));
   const res = await fetch(url.toString(), {
     headers: { accept: "application/json" },
+    redirect: "error",
     signal: AbortSignal.timeout(INDEX_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const body = (await res.json()) as { services?: IndexRow[] } | IndexRow[];
+  const body = (await readDiscoveryJson(res, INDEX_TIMEOUT_MS, "index")) as { services?: IndexRow[] } | IndexRow[];
   const rows = Array.isArray(body) ? body : (body.services ?? []);
   return rows.filter((row) => row && row.id && row.endpoint).map(fromIndexRow);
 }
@@ -653,7 +686,7 @@ function fromIndexRow(row: IndexRow): ServiceListing {
   // endpoint, and `chains` is the row's own claim about where it pays, so neither is a check.
   let endpoint: URL | undefined;
   try { endpoint = new URL(String(row.endpoint)); } catch {}
-  const secure = endpoint !== undefined && (endpoint.protocol === "https:" || (endpoint.protocol === "http:" && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(endpoint.hostname)));
+  const secure = endpoint !== undefined && sellerUrlProblem(String(row.endpoint)) === undefined;
   return {
     // Index text is whoever registered the service. It reaches an agent that then chooses what to pay and
     // what to tell the owner, so it is flattened to one bounded line here rather than at each place it is shown.
@@ -697,9 +730,9 @@ function fromIndexRow(row: IndexRow): ServiceListing {
             : `this client does not pay ${describeOffer(rails, chains)}`,
     rails,
     chains,
-    // routes, with `pay` off where the endpoint cannot carry a credential safely. This is the field
+    // routes, with `pay` and the budget routes off where the endpoint cannot carry a credential safely. This is the field
     // the CLI gates a payment on, so it is where the rule belongs.
-    routes: secure ? routes : { ...routes, pay: false },
+    routes: secure ? routes : { pay: false, budget: [] },
     ...referralOf(row),
   };
 }

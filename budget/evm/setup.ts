@@ -26,17 +26,24 @@ import "./cli-guard.mjs";
 // complete it. Once recorded, the owner never changes silently: --new-owner replaces it explicitly, and only while no
 // budget is live (allowance 0).
 // npx tsx budget/evm/setup.ts [--chain <name>] [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund [--fund-amount <amount>]]] [--timeout <s>]
-//                             [--no-open] [--owner-key-file <path>]
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+//                             [--no-open] [--owner-key-file <path>] [--key-store file|os-keychain]
+import { existsSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 import { EVM_CHAINS } from "./chains.mjs";
-import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, toUsdc, usageError, assertRpcChain, publicClient, tx } from "./lib.ts";
-import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, fundingTx, fundValue, DEFAULT_FUND_AMOUNT, grantTx, grantEnforced, GRANT_NOT_ENFORCED, approveRow, capWords, checkFundSent, checkGrantSent, REVOKE_HINT, type SentCheck } from "./owner.ts";
+import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, allowanceAgreed, agreementWords, usuallyWords, toUsdc, usageError, assertRpcChain, assertReadChain, readChainProblem, publicClient, tx, oneLine } from "./lib.ts";
+import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, fundingTx, fundValue, DEFAULT_FUND_AMOUNT, grantTx, approveResetHostedProblem, grantEnforced, GRANT_NOT_ENFORCED, approveRow, capWords, checkFundSent, checkGrantSent, REVOKE_HINT, type SentCheck } from "./owner.ts";
 import { NEW_OWNER } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
 import { chosenSite, isSiteRequestId, siteOrigin } from "../site.mjs";
+import { retiredProblem } from "../retired.mjs";
+import { HOME, ensurePrivateDir } from "../paths.mjs";
+import { KEYCHAIN_UNAVAILABLE, deleteAgentSecret, storeAgentSecret } from "../os-keychain.mjs";
+import { overwriteInPlace } from "../../src/core/secret-overwrite.mjs";
+import { prepareSecretFile } from "../secret-file.mjs";
+import { resumeKeychainMove } from "../keychain-move.mjs";
+import { SETUP_KEYS, agentBinding, bindingLines, signLocalBinding } from "../owner-binding.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const d = (EVM_CHAINS as Record<string, any>)[CFG.key].doctor;
@@ -48,7 +55,7 @@ let SITE: string | null = null;
 if (HOSTED) {
   if (OWNER_KEY_FILE) { console.error("error: --hosted asks the owner on the site; with --owner-key-file there is no owner to ask"); process.exit(2); }
   const s = chosenSite(arg("site"));
-  if (s.error) { console.error(`error: --site: ${s.error}`); process.exit(2); }
+  if (s.error) { console.error(`error: ${s.error}`); process.exit(2); }
   SITE = s.origin as string;
 } else if (arg("site")) { console.error("error: --site goes with --hosted"); process.exit(2); }
 // The setup command that replaces the owner. On a hosted chain it names --hosted and the exact site: without them, setup
@@ -64,6 +71,13 @@ const BUNDLE = GRANT !== undefined || FUND;
 if (BUNDLE && !HOSTED) usageError("--grant and --fund go with --hosted: without it, run setup, then fund-agent and grant, each with its own approval");
 const CAP = GRANT !== undefined ? toUsdc(GRANT) : undefined;
 if (CAP === 0n) usageError("--grant must be above 0");
+if (CAP !== undefined) {
+  const reset = approveResetHostedProblem();
+  if (reset) {
+    console.log(`REFUSED: ${reset}. Nothing was requested.`);
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason: reset, next: "run setup --hosted without --grant to add the agent, and ask the owner to grant on this computer (setup without --hosted)" }));
+  }
+}
 const FUND_AMT = FUND ? arg("fund-amount") ?? DEFAULT_FUND_AMOUNT : undefined;
 let FUND_VALUE = 0n;
 if (FUND_AMT !== undefined) {
@@ -71,22 +85,113 @@ if (FUND_AMT !== undefined) {
 }
 
 // 1. the agent key
+// where the secret lives: the key file (default), or the OS keychain with only its address in the file (src: ../os-keychain.mjs)
+const STORE = arg("key-store") ?? "file";
+if (STORE !== "file" && STORE !== "os-keychain") usageError(`--key-store must be file or os-keychain, not "${STORE.slice(0, 40)}"`);
+// the folders setup writes into must be real folders only this user can write to, checked before anything is written
+for (const dir of [dirname(AGENT_ENV), dirname(PUBLIC_ENV)]) {
+  try {
+    ensurePrivateDir(dir, { root: HOME });
+  } catch (err) {
+    const reason = (err as Error).message;
+    console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`);
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: `make ${dir} a folder only you can write to (chmod 700), then run setup again` }));
+  }
+}
+// a move into the keychain that a killed setup left half done (the key file holds only zeros): finish it, or say where the key is
+const resumed = resumeKeychainMove("evm", AGENT_ENV, {
+  storeVar: "B4_AGENT_KEY_STORE", addressVar: "B4_AGENT_ADDRESS", keyVar: "B4_AGENT_KEY",
+  addressOf: (k) => privateKeyToAccount(k as Hex).address, publicAddress: () => publicEnv().B4_AGENT_ADDRESS,
+});
+if (resumed.state === "refused") {
+  console.log(`REFUSED: ${resumed.reason}. Nothing was changed on this machine.\nNext: ${resumed.next}`);
+  process.exit(emit("setup", 3, { state: "refused_precheck", reason: resumed.reason, next: resumed.next }));
+}
+if (resumed.state === "finished") console.log(`finished moving the agent key into the keychain: an earlier setup stopped after overwriting ${AGENT_ENV} and before replacing it (agent ${resumed.address})`);
 let agentAddr: Address;
 const agentFile = agentFileValues();
 if (agentFile.problem !== undefined) {
   // reusing it would hand the owner's budget to a key other users on this machine may already hold
   console.log(`REFUSED: ${agentFile.problem}. Nothing was changed on this machine.`);
-  process.exit(emit("setup", 3, { state: "refused_precheck", reason: agentFile.problem, next: `make ${AGENT_ENV} a regular file only you can read (chmod 600), then run setup again` }));
+  process.exit(emit("setup", 3, { state: "refused_precheck", reason: agentFile.problem, next: `make ${AGENT_ENV} a regular file only you can read (chmod 600) that names a key in this machine's keychain or holds one, then run setup again` }));
 }
+const keychainRefusal = (err: unknown): never => {
+  const unavailable = (err as { code?: string }).code === KEYCHAIN_UNAVAILABLE;
+  const reason = unavailable ? `no keychain tool (secret-tool or security) answered: ${(err as Error).message}` : `the keychain refused the key: ${(err as Error).message}`;
+  console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`);
+  process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: unavailable ? "install secret-tool (libsecret-tools) on Linux, or use macOS, or run setup without --key-store os-keychain" : "unlock the keychain, then run setup again" }));
+};
+let keyStore: "file" | "os-keychain" = "file";
+// A grant bundled into this setup is asked for over an older allowance only when it can be read to be 0: a key created in this very
+// run cannot have one, a key that already existed might.
+const createdNow = !existsSync(AGENT_ENV);
 if (existsSync(AGENT_ENV)) {
+  const inKeychain = agentFile.env.B4_AGENT_KEY_STORE === "os-keychain";
   agentAddr = privateKeyToAccount(need(agentFile.env, "B4_AGENT_KEY", AGENT_ENV) as Hex).address;
-  console.log(`agent key file ${AGENT_ENV} exists; reusing it (agent ${agentAddr})`);
+  keyStore = inKeychain ? "os-keychain" : "file";
+  if (inKeychain) {
+    console.log(`agent key file ${AGENT_ENV} exists; reusing it (agent ${agentAddr}); the key is in the OS keychain`);
+  } else if (STORE === "os-keychain") {
+    // move the key: into the keychain first, then the file's own bytes are overwritten before the file is replaced
+    try {
+      storeAgentSecret("evm", agentAddr, agentFile.env.B4_AGENT_KEY);
+    } catch (err) {
+      keychainRefusal(err);
+    }
+    const rest = Object.entries(agentFile.env).filter(([k]) => k !== "B4_AGENT_KEY" && k !== "B4_AGENT_KEY_STORE" && k !== "B4_AGENT_ADDRESS");
+    // the replacement is written beside the file first; the old bytes are overwritten only once it exists
+    let swap: ReturnType<typeof prepareSecretFile>;
+    try {
+      swap = prepareSecretFile(AGENT_ENV, `B4_AGENT_KEY_STORE=os-keychain\nB4_AGENT_ADDRESS=${agentAddr}\n${rest.map(([k, v]) => `${k}=${v}\n`).join("")}`);
+    } catch (err) {
+      const reason = `the replacement for ${AGENT_ENV} could not be written (${(err as Error).message}); the key file was not changed`;
+      console.log(`REFUSED: ${reason}. The keychain entry made for the key is harmless and is overwritten on the next run.`);
+      process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: `make ${dirname(AGENT_ENV)} writable (chmod 700), then run setup again` }));
+    }
+    const gone = overwriteInPlace(AGENT_ENV);
+    try {
+      swap.commit();
+    } catch (err) {
+      swap.discard();
+      console.log(`REFUSED: the key file could not be replaced (${(err as Error).message}). Its old bytes are ${gone === "overwritten" ? "overwritten" : `not overwritten (${gone})`}; the key is in the keychain. Put these lines in ${AGENT_ENV}:\nB4_AGENT_KEY_STORE=os-keychain\nB4_AGENT_ADDRESS=${agentAddr}`);
+      process.exit(emit("setup", 3, { state: "refused_precheck", reason: `the key file could not be replaced (${(err as Error).message})`, next: `write the lines above into ${AGENT_ENV}, then run setup again` }));
+    }
+    keyStore = "os-keychain";
+    console.log(gone === "overwritten"
+      ? `moved the agent key into the keychain; the file's old bytes were overwritten (agent ${agentAddr})`
+      : `moved the agent key into the keychain (agent ${agentAddr}); the file's old bytes could not be overwritten (${gone}): delete any copy of the old file you made`);
+  } else {
+    console.log(`agent key file ${AGENT_ENV} exists; reusing it (agent ${agentAddr})`);
+  }
 } else {
   const key = newKey();
   agentAddr = privateKeyToAccount(key).address;
-  mkdirSync(dirname(AGENT_ENV), { recursive: true, mode: 0o700 });
-  writeFileSync(AGENT_ENV, `B4_AGENT_KEY=${key}\nB4_AGENT_ADDRESS=${agentAddr}\n`, { mode: 0o600, flag: "wx" });
-  console.log(`created the agent key file ${AGENT_ENV} (mode 600): agent ${agentAddr}`);
+  if (STORE === "os-keychain") {
+    // the keychain first: if it refuses, no file is written and no key is lost
+    try {
+      storeAgentSecret("evm", agentAddr, key);
+    } catch (err) {
+      keychainRefusal(err);
+    }
+    try {
+      writeFileSync(AGENT_ENV, `B4_AGENT_KEY_STORE=os-keychain\nB4_AGENT_ADDRESS=${agentAddr}\n`, { mode: 0o600, flag: "wx" });
+    } catch (err) {
+      try { deleteAgentSecret("evm", agentAddr); } catch { /* the entry belongs to a key nothing else knows */ }
+      throw err;
+    }
+    keyStore = "os-keychain";
+    console.log(`created the agent key in the OS keychain (service superstables-budget-agent, account evm:${agentAddr}); ${AGENT_ENV} (mode 600) holds only its address`);
+  } else {
+    writeFileSync(AGENT_ENV, `B4_AGENT_KEY=${key}\nB4_AGENT_ADDRESS=${agentAddr}\n`, { mode: 0o600, flag: "wx" });
+    console.log(`created the agent key file ${AGENT_ENV} (mode 600): agent ${agentAddr}`);
+  }
+}
+const keyWhere = keyStore === "os-keychain" ? "in its OS keychain (only its address is in the key file)" : `in ${AGENT_ENV}`;
+// a key that `budget rotate` retired is never set up again (the owner's revoke on chain is what stops it elsewhere)
+const retired = retiredProblem("evm", agentAddr);
+if (retired) {
+  console.log(`REFUSED: ${retired}. Nothing was changed.`);
+  process.exit(emit("setup", 3, { state: "refused_precheck", reason: retired, next: `move the agent key file away (superstables budget rotate --rail evm does this), then run setup again` }));
 }
 
 const p = publicEnv();
@@ -99,6 +204,7 @@ if (p.B4_AGENT_ADDRESS && !same(p.B4_AGENT_ADDRESS, agentAddr)) {
 // on record for this agent: a public file that names another agent was refused above; one that names no agent (an edit)
 // still records its owner, which only --new-owner replaces
 const recorded = p.B4_OWNER_ADDRESS && (!p.B4_AGENT_ADDRESS || same(p.B4_AGENT_ADDRESS, agentAddr)) ? (p.B4_OWNER_ADDRESS as Address) : undefined;
+if (recorded && (NEW_OWNER || (BUNDLE && CAP !== undefined))) await assertReadChain("setup"); // before the first allowance or balance read
 if (NEW_OWNER && recorded) {
   // never move the owner while the agent can still spend from the old one
   const live = await allowanceOf(recorded, agentAddr).catch(() => null);
@@ -119,7 +225,7 @@ if (NEW_OWNER && recorded) {
 }
 // The link recorded with the owner (setup --hosted), on this same site: an "already linked" answer is checked against it.
 // None with --new-owner, or when the site changes: then only a fresh link the owner signs records an owner.
-const recordedSite = p.APPROVALS === "hosted" && p.SITE ? siteOrigin(p.SITE).origin : undefined;
+const recordedSite = p.APPROVALS === "hosted" && p.SITE ? siteOrigin(p.SITE, "read").origin : undefined;
 const prior: PriorLink | null = recorded && !NEW_OWNER && SITE && recordedSite === SITE && isSiteRequestId(p.LINK_ID) && typeof p.LINK_CODE === "string" && p.LINK_CODE ? { owner: recorded, linkId: p.LINK_ID, linkCode: p.LINK_CODE } : null;
 if (HOSTED && recordedSite && recordedSite !== SITE) console.log(`this chain's approvals are hosted on ${recordedSite}; moving them to ${SITE} means adding the agent there, with a new owner proof`);
 let linked: { id: string; code: string } | undefined;
@@ -135,12 +241,33 @@ if (BUNDLE) {
     then.push({ kind: "fund_agent", transaction: { to: fundTx.to, data: fundTx.data ?? "0x", value: `0x${(fundTx.value ?? 0n).toString(16)}` } });
   }
   if (CAP !== undefined) {
-    // a live allowance is never overwritten silently (grant refuses the same way)
-    const live = recorded && !NEW_OWNER ? await allowanceOf(recorded, agentAddr).catch(() => null) : 0n;
-    if (live !== null && live > 0n) {
-      const reason = `a budget is live: the owner on record ${recorded} still allows the agent ${usdc(live)} ${SYM}. A grant overwrites it in place, so it is not asked for here`;
-      console.log(`REFUSED: ${reason}. Nothing was requested.`);
-      process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `revoke first (superstables budget revoke --rail evm${chainFlag}), then superstables budget grant --rail evm${chainFlag} --amount A` }));
+    // a live allowance is never overwritten silently (grant refuses the same way), and an unreadable one is not taken as 0
+    if (!createdNow) {
+      const refuse = (reason: string, next: string): never => {
+        console.log(`REFUSED: ${reason}. Nothing was requested.`);
+        return process.exit(emit("setup", 3, { state: "refused_precheck", reason, ...(recorded ? { owner: recorded } : {}), next }));
+      };
+      if (!recorded || NEW_OWNER) refuse(
+        !recorded
+          ? "this agent key existed before this setup, and no owner is recorded for it here, so whether an older allowance is live cannot be read. Set up first (link), then grant"
+          : "this agent key existed before this setup, and this setup replaces the owner, so whether the new owner already gives this agent an allowance cannot be read before the link. Set up first (link), then grant",
+        `superstables budget setup --rail evm${chainFlag}${HOSTED ? " --hosted" : ""}${NEW_OWNER ? " --new-owner" : ""}, then superstables budget grant --rail evm${chainFlag} --amount A`,
+      );
+      const at = await allowanceAgreed(recorded!, agentAddr);
+      if (!at.agreed) refuse(`the allowance at the chain's final block could not be confirmed (${agreementWords(at)})`, `superstables budget doctor --rail evm${chainFlag}, then run setup again`);
+      if (at.value !== 0n) {
+        const latest = await allowanceOf(recorded!, agentAddr).catch(() => null);
+        refuse(
+          latest === 0n
+            ? `the previous revoke is not final yet: the allowance reads 0 at the latest block but ${usdc(at.value as bigint)} ${SYM} at the final block. Grant again once it is final${usuallyWords()}`
+            : `a budget is live: the owner on record ${recorded} still allows the agent ${usdc(at.value as bigint)} ${SYM}. A grant overwrites it in place, so it is not asked for here`,
+          latest === 0n ? `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final` : `revoke first (superstables budget revoke --rail evm${chainFlag}), then superstables budget grant --rail evm${chainFlag} --amount A`,
+        );
+      }
+      if (/^\d+$/.test(p.B4_REVOKED_BLOCK ?? "") && at.block.number < BigInt(p.B4_REVOKED_BLOCK!)) refuse(
+        `the previous revoke is not final yet: it landed in block ${p.B4_REVOKED_BLOCK} and the final block is ${at.block.number}. Grant again once it is final${usuallyWords()}`,
+        `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final`,
+      );
     }
     const g = grantTx(agentAddr, CAP);
     then.push({ kind: "grant", transaction: { to: g.to, data: g.data, value: "0x0" } });
@@ -149,7 +276,7 @@ if (BUNDLE) {
     await assertRpcChain();
     startBlock = await publicClient.getBlockNumber();
   } catch (e) {
-    const reason = `could not read ${CFG.label} before asking (${(e as Error).message.split("\n")[0]}); the transactions could not be checked afterwards`;
+    const reason = `could not read ${CFG.label} before asking (${oneLine((e as Error).message, 300)}); the transactions could not be checked afterwards`;
     console.log(`REFUSED: ${reason}. Nothing was requested.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: `superstables budget doctor --rail evm${chainFlag} checks the RPC; then run the same command again` }));
   }
@@ -160,16 +287,32 @@ if (BUNDLE) {
 let ownerAddr: Address;
 let finish: ((v: OwnerVerdict) => void) | null = null;
 let bundle: { steps: HostedStepOutcome[] } | undefined;
+// The text the owner's wallet signed, naming this agent, and the signature: kept in the public file (../owner-binding.mjs).
+let binding: { message: string; signature: string } | undefined;
+const proofOrRefuse = async (proof: { message: string; signature: string } | undefined) => {
+  if (proof) return proof;
+  await closeOwnerPage(0);
+  const reason = "the owner's signature did not come back";
+  console.log(`REFUSED: ${reason}. Nothing was changed.`);
+  return process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: "run setup again; the owner signs once" }));
+};
+// A re-run on a recorded owner asks nothing only when the public file already holds the owner's signature for this agent. A chain
+// whose approvals are hosted keeps today's behaviour: setup --hosted records the signature from the site's owner proof.
+const heldBinding = recorded && !NEW_OWNER && !HOSTED ? await agentBinding("evm", { owner: recorded, agent: agentAddr, lines: p }, { keyAgent: agentAddr, file: PUBLIC_ENV }) : null;
+const reuse = !!recorded && !NEW_OWNER && !HOSTED && (!!recordedSite || heldBinding?.state === "signed");
 if (OWNER_KEY_FILE) {
-  ownerAddr = privateKeyToAccount(need(ownerKeyEnv(), "B4_OWNER_KEY", OWNER_KEY_FILE) as Hex).address;
+  const ownerKey = need(ownerKeyEnv(), "B4_OWNER_KEY", OWNER_KEY_FILE) as Hex;
+  ownerAddr = privateKeyToAccount(ownerKey).address;
   console.log(`owner address from --owner-key-file: ${ownerAddr}`);
   if (recorded && !same(recorded, ownerAddr) && !NEW_OWNER) {
     console.log(`REFUSED: ${PUBLIC_ENV} records owner ${recorded}, not ${ownerAddr}. Nothing was changed.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason: `another owner (${recorded}) is recorded`, owner: recorded, next: `${newOwnerCmd(recordedSite)} replaces it (refused while a budget is live)` }));
   }
-} else if (recorded && !NEW_OWNER && !HOSTED) {
+  binding = await signLocalBinding("evm", ownerKey, agentAddr, `${CFG.label} (testnet)`);
+} else if (reuse) {
   ownerAddr = recorded;
   console.log(`${PUBLIC_ENV} already records owner ${ownerAddr} for this agent; not asking again. If this isn't your wallet, stop: ${newOwnerCmd(recordedSite)} replaces it`);
+  if (recordedSite && heldBinding?.state !== "signed") console.log(`no owner signature naming agent ${agentAddr} is recorded yet: superstables budget setup --rail evm${chainFlag} --hosted --site ${recordedSite} records it from the site's owner proof`);
 } else if (HOSTED && then) {
   // one link: the owner links this agent, then the same page asks their wallet for the gas and the grant, in that order
   const what = [FUND_AMT ? "send it gas" : "", CAP !== undefined ? `approve a budget of ${usdc(CAP)} test ${SYM}` : ""].filter(Boolean);
@@ -197,7 +340,7 @@ if (OWNER_KEY_FILE) {
       ...(CAP !== undefined ? [`The grant gives permission; it does not transfer the budget now. Do not change the spending cap in your wallet. To end the budget at any time: ${REVOKE_HINT}`] : []),
       "You pay the network fee for each transaction, shown in your wallet.",
     ],
-  }, "", NEW_OWNER ? recorded : undefined, then, { prior, newOwner: NEW_OWNER });
+  }, "", NEW_OWNER ? recorded : undefined, then, { prior, newOwner: NEW_OWNER, expectedOwner: NEW_OWNER ? undefined : recorded });
   bundle = r.bundle;
   linked = r.link;
   const outcome = r.outcome;
@@ -212,6 +355,7 @@ if (OWNER_KEY_FILE) {
     console.log(`REFUSED: ${reason}.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `if ${ownerAddr} is the right owner: ${newOwnerCmd(SITE)} (refused while a budget is live). If not, remove this agent from that account on ${HOST}${sent.length ? ", and check that account's wallet activity" : ""}` }));
   }
+  binding = await proofOrRefuse(outcome.proof);
 } else if (HOSTED) {
   // the owner links this agent to their account on the site; the account's address becomes the owner on record
   const r = await askConnect("setup", {
@@ -220,7 +364,7 @@ if (OWNER_KEY_FILE) {
     rows: [
       { label: "Your agent", value: agentAddr, mono: true },
       { label: "Chain", value: `${CFG.label} (testnet)` },
-      { label: "Agent key", value: `on the agent's machine only, in ${AGENT_ENV}` },
+      { label: "Agent key", value: `on the agent's machine only, ${keyWhere}` },
     ],
     enforced: [],
     notEnforced: [],
@@ -228,7 +372,7 @@ if (OWNER_KEY_FILE) {
       `Grants, revokes and gas for this agent are then approved on ${HOST}, in your wallet. You pick the match code your agent shows you before the agent is added or anything is sent.`,
       `The agent key stays on the agent's machine; ${HOST} does not receive it. Your signing key stays in your wallet.`,
     ],
-  }, "", NEW_OWNER ? recorded : undefined, undefined, { prior, newOwner: NEW_OWNER });
+  }, "", NEW_OWNER ? recorded : undefined, undefined, { prior, newOwner: NEW_OWNER, expectedOwner: NEW_OWNER ? undefined : recorded });
   const outcome = r.outcome;
   linked = r.link;
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent: agentAddr });
@@ -241,19 +385,22 @@ if (OWNER_KEY_FILE) {
     console.log(`REFUSED: ${reason}.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `if ${ownerAddr} is the right owner: ${newOwnerCmd(SITE)} (refused while a budget is live). If not, remove this agent from that account on ${HOST}` }));
   }
+  binding = await proofOrRefuse(outcome.proof);
 } else {
   const { handle, outcome } = await askConnect("setup", {
     title: "Connect your wallet",
     summary: "Connect your wallet and sign a message to record its address as the budget owner on this machine. This does not grant a budget or send a transaction.",
     rows: [
       { label: "Your agent", value: agentAddr, mono: true },
-      { label: "Agent key", value: `on this machine only, in ${AGENT_ENV}` },
+      { label: "Agent key", value: `on this machine only, ${keyWhere}` },
+      ...(recorded && !NEW_OWNER ? [{ label: "Owner on record", value: recorded, mono: true }] : []),
     ],
     enforced: [],
     notEnforced: [],
     notes: [
       "Signing the message proves control of this address. It grants no spending permission and has no network fee.",
       "You will review and approve any later budget grant separately.",
+      ...(recorded && !NEW_OWNER ? ["Connect this wallet. Any other wallet is refused, and nothing changes."] : []),
     ],
   }, `Superstables budget: record this wallet as the owner of agent ${agentAddr} on ${CFG.label} (testnet).`, NEW_OWNER ? recorded : undefined);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent: agentAddr });
@@ -261,6 +408,14 @@ if (OWNER_KEY_FILE) {
   ownerAddr = outcome.address as Address;
   finish = handle.finish;
   console.log(`the owner connected ${ownerAddr} and signed the sign-in message`);
+  if (recorded && !same(recorded, ownerAddr) && !NEW_OWNER) {
+    const reason = `the wallet that signed is ${ownerAddr}, but this machine records the owner ${recorded}`;
+    finish({ outcome: "failed", message: `This machine records the owner ${recorded}, not this wallet. Nothing was changed.` });
+    await closeOwnerPage();
+    console.log(`REFUSED: ${reason}. Nothing was changed.`);
+    process.exit(emit("setup", 3, { state: "refused_precheck", reason, owner: recorded, next: `connect ${recorded}, or ${newOwnerCmd(SITE)} replaces it (refused while a budget is live)` }));
+  }
+  binding = await proofOrRefuse(outcome.proof);
 }
 if (same(ownerAddr, agentAddr)) {
   finish?.({ outcome: "failed", message: "That is the agent's own address. Connect your own wallet instead." });
@@ -271,20 +426,23 @@ if (same(ownerAddr, agentAddr)) {
 // 3. the public file (a new owner starts with no budget terms). Hosted: APPROVALS, SITE, and the link the owner signed
 // (LINK_ID, LINK_CODE: a later "already linked" answer is checked against them). Asked on this computer: none of them.
 const replaced = recorded && !same(recorded, ownerAddr) ? recorded : undefined;
-const asked = !OWNER_KEY_FILE && !(recorded && !NEW_OWNER && !HOSTED);
+const asked = !OWNER_KEY_FILE && !reuse;
 if (HOSTED && !linked) throw new Error("an add-agent request without its id and code");
-const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_EXPIRY", "B4_REVOKED_AT"] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : [])];
-writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, drop);
+const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_SET_TX", "B4_SET_BLOCK", "B4_EXPIRY", "B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_REVOKED_BY", ...(binding ? [] : SETUP_KEYS)] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : [])];
+writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}), ...(binding ? bindingLines(binding) : {}) }, drop);
 if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${ownerAddr}`);
 console.log(`${CFG.label}: wrote ${PUBLIC_ENV} (no secret).${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ""}`);
+if (binding) console.log(`the owner's signature naming agent ${agentAddr} is recorded in ${PUBLIC_ENV}`);
 // balances are for the next steps only: a slow or failing RPC does not undo the setup
 const within = <T,>(p: Promise<T>, ms: number) => Promise.race([p, new Promise<never>((_, no) => setTimeout(() => no(new Error(`no answer within ${ms / 1000} s`)), ms).unref())]);
 try {
+  const wrong = await readChainProblem();
+  if (wrong) throw new Error(wrong);
   const [oTok, oGas, aGas] = await within(Promise.all([usdcBalance(ownerAddr), nativeBalance(ownerAddr), nativeBalance(agentAddr)]), 20_000);
   console.log(`owner ${ownerAddr}: ${SYM} ${usdc(oTok)}, ${GAS.symbol} ${gasFmt(oGas)}`);
   console.log(`agent ${agentAddr}: ${GAS.symbol} ${gasFmt(aGas)}`);
 } catch (e) {
-  console.log(`could not read the balances (${(e as Error).message}); superstables budget doctor --rail evm${chainFlag} checks them`);
+  console.log(`could not read the balances (${oneLine((e as Error).message, 300)}); superstables budget doctor --rail evm${chainFlag} checks them`);
 }
 
 if (BUNDLE) await finishBundle();
@@ -309,7 +467,7 @@ process.exit(emit("setup", 0, { state: "ok", owner: ownerAddr, ...(replaced ? { 
  */
 async function finishBundle(): Promise<never> {
   const steps = bundle?.steps ?? [];
-  type Report = { kind: string; state: SentCheck["state"] | "refused_precheck"; proof?: SentCheck["proof"]; tx?: string; txUrl?: string; amount?: string; reason?: string; next?: string; reasonCode?: string };
+  type Report = { kind: string; state: SentCheck["state"] | "refused_precheck"; final?: boolean; proof?: SentCheck["proof"]; tx?: string; txUrl?: string; amount?: string; reason?: string; next?: string; reasonCode?: string };
   const reports: Report[] = [];
   let grantDone: SentCheck | undefined;
   for (const s of steps) {
@@ -322,7 +480,7 @@ async function finishBundle(): Promise<never> {
         ? await checkGrantSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, cap: CAP!, afterBlock: startBlock, siteFailed })
         : await checkFundSent(s.hash as Hex, { owner: ownerAddr, agent: agentAddr, t: fundTx!, value: FUND_VALUE, agentHad, afterBlock: startBlock, siteFailed });
       if (s.kind === "grant" && c.state === "settled") grantDone = c;
-      reports.push({ kind: s.kind, state: c.state, proof: c.proof, tx: c.tx, txUrl: tx(c.tx), amount, reason: c.reason, next: c.next });
+      reports.push({ kind: s.kind, state: c.state, final: c.state === "settled" ? c.final === true : undefined, proof: c.proof, tx: c.tx, txUrl: tx(c.tx), amount, reason: c.reason, next: c.next });
     } else if (s.walletAsked || s.state === "unknown") {
       reports.push({ kind: s.kind, state: "unknown", amount, reason: s.reason || "the wallet was asked to send, but superstables.com reported no transaction" });
     } else {
@@ -337,7 +495,7 @@ async function finishBundle(): Promise<never> {
   }
   if (grantDone) {
     const now = Math.floor(Date.now() / 1000);
-    writePublic({ B4_CAP: String(CAP), B4_SET_AT: String(now) }, ["B4_REVOKED_AT", "B4_EXPIRY"]);
+    writePublic({ B4_CAP: String(CAP), B4_SET_AT: String(now), B4_SET_TX: grantDone.tx }, ["B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_REVOKED_BY", "B4_SET_BLOCK", "B4_EXPIRY"]);
     console.log(`budget: ${usdc(CAP!)} ${SYM}, allowance == cap on chain.`);
   }
   await closeOwnerPage();
@@ -350,9 +508,12 @@ async function finishBundle(): Promise<never> {
   const txs = Object.fromEntries(reports.filter((r) => r.tx).map((r) => [r.kind === "grant" ? "grant" : "fundAgent", r.tx]));
   const base = { owner: ownerAddr, agent: agentAddr, linked: true, steps: reports, tx: txs, cap: grantDone ? usdc(CAP!) : undefined, allowance: grantDone?.allowance !== undefined ? usdc(grantDone.allowance) : undefined, sent: reports.find((r) => r.kind === "fund_agent" && r.state === "settled") ? FUND_AMT : undefined, publicFile: PUBLIC_ENV, agentKeyFile: AGENT_ENV };
   const first = reports.find((r) => r.state !== "settled");
+  // landed: on chain as planned, but not final yet
+  const notFinal = reports.filter((r) => r.state === "settled" && r.final === false);
   if (!first) {
+    if (notFinal.length) console.log(`\n${notFinal.map((r) => name(r.kind)).join(" and ")}: in a block as planned, but the chain has not made it final yet${usuallyWords()}`);
     console.log(`\nDone with one approval link: the agent was added to the account${FUND_AMT ? ", has gas" : ""}${CAP !== undefined ? ` and has a budget of ${usdc(CAP)} ${SYM}` : ""}.`);
-    process.exit(emit("setup", 0, { state: "ok", ...base, next: CAP !== undefined ? `none: the agent can buy under the budget. superstables budget status --rail evm${chainFlag} shows what is left` : `superstables budget grant --rail evm${chainFlag} --amount A, only when the owner asks for a budget` }));
+    process.exit(emit("setup", 0, { state: "ok", ...base, steps: reports.map((r) => (r.state === "settled" && r.final === false ? { ...r, state: "landed" } : r)), ...(notFinal.length ? { final: false } : {}), next: notFinal.length ? (notFinal.some((r) => r.kind === "grant") ? `landed, not final yet: superstables budget status --rail evm${chainFlag} later shows when the grant is final${usuallyWords()}. Do not rely on the budget until then${notFinal.some((r) => r.kind !== "grant") ? ". Nothing to do for the gas transfer: it is final once its block is" : ""}` : `landed, not final yet. Nothing to do: the gas transfer is final once its block is${usuallyWords()}`) : CAP !== undefined ? `none: the agent can buy under the budget. superstables budget status --rail evm${chainFlag} shows what is left` : `superstables budget grant --rail evm${chainFlag} --amount A, only when the owner asks for a budget` }));
   }
   const missing = reports.filter((r) => r.state !== "settled");
   const later = missing.map((r) => (r.kind === "grant" ? `superstables budget grant --rail evm${chainFlag} --amount A` : `superstables budget fund-agent --rail evm${chainFlag}`)).join(" and ");

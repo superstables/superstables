@@ -216,14 +216,29 @@ before another payment. Keep its journal and key. To remove the client, follow
 [Uninstalling](install.md#uninstalling), which separates revocation, site account removal and local
 file deletion. [Security](security.md#hosted-approvals-and-buy-once-what-the-site-can-and-cannot-do) covers key loss and revocation limits.
 
+## Replacing the agent key
+
+If an agent key may have been seen by someone else, replace it. `superstables budget rotate
+--rail evm` (or `--rail solana`) is the command; run it in the owner's terminal, because the owner
+approves each step, and start with `--plan`, which sends nothing. It retires the old address
+first, so this machine never grants, funds, sets up or buys with it again. Then, on every chain
+where that key is set up, the owner ends its allowance or delegate in their wallet, open purchases
+are settled or returned, and the key's funds go back to the owner. Only after that does it move
+the old key file to `keys/budget/retired/` and connect a new key on the same chains, with the same
+owner. Grant the new key as usual. A rotation that stops can be run again and continues where it
+stopped. On chains approved on superstables.com, also remove the old agent on the account page.
+On `tempo`, add a new key with `setup --agent LABEL`. What stops a stolen key is the owner's
+revoke on chain, not the retired list, which is a file on this machine.
+[Replacing a key](security.md#replacing-a-key) has the details and what it does not cover.
+
 ## Approve on superstables.com instead
 
 Use approval on superstables.com when the owner wants to approve from a device other than the machine running
 the agent. superstables.com supports Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy,
 SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
-The owner needs a compatible wallet on that device and an account created by signing in with an
-Ethereum or Solana wallet. For now, a Solana account supports only Solana agents, Solana budgets and Solana single
-purchases. With an Ethereum account, Solana also requires a Solana wallet. Signing in and adding an agent do
+The owner needs a compatible wallet on that device and a superstables.com account. They sign in with an
+Ethereum or Solana wallet or an email address. The account holds the wallets that approve: an Ethereum wallet for
+the EVM chains and Tempo, a Solana wallet for Solana. An account admin adds wallets on the account page. Signing in and adding an agent do
 not grant a budget; funding and grant are separate wallet transactions.
 
 The [owner guide](https://www.superstables.com/docs/owner) covers the approval handoff, sign-in
@@ -235,14 +250,13 @@ superstables budget setup --rail tempo --hosted
 superstables budget setup --rail solana --hosted
 ```
 
-Setup then prints an approval link and a match code. The owner opens it, signs in with an Ethereum or Solana wallet
-the first time (a message, no fee), picks the same code and adds the agent to their superstables.com
+Setup then prints an approval link and a match code. The owner opens it, signs in the first time (with a wallet,
+a message and no fee, or with an email address), picks the same code and adds the agent to their superstables.com
 account. From then on, `fund-agent`, `grant` and `revoke` on that chain ask through the site, each
 with its own approval link and code, and the owner approves the transaction in their wallet there. `recover`
 still uses the page on this machine. The CLI, agent key and purchase journals stay on your own runtime; the owner's key stays in their wallet. Purchases need no approval from
-the site: the client pays the seller directly. On Solana the owner also connects a Solana wallet on
-the site's page (with a Solana account, the wallet they signed in with); that address is the owner on
-record, and it signs each transaction the site builds.
+the site: the client pays the seller directly. On Solana the owner signs on the site's page with a Solana
+wallet their account holds; that address is the owner on record, and it signs each transaction the site builds.
 
 The [site account](https://www.superstables.com/account) lets the owner inspect linked agents and
 revoke budgets. It shows Single purchase requests made on superstables.com, not a complete history of budget purchases;
@@ -252,7 +266,7 @@ read [local budget records](records.md#budget-records) for those. After requesti
 This is optional. Approvals on this machine remain the default and need no account. Approvals on superstables.com
 need a superstables.com account, or a compatible deployment the owner names with `--site`
 or `SUPERSTABLES_SITE`. An origin outside superstables.com and its subdomains also needs the owner to
-set `SUPERSTABLES_ALLOW_SITE` to that exact origin in their own environment; an agent never sets it.
+allow it with `superstables owner settings` in their own terminal; an agent never does.
 After picking the match code, the owner signs the owner-proof message in their wallet, and the command checks that
 signature before it records anyone as the owner. Approval on superstables.com does not host your agent runtime.
 Choosing a compatible site is an advanced API option; `--hosted` does not deploy a site. The contract is in
@@ -262,8 +276,9 @@ Choosing a compatible site is an advanced API option; `--hosted` does not deploy
 
 Run by an agent (stdout is not a terminal), an owner command that needs the wallet does not wait
 for the owner. It returns in seconds with an `APPROVE` line and a `RESULT` whose `state` is
-`waiting_owner` and `final` is `false`, exit 0. A command that needs no wallet, such as a revoke
-with nothing to revoke, returns its final result at once. `--wait` makes it block instead:
+`waiting_owner` and `final` is `false`, exit 0. A command that ends before the wallet is needed, such as a revoke on
+`tempo` of a key the keychain confirms is already revoked, or on `solana` when the owner has no USDC account, returns
+its final result at once. `--wait` makes it block instead:
 
 ```
 RESULT {"ok":true,"command":"grant",...,"state":"waiting_owner","final":false,"chain_final":null,"id":"oa-20261001231446-3c6ea55b","url":"http://127.0.0.1:33847/owner/013825489bc9de0494cd76603c7ff9e6","expires":"2026-10-01T23:15:10.110Z","terms":{...},"next":"show the owner the exact url and terms; ..."}

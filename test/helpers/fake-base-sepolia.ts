@@ -28,6 +28,13 @@ export interface FakeBaseSepolia extends TestServer {
   advance(seconds: number): void;
   /** How many blocks the finalized block is behind the head; undefined: the chain names no finalized block. */
   finalizedLag?: number;
+  /** What eth_chainId answers (84532, Base Sepolia's, by default). */
+  chainId: number;
+  /**
+   * A second server over this same chain (same blocks, same hashes). `override` answers a method when it returns something
+   * other than undefined: the endpoint that lies. Closed by the caller like the chain itself.
+   */
+  mirror(override?: (method: string, params: any[]) => unknown): Promise<TestServer>;
 }
 
 const topic = (address: string) => `0x${address.slice(2).toLowerCase().padStart(64, "0")}`;
@@ -74,7 +81,10 @@ export async function startFakeBaseSepolia(): Promise<FakeBaseSepolia> {
     secondsPerBlock: 2,
     used: new Map(),
     finalizedLag: 0,
+    chainId: 84532,
   } as unknown as FakeBaseSepolia;
+  // Block hashes handed out so far, so an eth_call bound to a block hash (EIP-1898) finds its block.
+  const numberOfHash = new Map<string, bigint>();
   const timeOf = (n: bigint) => chain.head.timestamp - Number(chain.head.number - n) * chain.secondsPerBlock;
   // A block's hash: its number and what the token did in it, on this chain.
   const salt = randomBytes(8).toString("hex");
@@ -98,6 +108,12 @@ export async function startFakeBaseSepolia(): Promise<FakeBaseSepolia> {
     switch (method) {
       case "eth_getTransactionReceipt": {
         const hash = String(params[0] ?? "").toLowerCase();
+        // A cancellation's receipt logs AuthorizationCanceled, not a payment
+        const cancel = [...chain.used.entries()].find(([, u]) => u.cancelled && u.transaction.toLowerCase() === hash);
+        if (cancel) {
+          const [nonce, u] = cancel;
+          return { transactionHash: hash, status: "0x1", blockNumber: hex(u.block), blockHash: hashOf(u.block), logs: [{ address: u.token, topics: [CANCELED_TOPIC, topic(u.payer), nonce], data: "0x" }] };
+        }
         const found = chain.receipts.has(hash) ? chain.receipts.get(hash) : (chain.dynamic?.(hash) ?? null);
         // A real node's receipt names its transaction; a test that wants another (or none) sets transactionHash itself.
         if (!found || typeof found !== "object") return found;
@@ -108,12 +124,18 @@ export async function startFakeBaseSepolia(): Promise<FakeBaseSepolia> {
         if (params[0] === "finalized" && chain.finalizedLag === undefined) throw new Error("unknown block tag");
         const n = params[0] === "latest" ? chain.head.number : params[0] === "finalized" ? chain.head.number - BigInt(chain.finalizedLag!) : BigInt(params[0]);
         if (n > chain.head.number) return null;
+        numberOfHash.set(hashOf(n), n);
         return { number: hex(n), hash: hashOf(n), timestamp: hex(timeOf(n)) };
       }
+      case "eth_chainId":
+        return hex(chain.chainId);
       case "eth_call": {
         const call = decodeFunctionData({ abi: AUTHORIZATION_STATE_ABI, data: params[0].data });
         const [, nonce] = call.args as [string, string];
-        const at = params[1] === "latest" || params[1] === undefined ? chain.head.number : BigInt(params[1]);
+        const block = params[1];
+        const at = typeof block === "object" && block !== null && typeof block.blockHash === "string"
+          ? numberOfHash.get(block.blockHash) ?? (() => { throw new Error("unknown block hash"); })()
+          : block === "latest" || block === undefined ? chain.head.number : BigInt(block);
         const used = chain.used.get(nonce.toLowerCase());
         return encodeFunctionResult({ abi: AUTHORIZATION_STATE_ABI, functionName: "authorizationState", result: !!used && used.block <= at });
       }
@@ -132,7 +154,7 @@ export async function startFakeBaseSepolia(): Promise<FakeBaseSepolia> {
         throw new Error("not here");
     }
   };
-  const server = await startServer(async (req, res) => {
+  const serve = (override?: (method: string, params: any[]) => unknown) => async (req: Parameters<Parameters<typeof startServer>[0]>[0], res: Parameters<Parameters<typeof startServer>[0]>[1]) => {
     chain.calls += 1;
     const body = JSON.parse((await readBody(req)) || "{}") as { id?: number; method?: string; params?: unknown[] };
     if (chain.down) {
@@ -141,10 +163,13 @@ export async function startFakeBaseSepolia(): Promise<FakeBaseSepolia> {
       return;
     }
     try {
-      sendJson(res, 200, { jsonrpc: "2.0", id: body.id, result: answer(String(body.method), body.params ?? []) });
+      const lie = override?.(String(body.method), body.params ?? []);
+      sendJson(res, 200, { jsonrpc: "2.0", id: body.id, result: lie !== undefined ? lie : answer(String(body.method), body.params ?? []) });
     } catch (err) {
       sendJson(res, 200, { jsonrpc: "2.0", id: body.id, error: { code: -32601, message: (err as Error).message } });
     }
-  });
+  };
+  const server = await startServer(serve());
+  chain.mirror = (override) => startServer(serve(override));
   return Object.assign(chain, server);
 }

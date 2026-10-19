@@ -5,6 +5,10 @@ sellers used in the budget quickstarts. Unpaid checks need no wallet. Each
 asserts the expected price, token, network and recipient. A seller outage or
 changed terms fails the check. Normal `npm test` excludes this directory.
 
+`token-facts.live.test.ts` reads each chain's token facts (decimals, name, version and `DOMAIN_SEPARATOR()` on the EVM
+chains, pathUSD's decimals, the devnet USDC mint's decimals) from the public RPCs and compares them with the client's
+chain table. It needs no wallet and sends nothing.
+
 Paid checks require a separate opt-in home for each rail:
 
 | Variable | Check | Test tokens spent per successful run |

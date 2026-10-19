@@ -8,9 +8,9 @@
 import { detectPayment, type SellerChallenge } from "./x402.js";
 import { judgeOffers } from "./rails/index.js";
 import type { Offer } from "./rails/types.js";
-import { SellerTextError } from "./text.js";
+import { SellerTextError, untrustedText } from "./text.js";
 import { chainName, payNetworkFor } from "./routes.js";
-import { evaluatePolicy, policyChecks, type Policy } from "./policy.js";
+import { evaluatePolicy, policyAmount, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
 import { Records } from "./records.js";
 import { referralFor } from "./referrals.js";
@@ -46,9 +46,10 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
   const payment = {
     // The host we chose to call, never the one the seller claims in its challenge.
     domain: hostOf(url),
-    amountDecimal: chosen.terms.amountDecimal,
     asset,
-    spentTodayDecimal: deps.records.spentToday(asset),
+    ...policyAmount(chosen.terms),
+    spentTodayAtomic: deps.records.spentTodayAtomic(asset),
+    spentTodayHasOpen: deps.records.spentTodayHasOpen(asset),
   };
   const verdict = evaluatePolicy(deps.policy, payment);
   // A referral the index gave for this exact origin, if one is remembered and has not expired (core/referrals.ts). The
@@ -69,7 +70,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
     url,
     serviceId: service?.id,
     serviceName: service?.name,
-    description: challenge.description || undefined,
+    description: untrustedText(challenge.description, 500) || undefined,
     request,
     terms: chosen.terms,
     requirement: chosen.requirement,

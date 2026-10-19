@@ -6,6 +6,10 @@
 // the owner, to the keychain, the exact calldata, fee payer the owner) and the key (isRevoked). With --owner-key-file <path>
 // it signs with that key file instead (tests and automation only).
 //
+// A read alone never skips the revoke: a key that reads revoked or never authorized is checked by simulating revokeKey from
+// the owner (eth_call, nothing signed) at the head just read. Only the keychain's refusal skips the send, since that
+// transaction could only revert; if the simulation succeeds, the key is live after all and the revoke is sent.
+//
 // What a revoke does NOT stop: a payment session the key already opened. superstables budget never opens one (buy is a
 // one-off charge), but the key could have been used elsewhere. After the revoke this script scans the channel reserve and
 // prints the residual exposure: every channel of this key that still holds a deposit. It only reports.
@@ -13,18 +17,21 @@
 // Usage:
 //   npx tsx budget/tempo/revokeBudget.ts [--agent <label> | --key <address>] [--lookback-blocks 300000]
 //                                        [--timeout <s>] [--no-open] [--owner-key-file <path>]
-// Exit codes: 0 revoked (or already revoked), 1 the key still reads as live or the session scan failed, 3 refused (never
-// authorized, the owner rejected or the link expired), 5 the wallet may have sent it but the chain does not show it.
+// Exit codes: 0 revoked (or already revoked: the key reads revoked and the keychain refuses a simulated revoke), 1 the key
+// still reads as live or the session scan failed, 3 refused (never authorized: the key reads so and the keychain refuses a
+// simulated revoke with KeyNotFound; the owner rejected or the link expired), 5 unknown (the wallet may have sent it but
+// the chain does not show it, or the simulation could not tell).
 
 import type { Address, Hex } from 'viem'
 import { addressCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { AGENT_ENV_PATH, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, ownerAccount, parseEnvFile } from './lib/common.ts'
-import { chainHead, readKey, sleep } from './lib/chain.ts'
+import { AGENT_ENV_PATH, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, oneLine, ownerAccount, parseEnvFile } from './lib/common.ts'
+import { agreedAtBlock, chainHead, keychainError, readKey, simulateRevokeAt, sleep, type Simulated } from './lib/chain.ts'
 import { closeGracePeriod, findOpenChannels, type OpenChannel } from './lib/channels.ts'
 import { OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { readRegularFile } from '../secret-file.mjs'
 import { KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, readSent, revertedReceiptOf, revokeCalldata, revokeTerms, tokenBalance, useHostedAgent } from './owner.ts'
 import { differsFromRequest, mismatchPage, mismatchReason } from '../site.mjs'
+import { agreementWords } from '../../src/core/rpc-quorum.mjs'
 import type { OwnerVerdict } from '../../src/core/signer/owner-approval-server.ts'
 
 const { values: args } = parseCli({
@@ -107,10 +114,45 @@ async function main() {
     process.exit(emit('revokeBudget', 1, { state: 'failed', proof: 'reverted', tx, revoked: now ? now.revoked : null, reason, next: now?.revoked ? `superstables budget status --rail tempo${agentFlag(agentLabel)}: the key reads revoked, by another transaction` : 'run revoke again' }))
   }
 
-  if (before.revoked) console.log('The key is already revoked; nothing to send.')
-  else if (!before.exists) {
-    console.log('REFUSED: the key was never authorized on this owner; there is nothing to revoke. Nothing was sent.')
-    process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason: 'the key was never authorized on this owner; there is nothing to revoke', next: 'none' }))
+  let alreadyRevoked = false
+  let simAgreement: string | undefined
+  if (before.revoked || !before.exists) {
+    const reads = before.revoked ? 'revoked' : 'never authorized'
+    // The simulation is believed when every confirming endpoint, at one block, gives the same answer. A revoke that any one of them
+    // says would succeed is sent: sending it is not wrong, and skipping it would leave a live key.
+    const seen = new Map<string, Simulated>()
+    const agreedSim = await agreedAtBlock(async (url, _block, hash) => {
+      const one = await simulateRevokeAt(url, owner, agentAddress, hash)
+      seen.set(url, one)
+      if (one.verdict === 'unknown') throw new Error('unknown')
+      return one.verdict
+    }, headStart.number > 64n ? headStart.number - 64n : 0n).catch(() => null) // KeyNotFound is a verdict of absence: it must hold from about the head read above
+    const answers = [...seen.values()]
+    const anySends = answers.some((x) => x.verdict === 'sends')
+    const sim: Simulated & { agreement?: string } = agreedSim && agreedSim.agreed
+      ? { verdict: agreedSim.value as Simulated['verdict'], words: answers[0]?.words ?? 'it was simulated', agreement: agreedSim.agreement }
+      : anySends
+        ? { verdict: 'sends', words: 'it would succeed on at least one RPC endpoint' }
+        : { verdict: 'unknown', words: answers.find((x) => x.verdict === 'unknown')?.words ?? (agreedSim ? agreementWords(agreedSim) : 'the RPC endpoints could not be read') }
+    simAgreement = sim.agreement
+    console.log(`The key reads ${reads}; a simulated revokeKey from the owner at the confirming block${sim.agreement ? ` (agreement: ${sim.agreement})` : ''}: ${sim.words}.`)
+    if (sim.verdict === 'unknown' || (!before.revoked && sim.verdict === 'already_revoked')) {
+      const reason = sim.verdict === 'unknown'
+        ? `the key reads ${reads}, but ${sim.words}; whether the key is live is unknown`
+        : 'the key reads never authorized, but the keychain refuses a revoke as already done; whether the key is live is unknown'
+      console.log(`UNKNOWN: ${reason}. Nothing was sent.`)
+      process.exit(emit('revokeBudget', 5, { state: 'unknown', tx: null, reason, next: `check the Moderato RPC (superstables budget doctor --rail tempo), then run revoke again${agentFlag(agentLabel)}` }))
+    }
+    if (before.revoked && sim.verdict !== 'sends') {
+      alreadyRevoked = true
+      console.log('The key is already revoked; nothing to send.')
+    } else if (!before.revoked && sim.verdict === 'not_found') {
+      console.log('REFUSED: the key was never authorized on this owner; there is nothing to revoke. Nothing was sent.')
+      process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason: 'the key was never authorized on this owner; there is nothing to revoke', next: 'none' }))
+    } else console.log('The keychain would accept a revoke of this key: sending it.')
+  }
+  if (alreadyRevoked) {
+    // nothing to send: the readback below reads the key once (hash is null)
   } else if (OWNER_KEY_FILE) {
     checkOwnerKeyFile(OWNER_KEY_FILE)
     const account = ownerAccount(loadOwnerKeyFile(OWNER_KEY_FILE))
@@ -128,7 +170,7 @@ async function main() {
       // the SDK raises on a reverted receipt: that transaction was mined and did nothing
       reverted = revertedReceiptOf(err)?.transactionHash ?? null
       // Any other error does not mean the revoke failed: the transaction may have landed. Read the chain.
-      if (!reverted) console.log(`\nThe send raised an error (${String((err as any)?.shortMessage ?? (err as Error)?.message ?? err).slice(0, 160)}). Reading the chain to see whether the revoke landed.`)
+      if (!reverted) console.log(`\nThe send raised an error (${oneLine((err as any)?.shortMessage ?? (err as Error)?.message ?? err, 160)}). Reading the chain to see whether the revoke landed.`)
     }
     if (reverted) await revertedRevoke(reverted, [])
   } else {
@@ -136,7 +178,7 @@ async function main() {
     try {
       feeToken = await feeTokenOf(owner)
     } catch (err) {
-      const reason = `could not read the owner's fee token from the FeeManager (${String((err as Error)?.message ?? err).slice(0, 120)})`
+      const reason = `could not read the owner's fee token from the FeeManager (${oneLine((err as Error)?.message ?? err, 120)})`
       console.log(`REFUSED: ${reason}. Nothing was sent.`)
       process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: 'check the Moderato RPC (superstables budget doctor --rail tempo), then revoke again' }))
     }
@@ -189,7 +231,7 @@ async function main() {
   try {
     unclosed = (await residualScan(owner, agentAddress, fromBlock, grace, 'Open payment sessions of this key (report only)')).unclosed
   } catch (err) {
-    console.log(`\nSession scan FAILED (${String((err as Error).message).slice(0, 160)}). Residual exposure from payment sessions is UNKNOWN.`)
+    console.log(`\nSession scan FAILED (${oneLine((err as Error).message, 160)}). Residual exposure from payment sessions is UNKNOWN.`)
     scanFailed = true
   }
   if (after.revoked && unclosed) console.log('\nThis revoke does not stop those sessions. Close them with the tool that opened them.')
@@ -200,10 +242,10 @@ async function main() {
   }
   finish?.({ outcome: "confirmed", message: `Done. The chain shows the key as revoked: your agent can spend nothing more with it.${unclosed ? ' The terminal lists payment sessions it left open.' : ''} You can close this page.`, hash: hash ?? undefined })
   await closeOwnerPage()
-  process.exit(emit('revokeBudget', scanFailed ? 1 : 0, { state: scanFailed ? 'failed' : 'revoked', tx: hash, remaining: fromBaseUnits(after.remaining), openSessions: unclosed, reason: scanFailed ? 'revoked, but the session scan failed: residual exposure is unknown' : undefined, next: 'none' }))
+  process.exit(emit('revokeBudget', scanFailed ? 1 : 0, { state: scanFailed ? 'failed' : 'revoked', tx: hash, remaining: fromBaseUnits(after.remaining), openSessions: unclosed, ...(alreadyRevoked ? { revoked: true, evidence: 'simulated_already_revoked', ...(simAgreement ? { agreement: simAgreement } : {}) } : {}), reason: scanFailed ? 'revoked, but the session scan failed: residual exposure is unknown' : undefined, next: 'none' }))
 }
 
 main().catch((err) => {
-  console.error('revokeBudget failed:', String(err?.shortMessage ?? err?.message ?? err).slice(0, 400))
+  console.error('revokeBudget failed:', oneLine(err?.shortMessage ?? err?.message ?? err, 400))
   return exitAfterError()
 })

@@ -1,0 +1,1 @@
+Find me a paid API that returns the current BTC price and get me the price. Pay for it if it costs less than 0.02 USDC.

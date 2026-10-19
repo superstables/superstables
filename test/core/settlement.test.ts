@@ -70,7 +70,8 @@ describe("checkSettlement", () => {
     expect((await checkSettlement(PAYMENT, { rpcUrl: chain.url })).chain).toBe("unchecked");
     const unreachable = await checkSettlement(PAYMENT, { rpcUrl: "http://127.0.0.1:9/" });
     expect(unreachable.chain).toBe("unchecked");
-    expect(unreachable.reason).toContain("the chain could not be read");
+    // the RPC is asked which chain it is on before anything is read from it
+    expect(unreachable.reason).toContain("could not be asked which chain it is on");
   });
 
   it("leaves it unchecked without reading anything when no hash was given", async () => {
@@ -82,9 +83,9 @@ describe("checkSettlement", () => {
   });
 
   it("reads only an RPC that uses HTTPS, or HTTP on this machine", () => {
-    expect(settlementRpc({})).toEqual({ url: "https://sepolia.base.org" });
-    expect(settlementRpc({ SUPERSTABLES_RPC_URL: "https://rpc.example/x" })).toEqual({ url: "https://rpc.example/x" });
-    expect(settlementRpc({ SUPERSTABLES_RPC_URL: "http://127.0.0.1:8545" })).toEqual({ url: "http://127.0.0.1:8545" });
+    expect(settlementRpc({})).toEqual({ url: "https://sepolia.base.org", source: "default" });
+    expect(settlementRpc({ SUPERSTABLES_RPC_URL: "https://rpc.example/x" })).toEqual({ url: "https://rpc.example/x", source: "env" });
+    expect(settlementRpc({ SUPERSTABLES_RPC_URL: "http://127.0.0.1:8545" })).toEqual({ url: "http://127.0.0.1:8545", source: "env" });
     expect(settlementRpc({ SUPERSTABLES_RPC_URL: "http://rpc.example" })).toEqual({ error: "SUPERSTABLES_RPC_URL must use HTTPS, or HTTP on this machine" });
     expect(settlementRpc({ SUPERSTABLES_RPC_URL: "https://u:p@rpc.example" })).toHaveProperty("error");
   });
@@ -175,8 +176,10 @@ describe("findAuthorization", () => {
       const call = JSON.parse(String(init?.body)) as { id: number; method: string; params: unknown[] };
       const answer = await fetch(input, init);
       if (done || !when(call)) return answer;
-      done = true;
       const body = (await answer.json()) as { result: unknown };
+      // A log search reads several windows: the first one that holds a log is the read this test means.
+      if (Array.isArray(body.result) && body.result.length === 0) return new Response(JSON.stringify(body));
+      done = true;
       then();
       return new Response(JSON.stringify({ ...body, result: rewrite ? rewrite(body.result) : body.result }));
     }) as typeof fetch;
@@ -187,6 +190,7 @@ describe("findAuthorization", () => {
     // reorganisation replaces it with the facilitator's payment of the same authorization, and finality passes it.
     chain = await startFakeBaseSepolia();
     const token = POLYGON_AMOY.usdc.address;
+    chain.chainId = POLYGON_AMOY.chainId;
     const cancelled = chain.settle({ from: PAYER, to: PAY_TO, value: 10000n, nonce: NONCE, token });
     chain.used.get(NONCE)!.cancelled = true;
     chain.finalizedLag = 2;
@@ -234,7 +238,9 @@ describe("findAuthorization", () => {
     chain.finalizedLag = 0;
     // The final block is read before the logs: a cancellation that only became final after them is not taken as final.
     chain.finalizedLag = 30;
-    const finalLater = await find({}, after((c) => c.method === "eth_getLogs", () => (chain!.finalizedLag = 0)));
+    let fired = false;
+    const finalLater = await find({}, after((c) => c.method === "eth_getLogs", () => { fired = true; chain!.finalizedLag = 0; }));
+    expect(fired).toBe(true);
     expect(finalLater).not.toHaveProperty("never");
     // As it is: final.
     expect(await find()).toMatchObject({ found: false, never: true, reason: "the chain shows the owner's authorization was cancelled, in a final block, so it can never be used" });
@@ -251,12 +257,14 @@ describe("finality on each EVM chain", () => {
     chain.finalizedLag = undefined; // SKALE's RPC refuses the finalized tag
     const validBefore = new Date((chain.head.timestamp + 60) * 1000).toISOString();
     chain.advance(120);
+    chain.chainId = SKALE_BASE_SEPOLIA.chainId;
     const skale = await findAuthorization(
       { network: SKALE_BASE_SEPOLIA.caip2, payer: PAYER, recipient: PAY_TO, amountAtomic: "10000", nonce: NONCE, validBefore, since: new Date().toISOString() },
       { rpcUrl: chain.url },
     );
     expect(skale).toMatchObject({ found: false, never: true });
     // The same answers from a chain that needs a finalized block: undecided.
+    chain.chainId = BASE_SEPOLIA.chainId;
     const base = await findAuthorization(
       { network: BASE_SEPOLIA.caip2, payer: PAYER, recipient: PAY_TO, amountAtomic: "10000", nonce: NONCE, validBefore, since: new Date().toISOString() },
       { rpcUrl: chain.url },

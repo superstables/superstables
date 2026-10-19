@@ -10,6 +10,7 @@ import { paymentOutput, SERVICE_BODY_LIMIT, shownPayer, shownTransaction } from 
 import { railFor } from "../core/rails/index.js";
 import type { Records } from "../core/records.js";
 import type { Attempt, Receipt } from "../core/types.js";
+import { termsMoney } from "./format.js";
 
 /** Everything there is to say about an attempt, including the sentence to say it with. */
 export function attemptView(deps: { records: Records }, attempt: Attempt): Record<string, unknown> {
@@ -75,18 +76,19 @@ function receiptView(receipt: Receipt): object {
  */
 export function messageFor(attempt: Attempt, receipt?: Receipt): string {
   const terms = attempt.terms;
-  const amount = `${terms.amountDecimal} ${terms.asset}`;
+  const amount = termsMoney(terms);
   // Only a well-formed hash is ever kept as the transaction (pay.ts), so this repeats nothing the seller wrote.
   // Checked here too, not only when written: a record from an earlier version may hold whatever a seller sent.
   const hash = shownTransaction(attempt.transaction, terms.network).hash ?? shownTransaction(receipt?.transaction, terms.network).hash;
   const transaction = hash ? `transaction ${hash}` : "no transaction hash was given";
   const status = attempt.serviceStatus ?? "no status";
   const check = `Run \`superstables status ${attempt.id}\` to see where it got to`;
+  const waiting = "Wait for the `superstables pay` command that started it; running `superstables status` again will not move it";
   switch (attempt.state) {
     case "awaiting_approval":
       return (
         `The owner has been asked to approve ${amount} to ${terms.recipient} on ${terms.networkLabel} ` +
-        `in their wallet. Nothing is signed yet. ${check}.`
+        `in their wallet. Nothing is signed yet. ${waiting}.`
       );
     case "approved":
       // On Tempo the owner's wallet sends the payment itself: approved means it was asked to, not that it did.

@@ -5,7 +5,8 @@
 import type { PaymentRequirements } from "@x402/core/types";
 import { authorizationTypes } from "@x402/evm";
 import { getAddress, verifyTypedData, type Hex } from "viem";
-import { isAddress, shortLabel, type NetworkInfo } from "../../chain.js";
+import { isAddress, isSameAddress, shortLabel, type NetworkInfo } from "../../chain.js";
+import { signedLifetime } from "../../rails/evm.js";
 import { referralNonce } from "../../referral-nonce.js";
 import type { StepAnswer, StepRecord, WalletStep } from "./types.js";
 
@@ -44,6 +45,7 @@ export interface AuthorizationRequirement {
  * for field, because the facilitator that settles this credential checks all of them: a v1 requirement backdates
  * validAfter by ten minutes and carries its amount as maxAmountRequired, a v2 one does not. Only the nonce is the
  * caller's: core/referral-nonce.ts decides it, so a referred payment carries its referral.
+ * validBefore is now plus the seller's window, at most ten minutes (rails/evm.ts).
  */
 export function authorizationTypedData(input: {
   domain: ApprovalTypedData["domain"];
@@ -54,7 +56,7 @@ export function authorizationTypedData(input: {
 }): ApprovalTypedData {
   const { requirement } = input;
   const now = Math.floor(Date.now() / 1000);
-  const timeout = Number(requirement.maxTimeoutSeconds ?? 300);
+  const timeout = signedLifetime(requirement.maxTimeoutSeconds);
   return {
     domain: input.domain,
     // Copied rather than referenced: this object is serialised to the page as JSON, and the
@@ -100,7 +102,7 @@ export function usdcAuthorization(network: NetworkInfo, requirement: PaymentRequ
 }
 
 /** The authorization the approval page asks the account it reported to sign. */
-export function buildTypedData(record: StepRecord, payer: string): ApprovalTypedData {
+export function buildTypedData(record: Pick<StepRecord, "network" | "requirement" | "x402Version" | "nonce">, payer: string): ApprovalTypedData {
   return usdcAuthorization(record.network, record.requirement as PaymentRequirements, record.x402Version, payer, record.nonce ?? referralNonce());
 }
 
@@ -113,6 +115,10 @@ export const eip3009Step: WalletStep = {
   },
 
   async prepare(record: StepRecord, account: string): Promise<StepAnswer> {
+    // The recipient is never the account paying: the transfer would move nothing, yet the payment would count as paid.
+    if (isSameAddress(String((record.requirement as PaymentRequirements).payTo), account)) {
+      return { http: 409, body: { error: "the recipient is the account paying, so this payment was not prepared; nothing was signed. Connect another account, or reject" } };
+    }
     // A person may switch accounts before signing, so this rebuilds rather than refusing.
     const typedData = buildTypedData(record, account);
     record.prepared = typedData;
@@ -168,6 +174,8 @@ export const eip3009Step: WalletStep = {
       rpcUrl: network.defaultRpc,
       explorer: network.explorer,
       nativeCurrency: network.wallet.nativeCurrency,
+      signingName: network.rail === "evm" ? network.usdc.eip712.name : undefined,
+      validity: { kind: "authorization" as const, seconds: signedLifetime((record.requirement as PaymentRequirements).maxTimeoutSeconds) },
     };
   },
 
@@ -175,6 +183,13 @@ export const eip3009Step: WalletStep = {
     lede: "Check the amount and the recipient, then sign with your browser wallet, or reject. Your wallet keeps its key.",
     fineprint: (facts) =>
       `Your wallet shows this amount in the token's smallest unit: ${facts.amountAtomic} is ${facts.amountDecimal} ${facts.asset}. Signing authorises this one transfer and nothing else.`,
+    walletShows: (f) => [
+      `A signature request, not a transaction: "TransferWithAuthorization", for the token contract that signs as "${f.signingName ?? f.asset}". The application asking is this page, at 127.0.0.1 and its port.`,
+      `value: ${f.amountAtomic}, in the token's smallest unit. That is ${f.amountDecimal} ${f.asset}.`,
+      `to: ${f.recipient}`,
+      "validBefore: the time it stops being valid, in seconds since 1970. This page shows it as a time once your wallet is connected.",
+      `verifyingContract: ${f.assetAddress}, the ${f.asset} token.`,
+    ],
   },
 
   script: "",

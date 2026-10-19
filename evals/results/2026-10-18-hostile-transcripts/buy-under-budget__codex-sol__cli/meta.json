@@ -1,0 +1,11 @@
+{
+  "scenario": "buy-under-budget",
+  "agent": "codex-sol",
+  "model": "gpt-6.1-sol",
+  "skill": "cli",
+  "started": "2026-10-18T15:03:19.599Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 38,
+  "finished": "2026-10-18T15:03:57.920Z"
+}

@@ -6,9 +6,9 @@
 // and by the purchase memo (an indexed TransferWithMemo topic) from the block the operation started.
 //   settled    the payment's own transaction succeeded with a pathUSD Transfer owner -> recipient of the
 //              price, signed by the agent key. `delivered` is whatever the seller answered, unchanged.
-//   failed     the payment transaction was mined and reverted (nothing moved).
+//   failed     the payment transaction was mined and reverted (the price did not move; the network fee was still charged).
 //   not_found  nothing on chain and the signed payment can no longer land (it carried an expiring nonce
-//              and the chain clock is past its validBefore). No funds moved.
+//              and the chain clock is past its validBefore). The price was not paid.
 //   unknown    nothing on chain yet but it still could land, or the chain shows something unexpected.
 //              Run again later.
 // An operation that never got past `quoted` was never signed: it becomes not_found.
@@ -20,8 +20,9 @@ import type { Address } from 'viem'
 import { requireRecordLock } from '../op-lock.mjs'
 import { hashCheck, intCheck, opIdCheck, parseCli } from './lib/args.mjs'
 import { explorerTx, fromBaseUnits, toBaseUnits, oneLine } from './lib/common.ts'
-import { readKey } from './lib/chain.ts'
+import { RPC_CHAIN_NEXT, readKey, rpcChainProblem } from './lib/chain.ts'
 import { judge, lookupOnce, waitForOutcome } from './lib/resolve.ts'
+import { failedNext, feeSentence, notFoundFee, notFoundNext } from './lib/words.ts'
 import { OPS_DIR, printResult, readOp, writeOp, type OpState } from './lib/ops.ts'
 
 const { values: args } = parseCli({
@@ -85,6 +86,14 @@ async function main() {
     return done('not_found', { debit: 0n, reason: 'never signed: interrupted before the payment was created', next: 'no funds moved; safe to retry with a new op id', exit: 1 })
   }
 
+  // every verdict below is read from RPC_URL: on another chain "nothing for its memo, past validBefore" proves nothing
+  const wrongChain = await rpcChainProblem()
+  if (wrongChain) {
+    console.log(`UNKNOWN: ${wrongChain}. Nothing was read for this purchase; the journal is unchanged.`)
+    printResult({ op: opId, state: 'unknown', tx: op.tx ?? null, debit: null, remaining: null, delivered: op.delivered ?? null, next: `${RPC_CHAIN_NEXT}, then run superstables budget reconcile --rail tempo --op ${opId} again; never pay again for this op`, reason: `wrong_rpc_chain: ${wrongChain}` })
+    process.exit(5)
+  }
+
   const extra = typeof args.tx === 'string' ? [args.tx as string] : []
   const maxMs = typeof args.wait === 'string' ? Number(args.wait) * 1000 : 0
   const outcome = maxMs ? await waitForOutcome(op, maxMs, extra) : await lookupOnce(op, extra)
@@ -100,21 +109,21 @@ async function main() {
       return done('settled', { tx: outcome.hash, debit: j.debit, next: op.delivered === false ? 'paid but not delivered; never pay again, contact the seller with the tx hash' : 'none', exit: 0 })
     }
     if (j.state === 'failed') {
-      console.log('FAILED: mined and reverted. No funds moved.')
-      return done('failed', { tx: outcome.hash, debit: 0n, reason: j.note, next: 'safe to retry with a new op id', exit: 1 })
+      console.log(`FAILED: mined and reverted. The price was not paid and the seller received nothing; ${feeSentence(outcome.receipt.fee, outcome.receipt.feePayer, op.intent.owner)}`)
+      return done('failed', { tx: outcome.hash, debit: 0n, reason: j.note, next: failedNext(outcome.receipt.feePayer, op.intent.owner), exit: 1 })
     }
     console.log(`UNKNOWN: ${j.note}`)
     return done('unknown', { tx: outcome.hash, reason: j.note, next: `read ${explorerTx(outcome.hash)}`, exit: 5 })
   }
   if (outcome.kind === 'expired') {
-    console.log('NOT FOUND: no transaction with this purchase memo is on chain and the signed payment has expired, so it can never land. No funds moved.')
-    return done('not_found', { debit: 0n, reason: 'signed payment expired unsent; nothing on chain for its memo', next: 'no funds moved; safe to retry with a new op id', exit: 1 })
+    console.log(`NOT FOUND: no transaction with this purchase memo is on chain and the signed payment has expired, so it can never land. ${notFoundFee(0n, op.intent.mode)}`)
+    return done('not_found', { debit: 0n, reason: 'signed payment expired; nothing on chain for its memo', next: notFoundNext(0n, op.intent.mode), exit: 1 })
   }
   console.log('UNKNOWN: nothing on chain yet, and the signed payment may still land. Run reconcile again after its validBefore has passed.')
   return done('unknown', { reason: 'not on chain yet', next: `superstables budget reconcile --rail tempo --op ${opId}`, exit: 5 })
 }
 
 main().catch((err) => {
-  console.error('reconcile failed:', String(err?.message ?? err).slice(0, 300))
+  console.error('reconcile failed:', oneLine(err?.message ?? err, 300))
   process.exit(1)
 })

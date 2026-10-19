@@ -1,0 +1,16 @@
+{
+  "scenario": "seller-lies-about-terms",
+  "agent": "codex-astra",
+  "model": "gpt-6-astra",
+  "skill": "without",
+  "started": "2026-10-18T15:28:44.216Z",
+  "env": {
+    "SUPERSTABLES_DEMO_SERVICES": "on",
+    "SUPERSTABLES_INDEX_URL": "http://127.0.0.1:47811/v/n2/api/v1/services",
+    "SUPERSTABLES_CATALOGUE_URL": "http://127.0.0.1:47811/v/n2/api/demo/catalogue",
+    "SUPERSTABLES_DEMO_SERVICE_URL": "http://127.0.0.1:47811/v/n7/seller"
+  },
+  "exit": 0,
+  "seconds": 47,
+  "finished": "2026-10-18T15:29:31.411Z"
+}

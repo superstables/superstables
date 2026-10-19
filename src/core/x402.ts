@@ -5,9 +5,10 @@
 
 import type { PaymentRequirements } from "@x402/core/types";
 import { sameAddressOn, toCaip2 } from "./chain.js";
-import { DETECT_TIMEOUT_MS, DeadlineError, MAX_CHALLENGE_BYTES, readCapped } from "./http.js";
+import { DETECT_TIMEOUT_MS, DeadlineError, MAX_CHALLENGE_BYTES, hostLabel, readCapped } from "./http.js";
 import { parseMppChallenges, type MppChallenge } from "./mpp.js";
 import { judgeAccept } from "./rails/index.js";
+import { sellerUrlProblem } from "./seller-url.mjs";
 import { untrustedText } from "./text.js";
 import type { PaymentTerms } from "./types.js";
 
@@ -131,6 +132,23 @@ export function readSellerChallenge(input: { paymentRequiredHeader?: string | nu
   return { ...(x402 ? { x402 } : {}), ...(x402Refusal ? { x402Refusal } : {}), mpp, description };
 }
 
+/** The seller's host did not answer at all (no DNS, refused, reset): nothing was sent that could be paid. */
+export class SellerUnreachableError extends Error {
+  constructor(url: string, cause: string) {
+    super(`could not reach ${hostLabel(url)} (${cause}); nothing was paid`);
+    this.name = "SellerUnreachableError";
+  }
+}
+
+/** What stopped a fetch that never got an answer: the system error code (ENOTFOUND, ECONNREFUSED), else its words. */
+function networkCause(err: unknown): string | undefined {
+  if (!(err instanceof TypeError)) return undefined;
+  const cause = (err as { cause?: { code?: unknown; message?: unknown } }).cause;
+  if (typeof cause?.code === "string" && /^[A-Z0-9_]{3,40}$/.test(cause.code)) return cause.code;
+  if (err.message === "fetch failed") return typeof cause?.message === "string" ? cause.message.replace(/\s+/g, " ").slice(0, 100) : "no answer";
+  return undefined;
+}
+
 export class NotPaidEndpointError extends Error {
   constructor(readonly url: string, readonly status: number, readonly bodyPreview: string) {
     super(`Expected HTTP 402 from ${url}, got ${status}: not a paid endpoint (x402 or MPP), or the request is wrong`);
@@ -156,11 +174,28 @@ export async function detectPayment(url: string, init: RequestInit = {}, options
   return readSellerChallenge(await fetch402(url, init, options));
 }
 
+/**
+ * A seller that answered with a redirect. This client follows none (a payment or a credential could be carried to a host
+ * nobody chose); fetch with `redirect: "error"` then rejects with a TypeError, "fetch failed", whose cause says
+ * "unexpected redirect" (undici). True for that rejection only.
+ */
+export function isRedirectRefusal(err: unknown): boolean {
+  const cause = err instanceof TypeError ? (err as { cause?: unknown }).cause : undefined;
+  return cause instanceof Error && /redirect/i.test(cause.message);
+}
+/** A redirect refused on a request that carried no payment: the quote's read, or pay's read before anything is signed. */
+export const SELLER_REDIRECTED = "the seller redirected, and this client follows no redirect; nothing was sent";
+/** A redirect refused on the request that carried the signed payment: the seller received it. */
+export const REDIRECTED_AFTER_SEND =
+  "the seller answered the request that carried the signed payment with a redirect, which this client does not follow; the seller received the payment and may still settle it, so whether it was paid is unknown until the chain shows it";
+
 async function fetch402(
   url: string,
   init: RequestInit,
   options: { timeoutMs?: number },
 ): Promise<{ paymentRequiredHeader: string | null; wwwAuthenticate: string | null; body: string }> {
+  const problem = sellerUrlProblem(url);
+  if (problem) throw new Error(`the seller URL ${problem}`);
   const timeoutMs = options.timeoutMs ?? DETECT_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   const controller = new AbortController();
@@ -178,6 +213,9 @@ async function fetch402(
   } catch (err) {
     // An abort from our own deadline reads as what it is, not as an AbortError.
     if (controller.signal.aborted && controller.signal.reason instanceof DeadlineError) throw controller.signal.reason;
+    if (isRedirectRefusal(err)) throw new Error(SELLER_REDIRECTED);
+    const unreachable = networkCause(err);
+    if (unreachable !== undefined) throw new SellerUnreachableError(url, unreachable);
     throw err;
   } finally {
     clearTimeout(timer);
@@ -198,7 +236,7 @@ export function termsFor(accept: RawAccept, version: 1 | 2): Supported | Unsuppo
   return { supported: true, terms: judged.offer.terms, requirement: judged.offer.requirement as PaymentRequirements };
 }
 
-/** Two requirements name the same payment when amount, asset, recipient and network agree. */
+/** Two requirements name the same payment when amount, asset, recipient, network, scheme and the seller's authorization window agree. */
 export function sameTerms(a: PaymentTerms, b: PaymentTerms): boolean {
   const network = toCaip2(a.network);
   return (
@@ -206,6 +244,8 @@ export function sameTerms(a: PaymentTerms, b: PaymentTerms): boolean {
     network === toCaip2(b.network) &&
     sameAddressOn(network, a.assetAddress, b.assetAddress) &&
     sameAddressOn(network, a.recipient, b.recipient) &&
-    (a.scheme ?? "exact") === (b.scheme ?? "exact")
+    (a.scheme ?? "exact") === (b.scheme ?? "exact") &&
+    // How long a signature can move money. A quote recorded before this was kept has none, and is quoted again.
+    a.maxTimeoutSeconds === b.maxTimeoutSeconds
   );
 }

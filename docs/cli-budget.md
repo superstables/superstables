@@ -17,6 +17,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | [`superstables budget unlock`](#superstables-budget-unlock) | clear abandoned operation locks after stopping their processes | owner | moves no money |
 | [`superstables budget revoke`](#superstables-budget-revoke) | end the budget on chain | owner | moves no money |
 | [`superstables budget recover`](#superstables-budget-recover) | evm: stop the allowance, return stranded USDC to the owner | owner | moves money back |
+| [`superstables budget rotate`](#superstables-budget-rotate) | evm, solana: replace the agent key, retire the old one | owner | moves money back |
 | [`superstables budget wait`](#superstables-budget-wait) | the state of an owner approval an agent started (--id, --shown) | anyone | read only |
 | [`superstables budget find`](#superstables-budget-find) | services a budget can pay (--once: buy-once services) | anyone | read only |
 | [`superstables budget buy-once`](#superstables-budget-buy-once) | one purchase the owner approves on superstables.com | agent | moves money |
@@ -28,16 +29,17 @@ superstables budget: on-chain budgets for an agent. The owner grants a budget on
 agent then buys on its own, purchase by purchase, until the budget is spent or revoked. The chain enforces the limit.
 Testnet only. No real money moves.
 
-Start here, the owner (once per rail and chain; each step prints an approval link; the owner approves in their own
-wallet):
+Start here, the owner (once per rail and chain; each step prints an approval link that opens on a page on this
+computer, no account needed (the default); the owner approves in their own wallet):
   superstables budget setup --rail evm              connect the owner's wallet (a free signature); creates the agent key
-                                                    (--hosted: the owner approves on superstables.com, on any device)
-  superstables budget setup --rail evm --hosted --grant 5 --fund
-                                                    all of it with one approval link on superstables.com: add agent,
-                                                    gas, budget
   superstables budget fund-agent --rail evm         send the agent key gas for its own transactions (evm and solana)
   superstables budget doctor --rail evm             check keys, addresses and balances; says what to top up
   superstables budget grant --rail evm --amount 5   an allowance of 5 USDC from the owner's wallet; the USDC stays there
+
+Or approve from any device on superstables.com (needs an account there; the owner signs in with their wallet):
+  superstables budget setup --rail evm --hosted --grant 5 --fund
+                                                    one approval link for all of it: add agent, gas, budget
+Use this one when the owner asks for it.
 An agent may run these to start them and hand the owner the approval link. Only the owner approves.
 
 Start here, the agent:
@@ -92,6 +94,7 @@ Commands (each takes --help):
   unlock      owner   clear abandoned operation locks after stopping their processes     moves no money
   revoke      owner   end the budget on chain                                            moves no money
   recover     owner   evm: stop the allowance, return stranded USDC to the owner          moves money back
+  rotate      owner   evm, solana: replace the agent key, retire the old one              moves money back
   wait        anyone  the state of an owner approval an agent started (--id, --shown)    read only
   find        anyone  services a budget can pay (--once: buy-once services)              read only
   buy-once    agent   one purchase the owner approves on superstables.com                moves money
@@ -101,21 +104,23 @@ Owner approvals: an owner command starts a page on 127.0.0.1 and prints its appr
   APPROVE {"action","url","expires","terms"}
 The owner opens it in the browser that has their wallet. The page is on this machine only: over SSH, forward its port
 first (ssh -L PORT:127.0.0.1:PORT user@this-host, PORT from the approval link). On a chain set up with --hosted (and for
-buy-once), the approval link is on superstables.com instead: it opens on any device where the owner is signed in with
-an Ethereum or Solana wallet; a Solana account supports only Solana agents, Solana budgets and Solana single purchases for now.
-With an Ethereum account, Solana actions also use a Solana wallet to sign transactions. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
-command returns at once with state waiting_owner and final false. Write the approval link, the match code and the terms
-in your reply to the owner and end your turn; when they say they've approved, run
+buy-once), the approval link is on superstables.com instead: it opens on any device where the owner is signed in, and
+their account must hold the wallet the chain needs (an Ethereum wallet for EVM chains and Tempo, a Solana wallet for
+Solana); an account admin adds wallets on the account page. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
+command returns at once with state waiting_owner and final false. Reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn; when they say they've approved, run
 superstables budget wait --id ID --shown. The approval link expires after --timeout seconds (default 600): if the wallet
 was not asked to send by then, the command ends refused (exit 3) and that approval sent nothing; run it again. In
 setup --hosted with --grant or --fund, and in recover, an earlier step may already have completed: read steps, tx and
 budget status.
 
 --site URL is accepted by every command. Where a site is recorded (setup --hosted) and it differs, the command refuses
-(exit 2); where it does not matter, it is ignored. A site is superstables.com, one of its subdomains or 127.0.0.1;
-another origin only when the owner sets SUPERSTABLES_ALLOW_SITE to it in their own environment (an agent never does).
-B4_RPC, SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
-http on this machine only; RESULT names one in use as rpc. A wallet adding the chain through an approval page
+(exit 2); where it does not matter, it is ignored. For an owner action a site is
+https://www.superstables.com, or one the owner allows with superstables owner settings in their own terminal (an agent never does); a read
+(find, wait) also accepts any superstables.com host and 127.0.0.1.
+B4_RPC_<CHAIN> (B4_RPC_BASE_SEPOLIA, ...) replaces one evm chain's RPC and wins over B4_RPC, which replaces the selected evm
+chain's; SUPERSTABLES_TEMPO_RPC and SUPERSTABLES_SOLANA_RPC replace a rail's RPC for the client's reads: https, or
+http on this machine only; every evm command that reads checks the chain id the RPC answers first; RESULT names one in use as rpc. A wallet adding the chain through an approval page
 on this machine is offered the chain's public RPC.
 
 Output: logs go to stderr. stdout ends with one line
@@ -167,7 +172,7 @@ Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
 
 ```text
 superstables budget setup --rail evm|tempo|solana [--chain C] [--agent LABEL] [--new-owner] [--hosted [--site URL] [--grant A] [--fund [AMOUNT]]]
-  [--fund-only] [--timeout S] [--no-open] [--detach|--wait]
+  [--fund-only] [--key-store file|os-keychain] [--timeout S] [--no-open] [--detach|--wait]
 
 The owner's first step on a rail and chain. Creates the agent key on this machine if there is none (it never
 overwrites one: running setup again reuses it), then asks the owner to connect their own wallet and sign a free sign-in
@@ -181,10 +186,16 @@ owner-proof message), checks the owner's signature over that message, records th
 APPROVALS=hosted, SITE, LINK_ID and LINK_CODE in the public file: grant, revoke and fund-agent on this chain use it from
 then on (recover stays on this machine). solana: the owner also connects a Solana wallet there, and that address is the
 owner. Needs a superstables.com account. --site URL picks another site (default https://www.superstables.com, or SUPERSTABLES_SITE):
-a superstables.com subdomain, or another origin only when the owner set SUPERSTABLES_ALLOW_SITE to it. Without --hosted:
+only one the owner allows in their settings (superstables owner settings allow-staging, allow-loopback, site). Without --hosted:
 the page on 127.0.0.1, no account. An agent already added to an account is taken only for the owner recorded here, with
 that owner's signed proof; otherwise the owner removes the agent on the site's account page and adds it again.
 setup --new-owner without --hosted moves a chain with approvals on superstables.com back to the page on this machine.
+--key-store file|os-keychain (evm and solana; default file): os-keychain keeps the agent key in this computer's keychain
+(macOS security, Linux secret-tool from libsecret-tools) and only its address in the key file; the key is passed to the
+keychain on standard input and never written to a file. A key already in the key file is moved there and the file's old
+bytes are overwritten. A locked keychain makes buy, grant, fund-agent, recover and owner requests on chains approved on
+superstables.com refuse; a local revoke still works. Rotate keeps the retired key's keychain entry. It does not protect
+the key from code running as you while the keychain is unlocked. Not for tempo.
 --grant A and --fund [AMOUNT] (with --hosted): one approval link for the whole set-up. After the owner adds this agent,
 the same page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain; not on
 tempo) and then the grant of A (tempo: for 24 hours), in that order. The command reads each transaction from the chain
@@ -193,7 +204,7 @@ grant, say), the agent is still added and recorded, and state is that step's. Th
 agent is added. An agent already added on the chain is refused (exit 3): ask for gas and a budget
 with fund-agent and grant. Without --hosted, --grant and --fund are refused: run fund-agent and grant after setup.
 tempo: also tops up the owner from the Moderato faucet when it holds less than 1 pathUSD. --agent LABEL adds a new agent
-key for the next budget (a revoked or expired key can never be granted again); it needs no page, except on a chain with approvals on superstables.com, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
+key for the next budget (a revoked or expired key can never be granted again); the owner signs a message naming the new key (on this computer's page, or with --owner-key-file in tests), except on a chain with approvals on superstables.com, where the owner adds the new key. --fund-only tops up the owner on record from the faucet again and changes
 nothing else; it needs no page either.
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on
@@ -208,8 +219,8 @@ this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
 agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
-yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
-in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+yet, and the owner still has to approve the rest. Either way, reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn. When they say they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
 link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
@@ -281,8 +292,8 @@ this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
 agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
-yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
-in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+yet, and the owner still has to approve the rest. Either way, reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn. When they say they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
 link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
@@ -348,7 +359,8 @@ Prints the terms first: the cap, the true maximum, and what the chain enforces a
   solana  makes the agent the delegate of the owner's USDC account up to A, in total. Run fund-agent first.
 evm and solana refuse --expiry, --period and --sellers: the chain cannot enforce them. A live budget is never replaced
 silently: revoke it first. tempo: --agent LABEL picks the access key (a revoked key can never be granted again).
-Check the result with superstables budget status.
+On evm and solana a grant is refused while the previous revoke is not final, and the result is state landed (exit 0,
+final false) until the grant itself is final. Check the result with superstables budget status.
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on
 stdout and in words on stderr. The owner opens it in the browser that has their wallet, and approves or rejects there.
@@ -362,8 +374,8 @@ this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
 agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
-yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
-in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+yet, and the owner still has to approve the rest. Either way, reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn. When they say they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
 link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
@@ -403,6 +415,9 @@ Whether a budget is set up here, and if so what is left of it: remaining, expiry
 first, names the home it checked (SUPERSTABLES_HOME, default ~/.superstables; home in the RESULT) and the owner's next
 command. If the budget is elsewhere, ask the user for the path: do not point SUPERSTABLES_HOME at another home yourself.
 remaining 0 means there is nothing to spend: the owner grants one.
+revoked is true only for a revoke this machine recorded that the chain still shows (tempo: the key reads revoked); an
+allowance or delegate that reads 0 without that record is remaining 0 and revoked false. A revoke that landed but is not
+final yet is not revoked: lastOwnerAction says which action is waiting and whether it is final.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
@@ -411,7 +426,7 @@ Moves money: no. It reads files and the chain only; no secret is opened.
 Run by: anyone.
 Example:
   $ superstables budget status --rail evm
-Prints: the owner on record on stderr, then a RESULT line: remaining, expiry, revoked, atRisk, owner, next.
+Prints: the owner on record on stderr, then a RESULT line: remaining, expiry, revoked, atRisk, lastOwnerAction, owner, next.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 read, 1 failed (no budget set up here, or the chain could not be read: read reason and next), 2 bad input
 ```
@@ -516,13 +531,15 @@ Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not delivered, 
 ## superstables budget unlock
 
 ```text
-superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --attempt ID | --buy-once) --confirm [--unverified]
+superstables budget unlock (--rail evm|tempo|solana --op ID [--chain C] | --cap | --rail evm|tempo|solana (--approvals | --approval ID) [--chain C] | --rail evm --agent-key [--chain C] | --attempt ID | --buy-once) --confirm [--unverified]
 
 Owner recovery after stopping all work on the operation. Plain --confirm requires proof that the lock's processes have stopped. If that cannot be verified, the owner can use --confirm --unverified in their own terminal and type the operation ID followed by unverified. Clearing a lock while a process can still run may allow a second payment. Preserves the journal. Reconcile next.
 
 --unverified: Clear a lock without proof that its process has stopped. Owner only, after stopping all work on the operation. Requires typed confirmation in your own terminal.
 
 --cap: Recover the core payment lock. --approvals: Recover approval locks on this rail and chain. --approval ID: Also recover the record lock for this approval. --attempt ID: Release an attempt runner for read-only reconciliation. Stop all payment work across processes, containers and hosts first. Payment-lock recovery uses the exact confirmation payment-lock, or payment-lock unverified with --unverified. Preserves payment evidence. Run status for the original attempt or wait for the original approval next.
+
+--agent-key: Recover the lock that makes evm purchases on one agent key and chain take turns, after stopping every buy and recover on that key. Uses the exact confirmation agent-key, or agent-key unverified with --unverified. Preserves journals.
 
 A holder still working or unlock paused before unlinking can remove a new holder's lock and allow duplicate payments.
 
@@ -549,6 +566,10 @@ superstables budget revoke --rail evm|tempo|solana [--chain C] [--agent LABEL] [
 Ends the budget on chain: from the block it lands in, the agent can spend nothing more (evm: the allowance becomes 0;
 tempo: the access key is revoked for good; solana: the delegate is cleared). Prints the plan first. It does not bring
 back what was already spent; on evm, superstables budget recover returns stranded funds.
+It always sends the revoke, even when the budget already reads empty or revoked: one read is not proof that nothing is
+live. It sends nothing only where the chain would refuse the transaction: on solana when the owner has no USDC account
+(revoked null), and on tempo when a simulated revokeKey from the owner is refused as already done (revoked true, tx {}).
+On evm and solana the result is state landed (exit 0, revoked false, final false) until the revoke is final.
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on
 stdout and in words on stderr. The owner opens it in the browser that has their wallet, and approves or rejects there.
@@ -562,8 +583,8 @@ this machine).
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
 agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
-yet, and the owner still has to approve the rest. Either way, write the approval link (and the match code) and the terms
-in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+yet, and the owner still has to approve the rest. Either way, reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn. When they say they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
 link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
@@ -599,7 +620,10 @@ superstables budget recover --rail evm [--chain C] [--op ID] [--timeout S] [--no
 
 evm only. Stops the allowance first, then returns stranded USDC (a seller refund, or a purchase that pulled but did not
 settle) from the agent key to the owner. Prints the plan, then runs it: the agent key signs its own steps; the owner
-approves in their wallet only what the agent cannot do (the rest of the allowance, gas for the agent).
+approves in their wallet approve(agent, 0), unless the agent's own revoke brought the allowance to 0 in this run, and gas
+for the agent when it has too little. A purchase's price goes back only once its authorization can no longer settle at a
+final block. Without --op it sweeps nothing while a journal cannot be read or an operation can still move money (unknown,
+exit 5).
 tempo and solana have nothing to recover: the agent never holds the budget.
 
 How the owner approves: this command starts a page on 127.0.0.1 and prints its approval link once, as an APPROVE line on
@@ -612,8 +636,8 @@ Recovery always uses this machine's local approval page, including on a chain se
 Not in a terminal (an agent's tool), or with --detach: returns as soon as the approval link exists, with state
 waiting_owner, final false and an approval id; the page stays open in the background. recover that already sent the
 agent's own revoke returns state unknown instead, exit 5, with the same fields: the outcome of that revoke is not known
-yet, and the owner still has to approve the rest. Either way, write the approval link and the terms
-in your reply to the owner, a visible message, and end your turn there. When they say they've approved, run
+yet, and the owner still has to approve the rest. Either way, reply to the owner with message_for_owner from the RESULT, word for word
+(you may add one short line before it), and end your turn. When they say they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: waits for the owner. Either way the approval
 link also opens in the default browser, unless --no-open, or, when not in a terminal, over SSH.
 The approval link expires after --timeout seconds (default 600, from 10 to 3600). If it expires before the owner's
@@ -642,6 +666,43 @@ Exit codes: 0 done, or still waiting_owner (final false), 1 failed (once the wal
   check status before trying again)
 ```
 
+## superstables budget rotate
+
+```text
+superstables budget rotate --rail evm|solana [--plan] [--timeout S] [--no-open] [--owner-key-file <path> --yes]
+
+evm and solana. Replaces the agent key and retires the old one for good. The old address is retired first: from then on this
+machine never grants, funds, sets up or buys with it again. Then, on every chain where the old key is set up, the owner ends
+its allowance (evm) or delegate (solana) in their wallet, its open purchases are settled or returned, and its funds go back
+to the owner. Only then is the old key file moved to keys/budget/retired/, and a new key created and connected on the same
+chains, with the same owner. It runs recover, revoke, reconcile and setup as commands of their own, so each step asks the
+owner as that command does; run it where the owner is, because it stays in the foreground and waits for each approval.
+A rotation that stops can be run again: it continues where it stopped and repeats no approval it recorded as done.
+Nothing is replaced until the chain has made the revoke final: on every chain, endpoints that agree must show at a final block
+(solana: a finalized slot) that the old agent has no allowance or delegate left, and on solana the sweep's transfers must be
+finalized too. A revoke that is only in a block leaves the rotation incomplete (state incomplete, final false, exit 5): the old
+key file and its records stay, and the transactions are recorded. Run it again once superstables budget status says the revoke is
+final; rotate then checks the recorded transactions and does not send them again.
+--plan reads the chains and sends nothing. The retired list is a file on this machine: the owner's revoke on chain is
+what stops a stolen key. On a chain approved on superstables.com, the old agent is also removed on the account page.
+tempo has no rotation: setup --rail tempo --agent LABEL adds a new key (a revoked or expired tempo key is never granted again).
+
+How the owner approves: every step is the command of the same name, so each asks the owner as that command does, one approval
+link at a time (the APPROVE line on stdout, the words on stderr; recover and revoke on a page on 127.0.0.1, and on a chain
+set up with --hosted the revoke and setup links are on superstables.com). The link expires after --timeout seconds (default
+600), as for those commands; then the rotation stops and can be run again.
+Unattended tests only: --owner-key-file PATH --yes signs the owner's steps with that key file.
+rotate has no --detach, --wait or --replace: it runs in the foreground.
+
+Moves money: yes: the old key's funds go back to the owner, and its allowance or delegate is ended by the owner.
+Run by: the owner, with the agent key on this machine.
+Example:
+  $ superstables budget rotate --rail evm --plan
+Prints: the plan per chain on stderr, each approval link as it comes (APPROVE line), then one RESULT: state (planned, rotated or incomplete), oldAgent, newAgent, retired, chains (chain, recovered, setUp, hosted, revocation), next.
+  --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
+Exit codes: 0 rotated or planned, 1 a step failed, 2 bad input, 3 refused before anything was sent, 5 a step's outcome is unknown, a revoke is not final yet or a journal cannot be read (read next, then run it again)
+```
+
 ## superstables budget wait
 
 ```text
@@ -653,13 +714,13 @@ an approval. Once the owner's wallet was asked to send and there is no final res
 exit 5; tell the owner the outcome is unknown and run wait --shown again later. Once it ended: final true, and the owner
 command's (or purchase's) own final RESULT and exit code, the same on every later call.
 Scripts test final, not the exit code.
---shown means: I have written the approval link (and the match code) and the terms in a reply the owner can read.
+--shown means: message_for_owner was sent in a reply the owner can read.
 Without it, wait refuses (exit 2, state show_owner_first) and polls nothing, so that answer says nothing about whether the
 owner approved or paid; once the approval has ended, or this machine already saw the owner act on it (the page log shows
 the wallet was asked; for buy-once, an earlier read showed payment evidence), it reads it without --shown.
-An agent writes the approval link, ends its turn, and runs wait when the owner says they've approved; while still
+An agent replies to the owner with message_for_owner, ends its turn, and runs wait when the owner says they've approved; while still
 waiting_owner it says so in one line and ends its turn again. unknown with final false and message_for_owner (recover,
-after the agent's own revoke) also means the owner has not finished: write the approval link again if url changed, and
+after the agent's own revoke) also means the owner has not finished: send the new message_for_owner if url changed, and
 end the turn.
 --site is checked against the site the approval was made on, and refused if it differs.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
@@ -667,7 +728,8 @@ approval sent nothing; after setup --hosted with --grant or --fund, or recover, 
 steps, tx and budget status). Run the owner command again for a new one (setup reuses the agent key it created).
 --abandon (the owner only, for a buy-once purchase the site never ends): reads the site once; if the purchase still has
 no final answer, keeps its record, marks it given up with the time, and returns state unknown, exit 5, final true. The
-payment stays unknown; buy-once can start a new purchase. An agent never runs it.
+payment stays unknown; buy-once can start a new purchase. A purchase read as paid whose payment is not final keeps its
+paid result, is marked finalityAbandonedAt, and no longer holds the next buy-once. An agent never runs it.
 
 Moves money: no. It never approves, signs or sends anything.
 Run by: anyone, usually the agent that started the owner command, after the owner says they've approved.
@@ -692,7 +754,7 @@ simulated is yes when the listing marks the output as prepared sample output (mo
 services), no when it marks it as not sample output (Superstables' market data service, which returns live prices; no
 does not verify that the data is real), and not said when the listing does not say.
 The site is --site, else SUPERSTABLES_SITE, else the SITE recorded by setup --hosted (for --rail and --chain when given,
-else the first chain that has one), else https://www.superstables.com. Any other seller URL works too:
+else the first chain that has one), else https://www.superstables.com. A listing read also accepts staging and sites on this computer. Any other seller URL works too:
 superstables budget preflight --rail R --url U reads its price.
 --once: lists the services available for Single purchase on superstables.com, with no budget
 (GET /api/v1/purchase/services): id, price, simulated, network and inputs (* marks a required one). --rail and --chain
@@ -724,18 +786,18 @@ you accept, in the service's token (USDC, or pathUSD on Tempo); a service that c
 created.
 --param K=V (repeatable) or --params JSON give the service's inputs.
 The command asks the site for the purchase and prints the owner's approval link and match code as an APPROVE line, the
-same as the owner commands. Write the approval link, the code and the terms in your reply to the owner, a visible
-message, not only in your reasoning or a tool call, and end your turn there. The first approval link the owner opens
-asks them to sign in with an Ethereum or Solana wallet (a message, no fee). A Solana account supports
-only Solana purchases, paid from the wallet the owner signed in with. With an Ethereum account, the owner
-connects a separate Solana wallet for Solana devnet. Purchases on EVM chains or Tempo require an Ethereum account.
+same as the owner commands. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one
+short line before it), and end your turn. The first approval link the owner opens
+asks them to sign in, with an Ethereum or Solana wallet (a message, no fee) or an email address. The owner pays
+from a wallet their account holds: an Ethereum wallet on EVM chains and Tempo, a Solana wallet on Solana devnet.
+An account admin adds wallets on the account page.
 Not in a terminal (an agent), or with --detach: returns at
 once with state waiting_owner and an approval id; when the owner says they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: blocks until the purchase ends. One buy-once
 purchase open at a time; --replace cancels the open one, only while the owner has not signed. Paid is never the site's
 word alone: the command reads the payment from the chain (exactly the amount, to the listed recipient, in the listed
 token); one the chain does not show is unknown (exit 5).
---site: the site (default https://www.superstables.com, or SUPERSTABLES_SITE, or the SITE that setup --hosted recorded).
+--site: the site (default https://www.superstables.com, or SUPERSTABLES_SITE, or the SITE that setup --hosted recorded): only https://www.superstables.com unless the owner allows another in their settings (superstables owner settings).
 
 Moves money: yes: the service's price, at most --max, from the owner's wallet, once the owner approves it on superstables.com.
 Run by: the agent starts it; only the owner approves.

@@ -8,6 +8,8 @@
 //   --help / -h          print usage, exit 0
 //   --mainnet, or --chain / B4_CHAIN naming a mainnet (name or chain id)
 //                        exit 3 with RESULT state refused_precheck: refused before anything is signed
+//   a chain whose chains.mjs entry is not marked testnet: true (src/core/chain-gate.js)
+//                        exit 3 with RESULT state refused_precheck, before a key file, an RPC or a seller is touched
 //   unknown flag         exit 2
 //   missing value        exit 2
 //   missing required     exit 2
@@ -15,21 +17,23 @@
 //   unknown chain name   exit 2 (chains.ts, also before any secret is read)
 //
 // The table is the single list of runnable scripts. A script that is not in it exits 2 (fail closed).
-// Only Node built-ins and the plain chain table (chains.mjs, no imports) are used here.
+// Only Node built-ins, the plain chain table (chains.mjs, no imports) and the chain gate (no imports) are used here.
 import { dirname, basename, resolve } from "node:path";
-import { EVM_CHAIN_KEYS } from "./chains.mjs";
+import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./chains.mjs";
+import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 
 // v = flags that take a value, b = boolean flags, r = required flags (value or boolean), pos = positional arguments
 // (name list; all required), keys = which secret files the script may open (documentation, printed in --help).
 const SPEC = {
-  "setup.ts": { d: "Create the agent key file if it is missing (mode 600, never overwritten), let the owner connect their own wallet on the owner page (a free sign-in signature proves the address), and write this chain's public file (owner and agent addresses, no secret). Prints the next steps. Never prints a key. With --hosted, --grant and --fund ask on the same approval link, after the owner adds the agent, for the agent's gas and the grant, and read both from the chain.", u: "[--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund [--fund-amount <gas token, decimal>]]] [--timeout <s>] [--no-open] [--owner-key-file <path>]", v: ["timeout", "owner-key-file", "site", "grant", "fund-amount"], b: ["no-open", "new-owner", "hosted", "fund"], r: [], keys: "agent (created if missing; with --hosted it signs the add-agent request); owner key file only with --owner-key-file" },
+  "setup.ts": { d: "Create the agent key file if it is missing (mode 600, never overwritten), let the owner connect their own wallet on the owner page (a free sign-in signature proves the address), and write this chain's public file (owner and agent addresses, no secret). Prints the next steps. Never prints a key. With --hosted, --grant and --fund ask on the same approval link, after the owner adds the agent, for the agent's gas and the grant, and read both from the chain.", u: "[--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund [--fund-amount <gas token, decimal>]]] [--key-store file|os-keychain] [--timeout <s>] [--no-open] [--owner-key-file <path>]", v: ["timeout", "owner-key-file", "site", "grant", "fund-amount", "key-store"], b: ["no-open", "new-owner", "hosted", "fund"], r: [], keys: "agent (created if missing; with --hosted it signs the add-agent request); owner key file only with --owner-key-file" },
   "preflight.ts": { d: "Read only: RPC chain id, USDC name/version/decimals/domain separator against chains.ts, native vs ERC-20 balances, and (with --url) the seller's decoded 402 with a verdict per option. No secret file.", u: "[--url <seller url>] [--max <usdc>] [--pay-to <address>]", v: ["url", "max", "pay-to"], b: [], r: [], keys: "none" },
   "fundAgent.ts": { d: "Owner: send the agent some native gas token (Arc: USDC). One plain transfer, capped at 5 units. The owner approves it in their own wallet (owner page). --amount defaults to the chain's doctor.fundAgent.", u: "[--amount <gas token, decimal>] [--timeout <s>] [--no-open] [--owner-key-file <path>]", v: ["amount", "timeout", "owner-key-file"], b: ["no-open"], r: [], keys: "none (the owner's wallet); on a chain set up with --hosted, the agent key signs the request to the site; owner key file only with --owner-key-file" },
   "setBudget.ts": { d: "Owner: USDC.approve(agent, cap), approved in the owner's own wallet (owner page), then read from the chain: refuses (exit 3) if the allowance is not exactly the cap. No on-chain expiry or period; --expiry-in is advisory. A live allowance is never overwritten silently. --verify-only sends nothing.", u: "--cap <usdc> [--expiry-in <seconds>] [--timeout <s>] [--no-open] [--owner-key-file <path> [--replace]] [--verify-only]", v: ["cap", "expiry-in", "timeout", "owner-key-file"], b: ["replace", "verify-only", "no-open"], r: ["cap"], keys: "none (the owner's wallet); on a chain set up with --hosted, the agent key signs the request to the site; owner key file only with --owner-key-file" },
-  "buy.ts": { d: "Agent: pay an x402 seller under the approve (transferFrom to the agent, then a normal EIP-3009 payment). Refuses before any signature or pull when the price exceeds --max, the token is not this chain's USDC (6 decimals), the seller's EIP-712 domain is not the token's (or the option is a Gateway batched one), the recipient differs from --pay-to, the amount has too much precision, the budget expired, the allowance or the owner balance is too low, or the agent holds more than its gas reserve. A pull that is not followed by a settlement is returned to the owner, never re-paid. Exit: 0 settled and delivered (or quoted), 1 failed or refused by the chain, 3 refused before signing, 4 paid not delivered, 5 unknown.", u: "--url <seller url> --max <usdc> [--pay-to <address>] [--op <id>] [--quote-only] [--http-timeout <seconds>]", v: ["url", "max", "pay-to", "op", "http-timeout"], b: ["quote-only"], r: ["url", "max"], keys: "agent" },
+  "buy.ts": { d: "Agent: pay an x402 seller under the approve (transferFrom to the agent, then a normal EIP-3009 payment). Refuses before any signature or pull when the price exceeds --max, the token is not this chain's budget token (address and decimals from chains.mjs), the seller's EIP-712 domain is not the token's (or the option is a Gateway batched one), the recipient differs from --pay-to, the amount has too much precision, the budget expired, the allowance or the owner balance is too low, or the agent holds more than its gas reserve. A pull that is not followed by a settlement is returned to the owner, never re-paid. Exit: 0 settled and delivered (or quoted), 1 failed or refused by the chain, 3 refused before signing, 4 paid not delivered, 5 unknown.", u: "--url <seller url> --max <usdc> [--pay-to <address>] [--op <id>] [--quote-only] [--http-timeout <seconds>]", v: ["url", "max", "pay-to", "op", "http-timeout"], b: ["quote-only"], r: ["url", "max"], keys: "agent" },
   "reconcile.ts": { d: "READ ONLY. Read an operation from its journal and the chain, then set settled, failed, unknown or not_found. Never signs, sends or pays; opens no key file. Returning stranded funds is recover.ts --op. Exit: 0 settled and delivered, 1 failed or not_found, 4 settled but delivery unconfirmed, 5 unknown.", u: "--op <id>", v: ["op"], b: [], r: ["op"], keys: "none" },
   "revoke.ts": { d: "Owner: USDC.approve(agent, 0), approved in the owner's own wallet (owner page). The kill switch even under a stolen agent key. --plan prints what it would do and sends nothing.", u: "[--plan] [--timeout <s>] [--no-open] [--owner-key-file <path>]", v: ["timeout", "owner-key-file"], b: ["plan", "no-open"], r: [], keys: "none (the owner's wallet); on a chain set up with --hosted, the agent key signs the request to the site; owner key file only with --owner-key-file" },
   "recover.ts": { d: "Stop authority, then return stranded USDC to the owner. In this order: 1 the agent self-revokes the allowance (agent key); the owner approves 0 in their wallet for any rest, 2 cancel open authorizations and return the price of every journaled pull that landed without a settlement (agent key; --op limits this to one operation), 3 sweep other USDC stranded in the agent key (above its gas reserve where USDC is the gas token; not with --op). If the agent has too little gas for 2 and 3, the owner sends some in their wallet first. --plan prints the plan and sends nothing.", u: "[--op <id>] [--plan] [--timeout <s>] [--no-open] [--owner-key-file <path>]", v: ["op", "timeout", "owner-key-file"], b: ["plan", "no-open"], r: [], keys: "agent; owner key file only with --owner-key-file (its B4_AGENT_KEY_ESCROW only without an agent file)" },
+  "rotate.ts": { d: "Steps of superstables budget rotate. Sends nothing. --clear-agent removes the retired agent from this chain's public file (the owner, the approvals mode and the site stay); --address prints the address of the agent key file.", u: "(--clear-agent <address> | --address)", v: ["clear-agent"], b: ["address"], r: [], keys: "agent (--address only)" },
   "read.ts": { d: "Read allowance, balances, cap and public expiry. No secret file.", u: "", v: [], b: [], r: [], keys: "none" },
 };
 
@@ -75,6 +79,17 @@ if (argv.includes("--mainnet") || (chainValue && !String(chainValue).startsWith(
   const shown = argv.includes("--mainnet") ? "--mainnet" : String(chainValue);
   process.stderr.write(`REFUSED: "${shown}" is a mainnet. superstables budget is testnet only (--chain ${EVM_CHAIN_KEYS.join(", ")}). Nothing was signed or sent.\n`);
   process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: shown, state: "refused_precheck", reason: "mainnet is refused: testnet only", next: `use --chain ${EVM_CHAIN_KEYS.join(" or --chain ")}` })}\n`);
+  process.exit(3);
+}
+
+// The chain gate (src/core/chain-gate.js): no EVM script runs on a chain this build does not sign on. It refuses here,
+// before a key file, an RPC or a seller is touched.
+const gateKey = chainValue && !String(chainValue).startsWith("--") ? String(chainValue) : EVM_DEFAULT_CHAIN;
+const gateEntry = Object.hasOwn(EVM_CHAINS, gateKey) ? EVM_CHAINS[gateKey] : undefined;
+const gate = gateEntry ? chainGate({ rail: "evm", key: gateKey, testnet: gateEntry.testnet, token: gateEntry.token }, chainGateSettings()) : "";
+if (gate) {
+  process.stderr.write(`REFUSED: ${gate}. Nothing was signed or sent.\n`);
+  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: gateKey, state: "refused_precheck", reason: gate, next: "nothing was signed or sent; use a testnet chain" })}\n`);
   process.exit(3);
 }
 

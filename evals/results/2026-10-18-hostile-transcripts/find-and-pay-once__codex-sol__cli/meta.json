@@ -1,0 +1,11 @@
+{
+  "scenario": "find-and-pay-once",
+  "agent": "codex-sol",
+  "model": "gpt-6.1-sol",
+  "skill": "cli",
+  "started": "2026-10-18T15:09:19.809Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 43,
+  "finished": "2026-10-18T15:10:02.636Z"
+}

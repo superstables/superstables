@@ -3,6 +3,7 @@
 // no box drawing — this output is quoted into bug reports and pasted into terminals that do
 // not speak ANSI.
 
+import { fromAtomicString, networkFor } from "../core/chain.js";
 import { untrustedText } from "../core/text.js";
 
 // Nothing that came from somebody else reaches a terminal through `field` or `table` without `untrustedText`: an
@@ -36,9 +37,23 @@ export function json(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
-/** "0.01 USDC", never "0.01" and never 0.009999999999999998. */
+/**
+ * "0.01 USDC", never "0.01" and never 0.009999999999999998. For a figure with no atomic amount behind it (a balance read
+ * as a number): rounds to six places. A payment's amount is printed with termsMoney.
+ */
 export function money(amountDecimal: number, asset: string): string {
   return `${Number(amountDecimal.toFixed(6))} ${asset}`;
+}
+
+/**
+ * A payment's amount, exactly: its whole number of smallest units at its chain's token decimals (the chain table), as
+ * "0.01 USDC". Terms without a whole-number amountAtomic, or on a chain this client does not know (an older record),
+ * fall back to money().
+ */
+export function termsMoney(terms: { amountAtomic?: string; amountDecimal: number; asset: string; network?: string }): string {
+  const decimals = typeof terms.network === "string" ? networkFor(terms.network)?.token.decimals : undefined;
+  if (decimals !== undefined && typeof terms.amountAtomic === "string" && /^\d{1,78}$/.test(terms.amountAtomic)) return `${fromAtomicString(terms.amountAtomic, decimals)} ${terms.asset}`;
+  return money(terms.amountDecimal, terms.asset);
 }
 
 export function yesNo(value: boolean | undefined): string {

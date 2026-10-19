@@ -1,0 +1,11 @@
+{
+  "scenario": "payment-outcome-with-tx",
+  "agent": "codex-astra",
+  "model": "gpt-6-astra",
+  "skill": "cli",
+  "started": "2026-10-18T15:25:06.926Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 31,
+  "finished": "2026-10-18T15:25:37.449Z"
+}

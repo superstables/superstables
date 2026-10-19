@@ -2,6 +2,7 @@
 // step for the approval page (../signer/steps/), and one line in each list. A chain no registered rail names is
 // refused before the owner is asked.
 
+import { chainGate, chainGateSettings } from "../chain-gate.js";
 import { describeNetwork, mainnetName, networkFor, shortLabel, type NetworkInfo } from "../chain.js";
 import type { MppChallenge } from "../mpp.js";
 import type { SignRequest } from "../signer/types.js";
@@ -53,6 +54,24 @@ export function networkRefusal(named: string): string {
 }
 
 /**
+ * The chain gate (../chain-gate.js) for a chain an offer resolved to: a refusal when nothing may be signed there, or
+ * undefined. Asked before any other check of an offer on that chain, so a chain table that names a mainnet never gets as
+ * far as the owner.
+ */
+function gateRefusal(network: NetworkInfo): Judged | undefined {
+  const reason = chainGate({ rail: network.rail, key: network.key, testnet: network.testnet, token: network.token }, chainGateSettings());
+  return reason ? { supported: false, reason } : undefined;
+}
+
+/** The judged offer, or a refusal when its chain is unknown here or the chain gate refuses it. */
+function gated(judged: Judged): Judged {
+  if (!judged.supported) return judged;
+  const network = networkFor(judged.offer.terms.network);
+  if (!network) return { supported: false, reason: networkRefusal(judged.offer.terms.network) };
+  return gateRefusal(network) ?? judged;
+}
+
+/**
  * Judge one x402 accept: exact scheme, a chain a registered x402 rail pays on, and that rail's own checks (token,
  * signing domain, amount, recipient). The terms come from the accept alone.
  */
@@ -63,6 +82,8 @@ export function judgeAccept(accept: RawAccept, version: 1 | 2): Judged {
   const named = String(accept.network ?? "");
   const network = networkFor(named);
   if (!network) return { supported: false, reason: networkRefusal(named || "unknown") };
+  const gate = gateRefusal(network);
+  if (gate) return gate;
   const rail = x402RailFor(network);
   // A chain this client pays on, but not with x402 (Tempo Moderato, where it pays MPP): the protocol is what is refused.
   if (!rail) {
@@ -84,7 +105,7 @@ export function judgeMppChallenge(challenge: MppChallenge, now: number = Date.no
   if (!rail || challenge.method !== "tempo" || challenge.intent !== "charge") {
     return { supported: false, reason: `MPP ${intent} is not supported${rail ? " (only tempo.charge)" : ""}` };
   }
-  return rail.judgeChallenge(challenge, now);
+  return gated(rail.judgeChallenge(challenge, now));
 }
 
 /** Every offer in a 402, judged, in the seller's order: x402 accepts first, then MPP challenges. */
@@ -113,7 +134,7 @@ export function firstPayable(challenge: SellerChallenge, network?: string, now: 
 export function judgeSignRequest(req: SignRequest): Judged {
   if (req.kind === "tempo-transfer") {
     if (!req.challenge || typeof req.challenge !== "object") return { supported: false, reason: "the request carried no payment challenge to check" };
-    const judged = judgeMppChallenge(req.challenge);
+    const judged = gated(judgeMppChallenge(req.challenge));
     return judged.supported && railFor(judged.offer.terms.network)?.signKind !== req.kind
       ? { supported: false, reason: `a ${req.kind} request cannot pay on ${judged.offer.terms.networkLabel}` }
       : judged;
@@ -124,7 +145,7 @@ export function judgeSignRequest(req: SignRequest): Judged {
   if (!req.requirements || typeof req.requirements !== "object") return { supported: false, reason: "the request carried no payment requirement to check" };
   const version: unknown = req.x402Version;
   if (version !== 1 && version !== 2) return { supported: false, reason: `x402 version ${untrustedText(String(version), 20)} is not supported (only 1 and 2)` };
-  const judged = judgeAccept(req.requirements as RawAccept, version);
+  const judged = gated(judgeAccept(req.requirements as RawAccept, version));
   if (!judged.supported) return judged;
   if (railFor(judged.offer.terms.network)?.signKind !== req.kind) {
     return { supported: false, reason: `a ${req.kind} request cannot pay on ${judged.offer.terms.networkLabel}` };

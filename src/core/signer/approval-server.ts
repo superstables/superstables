@@ -27,14 +27,17 @@
 // origin with a JSON body, so another web page in the owner's browser cannot reject or sign.
 
 import { randomBytes } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { closeSync, fsyncSync, openSync, writeSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Hex } from "viem";
 import { networkFor } from "../chain.js";
 import { DEFAULT_APPROVE_PORT, approvalsPath, ensureDir, recordsDir } from "../home.js";
 import type { RailRequirement } from "../rails/types.js";
+import { approvalIdHash } from "../records.js";
+import { untrustedText } from "../text.js";
 import type { PaymentContext, VerifiedTerms } from "../types.js";
-import { approvalNotFoundPage, approvalPage, type ApprovalPageFacts } from "./approval-page.js";
+import { approvalNotFoundPage, approvalPage, type ApprovalPageFacts, type PagePolicy } from "./approval-page.js";
+import { pageCsp, scriptNonce } from "./look.js";
 import { stepFor } from "./steps/index.js";
 import type { StepRecord, WalletStep } from "./steps/types.js";
 import { SignRefused, type RefusalCode, type SignKind, type SignResult, type WalletSendIntent } from "./types.js";
@@ -57,6 +60,8 @@ export interface ApprovalRequestInput {
   reported?: PaymentContext;
   /** The seller's requirement as it was judged: what the wallet's request is built from. */
   requirement: RailRequirement;
+  /** Which spend policy applied. Shown on the page; used for nothing else. */
+  policy?: PagePolicy;
   x402Version: 1 | 2;
   /** EIP-3009: the nonce the payment engine chose for the authorization. */
   nonce?: Hex;
@@ -90,6 +95,8 @@ interface ApprovalRecord extends StepRecord {
   timeoutMs: number;
   reason?: string;
   reported?: PaymentContext;
+  policy?: PagePolicy;
+  seller?: ApprovalPageFacts["seller"];
   step: WalletStep;
   beforeWalletSends?: (intent: WalletSendIntent) => Promise<void>;
   /** A POST is being answered: a second one is refused (409) rather than racing it. */
@@ -114,6 +121,24 @@ export interface ApprovalServerOptions {
   recordsDirPath?: string;
   /** Remember the connected account here, so `status` can name a payer later. */
   onAccount?: (address: string, network: string) => void;
+  /**
+   * What the owner's signed settings say about the account that just connected, for the page's "Signed settings" row. Never
+   * throws; undefined when the settings carry no signature.
+   */
+  settingsNote?: (address: string) => Promise<SettingsNote | undefined>;
+  /**
+   * Asked with the account that connects, before anything is prepared for it: the reason to stop (the owner's signed settings
+   * pin a spend policy this wallet's payment does not meet), or undefined to go on. Never throws.
+   */
+  accountRefusal?: (address: string) => Promise<string | undefined>;
+}
+
+/** The "Signed settings" row of the approval page: who signed the owner's settings, and whether that is the connected wallet. */
+export interface SettingsNote {
+  /** "yours": the connected wallet signed them. "other": another wallet did, and they do not apply here. */
+  applies: "yours" | "other";
+  signer: string;
+  signedAt: string;
 }
 
 /** What an approval whose wallet was asked to send ends with, when nothing came back. */
@@ -124,6 +149,46 @@ const MAY_HAVE_SENT =
 const WALLET_SAID_NO =
   "the approval page reported that the owner rejected this payment in their wallet after the wallet was asked to send it; " +
   "that report cannot be checked against the wallet, so whether it was sent is unknown until the chain shows it";
+
+/** The seller's description on the page: one line, cleaned, at most this many characters. */
+const SELLER_SAYS_MAX = 200;
+
+/**
+ * The context the caller passed, as this server keeps, shows and logs it: every field cleaned of control and invisible
+ * characters (src/core/text.ts) and bounded; the seller's description to SELLER_SAYS_MAX with an ellipsis when cut.
+ */
+function cleanReported(input?: PaymentContext): PaymentContext | undefined {
+  if (!input) return undefined;
+  // more than two combining marks in a row only stack over the lines around them
+  const marks = (text: string) => text.replace(/(\p{M}{2})\p{M}+/gu, "$1");
+  const field = (value: unknown, max: number) => {
+    const text = marks(untrustedText(value, max));
+    return text === "" ? undefined : text;
+  };
+  const said = marks(untrustedText(input.description, 4 * SELLER_SAYS_MAX));
+  // a cut between the two halves of a surrogate pair would leave a lone half, which renders as a replacement box
+  const cut = said.length > SELLER_SAYS_MAX ? `${said.slice(0, SELLER_SAYS_MAX - 1).replace(/[\uD800-\uDBFF]$/, "").trimEnd()}…` : said;
+  return {
+    target: untrustedText(input.target, 2_000),
+    serviceId: field(input.serviceId, 64),
+    serviceName: field(input.serviceName, 80),
+    description: cut === "" ? undefined : cut,
+    quoteId: field(input.quoteId, 64),
+    attemptId: field(input.attemptId, 64),
+  };
+}
+
+/** The scheme and host of the URL this client called, when it is an http(s) URL. */
+function sellerOf(target?: string): ApprovalPageFacts["seller"] {
+  if (!target) return undefined;
+  try {
+    const url = new URL(target);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    return { scheme: url.protocol === "https:" ? "https" : "http", host: url.host };
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * The port somebody chose is taken. Most likely another `superstables pay` is
@@ -215,7 +280,8 @@ export class ApprovalServer {
           res.end();
           return;
         }
-        this.sendJson(res, 500, { error: `the approval page could not handle that: ${err.message}` });
+        process.stderr.write(`approval page: a request failed: ${untrustedText(err?.message ?? err, 300)}\n`);
+        this.sendJson(res, 500, { error: "the approval page could not handle that request; the command's error output says why" });
       });
     });
     await new Promise<void>((resolve, reject) => {
@@ -253,7 +319,9 @@ export class ApprovalServer {
       network,
       step,
       verified: input.verified,
-      reported: input.reported,
+      reported: cleanReported(input.reported),
+      policy: input.policy,
+      seller: sellerOf(input.reported?.target),
       requirement: input.requirement,
       x402Version: input.x402Version,
       ...(input.nonce ? { nonce: input.nonce } : {}),
@@ -315,23 +383,29 @@ export class ApprovalServer {
     record.finish({ status, reason });
   }
 
-  /** One line per state change. Never a signature, never a key: this file is for reading. */
+  /** One line per state change, flushed. Never a signature, never a key, never the id itself: its hash (approvalIdHash). */
   private audit(record: ApprovalRecord): void {
     const dir = this.options.recordsDirPath ?? recordsDir();
     const line = {
       at: new Date().toISOString(),
-      id: record.id,
+      id: approvalIdHash(record.id),
       status: record.status,
-      reason: record.reason,
+      reason: record.reason === undefined ? undefined : untrustedText(record.reason, 1_000),
       verified: record.verified,
       reported: record.reported,
       address: record.account,
     };
+    let fd: number | undefined;
     try {
       ensureDir(dir);
-      appendFileSync(approvalsPath(dir), `${JSON.stringify(line)}\n`, { mode: 0o600 });
+      fd = openSync(approvalsPath(dir), "a", 0o600);
+      const bytes = Buffer.from(`${JSON.stringify(line)}\n`);
+      for (let at = 0; at < bytes.length; ) at += writeSync(fd, bytes, at);
+      fsyncSync(fd);
     } catch {
       // An unwritable audit file must never stop a person from deciding about their own money.
+    } finally {
+      if (fd !== undefined) try { closeSync(fd); } catch {}
     }
   }
 
@@ -349,6 +423,8 @@ export class ApprovalServer {
       expiresAt: record.expiresAt,
       ...record.step.pageFacts(record),
       reported: record.reported,
+      seller: record.seller,
+      policy: record.policy,
     };
   }
 
@@ -359,8 +435,17 @@ export class ApprovalServer {
     res.end(JSON.stringify(body));
   }
 
-  private sendHtml(res: ServerResponse, status: number, html: string): void {
-    res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+  private sendHtml(res: ServerResponse, status: number, html: string, nonce?: string): void {
+    res.writeHead(status, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "x-frame-options": "DENY",
+      // Only this page's own scripts run (pageCsp); connect-src stays open, because a wallet's injected provider may call RPC from the page.
+      "content-security-policy": pageCsp(nonce),
+      // the link carries the approval id, which is the capability: it must not leave in a Referer
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    });
     res.end(html);
   }
 
@@ -400,7 +485,10 @@ export class ApprovalServer {
       this.sendJson(res, 404, { error: "no such route" });
       return;
     }
-    const record = this.records.get(decodeURIComponent(match[1]));
+    // A malformed escape in the id (%E0%A4%A) names no approval: the same 404 as any unknown id, never a 500.
+    let id = "";
+    try { id = decodeURIComponent(match[1]); } catch {}
+    const record = this.records.get(id);
     const leaf = match[2];
 
     if (!record) {
@@ -418,7 +506,8 @@ export class ApprovalServer {
     }
 
     if (!leaf && method === "GET") {
-      this.sendHtml(res, 200, approvalPage(this.facts(record), record.step));
+      const nonce = scriptNonce();
+      this.sendHtml(res, 200, approvalPage(this.facts(record), record.step, undefined, nonce), nonce);
       return;
     }
     if (leaf === "/state" && method === "GET") {
@@ -516,13 +605,37 @@ export class ApprovalServer {
         this.sendJson(res, 409, { error: "your wallet was already asked to send this payment; it is not prepared again" });
         return;
       }
+      const refusal = await this.options.accountRefusal?.(address);
+      if (refusal) {
+        // The wallet that connected is bound by what the owner signed, and the policy in use is not that: nothing is prepared,
+        // nothing is signed, and the approval ends.
+        if (record.status === "pending") {
+          record.status = "refused";
+          record.reason = refusal;
+          this.audit(record);
+          record.finish({ status: "refused", code: "policy", reason: refusal });
+        }
+        this.sendJson(res, 409, { error: refusal, status: record.status, reason: record.reason });
+        return;
+      }
+      // The approval may have ended during that check (the process serving it closed or timed out): nothing is prepared.
+      if (record.status !== "pending") {
+        this.sendJson(res, 409, { error: `this payment is already ${record.status}`, status: record.status, reason: record.reason });
+        return;
+      }
       const answer = await record.step.prepare(record, address);
+      let note: SettingsNote | undefined;
       if (answer.http === 200) {
         // A person may switch accounts before signing, so this rebuilds rather than refusing.
         record.account = address;
         record.verified = { ...record.verified, payer: address };
+        try {
+          note = await this.options.settingsNote?.(address);
+        } catch {
+          note = undefined;
+        }
       }
-      this.sendJson(res, answer.http, answer.body);
+      this.sendJson(res, answer.http, note ? { ...(answer.body as object), signedSettings: note } : answer.body);
       return;
     }
 

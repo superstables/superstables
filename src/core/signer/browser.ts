@@ -10,15 +10,18 @@
 // open. What the wallet is then asked to do is the rail's: sign an EIP-3009 authorization
 // (EVM), send a pathUSD transfer (Tempo), or sign a token transfer (Solana).
 
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { DEFAULT_NETWORK, networkFor, usdcBalance, type Rail } from "../chain.js";
-import { browserWalletPath, ensureDir, homeDir, policyPath, recordsDir } from "../home.js";
-import { evaluatePolicy, formatMoney, loadPolicy, type Policy } from "../policy.js";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { DEFAULT_NETWORK, fromAtomicString, networkFor, usdcBalance, type Rail } from "../chain.js";
+import { accountPolicyPath, browserWalletPath, ensureDir, homeDir, policyPath, recordsDir, retiredListPath } from "../home.js";
+import { signedBy, signedPolicyCheck, signedSettings } from "../owner-settings.js";
+import { CAP_DECIMALS, evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Money, type Policy } from "../policy.js";
 import { Records } from "../records.js";
 import { judgeSignRequest } from "../rails/index.js";
+import { untrustedText } from "../text.js";
 import type { VerifiedTerms, WalletStatus } from "../types.js";
-import { ApprovalServer } from "./approval-server.js";
+import { ApprovalServer, type SettingsNote } from "./approval-server.js";
+import type { PagePolicy } from "./approval-page.js";
 import { SignRefused, type Eip3009SignRequest, type Eip3009SignResult, type SignHooks, type SignRequest, type SignResult, type Signer } from "./types.js";
 
 /** How long an approval page waits for the person before the request expires. */
@@ -80,6 +83,8 @@ export class BrowserWalletSigner implements Signer {
       preferredPort: options.preferredPort,
       recordsDirPath: dir,
       onAccount: (address, network) => this.remember(address, network),
+      settingsNote: (address) => settingsNoteFor(address),
+      accountRefusal: (address) => accountRefusalFor(address),
     });
     this.remembered = this.readRemembered();
   }
@@ -127,6 +132,14 @@ export class BrowserWalletSigner implements Signer {
   /** What this signer says about itself. It never throws: there is nothing here to be down. */
   async status(): Promise<WalletStatus> {
     const policy = this.policy();
+    const shown = (p: Policy): WalletStatus["policy"] => ({
+      perCall: formatMoney(p.perCall),
+      perDay: formatMoney(p.perDay),
+      allow: p.allow,
+      deny: p.deny,
+      stablecoins: p.stablecoins,
+      killSwitch: p.killSwitch,
+    });
     const address = this.rememberedOn("evm") || undefined;
     return {
       mode: "browser",
@@ -137,14 +150,8 @@ export class BrowserWalletSigner implements Signer {
       balanceDecimal: address ? await this.balanceOf(address) : undefined,
       approvalMode: APPROVAL_MODE,
       pending: this.server.pending,
-      policy: {
-        perCall: formatMoney(policy.perCall),
-        perDay: formatMoney(policy.perDay),
-        allow: policy.allow,
-        deny: policy.deny,
-        stablecoins: policy.stablecoins,
-        killSwitch: policy.killSwitch,
-      },
+      policy: shown(policy),
+      ...(policy.also ? { also: { file: policy.also.file, policy: shown(policy.also.policy) } } : {}),
     };
   }
 
@@ -167,12 +174,13 @@ export class BrowserWalletSigner implements Signer {
     const policy = this.policy();
     const verdict = evaluatePolicy(policy, {
       domain: policyDomain(req.context?.target),
-      amountDecimal: terms.amountDecimal,
       asset: terms.asset,
+      ...policyAmount(terms),
       // What this machine has already paid today, from its own receipts: the per-day cap is
       // checked again here, at the gate, and not only when the quote was taken.
       // The attempt being signed has already reserved its amount (pay.ts): it is left out, so it does not count twice.
-      spentTodayDecimal: this.records.spentToday(terms.asset, new Date(), { exclude: req.context?.attemptId }),
+      spentTodayAtomic: this.records.spentTodayAtomic(terms.asset, new Date(), { exclude: req.context?.attemptId }),
+      spentTodayHasOpen: this.records.spentTodayHasOpen(terms.asset, new Date(), { exclude: req.context?.attemptId }),
     });
     // A payment the owner's policy refuses never becomes an approval: nobody is asked, and
     // there is no link to open.
@@ -196,6 +204,7 @@ export class BrowserWalletSigner implements Signer {
       verified,
       reported: req.context,
       requirement,
+      policy: pagePolicy(policy, this.options.policy !== undefined),
       x402Version: req.kind === "eip3009" && req.x402Version === 1 ? 1 : 2,
       ...(req.kind === "eip3009" && req.nonce ? { nonce: req.nonce } : {}),
       ...(req.kind !== "eip3009" && req.referralId ? { referralId: req.referralId } : {}),
@@ -217,7 +226,7 @@ export class BrowserWalletSigner implements Signer {
 
   /** Read late: the owner may have edited their policy since this signer was built. */
   private policy(): Policy {
-    return this.options.policy ?? loadPolicy(policyPath());
+    return this.options.policy ?? loadPaymentPolicy();
   }
 
   private async balanceOf(address: string): Promise<number | undefined> {
@@ -264,6 +273,32 @@ export class BrowserWalletSigner implements Signer {
   }
 }
 
+/** What the owner's signed settings say about the account that connected: undefined when unsigned or not valid. */
+export async function settingsNoteFor(address: string): Promise<SettingsNote | undefined> {
+  try {
+    const signed = await signedSettings({ policyPath: accountPolicyPath(), retiredPath: retiredListPath() });
+    if (!signed?.valid || !signed.signer || !signed.signedAt) return undefined;
+    // "Signed by" only for a signature that holds and covers the policy in use.
+    const yours = signedBy(signed, address);
+    if (yours && !signed.policyMatches) return undefined;
+    return { applies: yours ? "yours" : "other", signer: signed.signer, signedAt: signed.signedAt };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Why the wallet that just connected may not go on: the owner's signed settings bind it and the account policy file in use is
+ * not the one signed. The address remembered from an earlier payment only guesses who will connect; this is the check on who did.
+ */
+async function accountRefusalFor(address: string): Promise<string | undefined> {
+  try {
+    return (await signedPolicyCheck(address, { policyPath: accountPolicyPath(), retiredPath: retiredListPath() })).refuse;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The hostname the policy judges: the URL the agent says it is calling, when it is a URL. */
 function policyDomain(target?: string): string {
   if (!target) return "";
@@ -273,4 +308,31 @@ function policyDomain(target?: string): string {
   } catch {
     return "";
   }
+}
+
+/** A cap as the page says it: exact, from the cap's whole units (S7), in the asset the owner wrote. */
+function capText(m?: Money): string | undefined {
+  if (!m) return undefined;
+  try {
+    return `${fromAtomicString(m.atomic ?? "", CAP_DECIMALS)} ${m.asset}`;
+  } catch {
+    return formatMoney(m);
+  }
+}
+
+/**
+ * Which spend policy decided that this payment may be asked for, for the page: the file (or "the program", when a caller
+ * passed its own policy object), whether it is the account's own file, and the caps. Read now, at the gate, as policy() is.
+ */
+function pagePolicy(policy: Policy, fromProgram: boolean): PagePolicy {
+  const file = policyPath();
+  return {
+    file: untrustedText(file, 300),
+    source: fromProgram ? "program" : existsSync(file) ? "file" : "defaults",
+    chosen: !fromProgram && resolve(file) !== resolve(accountPolicyPath()),
+    perCall: capText(policy.perCall),
+    perDay: capText(policy.perDay),
+    killSwitch: policy.killSwitch,
+    ...(policy.also ? { also: { file: untrustedText(policy.also.file, 300), perCall: capText(policy.also.policy.perCall), perDay: capText(policy.also.policy.perDay) } } : {}),
+  };
 }

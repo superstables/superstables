@@ -5,14 +5,29 @@
 import { encodeFunctionData, parseEventLogs, parseUnits, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { DEFAULT_SITE, differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
+import { ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
+import { rpcFacts } from "../page-facts.mjs";
 import { EVM_CHAINS } from "./chains.mjs";
 import { CHAINS } from "./chains.ts";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { ownerEvidence, plannedCall, type EvidenceReads } from "./delegation.ts";
-import { CFG, GAS, SYM, USDC, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need } from "./lib.ts";
+import { searchLogs } from "../../src/core/log-windows.mjs";
+import { CFG, GAS, SYM, USDC, USDC_DECIMALS, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need, allowanceAgreed, finalityOf, thatTakes, agreementWords } from "./lib.ts";
 
 export { closeOwnerPage };
+
+// An owner script reads and sends only through an RPC the owner set (or the built-in one): a variable that names another is
+// refused here, before this script reads a key, asks the owner or sends anything. The dispatcher refuses it earlier; this
+// covers a script run directly. (src/core/owner-settings.js)
+{
+  const problem = ownerRpcProblem("evm", CFG.key);
+  if (problem) {
+    const command = String(process.argv[1] ?? "").split(/[\\/]/).pop()!.replace(/\.(?:ts|mjs)$/, "") || "owner";
+    console.log(`REFUSED: ${problem}. Nothing was asked or sent.`);
+    process.exit(emit(command, 3, { state: "refused_precheck", reason: problem, next: ownerRpcNext("evm", CFG.key) }));
+  }
+}
 export const OWNER_CHAIN: OwnerChain = {
   chainId: CFG.chainId,
   chainName: CFG.label,
@@ -25,6 +40,13 @@ export const OWNER_CHAIN: OwnerChain = {
 export const chainFlag = CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`;
 /** How the owner revokes, in words the page and the logs share. */
 export const REVOKE_HINT = `superstables budget revoke --rail evm${chainFlag}. You approve that in your wallet too.`;
+
+/** What the owner page says when a revoke is in a block but the chain has not made it final yet. */
+export const landedRevoke = (): string => `Sent and included on chain. The allowance reads 0, but the chain has not made this final yet${thatTakes()}. Until then, check superstables budget status before you rely on it. Funds already withdrawn remain under the agent key. You can close this page.`;
+/** The same for a grant. */
+export const landedGrant = (cap: bigint): string => `Sent and included on chain. The allowance reads ${capWords(cap)}, but the chain has not made it final yet${thatTakes()}. You can close this page. To end it: ${REVOKE_HINT}`;
+/** The same for the gas transfer. */
+export const landedFund = (): string => `Sent and included on chain. Your agent's balance shows the transfer, but the chain has not made it final yet${thatTakes()}. You can close this page.`;
 
 /** undefined: read the public file. setup decides for itself (--hosted), before the file says anything. */
 let chosenSite: string | null | undefined;
@@ -39,8 +61,25 @@ export function approvalSite(): string | null {
   return p.APPROVALS === "hosted" ? p.SITE || DEFAULT_SITE : null;
 }
 
+/** The budget token, as the page offers it to the owner's wallet before an approval of it. */
+export const OWNER_TOKEN = { address: USDC, symbol: SYM, decimals: USDC_DECIMALS };
+
+/** What the wallet will show for approve(agent, atomic) on the budget token: the raw amount next to the readable one. */
+export const approveShows = (agent: Address, atomic: bigint): string[] => [
+  `approve(spender ${agent}, amount ${atomic}): ${usdc(atomic)} ${SYM}`,
+  `To: the ${SYM} token contract ${USDC}`,
+  `A network fee in ${GAS.symbol}, paid from your wallet`,
+];
+/** The same for the plain transfer of the chain's gas token (on Arc that is USDC in 18 decimals). */
+export const fundShows = (agent: Address, wei: bigint): string[] => [
+  `A transfer of ${wei} wei: ${gasFmt(wei)} ${GAS.symbol}`,
+  `To: ${agent}`,
+  `A network fee in ${GAS.symbol}, paid from your wallet`,
+];
+
 export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   chain: OWNER_CHAIN,
+  pageFacts: () => ({ rpc: rpcFacts("evm", CFG.key), token: OWNER_TOKEN }),
   walletWords: "any EVM browser wallet, such as MetaMask, Rabby or Coinbase Wallet",
   statusCommand: `superstables budget status --rail evm${chainFlag}`,
   emit,
@@ -65,7 +104,8 @@ export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   },
 });
 
-export type Sent = { hash: Hex; status: "success" | "reverted"; blockNumber: bigint; logs: any[]; problems: string[]; unresolved?: string; siteFailed?: string };
+/** `final`: the block the transaction landed in is final on this chain as the endpoints agree (finalityOf); a landed one is not a problem. */
+export type Sent = { hash: Hex; status: "success" | "reverted"; blockNumber: bigint; blockHash?: string; final: boolean; logs: any[]; problems: string[]; unresolved?: string; siteFailed?: string };
 
 /** Code and nonce reads at a block for the delegation evidence: a few tries, then undefined (not known), never a guess. */
 const evidenceReads: EvidenceReads = {
@@ -115,7 +155,8 @@ export async function readSent(hash: Hex, want: { from: Address; to: Address; da
   if (block <= want.afterBlock) problems.push(`it was mined in block ${r.blockNumber}, before this request started (block ${want.afterBlock})`);
   if (want.siteFailed) problems.push(want.siteFailed);
   await sleep(2500); // public RPC nodes lag a moment behind a block they just served
-  return { hash, status: r.status, blockNumber: block, logs: r.logs, problems, ...(problems.length === 0 && unresolved ? { unresolved } : {}), ...(want.siteFailed ? { siteFailed: want.siteFailed } : {}) };
+  const final = r.status === "success" ? (await finalityOf(hash, r)).final : false;
+  return { hash, status: r.status, blockNumber: block, blockHash: r.blockHash, final, logs: r.logs, problems, ...(problems.length === 0 && unresolved ? { unresolved } : {}), ...(want.siteFailed ? { siteFailed: want.siteFailed } : {}) };
 }
 
 /** The Approval(owner, spender, value) events of this token in a receipt. */
@@ -153,24 +194,54 @@ export function grantMismatchSteps(logs: any[], owner: Address, agent: Address, 
 
 /**
  * A wallet's "speed up" or "cancel" replaces the transaction under a new hash, so the reported hash may never land.
- * Find the latest Approval(owner, spender) since `fromBlock` instead (searched in the RPC's log-range windows).
+ * Find the latest Approval(owner, spender) since `fromBlock` instead (searched in windows the RPC accepts; a search that
+ * could not read every block takes none).
  */
 export async function findApproval(owner: Address, spender: Address, fromBlock: bigint): Promise<{ hash: Hex; value: bigint } | null> {
   const head = await retry(() => publicClient.getBlockNumber());
-  const step = BigInt(CFG.logRange ?? 1000);
-  let found: { hash: Hex; value: bigint } | null = null;
-  for (let from = fromBlock + 1n; from <= head; from += step) {
-    const to = from + step - 1n < head ? from + step - 1n : head;
-    const logs = (await retry(() => publicClient.getLogs({ address: USDC, event: erc20Abi.find((x: any) => x.name === "Approval") as any, args: { owner, spender } as any, fromBlock: from, toBlock: to }))) as any[];
-    for (const l of logs) found = { hash: l.transactionHash, value: l.args.value };
+  const approval = erc20Abi.find((x: any) => x.name === "Approval") as any;
+  const seen: { hash: Hex; value: bigint }[] = [];
+  const search = await searchLogs(
+    (from, to) => publicClient.getLogs({ address: USDC, event: approval, args: { owner, spender } as any, fromBlock: from, toBlock: to }) as Promise<any[]>,
+    { from: fromBlock + 1n, to: head, window: CFG.logRange ?? 1000, blockSeconds: CFG.blockSeconds },
+    async (logs) => {
+      for (const l of logs) seen.push({ hash: l.transactionHash, value: l.args.value });
+      return undefined;
+    },
+  );
+  if (!search.covered) {
+    console.log(`the approvals since block ${fromBlock + 1n} could not all be read (read to block ${search.searchedTo} of ${head}), so no replacement is taken`);
+    return null;
   }
-  return found;
+  return seen[seen.length - 1] ?? null;
 }
 
 // ---- the grant and the gas, shared by grant (setBudget.ts), fund-agent (fundAgent.ts) and setup --hosted --grant --fund ----
 
 /** USDC.approve(agent, cap): the transaction a grant asks the owner's wallet for. */
 export const grantTx = (agent: Address, cap: bigint): { to: Address; data: Hex } => ({ to: USDC, data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [agent, cap] }) });
+
+/**
+ * The owner's transactions for a grant of `cap`, from the allowance `live` read now: approve(agent, cap) from 0; over a
+ * live allowance approve(agent, 0) first, then approve(agent, cap) once the chain reads 0. Two steps on every token: an
+ * approveReset token needs them, and this client never overwrites a live allowance in place on any token (an agent that
+ * sees the pending approve could spend the old allowance and then the new one). Only setBudget --replace with an owner
+ * key file sends two; every flow that asks the owner's wallet or the site refuses a live allowance before asking.
+ */
+export const grantSteps = (agent: Address, cap: bigint, live: bigint): { to: Address; data: Hex }[] =>
+  live > 0n ? [grantTx(agent, 0n), grantTx(agent, cap)] : [grantTx(agent, cap)];
+
+/**
+ * Why a grant on this chain is not asked for through the approval site, or "". The token needs its allowance at 0 before
+ * a new one (approveReset), and the site's steps are a gas transfer and an approve only: no approve(0) step, and no read
+ * of 0 this client can check before the owner's wallet is asked. On the page on this computer a grant is asked for only
+ * after the allowance read 0 (setBudget.ts), and approve(cap) from 0 is valid on every token.
+ */
+export function approveResetHostedProblem(): string {
+  const site = approvalSite();
+  if (!CFG.approveReset || site === null) return "";
+  return `${SYM} on ${CFG.label} needs its allowance set to 0 before a new one is approved, and approvals on ${new URL(site).host} have no such step, so this budget is not asked for there`;
+}
 
 /** What the chain enforces for an evm grant of `cap`, and what it does not: the page's terms. */
 export const grantEnforced = (cap: bigint) => [
@@ -195,7 +266,7 @@ export function fundValue(amt: string): bigint {
 
 /** What the chain shows for a transaction the owner's wallet reported, checked against the plan. */
 /** `proof`: a failed check names the chain's proof (../proof.mjs). */
-export type SentCheck = { state: "settled" | "mismatch" | "failed" | "unknown"; proof?: "reverted"; tx: string; reason?: string; next?: string; allowance?: bigint; agentGas?: bigint };
+export type SentCheck = { state: "settled" | "mismatch" | "failed" | "unknown"; proof?: "reverted"; tx: string; reason?: string; next?: string; allowance?: bigint; agentGas?: bigint; final?: boolean };
 
 /**
  * The gas transfer: the owner's account sent exactly `t` (to, data, value), mined after `afterBlock`, and successful: sent
@@ -226,7 +297,7 @@ export async function checkFundSent(hash: Hex, o: { owner: Address; agent: Addre
     return { state: "unknown", tx: sent.hash, reason, ...(after === undefined ? {} : { agentGas: after }) };
   }
   console.log(`agent balance after the transfer: ${gasFmt(after)} ${GAS.symbol}`);
-  return { state: "settled", tx: sent.hash, agentGas: after };
+  return { state: "settled", tx: sent.hash, agentGas: after, final: sent.final };
 }
 
 /**
@@ -265,7 +336,10 @@ export async function checkGrantSent(hash: Hex, o: { owner: Address; agent: Addr
     console.log(`REFUSED: ${reason}`);
     return { state: "mismatch", tx: sent.hash, reason, allowance };
   }
-  return { state: "settled", tx: sent.hash, allowance };
+  // final only when the endpoints agree, at a final block at or after this one, that the allowance is the cap
+  const at = sent.final ? await allowanceAgreed(o.owner, o.agent, sent.blockNumber) : null;
+  const final = at !== null && at.agreed && at.value === o.cap;
+  return { state: "settled", tx: sent.hash, allowance, final };
 }
 
 /** The plain words shared by every allowance page. */
@@ -292,6 +366,7 @@ export function revokeTerms(owner: Address, agent: Address, allowance: bigint, h
       "No reversal of withdrawals confirmed before this revoke.",
     ],
     notes: ["This changes spending permission; it does not return funds. You pay the network fee shown in your wallet. You can grant a new budget later."],
+    walletShows: approveShows(agent, 0n),
   };
 }
 
@@ -305,7 +380,7 @@ const withEarlier = (earlier: Earlier | undefined, o: Record<string, unknown>) =
   earlier ? { ...earlier.result, ...(earlier.stepTx && o.tx ? { [earlier.stepTx]: o.tx } : {}), ...o, ...(earlier.done ? { next: `${earlier.done}. ${o.next}` } : {}) } : o;
 
 /** Owner approve(agent, 0) through the wallet page. Returns the verified transaction hash, or exits with a RESULT. */
-export async function revokeInWallet(command: string, owner: Address, agent: Address, title?: string, earlier?: Earlier): Promise<Hex> {
+export async function revokeInWallet(command: string, owner: Address, agent: Address, title?: string, earlier?: Earlier): Promise<{ hash: Hex; final: boolean; block: bigint }> {
   const before = await allowanceOf(owner, agent);
   const held = await usdcBalance(agent);
   if (!GAS.isUsdc && (await nativeBalance(owner)) === 0n) {
@@ -363,9 +438,22 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
     await closeOwnerPage();
     process.exit(emit(command, 1, withEarlier(earlier, { state: "not_revoked", tx: sent.hash, allowance: usdc(after), reason: "the allowance still reads above 0", next: "run revoke again" })));
   }
-  handle.finish({ outcome: "confirmed", message: `Confirmed. This allowance is 0. Funds already withdrawn remain under the agent key. You can close this page.`, hash: sent.hash });
+  // The allowance reads 0 on the first endpoint. It is final only when this transaction's block is final and the endpoints agree,
+  // at a final block at or after it, that the allowance is 0; an agreed value above 0 there is not a revoke.
+  const at = await allowanceAgreed(owner, agent, sent.blockNumber);
+  if (at.agreed && at.value !== 0n) {
+    const now = at.value as bigint;
+    handle.finish({ outcome: "failed", message: `The chain still shows an allowance of ${usdc(now)} ${SYM}. Run the revoke again.`, hash: sent.hash });
+    await closeOwnerPage();
+    process.exit(emit(command, 1, withEarlier(earlier, { state: "not_revoked", tx: sent.hash, allowance: usdc(now), reason: "the allowance still reads above 0", next: "run revoke again" })));
+  }
+  const final = sent.final && at.agreed && at.value === 0n;
+  if (!final) {
+    console.log(`the revoke is in block ${sent.blockNumber} and the allowance reads 0, but the chain has not made it final yet (${at.agreed ? "its block is not confirmed as final" : agreementWords(at)})`);
+    handle.finish({ outcome: "confirmed", message: landedRevoke(), hash: sent.hash });
+  } else handle.finish({ outcome: "confirmed", message: `Confirmed. This allowance is 0. Funds already withdrawn remain under the agent key. You can close this page.`, hash: sent.hash });
   await closeOwnerPage();
-  return sent.hash;
+  return { hash: sent.hash, final, block: sent.blockNumber };
 }
 
 /**
@@ -376,8 +464,8 @@ export function fundingTx(agent: Address, value: bigint, _hosted: boolean): { to
   return { to: agent, value, words: "" };
 }
 
-/** Owner sends the agent `value` of the gas token through the wallet page. Returns the verified hash, or exits with a RESULT. */
-export async function fundInWallet(command: string, owner: Address, agent: Address, value: bigint, amt: string, agentHas: bigint, earlier?: Earlier): Promise<Hex> {
+/** Owner sends the agent `value` of the gas token through the wallet page. Returns the verified hash and whether its block is final, or exits with a RESULT. */
+export async function fundInWallet(command: string, owner: Address, agent: Address, value: bigint, amt: string, agentHas: bigint, earlier?: Earlier): Promise<{ hash: Hex; final: boolean }> {
   const startBlock = await publicClient.getBlockNumber();
   const action = command === "recover" ? "recover-gas" : "fund-agent";
   // recover's owner steps stay on this computer, so only fund-agent can be hosted
@@ -401,6 +489,7 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
       "The agent controls the transferred funds and can send them elsewhere. This does not grant permission to withdraw more from your wallet.",
       `superstables budget recover returns recoverable ${SYM}. It leaves a gas reserve on Arc and does not return other gas tokens. Revoking a budget does not undo this transfer.`,
     ],
+    walletShows: fundShows(agent, value),
   });
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved(command, outcome, { ...earlier?.result }, undefined, earlier?.done);
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
@@ -418,7 +507,8 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
     await closeOwnerPage();
     process.exit(emit(command, c.state === "mismatch" ? 3 : 1, withEarlier(earlier, { state: c.state, proof: c.proof, tx: c.tx, reason: c.reason, next: "check wallet activity, then superstables budget doctor --rail evm" })));
   }
-  handle.finish({ outcome: "confirmed", message: `Done. Your agent received ${amt} ${GAS.symbol} and now has ${gasFmt(c.agentGas!)} ${GAS.symbol}. You can close this page.`, hash: c.tx });
+  const final = c.final === true;
+  handle.finish({ outcome: "confirmed", message: final ? `Done. Your agent received ${amt} ${GAS.symbol} and now has ${gasFmt(c.agentGas!)} ${GAS.symbol}. You can close this page.` : landedFund(), hash: c.tx });
   await closeOwnerPage();
-  return c.tx as Hex;
+  return { hash: c.tx as Hex, final };
 }

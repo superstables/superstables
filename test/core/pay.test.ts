@@ -16,7 +16,7 @@ import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
 import { PaymentEngine, QuoteUsedError, recheckChain, shownAttempt, shownReceipt } from "../../src/core/pay.js";
 import { paymentReceipt, startFakeBaseSepolia } from "../helpers/fake-base-sepolia.js";
 import { attemptView, messageFor } from "../../src/cli/views.js";
-import { Records } from "../../src/core/records.js";
+import { Records, attemptRunner } from "../../src/core/records.js";
 import { quote } from "../../src/core/quote.js";
 import { rememberReferrals } from "../../src/core/referrals.js";
 import { referralKey, signReferral } from "../helpers/referrals.js";
@@ -122,6 +122,12 @@ describe("PaymentEngine", () => {
     expect(final.history[1].note).toContain("waiting for the owner");
     expect(final.walletRequestId).toBeTruthy();
     expect(s.transitions.at(-1)?.state).toBe("settled");
+
+    // The record names this process and its machine for the lock checks; no attempt the SDK hands out does.
+    expect(attemptRunner(s.records, final.id)?.pid).toBe(process.pid);
+    for (const attempt of [started, final, ...s.transitions, s.engine.getAttempt(final.id), ...s.engine.listAttempts()]) {
+      expect(attempt).not.toHaveProperty("runner");
+    }
   });
 
   it("marks a referred payment's nonce with its referral, signed by the payer, and sends the same referral's token", async () => {
@@ -216,6 +222,7 @@ describe("PaymentEngine", () => {
     expect(refused).toBeInstanceOf(QuoteUsedError);
     expect((refused as QuoteUsedError).attempt?.id).toBe(first.id);
     expect((refused as QuoteUsedError).attempt?.state).toBe(s.engine.getAttempt(first.id)?.state);
+    expect((refused as QuoteUsedError).attempt).not.toHaveProperty("runner");
     expect((refused as Error).message).not.toContain("(not final)");
     expect(s.engine.listAttempts()).toHaveLength(1);
   });
@@ -247,11 +254,10 @@ describe("PaymentEngine", () => {
     const s = await stack();
     const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
     const barrier = mkdtempSync(join(tmpdir(), "superstables-barrier-"));
-    const tsx = resolve(dirname(fileURLToPath(import.meta.url)), "../../node_modules/tsx/dist/cli.mjs");
     const script = resolve(dirname(fileURLToPath(import.meta.url)), "../helpers/claim-process.ts");
     const run = () =>
       new Promise<Record<string, string | null>>((done, fail) => {
-        const child = spawn(process.execPath, [tsx, script, s.records.dir, q.id, barrier], { env: process.env });
+        const child = spawn(process.execPath, ["--import", "tsx", script, s.records.dir, q.id, barrier], { env: process.env });
         let out = "";
         child.stdout.on("data", (chunk) => (out += chunk));
         child.on("exit", () => {
@@ -859,10 +865,10 @@ describe("PaymentEngine", () => {
     const cap: Policy = { ...DEFAULT_POLICY, perDay: { amount: 0.01, asset: "USDC" } };
     const qA = await quote({ url: s.url }, { records: s.records, policy: cap });
     const qB = await quote({ url: s.url }, { records: s.records, policy: cap });
-    const tsx = resolve(dirname(fileURLToPath(import.meta.url)), "../../node_modules/tsx/dist/cli.mjs");
     const script = resolve(dirname(fileURLToPath(import.meta.url)), "../helpers/pay-process.ts");
     const pay = (quoteId: string) => {
-      const child = spawn(process.execPath, [tsx, script, s.records.dir, quoteId, "0.01"], { env: process.env });
+      // tsx's loader in this process, not its CLI: a SIGKILL to the CLI would leave the script it runs still running
+      const child = spawn(process.execPath, ["--import", "tsx", script, s.records.dir, quoteId, "0.01"], { env: process.env });
       const lines: Record<string, unknown>[] = [];
       const waiters: (() => void)[] = [];
       createInterface({ input: child.stdout }).on("line", (line) => {
@@ -888,14 +894,18 @@ describe("PaymentEngine", () => {
     expect(await a.until("final")).toMatchObject({ state: "denied" });
     expect(s.records.spentToday("USDC")).toBe(0); // released
 
-    // A process that stops while its owner decides leaves its reservation, which counts for that UTC day only.
+    // A process that stops while its owner decides leaves a record nobody can decide any more: once its process is
+    // verifiably gone, the reservation stops counting at once, and `status` ends the attempt as abandoned.
     const qC = await quote({ url: s.url }, { records: s.records, policy: cap });
     const c = pay(qC.id);
     await c.until("asked");
     c.child.kill("SIGKILL");
     await new Promise((r) => c.child.once("exit", r));
-    expect(s.records.spentToday("USDC")).toBe(0.01);
-    expect(s.records.spentToday("USDC", new Date(Date.now() + 24 * 60 * 60 * 1000))).toBe(0);
+    expect(s.records.spentToday("USDC")).toBe(0);
+    const left = s.records.listAttempts().find((x) => x.quoteId === qC.id)!;
+    expect(left.state).toBe("awaiting_approval"); // nothing has read it yet
+    expect(await recheckChain(s.records, left.id)).toMatchObject({ state: "abandoned", abandonedBy: "stopped" });
+    expect(s.records.spentToday("USDC")).toBe(0);
   }, 60_000);
 
   it("renews a lapsed reservation before the owner is asked, or refuses when the cap is now used", async () => {

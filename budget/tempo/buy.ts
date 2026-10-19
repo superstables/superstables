@@ -9,15 +9,22 @@
 //   1. Parse flags. Bad or missing flags exit 2 before any file is read.
 //   2. Open tempo-agent.env only (access key + the owner's PUBLIC address; no owner key).
 //   3. Fetch the seller's challenge (an unpaid request) and run the pre-signing checks: price <= --max
-//      (required), token is pathUSD on Moderato, whole base units, recipient == --pay-to when given.
+//      (required), token is pathUSD on Moderato, whole base units, recipient == --pay-to when given, the
+//      challenge names a realm, stays open at most 600 s and does not turn on mppx's machine-token route.
 //      A refusal exits 3 with RESULT state refused_precheck. Nothing has been signed.
 //   4. Write the operation journal (state quoted, with the purchase memo and the seller's referral, which
-//      the memo names through MPP's client id), then sign. In pull mode (the default for an access key)
-//      the signed payment is a bearer transaction that expires in 25 s. The memo mppx puts on it is known
-//      before signing and is an indexed topic of the on-chain
+//      the memo names through MPP's client id), then sign. In pull mode (the
+//      default for an access key) the signed payment is a bearer transaction that expires when mppx says, 25 s,
+//      read from the signed transaction. The challenge's memo is claimed for this op (lib/claim.ts) before signing;
+//      the signed payment is read back and leaves only if it is the quoted pathUSD transfers, valid at most 600 s. The
+//      memo mppx puts on it is known before signing and is an indexed topic of the on-chain
 //      TransferWithMemo event, so this one purchase can be found on chain even if its transaction hash
 //      is never learned (a sponsored transaction's final hash exists only after the seller adds the
-//      fee payer's signature). The journal is set to `submitted` BEFORE the payment is sent.
+//      fee payer's signature). The journal is set to `submitted` BEFORE the payment is sent. In push mode (the
+//      seller accepts only a payment the client sends) the journal turns `submitted`, with the transaction's hash
+//      and validBefore, in the RPC request that sends it. An error while the payment is created ends `failed`
+//      only when no broadcast request began; once one did, any error stays `unknown` (even a journal write that
+//      stopped the request), and a payment with a recorded expiry can be proven expired by reconcile.
 //   5. Send it. Whatever the seller answers (200, 402, 500, a dropped connection), the outcome is read
 //      from the chain: settled needs the payment's OWN transaction to have succeeded with a pathUSD
 //      Transfer owner -> recipient of the price. The seller's HTTP status is recorded separately as
@@ -39,7 +46,7 @@ import { join } from 'node:path'
 import { requireRecordLock } from '../op-lock.mjs'
 import { Mppx, tempo } from 'mppx/client'
 import { Credential, Receipt } from 'mppx'
-import { createClient, http, keccak256, type Address, type Hex } from 'viem'
+import { createClient, http, isHex, keccak256, type Address, type Hex } from 'viem'
 import { tempoModerato } from 'viem/tempo/chains'
 import { addressCheck, decimalCheck, labelCheck, opIdCheck, parseCli, urlCheck } from './lib/args.mjs'
 import {
@@ -55,16 +62,21 @@ import {
   loadAgentEnv,
   makeClient,
   oneLine,
+  tempoGate,
   toBaseUnits,
 } from './lib/common.ts'
-import { chainHead, getTxSigner, mppMemo, readKey, readScope } from './lib/chain.ts'
+import { RPC_CHAIN_NEXT, chainHead, estimateMaxFee, getTxSigner, mppMemo, readKey, readScope, rpcChainProblem } from './lib/chain.ts'
 import { judge, waitForOutcome } from './lib/resolve.ts'
+import { failedNext, feeSentence, notFoundFee, notFoundNext } from './lib/words.ts'
 import { BLOCKING, OPS_DIR, newOpId, printResult, readOp, writeOp, type JournalReferral, type Op, type OpState } from './lib/ops.ts'
 import { HOME } from '../paths.mjs'
 import { tempoClientId } from '../../src/core/referral-memo.mjs'
 import { operationReferral, paidReferralHeaders } from '../../src/core/referral-store.mjs'
 import { readCapped, saveResponse } from '../response.mjs'
-import { budgetShortfall, precheckCharge, recipientsOutsideScope } from './lib/precheck.ts'
+import { markSend } from '../proof.mjs'
+import { budgetShortfall, ownerPaysFee, precheckChallenge, precheckCharge, recipientsOutsideScope } from './lib/precheck.ts'
+import { claimChallenge } from './lib/claim.ts'
+import { signedPayment, type Quoted } from './lib/signed.ts'
 import { CHALLENGE_OPTIONS, sellerInit } from './lib/seller.ts'
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
@@ -132,6 +144,38 @@ function finish(state: OpState, f: { tx?: string | null; debit?: bigint | null; 
   process.exit(exitFor(state, delivered))
 }
 
+/** A request that broadcasts a transaction. Wider than ../proof.mjs markSend's pattern, which lacks wallet_send*: matching more is the safe side. */
+const SENDS = /"method":\s*"(eth_sendRawTransaction\w*|eth_sendTransaction|wallet_send\w*)"/
+/** This process handed a signed payment to the RPC (beforeBroadcast ran). Until then the payment never left this process. */
+let broadcastBegan = false
+/** The payment the checks passed, set right before signing: what the signed transaction must be (lib/signed.ts). */
+let quoted: Quoted | undefined
+/**
+ * Every request of the RPC client mppx signs and sends with passes here before it leaves. A broadcast is journaled first:
+ * `submitted`, with the signed transaction's own hash and the validBefore signed into it, so reconcile can find it by hash,
+ * or prove it can never land once the chain's clock is past validBefore. A write that fails throws, and the request does
+ * not leave. A payment that is not the quoted transfers, or is valid too long, never leaves either: it is refused before it
+ * is marked as sent. In pull mode nothing broadcasts here: the seller sends the payment.
+ */
+function beforeBroadcast(body: unknown) {
+  if (typeof body !== 'string' || !SENDS.test(body)) return
+  let raw: unknown
+  try { const c = JSON.parse(body); raw = (Array.isArray(c) ? c.find((x) => SENDS.test(JSON.stringify(x))) : c)?.params?.[0] } catch {}
+  // a payment other than the quoted transfers, or one valid too long, never leaves: throwing here stops the request
+  const signed = quoted ? signedPayment(raw, quoted) : { problem: 'nothing was quoted to pay', validBefore: undefined }
+  if (signed.problem) throw new Error(`the payment mppx built was not sent: ${signed.problem}`)
+  broadcastBegan = true
+  if (!op) return markSend(body)
+  if (typeof raw === 'string' && isHex(raw)) {
+    op.expectedTx = keccak256(raw)
+    // the latest expiry of any payment seen, so a later send never shortens the window reconcile must wait out
+    op.validBefore = Math.max(op.validBefore ?? 0, signed.validBefore!)
+  }
+  op.state = 'submitted'
+  writeOp(op, `the signed payment is about to be sent to the RPC${op.validBefore ? `; it can land until unix ${op.validBefore}` : ''}`)
+  markSend(body)
+}
+
 async function main() {
   requireRecordLock(OPS_DIR, opId)
   // 1. An operation that is pending or settled is never started again under the same id.
@@ -169,7 +213,7 @@ async function main() {
 
   // tempo.charge only: a seller that offers a session (a deposit of its choosing) is never selected.
   const mppx = Mppx.create({
-    methods: [tempo.charge({ account: agent, getClient: () => createClient({ chain: tempoModerato, transport: http(RPC_URL) }), expectedChainId: CHAIN_ID, ...(clientId ? { clientId } : {}), ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
+    methods: [tempo.charge({ account: agent, getClient: () => createClient({ chain: tempoModerato, transport: http(RPC_URL, { onFetchRequest: (_request, init) => { beforeBroadcast(init.body) } }) }), expectedChainId: CHAIN_ID, ...(clientId ? { clientId } : {}), ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
     polyfill: false,
   })
   // no redirects on either request to the seller (lib/seller.ts says why)
@@ -194,9 +238,10 @@ async function main() {
   console.log(`    ${oneLine(`amount=${req.amount} currency=${req.currency} chainId=${details.chainId} recipient=${req.recipient}`, 500)}`)
   console.log(`    ${oneLine(`feePayer=${details.feePayer ?? false} supportedModes=${JSON.stringify(details.supportedModes ?? ['pull', 'push'])} expires=${challenge.expires ?? 'n/a'}`, 500)}`)
 
+  const around = precheckChallenge(challenge)
   const check = challenge.intent !== 'charge' || challenge.method !== 'tempo'
     ? ({ ok: false, code: 'unsupported_intent', reason: `challenge is ${challenge.method}.${challenge.intent}, only tempo.charge is bought here` } as const)
-    : precheckCharge(req, { maxBase, payTo })
+    : !around.ok ? around : precheckCharge(req, { maxBase, payTo, agent: agentKey, owner: ownerAddress })
 
   op = baseOp(
     {
@@ -216,6 +261,21 @@ async function main() {
     console.log(`\nREFUSED before signing (${check.code}): ${oneLine(check.reason, 1000)}`)
     console.log('Nothing was signed or sent.')
     finish('refused_precheck', { reason: `${check.code}: ${check.reason}`, next: 'nothing was signed; pick another seller or raise --max' })
+  }
+
+  // The payment is signed for Moderato whatever RPC_URL is, sent there in push mode, and every outcome is read there.
+  const wrongChain = await rpcChainProblem()
+  if (wrongChain) {
+    console.log(`\nREFUSED before signing: ${wrongChain}. Nothing was signed or sent.`)
+    finish('refused_precheck', { reason: `wrong_rpc_chain: ${wrongChain}`, next: `${RPC_CHAIN_NEXT}; nothing was signed` })
+  }
+
+  // The chain gate. This script signs through mppx's own client, not makeClient, so it asks for itself before anything is signed.
+  // Today the load-time gate in lib/common.ts stops the script first; this call is a backstop.
+  const gate = tempoGate()
+  if (gate) {
+    console.log(`\nREFUSED before signing: ${gate}. Nothing was signed or sent.`)
+    finish('refused_precheck', { reason: `chain_gate: ${gate}`, next: 'nothing was signed or sent; this build signs on Tempo Moderato only' })
   }
 
   // 4. Journal the intent before signing.
@@ -243,11 +303,24 @@ async function main() {
     else if (!k.exists) noBudget = 'the agent access key is not authorized: the owner has not granted a budget'
     else if (k.expiry && k.expiry * 1000 <= Date.now()) noBudget = `the budget expired at ${new Date(k.expiry * 1000).toISOString()}`
     // The chain would refuse a payment above what is left (SpendingLimitExceeded): say so before signing, as evm does.
-    // When the seller pays the fee, the payment takes exactly the price from the limit. How an unsponsored payment's fee
-    // affects the limit has not been verified yet; the chain still checks the limit either way.
-    else overBudget = budgetShortfall(k, amount) ?? undefined
+    // Measured on Moderato (16 October 2026): when the seller sponsors the fee the payment takes exactly the price from the
+    // limit; when the owner's account pays it (push, or pull without a sponsor) the fee is paid in the limit's own token and
+    // counts against it. The chain also holds back a reservation above the fee finally charged (42 to 45 units for a fee of 33)
+    // and a payment whose limit falls short of price plus that reservation reverts, still charging its fee. So the check
+    // allows for the largest fee the payment can have, not the fee measured afterwards.
+    else {
+      let maxFee = 0n
+      if (k.spendPolicy !== 'unlimited' && k.remaining >= amount && ownerPaysFee(mode, details)) {
+        try {
+          maxFee = await estimateMaxFee(ownerAddress, [{ to: String(req.recipient), amount: primary, memo: op.memo }, ...check.splits.map((x) => ({ to: x.recipient, amount: BigInt(x.amount), memo: (x as { memo?: string }).memo }))], mode)
+        } catch (err) {
+          console.log(`  (could not estimate the network fee; the chain still checks the limit: ${oneLine((err as Error).message, 120)})`)
+        }
+      }
+      overBudget = budgetShortfall(k, amount, Date.now(), maxFee) ?? undefined
+    }
   } catch (err) {
-    console.log(`  (could not read the key state: ${String((err as Error).message).slice(0, 120)})`)
+    console.log(`  (could not read the key state: ${oneLine((err as Error).message, 120)})`)
   }
 
   // A key granted with a seller list may pay only those recipients (the chain answers CallNotAllowed otherwise). A read
@@ -257,7 +330,7 @@ async function main() {
     try {
       outsideScope = recipientsOutsideScope(await readScope(ownerAddress, agentKey), recipients)
     } catch (err) {
-      console.log(`  (could not read the key's seller list: ${String((err as Error).message).slice(0, 120)})`)
+      console.log(`  (could not read the key's seller list: ${oneLine((err as Error).message, 120)})`)
     }
   }
 
@@ -296,33 +369,57 @@ async function main() {
     })
   }
 
-  // 5. Sign. Push mode broadcasts inside createCredential, so the intent is already `submitted`.
-  if (mode === 'push') {
-    op.state = 'submitted'
-    writeOp(op, 'push mode: createCredential broadcasts')
+  // One challenge funds one operation: claim its memo before signing (lib/claim.ts). Another op holding it is refused.
+  const holder = claimChallenge(op.memo!, opId)
+  if (holder) {
+    console.log(`\nREFUSED before signing: ${holder} already used this seller challenge, so a payment for it could not be told apart from that one's. Nothing was signed or sent.`)
+    finish('refused_precheck', {
+      reason: `challenge_used: ${holder} already used this seller challenge; a payment for it could not be told apart from that one's`,
+      remaining: remainingBefore,
+      next: 'nothing was signed; buy again with a new op id to get a new challenge from the seller',
+    })
   }
+  quoted = { recipient: String(req.recipient), primary, memo: op.memo!, splits: check.splits }
+
+  // 5. Sign. In push mode createCredential also broadcasts; beforeBroadcast journals `submitted` right before the signed payment leaves.
   let credential: string
+  let pullExpiry: number | undefined
   try {
     credential = await payment.createCredential()
+    // pull mode: the signed payment is still in this process; it leaves only if it is the quoted transfer, valid 600 s at most
+    const pulled = Credential.deserialize(credential).payload as { type?: string; signature?: unknown }
+    // only a signed transaction (checked here) or a hash (sent through beforeBroadcast, which checked it) is a quoted payment
+    if (pulled.type !== 'transaction' && pulled.type !== 'hash') {
+      throw new Error(`the payment mppx signed was not sent: it is a ${oneLine(String(pulled.type), 40)} credential, not a ${TOKEN_LABEL} transfer`)
+    }
+    if (pulled.type === 'transaction') {
+      const signed = signedPayment(pulled.signature, quoted)
+      if (signed.problem) throw new Error(`the payment mppx signed was not sent: ${signed.problem}`)
+      pullExpiry = signed.validBefore
+    }
   } catch (err) {
     const desc = oneLine(describeError(err), 1000)
+    // the signed payment was handed to the RPC (beforeBroadcast): whatever the error, it may land until its validBefore
+    if (broadcastBegan) {
+      console.log(`\nUNKNOWN: the signed payment was handed to the RPC client and may have reached the RPC; the attempt ended with an error: ${desc}`)
+      finish('unknown', { reason: desc, next: `superstables budget reconcile --rail tempo --op ${opId}` })
+    }
     if (isChainRefusal(desc)) {
       console.log(`\nREFUSED by the chain before anything was signed or sent: ${desc}`)
       finish('refused_chain', { reason: desc, remaining: remainingBefore, next: 'nothing was signed; check the budget with readBudget' })
     }
-    if (mode === 'push') {
-      console.log(`\nUNKNOWN: push-mode broadcast raised an error: ${desc}`)
-      finish('unknown', { reason: desc, next: `superstables budget reconcile --rail tempo --op ${opId}` })
-    }
-    console.log(`\nFAILED before signing: ${desc}`)
+    console.log(`\nFAILED before anything was sent: ${desc}`)
     finish('failed', { reason: `signing_failed: ${desc}`, remaining: remainingBefore, next: 'nothing was sent; safe to retry with a new op id' })
   }
   const payload = Credential.deserialize(credential).payload as { type?: string; signature?: Hex; hash?: Hex }
   console.log(`  credential created: mode=${payload.type === 'hash' ? 'push (client-broadcast)' : payload.type === 'transaction' ? 'pull (relay-broadcast)' : payload.type}`)
-  if (payload.type === 'hash' && payload.hash) op.expectedTx = payload.hash // push: already broadcast, this IS the tx hash
+  if (payload.type === 'hash' && payload.hash && !op.expectedTx) op.expectedTx = payload.hash
+  if (payload.type === 'hash' && payload.hash && op.expectedTx && op.expectedTx.toLowerCase() !== payload.hash.toLowerCase()) {
+    console.log(`note: the RPC named ${oneLine(payload.hash, 100)} for the payment signed as ${op.expectedTx}; the chain is read for the signed one and for this purchase's memo`)
+  }
   if (payload.type === 'transaction' && payload.signature) {
     op.signedHash = keccak256(payload.signature) // informational: a sponsored tx's final hash differs (the seller adds the fee payer signature)
-    op.validBefore = Math.floor(Date.now() / 1000) + 26 // mppx signs with validBefore = now + 25 s at most; after it the payment can never land
+    op.validBefore = pullExpiry // read from the signed payment (lib/signed.ts); after it the payment can never land
   }
   op.state = 'submitted'
   writeOp(op, 'signed; about to send to the seller')
@@ -374,15 +471,16 @@ async function main() {
       finish('settled', { tx: r.transactionHash, debit: j.debit, remaining: remainingAfter, delivered, next: delivered ? 'none' : 'paid but not delivered; do not pay again, contact the seller with the tx hash' })
     }
     if (j.state === 'failed') {
-      console.log('FAILED: the payment transaction was mined and reverted. No funds moved.')
-      finish('failed', { tx: r.transactionHash, debit: 0n, remaining: remainingAfter, delivered, reason: j.note, next: 'read the tx on the explorer; safe to retry with a new op id' })
+      console.log(`FAILED: the payment transaction was mined and reverted. The price was not paid and the seller received nothing; ${feeSentence(r.fee, r.feePayer, ownerAddress)}`)
+      finish('failed', { tx: r.transactionHash, debit: 0n, remaining: remainingAfter, delivered, reason: j.note, next: failedNext(r.feePayer, ownerAddress) })
     }
     console.log(`UNKNOWN: ${j.note}`)
     finish('unknown', { tx: r.transactionHash, remaining: remainingAfter, delivered, reason: j.note, next: `superstables budget reconcile --rail tempo --op ${opId}` })
   }
   if (outcome.kind === 'expired') {
-    console.log('NOT FOUND: the signed payment expired without landing on chain. No funds moved.')
-    finish('not_found', { debit: 0n, remaining: remainingAfter, delivered, reason: 'signed payment expired unsent; no transfer with this purchase memo on chain', next: 'no funds moved; safe to retry with a new op id' })
+    const spent = remainingBefore !== null && remainingAfter !== null && remainingBefore > remainingAfter ? remainingBefore - remainingAfter : 0n
+    console.log(`NOT FOUND: no transfer to the seller with this purchase memo is on chain and the signed payment has expired. ${notFoundFee(spent, mode)}`)
+    finish('not_found', { debit: 0n, remaining: remainingAfter, delivered, reason: 'signed payment expired; no transfer with this purchase memo on chain', next: notFoundNext(spent, mode) })
   }
   console.log('UNKNOWN: the chain does not show the payment yet and it may still land.')
   finish('unknown', { remaining: remainingAfter, delivered, reason: sendError ?? 'not visible on chain yet', next: `superstables budget reconcile --rail tempo --op ${opId}` })
@@ -425,10 +523,11 @@ function baseOp(
 }
 
 main().catch((err) => {
-  // Anything unexpected after the payment was signed is an unknown outcome, never "no transfer sent".
+  // Anything unexpected once the signed payment may have left (the RPC client was handed it, or the journal got past quoted,
+  // e.g. a journal write that failed inside finish) is an unknown outcome, never "no transfer sent".
   const msg = oneLine((err as Error)?.message ?? err)
   console.error('buy failed:', msg)
-  if (op && (op.state === 'submitted')) {
+  if (op && (broadcastBegan || !(['quoted', 'refused_precheck'] as OpState[]).includes(op.state))) {
     finish('unknown', { reason: msg, next: `superstables budget reconcile --rail tempo --op ${opId}` })
   }
   if (op) finish('failed', { reason: `error before signing: ${msg}`, next: 'nothing was signed; safe to retry with a new op id' })

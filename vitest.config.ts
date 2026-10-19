@@ -1,27 +1,56 @@
 import { defineConfig } from "vitest/config";
 
 // Test files that start the CLI or other processes and take ten seconds or more on the CI runner.
-// `npm run test:fast` (CI on every push to main) skips them; `npm test` and the CI full workflow
-// (the release gate, and nightly) run everything. A new test file is fast until it is listed here.
+// `npm run test:fast` (the CI workflow, on every push to main, and the release gate) skips them; `npm test` and the
+// CI full workflow (nightly and on demand) run everything. A new test file is fast until it is listed here.
 const SLOW = [
+  "test/budget/agent-binding.test.ts",
+  "test/budget/agent-key-store.test.ts",
   "test/budget/approvals-token.test.ts",
+  "test/budget/approve-reset.test.ts",
+  "test/budget/chain-gate.test.ts",
   "test/budget/chain-guard.test.ts",
   "test/budget/cli-hosted-rails.test.ts",
   "test/budget/cli-hosted.test.ts",
   "test/budget/cli-once.test.ts",
   "test/budget/cli.test.ts",
+  "test/budget/evm-purchase-checks.test.ts",
+  "test/budget/evm-rpc-order.test.ts",
+  "test/budget/evm-quorum.test.ts",
   "test/budget/guidance.test.ts",
+  "test/budget/hosted-cancel.test.ts",
   "test/budget/hosted.test.ts",
   "test/budget/journal-durability.test.ts",
+  "test/budget/journal-shape.test.ts",
+  "test/budget/journal-unreadable.test.ts",
   "test/budget/link-gate.test.ts",
   "test/budget/lock-macos-side-effects.test.ts",
   "test/budget/lock-recovery.test.ts",
+  "test/budget/once-not-final.test.ts",
   "test/budget/operation-races.test.ts",
+  "test/budget/owner-finality.test.ts",
+  "test/budget/owner-page-facts-rails.test.ts",
+  "test/budget/owner-rpc.test.ts",
+  "test/budget/read-caps-cli.test.ts",
+  "test/budget/revoke-always.test.ts",
+  "test/budget/rotate.test.ts",
+  "test/budget/rpc-error-text.test.ts",
   "test/budget/setup-owner.test.ts",
+  "test/budget/site-anchor.test.ts",
+  "test/budget/solana-tempo-quorum.test.ts",
+  "test/budget/tempo-challenges.test.ts",
+  "test/budget/tempo-push.test.ts",
   "test/budget/tempo-rpc.test.ts",
   "test/cli/cli.test.ts",
+  "test/cli/owner-settings-command.test.ts",
+  "test/cli/wallet-encrypted.test.ts",
+  "test/cli/owner-settings-sign.test.ts",
   "test/core/browser-signer.test.ts",
+  "test/core/rpc-quorum-status-cli.test.ts",
   "test/core/wallet-public-rpc.test.ts",
+  "test/core/wallet-signer-cancel.test.ts",
+  "test/scripts/supply-chain-pack.test.ts",
+  "test/wallet/daemon-gate.test.ts",
 ];
 
 export default defineConfig({

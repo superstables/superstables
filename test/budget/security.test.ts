@@ -177,7 +177,7 @@ describe("a buy stopped by a signal", () => {
     // an earlier attempt of this op that ended before it paid: the journal exists, so this run may have signed
     const ops = join(home, "budget", "ops", "solana-devnet");
     mkdirSync(ops, { recursive: true, mode: 0o700 });
-    writeFileSync(join(ops, "stopped-buy.json"), JSON.stringify({ op: "stopped-buy", state: "failed" }), { mode: 0o600 });
+    writeFileSync(join(ops, "stopped-buy.json"), JSON.stringify({ op: "stopped-buy", state: "failed", history: [] }), { mode: 0o600 });
     const r = await stoppedBuy("stopped-buy");
     expect(r.code).toBe(5);
     expect(r.result).toMatchObject({ command: "buy", state: "unknown", paid: null, op: "stopped-buy" });
@@ -334,7 +334,10 @@ describe.runIf(PROCESS_START)("a recorded pid is believed only with its process'
 
 describe("a Solana payment the chain refuses today", () => {
   const rec = { agentSig: "our-agent-sig", tx: "our-agent-sig", agent: "11111111111111111111111111111111", lastValidBlockHeight: 1000, submittedAt: new Date().toISOString() };
+  // the endpoints that confirm a verdict of absence: the one connection's own (a single public endpoint)
+  const set = { verdict: [{ url: "http://primary.test", operator: "primary" }], quorum: 1, agreement: "single" as const };
   const conn = (height: number, over: Record<string, unknown> = {}) => ({
+    rpcEndpoint: "http://primary.test",
     getGenesisHash: async () => "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
     getEpochInfo: async () => ({ blockHeight: height, absoluteSlot: height }),
     getFirstAvailableBlock: async () => 0,
@@ -348,14 +351,14 @@ describe("a Solana payment the chain refuses today", () => {
   it("is refused for good only once its blockhash has expired and a read finds nothing of ours", async () => {
     const { refusalIsFinal } = await import("../../budget/solana/ops.mjs");
     // still valid: the seller could submit it after a new grant or deposit
-    expect(await refusalIsFinal(conn(990), rec)).toBe(false);
-    expect(await refusalIsFinal(conn(1000), rec)).toBe(false); // finalized expiry has not passed
-    expect(await refusalIsFinal(conn(1010), rec)).toBe(true); // finalized expiry and complete direct history
-    expect(await refusalIsFinal(conn(2000), rec)).toBe(true);
+    expect(await refusalIsFinal(conn(990), rec, { set })).toBe(false);
+    expect(await refusalIsFinal(conn(1000), rec, { set })).toBe(false); // finalized expiry has not passed
+    expect(await refusalIsFinal(conn(1010), rec, { set })).toBe(true); // finalized expiry and complete direct history
+    expect(await refusalIsFinal(conn(2000), rec, { set })).toBe(true);
     // a read that fails is never an answer
-    expect(await refusalIsFinal(conn(2000, { getSignatureStatuses: async () => { throw new Error("fetch failed"); } }), rec)).toBe(false);
-    expect(await refusalIsFinal(conn(2000, { getEpochInfo: async () => { throw new Error("fetch failed"); } }), rec)).toBe(false);
-    expect(await refusalIsFinal(conn(2000), { ...rec, lastValidBlockHeight: undefined })).toBe(false);
+    expect(await refusalIsFinal(conn(2000, { getSignatureStatuses: async () => { throw new Error("fetch failed"); } }), rec, { set })).toBe(false);
+    expect(await refusalIsFinal(conn(2000, { getEpochInfo: async () => { throw new Error("fetch failed"); } }), rec, { set })).toBe(false);
+    expect(await refusalIsFinal(conn(2000), { ...rec, lastValidBlockHeight: undefined }, { set })).toBe(false);
   });
 });
 

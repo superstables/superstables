@@ -30,18 +30,20 @@
 // Usage: npx tsx budget/tempo/setup.ts [--agent <label>] [--fund-only] [--new-owner] [--hosted [--site <url>] [--grant <amount>]]
 //                                      [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 import { LABEL, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, RPC_URL, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
+import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, oneLine, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { UNSAFE_SECRET_FILE } from '../secret-file.mjs'
+import { HOME, ensurePrivateDir } from '../paths.mjs'
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from '../hosted.ts'
 import { chosenSite, isSiteRequestId, siteOrigin } from '../site.mjs'
+import { SETUP_KEYS, agentBinding, bindingLines, signLocalBinding } from '../owner-binding.mjs'
 import { KEYCHAIN, approvalSite, askConnect, checkGrantSent, closeOwnerPage, emit, endUnapproved, grantCalldata, iso, tokenBalance, useApprovalSite, useHostedAgent, type GrantPlan, type SentCheck } from './owner.ts'
-import { chainHead, readKey } from './lib/chain.ts'
+import { chainHead, readKey, rpcWrite } from './lib/chain.ts'
 import type { OwnerVerdict } from '../../src/core/signer/owner-approval-server.ts'
 
 const { values: args } = parseCli({
@@ -72,15 +74,11 @@ const usage = (message: string): never => {
 }
 
 async function fundAddress(address: string): Promise<string[]> {
-  const res = await fetch(RPC_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tempo_fundAddress', params: [address] }),
-    signal: AbortSignal.timeout(30_000),
-  })
-  const json = await res.json()
-  if (json.error) throw new Error(`tempo_fundAddress failed for ${address}: ${JSON.stringify(json.error)}`)
-  return json.result as string[]
+  // one request, never retried, read through the capped reader every Tempo RPC read uses (lib/chain.ts)
+  const hashes = await rpcWrite('tempo_fundAddress', [address]).catch((err: Error) => { throw new Error(`tempo_fundAddress failed for ${address}: ${oneLine(err.message, 300)}`) })
+  // faucet() prints these: transaction hashes only, never the faucet's other text
+  if (!Array.isArray(hashes) || !hashes.every((h) => typeof h === 'string' && /^0x[0-9a-fA-F]{64}$/.test(h))) throw new Error(`tempo_fundAddress failed for ${address}: its answer is not a list of transaction hashes`)
+  return hashes
 }
 
 async function faucet(owner: string) {
@@ -95,7 +93,7 @@ if (HOSTED) {
   if (OWNER_KEY_FILE) usage('--hosted asks the owner on the site; with --owner-key-file there is no owner to ask')
   if (typeof args.agent === 'string') usage('--agent on a hosted chain adds the new key on the site by itself: drop --hosted')
   const s = chosenSite(typeof args.site === 'string' ? args.site : undefined)
-  if (s.error) usage(`--site: ${s.error}`)
+  if (s.error) usage(s.error)
   SITE = s.origin as string
 } else if (typeof args.site === 'string') usage('--site goes with --hosted')
 // The setup command that replaces the owner. On a hosted chain it names --hosted and the exact site: without them, setup
@@ -129,7 +127,7 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
     enforced: [],
     notEnforced: [],
     notes: [`You pick the match code your agent shows you before the key is added. The agent key stays on the agent's machine; ${host} does not receive it.`],
-  }, '', undefined, undefined, { prior })
+  }, '', undefined, undefined, { prior, expectedOwner: owner })
   if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent: address, linked: false })
   if (outcome.status !== 'connected') throw new Error(`unexpected approval outcome ${outcome.status}`)
   if (!same(outcome.address, owner)) {
@@ -140,9 +138,63 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
   }
   await closeOwnerPage(0)
   if (!link) throw new Error('an add-agent request without its id and code')
-  writePublicEnv({ [`AGENT${label}_LINK_ID`]: link.id, [`AGENT${label}_LINK_CODE`]: link.code })
+  writePublicEnv({ [`AGENT${label}_LINK_ID`]: link.id, [`AGENT${label}_LINK_CODE`]: link.code, ...(outcome.proof ? bindingLines(outcome.proof, label) : {}) })
   console.log(`Key ${address} added to the ${host} account ${owner}`)
   process.exit(result(0, { state: 'ok', owner, agent: address, linked: true, next: `superstables budget grant --rail tempo --agent ${label} --amount A (the owner approves it on ${host}, in their wallet)` }))
+}
+
+/**
+ * setup --agent on a chain with approvals on this computer: the owner signs a message naming the new key (or --owner-key-file
+ * signs for tests and automation), and the signature is kept as AGENT<label>_SETUP_*. The signer must be the owner on record.
+ */
+async function bindExtraAgent(label: string, address: Address, owner: Address) {
+  let proof: { message: string; signature: string } | undefined
+  let finish: ((v: OwnerVerdict) => void) | null = null
+  if (OWNER_KEY_FILE) {
+    checkOwnerKeyFile(OWNER_KEY_FILE)
+    const key = loadOwnerKeyFile(OWNER_KEY_FILE)
+    if (!same(key.OWNER_ADDRESS, owner)) {
+      const reason = `the key in ${OWNER_KEY_FILE} is for ${key.OWNER_ADDRESS}, but this machine records the owner ${owner}`
+      console.log(`REFUSED: ${reason}. Nothing was signed.`)
+      process.exit(result(3, { state: 'refused_precheck', reason, owner, agent: address, next: 'pass the owner key file of the owner on record' }))
+    }
+    proof = await signLocalBinding('tempo', key.OWNER_PRIVATE_KEY, address, 'Tempo Testnet (Moderato)')
+  } else {
+    const { handle, outcome } = await askConnect('setup', {
+      title: "Confirm your agent's new key",
+      summary: `Connect your wallet and sign a message naming the agent's new key ${address}, so you can grant it a budget. This does not grant a budget or send a transaction.`,
+      rows: [
+        { label: 'New agent key', value: address, mono: true },
+        { label: 'Agent key', value: `on this machine only, in ${AGENT_ENV_PATH}` },
+        { label: 'Owner on record', value: owner, mono: true },
+      ],
+      enforced: [],
+      notEnforced: [],
+      notes: ['Signing the message proves control of this address. It grants no spending permission and has no network fee.', 'Connect this wallet. Any other wallet is refused, and nothing changes.'],
+    }, `Superstables budget: record this wallet as the owner of agent ${address} on Tempo Testnet (Moderato).`, undefined)
+    if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent: address })
+    if (outcome.status !== 'connected') throw new Error(`unexpected owner page outcome ${outcome.status}`)
+    finish = handle.finish
+    if (!same(outcome.address, owner)) {
+      const reason = `the wallet that signed is ${outcome.address}, but this machine records the owner ${owner}`
+      finish({ outcome: 'failed', message: `This machine records the owner ${owner}, not this wallet. Nothing was changed.` })
+      await closeOwnerPage()
+      console.log(`REFUSED: ${reason}. Nothing was changed.`)
+      process.exit(result(3, { state: 'refused_precheck', reason, owner, agent: address, next: `connect ${owner}` }))
+    }
+    proof = outcome.proof
+  }
+  if (!proof) {
+    finish?.({ outcome: 'failed', message: "The owner's signature did not come back. Nothing was changed." })
+    await closeOwnerPage()
+    const reason = "the owner's signature did not come back"
+    console.log(`REFUSED: ${reason}. Nothing was changed.`)
+    process.exit(result(3, { state: 'refused_precheck', reason, owner, agent: address, next: `run superstables budget setup --rail tempo --agent ${label} again; the owner signs once` }))
+  }
+  writePublicEnv(bindingLines(proof, label))
+  console.log(`the owner's signature naming agent ${address} is recorded in ${PUBLIC_ENV_PATH}`)
+  finish?.({ outcome: 'confirmed', message: `Done. The owner on record signed for the new key ${address}. You can close this page. Next: grant a budget with --agent ${label} (the terminal lists the command).` })
+  await closeOwnerPage()
 }
 
 function refuseAgentFile(reason: string): never {
@@ -229,7 +281,7 @@ async function main() {
     if (boundTo && !same(boundTo, pub.OWNER_ADDRESS)) {
       const reason = `the owner files disagree: ${PUBLIC_ENV_PATH} records the owner ${pub.OWNER_ADDRESS}, and ${AGENT_ENV_PATH} is bound to ${boundTo}`
       console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)
-      const site = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE).origin : undefined
+      const site = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE, 'read').origin : undefined
       process.exit(result(3, { state: 'refused_precheck', reason, owner: pub.OWNER_ADDRESS, next: `${newOwnerCmd(site)} records one owner again (refused while a budget is live on either), then superstables budget setup --rail tempo --agent ${label}` }))
     }
     // unbound (an interrupted setup, a backup): bind it to the owner on record, so a later setup cannot replace that owner
@@ -246,7 +298,11 @@ async function main() {
     if (!boundTo) refuseAgentFileErrors(() => setAgentPublic({ OWNER_ADDRESS: pub.OWNER_ADDRESS! }))
     const { address, created } = refuseAgentFileErrors(() => appendExtraAgent(label))
     console.log(`${created ? 'created' : 'reusing'} agent key AGENT${label} in ${AGENT_ENV_PATH}: ${address}`)
+    if (approvalSite() && OWNER_KEY_FILE) console.log(`--owner-key-file is ignored: this chain's approvals are on ${new URL(approvalSite()!).host}, so the owner adds the new key there`)
     if (approvalSite()) await linkExtraAgent(label, address, pub.OWNER_ADDRESS as Address)
+    // on this computer: the owner signs for the new key, unless the public file already holds a signature that names it
+    const held = await agentBinding('tempo', { owner: pub.OWNER_ADDRESS as Address, agent: address, lines: loadPublicEnv() }, { label, keyAgent: address, file: PUBLIC_ENV_PATH })
+    if (held.state !== 'signed') await bindExtraAgent(label, address, pub.OWNER_ADDRESS as Address)
     process.exit(result(0, { state: 'ok', owner: pub.OWNER_ADDRESS, agent: address, next: `superstables budget grant --rail tempo --agent ${label} --amount A (you approve it in your wallet)` }))
   }
   useApprovalSite(SITE)
@@ -267,7 +323,7 @@ async function main() {
   } else {
     const key = generatePrivateKey()
     agent = privateKeyToAddress(key)
-    mkdirSync(dirname(AGENT_ENV_PATH), { recursive: true, mode: 0o700 })
+    ensurePrivateDir(dirname(AGENT_ENV_PATH), { root: HOME })
     writeFileSync(AGENT_ENV_PATH, `# Tempo agent: access-key private keys plus public addresses. NO owner private key. Only agent commands open this file.\nAGENT_PRIVATE_KEY=${key}\nAGENT_ADDRESS=${agent}\n`, { mode: 0o600, flag: 'wx' })
     console.log(`created the agent key file ${AGENT_ENV_PATH} (mode 600): agent ${agent}`)
   }
@@ -287,7 +343,7 @@ async function main() {
   const newOwner = NEW_OWNER
   const publicOwner = pub.OWNER_ADDRESS && (!pub.AGENT_ADDRESS || same(pub.AGENT_ADDRESS, agent)) ? (pub.OWNER_ADDRESS as Address) : undefined
   const recorded = (publicOwner ?? agentOwner) as Address | undefined
-  const recordedSite = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE).origin : undefined
+  const recordedSite = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE, 'read').origin : undefined
   if (agentOwner && publicOwner && !same(agentOwner, publicOwner) && !newOwner) {
     const reason = `the owner files disagree: ${PUBLIC_ENV_PATH} records the owner ${publicOwner}, and ${AGENT_ENV_PATH} is bound to ${agentOwner}`
     console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)
@@ -339,7 +395,7 @@ async function main() {
       }
       head = await chainHead()
     } catch (e) {
-      const reason = `could not read Tempo Moderato before asking (${String((e as Error).message).split('\n')[0]}); the grant could not be checked afterwards`
+      const reason = `could not read Tempo Moderato before asking (${oneLine((e as Error).message, 300)}); the grant could not be checked afterwards`
       console.log(`REFUSED: ${reason}. Nothing was requested.`)
       process.exit(result(3, { state: 'refused_precheck', reason, next: 'superstables budget doctor --rail tempo checks the RPC; then run the same command again' }))
     }
@@ -352,13 +408,22 @@ async function main() {
   let owner: Address
   let finish: ((v: OwnerVerdict) => void) | null = null
   let bundle: { steps: HostedStepOutcome[] } | undefined
+  // The text the owner's wallet signed, naming this agent, and the signature: kept in the public file (../owner-binding.mjs).
+  let binding: { message: string; signature: string } | undefined
+  // A re-run on a recorded owner asks nothing only when the public file already holds the owner's signature for this agent. A chain
+  // whose approvals are hosted keeps today's behaviour: setup --hosted records the signature from the site's owner proof.
+  const heldBinding = publicOwner && !newOwner && !HOSTED ? await agentBinding('tempo', { owner: publicOwner, agent, lines: pub }, { keyAgent: agent, file: PUBLIC_ENV_PATH }) : null
+  const reuse = !!publicOwner && !newOwner && !HOSTED && (!!recordedSite || heldBinding?.state === 'signed')
   if (OWNER_KEY_FILE) {
     checkOwnerKeyFile(OWNER_KEY_FILE)
-    owner = loadOwnerKeyFile(OWNER_KEY_FILE).OWNER_ADDRESS
+    const ownerFile = loadOwnerKeyFile(OWNER_KEY_FILE)
+    owner = ownerFile.OWNER_ADDRESS
     console.log(`owner address from --owner-key-file: ${owner}`)
-  } else if (publicOwner && !newOwner && !HOSTED) {
-    owner = publicOwner
+    binding = await signLocalBinding('tempo', ownerFile.OWNER_PRIVATE_KEY, agent, 'Tempo Testnet (Moderato)')
+  } else if (reuse) {
+    owner = publicOwner!
     console.log(`${PUBLIC_ENV_PATH} already records owner ${owner} for this agent; not asking again. If this isn't your wallet, stop: ${newOwnerCmd(recordedSite)} replaces it`)
+    if (recordedSite && heldBinding?.state !== 'signed') console.log(`no owner signature naming agent ${agent} is recorded yet: superstables budget setup --rail tempo --hosted --site ${recordedSite} records it from the site's owner proof`)
   } else if (HOSTED) {
     // the owner links this agent to their account on the site; the account's address becomes the owner on record
     const amt = GRANT !== undefined ? `${fromBaseUnits(LIMIT!)} ${TOKEN_LABEL}` : ''
@@ -379,13 +444,14 @@ async function main() {
         `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on the agent's machine; ${HOST} does not receive it.`,
         ...(plan ? ['You pay the network fee in your wallet. To end the budget at any time: superstables budget revoke --rail tempo.'] : [`Grants and revokes for this agent are then approved on ${HOST}, in your wallet.`]),
       ],
-    }, '', newOwner ? recorded : undefined, then, { prior, newOwner })
+    }, '', newOwner ? recorded : undefined, then, { prior, newOwner, expectedOwner: newOwner ? undefined : recorded })
     bundle = r.bundle
     linked = r.link
     const outcome = r.outcome
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent, linked: false })
     if (outcome.status !== 'connected') throw new Error(`unexpected approval outcome ${outcome.status}`)
     owner = outcome.address as Address
+    binding = outcome.proof
     console.log(`Agent added to the ${HOST} account ${owner}`)
     if (recorded && !same(recorded, owner) && !newOwner) {
       await closeOwnerPage(0)
@@ -401,17 +467,20 @@ async function main() {
       rows: [
         { label: 'Your agent', value: agent, mono: true },
         { label: 'Agent key', value: `on this machine only, in ${AGENT_ENV_PATH}` },
+        ...(recorded && !newOwner ? [{ label: 'Owner on record', value: recorded, mono: true }] : []),
       ],
       enforced: [],
       notEnforced: [],
       notes: [
         'Signing the message proves control of this address. It grants no spending permission and has no network fee.',
         'Your signing key stays in your wallet. You will review and approve any later budget grant separately.',
+        ...(recorded && !newOwner ? ['Connect this wallet. Any other wallet is refused, and nothing changes.'] : []),
       ],
     }, `Superstables budget: record this wallet as the owner of agent ${agent} on Tempo Testnet (Moderato).`, newOwner ? recorded : undefined)
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent })
     if (outcome.status !== 'connected') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     owner = outcome.address as Address
+    binding = outcome.proof
     finish = handle.finish
     console.log(`the owner connected ${owner} and signed the sign-in message`)
   }
@@ -428,18 +497,26 @@ async function main() {
     console.log(`REFUSED: ${reason}, not ${owner}. Nothing was changed on this machine.`)
     process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: `${newOwnerCmd(HOSTED ? SITE : recordedSite)} replaces it (refused while a budget is live)` }))
   }
+  if (!reuse && !binding) {
+    finish?.({ outcome: 'failed', message: "The owner's signature did not come back. Nothing was changed." })
+    await closeOwnerPage(0)
+    const reason = "the owner's signature did not come back"
+    console.log(`REFUSED: ${reason}. Nothing was changed.`)
+    process.exit(result(3, { state: 'refused_precheck', reason, next: 'run setup again; the owner signs once' }))
+  }
   const replaced = recorded && !same(recorded, owner) ? recorded : undefined
   if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${owner}`)
 
   // 3. the owner's public address, in the agent file (buy binds the access key to it) and the public file. Hosted: APPROVALS
   // and SITE. Asked on this computer: neither.
-  const asked = !OWNER_KEY_FILE && !(publicOwner && !newOwner && !HOSTED)
+  const asked = !OWNER_KEY_FILE && !reuse
   refuseAgentFileErrors(() => setAgentPublic({ OWNER_ADDRESS: owner })) // checked again after the wait for the owner
   if (HOSTED && !linked) throw new Error('an add-agent request without its id and code')
   // hosted: APPROVALS, SITE, and the link the owner signed (LINK_ID, LINK_CODE: a later "already linked" answer is checked
   // against them)
-  writePublicEnv({ OWNER_ADDRESS: owner, AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: 'hosted', SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}) }, asked && !HOSTED ? ['APPROVALS', 'SITE', 'LINK_ID', 'LINK_CODE'] : replaced && !HOSTED ? ['LINK_ID', 'LINK_CODE'] : [])
+  writePublicEnv({ OWNER_ADDRESS: owner, AGENT_ADDRESS: agent, ...(HOSTED ? { APPROVALS: 'hosted', SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}), ...(binding ? bindingLines(binding) : {}) }, [...(asked && !HOSTED ? ['APPROVALS', 'SITE', 'LINK_ID', 'LINK_CODE'] : replaced && !HOSTED ? ['LINK_ID', 'LINK_CODE'] : []), ...(replaced && !binding ? SETUP_KEYS : [])])
   console.log(`wrote ${PUBLIC_ENV_PATH} (no secret) and the owner's address into ${AGENT_ENV_PATH}.${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ''}`)
+  if (binding) console.log(`the owner's signature naming agent ${agent} is recorded in ${PUBLIC_ENV_PATH}`)
 
   // 4. test pathUSD for the owner, if it has too little
   let held = await tokenBalance(TOKEN_ADDRESS, owner).catch(() => null)
@@ -452,7 +529,7 @@ async function main() {
         held = await tokenBalance(TOKEN_ADDRESS, owner).catch(() => held)
       }
     } catch (e) {
-      console.log(`the faucet did not answer (${(e as Error).message}); fund the owner later with: superstables budget setup --rail tempo --fund-only`)
+      console.log(`the faucet did not answer (${oneLine((e as Error).message, 300)}); fund the owner later with: superstables budget setup --rail tempo --fund-only`)
     }
   }
   console.log(`owner ${owner}: pathUSD ${held === null ? 'unknown' : fromBaseUnits(held)}. The agent needs no funds.`)
@@ -517,6 +594,6 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
 }
 
 main().catch((err) => {
-  console.error('setup failed:', err?.message ?? err)
+  console.error('setup failed:', oneLine(err?.message ?? err, 1000))
   return exitAfterError()
 })

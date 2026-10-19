@@ -30,14 +30,16 @@
 // Nothing here kills a process group it did not start. `--replace` first asks the running page to cancel
 // (POST /cancel): only a page that confirms the wallet was never asked is stopped.
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { approvalsDir, ownerApprovalsLog } from "./paths.mjs";
+import { HOME, approvalsDir, ensurePrivateDir, ownerApprovalsLog } from "./paths.mjs";
+import { writeJournalFile } from "./journal.mjs";
 import { spawnIdentified } from './child-identity.mjs';
 import { createIdentitySource, inspectProcess, visiblePid } from '../src/core/process-identity.mjs';
 import { clearFileLock, inspectLockText, recoveryResult, paymentBusy } from '../src/core/owner-recovery.mjs';
 import { groupAlive as groupOf, sameProcess } from "./procs.mjs";
-import { accountWaitingWords, cancelSiteRequest, readSiteRequest, siteWord } from "./site.mjs";
+import { accountWaitingWords, cancelSiteRequest, readSiteRequest, siteText, siteWord } from "./site.mjs";
+import { readCapped } from "./response.mjs";
 
 /** A lock younger than this is never taken over, whatever its processes look like (startup: the record is being written). */
 export const STARTUP_GRACE_MS = 30_000;
@@ -65,7 +67,7 @@ const activeFile = (rail, chain) => join(approvalsDir(), `active-${rail}-${chain
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function ensureDir() {
-  mkdirSync(approvalsDir(), { recursive: true, mode: 0o700 });
+  ensurePrivateDir(approvalsDir(), { root: HOME });
 }
 
 export function readApproval(id) {
@@ -127,8 +129,8 @@ const LOCK_RETRY_MS = 10;
 // ── locks held for a moment (a record's read and write, the break of a dead holder's lock) ──────────────────
 // The design of src/core/lock.ts, synchronous here because every caller writes a record synchronously (a RESULT is
 // recorded and the process exits). A lock or mutex file holds { pid, pidStart, owner }: the holder's pid, that process's
-// start identity and a random owner id, written whole to a temporary file and hard-linked into place, so it exists
-// complete or not at all. It is taken over only from a holder that is gone (no process with that pid and start runs),
+// start identity and a random owner id, written whole to a temporary file, flushed to disk and hard-linked into place, so
+// it exists complete or not at all. It is taken over only from a holder that is gone (no process with that pid and start runs),
 // never because it is old: a live holder may be paused for any time. A dead holder's lock is broken under a mutex that
 // follows the same rules, and only if it is still that exact lock; a lock is released only by its owner. A file that
 // cannot be read as a holder (the whole-file write does not make one) is waited for, never taken, and named in the
@@ -155,6 +157,18 @@ function removeIfSame(path, text) {
   } catch {}
 }
 
+/** Write a new holder file whole and flush it, before it can be linked into place as a lock: a lock that survives a crash must hold its holder in full. */
+function writeHolderFile(path, text) {
+  const fd = openSync(path, "wx", 0o600);
+  try {
+    const bytes = Buffer.from(text);
+    for (let at = 0; at < bytes.length;) at += writeSync(fd, bytes, at);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * Create `path` holding `me` (temp file + hard link), waiting until `deadline`. A file there whose holder is gone is
  * removed first: by `breakDead` (a lock, broken under its mutex), else only if it still holds the text judged dead (the
@@ -162,8 +176,8 @@ function removeIfSame(path, text) {
  */
 function acquireSync(path, me, deadline, breakDead) {
   const mine = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(mine, me, { mode: 0o600, flag: "wx" });
   try {
+    writeHolderFile(mine, me);
     for (;;) {
       try {
         linkSync(mine, path);
@@ -228,9 +242,8 @@ function withRecordLock(id, fn) {
 function writeApproval(id, record) {
   ensureDir();
   const out = record.final && record.hosted?.token ? { ...record, hosted: { ...record.hosted, token: undefined } } : record;
-  const tmp = `${recordFile(id)}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(out, null, 2) + "\n", { mode: 0o600 });
-  renameSync(tmp, recordFile(id));
+  // a temp file with a random name, opened exclusively so a planted symlink is never followed, synced, then renamed (journal.mjs)
+  writeJournalFile(recordFile(id), JSON.stringify(out, null, 2) + "\n");
   return JSON.parse(JSON.stringify(out));
 }
 
@@ -431,15 +444,15 @@ function breakStale(rail, chain, stale) {
 
 /**
  * Take the rail and chain for `id`, held by `pid` (the claiming process) until the approval's own processes run. One
- * exclusive step: the lock is written in full to a private file and hard-linked to its name, so it exists complete or
- * not at all. { ok: false, pending } when another approval holds them.
+ * exclusive step: the lock is written in full to a private file, flushed to disk and hard-linked to its name, so it
+ * exists complete or not at all. { ok: false, pending } when another approval holds them.
  */
 export function claim(rail, chain, id, { pid = process.pid } = {}) {
   ensureDir();
   const path = activeFile(rail, chain);
   const mine = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(mine, JSON.stringify({ id, pid, ...startOf(pid), createdAt: Date.now() }), { mode: 0o600 });
   try {
+    writeHolderFile(mine, JSON.stringify({ id, pid, ...startOf(pid), createdAt: Date.now() }));
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         linkSync(mine, path);
@@ -721,12 +734,21 @@ export async function pageStateOf(record) {
   return pageState(record?.url);
 }
 
+/** The most read of one answer from an owner page on this computer: its /state and /cancel answers are a few hundred bytes. */
+const PAGE_MAX_BYTES = 65_536;
+/** An owner page's JSON answer, read up to PAGE_MAX_BYTES; null when it is longer, cut off or not JSON. */
+async function pageJson(res) {
+  const { bytes, truncated } = await readCapped(res, PAGE_MAX_BYTES);
+  if (truncated) return null;
+  try { return JSON.parse(bytes.toString("utf8")); } catch { return null; }
+}
+
 /** The owner page's own view (loopback), or null. Only for words; nothing is decided from it except --replace. */
 export async function pageState(url) {
   if (!url) return null;
   try {
     const res = await fetch(`${url}/state`, { signal: AbortSignal.timeout(1500) });
-    return res.ok ? await res.json() : null;
+    return res.ok ? await pageJson(res) : null;
   } catch {
     return null;
   }
@@ -886,8 +908,10 @@ export async function cancelPage(url, byId) {
       body: JSON.stringify({ replacedBy: byId }),
       signal: AbortSignal.timeout(3000),
     });
-    const body = await res.json().catch(() => ({}));
-    return { cancelled: res.ok && body.cancelled === true, status: body.status ?? null, sending: body.sending === true };
+    const body = await pageJson(res);
+    // an answer longer than a page's, cut off or not JSON is no answer: the pending approval is not replaced
+    if (!body || typeof body !== "object") return null;
+    return { cancelled: res.ok && body.cancelled === true, status: typeof body.status === "string" ? siteText(body.status, 40) : null, sending: body.sending === true };
   } catch {
     return null;
   }

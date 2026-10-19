@@ -304,6 +304,9 @@ export const solanaStep: WalletStep = {
     if (feePayer === account) {
       return { http: 409, body: { error: "the seller's fee payer is your own address, so this payment cannot be built; nothing was signed. Connect another account, or reject" } };
     }
+    if (account === record.verified.recipient) {
+      return { http: 409, body: { error: "the recipient is the account paying, so this payment cannot be built; nothing was signed. Connect another account, or reject" } };
+    }
     return {
       http: 200,
       body: { summary: `${record.verified.amountDecimal} ${record.verified.asset} to ${record.verified.recipient} on ${record.verified.networkLabel}` },
@@ -330,6 +333,7 @@ export const solanaStep: WalletStep = {
       explorer: network.explorer,
       nativeCurrency: network.wallet.nativeCurrency,
       walletChain: network.wallet.walletChain ?? SOLANA_DEVNET.wallet.walletChain,
+      validity: { kind: "blockhash" as const, seconds: SIGNED_WITHIN_MS / 1000 },
     };
   },
 
@@ -338,6 +342,11 @@ export const solanaStep: WalletStep = {
     fineprint: (facts) =>
       `Signing approves this one transfer of ${facts.amountDecimal} ${facts.asset} and nothing else; the seller pays the network fee and sends it. ` +
       "Before you sign, switch your wallet to Solana devnet. For example, in Phantom: open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet.",
+    walletShows: (f) => [
+      "A transaction to sign, not to send: the seller's fee payer signs it after you and sends it.",
+      `A transfer of ${f.amountDecimal} ${f.asset} to ${f.recipient}. Wallets that simulate show it as −${f.amountDecimal} ${f.asset}.`,
+      "No network fee for you: the seller pays it.",
+    ],
   },
 
   script: SOLANA_STEP_SCRIPT,

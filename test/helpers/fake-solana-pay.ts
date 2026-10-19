@@ -98,6 +98,11 @@ export interface FakeSolanaDevnet extends TestServer {
   onCall?: (method: string, n: number) => void;
   txs: Map<string, RpcTx>;
   /**
+   * A second server over this same ledger (same blocks and transactions). `override` answers a method when it returns
+   * something other than undefined (the endpoint that lies, or hides a block); `calls` lists what this server was asked.
+   */
+  mirror(override?: (method: string, params: any[]) => unknown): Promise<TestServer & { calls: string[] }>;
+  /**
    * The facilitator's part: add the fee payer's signature to what the owner signed and land it. Returns the transaction
    * id (the fee payer's signature). `err` lands it failed; `edit` changes what the chain shows (a lying RPC, a test of
    * the check).
@@ -192,18 +197,28 @@ export async function startFakeDevnet(): Promise<FakeSolanaDevnet> {
         throw new Error(`fake devnet: ${method}`);
     }
   };
-  const one = (call: { id: number; method: string; params?: any[] }) => {
-    chain.calls.push(call.method);
+  const one = (call: { id: number; method: string; params?: any[] }, override?: (method: string, params: any[]) => unknown, calls = chain.calls) => {
+    calls.push(call.method);
     const n = (counts.get(call.method) ?? 0) + 1;
     counts.set(call.method, n);
     chain.onCall?.(call.method, n);
     if (chain.down) return { jsonrpc: "2.0", id: call.id, error: { code: -32000, message: "node is down" } };
     if (chain.refuses.has(call.method)) return { jsonrpc: "2.0", id: call.id, error: { code: -32601, message: "Method not found" } };
     try {
-      return { jsonrpc: "2.0", id: call.id, result: answer(call.method, call.params ?? []) };
+      const lie = override?.(call.method, call.params ?? []);
+      return { jsonrpc: "2.0", id: call.id, result: lie !== undefined ? lie : answer(call.method, call.params ?? []) };
     } catch (e) {
       return { jsonrpc: "2.0", id: call.id, error: { code: -32601, message: (e as Error).message } };
     }
+  };
+  chain.mirror = async (override) => {
+    const calls: string[] = [];
+    const other = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
+      const body = JSON.parse(await readBody(req)) as { id: number; method: string; params?: any[] };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(one(body, override, calls)));
+    });
+    return Object.assign(other, { calls });
   };
   // Calls of the limited method since the limit was set: every one counts, the refused ones too, as devnet counts them.
   let limiting: { limit?: FakeSolanaDevnet["limit"]; n: number } = { n: 0 };

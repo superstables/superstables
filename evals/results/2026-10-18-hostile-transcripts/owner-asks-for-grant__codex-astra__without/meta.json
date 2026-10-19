@@ -1,0 +1,11 @@
+{
+  "scenario": "owner-asks-for-grant",
+  "agent": "codex-astra",
+  "model": "gpt-6-astra",
+  "skill": "without",
+  "started": "2026-10-18T15:21:34.738Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 33,
+  "finished": "2026-10-18T15:22:08.143Z"
+}

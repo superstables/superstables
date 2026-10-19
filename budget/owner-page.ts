@@ -10,14 +10,16 @@
 // transaction when the owner is ready (askSolanaIntent): the command sends only the amount.
 //
 // The link is printed as one stdout line `APPROVE {"action","url","expires","terms"}` (cli.mjs passes it on) and as a sentence
-// on stderr. The default browser opens it too, unless --no-open. --timeout <seconds> sets how long the link stays open
-// (default 600). Each rail binds these helpers to its chain with ownerPageFor (evm/owner.ts, tempo/owner.ts, solana/owner.ts).
-import { spawn } from "node:child_process";
+// on stderr. The default browser opens it too, through a private launcher file (owner-launcher.mjs), unless --no-open.
+// --timeout <seconds> sets how long the link stays open (default 600). Each rail binds these helpers to its chain with
+// ownerPageFor (evm/owner.ts, tempo/owner.ts, solana/owner.ts).
+import { openLink, removeLauncher } from "../src/core/owner-launcher.mjs";
 import { existsSync, statSync } from "node:fs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "./secret-file.mjs";
 import {
   OwnerApprovalServer,
   type OwnerActionHandle,
+  type OwnerActionInput,
   type OwnerActionOutcome,
   type OwnerChain,
   type OwnerTerms,
@@ -25,10 +27,11 @@ import {
   type SolanaTransactionPort,
 } from "../src/core/signer/owner-approval-server.ts";
 import { ownerApprovalsLog } from "./paths.mjs";
+import { bindingFacts } from "./page-facts.mjs";
 import { HOLDER_ENV, recordHosted } from "./approvals.mjs";
 import { sendBegan } from "./proof.mjs";
 import { HOSTED_KIND, HostedApprovals, HostedRefusal, type HostedBundleOutcome, type HostedSettings, type HostedStep, type PriorLink } from "./hosted.ts";
-import { isOtherSite, siteName, siteOrigin } from "./site.mjs";
+import { DEFAULT_SITE, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
 
 const argv = process.argv.slice(2);
 const argValue = (name: string) => {
@@ -98,6 +101,7 @@ function hostedFor(settings: Omit<HostedSettings, "auditPath" | "onRecord">): Ho
 
 /** Keep the page up a moment so it can show the final state, then stop it. A hosted request has no page here to keep up. */
 export async function closeOwnerPage(lingerMs = 4000) {
+  dropLaunchers();
   if (hostedClient) {
     await hostedClient.close();
     hostedClient = undefined;
@@ -122,17 +126,29 @@ export async function exitAfterError(): Promise<never> {
   process.exit(1);
 }
 const crashed = (err: unknown) => {
-  process.stderr.write(`${(err as Error)?.stack ?? String(err)}\n`);
+  // a library error carries an RPC's words (viem decodes revert data into its message): one line, no hidden characters
+  process.stderr.write(`${siteText((err as Error)?.stack ?? String(err), 4_000)}\n`);
   void exitAfterError();
 };
 
-function openBrowser(url: string) {
-  const [cmd, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
-  try {
-    const p = spawn(cmd as string, args as string[], { stdio: "ignore", detached: true });
-    p.on("error", () => {});
-    p.unref();
-  } catch {}
+// The link is a capability: on a command line every user on this machine could read it (ps). The browser gets a launcher
+// file only this user can read, which redirects to the link; it is deleted when the link settles, the page closes or this
+// process exits (one left by a killed command goes the next time a link is opened).
+const launchers = new Set<string>();
+const dropLaunchers = () => {
+  for (const p of launchers) if (removeLauncher(p)) launchers.delete(p);
+};
+process.once("exit", dropLaunchers);
+function openBrowser(url: string, settled?: Promise<unknown>) {
+  const opened = openLink(url);
+  if ("problem" in opened) {
+    console.error(`(The link was not opened in a browser: ${opened.problem}. Open the link above.)`);
+    return;
+  }
+  launchers.add(opened.path);
+  void settled?.finally(() => {
+    if (removeLauncher(opened.path)) launchers.delete(opened.path);
+  });
 }
 
 /** What a rail tells the shared page helpers. */
@@ -153,6 +169,8 @@ export interface OwnerRail {
   railFlag?: string;
   /** The wallets a hosted page asks for, when they differ from walletWords (solana: Solana or Ethereum sign-in). */
   hostedWalletWords?: string;
+  /** What the page on this computer says about the command: the RPC hosts it reads and, for a token approval, the token (page-facts.mjs). */
+  pageFacts?: () => { rpc?: OwnerActionInput["rpc"]; token?: OwnerActionInput["token"] };
 }
 
 export type Unapproved = Extract<OwnerActionOutcome, { status: "rejected" | "expired" }>;
@@ -173,32 +191,40 @@ async function settledOf<T extends { finish(v: OwnerVerdict): void; settled: Pro
 
 /** The page helpers bound to one rail and chain. */
 export function ownerPageFor(rail: OwnerRail) {
+  /** The facts every page on this computer carries: the RPC hosts, the token, and the agent binding an owner plan noted. */
+  const pageFacts = () => ({ ...rail.pageFacts?.(), binding: bindingFacts() });
   const inMinutes = (expiresAt: number) => {
     const minutes = Math.round((expiresAt - Date.now()) / 60000);
     return minutes >= 1 ? `${minutes} minute${minutes === 1 ? "" : "s"}` : `${Math.round((expiresAt - Date.now()) / 1000)} seconds`;
   };
-  function announce(action: string, h: { url: string; expiresAt: number; matchCode?: string; bundle?: unknown }, t: OwnerTerms, site?: string) {
+  function announce(action: string, h: { url: string; expiresAt: number; matchCode?: string; bundle?: unknown; settled?: Promise<unknown> }, t: OwnerTerms, site?: string) {
     // The plain terms travel with the link, so a caller that is not watching stderr can show them next to it.
     const terms = { title: t.title, amount: t.amount, unit: t.unit, summary: t.summary, enforced: t.enforced, notEnforced: t.notEnforced };
     console.log(`APPROVE ${JSON.stringify({ action, url: h.url, expires: new Date(h.expiresAt).toISOString(), terms, ...(h.matchCode ? { matchCode: h.matchCode } : {}) })}`);
     if (site) {
       const host = siteName(site);
       const other = isOtherSite(site) ? ` The site is ${host}, not www.superstables.com: say so to the owner.` : "";
-      console.error(`\nWrite this approval link, the match code ${h.matchCode} and the terms in your reply to the owner, a visible message, not only in your reasoning or a tool call: the page asks them to pick the code. It opens on any device where the owner is signed in to ${host} with their wallet (${rail.hostedWalletWords ?? rail.walletWords}):\n\n  ${h.url}\n\n  match code: ${h.matchCode}\n\nThe first approval link they open asks them to sign in with their wallet (a message, no fee). It expires in ${inMinutes(h.expiresAt)}. ${h.bundle ? `After they add the agent, the same page asks their wallet for each transaction in the terms, one after the other.` : `Setup adds this agent to their ${host} account: after the code, their wallet signs the owner-proof message (no fee), and no transaction is sent. Other actions ask their wallet for a transaction.`} Testnet only. Test tokens, no real money.${other} End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
+      console.error(`\nReply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn; the page asks them to pick the code. It opens on any device where the owner is signed in to ${host} with their wallet (${rail.hostedWalletWords ?? rail.walletWords}):\n\n  ${h.url}\n\n  match code: ${h.matchCode}\n\nThe first approval link they open asks them to sign in with their wallet (a message, no fee). It expires in ${inMinutes(h.expiresAt)}. ${h.bundle ? `After they add the agent, the same page asks their wallet for each transaction in the terms, one after the other.` : `Setup adds this agent to their ${host} account: after the code, their wallet signs the owner-proof message (no fee), and no transaction is sent. Other actions ask their wallet for a transaction.`} Testnet only. Test tokens, no real money.${other} When they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
     } else {
-      console.error(`\nWrite this approval link and its terms in your reply to the owner, a visible message, not only in your reasoning or a tool call. Only the owner should use the page, in the browser with their wallet (${rail.walletWords}):\n\n  ${h.url}\n\nIt works on this machine only (over SSH, the owner first forwards the port: ssh -L ${new URL(h.url).port}:127.0.0.1:${new URL(h.url).port} user@this-host) and expires in ${inMinutes(h.expiresAt)}; after that, run the command again for a new one. Setup asks for a message signature. Other actions ask for a transaction approval. Testnet only. Test tokens, no real money. End your turn with that reply; when they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
+      console.error(`\nReply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. Only the owner should use the page, in the browser with their wallet (${rail.walletWords}):\n\n  ${h.url}\n\nIt works on this machine only (over SSH, the owner first forwards the port: ssh -L ${new URL(h.url).port}:127.0.0.1:${new URL(h.url).port} user@this-host) and expires in ${inMinutes(h.expiresAt)}; after that, run the command again for a new one. Setup asks for a message signature. Other actions ask for a transaction approval. Testnet only. Test tokens, no real money. When they say they've approved, run superstables budget wait --id <the approval id> --shown. Do not approve for the owner.\n`);
     }
-    if (!argv.includes("--no-open")) openBrowser(h.url);
+    // tests never open a browser (cli.mjs does the same for a detached worker)
+    if (!argv.includes("--no-open") && process.env.VITEST === undefined) openBrowser(h.url, h.settled);
   }
 
   /** The hosted settings for this action, or undefined for the page on this computer. */
   function hostedSettings(action: string, kind: "connect" | "transaction") {
     const recorded = rail.hostedSite?.();
     if (!recorded || !rail.hosted) return undefined;
-    const site = siteOrigin(recorded);
+    const site = siteOrigin(recorded, "owner");
     if (site.error) {
+      // the kill switch must work on an install whose recorded site the owner no longer allows: revoke asks on this machine
+      if (action === "revoke" && site.ownerCommand) {
+        console.error(`revoke: the site recorded for this chain (${siteText(recorded, 120)}) is not an approval site the owner allows, so this revoke asks on the page on this machine (127.0.0.1) instead. The owner allows that site with ${site.ownerCommand}.`);
+        return undefined;
+      }
       console.log(`REFUSED: the recorded site is not usable: ${site.error}`);
-      process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: `the recorded site is not usable: ${site.error}`, next: `run superstables budget setup ${rail.railFlag ?? "--rail evm"} --hosted again, with --site if you use another site` }));
+      process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: `the recorded site is not usable: ${site.error}`, next: site.ownerCommand ? `${site.ownerCommand} in the owner's own terminal, or superstables budget setup ${rail.railFlag ?? "--rail evm"} --hosted --new-owner to move this chain to ${DEFAULT_SITE}` : `run superstables budget setup ${rail.railFlag ?? "--rail evm"} --hosted again, with --site if you use another site` }));
     }
     if (kind === "transaction" && !HOSTED_KIND[action]) {
       console.error(`${action}: the owner's steps of recover use the approval page on this machine (127.0.0.1), not ${site.origin}. Hosted approvals cover setup, grant, revoke and fund-agent.`);
@@ -229,11 +255,11 @@ export function ownerPageFor(rail: OwnerRail) {
      * setup --new-owner replaces, shown on the page. Hosted: the owner adds this agent to their account instead.
      * `then` (hosted only): wallet steps on the same page after the link; `bundle` is what became of the link and each step.
      */
-    async askConnect(action: string, terms: OwnerTerms, signIn: string, replacing?: string, then?: HostedStep[], linkOpts: { prior?: PriorLink | null; newOwner?: boolean } = {}): Promise<{ handle: { finish(v: OwnerVerdict): void }; outcome: OwnerActionOutcome; bundle?: HostedBundleOutcome; link?: { id: string; code: string } }> {
+    async askConnect(action: string, terms: OwnerTerms, signIn: string, replacing?: string, then?: HostedStep[], linkOpts: { prior?: PriorLink | null; newOwner?: boolean; expectedOwner?: string } = {}): Promise<{ handle: { finish(v: OwnerVerdict): void }; outcome: OwnerActionOutcome; bundle?: HostedBundleOutcome; link?: { id: string; code: string } }> {
       const hosted = hostedSettings(action, "connect");
       if (then?.length && !hosted) throw new Error("wallet steps after adding the agent need hosted approvals");
       if (hosted) {
-        const handle = await hostedFor(hosted).request({ kind: "connect", terms, timeoutMs: OWNER_TIMEOUT_MS, then, prior: linkOpts.prior ?? null, newOwner: linkOpts.newOwner === true }).catch((e) => refusedBySite(action, e));
+        const handle = await hostedFor(hosted).request({ kind: "connect", terms, timeoutMs: OWNER_TIMEOUT_MS, then, prior: linkOpts.prior ?? null, newOwner: linkOpts.newOwner === true, expectedOwner: linkOpts.expectedOwner }).catch((e) => refusedBySite(action, e));
         // already linked on this chain, with the owner's proof over the link recorded here: no link to show, nothing to wait for
         if (handle.alreadyLinked) console.error(`\nThis agent already belongs to the account of the owner recorded on this machine, on ${hosted.site} (checked against that owner's signed proof); no approval link is needed.\n`);
         else announce(action, handle, terms, hosted.site);
@@ -244,7 +270,8 @@ export function ownerPageFor(rail: OwnerRail) {
         return { handle, outcome: await handle.settled, link: handle.link };
       }
       const s = await page();
-      const handle = s.request({ kind: "connect", chain: rail.chain, terms, signIn, recordedOwner: replacing, timeoutMs: OWNER_TIMEOUT_MS });
+      // a sign-in names no agent: the binding is not shown on it
+      const handle = s.request({ kind: "connect", chain: rail.chain, terms, signIn, recordedOwner: replacing, timeoutMs: OWNER_TIMEOUT_MS, rpc: pageFacts().rpc });
       announce(action, handle, terms);
       return { handle, outcome: await handle.settled };
     },
@@ -259,7 +286,7 @@ export function ownerPageFor(rail: OwnerRail) {
         return settledOf(handle);
       }
       const s = await page();
-      const handle = s.request({ kind: "evm-transaction", chain: rail.chain, terms, account: owner, timeoutMs: OWNER_TIMEOUT_MS, transaction });
+      const handle = s.request({ kind: "evm-transaction", chain: rail.chain, terms, account: owner, timeoutMs: OWNER_TIMEOUT_MS, transaction, ...pageFacts() });
       announce(action, handle, terms);
       return settledOf(handle);
     },
@@ -279,7 +306,7 @@ export function ownerPageFor(rail: OwnerRail) {
     /** Solana: the owner's wallet signs what `port` builds when the owner presses Approve; `port` checks and sends it. */
     async askSolanaTransaction(action: string, owner: string, port: SolanaTransactionPort, terms: OwnerTerms) {
       const s = await page();
-      const handle = s.request({ kind: "solana-transaction", chain: rail.chain, terms, account: owner, solana: port, timeoutMs: OWNER_TIMEOUT_MS });
+      const handle = s.request({ kind: "solana-transaction", chain: rail.chain, terms, account: owner, solana: port, timeoutMs: OWNER_TIMEOUT_MS, ...pageFacts() });
       announce(action, handle, terms);
       return settledOf(handle);
     },

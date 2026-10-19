@@ -1,11 +1,12 @@
 // `superstables budget` against key files that are not key files: a FIFO, which a plain read would wait on forever. No
 // rail script signs anything here and no RPC is reached; each command must answer at once.
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isZeroed, leftoverReplacements } from "../../budget/secret-file.mjs";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
@@ -89,4 +90,43 @@ describe("an --owner-key-file that is a FIFO", () => {
       expect(r.result.reason).toMatch(/--owner-key-file .*owner\.fifo is not a regular file/);
     }, 30_000);
   }
+});
+
+describe("an interrupted replacement", () => {
+  const dir = () => join(home, "keys", "budget");
+  const file = () => join(dir(), "evm-agent.env");
+  const tmpName = (pid: number, hex = "0123abcd", base = "evm-agent.env") => join(dir(), `.${base}.${pid}.${hex}.tmp`);
+  const put = (path: string, text: string | Buffer, mode = 0o600) => { writeFileSync(path, text, { mode }); chmodSync(path, mode); };
+
+  it("isZeroed: only a regular file of at least one byte, all zero", () => {
+    put(file(), Buffer.alloc(64));
+    expect(isZeroed(file())).toBe(true);
+    put(file(), Buffer.alloc(0));
+    expect(isZeroed(file())).toBe(false);
+    const one = Buffer.alloc(64);
+    one[30] = 1;
+    put(file(), one);
+    expect(isZeroed(file())).toBe(false);
+    expect(isZeroed(join(dir(), "missing.env"))).toBe(false);
+    expect(isZeroed(dir())).toBe(false);
+    const fifo = join(dir(), "fifo.env");
+    execFileSync("mkfifo", ["-m", "600", fifo]);
+    const t = Date.now();
+    expect(isZeroed(fifo)).toBe(false);
+    expect(Date.now() - t).toBeLessThan(1000);
+  });
+
+  it("leftoverReplacements: finds an exact-name replacement and ignores look-alikes", () => {
+    const good = tmpName(4242);
+    put(good, "B4_AGENT_KEY_STORE=os-keychain\n");
+    put(tmpName(4243, "0123abc"), "x\n");
+    put(tmpName(4244, "0123abcd0"), "x\n");
+    put(tmpName(4245), "x\n", 0o644);
+    put(tmpName(4246, "0123abcd", "tempo-agent.env"), "x\n");
+    put(join(dir(), "elsewhere"), "x\n");
+    symlinkSync(join(dir(), "elsewhere"), tmpName(4247));
+    put(file(), Buffer.alloc(8));
+    expect(leftoverReplacements(file())).toEqual([{ path: good, pid: 4242, text: "B4_AGENT_KEY_STORE=os-keychain\n" }]);
+    expect(leftoverReplacements(join(dir(), "none", "evm-agent.env"))).toEqual([]);
+  });
 });

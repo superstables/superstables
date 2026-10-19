@@ -20,7 +20,8 @@ import { Abis, Addresses } from 'viem/tempo'
 import type { OwnerChain, OwnerTerms } from '../../src/core/signer/owner-approval-server.ts'
 import { closeOwnerPage, ownerPageFor } from '../owner-page.ts'
 import { DEFAULT_SITE, differsFromRequest, mismatchReason } from '../site.mjs'
-import { DEFAULT_RPC } from '../rpc.mjs'
+import { DEFAULT_RPC, ownerRpcNext, ownerRpcProblem } from '../rpc.mjs'
+import { rpcFacts } from '../page-facts.mjs'
 import { AGENT_ENV_PATH, CHAIN_ID, EXPLORER_BASE, TOKEN_ADDRESS, TOKEN_LABEL, fromBaseUnits, loadPublicEnv, makeClient, parseEnvFile, agentFileText } from './lib/common.ts'
 import { chainHead, rpcRead, sleep, topicOf } from './lib/chain.ts'
 import { LABEL } from './lib/args.mjs'
@@ -51,6 +52,18 @@ export const MIN_FEE_BALANCE = 100_000n // 0.1 in 6-decimal units
 export function emit(command: string, exit: number, o: Record<string, unknown>): number {
   console.log(`RESULT ${JSON.stringify({ ok: exit === 0, command, rail: 'tempo', chain: 'moderato', ...o })}`)
   return exit
+}
+
+// An owner script reads and sends only through an RPC the owner set (or the built-in one): a variable that names another is
+// refused here, before this script reads a key, asks the owner or sends anything. The dispatcher refuses it earlier; this
+// covers a script run directly. (src/core/owner-settings.js)
+{
+  const problem = ownerRpcProblem('tempo', 'moderato')
+  if (problem) {
+    const command = String(process.argv[1] ?? '').split(/[\\/]/).pop()!.replace(/\.(?:ts|mjs)$/, '') || 'owner'
+    console.log(`REFUSED: ${problem}. Nothing was asked or sent.`)
+    process.exit(emit(command, 3, { state: 'refused_precheck', reason: problem, next: ownerRpcNext('tempo', 'moderato') }))
+  }
 }
 
 export const agentFlag = (label: string) => (label ? ` --agent ${label}` : '')
@@ -112,6 +125,7 @@ function agentKeyFor(agent: Address, action: string, site: string): Hex | undefi
 }
 
 export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
+  pageFacts: () => ({ rpc: rpcFacts('tempo', 'moderato') }),
   chain: TEMPO_OWNER_CHAIN,
   walletWords: 'any EVM browser wallet that can add a custom network',
   statusCommand: 'superstables budget status --rail tempo',
@@ -293,7 +307,8 @@ export function revertedReceiptOf(err: unknown): { transactionHash: Hex } | null
   return null
 }
 
-export type Sent = { hash: Hex; status: 'success' | 'reverted'; blockNumber: bigint; blockTimestamp?: number; type: string; feePayer?: string; feeToken?: string; problems: string[]; siteFailed?: string }
+/** `final`: Tempo Moderato is final the moment a block is canonical (finality-policy: instant), so this is true when the receipt's block is on the chain. */
+export type Sent = { hash: Hex; status: 'success' | 'reverted'; blockNumber: bigint; final: boolean; blockTimestamp?: number; type: string; feePayer?: string; feeToken?: string; problems: string[]; siteFailed?: string }
 
 /** Transaction types the owner's wallet may use: a plain root-signed transaction (the design sends type 2). */
 const OWNER_TX_TYPES = ['0x0', '0x1', '0x2']
@@ -334,9 +349,14 @@ export async function readSent(hash: Hex, want: { from: Address; data: Hex; afte
   if (r.feePayer && !same(r.feePayer, want.from)) problems.push(`its fee was paid by ${r.feePayer}, not the owner`)
   // the site reported this transaction as failed: never settled here, whatever the chain shows
   if (want.siteFailed) problems.push(want.siteFailed)
+  // The receipt's block has to be on the chain: the block at that number carries the hash the receipt names, and it is at or below
+  // the latest block. Anything else (a block the chain replaced, a receipt for a block it does not have) is "not committed".
   const block = await rpcRead('eth_getBlockByNumber', [r.blockNumber, false]).catch(() => null)
+  const latest = await rpcRead('eth_blockNumber', []).then((v: string) => BigInt(v), () => null)
+  const canonical = Boolean(block) && typeof r.blockHash === 'string' && same(block.hash, r.blockHash) && latest !== null && BigInt(r.blockNumber) <= latest
+  if (!canonical) problems.push('it is not in a committed block on chain')
   return {
-    hash, status: r.status === '0x1' ? 'success' : 'reverted', blockNumber: BigInt(r.blockNumber), blockTimestamp: block?.timestamp ? parseInt(block.timestamp, 16) : undefined,
+    hash, status: r.status === '0x1' ? 'success' : 'reverted', blockNumber: BigInt(r.blockNumber), final: canonical, blockTimestamp: block?.timestamp ? parseInt(block.timestamp, 16) : undefined,
     type, feePayer: r.feePayer, feeToken: r.feeToken ?? t.feeToken ?? undefined, problems, ...(want.siteFailed ? { siteFailed: want.siteFailed } : {}),
   }
 }
@@ -435,8 +455,18 @@ export function grantTerms(p: GrantPlan & { owner: Address; expirySeconds: numbe
       `To end the budget at any time: superstables budget revoke --rail tempo${agentFlag(p.label)}. You approve that in your wallet too.`,
       'A revoked or expired key can never be granted again: the next budget needs a new agent key (superstables budget setup --rail tempo --agent LABEL).',
     ],
+    walletShows: [
+      `Call authorizeKey for the key ${p.agent} on the account keychain ${KEYCHAIN}`,
+      `Spending limit: ${p.limit} in base units (${amt})${p.period ? `, refilled every ${p.period} seconds` : ', no refill'}`,
+      `Expires: unix time ${p.expiry} (${iso(p.expiry)})`,
+      p.sellers ? `Allowed calls: token transfers to ${p.sellers.join(', ')}` : 'Allowed calls: any',
+      `A network fee in ${feeTokenWords(p.feeToken)}, paid from your account`,
+    ],
   }
 }
+
+/** The fee token in words: its label when it is the budget token, else its address. */
+const feeTokenWords = (feeToken: Address) => (feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : feeToken)
 
 export function revokeTerms(p: { owner: Address; agent: Address; remaining: bigint; expiry: number; feeToken: Address; label: string }): OwnerTerms {
   return {
@@ -458,6 +488,11 @@ export function revokeTerms(p: { owner: Address; agent: Address; remaining: bigi
     notes: [
       `This revokes permission; it does not return funds. The expected fee token is ${p.feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : p.feeToken}. Check both the token and fee in your wallet.`,
       'This key can never be granted again. For a new budget, make a new agent key: superstables budget setup --rail tempo --agent LABEL.',
+    ],
+    walletShows: [
+      `Call revokeKey for the key ${p.agent} on the account keychain ${KEYCHAIN}`,
+      'No token amount moves',
+      `A network fee in ${feeTokenWords(p.feeToken)}, paid from your account`,
     ],
   }
 }

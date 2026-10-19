@@ -13,6 +13,7 @@ import { agentProof, agentProofText, bodyHash, HostedApprovals, HostedRefusal, o
 import { accountRefusalNext, cancelSiteRequest, chosenSite, listSiteServices, siteFailure, siteName, siteOrigin, siteText } from "../../budget/site.mjs";
 import { agentProofV2Text, evmOwner, evmOwnerKey, linkProofText, signLinkProof, solanaOwner, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import { startServer } from "../helpers/servers.js";
+import { accountHomeWith } from "../helpers/owner-settings.js";
 
 const KEY = `0x${"11".repeat(32)}` as const;
 const AGENT = privateKeyToAccount(KEY).address;
@@ -24,9 +25,10 @@ const HASH = `0x${"ab".repeat(32)}`;
 const TERMS = { title: "Grant a spending budget", summary: "test", rows: [], enforced: [], notEnforced: [], notes: [] };
 const GRANT_TX = { to: USDC, data: "0x095ea7b3", value: "0x0" };
 const ACCOUNT_REFUSALS = [
-  [403, "ethereum_account_required", /sign in with an Ethereum wallet/],
-  [400, "owner_proof_owner_mismatch", /sign the owner-proof message with the Solana wallet they signed in with/],
-  [403, "wrong_account", /sign in with the paying Solana wallet/],
+  [403, "ethereum_account_required", /approve from an account that holds an Ethereum wallet/],
+  [400, "owner_proof_owner_mismatch", /sign the owner-proof message with a wallet their account holds for this chain/],
+  [403, "wrong_account", /pay from a Solana wallet their account holds/],
+  [403, "owner_wallet_required", /add this budget's Solana owner wallet to the account/],
 ] as const;
 
 describe("agent proof v2", () => {
@@ -159,30 +161,33 @@ describe("owner proof", () => {
 });
 
 describe("site URL", () => {
-  it("takes superstables.com, its subdomains and this computer; another site only with the owner's exact opt-in", () => {
-    const before = process.env.SUPERSTABLES_ALLOW_SITE;
+  it("an owner action takes www.superstables.com and what the owner's settings allow; a read also takes any superstables.com host", () => {
+    const before = process.env.SUPERSTABLES_TEST_ACCOUNT_HOME;
     try {
-      delete process.env.SUPERSTABLES_ALLOW_SITE;
+      process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = accountHomeWith(null);
       // The apex is www.superstables.com's site, which makes its approval links on www.
       expect(siteOrigin("https://superstables.com").origin).toBe("https://www.superstables.com");
       expect(siteOrigin("https://superstables.com/").origin).toBe("https://www.superstables.com");
-      expect(siteOrigin("https://superstables.com:8443").origin).toBe("https://superstables.com:8443");
-      expect(siteOrigin("https://staging.superstables.com").origin).toBe("https://staging.superstables.com");
-      expect(siteOrigin("https://localhost:8443").origin).toBe("https://localhost:8443");
-      for (const bad of ["https://evil.example", "https://superstables.com.evil.example", "https://evilsuperstables.com", "https://xn--superstables-xyz.com"]) {
-        expect(siteOrigin(bad).error, bad).toMatch(/is not superstables\.com.*SUPERSTABLES_ALLOW_SITE=.*an agent never sets it/);
+      for (const bad of ["https://superstables.com:8443", "https://staging.superstables.com", "https://localhost:8443", "https://evil.example", "https://superstables.com.evil.example", "https://evilsuperstables.com", "https://xn--superstables-xyz.com"]) {
+        expect(siteOrigin(bad).error, bad).toMatch(/is not an approval site the owner allows: approvals use https:\/\/www\.superstables\.com unless the owner runs superstables owner settings .* in their own terminal \(an agent never does\)/);
       }
-      process.env.SUPERSTABLES_ALLOW_SITE = "https://approvals.example.org";
+      expect(siteOrigin("https://staging.superstables.com").ownerCommand).toBe("superstables owner settings allow-staging on");
+      expect(siteOrigin("https://staging.superstables.com", "read").origin).toBe("https://staging.superstables.com");
+      expect(siteOrigin("https://evil.example", "read").error).toBeDefined();
+      process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = accountHomeWith({ version: 1, site: { origin: "https://approvals.example.org", allowStaging: true } });
       expect(siteOrigin("https://approvals.example.org").origin).toBe("https://approvals.example.org");
-      expect(siteOrigin("https://approvals.example.org:8443").error).toMatch(/is not superstables\.com/);
-      expect(siteOrigin("https://evil.example").error).toMatch(/is not superstables\.com/);
-      // the opt-in never makes plain http acceptable off this computer
-      process.env.SUPERSTABLES_ALLOW_SITE = "http://approvals.example.org";
+      expect(siteOrigin("https://staging.superstables.com").origin).toBe("https://staging.superstables.com");
+      expect(siteOrigin("https://approvals.example.org:8443").error).toMatch(/is not an approval site/);
+      expect(siteOrigin("https://evil.example").error).toMatch(/is not an approval site/);
+      // an environment variable allows nothing: SUPERSTABLES_ALLOW_SITE is not read
+      process.env.SUPERSTABLES_ALLOW_SITE = "https://evil.example";
+      expect(siteOrigin("https://evil.example").error).toMatch(/is not an approval site/);
       expect(siteOrigin("http://approvals.example.org").error).toMatch(/https/);
-      expect(chosenSite(undefined).origin).toBe("https://www.superstables.com");
+      expect(chosenSite(undefined).origin).toBe("https://approvals.example.org");
     } finally {
-      if (before === undefined) delete process.env.SUPERSTABLES_ALLOW_SITE;
-      else process.env.SUPERSTABLES_ALLOW_SITE = before;
+      delete process.env.SUPERSTABLES_ALLOW_SITE;
+      if (before === undefined) delete process.env.SUPERSTABLES_TEST_ACCOUNT_HOME;
+      else process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = before;
     }
   });
 
@@ -206,17 +211,24 @@ describe("site URL", () => {
     expect(siteOrigin("https://user:pw@www.superstables.com").error).toMatch(/password/);
   });
 
-  it("defaults to superstables.com, and SUPERSTABLES_SITE overrides it", () => {
+  it("defaults to superstables.com, and SUPERSTABLES_SITE is a candidate the owner's settings must allow", () => {
     const before = process.env.SUPERSTABLES_SITE;
+    const home = process.env.SUPERSTABLES_TEST_ACCOUNT_HOME;
     try {
       delete process.env.SUPERSTABLES_SITE;
+      process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = accountHomeWith({ version: 1, site: { allowLoopback: true, allowStaging: true } });
       expect(chosenSite(undefined).origin).toBe("https://www.superstables.com");
       process.env.SUPERSTABLES_SITE = "http://localhost:4000";
       expect(chosenSite(undefined).origin).toBe("http://localhost:4000");
       expect(chosenSite("https://staging.superstables.com").origin).toBe("https://staging.superstables.com");
+      process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = accountHomeWith(null);
+      expect(chosenSite(undefined).error).toMatch(/^SUPERSTABLES_SITE: http:\/\/localhost:4000 is not an approval site the owner allows/);
+      expect(chosenSite("https://staging.superstables.com").error).toMatch(/^--site: /);
     } finally {
       if (before === undefined) delete process.env.SUPERSTABLES_SITE;
       else process.env.SUPERSTABLES_SITE = before;
+      if (home === undefined) delete process.env.SUPERSTABLES_TEST_ACCOUNT_HOME;
+      else process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = home;
     }
   });
 });
@@ -248,7 +260,7 @@ describe("hosted approvals", () => {
     expect(h.url).toMatch(new RegExp(`^${site.url}/approve/budget/bl_test0001#ssba_`));
     expect(h.matchCode).toBe("ABC-DEF");
     expect(h.link).toEqual({ id: "bl_test0001", code: "ABC-DEF" });
-    expect(await h.settled).toEqual({ status: "connected", address: OWNER });
+    expect(await h.settled).toMatchObject({ status: "connected", address: OWNER, proof: { message: expect.stringMatching(/^Superstables: add an agent to my account\n/), signature: expect.stringMatching(/^0x[0-9a-f]+$/) } });
     // the site sent the owner's proof over this very link, and the client checked it
     expect(site.requests[0].owner_proof).toMatchObject({ scheme: "eip191", message: linkProofText({ site: site.url, owner: OWNER, agent: AGENT, rail: "evm", chain: "base-sepolia", linkId: "bl_test0001", code: "ABC-DEF" }) });
     expect(site.posts).toEqual([{ path: "/api/v1/budget/links", ok: true, why: undefined }]);
@@ -269,7 +281,7 @@ describe("hosted approvals", () => {
       site.reply = answer(OWNER, await signLinkProof(facts()));
       const h = await connect({ prior: { owner: OWNER, linkId: LINK, linkCode: CODE } });
       expect(h).toMatchObject({ id: LINK, url: "", matchCode: "", alreadyLinked: true, link: { id: LINK, code: CODE } });
-      expect(await h.settled).toEqual({ status: "connected", address: OWNER });
+      expect(await h.settled).toMatchObject({ status: "connected", address: OWNER });
       expect(site.posts[0]).toMatchObject({ path: "/api/v1/budget/links", ok: true });
       // nothing to poll, nothing stored
       expect(site.requests).toEqual([]);
@@ -607,7 +619,7 @@ describe("hosted approvals", () => {
 
   it("no owner named, and the site will not cancel because the wallet was asked: unknown (sending), never nothing sent", async () => {
     site.owner = null;
-    site.cancelAnswer = () => ({ status: 409, body: { error: { code: "wallet_asked" }, state: "sending", wallet_asked: true } });
+    site.cancelAnswer = () => ({ status: 409, body: { error: { code: "wallet_asked", state: "sending", wallet_asked: true, money_moved: "unknown" } } });
     const err = await grant(client()).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
     expect(err.sending).toBe(true);
@@ -616,13 +628,13 @@ describe("hosted approvals", () => {
     expect(err.next).toMatch(/read whether anything landed/);
   });
 
-  it("no owner named, and the cancel gets no clear answer: no claim that nothing was sent", async () => {
+  it("no owner named, and the cancel gets no clear answer: unknown (sending), no claim that nothing was sent", async () => {
     site.owner = null;
     site.cancelFails = true;
     const err = await grant(client()).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
-    expect(err.sending).toBe(false);
-    expect(err.message).toMatch(/This command did not show an approval link\. Check wallet activity before retrying$/);
+    expect(err.sending).toBe(true);
+    expect(err.message).toMatch(/The site did not confirm the request was cancelled before the owner's wallet was asked, so whether anything was sent is unknown; read the chain before retrying$/);
     expect(err.message).not.toMatch(/nothing was sent/);
   });
 
@@ -785,6 +797,10 @@ describe("hosted approvals", () => {
       expect(siteWord("state", "linked")).toBe("linked");
       expect(siteWord("code", "anything else")).toBe("unexpected");
     });
+
+    it("the codes a site with wallets held by accounts sends are its own words", () => {
+      for (const code of ["owner_wallet_required", "owner_unknown", "page_stopped_before_send"]) expect(siteWord("code", code)).toBe(code);
+    });
   });
 
   it("site unreachable: a clear refusal, nothing requested or sent", async () => {
@@ -835,7 +851,8 @@ describe("hosted approvals", () => {
       expect(JSON.stringify(o)).not.toMatch(/untrusted|ssbt_/);
       if (kind === "bundle") expect((await h.bundle!).steps).toMatchObject([{ state: "skipped", walletAsked: false }]);
       expect(reads).toBe(kind === "transaction" ? 2 : 1);
-      expect(site.requests[0]).toMatchObject({ state: "awaiting_owner", cancels: 0 });
+      // an unapproved link with steps is withdrawn on the site first: only a confirmed withdrawal makes its steps "nothing sent"
+      expect(site.requests[0]).toMatchObject(kind === "bundle" ? { state: "cancelled", cancels: 1 } : { state: "awaiting_owner", cancels: 0 });
       await c.close();
     });
   }
@@ -981,7 +998,7 @@ describe("hosted approvals on tempo and solana", () => {
       if (r.polls >= 2) Object.assign(r, { state: "linked", owner: SOL_OWNER });
     };
     const h = await solana().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
-    expect(await h.settled).toEqual({ status: "connected", address: SOL_OWNER });
+    expect(await h.settled).toMatchObject({ status: "connected", address: SOL_OWNER });
     expect(site.posts).toEqual([{ path: "/api/v1/budget/links", ok: true, why: undefined }]);
     expect(site.requests[0].body).toEqual({ rail: "solana", chain: "devnet", agent: SOL_KEY.address });
   });
@@ -1031,7 +1048,7 @@ describe("hosted approvals on tempo and solana", () => {
     Object.assign(r.steps![0], { state: "confirmed", tx_hash: SIG, wallet_asked: true });
     Object.assign(r.steps![1], { state: "rejected", reason: "the owner rejected it", reason_code: "owner_rejected" });
     const b = await h.bundle!;
-    expect(b.link).toEqual({ status: "connected", address: SOL_OWNER });
+    expect(b.link).toMatchObject({ status: "connected", address: SOL_OWNER });
     expect(b.steps).toMatchObject([{ kind: "fund_agent", state: "confirmed", hash: SIG }, { kind: "grant", state: "rejected", hash: null, reasonCode: "owner_rejected" }]);
   });
 
@@ -1082,7 +1099,7 @@ describe("hosted approvals on tempo and solana", () => {
       if (r.kind !== "link" && r.polls >= 2) Object.assign(r, { state: "confirmed", tx_hash: HASH });
     };
     const c = tempo();
-    expect(await (await c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 })).settled).toEqual({ status: "connected", address: OWNER });
+    expect(await (await c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 })).settled).toMatchObject({ status: "connected", address: OWNER });
     site.owner = OWNER;
     const tx = { to: KEYCHAIN, data: "0x5ae7ab32" + "0".repeat(24) + AGENT.slice(2).toLowerCase(), value: "0x0" };
     const h = await c.request({ kind: "evm-transaction", action: "revoke", account: OWNER, transaction: tx, terms: TERMS, timeoutMs: 60_000 });
@@ -1110,6 +1127,8 @@ describe("find: the site's list of services", () => {
         { name: "Bad\nname", price: "0.01", chain: "arc-testnet", url: "https://arc.example/x" },
         { name: "Briefing", price: "0.003", network: "eip155:84532", sample: true, url: "https://seller.example/briefing" },
         { name: "Market", price: "0.01", network: "eip155:84532", simulated: false, sample: "yes", url: "https://seller.example/market" },
+        { name: "Mislabelled", price: "0.01", network: "eip155:84532", chain: "arc-testnet", url: "https://seller.example/mislabelled" },
+        { name: "Proto", price: "0.01", network: "constructor", chain: "arc-testnet", url: "https://seller.example/proto" },
       ] };
       const r = await listSiteServices({ site: site.url, chainByNetwork: { "eip155:84532": "base-sepolia" } });
       // simulated: the site's simulated, mock or sample flag when it is true or false; null when it gives none
@@ -1118,6 +1137,10 @@ describe("find: the site's list of services", () => {
         { name: "Bad name", price: "0.01 USDC", chain: "arc-testnet", network: null, rail: null, simulated: null, url: "https://arc.example/x" },
         { name: "Briefing", price: "0.003 USDC", chain: "base-sepolia", network: "eip155:84532", rail: "evm", simulated: true, url: "https://seller.example/briefing" },
         { name: "Market", price: "0.01 USDC", chain: "base-sepolia", network: "eip155:84532", rail: "evm", simulated: false, url: "https://seller.example/market" },
+        // the network is one the client knows: its own chain and rail win over the listing's words
+        { name: "Mislabelled", price: "0.01 USDC", chain: "base-sepolia", network: "eip155:84532", rail: "evm", simulated: null, url: "https://seller.example/mislabelled" },
+        // a network named like an inherited property is not one the client knows: the listing's words stay data
+        { name: "Proto", price: "0.01 USDC", chain: "arc-testnet", network: "constructor", rail: null, simulated: null, url: "https://seller.example/proto" },
       ] });
     } finally {
       await site.close();

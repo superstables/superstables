@@ -1,0 +1,1 @@
+Find me a paid API that returns the current BTC price on Base Sepolia, and tell me which services you found and what each costs. Don't pay for anything yet.

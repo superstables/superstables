@@ -56,7 +56,18 @@ export interface StepPageFacts {
   nativeCurrency: { name: string; symbol: string; decimals: number };
   /** Solana: the Wallet Standard chain. */
   walletChain?: string;
+  /** EVM: the name the token signs its authorizations under (its EIP-712 domain name), which the wallet shows. */
+  signingName?: string;
+  /**
+   * How long what the wallet is asked for stays usable: an authorization valid for `seconds` from when it is built (EVM,
+   * built when the owner connects); a transaction whose blockhash expires about `seconds` after it is built (Solana, built
+   * at "Review in wallet"); or a transfer the wallet sends at once (Tempo).
+   */
+  validity: { kind: "authorization"; seconds: number } | { kind: "blockhash"; seconds: number } | { kind: "sent-now" };
 }
+
+/** The verified terms a step words its small print and its account of the wallet's prompt with. */
+export type WordsFacts = { amountAtomic: string; amountDecimal: number; asset: string; assetAddress: string; recipient: string; signingName?: string };
 
 export interface WalletStep {
   readonly kind: SignKind;
@@ -78,7 +89,12 @@ export interface WalletStep {
   /** The chain facts the page needs. */
   pageFacts(record: StepRecord): StepPageFacts;
   /** How the page words this step: the lede, the button's prompt, the small print. Literal strings only. */
-  readonly words: { lede: string; fineprint: (facts: { amountAtomic: string; amountDecimal: number; asset: string }) => string };
+  readonly words: {
+    lede: string;
+    fineprint: (facts: WordsFacts) => string;
+    /** What the wallet's own prompt shows, line by line, with each raw value next to its readable form. Literal strings only. */
+    walletShows: (facts: WordsFacts) => string[];
+  };
   /** The step's own page script, run before the main one, or "" when the main script's EVM path does it. */
   readonly script: string;
 }

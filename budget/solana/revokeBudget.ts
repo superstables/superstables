@@ -9,16 +9,26 @@
 // transaction (no error, signed by the owner) and the token account (no delegate, delegated amount 0). With --owner-key-file
 // <path> it signs with that key file instead (tests and automation only).
 //
+// It always sends Revoke when the owner's USDC account exists, even when no delegate reads: one RPC's read is not proof
+// that no delegate is live (Revoke succeeds on an account without one). Only an owner with no USDC account is sent
+// nothing, because a Revoke there fails on chain; that answer needs the owner's endpoints to agree at finalized commitment (else
+// it is unknown, exit 5), and it says revoked: null, not revoked.
+// A confirmed revoke is recorded in the public file (REVOKED_AT, REVOKED_TX, REVOKED_SLOT): status reports revoked only while the
+// chain still shows no delegate. This command reports revoked, final: true only once the transaction is finalized (waiting up
+// to a minute) and the owner's endpoints agree, at finalized, that no delegate is left; before that it reports landed (exit 0,
+// final: false). Both results carry the signature and its slot.
+//
 // npx tsx budget/solana/revokeBudget.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
-// Exit codes: 0 revoked (or nothing to revoke), 1 failed on chain, never landed, or a delegate still reads, 3 refused (the
+// Exit codes: 0 revoked (or the owner has no USDC account: nothing sent, revoked null), 1 failed on chain, never landed, or a delegate still reads, 3 refused (the
 // owner rejected or the link expired, no SOL for the fee), 5 unknown (read the chain).
 import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { AGENT_KEY_PATH, connection, loadOwner, explorerTx, USDC_MINT, formatUnits, parseEnvText, parseStrict, readPublic, retryRead, sleep } from "./lib.mjs";
+import { AGENT_KEY_PATH, CLUSTER_NEXT, agreedAccount, clusterProblem, connection, recentFinalizedSlot, loadOwner, explorerTx, USDC_MINT, formatUnits, oneLine, parseEnvText, parseStrict, readPublic, retryRead, sleep, writePublic } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { readRegularFile } from "../secret-file.mjs";
-import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort } from "./owner.ts";
+import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, revokeTerms, sol, transactionPort, finalizedOf, agreedFinalAccount, LANDED_SOLANA_REVOKE } from "./owner.ts";
+import { agreementWords } from "../../src/core/rpc-quorum.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/revokeBudget.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
@@ -39,12 +49,14 @@ function refuse(reason: string, next: string): never {
   process.exit(result(3, { state: "refused_precheck", reason, next }));
 }
 
-const conn = connection();
+const conn = connection("owner");
+const cluster = await clusterProblem(conn);
+if (cluster) refuse(cluster, CLUSTER_NEXT);
 const pub = readPublic();
 if (!pub.owner) refuse("the public file names no owner", "superstables budget setup --rail solana");
 const owner: PublicKey = pub.owner;
 // The agent key file also records the owner. While it names another, this command (which acts for the public file's
-// owner) says nothing about either: "nothing to revoke" for one could hide the other's live budget. Read for that one
+// owner) says nothing about either: an answer for one could hide the other's live budget. Read for that one
 // public line only, through the bounded reader that never waits on a FIFO; an agent key file it cannot read (missing, not
 // a regular file, too large) never stops the revoke.
 {
@@ -58,15 +70,27 @@ try {
   before = await retryRead(() => getAccountOrNull(conn, ata));
 } catch (err) {
   // could not read is not "no delegate": whether a budget is live is unknown
-  const reason = `could not read the owner's USDC account ${ata.toBase58()} (${String((err as Error)?.message ?? err).slice(0, 160)}); whether a delegate is live is unknown`;
+  const reason = `could not read the owner's USDC account ${ata.toBase58()} (${oneLine((err as Error)?.message ?? err, 160)}); whether a delegate is live is unknown`;
   console.log(`UNKNOWN: ${reason}. Nothing was sent.`);
   process.exit(result(5, { state: "unknown", tx: null, reason, next: "superstables budget status --rail solana, then run revoke again" }));
 }
 console.log(`Before: ${before ? `delegate=${before.delegate?.toBase58() ?? "none"} remaining=${formatUnits(before.delegatedAmount)} USDC` : "the owner has no USDC account (the chain says it does not exist)"}`);
-if (!before || !before.delegate) {
-  console.log(`${before ? "There is no delegate on the owner's USDC account" : "The owner has no USDC account"}: nothing to revoke. Nothing was sent.`);
-  process.exit(result(0, { state: "revoked", tx: null, remaining: "0", reason: before ? "no delegate is set; nothing to send" : "the owner has no USDC account; nothing to send", next: "none" }));
+if (!before) {
+  // No token account: there is no delegate to clear, and a Revoke would fail on chain, so nothing is sent. One endpoint's
+  // answer is not enough: the owner's endpoints must all read, at finalized commitment from one common slot on, that it does
+  // not exist. Otherwise whether a delegate is live is unknown.
+  const from = await recentFinalizedSlot(conn).catch(() => undefined);
+  const agreed = from === undefined ? undefined : await agreedAccount(ata.toBase58(), { atLeast: from, purpose: "owner" });
+  if (!agreed?.agreed || agreed.value !== null) {
+    const words = !agreed ? "the finalized slot could not be read" : agreed.agreed ? "the confirming RPC endpoints read it" : agreementWords(agreed);
+    const reason = `the owner's USDC account reads as absent on one RPC, but ${words}; whether a delegate is live is unknown`;
+    console.log(`UNKNOWN: ${reason}. Nothing was sent.`);
+    process.exit(result(5, { state: "unknown", tx: null, reason, next: "superstables budget status --rail solana, then revoke again" }));
+  }
+  console.log("The owner has no USDC account (the chain says it does not exist): there is no delegate to clear. Nothing was sent.");
+  process.exit(result(0, { state: "ok", evidence: "no_token_account", agreement: agreed.agreement, revoked: null, tx: null, remaining: "0", reason: "the owner has no USDC account on Solana devnet, so there is no delegate to clear; nothing was sent", next: "none" }));
 }
+if (!before.delegate) console.log("No delegate reads on the owner's USDC account; sending Revoke anyway: one read is not proof that no delegate is live.");
 const lamports = BigInt(await retryRead(() => conn.getBalance(owner, "confirmed")));
 if (lamports < MIN_FEE_LAMPORTS) refuse(`the owner holds ${sol(lamports)} SOL, too little for the network fee`, "get devnet SOL (faucet.solana.com), then revoke again");
 
@@ -83,7 +107,7 @@ if (OWNER_KEY_FILE) {
   // hosted: the site builds the Revoke when the owner is ready and sends what their wallet signed
   const hosted = approvalSite() !== null;
   const startSlot = hosted ? await retryRead(() => conn.getSlot("confirmed")) : 0;
-  const terms = revokeTerms({ owner: owner.toBase58(), agent: before.delegate.toBase58(), ata: ata.toBase58(), remaining: before.delegatedAmount });
+  const terms = revokeTerms({ owner: owner.toBase58(), agent: before.delegate?.toBase58() ?? null, ata: ata.toBase58(), remaining: before.delegatedAmount });
   const local = hosted ? null : transactionPort(conn, owner, ix);
   const { handle, outcome } = local
     ? await askSolanaTransaction("revoke", owner.toBase58(), local.port, terms)
@@ -104,7 +128,7 @@ if (OWNER_KEY_FILE) {
     const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
     handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. This transaction did not revoke the budget. Check superstables budget status --rail solana; run revoke again only if a delegate remains.`, hash: sig });
     await closeOwnerPage();
-    process.exit(result(1, { state: "not_revoked", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget status --rail solana; run revoke again only if a delegate remains" }));
+    process.exit(result(1, { state: "not_revoked", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${oneLine(JSON.stringify(c.err), 300)})`, next: "superstables budget status --rail solana; run revoke again only if a delegate remains" }));
   }
   if (c.problems.length) {
     // not the Revoke alone: the transaction did something else as well (or instead), so it is not reported as a revoke
@@ -129,7 +153,22 @@ if (after.delegate || after.delegatedAmount !== 0n) {
   await closeOwnerPage();
   process.exit(result(1, { state: "not_revoked", tx: sig, remaining: formatUnits(after.delegatedAmount), reason: "a delegate still reads on chain", next: "run revoke again" }));
 }
+// Final: the signature reaches finalized, and the owner's endpoints agree at finalized, from that slot on, that no delegate is left.
+const fin = await finalizedOf(conn, sig);
+let final = false;
+if (fin.final && !fin.failed) {
+  const ag = await agreedFinalAccount(ata.toBase58(), fin.slot);
+  final = ag.agreed && ag.value !== null && ag.value.delegate === null && ag.value.delegatedAmount === 0n;
+}
+// recorded: status reports this budget as revoked only while the chain still shows no delegate (readBudget.mjs)
+writePublic({ REVOKED_AT: String(Math.floor(Date.now() / 1000)), REVOKED_TX: sig, ...(fin.slot !== undefined ? { REVOKED_SLOT: String(fin.slot) } : {}) }, ["GRANT_TX", "GRANT_SLOT", ...(fin.slot === undefined ? ["REVOKED_SLOT"] : [])]);
+if (!final) {
+  console.log("The revoke is in a block and no delegate reads, but the transaction is not finalized yet. Until then, check superstables budget status before you rely on it.");
+  finish?.({ outcome: "confirmed", message: LANDED_SOLANA_REVOKE, hash: sig });
+  await closeOwnerPage();
+  process.exit(result(0, { state: "landed", final: false, revoked: false, tx: sig, ...(fin.slot !== undefined ? { slot: fin.slot } : {}), remaining: "0", next: "superstables budget status --rail solana later: the revoke is final when status says so" }));
+}
 console.log("This delegation is cleared. Transactions that still require it will fail. Previously transferred funds are not recovered.");
 finish?.({ outcome: "confirmed", message: "Confirmed. Your USDC account has no delegate. This does not recover tokens already transferred. You can close this page.", hash: sig });
 await closeOwnerPage();
-process.exit(result(0, { state: "revoked", tx: sig, remaining: "0", next: "none" }));
+process.exit(result(0, { state: "revoked", final: true, tx: sig, ...(fin.slot !== undefined ? { slot: fin.slot } : {}), remaining: "0", next: "none" }));

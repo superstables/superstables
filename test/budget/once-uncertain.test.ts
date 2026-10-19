@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ARC_MARKET, PAYER, SOLANA_MARKET, TEMPO_MARKET, startFakePurchaseSite, type FakePurchaseSite } from "../helpers/fake-purchase-site.js";
+import { ARC_MARKET, MARKET, PAYER, SOLANA_MARKET, TEMPO_MARKET, orderOf, startFakePurchaseSite, type FakePurchaseSite } from "../helpers/fake-purchase-site.js";
+import { keccak256, toBytes } from "viem";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
@@ -199,7 +200,7 @@ describe("buy once: an outcome that is not established is unknown, on every rail
     process.env.B4_RPC = rpc;
     let reads = 0;
     // the first read is uncertain (the read-on starts); the next is final and says paid, with a transaction to check
-    answer = () => (++reads === 1 ? ROWS[0].view(id, EVM_HASH, PAYER) : { id, state: "settled", final: true, payment: { status: "paid", transaction: EVM_HASH, payer: PAYER, authorization: { nonce: `0x${"9a".repeat(32)}` } }, delivery: { status: "delivered", http_status: 200, result: { ok: true } } });
+    answer = () => (++reads === 1 ? ROWS[0].view(id, EVM_HASH, PAYER) : { id, state: "settled", final: true, payment: { status: "paid", transaction: EVM_HASH, payer: PAYER, authorization: { nonce: keccak256(toBytes(orderOf({ id, service: MARKET }))), order: orderOf({ id, service: MARKET }) } }, delivery: { status: "delivered", http_status: 200, result: { ok: true } } });
     try {
       const grace = 2_000;
       const t = Date.now();

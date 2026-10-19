@@ -7,12 +7,20 @@
 //   public file         public addresses only. Read commands (readBudget, reconcile) and owner commands use it.
 //   an owner key file   tests and automation only, named with --owner-key-file <path> (mode 600):
 //                       SOLANA_OWNER_SECRET_BASE58. The default path ownerKeyFile("solana") is never read.
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
+import { HOME, ensurePrivateDir, ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
+import { readAgentSecret } from "../os-keychain.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret-file.mjs";
-import { DEFAULT_RPC, rpcFromEnv } from "../rpc.mjs";
+import { DEFAULT_RPC, SOLANA_RPC_MAX_BYTES, budgetCall, cappedRpcFetch, jsonRpc, rpcFromEnv } from "../rpc.mjs";
 import { markSend } from "../proof.mjs";
+import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
+import { noteBinding } from "../page-facts.mjs";
+import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
+import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
+import { endpointSet } from "../../src/core/rpc-endpoints.mjs";
+import { agreeAtFinalSolana, agreementWords, checkIdentity } from "../../src/core/rpc-quorum.mjs";
+import { TOKEN_PROGRAM_ID, decodeTokenAccount } from "./token.mjs";
 import {
   Connection,
   Keypair,
@@ -24,44 +32,160 @@ import bs58 from "bs58";
 // if any) without a full stack trace, then exit non-zero. This is what
 // callers of these scripts should see for a refused payment or an
 // unfunded fee payer, not a raw JS crash.
-process.on("unhandledRejection", async (err) => {
-  console.error("\nFailed:", err?.message ?? err);
+// A failed top-level await in an ES module raises uncaughtException (as do synchronous throws and unhandled rejections).
+// The owner page's handler (owner-page.ts), once installed, prints and exits itself.
+// Every rail's crash handler carries this mark (the EVM library's too). A handler steps aside for any listener that is not
+// marked (the owner page's) and, when several marked ones are loaded in one process, for all but the first.
+const RAIL_CRASH_HANDLER = Symbol.for("superstables.railCrashHandler");
+// A program log is a program's words, never a line of the client's: each entry follows fixed client text, so one that starts
+// with RESULT or APPROVE cannot stand at the start of a line.
+const logLine = (l) => `RPC log: ${oneLine(l, 500)}`;
+const crashHandler = async (err) => {
+  const listeners = process.listeners("uncaughtException");
+  if (listeners.some((l) => !l[RAIL_CRASH_HANDLER]) || listeners.find((l) => l[RAIL_CRASH_HANDLER]) !== crashHandler) return;
+  // the RPC's words and a program's logs are outside text: one line each, no hidden characters (oneLine, below)
+  console.error("\nFailed:", oneLine(err?.message ?? err, 1000));
   if (typeof err?.getLogs === "function") {
     try {
       const logs = await err.getLogs();
-      if (logs?.length) console.error("Logs:\n" + logs.join("\n"));
+      if (logs?.length) console.error("Logs:\n" + logs.map(logLine).join("\n"));
     } catch {
       // ignore, we already printed the message
     }
   } else if (err?.logs?.length) {
-    console.error("Logs:\n" + err.logs.join("\n"));
+    console.error("Logs:\n" + err.logs.map(logLine).join("\n"));
   }
   process.exit(1);
-});
+};
+crashHandler[RAIL_CRASH_HANDLER] = true;
+process.on("uncaughtException", crashHandler);
 
-// SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL (tests point it at a local fake; you can point it at your own node).
+/** Solana devnet is a testnet. The chain gate (../../src/core/chain-gate.js) signs on nothing else in this build. */
+export const TESTNET = true;
+// SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL for reads (tests point it at a local fake; you can point it at your own node).
 // https, or http on this computer only (../rpc.mjs): anything else is ignored here with a warning, and the dispatcher refuses
-// the command before it runs a script.
-export const RPC_URL = (() => {
-  const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana);
+// the command before it runs a script. Owner commands and the verdicts that let an agent pay again do not take the replacement
+// on its word: they use the endpoints the owner set (src/core/rpc-endpoints.mjs), and a replacement that is not one of them is
+// refused there (an owner command exits 3; a verdict stays unknown, with that reason).
+const envRpc = (() => {
+  const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana, "read", "solana-devnet");
   if (r.error) process.stderr.write(`warning: ${r.error}; using ${DEFAULT_RPC.solana}\n`);
-  return r.url;
+  // custom is also true for the owner's own URL (source "settings"): that one is not the variable
+  return r.custom && r.source !== "settings" ? r.url : undefined;
 })();
+/** The endpoints for a purpose: "read" (balances, searches, the primary), "verdict" (what lets an agent pay again) or "owner" (what an owner command reads and sends through). */
+export function solanaSet(purpose = "read") {
+  return endpointSet("solana-devnet", purpose, { envUrl: envRpc, envName: "SUPERSTABLES_SOLANA_RPC", testnet: TESTNET });
+}
+/** The URL a connection for `purpose` talks to. Throws (in words) when the owner settings cannot be read. */
+export function rpcUrl(purpose = "read") {
+  const set = solanaSet(purpose === "owner" ? "owner" : "read");
+  if ("error" in set) throw new Error(set.error);
+  return set.primary.url;
+}
+export const RPC_URL = (() => { try { return rpcUrl("read"); } catch { return DEFAULT_RPC.solana; } })();
 export const EXPLORER_CLUSTER = "?cluster=devnet";
 export const USDC_MINT = new PublicKey(
   "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 );
 export const USDC_DECIMALS = 6;
+/** The chain gate for this rail's one chain: "" when this build may sign, ask the owner's wallet or send on it, else why not. */
+const solanaGate = () => chainGate({ rail: "solana", key: "solana-devnet", testnet: TESTNET, token: { symbol: "USDC", address: USDC_MINT.toBase58(), decimals: USDC_DECIMALS } }, chainGateSettings());
+// No Solana budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a
+// key file or asks an RPC anything.
+if (solanaGate()) {
+  const command = String(process.argv[1] ?? "").split(/[\\/]/).pop().replace(/\.(?:ts|mjs)$/, "") || "solana";
+  console.error(`REFUSED: ${solanaGate()}. Nothing was signed or sent.`);
+  console.log(`RESULT ${JSON.stringify({ ok: false, command, rail: "solana", chain: "devnet", state: "refused_precheck", reason: solanaGate(), next: "nothing was signed or sent; this build signs on Solana devnet only" })}`);
+  process.exit(3);
+}
 
 export const OWNER_KEY_PATH = ownerKeyFile("solana");
 export const AGENT_KEY_PATH = agentKeyFile("solana");
 export const PUBLIC_PATH = publicFile("solana", "devnet");
 export const OPS_DIR = opsDir("solana", "devnet");
 
-export function connection() {
-  // a broadcast prints SENDING before it leaves (../proof.mjs)
-  return new Connection(RPC_URL, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (url, init) => { markSend(init?.body); return fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }); } });
+const rpcFetch = cappedRpcFetch(SOLANA_RPC_MAX_BYTES);
+/** A connection to `url`: a broadcast prints SENDING before it leaves (../proof.mjs); every answer is read through cappedRpcFetch (../rpc.mjs). */
+export function connectionTo(url) {
+  return new Connection(url, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (u, init) => { markSend(init?.body); return rpcFetch(u, { ...init, signal: AbortSignal.timeout(10_000) }); } });
 }
+/** The connection for reads (the default) or for an owner command, which reads and sends through the owner's endpoints. */
+export function connection(purpose = "read") {
+  return connectionTo(rpcUrl(purpose));
+}
+
+/** The RPC's host, for words: a replacement's path or query can carry an access key, so never the whole URL. */
+export const RPC_HOST = (() => { try { return new URL(RPC_URL).host; } catch { return "the Solana RPC"; } })();
+const hostOf = (url) => { try { return new URL(url).host; } catch { return "the Solana RPC"; } };
+/** What to do when the RPC is on another cluster. */
+export const CLUSTER_NEXT = "unset SUPERSTABLES_SOLANA_RPC, or set it to a Solana devnet RPC, then run the command again";
+/**
+ * Why `conn` must not be used for a budget transaction, in words, or "" when its RPC answers Solana devnet's genesis
+ * hash. Asked before a blockhash is fetched, a transaction is offered to a wallet, signed or sent, and before a read
+ * that decides one: a SOL transfer names no cluster, so one built on another cluster's blockhash moves SOL there. A
+ * genesis that cannot be read is a reason too.
+ */
+export async function clusterProblem(conn) {
+  const gate = solanaGate();
+  if (gate) return gate;
+  const host = conn?.rpcEndpoint ? hostOf(conn.rpcEndpoint) : RPC_HOST;
+  let genesis;
+  try {
+    genesis = await retryRead(() => conn.getGenesisHash());
+  } catch (err) {
+    return `could not read which Solana cluster ${host} is on (${oneLine(err?.message ?? err, 160)})`;
+  }
+  if (genesis === SOLANA_DEVNET_GENESIS) return "";
+  return `the Solana RPC ${host} is not on Solana devnet (its genesis hash is ${oneLine(genesis, 60)})`;
+}
+
+/** A JSON-RPC call to `url` for the agreement engine: plain data in and out, with a timeout. */
+export const rpcCall = (url, method, params) => budgetCall(url, method, params, 10_000);
+
+/** The confirming endpoints for `purpose` ("read" or "owner"): the engine's verdict set, with the genesis of each checked before it is read. */
+export function solanaVerdictSet(purpose = "read") {
+  return solanaSet(purpose === "owner" ? "owner" : "verdict");
+}
+
+/** A finalized slot a little behind the primary's, for a verdict of absence that has no recorded slot of its own. */
+export async function recentFinalizedSlot(conn, behind = 32) {
+  const slot = await retryRead(() => conn.getSlot("finalized"));
+  return BigInt(Math.max(0, slot - behind));
+}
+
+/**
+ * The owner's token account read from every confirming endpoint at `finalized`, from one common slot on. Resolves to the
+ * engine's answer: { agreed: true, value, slot, agreement } where value is null (the chain says the account does not exist) or
+ * { owner, delegate, delegatedAmount, amount } as strings and bigints, else { agreed: false, why, reason }.
+ * A verdict of absence (no account, no delegate) must pass `atLeast`: the slot from which it has to hold.
+ * @param {string} address the token account
+ * @param {{ minSlot?: bigint, atLeast?: bigint, purpose?: "read"|"owner" }} [o]
+ */
+export function agreedAccount(address, { minSlot, atLeast, purpose = "read" } = {}) {
+  return agreeAtFinalSolana({
+    set: solanaVerdictSet(purpose),
+    call: rpcCall,
+    genesis: SOLANA_DEVNET_GENESIS,
+    minSlot,
+    atLeast,
+    read: async (url, slot) => {
+      const got = await jsonRpc(url, "getAccountInfo", [address, { commitment: "finalized", minContextSlot: Number(slot), encoding: "base64" }], 10_000);
+      const at = got?.context?.slot;
+      if (!Number.isSafeInteger(at)) throw new Error("no context slot");
+      if (got.value === null) return { slot: at, value: null };
+      const info = got.value;
+      const data = Array.isArray(info?.data) && info.data[1] === "base64" && typeof info.data[0] === "string" ? Buffer.from(info.data[0], "base64") : null;
+      if (info.owner !== TOKEN_PROGRAM_ID.toBase58() || !data || data.length < 165) throw new Error("not a token account");
+      const acc = decodeTokenAccount(data);
+      return { slot: at, value: { owner: acc.owner.toBase58(), delegate: acc.delegate ? acc.delegate.toBase58() : null, delegatedAmount: acc.delegatedAmount, amount: acc.amount } };
+    },
+  });
+}
+
+/** How an agreement is said in a line: the label when agreed, else the reason in words. */
+export const agreementLine = (a) => (a.agreed ? a.agreement : agreementWords(a));
+export { checkIdentity };
 
 // Exact decimal parse. Throws on anything that is not a plain non-negative
 // decimal or that has more than `decimals` fractional digits (no rounding).
@@ -127,6 +251,27 @@ export function parseSecretEnvFile(path, what) {
 }
 
 /**
+ * The agent key file's values, with the key put in when the file names the OS keychain instead of holding it (setup
+ * --key-store os-keychain): then SOLANA_AGENT_SECRET_BASE58 is what the keychain returns. Refuses (UNSAFE_SECRET_FILE) a file that
+ * names the keychain and also holds a key, an unknown store, or an entry that is missing.
+ */
+function agentFileEnv(path, what) {
+  const env = parseSecretEnvFile(path, what);
+  const store = env.SOLANA_AGENT_KEY_STORE;
+  if (store === undefined) return env;
+  const refuse = (message) => Object.assign(new Error(message), { code: UNSAFE_SECRET_FILE });
+  if (store !== "os-keychain") throw refuse(`${what} ${path} names an unknown key store "${String(store).slice(0, 40)}"`);
+  if (env.SOLANA_AGENT_SECRET_BASE58) throw refuse(`${what} ${path} names the keychain and also holds a key`);
+  if (!env.SOLANA_AGENT_ADDRESS) throw refuse(`${what} ${path} names the keychain but no agent address`);
+  try {
+    env.SOLANA_AGENT_SECRET_BASE58 = readAgentSecret("solana", env.SOLANA_AGENT_ADDRESS);
+  } catch (err) {
+    throw refuse(`${err.message} (${what} ${path} says it is there)`);
+  }
+  return env;
+}
+
+/**
  * The agent key file's values for a command that must refuse cleanly rather than throw: `{ env }` ({} when there is no
  * file), or `{ problem }` when the file must not be used (readable by other users, not a regular file). Read once, and
  * checked on the file actually read, so ask again after any wait instead of keeping an earlier answer.
@@ -134,7 +279,7 @@ export function parseSecretEnvFile(path, what) {
  */
 export function agentKeyFileValues() {
   try {
-    return { env: parseSecretEnvFile(AGENT_KEY_PATH, "the agent key file") };
+    return { env: agentFileEnv(AGENT_KEY_PATH, "the agent key file") };
   } catch (err) {
     if (err && err.code === "ENOENT") return { env: {} };
     if (err && err.code === UNSAFE_SECRET_FILE) return { problem: err.message };
@@ -142,12 +287,12 @@ export function agentKeyFileValues() {
   }
 }
 
-function loadKeypair(path, secretName, addressName, what) {
+function loadKeypair(path, secretName, addressName, what, read = parseSecretEnvFile) {
   requireFile(path, what);
   // Mode 600 is set when the file is written, but a restore, a `cp` without -p or an editor can leave it
   // readable by other users, and every purchase from here on would then be signed with a key this machine
   // no longer keeps to itself. Refuse rather than quietly re-tighten; the check is on the file actually read.
-  const env = parseSecretEnvFile(path, what);
+  const env = read(path, what);
   const secret = env[secretName];
   if (!secret) throw new Error(`${secretName} missing from ${path}`);
   const keypair = Keypair.fromSecretKey(bs58.decode(secret));
@@ -167,7 +312,7 @@ export function loadOwner(path) {
 
 // Agent commands only. Opens solana-agent.env, never the owner file.
 export function loadAgent() {
-  const { keypair, env } = loadKeypair(AGENT_KEY_PATH, "SOLANA_AGENT_SECRET_BASE58", "SOLANA_AGENT_ADDRESS", "Agent key file");
+  const { keypair, env } = loadKeypair(AGENT_KEY_PATH, "SOLANA_AGENT_SECRET_BASE58", "SOLANA_AGENT_ADDRESS", "Agent key file", agentFileEnv);
   return { keypair, owner: pk(env, "SOLANA_OWNER_ADDRESS") };
 }
 
@@ -186,7 +331,7 @@ export function writePublic(pairs, drop = []) {
   const env = existsSync(PUBLIC_PATH) ? parseEnvFile(PUBLIC_PATH) : {};
   Object.assign(env, pairs);
   for (const k of drop) delete env[k];
-  mkdirSync(dirname(PUBLIC_PATH), { recursive: true, mode: 0o700 });
+  ensurePrivateDir(dirname(PUBLIC_PATH), { root: HOME });
   const body =
     "# Solana devnet public addresses only. Read commands use this file. No secrets.\n" +
     Object.entries(env).map(([k, v]) => `${k}=${v}\n`).join("");
@@ -208,11 +353,12 @@ export function replaceKeyFile(path, text) {
   replaceSecretFile(path, text);
 }
 
-// Seller text (its 402, its answer, its headers, its errors) on one log line: control characters, newlines included, and
-// the Unicode line separators become spaces. A seller must not be able to start a line of its own on stdout, where the
-// dispatcher reads APPROVE and RESULT lines. The same rule as evm's oneLine.
+// Seller text (its 402, its answer, its headers, its errors) on one log line, at most `max` characters: control characters,
+// newlines included, become spaces; format, bidi and Unicode tag characters are removed. A seller must not be able to start a
+// line of its own on stdout, where the dispatcher reads APPROVE and RESULT lines. The same rule as untrustedText
+// (src/core/text.ts).
 export function oneLine(s, max = 300) {
-  return String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim().slice(0, max);
+  return String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, "").trim().slice(0, max);
 }
 
 // ---------------------------------------------------------------------------
@@ -300,4 +446,33 @@ export async function retryRead(fn, tries = 6) {
       delay *= 1.7;
     }
   }
+}
+
+/**
+ * The owner and agent of an owner plan (grant, fund-agent), as PublicKeys. Before it returns, the owner's setup signature in the
+ * public file must name this agent address for the owner on record, the address must be the agent key on this machine when that
+ * key file is here, and it must not be retired (../owner-binding.mjs). Otherwise `refuse(reason, next)` ends the command (exit 3)
+ * before any page or send. A public file from before the signature was kept goes on, with one warning line on stderr.
+ */
+export async function ownerPlanCtx(refuse) {
+  const env = existsSync(PUBLIC_PATH) ? parseEnvFile(PUBLIC_PATH) : {};
+  const owner = pk(env, "SOLANA_OWNER_ADDRESS");
+  const agent = pk(env, "SOLANA_AGENT_ADDRESS");
+  if (!owner || !agent) return refuse("the public file names no owner or no agent", "superstables budget setup --rail solana");
+  const next = `check the public file: run superstables budget setup --rail solana${hostedFlags(env)} where the agent key is, to record the owner's signature again. The owner can still end the delegation from any machine: superstables budget revoke --rail solana`;
+  let keyAgent = null;
+  if (existsSync(AGENT_KEY_PATH)) {
+    const file = agentKeyFileValues();
+    if (file.problem !== undefined) return refuse(file.problem, next);
+    try {
+      keyAgent = Keypair.fromSecretKey(bs58.decode(file.env.SOLANA_AGENT_SECRET_BASE58 ?? "")).publicKey.toBase58();
+    } catch {
+      return refuse(`${AGENT_KEY_PATH} has no usable SOLANA_AGENT_SECRET_BASE58`, next);
+    }
+  }
+  const b = await agentBinding("solana", { owner: owner.toBase58(), agent: agent.toBase58(), lines: env }, { keyAgent, file: PUBLIC_PATH, testnet: TESTNET === true });
+  if (b.state === "refused") return refuse(b.problem, next);
+  noteBinding(b); // the page this plan opens says whether the owner signed this agent
+  if (b.state === "legacy") console.error(legacyWarning("solana", PUBLIC_PATH, agent.toBase58(), hostedFlags(env)));
+  return { owner, agent };
 }

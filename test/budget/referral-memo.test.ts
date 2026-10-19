@@ -16,6 +16,7 @@ import { keccak256, toBytes, toHex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempoClientId } from "../../src/core/referral-memo.mjs";
+import { endpointTree } from "../helpers/endpoint-tree.js";
 import { PATH_USD, startFakeTempo } from "../helpers/fake-chains.js";
 import { referralKey, signReferral } from "../helpers/referrals.js";
 
@@ -77,6 +78,7 @@ async function devnet(owner: PublicKey, agent: PublicKey, landed: { sig: string;
         if (params[0] === MINT) return ctx(info(mint));
         if (params[0] === ataOf(owner).toBase58()) return ctx(info(account(owner, agent)));
         return ctx(null);
+      case "getGenesisHash": return "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
       case "getLatestBlockhash": return ctx({ blockhash: bs58.encode(Buffer.alloc(32, 9)), lastValidBlockHeight: 5150 });
       case "getSignatureStatuses": return ctx(params[0].map((s: string) => (s === landed.sig ? { slot: 5001, confirmations: null, err: null, confirmationStatus: "finalized" } : null)));
       case "getTransaction":
@@ -276,8 +278,16 @@ async function moderato(owner: string, agent: string): Promise<{ url: string; ra
     const out = Array.isArray(call) ? await Promise.all(call.map(answer)) : await answer(call);
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(out));
   });
+  // The endpoints that confirm a verdict that lets the agent pay again come from the client's table, so the buy runs from a
+  // copy whose table names this RPC.
+  const tree = endpointTree();
+  tree.set({ "tempo-moderato": [url] });
+  servers.push({ close: (done: () => void) => { tree.close(); done(); } } as unknown as Server);
+  treeOf.set(url, tree.root);
   return { url, raw, chain };
 }
+
+const treeOf = new Map<string, string>();
 
 /** An MPP seller of one tempo.charge in `mode`, keeping every request's headers and every credential's payload. */
 async function mppSeller(mode: "pull" | "push", onPaid: () => void = () => {}): Promise<{ url: string; unpaid: IncomingHttpHeaders[]; paid: { headers: IncomingHttpHeaders; payload: { type: string; signature?: string; hash?: string } }[] }> {
@@ -309,7 +319,7 @@ function tempoHome(owner: string): { dir: string; agent: string } {
 
 function tempoBuy(dir: string, rpc: string, url: string, op: string): Promise<{ result: Record<string, any>; out: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", "buy.ts", "--url", url, "--max", "0.01", "--op", op], { cwd: join(REPO, "budget", "tempo"), env: { ...process.env, SUPERSTABLES_HOME: dir, SUPERSTABLES_TEMPO_RPC: rpc } });
+    const child = spawn(process.execPath, ["--import", "tsx", "buy.ts", "--url", url, "--max", "0.01", "--op", op], { cwd: join(treeOf.get(rpc)!, "budget", "tempo"), env: { ...process.env, SUPERSTABLES_HOME: dir, SUPERSTABLES_TEMPO_RPC: rpc } });
     let out = "";
     child.stdout.on("data", (c) => (out += c));
     child.stderr.on("data", (c) => (out += c));
@@ -344,7 +354,7 @@ describe("a referred Tempo budget buy", () => {
       // The transaction mppx signed carries that memo: in the credential (pull), or as broadcast (push).
       const signed = mode === "pull" ? s.paid[0]!.payload.signature! : chain.raw[0]!;
       expect(memoIn(signed)).toBe(journaled.memo);
-      expect(r.result.state).toBe(mode === "pull" ? "not_found" : "settled");
+      expect(r.result.state, r.out).toBe(mode === "pull" ? "not_found" : "settled");
       expect(s.paid).toHaveLength(1);
       expect(s.paid[0]!.headers["superstables-referral"]).toBe(token);
       expect(s.paid[0]!.headers["superstables-purchase-ref"]).toBe(`tempo-${mode}`);

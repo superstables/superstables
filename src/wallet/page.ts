@@ -5,9 +5,9 @@
 //
 // The owner secret never reaches the server as part of a URL. It arrives in the location
 // fragment (http://127.0.0.1:4411/#<secret>, from the launcher file the wallet writes), which
-// browsers do not send, or the owner pastes it into the page. The page keeps it in this tab's
-// sessionStorage, takes it out of the address bar and history, and puts it in an
-// Authorization header itself.
+// browsers do not send, or the owner pastes it into the page. The page keeps it in the script's
+// memory only, never in storage; a reload asks for it again. It takes it out of the address bar and history, and puts
+// it in an Authorization header itself.
 //
 // Two rules the markup follows everywhere: every value that came from outside is escaped
 // before it is inserted, and anything the agent said about the payment is shown in its own
@@ -20,9 +20,19 @@ import { WALLET_STATUS_LABELS } from "../core/status-labels.js";
 
 const WALLET_STYLE = `
   h2.section { font-family: var(--mono); font-size: 11.5px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2); margin: 40px 0 0; }
+  #pending-empty[hidden] { display: none; }
+  .policy { margin-top: 20px; font-size: 14.5px; color: var(--ink-2); overflow-wrap: anywhere; }
+  .note code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; white-space: nowrap; }
+  .policy .mono { font-size: 13px; }
   #pending .card:first-child { margin-top: 14px; }
+  .card.ended { opacity: 0.55; }
+  .ended-label { margin: 22px 0 0; font-family: var(--mono); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); }
+  .confirm { margin: 24px 0 0; font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+  .confirm .mono { font-size: 14px; }
+  .raw { margin: 10px 0 0; font-size: 14px; color: var(--ink-2); }
+  .raw .mono { font-size: 13px; }
   #pending .card + .card { margin-top: 16px; }
-  #pending > .empty, #history > .empty { margin-top: 12px; }
+  #pending-empty, #history > .empty { margin-top: 12px; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 12px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; }
   th { font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
   td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
@@ -33,35 +43,52 @@ const WALLET_STYLE = `
   #unlock[hidden] { display: none; }
   #unlock label { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); }
   #unlock input { flex: 1; min-width: 16em; font-family: var(--mono); font-size: 13px; padding: 9px 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg-2); color: var(--ink); }
+  #settings-card { margin-top: 20px; }
+  #settings-card .rows .mono { font-size: 13px; }
+  #settings-card .actions { margin-top: 16px; }
   .status-signed { color: var(--good); }
   .status-denied, .status-rejected, .status-expired { color: var(--bad); }
 `;
 
-/** The page's own script. The owner secret comes from the location fragment or the owner's paste, never from the server. */
+/**
+ * The page's own script. The owner secret comes from the location fragment or the owner's paste, never from the
+ * server, and it is kept in this script's memory only: not in storage, not in the address bar.
+ */
 export const WALLET_PAGE_SCRIPT = `
 (function () {
-  var KEY = "superstables-owner-secret";
-  function remember(value) { try { sessionStorage.setItem(KEY, value); } catch (e) { /* storage off: this load only */ } }
-  function forget() { try { sessionStorage.removeItem(KEY); } catch (e) { /* nothing stored */ } }
-  // A secret in the fragment is kept for this tab and taken out of the address bar and the history.
+  // A secret in the fragment is taken out of the address bar and the history at once. It is not stored anywhere: a
+  // reload asks for it again.
   function fromFragment() {
     var value = location.hash.replace(/^#/, "");
     if (!value) return "";
-    remember(value);
     history.replaceState(null, "", location.pathname + location.search);
     return value;
   }
   var secret = fromFragment();
-  if (!secret) {
-    try { secret = sessionStorage.getItem(KEY) || ""; } catch (e) { secret = ""; }
-  }
   var unlock = document.getElementById("unlock");
   var secretInput = document.getElementById("secret-input");
   var notice = document.getElementById("notice");
+  var policyEl = document.getElementById("policy");
   var pendingEl = document.getElementById("pending");
+  var emptyEl = document.getElementById("pending-empty");
   var historyEl = document.getElementById("history");
   var labels = JSON.parse(document.getElementById("status-labels").textContent);
   var busy = {};
+  // id -> { el, expiry, actions, data, confirming, request, ended }; a request keeps its card for as long as it is listed
+  var cards = {};
+  // set while a refusal from the wallet is on show, so the refresh that follows does not wipe it
+  var decisionNote = false;
+  var lastHistory = "";
+  var policyAt = 0;
+  var settingsEl = document.getElementById("settings-card");
+  var settingsBody = document.getElementById("settings-body");
+  var settingsActions = document.getElementById("settings-actions");
+  // what the card showed, which a confirmation sends back
+  var settingsShown = null;
+  var settingsConfirming = false;
+  var settingsView = null;
+  var settingsGen = 0;
+  var settingsAt = 0;
 
   function esc(value) {
     return String(value === undefined || value === null ? "" : value)
@@ -75,11 +102,18 @@ export const WALLET_PAGE_SCRIPT = `
     notice.textContent = message;
   }
 
+  // fixed markup only (never the owner's or a request's text): the command shown as one unbreakable unit
+  function sayLocked() {
+    notice.hidden = false;
+    notice.className = "note";
+    notice.innerHTML = "This page does not keep the owner secret. Open it with <code>superstables --wallet local wallet open</code> or with the launcher file the wallet printed, or paste the secret from the wallet's owner-secret file.";
+  }
+
   function clear() { notice.hidden = true; }
 
   function ask(path, options) {
     var init = options || {};
-    init.headers = { "Authorization": "Bearer " + secret };
+    init.headers = Object.assign({ "Authorization": "Bearer " + secret }, init.headers || {});
     init.cache = "no-store";
     return fetch(path, init);
   }
@@ -105,23 +139,133 @@ export const WALLET_PAGE_SCRIPT = `
     return '<div class="reported"><strong>Reported by the agent (not verified)</strong>' + rows.join("") + "</div>";
   }
 
-  function card(request) {
+  function lifetime(total) {
+    if (!(total > 0)) return "";
+    return total < 120 ? total + " seconds" : Math.round(total / 60) + " minutes";
+  }
+
+  function actionsHtml(entry) {
+    var id = esc(entry.request.id);
+    var disabled = busy[entry.request.id] ? " disabled" : "";
+    if (entry.confirming) {
+      // the sentence is built from what a confirmation posts, so what is shown is what is sent
+      var shown = entry.shown;
+      var sent = entry.data;
+      var valid = lifetime(entry.request.validForSeconds);
+      return '<p class="confirm">Sign ' + esc(shown.amountDecimal) + " " + esc(shown.asset) +
+          ' to <span class="mono">' + esc(sent.recipient) + "</span> on " + esc(shown.networkLabel || sent.network) + "?</p>" +
+        '<p class="raw">The authorization\\'s value is <span class="mono">' + esc(sent.amountAtomic) + "</span> in the token's smallest unit." +
+          (valid ? " Once signed, it can be used for " + esc(valid) + "." : "") + "</p>" +
+        '<div class="actions">' +
+          '<button class="primary" data-act="confirm" data-id="' + id + '"' + disabled + ">Yes, sign</button>" +
+          '<button data-act="back" data-id="' + id + '"' + disabled + ">Back</button>" +
+        "</div>";
+    }
+    return '<div class="actions">' +
+      '<button class="primary" data-act="approve" data-id="' + id + '"' + disabled + ">Approve and sign</button>" +
+      '<button data-act="deny" data-id="' + id + '"' + disabled + ">Reject</button>" +
+    "</div>";
+  }
+
+  function makeCard(request) {
     var terms = request.verified || {};
-    var disabled = busy[request.id] ? " disabled" : "";
-    return '<div class="card">' +
-      '<div class="amount">' + esc(terms.amountDecimal) + "<span>" + esc(terms.asset) + "</span></div>" +
-      '<dl class="rows">' +
-        "<dt>Network</dt><dd>" + networkCell(terms) + "</dd>" +
+    var el = document.createElement("div");
+    el.className = "card";
+    var top = document.createElement("div");
+    top.innerHTML = '<div class="amount">' + esc(terms.amountDecimal) + "<span>" + esc(terms.asset) + "</span></div>";
+    el.appendChild(top);
+    var rows = document.createElement("dl");
+    rows.className = "rows";
+    rows.innerHTML = "<dt>Network</dt><dd>" + networkCell(terms) + "</dd>" +
         "<dt>To</dt><dd class=\\"mono\\">" + esc(terms.recipient) + "</dd>" +
         "<dt>Paying from</dt><dd class=\\"mono\\">" + esc(terms.payer) + "</dd>" +
-        "<dt>Expires in</dt><dd>" + seconds(request) + " s</dd>" +
-      "</dl>" +
-      reportedBlock(request.reported) +
-      '<div class="actions">' +
-        '<button class="primary" data-act="approve" data-id="' + esc(request.id) + '"' + disabled + ">Approve and sign</button>" +
-        '<button data-act="deny" data-id="' + esc(request.id) + '"' + disabled + ">Reject</button>" +
-      "</div>" +
-    "</div>";
+        "<dt>Value</dt><dd class=\\"mono\\">" + esc(terms.amountAtomic) + " = " + esc(terms.amountDecimal) + " " + esc(terms.asset) + "</dd>";
+    el.appendChild(rows);
+    // the last row; its text is updated where it stands, and both nodes are hidden when the request ends
+    var expiryLabel = document.createElement("dt");
+    expiryLabel.textContent = "Expires in";
+    var expiry = document.createElement("dd");
+    rows.appendChild(expiryLabel);
+    rows.appendChild(expiry);
+    var reported = document.createElement("div");
+    reported.innerHTML = reportedBlock(request.reported);
+    el.appendChild(reported);
+    var actions = document.createElement("div");
+    actions.className = "choice";
+    el.appendChild(actions);
+    var entry = {
+      el: el, expiry: expiry, expiryLabel: expiryLabel, actions: actions, request: request, confirming: false, ended: false,
+      // what the owner is shown now is what a confirmation sends back
+      data: { amountAtomic: String(terms.amountAtomic), recipient: String(terms.recipient), network: String(terms.network) },
+      // the display-only parts of the confirmation, fixed at the same moment as the data
+      shown: { amountDecimal: terms.amountDecimal, asset: terms.asset, networkLabel: terms.networkLabel }
+    };
+    return entry;
+  }
+
+  function paint(entry) {
+    entry.expiry.textContent = seconds(entry.request) + " s";
+    entry.actions.innerHTML = actionsHtml(entry);
+  }
+
+  function end(entry, request) {
+    entry.ended = true;
+    entry.confirming = false;
+    entry.el.className = "card ended";
+    entry.expiryLabel.hidden = true;
+    entry.expiry.hidden = true;
+    entry.actions.innerHTML = '<p class="ended-label status-' + esc(request.status) + '">' +
+      esc(request ? (labels[request.status] || request.status) : "No longer waiting") + "</p>";
+  }
+
+  function anyConfirming() {
+    return Object.keys(cards).some(function (id) { return cards[id].confirming; });
+  }
+
+  // Cards are kept by request id and updated where they stand. A request that ends stays in its place, greyed, while
+  // the pointer is on the list or a confirmation is open, so nothing the owner is about to click moves.
+  function render(requests) {
+    var byId = {};
+    requests.forEach(function (r) { byId[r.id] = r; });
+    var pending = requests.filter(function (r) { return r.status === "pending"; });
+    var rest = requests.filter(function (r) { return r.status !== "pending"; });
+    pending.sort(function (a, b) { return a.createdAt - b.createdAt; });
+    rest.sort(function (a, b) { return b.createdAt - a.createdAt; });
+
+    pending.forEach(function (request) {
+      var entry = cards[request.id];
+      if (!entry) {
+        entry = makeCard(request);
+        cards[request.id] = entry;
+        pendingEl.appendChild(entry.el);
+        entry.request = request;
+        paint(entry);
+        return;
+      }
+      entry.request = request;
+      entry.expiry.textContent = seconds(request) + " s";
+    });
+
+    Object.keys(cards).forEach(function (id) {
+      var entry = cards[id];
+      if (entry.ended || (byId[id] && byId[id].status === "pending")) return;
+      end(entry, byId[id] || { status: "expired" });
+    });
+
+    if (!pendingEl.matches(":hover") && !anyConfirming()) {
+      Object.keys(cards).forEach(function (id) {
+        if (!cards[id].ended) return;
+        pendingEl.removeChild(cards[id].el);
+        delete cards[id];
+      });
+    }
+    emptyEl.hidden = Object.keys(cards).length > 0;
+
+    var html = rest.length ? historyTable(rest) : '<p class="empty">Nothing yet.</p>';
+    if (html !== lastHistory) {
+      lastHistory = html;
+      historyEl.innerHTML = html;
+    }
   }
 
   function historyTable(requests) {
@@ -139,15 +283,99 @@ export const WALLET_PAGE_SCRIPT = `
     return "<table><thead><tr><th>Time</th><th>Status</th><th>Amount</th><th>Recipient</th><th>Reason</th></tr></thead><tbody>" + rows + "</tbody></table>";
   }
 
-  function render(requests) {
-    var pending = requests.filter(function (r) { return r.status === "pending"; });
-    var rest = requests.filter(function (r) { return r.status !== "pending"; });
-    pending.sort(function (a, b) { return a.createdAt - b.createdAt; });
-    rest.sort(function (a, b) { return b.createdAt - a.createdAt; });
-    pendingEl.innerHTML = pending.length
-      ? pending.map(card).join("")
-      : '<p class="empty">No payment is waiting for approval.</p>';
-    historyEl.innerHTML = rest.length ? historyTable(rest) : '<p class="empty">Nothing yet.</p>';
+  function caps(p) {
+    if (p.killSwitch) return "kill switch on, every payment is refused";
+    var parts = [];
+    if (p.perCall) parts.push(p.perCall + " a payment");
+    if (p.perDay) parts.push(p.perDay + " a day");
+    if (p.allow && p.allow.length) parts.push("only " + p.allow.join(", "));
+    if (p.deny && p.deny.length) parts.push("never " + p.deny.join(", "));
+    return parts.join(", ") || "no caps set";
+  }
+
+  function showPolicy(status) {
+    if (status.policyProblem) {
+      // the file exists and cannot be used: say only that, the caps below would be false
+      policyEl.innerHTML = "Nothing is signed: " + esc(status.policyProblem);
+      policyEl.hidden = false;
+      return;
+    }
+    var lines = [];
+    var policy = status.policy || {};
+    lines.push("Policy <span class=\\"mono\\">" + esc(policy.file || "built in, no policy file") + "</span>: " + esc(caps(policy)));
+    if (status.also) lines.push("Also applies <span class=\\"mono\\">" + esc(status.also.file) + "</span>: " + esc(caps(status.also.policy || {})));
+    policyEl.innerHTML = lines.join("<br>");
+    policyEl.hidden = false;
+  }
+
+  // the policy changes rarely, and the status route may ask an RPC for the balance: once a minute is enough
+  function refreshPolicy() {
+    if (Date.now() - policyAt < 60000) return;
+    policyAt = Date.now();
+    ask("/status").then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (status) { if (status) showPolicy(status); })
+      .catch(function () { policyAt = 0; });
+  }
+
+
+  // ── the settings card: the wallet's own key signs the owner's settings and policy ─────────────────────────────────
+  function showSettings(view) {
+    settingsShown = null;
+    settingsView = view;
+    if (!view || view.problem) {
+      settingsBody.innerHTML = "<p>" + esc(view && view.problem ? view.problem : "The settings could not be read.") + "</p>";
+      settingsActions.innerHTML = "";
+      settingsEl.hidden = false;
+      return;
+    }
+    var preview = view.preview;
+    settingsShown = { settingsHash: preview.settingsHash, policyHash: preview.policyHash, retiredHash: preview.retiredHash };
+    var signed = view.signed;
+    var status;
+    if (!signed) status = "Not signed.";
+    else if (!signed.valid) status = "A signature is there but does not hold: " + esc(signed.why || "") + ". Sign again.";
+    else if (!signed.thisWallet) status = "Signed by " + esc(signed.signer) + ", another wallet: these settings do not apply to this wallet.";
+    else status = "Signed by " + esc(signed.signer) + " on " + esc(String(signed.signedAt || "").slice(0, 10)) + "; " + (signed.policyMatches ? "policy matches." : "policy changed since signing. Sign again.");
+    settingsBody.innerHTML =
+      "<p>" + status + "</p>" +
+      '<dl class="rows">' +
+      "<dt>Site</dt><dd class=\\"mono\\">" + esc(preview.site) + "</dd>" +
+      "<dt>Enabled chains</dt><dd>" + esc(preview.enabledChains.length ? preview.enabledChains.join(", ") : "none: this build signs on testnets only") + "</dd>" +
+      "<dt>Policy</dt><dd class=\\"mono\\">" + esc(view.policyFile) + "<br>" + esc(preview.policyHash) + "</dd>" +
+      "<dt>Retired agents</dt><dd class=\\"mono\\">" + esc(preview.retiredHash) + "</dd>" +
+      "<dt>Settings</dt><dd class=\\"mono\\">" + esc(preview.settingsHash) + "</dd>" +
+      "</dl>";
+    settingsActions.innerHTML = settingsConfirming
+      ? '<p class="confirm">Sign these settings with this wallet\u2019s key, ' + esc(view.wallet) + "?</p>" +
+        '<button class="primary" data-act="settings-confirm">Yes, sign</button><button data-act="settings-back">Back</button>'
+      : '<button class="primary" data-act="settings-sign">Sign these settings with this wallet\u2019s key</button>';
+    settingsEl.hidden = false;
+  }
+
+  // A response counts only if no newer refresh started and no confirmation opened since it was asked for: the card stays
+  // as it was while the owner confirms, so the confirmation names exactly the hashes a click will send.
+  function refreshSettings() {
+    if (settingsConfirming) return;
+    var gen = ++settingsGen;
+    ask("/owner/settings").then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (view) { if (view && !settingsConfirming && gen === settingsGen) showSettings(view); })
+      .catch(function () {});
+  }
+
+  function signSettings() {
+    settingsGen++;
+    ask("/owner/settings/sign", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settingsShown) })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (answer) {
+          settingsConfirming = false;
+          settingsGen++;
+          if (response.ok) { showSettings(answer); say("Your settings are signed by this wallet\u2019s key."); decisionNote = true; return; }
+          say(answer.error ? "Not signed: " + answer.error + "." : "The wallet refused that (HTTP " + response.status + ").", true);
+          decisionNote = true;
+          refreshSettings();
+        });
+      })
+      .catch(function () { settingsConfirming = false; say("The wallet is not answering. Check that it is still running.", true); });
   }
 
   function askForSecret(message) {
@@ -161,6 +389,7 @@ export const WALLET_PAGE_SCRIPT = `
     if (!value) return;
     secret = value;
     unlock.hidden = true;
+    decisionNote = false;
     clear();
     refresh();
   });
@@ -171,8 +400,8 @@ export const WALLET_PAGE_SCRIPT = `
     secret = secretInput.value.trim().replace(/^[^#]*#/, "");
     secretInput.value = "";
     if (!secret) return;
-    remember(secret);
     unlock.hidden = true;
+    decisionNote = false;
     clear();
     refresh();
   });
@@ -180,12 +409,12 @@ export const WALLET_PAGE_SCRIPT = `
   function refresh() {
     if (!secret) {
       if (!unlock.hidden) return Promise.resolve(); // already asking; keep what the notice says
-      askForSecret("Paste the owner secret to see and decide payments. It is in the wallet's owner-secret file; the wallet printed where when it started.");
+      unlock.hidden = false;
+      sayLocked();
       return Promise.resolve();
     }
     return ask("/owner/requests").then(function (response) {
       if (response.status === 401 || response.status === 403) {
-        forget();
         askForSecret("That owner secret is not right. Paste the one in the wallet's owner-secret file.");
         secret = "";
         return null;
@@ -198,32 +427,56 @@ export const WALLET_PAGE_SCRIPT = `
       return response.json();
     }).then(function (body) {
       if (!body) return;
-      clear();
+      if (!decisionNote) clear();
       render(body.requests || []);
+      refreshPolicy();
+      if (Date.now() - settingsAt >= 15000) { settingsAt = Date.now(); refreshSettings(); }
     }).catch(function () {
+      decisionNote = false;
       say("The wallet is not answering. Check that it is still running.", true);
     });
   }
 
-  function decide(id, action) {
+  function decide(id, action, body) {
+    decisionNote = false;
     busy[id] = true;
-    refresh();
-    ask("/owner/requests/" + encodeURIComponent(id) + "/" + action, { method: "POST" })
+    if (cards[id]) paint(cards[id]);
+    var init = { method: "POST" };
+    if (body) {
+      init.headers = { "Content-Type": "application/json" };
+      init.body = JSON.stringify(body);
+    }
+    ask("/owner/requests/" + encodeURIComponent(id) + "/" + action, init)
       .then(function (response) {
         if (response.ok) return;
-        // 409: the request was already decided or expired; the wallet says which
-        return response.json().catch(function () { return {}; }).then(function (body) {
-          say(body.error ? "Not done: " + body.error + "." : "The wallet refused that (HTTP " + response.status + ").", true);
+        // 409: the request was already decided or expired, or is not the one confirmed; the wallet says which
+        return response.json().catch(function () { return {}; }).then(function (answer) {
+          say(answer.error ? "Not done: " + answer.error + "." : "The wallet refused that (HTTP " + response.status + ").", true);
+          decisionNote = true;
         });
       })
       .catch(function () { say("The wallet is not answering. Check that it is still running.", true); })
-      .then(function () { delete busy[id]; refresh(); });
+      .then(function () {
+        delete busy[id];
+        if (cards[id]) { cards[id].confirming = false; if (!cards[id].ended) paint(cards[id]); }
+        refresh();
+      });
   }
 
   document.addEventListener("click", function (event) {
     var button = event.target.closest ? event.target.closest("button[data-act]") : null;
     if (!button || button.disabled) return;
-    decide(button.getAttribute("data-id"), button.getAttribute("data-act"));
+    var id = button.getAttribute("data-id");
+    var act = button.getAttribute("data-act");
+    if (act === "settings-sign") { if (settingsView) { settingsConfirming = true; settingsGen++; showSettings(settingsView); } return; }
+    if (act === "settings-back") { settingsConfirming = false; if (settingsView) showSettings(settingsView); refreshSettings(); return; }
+    if (act === "settings-confirm") { signSettings(); return; }
+    var entry = cards[id];
+    // Approving takes two clicks: the first opens a confirmation in the card, the second sends what the card showed.
+    if (act === "approve" && entry) { entry.confirming = true; paint(entry); return; }
+    if (act === "back" && entry) { entry.confirming = false; paint(entry); return; }
+    if (act === "confirm" && entry) { decide(id, "approve", entry.data); return; }
+    if (act === "deny") decide(id, "deny");
   });
 
   refresh();
@@ -232,7 +485,7 @@ export const WALLET_PAGE_SCRIPT = `
 `;
 
 /** The wallet's page, ready to serve. Every payment on it arrives from the wallet's API after load. */
-export function walletPage(look: PageLook = pageLook()): string {
+export function walletPage(look: PageLook = pageLook(), nonce?: string): string {
   return framePage({
     look,
     title: "Payment approvals",
@@ -242,6 +495,12 @@ export function walletPage(look: PageLook = pageLook()): string {
     style: WALLET_STYLE,
     body: `
   <div id="notice" class="note" hidden></div>
+  <p id="policy" class="policy" hidden></p>
+  <div id="settings-card" class="card" hidden>
+    <h2 class="section" style="margin-top:0">Your settings</h2>
+    <div id="settings-body"></div>
+    <div id="settings-actions" class="actions"></div>
+  </div>
   <form id="unlock" hidden autocomplete="off">
     <label for="secret-input">Owner secret</label>
     <input id="secret-input" type="password" autocomplete="off" spellcheck="false">
@@ -249,12 +508,13 @@ export function walletPage(look: PageLook = pageLook()): string {
   </form>
 
   <h2 class="section">Pending</h2>
-  <div id="pending"><p class="empty">No payment is waiting for approval.</p></div>
+  <div id="pending"></div>
+  <p id="pending-empty" class="empty">No payment is waiting for approval.</p>
 
   <h2 class="section">History</h2>
   <div id="history"><p class="empty">Nothing yet.</p></div>
 
 <script id="status-labels" type="application/json">${inlineJson(WALLET_STATUS_LABELS)}</script>
-<script>${WALLET_PAGE_SCRIPT}</script>`,
+<script${nonce ? ` nonce="${nonce}"` : ""}>${WALLET_PAGE_SCRIPT}</script>`,
   });
 }

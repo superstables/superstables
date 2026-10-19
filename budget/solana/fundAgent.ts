@@ -9,11 +9,11 @@
 // npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 // Exit codes: 0 sent, 1 failed on chain or never landed, 2 bad flags, 3 refused (too little SOL, the owner rejected or the link
 // expired) or a mismatch (the transaction moved another amount), 5 unknown (read the chain).
-import { SystemProgram, Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
-import { connection, loadOwner, explorerTx, parseUnits, parseStrict, usageError, readPublic, retryRead, sleep } from "./lib.mjs";
+import { SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
+import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, oneLine, explorerTx, parseUnits, parseStrict, usageError, ownerPlanCtx, retryRead, sleep } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
-import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort } from "./owner.ts";
+import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort, finalizedOf, LANDED_SOLANA_FUND } from "./owner.ts";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
 const USAGE = `Usage: npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
@@ -44,11 +44,10 @@ function refuse(reason: string, next: string): never {
   process.exit(result(3, { state: "refused_precheck", reason, next }));
 }
 
-const conn = connection();
-const pub = readPublic();
-if (!pub.owner || !pub.agent) refuse("the public file names no owner or no agent", "superstables budget setup --rail solana");
-const owner: PublicKey = pub.owner;
-const agent: PublicKey = pub.agent;
+const conn = connection("owner");
+const cluster = await clusterProblem(conn);
+if (cluster) refuse(cluster, CLUSTER_NEXT);
+const { owner, agent } = await ownerPlanCtx(refuse); // the public addresses, checked against the owner's setup signature
 const ownerHas = BigInt(await retryRead(() => conn.getBalance(owner, "confirmed")));
 const agentHas = BigInt(await retryRead(() => conn.getBalance(agent, "confirmed")));
 console.log(`owner ${owner.toBase58()} ${sol(ownerHas)} SOL, agent ${agent.toBase58()} ${sol(agentHas)} SOL`);
@@ -89,7 +88,7 @@ if (OWNER_KEY_FILE) {
     const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
     handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The transfer is not confirmed. Check the command result and wallet activity before retrying.`, hash: sig });
     await closeOwnerPage();
-    process.exit(result(1, { state: "failed", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${JSON.stringify(c.err)})`, next: "superstables budget doctor --rail solana" }));
+    process.exit(result(1, { state: "failed", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${oneLine(JSON.stringify(c.err), 300)})`, next: "superstables budget doctor --rail solana" }));
   }
   if (c.problems.length) {
     const reason = mismatchReason(c.problems, c.siteFailed, sig);
@@ -126,6 +125,10 @@ if (delta === null && after < agentHas + amount) {
   process.exit(result(5, { state: "unknown", tx: sig, reason: why, next: "superstables budget doctor --rail solana: read the agent's SOL" }));
 }
 if (after < agentHas + amount) console.log(`the agent's balance reads ${sol(after)} SOL now, less than ${sol(agentHas + amount)}: it spent some, or the node lags behind; the transaction itself moved ${sol(amount)} SOL`);
-finish?.({ outcome: "confirmed", message: `Done. Your agent received ${sol(amount)} SOL. You can close this page.`, hash: sig });
+// Final: the transfer's signature reaches finalized (waiting up to a minute); before that it is landed.
+const fin = await finalizedOf(conn, sig);
+const final = fin.final && !fin.failed;
+if (!final) console.log("The transfer is in a block, but the transaction is not finalized yet.");
+finish?.({ outcome: "confirmed", message: final ? `Done. Your agent received ${sol(amount)} SOL. You can close this page.` : LANDED_SOLANA_FUND, hash: sig });
 await closeOwnerPage();
-process.exit(result(0, { state: "ok", tx: sig, sent: sol(amount), agentBefore: sol(agentHas), agentAfter: sol(after), next: "none" }));
+process.exit(result(0, { state: final ? "ok" : "landed", final, tx: sig, sent: sol(amount), agentBefore: sol(agentHas), agentAfter: sol(after), next: final ? "none" : "landed, not finalized yet. Nothing to do: the transfer is final once its transaction is finalized. superstables budget doctor --rail solana reads the balance" }));

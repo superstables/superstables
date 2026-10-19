@@ -14,10 +14,10 @@
 //
 // Exit: 0 when the chain gave an answer (settled, failed or not_found; read the RESULT state),
 // 1 for a missing journal, 2 bad flags, 4 unknown (still pending).
-import { connection, parseStrict, formatUnits, retryRead, EXIT, OPS_DIR } from "./lib.mjs";
+import { connection, parseStrict, formatUnits, retryRead, EXIT, OPS_DIR, oneLine } from "./lib.mjs";
 import { getAssociatedTokenAddressSync, getAccount } from "./token.mjs";
 import { PublicKey } from "@solana/web3.js";
-import { OP_ID_RE, readOp, updateOp, assessOp, readTransfer } from "./ops.mjs";
+import { OP_ID_RE, readOp, updateOp, assessAgreed, readTransfer } from "./ops.mjs";
 import { USDC_MINT, explorerTx } from "./lib.mjs";
 import { requireRecordLock } from "../op-lock.mjs";
 
@@ -66,19 +66,19 @@ const emit = (r, code) => {
 const alreadyFinal = rec.state === "settled" && rec.final !== false;
 let a;
 try {
-  a = alreadyFinal ? { verdict: "settled", tx: rec.tx, final: true } : await assessOp(conn, rec);
+  a = alreadyFinal ? { verdict: "settled", tx: rec.tx, final: true } : await assessAgreed(conn, rec);
 } catch (e) {
   // A failed read changes no payment evidence already observed.
   if (rec.state === "settled" && rec.inclusionObserved) {
-    console.log(`Could not read the chain: ${e?.message ?? e}. Keeping the earlier payment inclusion.`);
+    console.log(`Could not read the chain: ${oneLine(e?.message ?? e, 300)}. Keeping the earlier payment inclusion.`);
     emit(result("settled", { debit: rec.debit ?? rec.amountUsdc ?? "0", chain_final: false, next: `Run superstables budget reconcile --rail solana --op ${opId} later to check finality. Do not pay again.${rec.delivered === false ? " Contact the seller." : ""}` }), EXIT.OK);
   }
   if (["failed", "not_found", "refused_chain"].includes(rec.state)) {
-    console.log(`Could not read the chain: ${e?.message ?? e}. Keeping the recorded state: ${rec.state}.`);
+    console.log(`Could not read the chain: ${oneLine(e?.message ?? e, 300)}. Keeping the recorded state: ${rec.state}.`);
     emit(result(rec.state, { reason: rec.reason, next: `Run superstables budget reconcile --rail solana --op ${opId} again later.` }), EXIT.OK);
   }
-  console.log(`Could not read the chain: ${e?.message ?? e}. Do not pay again.`);
-  emit(result("unknown", { reason: `could not read the chain: ${String(e?.message ?? e).slice(0, 160)}`, next: `superstables budget reconcile --rail solana --op ${opId}. Do not pay again.` }), EXIT.UNCERTAIN);
+  console.log(`Could not read the chain: ${oneLine(e?.message ?? e, 300)}. Do not pay again.`);
+  emit(result("unknown", { reason: `could not read the chain: ${oneLine(e?.message ?? e, 160)}`, next: `superstables budget reconcile --rail solana --op ${opId}. Do not pay again.` }), EXIT.UNCERTAIN);
 }
 console.log(`Chain read: ${a.verdict}${a.tx ? ` ${explorerTx(a.tx)}` : ""}`);
 if (a.totalBlocks) console.log(`Checked ${a.checkedBlocks} of ${a.totalBlocks} finalized landing blocks. Run superstables budget reconcile --rail solana --op ${opId} again to continue. Do not pay again.`);
@@ -97,12 +97,12 @@ if (a.verdict === "no_tx") {
   emit(result("settled", { tx: a.tx, debit, chain_final: alreadyFinal ? rec.final ?? null : a.final !== false, next: a.final === false ? `the payment landed, but is not final on chain yet. Run superstables budget reconcile --rail solana --op ${opId} later. Do not pay again.${rec.delivered === false ? " Contact the seller." : ""}` : rec.delivered === false ? `settled but not delivered: do not pay again; contact the seller with tx ${a.tx}` : "none" }), EXIT.OK);
 } else if (a.verdict === "failed") {
   updateOp(opId, { state: "failed", tx: a.tx, error: a.err }, "reconcile: own transaction failed on chain");
-  console.log(`Failed on chain: ${JSON.stringify(a.err)}. Nothing moved.`);
-  emit(result("failed", { tx: a.tx, delivered: false, reason: JSON.stringify(a.err), next: "nothing moved; buy again with a new --op" }), EXIT.OK);
+  console.log(`Failed on chain: ${oneLine(JSON.stringify(a.err), 300)}. Nothing moved.`);
+  emit(result("failed", { tx: a.tx, delivered: false, ...(a.agreement ? { agreement: a.agreement } : {}), reason: oneLine(JSON.stringify(a.err), 300), next: "nothing moved; buy again with a new --op" }), EXIT.OK);
 } else if (a.verdict === "not_found" && !rec.inclusionObserved) {
   updateOp(opId, { state: "not_found" }, `reconcile: no transaction and the blockhash expired (height ${a.blockHeight} > ${a.lastValidBlockHeight})`);
-  console.log(`Not found: finalized block height ${a.blockHeight} is past ${a.lastValidBlockHeight}, and final history proves no transaction landed. Nothing was paid.`);
-  emit(result("not_found", { reason: "blockhash expired", delivered: false, next: `nothing was paid; safe to buy again (this --op may be reused)` }), EXIT.OK);
+  console.log(`Not found: finalized block height ${a.blockHeight} is past ${a.lastValidBlockHeight}, and final history proves no transaction landed (agreement: ${a.agreement ?? "single"}). Nothing was paid.`);
+  emit(result("not_found", { reason: "blockhash expired", delivered: false, ...(a.agreement ? { agreement: a.agreement } : {}), next: `nothing was paid; safe to buy again (this --op may be reused)` }), EXIT.OK);
 } else {
   updateOp(opId, { state: "unknown" }, `reconcile: pending, ${a.blocksLeft ?? "?"} blocks until the blockhash is provably dead`);
   console.log(a.reason ?? (a.blocksLeft != null ? `Still unresolved: about ${a.blocksLeft} blocks remain before the blockhash expires. Do not pay again.` : "Still unresolved: no final settlement or final absence proof. Do not pay again."));

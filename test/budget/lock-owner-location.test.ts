@@ -5,6 +5,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { runsInHostNamespace } from '../helpers/namespace-probes.js';
 
 const project = resolve(import.meta.dirname, '../..');
 const root = resolve(process.env.BUDGET_RACE_ROOT ?? project);
@@ -132,7 +133,7 @@ it.runIf(canUnshare)('wait preserves a live cloned-kernel approval past its dead
   expect(result.status, result.stderr).toBe(0); expect(JSON.parse(result.stdout)).toEqual({ final: false, orphaned: false });
   expect(readFileSync(path, 'utf8')).toBe(before);
 });
-it.runIf(process.platform === 'linux')('recovers a killed 0.3.0/0.3.1-format cap holder after upgrade', async () => {
+it.runIf(runsInHostNamespace)('recovers a killed 0.3.0/0.3.1-format cap holder after upgrade', async () => {
   const b = box();
   const child = spawn('sleep', ['60']); children.add(child);
   const identity = createIdentitySource();

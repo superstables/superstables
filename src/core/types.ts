@@ -7,6 +7,16 @@ import type { SettleResponse } from "@x402/core/types";
 import type { RailRequirement } from "./rails/types.js";
 import type { ChainState } from "./settlement.js";
 
+/** How a "never paid" verdict was agreed: two operators, the owner's own node, the one public RPC of a testnet, or an RPC the calling code pinned. */
+export type ChainAgreement = "quorum" | "owner-node" | "single" | "caller";
+/** Where it was agreed: the operators, and the final block (decimal) and its hash (EVM), or the slot (Solana). */
+export interface ChainAgreedAt {
+  operators: string[];
+  block?: string;
+  blockHash?: string;
+  slot?: number;
+}
+
 // ── Discovery ────────────────────────────────────────────────────────────────────────────
 
 export interface ServiceParam {
@@ -136,6 +146,11 @@ export interface PaymentTerms {
   scheme: string;
   /** The x402 wire version. Absent for MPP, which has none. */
   x402Version?: 1 | 2;
+  /**
+   * x402 on EVM: the seller's authorization window (maxTimeoutSeconds) as offered, in seconds. What `pay` signs lasts at
+   * most ten minutes of it (rails/evm.ts). Absent on other rails, and on quotes recorded before it was kept.
+   */
+  maxTimeoutSeconds?: number;
 }
 
 /** One rule of the spend policy, as it applied to one payment. */
@@ -283,12 +298,12 @@ export interface Attempt {
    * block after it.
    */
   searchedToSlot?: number;
-  /**
-   * The process running this attempt (its pid, and that process's start identity where the system gives one): while it
-   * runs, it carries the attempt on; once it is gone, an attempt it left approved or submitting is for
-   * `superstables status` to reconcile from the chain.
-   */
-  runner?: ReturnType<typeof import("./lock.js").thisProcess>;
+  /** Solana: how far each other verdict endpoint (by its id) has read those blocks, none holding the payment. */
+  confirmSearchedTo?: Record<string, number>;
+  /** How the chain's "never paid" verdict was agreed, on a payment released as unpaid. */
+  chainAgreement?: ChainAgreement;
+  /** Where it was agreed: the operators, and the final block (EVM) or slot (Solana). */
+  chainAgreedAt?: ChainAgreedAt;
   /**
    * What the chain says about the payment: "verified" (the transaction is this payment), "mismatch" (the transaction the
    * seller named is not; the attempt is then uncertain), "unchecked" (the chain could not say yet), or "unpaid" (a later
@@ -337,6 +352,8 @@ export interface Receipt {
   /** What the chain says about the settlement: see Attempt.chain. Absent on receipts written before it was read. */
   chain?: ChainState;
   chainReason?: string;
+  chainAgreement?: ChainAgreement;
+  chainAgreedAt?: ChainAgreedAt;
   /** Inclusion was proven; a later reorg cannot authorize repayment. */
   paymentIncluded?: true;
   /** True for final matching inclusion, false for provisional matching inclusion, null when none is established or finality was not observed. */
@@ -383,8 +400,14 @@ export interface WalletRequestView {
   verified: VerifiedTerms;
   reported?: PaymentContext;
   reason?: string;
+  /** How long the authorization lasts once signed, in seconds. */
+  validForSeconds?: number;
   /** Present only once signed; returned to the agent-token caller that created the request. The local wallet signs EIP-3009 only. */
   result?: { kind: "eip3009"; payload: { signature: string; authorization: Record<string, unknown> }; signer: string };
+  /** The wallet will not hand out this signature: the client stopped waiting for it. */
+  withheld?: boolean;
+  /** Set only in a cancel answer: whether this signature had been handed out before the cancel. */
+  served?: boolean;
 }
 
 export interface WalletStatus {
@@ -399,5 +422,9 @@ export interface WalletStatus {
   balanceDecimal?: number;
   approvalMode: "ask-every-payment";
   pending: number;
-  policy: { perCall?: string; perDay?: string; allow: string[]; deny: string[]; stablecoins: string[]; killSwitch: boolean };
+  policy: { file?: string; perCall?: string; perDay?: string; allow: string[]; deny: string[]; stablecoins: string[]; killSwitch: boolean };
+  /** The account's own policy file, when it applies as well as the one above: both must allow a payment. */
+  also?: { file: string; policy: WalletStatus["policy"] };
+  /** Why the wallet's policy files cannot be used, in which case nothing is signed. */
+  policyProblem?: string;
 }

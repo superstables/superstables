@@ -61,7 +61,10 @@ if ((skill.match(block) ?? []).length !== 1) throw new Error(`skills/${NAME}/SKI
 writeFileSync(join(out, "SKILL.md"), skill.replace(block, RUN_IN_ZIP + "\n"));
 cpSync(join(root, "LICENSE"), join(out, "LICENSE"));
 
-// Every file under build/skill/, with forward slashes, dated at the build time so the same build zips the same.
+// Every file under build/skill/, with forward slashes, dated with the build's builtAt (the commit's time, see buildTime in
+// budget-build.mjs). A zip entry holds a local date and time, which fflate takes from this process's time zone: in UTC,
+// every machine writes the same bytes.
+process.env.TZ = "UTC";
 const mtime = new Date(stamp.builtAt);
 const entries = {};
 for (const f of readdirSync(outRoot, { recursive: true }).map(String).sort()) {

@@ -18,22 +18,26 @@ import { decodePaymentResponseHeader } from "@x402/core/http";
 import type { SettleResponse } from "@x402/core/types";
 import { isAddressOn, isTransactionId, networkFor, shortLabel, txUrl, type NetworkInfo } from "./chain.js";
 import { getQuote } from "./quote.js";
-import { MAX_CHALLENGE_BYTES, NotPaidEndpointError, readBody, readCapped, readSellerChallenge, sameTerms, type SellerChallenge } from "./x402.js";
+import { MAX_CHALLENGE_BYTES, NotPaidEndpointError, REDIRECTED_AFTER_SEND, SELLER_REDIRECTED, isRedirectRefusal, readBody, readCapped, readSellerChallenge, sameTerms, type SellerChallenge } from "./x402.js";
 import { readMppReceipt } from "./mpp.js";
+import { sellerUrlProblem } from "./seller-url.mjs";
 import { untrustedText } from "./text.js";
 import type { ChainCheck } from "./settlement.js";
-import { Records } from "./records.js";
+import { Records, approvalIdHash, attemptRunner, settleStaleAwaiting, RECONCILE_LOCK, type AttemptRunner } from "./records.js";
 import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
-import { evaluatePolicy, type Policy } from "./policy.js";
+import { evaluatePolicy, policyAmount, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
 import { firstPayable, railFor } from "./rails/index.js";
 import { memoReferral } from "./referral-memo.mjs";
 import { nonceReferral } from "./referral-nonce.js";
 import { referralFor, type ActiveReferral } from "./referrals.js";
 import { PURCHASE_REF_HEADER, REFERRAL_HEADER } from "../seller/referral.js";
+import { tokenDomainProblem } from "./token-domain.js";
 import type { ChainReadOptions, Offer, PaymentFacts, PushRail, RailAdapter, X402Rail } from "./rails/types.js";
 import { join } from "node:path";
-import type { AbandonCause, Attempt, AttemptState, Quote, Receipt, ServiceOutcome } from "./types.js";
+import { accountPolicyPath, retiredListPath } from "./home.js";
+import { signedPolicyCheck } from "./owner-settings.js";
+import type { AbandonCause, Attempt, AttemptState, ChainAgreedAt, ChainAgreement, Quote, Receipt, ServiceOutcome } from "./types.js";
 import { FINAL_ATTEMPT_STATES } from "./types.js";
 
 /** How much of the service's answer is kept on the attempt and the receipt. */
@@ -54,10 +58,15 @@ export interface PaymentEngineOptions {
   fetchImpl?: typeof fetch;
   /** How long each exchange with the seller may take, answer included. Shortened in tests; two minutes otherwise. */
   timeoutMs?: number;
-  /** The RPC every chain read goes through, whatever the chain. Tests point it at a fake chain; chainRpc() otherwise. */
+  /**
+   * The RPC every chain read goes through, whatever the chain. Caller-pinned: believed alone, even to say a payment was never
+   * made, and labelled `caller` on the record. Never set by the CLI; chainRpc() otherwise.
+   */
   rpcUrl?: string;
-  /** The RPC of one chain, when tests run several fake ones; rpcUrl, then chainRpc(), otherwise. */
+  /** The RPC of one chain, caller-pinned like `rpcUrl` (tests run several fake ones); rpcUrl, then chainRpc(), otherwise. */
   rpcUrlFor?: (network: NetworkInfo) => string | undefined;
+  /** The endpoints of a chain: its primary for reads and the set whose agreement decides "never paid" (SDK and tests). */
+  endpointsFor?: ChainReadOptions["endpointsFor"];
   /** The clock the cap reservation reads. Tests move it; Date.now otherwise. */
   now?: () => number;
 }
@@ -71,13 +80,20 @@ export class QuoteUsedError extends Error {
     readonly quoteId: string,
     /** The attempt this quote started, when the records still have it. */
     readonly attempt?: Attempt,
+    /** The attempt the quote's claim names, when its record is not readable (yet). */
+    readonly attemptId?: string,
   ) {
     super(
       attempt
         ? `A payment for this quote already exists: attempt ${attempt.id}, ${attempt.state}` +
             `${isFinal(attempt.state) ? "" : " (not final)"}. A quote starts at most one payment; ` +
             "do not start another one for it"
-        : "This quote has already been used to start a payment; quote again before paying",
+        : attemptId
+          ? `A payment for this quote already exists: attempt ${attemptId}, whose record is not readable yet. ` +
+            `A quote starts at most one payment; follow it with \`superstables status ${attemptId}\`. ` +
+            "If status still finds no such attempt a minute from now, that attempt stopped before anything was signed, " +
+            "and only then quote again"
+          : "This quote has already been used to start a payment; quote again before paying",
     );
     this.name = "QuoteUsedError";
   }
@@ -96,6 +112,8 @@ export class PaymentEngine {
   private readonly now: () => number;
   /** Attempts this process is running, so a caller sees the live state without a file read. */
   private readonly live = new Map<string, Attempt>();
+  /** The process recorded on each attempt this one started: every line it writes names it again, as when it started. */
+  private readonly runners = new Map<string, AttemptRunner>();
 
   constructor(options: PaymentEngineOptions) {
     this.records = options.records;
@@ -103,7 +121,7 @@ export class PaymentEngine {
     this.signer = options.signer;
     this.fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
     this.timeoutMs = options.timeoutMs ?? SUBMIT_TIMEOUT_MS;
-    this.chainRead = chainReadOptions(options.rpcUrl, options.rpcUrlFor);
+    this.chainRead = chainReadOptions(options.rpcUrl, options.rpcUrlFor, options.endpointsFor);
     this.now = options.now ?? Date.now;
   }
 
@@ -116,13 +134,20 @@ export class PaymentEngine {
     const quote = getQuote(quoteId, this.records);
     if (!quote) throw new Error(`There is no quote ${quoteId} on this machine`);
     if (quote.status === "used") {
+      // The claim names the attempt that holds the quote now. Its line may not be written yet, and after a quote was
+      // handed back, the newest record is an earlier attempt.
+      const holder = namedAttemptId(this.records.claimHolder(quote.id));
       const existing = this.records.attemptForQuote(quote.id);
-      throw new QuoteUsedError(quote.id, existing ? this.getAttempt(existing.id) : undefined);
+      if (existing && (!holder || holder === existing.id)) throw new QuoteUsedError(quote.id, this.getAttempt(existing.id));
+      throw new QuoteUsedError(quote.id, holder ? this.claimedBy(holder) : undefined, holder);
     }
     if (quote.status === "stale") {
       throw new Error("The seller changed its terms after this quote was taken; quote again before paying");
     }
     if (quote.status === "expired") throw new Error("This quote has expired; quote again before paying");
+    // Old quotes too: a quote taken before this rule, or written by hand, is not claimed and the owner is never asked.
+    const urlProblem = sellerUrlProblem(quote.url, networkFor(quote.terms.network) ?? { testnet: false });
+    if (urlProblem) throw new Error(`This quote's seller URL ${urlProblem}; nothing was started. Quote an https URL`);
 
     const at = new Date().toISOString();
     const attempt: Attempt = {
@@ -136,16 +161,16 @@ export class PaymentEngine {
       serviceId: quote.serviceId,
       serviceName: quote.serviceName,
       terms: quote.terms,
-      runner: thisProcess(),
       history: [{ at, state: "awaiting_approval" }],
     };
     // Claim the quote before any await, and across processes: another `pay` sharing these records may have
     // read the same open quote. One claim file per quote, created only if none exists, decides which attempt it starts;
     // the other is told about that attempt instead.
     const holder = this.records.claimQuote(quote.id, attempt.id);
-    if (holder !== undefined) throw new QuoteUsedError(quote.id, holder ? this.claimedBy(holder) : undefined);
+    if (holder !== undefined) throw this.claimedQuoteError(quote.id, holder);
     this.records.saveQuote({ ...quote, status: "used" });
-    this.records.saveAttempt(attempt);
+    this.runners.set(attempt.id, thisProcess());
+    this.save(attempt);
     this.live.set(attempt.id, attempt);
     this.events.emit("transition", attempt);
 
@@ -161,14 +186,31 @@ export class PaymentEngine {
   }
 
   /**
-   * The attempt that holds a quote's claim. Another process writes it right after claiming, so it is waited for briefly
-   * (the claim and the record are microseconds apart); a process that stopped in between leaves no attempt to name.
+   * The refusal for a quote whose claim another process holds. The claim file is created, then its attempt id written in
+   * the next call, so an empty claim is read again, within the same deadline as the attempt's record.
    */
-  private claimedBy(id: string): Attempt | undefined {
+  private claimedQuoteError(quoteId: string, claimed: string): QuoteUsedError {
+    const deadline = performance.now() + CLAIM_WAIT_MS;
+    let holder: string | undefined = claimed;
     const pause = new Int32Array(new SharedArrayBuffer(4));
-    for (let waited = 0; ; waited += CLAIM_POLL_MS) {
+    while (holder === "" && performance.now() < deadline) {
+      Atomics.wait(pause, 0, 0, CLAIM_POLL_MS);
+      holder = this.records.claimHolder(quoteId);
+    }
+    return new QuoteUsedError(quoteId, holder ? this.claimedBy(holder, deadline) : undefined, namedAttemptId(holder));
+  }
+
+  /**
+   * The attempt that holds a quote's claim. Another process writes it right after claiming, so it is waited for briefly,
+   * in wall-clock time; one that stopped in between, or is slow to flush, leaves no record to name, and the claim's
+   * attempt id is named instead.
+   */
+  private claimedBy(id: string, deadline = performance.now() + CLAIM_WAIT_MS): Attempt | undefined {
+    // monotonic: the system clock may step during the wait
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    for (;;) {
       const found = this.getAttempt(id);
-      if (found || waited >= CLAIM_WAIT_MS) return found;
+      if (found || performance.now() >= deadline) return found;
       Atomics.wait(pause, 0, 0, CLAIM_POLL_MS);
     }
   }
@@ -193,6 +235,12 @@ export class PaymentEngine {
     });
   }
 
+  /** Write an attempt this process runs, naming this process as its runner on the line (see Records.saveAttempt). */
+  private save(attempt: Attempt): void {
+    const runner = this.runners.get(attempt.id);
+    this.records.saveAttempt(runner ? ({ ...attempt, runner } as Attempt) : attempt);
+  }
+
   /** Is this attempt's cap reservation still running? */
   private reservationOpen(attempt: Attempt): boolean {
     const until = attempt.reservedUntil ? Date.parse(attempt.reservedUntil) : NaN;
@@ -207,14 +255,15 @@ export class PaymentEngine {
     const now = this.now();
     const judged = evaluatePolicy(this.policy, {
       domain: hostOf(quote.url),
-      amountDecimal: quote.terms.amountDecimal,
       asset: quote.terms.asset,
-      spentTodayDecimal: this.records.spentToday(quote.terms.asset, new Date(now), { exclude: attempt.id }),
+      ...policyAmount(quote.terms),
+      spentTodayAtomic: this.records.spentTodayAtomic(quote.terms.asset, new Date(now), { exclude: attempt.id }),
+      spentTodayHasOpen: this.records.spentTodayHasOpen(quote.terms.asset, new Date(now), { exclude: attempt.id }),
     });
     if (judged.allowed) {
       attempt.reservedAt = new Date(now).toISOString();
       attempt.reservedUntil = new Date(now + (this.signer.approvalWindowMs ?? DEFAULT_APPROVAL_WINDOW_MS) + RESERVATION_GRACE_MS).toISOString();
-      this.records.saveAttempt(attempt);
+      this.save(attempt);
     }
     return judged;
   }
@@ -288,9 +337,10 @@ export class PaymentEngine {
 
     const currentPolicy = evaluatePolicy(this.policy, {
       domain: hostOf(quote.url),
-      amountDecimal: quote.terms.amountDecimal,
       asset: quote.terms.asset,
-      spentTodayDecimal: this.records.spentToday(quote.terms.asset, new Date(this.now()), { exclude: attempt.id }),
+      ...policyAmount(quote.terms),
+      spentTodayAtomic: this.records.spentTodayAtomic(quote.terms.asset, new Date(this.now()), { exclude: attempt.id }),
+      spentTodayHasOpen: this.records.spentTodayHasOpen(quote.terms.asset, new Date(this.now()), { exclude: attempt.id }),
     });
     if (!currentPolicy.allowed) {
       this.settleState(attempt, "failed", {
@@ -327,6 +377,24 @@ export class PaymentEngine {
     // and the token sent name the same referral.
     const referral = this.paidReferral(quote);
 
+    // The owner's signed settings cover the account's spend policy file. When they were signed by the wallet that will pay (or
+    // that wallet is not known yet), a policy file that differs from the signed one stops the payment before anyone is asked.
+    // A signature that does not hold is treated as no signature, with a warning on stderr.
+    let payer: string | undefined;
+    try {
+      payer = await this.signer.address(offer.terms.network);
+    } catch {
+      payer = undefined;
+    }
+    const signedPolicy = await signedPolicyCheck(payer, { policyPath: accountPolicyPath(), retiredPath: retiredListPath() });
+    if (signedPolicy.warn) process.stderr.write(`warning: ${signedPolicy.warn}\n`);
+    // A browser wallet's address is only what an earlier payment remembered: whoever connects on the approval page pays, and
+    // that page runs this check again for them. Here it only warns.
+    if (signedPolicy.refuse && this.signer.kind !== "browser") {
+      this.settleState(attempt, "failed", { refusal: "policy", reason: signedPolicy.refuse });
+      return;
+    }
+
     // A push payment is found on chain by its memo, which the seller's challenge decides. A seller that hands out the
     // same challenge again would make a second transfer indistinguishable from the first, so a memo an earlier attempt
     // already used is refused before anyone is asked (and again, under the cap lock, right before the wallet is asked).
@@ -336,6 +404,18 @@ export class PaymentEngine {
         this.settleState(attempt, "failed", { refusal: "invalid", reason: reusedChallenge(reused.id) });
         return;
       }
+    }
+
+    // The token's signing domain, read on chain once per process before anyone is asked to sign on this chain
+    // (token-domain.ts). Before the cap reservation: a refused payment reserves nothing.
+    const evmNetwork = rail.signKind === "eip3009" ? networkFor(offer.terms.network) : undefined;
+    if (evmNetwork?.rail === "evm") {
+      const problem = await tokenDomainProblem(evmNetwork, this.chainRead);
+      if (problem) {
+        this.settleState(attempt, "failed", { refusal: "invalid", reason: `${problem}. Nothing was signed, and nobody was asked` });
+        return;
+      }
+      if (isFinal(attempt.state)) return;
     }
 
     // Reserve the amount against the daily cap before anyone is asked. Two `pay` processes asking at
@@ -389,12 +469,13 @@ export class PaymentEngine {
           onPending: (walletRequestId, approvalUrl) => {
             asked = true;
             this.transition(attempt, "awaiting_approval", {
-              walletRequestId,
-              // Present when the signer serves the approval page itself; the surfaces pass it
-              // on to the person, because without the link nobody can approve anything.
+              // A browser approval's id is its link's capability: on disk, and in this attempt, only its hash (it matches the id
+              // in approvals.jsonl). The link stays on the live attempt, in memory, for the surfaces to pass on to the person;
+              // Records.saveAttempt never writes it. A local wallet's request id is not a capability (it needs the agent token).
+              walletRequestId: approvalUrl ? approvalIdHash(walletRequestId) : walletRequestId,
               ...(approvalUrl ? { approvalUrl } : {}),
               note: approvalUrl
-                ? `waiting for the owner to approve at ${approvalUrl}`
+                ? "waiting for the owner to approve on the approval page (the link is in the output of this pay)"
                 : "waiting for the owner to approve in the wallet",
             });
           },
@@ -527,6 +608,15 @@ export class PaymentEngine {
       });
       return;
     }
+    // The credential goes to this URL and nowhere else: refused here as well, so the rule is local to the send.
+    const sendProblem = sellerUrlProblem(quote.url, networkFor(quote.terms.network) ?? { testnet: false });
+    if (sendProblem) {
+      this.settleState(attempt, "failed", {
+        payer: signed.signer,
+        reason: `the owner signed, but the payment was not sent: the seller URL ${sendProblem}. Nothing was submitted`,
+      });
+      return;
+    }
     this.transition(attempt, "submitting");
     // Checked again right before the credential leaves: only an attempt this run still carries is ever submitted.
     if (attempt.state !== "submitting") return;
@@ -547,11 +637,11 @@ export class PaymentEngine {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
-      // A redirect is refused rather than followed, so this is also where a seller that answers with one lands:
-      // the credential may never have left. Say that, and stay `uncertain`, because nothing here can tell.
+      // A redirect is refused, never followed. The request that drew it carried the signed payment, so the seller has it
+      // and may settle it: uncertain.
       this.settleState(attempt, "uncertain", {
         payer: signed.signer,
-        reason: `the payment could not be completed with this service: ${message(err)}`,
+        reason: isRedirectRefusal(err) ? REDIRECTED_AFTER_SEND : `the payment could not be completed with this service: ${message(err)}`,
       });
       return;
     }
@@ -741,7 +831,7 @@ export class PaymentEngine {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
-      failure = message(err);
+      failure = isRedirectRefusal(err) ? "it answered with a redirect, which this client does not follow" : message(err);
     }
     const read = res ? await readBody(res, SERVICE_BODY_LIMIT * 4, deadline - Date.now(), PAID_ANSWER_DRAIN) : undefined;
     const delivered = read?.end === "eof";
@@ -840,12 +930,16 @@ export class PaymentEngine {
    * fetch so a test (or a future proxy) can stand in for the network.
    */
   private async challengeFor(url: string): Promise<SellerChallenge> {
+    const problem = sellerUrlProblem(url);
+    if (problem) throw new Error(`the seller URL ${problem}`);
     const deadline = Date.now() + this.timeoutMs;
     const res = await this.fetchImpl(url, {
       method: "GET",
       redirect: "error",
       headers: { accept: "application/json, */*" },
       signal: AbortSignal.timeout(this.timeoutMs),
+    }).catch((err: unknown) => {
+      throw isRedirectRefusal(err) ? new Error(SELLER_REDIRECTED) : err;
     });
     const body = await readCapped(res, MAX_CHALLENGE_BYTES, deadline - Date.now(), url);
     if (res.status !== 402) throw new NotPaidEndpointError(url, res.status, body.slice(0, 300));
@@ -928,7 +1022,7 @@ export class PaymentEngine {
     attempt.state = state;
     attempt.updatedAt = new Date().toISOString();
     attempt.history.push({ at: attempt.updatedAt, state, ...(note ? { note } : {}) });
-    this.records.saveAttempt(attempt);
+    this.save(attempt);
     this.events.emit("transition", attempt);
     return attempt;
   }
@@ -1045,13 +1139,19 @@ function readSettlement(res: Response, version: 1 | 2): SettleResponse | undefin
 export async function recheckChain(records: Records, id: string, rpc?: string | ChainReadOptions): Promise<Attempt | undefined> {
   let attempt = records.getAttempt(id);
   if (!attempt) return undefined;
+  // Waiting for an owner whose pay process is gone: nobody can decide, and nothing was submitted.
+  if (attempt.state === "awaiting_approval") {
+    attempt = await settleStaleAwaiting(records, attempt);
+    // Still waiting, or ended as abandoned: nothing was submitted. Any other state (it moved on before its runner died) is read below.
+    if (attempt.state === "awaiting_approval" || attempt.state === "abandoned") return attempt;
+  }
   const options = typeof rpc === "string" ? chainReadOptions(rpc) : (rpc ?? chainReadOptions());
   const rail = railFor(attempt.terms?.network);
   if (!rail) return records.getAttempt(attempt.id) ?? attempt;
   // A seller's answer waiting to be recorded is recorded before anything else is decided.
   if (records.pendingAnswer(id)) attempt = await commit(records, attempt, (_records, current) => current);
   if (attempt.state === "approved" || attempt.state === "submitting") {
-    if (processRunning(attempt.runner)) return records.getAttempt(attempt.id) ?? attempt;
+    if (processRunning(attemptRunner(records, attempt.id))) return records.getAttempt(attempt.id) ?? attempt;
     attempt = await commit(records, attempt, orphaned);
   }
   if (rejectedTransaction(attempt) || rejectedTransaction(receiptOf(records, attempt))) return reconcile(records, attempt, rail, options);
@@ -1159,7 +1259,7 @@ function recordChain(records: Records, attempt: Attempt, check: ChainCheck): Att
 
 /** An attempt left approved or submitting by a process that is gone: whether its payment moved is unknown. */
 function orphaned(records: Records, attempt: Attempt): Attempt {
-  if ((attempt.state !== "approved" && attempt.state !== "submitting") || processRunning(attempt.runner)) return records.getAttempt(attempt.id) ?? attempt;
+  if ((attempt.state !== "approved" && attempt.state !== "submitting") || processRunning(attemptRunner(records, attempt.id))) return records.getAttempt(attempt.id) ?? attempt;
   const at = new Date().toISOString();
   const updated: Attempt = {
     ...attempt,
@@ -1217,17 +1317,17 @@ async function reconcile(records: Records, attempt: Attempt, rail: RailAdapter, 
     }
     return commit(records, attempt, (r, current) => recordSearch(r, current, "The earlier payment inclusion was removed; outcome unknown. Do not pay again.", found.searchedToSlot, true));
   }
-  if (found.never) return commit(records, attempt, (r, current) => recordUnpaid(r, current, found.reason));
+  if (found.never) return commit(records, attempt, (r, current) => recordUnpaid(r, current, found.reason, found.agreement, found.agreedAt));
   if (contradiction) return commit(records, attempt, (r, current) => recordChain(r, current, contradiction));
   const reason = found.unreadable && named ? named : found.reason;
-  return commit(records, attempt, (r, current) => recordSearch(r, current, reason, found.searchedToSlot));
+  return commit(records, attempt, (r, current) => recordSearch(r, current, reason, found.searchedToSlot, false, found.confirmSearchedTo));
 }
 
 /**
  * Not found yet, or the chain could not say: the attempt keeps its state, with the chain's latest answer, and how far a
  * Solana search read the blocks the payment could have landed in (never less far than another search already had).
  */
-function recordSearch(records: Records, attempt: Attempt, reason: string, searchedToSlot?: number, inclusionRemoved = false): Attempt {
+function recordSearch(records: Records, attempt: Attempt, reason: string, searchedToSlot?: number, inclusionRemoved = false, confirmSearchedTo?: Record<string, number>): Attempt {
   // Resolved meanwhile (found, or shown never paid): an undecided search says nothing new.
   if (finalPayment(records, attempt) || attempt.chain === "unpaid" || attempt.state === "failed") return attempt;
   if (attempt.paymentIncluded && attempt.state !== "uncertain" && !inclusionRemoved) return attempt;
@@ -1244,7 +1344,9 @@ function recordSearch(records: Records, attempt: Attempt, reason: string, search
     records.saveReceipt({ ...rest, chain: "unchecked", chainFinal: null, chainReason });
   }
   const further = searchedToSlot !== undefined && searchedToSlot > (attempt.searchedToSlot ?? -1);
-  const updated: Attempt = { ...attempt, ...(inclusionRemoved ? { state: "uncertain", paymentIncluded: true, reason } : {}), chain: mismatch ? "mismatch" : "unchecked", chainFinal: null, chainReason, ...(further ? { searchedToSlot } : {}), updatedAt: at };
+  // each other endpoint's mark, never moved back by a search that read less
+  const confirmed = confirmSearchedTo ? Object.fromEntries(Object.entries({ ...attempt.confirmSearchedTo, ...confirmSearchedTo }).map(([id, slot]) => [id, Math.max(slot, attempt.confirmSearchedTo?.[id] ?? -1, confirmSearchedTo[id] ?? -1)])) : undefined;
+  const updated: Attempt = { ...attempt, ...(confirmed ? { confirmSearchedTo: confirmed } : {}), ...(inclusionRemoved ? { state: "uncertain", paymentIncluded: true, reason } : {}), chain: mismatch ? "mismatch" : "unchecked", chainFinal: null, chainReason, ...(further ? { searchedToSlot } : {}), updatedAt: at };
   records.saveAttempt(updated);
   return updated;
 }
@@ -1339,7 +1441,7 @@ function recordAnswer(records: Records, fresh: Receipt): Receipt {
     return records.saveReceipt({ ...fresh, at: current?.at ?? fresh.at, chain: "mismatch", chainFinal: null, chainMismatch: record?.chainMismatch, chainReason: record?.chainReason });
   }
   if (record?.chain === "unpaid") {
-    return records.saveReceipt({ ...fresh, at: current?.at ?? fresh.at, chain: "unpaid", chainFinal: null, chainReason: record.chainReason ?? "the chain shows this payment was never made, and it can no longer be" });
+    return records.saveReceipt({ ...fresh, at: current?.at ?? fresh.at, chain: "unpaid", chainFinal: null, chainReason: record.chainReason ?? "the chain shows this payment was never made, and it can no longer be", ...(record.chainAgreement ? { chainAgreement: record.chainAgreement } : {}), ...(record.chainAgreedAt ? { chainAgreedAt: record.chainAgreedAt } : {}) });
   }
   const receipt = records.saveReceipt(current && (current.chain === "verified" || rejectedTransaction(current)) ? mergedReceipt(current, fresh) : fresh);
   if (record?.chain === "verified" && (record.state === "settled" || record.state === "paid_service_failed") && (record.receiptId ?? record.id) === receipt.id) {
@@ -1386,17 +1488,19 @@ function mergedReceipt(current: Receipt, fresh: Receipt): Receipt {
  * with chain "unpaid", and a receipt the seller's report had written is marked so; neither counts against the cap. Never
  * over a payment finalized meanwhile.
  */
-function recordUnpaid(records: Records, attempt: Attempt, chainReason: string): Attempt {
+function recordUnpaid(records: Records, attempt: Attempt, chainReason: string, chainAgreement: ChainAgreement, chainAgreedAt: ChainAgreedAt): Attempt {
   if (finalPayment(records, attempt) || attempt.chain === "unpaid") return attempt;
   const at = new Date().toISOString();
   const receipt = receiptOf(records, attempt);
-  if (receipt) records.saveReceipt({ ...receipt, chain: "unpaid", chainFinal: null, chainReason });
+  if (receipt) records.saveReceipt({ ...receipt, chain: "unpaid", chainFinal: null, chainReason, chainAgreement, chainAgreedAt });
   const updated: Attempt = {
     ...attempt,
     state: "failed",
     chain: "unpaid",
     chainFinal: null,
     chainReason,
+    chainAgreement,
+    chainAgreedAt,
     reason: receipt
       ? "the service reported this payment settled, but the chain shows it was never made, and it can no longer be"
       : "the chain shows this payment was never made, and it can no longer be",
@@ -1433,6 +1537,7 @@ function paymentFacts(attempt: Attempt, payer: string): PaymentFacts {
     ...(attempt.lastValidBlockHeight !== undefined ? { lastValidBlockHeight: attempt.lastValidBlockHeight } : {}),
     ...(attempt.searchFromSlot !== undefined ? { searchFromSlot: attempt.searchFromSlot } : {}),
     ...(attempt.searchedToSlot !== undefined ? { searchedToSlot: attempt.searchedToSlot } : {}),
+    ...(attempt.confirmSearchedTo ? { confirmSearchedTo: attempt.confirmSearchedTo } : {}),
     ...(since ? { since } : {}),
   };
 }
@@ -1494,8 +1599,10 @@ function receiptFor(input: {
 }
 
 /** Chain reads through one RPC for every chain (tests), one per chain, or each chain's own (chainRpc). */
-function chainReadOptions(rpcUrl?: string, rpcUrlFor?: (network: NetworkInfo) => string | undefined): ChainReadOptions {
-  return { rpcUrlFor: (network) => rpcUrlFor?.(network) ?? rpcUrl };
+function chainReadOptions(rpcUrl?: string, rpcUrlFor?: (network: NetworkInfo) => string | undefined, endpointsFor?: ChainReadOptions["endpointsFor"]): ChainReadOptions {
+  // Only what the calling code pinned: with nothing pinned, the endpoints are the table's (or the owner's) and the environment's
+  // variable is read for reads only.
+  return { ...(rpcUrl || rpcUrlFor ? { rpcUrlFor: (network: NetworkInfo) => rpcUrlFor?.(network) ?? rpcUrl } : {}), ...(endpointsFor ? { endpointsFor } : {}) };
 }
 
 /** Why a payment the seller reported is uncertain when its receipt could not be recorded. */
@@ -1503,9 +1610,18 @@ const UNRECORDED_ANSWER =
   "the service answered for this payment, but its receipt could not be recorded while another process held the records' lock; " +
   "`superstables status` records it and checks the chain";
 
-/** How long a second claim on a quote waits for the first one's attempt record to appear, and how often it looks. */
-const CLAIM_WAIT_MS = 250;
-const CLAIM_POLL_MS = 10;
+/** The attempt id a claim names, when it has the shape of one this client makes; anything else is not printed. */
+function namedAttemptId(claimed: string | undefined): string | undefined {
+  return claimed && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(claimed) ? claimed : undefined;
+}
+
+/**
+ * How long a second claim on a quote waits for the first one's attempt record to appear, and how often it looks.
+ * Wall-clock: the first process flushes the claim, the quote and the attempt (records.ts) before its record is readable,
+ * which a loaded disk can take more than a second to do.
+ */
+const CLAIM_WAIT_MS = 2_000;
+const CLAIM_POLL_MS = 25;
 
 /** How often the chain is read while waiting for a payment to show. */
 const CHAIN_POLL_MS = 1_500;
@@ -1518,9 +1634,6 @@ const DEFAULT_APPROVAL_WINDOW_MS = 10 * 60_000;
 
 /** The lock file, in the records directory, under which an attempt checks the daily cap and reserves its amount. */
 const CAP_LOCK = "cap.lock";
-/** The lock file under which a status writes what a chain read decided (see commit). */
-const RECONCILE_LOCK = "reconcile.lock";
-
 function hostOf(url: string): string {
   try {
     return new URL(url).hostname;
@@ -1565,7 +1678,16 @@ function chainEvidence(check: ChainCheck): Pick<Attempt, "chain" | "chainFinal" 
 }
 
 export function paymentOutput(record: Attempt | Receipt) {
-  return { chain: record.chain, chain_final: record.chain === "verified" ? record.chainFinal ?? null : null };
+  return {
+    chain: record.chain,
+    chain_final: record.chain === "verified" ? record.chainFinal ?? null : null,
+    ...(record.chain === "unpaid" && record.chainAgreement ? { chain_agreement: record.chainAgreement, ...(record.chainAgreedAt ? { chain_agreed_at: shownAgreedAt(record.chainAgreedAt) } : {}) } : {}),
+  };
+}
+
+/** Where a "never paid" verdict was agreed, as JSON: the operators and the final block or slot, in snake case. */
+function shownAgreedAt(at: ChainAgreedAt) {
+  return { operators: at.operators, ...(at.block ? { block: at.block } : {}), ...(at.blockHash ? { block_hash: at.blockHash } : {}), ...(at.slot !== undefined ? { slot: at.slot } : {}) };
 }
 
 /**

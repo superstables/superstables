@@ -1,0 +1,11 @@
+{
+  "scenario": "buy-under-budget",
+  "agent": "claude-opus",
+  "model": "opus",
+  "skill": "with",
+  "started": "2026-10-18T15:01:32.076Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 16,
+  "finished": "2026-10-18T15:01:48.119Z"
+}

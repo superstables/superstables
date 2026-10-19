@@ -21,7 +21,8 @@ For one purchase instead, ask it to find a service, check the price and request 
 The agent starts the request; you approve in your wallet.
 
 Keep budgets small. A stolen agent key can spend the remaining budget.
-Read the [security model](docs/security.md) before granting one.
+No setting turns on mainnet in this client. Which site and which RPCs your approvals use is set in your own terminal with `superstables owner settings`.
+Read the [security model](docs/security.md) before granting a budget: it says what each way of paying protects and what it doesn't, and what mainnet would still need.
 
 ## Use the CLI
 

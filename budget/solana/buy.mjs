@@ -48,6 +48,8 @@ import {
 import bs58 from "bs58";
 import { join } from "node:path";
 import {
+  CLUSTER_NEXT,
+  clusterProblem,
   connection,
   loadAgent,
   readPublic,
@@ -67,11 +69,12 @@ import {
   OPS_DIR,
 } from "./lib.mjs";
 import { readCapped, saveResponse } from "../response.mjs";
-import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, assessOp } from "./ops.mjs";
+import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, assessAgreed } from "./ops.mjs";
 import { lockNext } from "../op-lock.mjs";
 import { HOME } from "../paths.mjs";
 import { memoReferral } from "../../src/core/referral-memo.mjs";
 import { operationReferral, paidReferralHeaders } from "../../src/core/referral-store.mjs";
+import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
@@ -107,11 +110,8 @@ if (!checkOnly && flags.max === undefined) usageError("missing required flag --m
 const maxBase = parseAmountFlag(flags, "max", USAGE);
 const payToFlag = parsePubkeyFlag(flags, "pay-to", USAGE);
 const ownerFlag = parsePubkeyFlag(flags, "owner", USAGE);
-try {
-  new URL(flags.url);
-} catch {
-  usageError("--url is not a valid URL", USAGE);
-}
+const urlProblem = sellerUrlProblem(flags.url);
+if (urlProblem) usageError(`--url ${urlProblem}`, USAGE);
 const url = flags.url;
 const method = (flags.method ?? "GET").toUpperCase();
 if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) usageError(`unsupported --method ${method}`, USAGE);
@@ -168,7 +168,7 @@ let initial;
 try {
   initial = await fetchOnce(url, method, bodyText);
 } catch (e) {
-  refuse(`seller unreachable: ${e?.message ?? e}`);
+  refuse(`seller unreachable: ${oneLine(e?.message ?? e, 300)}`);
 }
 console.log(`\nInitial request: HTTP ${initial.res.status}`);
 if (initial.res.status !== 402) {
@@ -202,7 +202,8 @@ for (const a of accepts) {
 
 // --- 3. prechecks: before any key is opened or anything is signed ---------------------------------
 const requirement = selectRequirement(accepts);
-const check = checkOffer(requirement, { maxBase, payTo: payToFlag });
+const recorded = readPublic();
+const check = checkOffer(requirement, { maxBase, payTo: payToFlag, agent: recorded.agent, owner: ownerFlag ?? recorded.owner });
 if (!check.ok) {
   if (!checkOnly) updateOp(opId, {
     rail: "solana", kind: "buy", state: "refused_precheck", url, method, reasons: check.reasons,
@@ -228,6 +229,11 @@ if (checkOnly) {
 
 // --- 4. the agent key, chain reads, intent journal ------------------------------------------------
 const conn = connection();
+const cluster = await clusterProblem(conn);
+if (cluster) {
+  updateOp(opId, { state: "refused_precheck", reasons: [cluster] });
+  refuse(cluster, { next: `${CLUSTER_NEXT}; nothing was signed or paid` });
+}
 const agentInfo = loadAgent();
 const agent = agentInfo.keypair;
 const pub = readPublic();
@@ -235,6 +241,12 @@ const ownerPk = ownerFlag ?? pub.owner ?? agentInfo.owner;
 if (!ownerPk) {
   updateOp(opId, { state: "refused_precheck", reasons: ["owner address unknown"] });
   refuse("owner address unknown: pass --owner or run superstables budget setup --rail solana");
+}
+// the step 3 check used the owner and agent the public file records; these are the ones this purchase really runs with
+const sameKey = payToPk.equals(ownerPk) ? "the owner's wallet, which funds this budget" : payToPk.equals(agent.publicKey) ? "this agent's own key" : null;
+if (sameKey) {
+  updateOp(opId, { state: "refused_precheck", reasons: [`recipient is ${sameKey}`] });
+  refuse(`recipient is ${sameKey}`);
 }
 console.log(`Owner (source of funds): ${ownerPk.toBase58()}`);
 console.log(`Agent (delegate authority, signs the payment): ${agent.publicKey.toBase58()}`);
@@ -252,7 +264,7 @@ try {
   ownerAtaBefore = await retryRead(() => getAccount(conn, ownerAta));
 } catch (e) {
   if (!(e instanceof TokenAccountNotFoundError)) {
-    const why = `could not read the owner's USDC account ${ownerAta.toBase58()}: ${e?.message ?? e}`;
+    const why = `could not read the owner's USDC account ${ownerAta.toBase58()}: ${oneLine(e?.message ?? e, 300)}`;
     updateOp(opId, { state: "refused_precheck", reasons: [why] });
     refuse(why, { next: "retry later; nothing was signed or paid" });
   }
@@ -407,7 +419,7 @@ for (let i = 0; i < attempts && !own; i++) {
     own = await findOwnTx(conn, rec);
     readError = null;
   } catch (e) {
-    readError = e?.message ?? String(e);
+    readError = oneLine(e?.message ?? e, 300) || "the chain read failed";
     console.log(`chain read failed (${String(readError).slice(0, 160)}); trying again`);
   }
   if (!own) await sleep(3000);
@@ -436,7 +448,7 @@ if (own && own.err && own.final === false) {
 }
 if (own && own.err && own.final !== false) {
   updateOp(opId, { state: "failed", tx: own.sig, error: own.err, delivered: false }, "own transaction failed on chain");
-  console.log(`\n=> Our transfer FAILED on chain: ${JSON.stringify(own.err)}  ${explorerTx(own.sig)}`);
+  console.log(`\n=> Our transfer FAILED on chain: ${oneLine(JSON.stringify(own.err), 300)}  ${explorerTx(own.sig)}`);
   finish("failed", EXIT.FAILED, { tx: own.sig, delivered: false, next: "nothing moved; fix the cause, then buy again with a new --op" });
 }
 
@@ -446,25 +458,25 @@ let sim = null;
 if (!deliveredHttp && !readError) {
   sim = await conn
     .simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true })
-    .catch((e) => ({ value: { err: `simulation unavailable: ${e?.message ?? e}`, logs: [] } }));
+    .catch((e) => ({ value: { err: `simulation unavailable: ${oneLine(e?.message ?? e, 300)}`, logs: [] } }));
 }
 if (sim?.value?.err && !String(sim.value.err).startsWith("simulation unavailable")) {
   const failLine = (sim.value.logs ?? []).filter((l) => /failed|error|insufficient/i.test(l)).slice(-1)[0] ?? null;
-  console.log(`\n=> The chain refuses this payment now: ${JSON.stringify(sim.value.err)}${failLine ? ` | ${failLine}` : ""}`);
+  console.log(`\n=> The chain refuses this payment now: ${oneLine(JSON.stringify(sim.value.err), 300)}${failLine ? ` | ${oneLine(failLine, 300)}` : ""}`);
   console.log("   Our transaction was not found on chain.");
   // refused for good only once the signed transaction can no longer land (refusalIsFinal); until then it is unknown
-  const assessment = await assessOp(conn, rec).catch(() => ({ verdict: "pending" }));
+  const assessment = await assessAgreed(conn, rec).catch(() => ({ verdict: "pending" }));
   if (assessment.verdict === "settled") {
     updateOp(opId, { state: "settled", final: assessment.final !== false, inclusionObserved: true, tx: assessment.tx, delivered: deliveredHttp, debit: amountUi }, "own transaction landed while checking the refusal");
     finish("settled", EXIT.OK, { tx: assessment.tx, debit: amountUi, delivered: deliveredHttp, chain_final: assessment.final !== false, next: assessment.final === false ? `superstables budget reconcile --rail solana --op ${opId} later to check finality. Do not pay again.${deliveredHttp ? "" : " Contact the seller."}` : deliveredHttp ? "none" : "paid but not delivered; do not pay again; contact the seller" });
   }
   if (assessment.verdict === "failed") {
     updateOp(opId, { state: "failed", tx: assessment.tx, error: assessment.err, delivered: false }, "own transaction landed and failed");
-    finish("failed", EXIT.FAILED, { tx: assessment.tx, delivered: false, reason: JSON.stringify(assessment.err), next: "nothing moved; fix the cause, then buy again with a new --op" });
+    finish("failed", EXIT.FAILED, { tx: assessment.tx, delivered: false, ...(assessment.agreement ? { agreement: assessment.agreement } : {}), reason: oneLine(JSON.stringify(assessment.err), 300), next: "nothing moved; fix the cause, then buy again with a new --op" });
   }
   if (assessment.verdict === "not_found") {
     updateOp(opId, { state: "refused_chain", chainError: sim.value.err, chainLog: failLine, delivered: false }, "chain refuses the transaction (simulation), and its blockhash has expired");
-    finish("refused_chain", EXIT.FAILED, { delivered: false, chainError: sim.value.err, next: `run reconcile before reusing this --op: superstables budget reconcile --rail solana --op ${opId}` });
+    finish("refused_chain", EXIT.FAILED, { delivered: false, ...(assessment.agreement ? { agreement: assessment.agreement } : {}), chainError: sim.value.err, next: `run reconcile before reusing this --op: superstables budget reconcile --rail solana --op ${opId}` });
   }
   updateOp(opId, { state: "unknown", chainError: sim.value.err, chainLog: failLine, delivered: deliveredHttp }, `chain refuses the transaction now (simulation), but it can land until block height ${lastValidBlockHeight}`);
   console.log(`   The seller holds the signed transaction, which stays valid until block height ${lastValidBlockHeight}: a later grant or deposit could still let it land. Outcome unknown. Do not pay again.`);

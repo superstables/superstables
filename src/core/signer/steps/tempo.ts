@@ -18,7 +18,7 @@
 
 import type { Hex } from "viem";
 import { getAddress } from "viem";
-import { TEMPO_MODERATO, isAddress } from "../../chain.js";
+import { TEMPO_MODERATO, isAddress, isSameAddress } from "../../chain.js";
 import type { MppChallenge } from "../../mpp.js";
 import { TEMPO_SEND_MARGIN_MS, mppMemo, transferCall } from "../../rails/tempo.js";
 import { tempoClientId } from "../../referral-memo.mjs";
@@ -129,6 +129,9 @@ export const tempoStep: WalletStep = {
   },
 
   async prepare(record: StepRecord, account: string): Promise<StepAnswer> {
+    if (isSameAddress(record.verified.recipient, account)) {
+      return { http: 409, body: { error: "the recipient is the account paying, so nothing was prepared for your wallet to send. Connect another account, or reject" } };
+    }
     const challenge = challengeOf(record);
     const memo = mppMemo(challenge.id, challenge.realm, tempoClientId(record.referralId));
     const call = transferCall({ from: account, recipient: record.verified.recipient, amountAtomic: record.verified.amountAtomic, memo });
@@ -187,6 +190,7 @@ export const tempoStep: WalletStep = {
       rpcUrl: TEMPO_MODERATO.defaultRpc,
       explorer: TEMPO_MODERATO.explorer,
       nativeCurrency: TEMPO_MODERATO.wallet.nativeCurrency,
+      validity: { kind: "sent-now" as const },
     };
   },
 
@@ -194,6 +198,12 @@ export const tempoStep: WalletStep = {
     lede: "Check the amount and the recipient, then send the payment from your browser wallet, or reject. Your wallet keeps its key.",
     fineprint: (facts) =>
       `Your wallet sends this one transfer itself and shows its network fee. ${facts.amountAtomic} in the token's smallest unit is ${facts.amountDecimal} ${facts.asset}. Nothing else is sent.`,
+    walletShows: (f) => [
+      `A transaction to the ${f.asset} token contract ${f.assetAddress}, not to the recipient: the recipient and the amount are inside the call (transferWithMemo).`,
+      `Amount in the call: ${f.amountAtomic}. That is ${f.amountDecimal} ${f.asset}.`,
+      `Recipient in the call: ${f.recipient}`,
+      "A network fee, which your wallet shows and you pay, in addition to the amount.",
+    ],
   },
 
   script: TEMPO_STEP_SCRIPT,

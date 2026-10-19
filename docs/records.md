@@ -51,8 +51,13 @@ grep -o '"state":"[^"]*"' ~/.superstables/records/attempts.jsonl | tail -5
 With `jq` installed, `jq -c '{id, state, reason}'` over the same file reads better. Neither is
 required: these are lines of JSON, and `tail` is a perfectly good reader.
 
+Each line is flushed to disk before the client goes on, so a payment's `submitting` line, and the claim on
+its quote, are on disk before the signed payment leaves this machine.
+
 Two consequences worth knowing. A line torn by a crash or a full disk is skipped on read
-rather than hiding every record behind it, so a damaged file still answers. And the files
+rather than hiding every record behind it, so a damaged file still answers. `superstables doctor`
+counts the lines it could not read and names the file (`payment records  1 unreadable line …`): a
+payment on such a line is not shown and does not count toward the daily cap. And the files
 contain no key and no signature, but they do say what was bought and for how much, which is
 why they are 0600.
 
@@ -113,7 +118,7 @@ awaiting_approval ──┼── the owner says no ─────────�
 
 | State | Final | What it means |
 | --- | --- | --- |
-| `awaiting_approval` | no | The attempt is checking the quote or waiting for the owner. In browser mode, `approvalUrl` appears once the page is ready. **No payment credential has been sent** |
+| `awaiting_approval` | no | The attempt is checking the quote or waiting for the owner. In browser mode, the approval link is printed by `pay` once the page is ready; it is kept only in that process, and `status` does not repeat it. **No payment credential has been sent** |
 | `approved` | no | The owner signed with their wallet. The payment credential has not been sent to the seller yet. On Tempo Moderato: the owner's wallet was asked to send the payment |
 | `submitting` | no | The request is being replayed with the payment credential attached. On Tempo Moderato: the client is checking on chain the transaction the wallet reported, before it calls the seller |
 | `denied` | yes | The owner rejected it — on the approval page, or in MetaMask's own popup — before anything was signed or sent. No payment credential was sent. The seller was only asked for its terms |
@@ -129,6 +134,13 @@ payment's chain and it is this payment (see [security.md](security.md) for what 
 chain); `unchecked` (with `chainReason`) when the chain could not say yet. `superstables status`
 reads the chain again for an unchecked attempt: first the transaction the seller named, then the
 payment itself, as for an `uncertain` one (below).
+
+When a later check releases a payment as `unpaid`, the attempt and its receipt also hold `chainAgreement`
+(`quorum`, `owner-node`, `single` or `caller`: see [security.md](security.md#which-rpc-is-believed)) and
+`chainAgreedAt` (`operators`, and the final block as a decimal `block` and its `blockHash`, or the Solana
+`slot`). A Solana attempt in progress holds `confirmSearchedTo`: how far each other verdict endpoint, by an
+id made from its URL, has read the blocks the payment could have landed in. `status --json` prints
+`chain_agreement` and `chain_agreed_at` (`operators`, `block`, `block_hash`, `slot`).
 
 A later chain check can change `settled` or `paid_service_failed` to `uncertain` and mark its
 receipt `mismatch`, correct the receipt to the transaction that is this payment, or, when the chain
@@ -170,7 +182,10 @@ again:
    says how far it got. It also searches the chain for the payment, by what ties it to this attempt
    alone, never by a transaction the seller named:
    - on the EVM chains, the authorization the owner signed: the token says whether its nonce was
-     used, and its `AuthorizationUsed` log names the transaction;
+     used, and its `AuthorizationUsed` log names the transaction. The log is searched from shortly
+     before the attempt began, over at most a day of blocks, in block ranges the chain's RPC accepts
+     (narrower ones when it refuses a range). A search that could not read all of them says the
+     chain could not be read, never that nothing was paid;
    - on Tempo Moderato, the transfer with this payment's memo, in a block after the one the chain
      was at when the wallet was asked;
    - on Solana devnet, a transaction carrying the owner's signature among the owner's token
@@ -200,7 +215,8 @@ again:
    that recipient around that time, for example on Base Sepolia
    `https://sepolia.basescan.org/address/<the account that paid>` — in browser mode that is the
    wallet account you connected, which `~/.superstables/browser-wallet.json` also names.
-3. Check the approval record for this attempt in `~/.superstables/records/approvals.jsonl`. A
+3. Check the approval record for this attempt in `~/.superstables/records/approvals.jsonl`: its `id` is the
+   attempt's `walletRequestId` (`sha256:…`). A
    `signed` line means the client verified a signature. A missing line does not prove that nothing
    was signed. With the local wallet, `~/.superstables/wallet/audit.jsonl` is the record.
 4. If the transfer is on chain, do not pay again; the service owes you an answer, so take it up
@@ -209,8 +225,8 @@ again:
 ## Approvals
 
 `approvals.jsonl` is the browser signer's own log: one line every time a request the owner was
-asked about changes state. It carries the time, the approval id, the status, the reason, the
-verified terms, the reported context and the account that connected — and never a signature.
+asked about changes state. It carries the time, a hash of the approval id, the status, the reason, the
+verified terms, the reported context and the account that connected — and never a signature or the id itself.
 
 | Approval status | Meaning |
 | --- | --- |
@@ -288,10 +304,10 @@ it became uncertain. One waiting for the owner counts until its reservation (`re
 `reservedUntil`) ends: the signer's approval window and one minute of grace. A reservation that lapses before the
 owner is asked, or before a signature is sent, is checked against the cap again and renewed, or the
 payment stops there. Before the owner is asked, `pay` checks the cap and reserves the amount under a lock every
-`pay` process on this machine shares, so two payments started at once cannot both pass. A payment
-that ends unsigned releases its reservation. Each payment counts once. It is checked
-once when a quote is taken, and again at the gate, before anyone is asked to approve. (With the
-local wallet there is a second count, from the wallet's own audit log of what it signed today.)
+`pay` process on this machine shares, so two payments started at once cannot both pass. The lock file is written to disk
+before it is taken, so a crash cannot leave one that cannot be read. A payment that ends unsigned releases its reservation.
+Each payment counts once. It is checked once when a quote is taken, and again at the gate, before anyone is asked to
+approve. (With the local wallet there is a second count, from the wallet's own audit log of what it signed today.)
 These are local files, not chain history. Delete them and the count starts again.
 This is a software policy, and [security.md](security.md) says exactly how far that goes.
 

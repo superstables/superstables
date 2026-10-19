@@ -508,7 +508,7 @@ describe("pay on Tempo Moderato", () => {
       at: new Date(s.clock.now).toISOString(),
       quoteId: "q",
       attemptId: "spent-elsewhere",
-      url: "http://elsewhere",
+      url: "https://elsewhere.example",
       terms: { ...other.terms, asset: "USDC", amountDecimal: 1, amountAtomic: "1000000" },
       payer: owner,
       transaction: "",

@@ -1,5 +1,5 @@
 // superstables.com for `superstables budget`: which site, and the requests that need no agent signature. Plain JavaScript with
-// Node built-ins only, so the dispatcher (cli.mjs), approvals.mjs and the rail scripts share it.
+// Node built-ins only (and response.mjs and ../src/core/owner-settings.js, which have the same), so the dispatcher (cli.mjs), approvals.mjs and the rail scripts share it.
 //
 // Hosted approvals (`setup --hosted`, every rail) record APPROVALS=hosted and SITE=<origin> in the chain's public file. Every
 // later owner command on that chain then asks the owner through the site instead of the page on 127.0.0.1. The site API is
@@ -12,54 +12,34 @@
 // The bearer token is the agent's access to one request. It is kept only in that approval's record (approvals.mjs, mode
 // 600) and in memory; nothing here logs it.
 
-export const DEFAULT_SITE = "https://www.superstables.com";
+import { DEFAULT_SITE, siteFor } from "../src/core/owner-settings.js";
+import { readCapped } from "./response.mjs";
+
+export { DEFAULT_SITE };
 export const BUDGET_API = "/api/v1/budget";
 
 /**
- * The owner's opt-in for a site outside superstables.com: the exact origin (or a comma list of origins), set by the owner in
- * their own environment. An agent never sets it. Without it, only superstables.com, its subdomains and this computer count.
+ * No longer read. SUPERSTABLES_ALLOW_SITE used to let the owner name another approval site in their environment, which an
+ * agent shares; the owner now sets one with `superstables owner settings site ORIGIN`. Named here so the dispatcher can warn.
  */
 export const ALLOW_SITE_ENV = "SUPERSTABLES_ALLOW_SITE";
 
-const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
-/** superstables.com itself or one of its subdomains (www.superstables.com, staging.superstables.com). */
-const isSuperstables = (host) => host === "superstables.com" || host.endsWith(".superstables.com");
-
 /**
- * The site's origin, or { error }. https only, except plain http on this computer (a local site for development and tests).
- * No path, query or credentials: every route is under /api/v1/budget/ on that origin. Only superstables.com, its subdomains
- * and this computer are accepted, unless the owner named that exact origin in SUPERSTABLES_ALLOW_SITE: an agent told to use
- * another site would otherwise send the owner's approvals there.
+ * The site's origin, or { error, ownerCommand? }. https only, except plain http on this computer. No path, query or
+ * credentials: every route is under /api/v1/budget/ on that origin. Which origins count is the owner's setting
+ * (src/core/owner-settings.js siteFor): for an owner action ("owner", the default) or a verdict ("verdict") only
+ * https://www.superstables.com (the apex is the same site) and what the owner allowed in their settings; for a read
+ * ("read") also any other https superstables.com host and this computer. An agent told to use another site would otherwise
+ * send the owner's approvals there.
+ * @param {unknown} value
+ * @param {"owner" | "verdict" | "read"} [purpose]
+ * @returns {{ origin?: string, error?: string, ownerCommand?: string }}
  */
-export function siteOrigin(value) {
+export function siteOrigin(value, purpose = "owner") {
   const raw = String(value ?? "").trim();
-  const shown = siteText(raw, 120);
-  let u;
-  try { u = new URL(raw); } catch { return { error: `"${shown}" is not a URL (for example ${DEFAULT_SITE})` }; }
-  if (u.username || u.password) return { error: "the site URL must not carry a user name or password" };
-  if (u.protocol !== "https:" && !(u.protocol === "http:" && LOOPBACK.has(u.hostname))) return { error: `the site must be an https URL (plain http only on 127.0.0.1 or localhost); got "${shown}"` };
-  if ((u.pathname !== "/" && u.pathname !== "") || u.search || u.hash) return { error: `the site is an origin only, such as ${DEFAULT_SITE}, with no path (got "${shown}")` };
-  if (!LOOPBACK.has(u.hostname) && !isSuperstables(u.hostname) && !ownerAllowed(u.origin)) {
-    return { error: `${u.origin} is not superstables.com: only https://superstables.com, its subdomains and 127.0.0.1 are used, unless the owner sets ${ALLOW_SITE_ENV}=${u.origin} in their own environment (an agent never sets it)` };
-  }
-  // superstables.com serves the same site as www.superstables.com, but it makes its approval links on www: the apex is that
-  // site, so a link on www is not refused as another site's.
-  if (u.origin === "https://superstables.com") return { origin: DEFAULT_SITE };
-  return { origin: u.origin };
-}
-
-/** The owner named this exact https origin in SUPERSTABLES_ALLOW_SITE. */
-function ownerAllowed(origin) {
-  const v = process.env[ALLOW_SITE_ENV]?.trim();
-  if (!v) return false;
-  return v.split(",").some((s) => {
-    try {
-      const u = new URL(s.trim());
-      return u.protocol === "https:" && !u.username && !u.password && (u.pathname === "/" || u.pathname === "") && !u.search && !u.hash && u.origin === origin;
-    } catch {
-      return false;
-    }
-  });
+  if (raw === "") return { error: `"" is not a URL (for example ${DEFAULT_SITE})` };
+  const site = siteFor(purpose, raw);
+  return site.error ? { error: siteText(site.error, 400), ...(site.ownerCommand ? { ownerCommand: site.ownerCommand } : {}) } : { origin: site.origin };
 }
 
 /**
@@ -83,22 +63,36 @@ export const isOtherSite = (origin) => {
   }
 };
 
-/** The site for a command: --site, else SUPERSTABLES_SITE, else superstables.com. { origin } or { error }. */
-export function chosenSite(flag) {
-  const v = flag ?? (process.env.SUPERSTABLES_SITE?.trim() || undefined) ?? DEFAULT_SITE;
-  return siteOrigin(v);
+/**
+ * The site for a command: --site, else SUPERSTABLES_SITE, else the owner's own site (their setting, else
+ * superstables.com). { origin } or { error, ownerCommand? }. Either source is a candidate only: it has to be a site the owner
+ * allows for `purpose`, and the error names where it came from.
+ * @param {string | undefined} flag
+ * @param {"owner" | "verdict" | "read"} [purpose]
+ * @returns {{ origin?: string, error?: string, ownerCommand?: string }}
+ */
+export function chosenSite(flag, purpose = "owner") {
+  const fromEnv = process.env.SUPERSTABLES_SITE?.trim() || undefined;
+  const source = flag !== undefined ? "--site" : fromEnv !== undefined ? "SUPERSTABLES_SITE" : null;
+  const candidate = flag ?? fromEnv;
+  if (candidate === undefined) {
+    const own = siteFor(purpose, undefined);
+    return own.error ? { error: siteText(own.error, 400) } : { origin: own.origin };
+  }
+  const site = siteOrigin(candidate, purpose);
+  return site.error ? { ...site, error: `${source}: ${site.error}` } : site;
 }
 
 /**
- * Text from the site on one line, without control characters and without the invisible characters that reorder or hide
- * text (zero-width, bidi embeddings and isolates), at most `max` characters. It is data, never a command.
+ * Text from the site on one line, at most `max` characters: control characters become spaces; format, bidi and Unicode tag
+ * characters are removed. The same rule as untrustedText (src/core/text.ts). It is data, never a command.
  */
-export const siteText = (s, max = 300) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "").trim().slice(0, max);
+export const siteText = (s, max = 300) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, "").trim().slice(0, max);
 
 /**
  * The words the site's budget API documents, by kind. The site's own sentences (an error message, a reason) are never
  * repeated in a log, an audit line or a RESULT: only one of these words, or "unexpected", inside this client's sentences.
- * Taken from the website's budget API on its staging and budget-proof-v2 branches (lib/budget: errors thrown with
+ * Taken from the website's budget API on its staging at ddb493a8 (lib/budget: errors thrown with
  * budgetError, flow.ts REASONS, proof.ts ProofReason; app/api/v1/budget and app/api/budget routes), October 2026.
  */
 export const SITE_WORDS = {
@@ -107,18 +101,19 @@ export const SITE_WORDS = {
     // errors (budgetError codes)
     "agent_mismatch", "agent_not_linked", "agent_proof", "agent_proof_invalid", "agent_proof_missing", "agent_proof_stale", "allowance_live",
     "already_linked", "amount_above_limit", "amount_zero", "blockhash_expired", "body_too_large", "cap_above_limit", "cap_zero", "chain_unavailable",
-    "duplicate_request", "ethereum_account_required", "expiry_passed", "idempotency_conflict", "idempotency_key_expired", "idempotency_key_reused", "internal_error",
-    "invalid_idempotency_key", "invalid_json", "invalid_kind", "invalid_label", "invalid_solana", "invalid_solana_owner", "invalid_step",
-    "invalid_then", "invalid_transaction", "invalid_tx_hash", "linked_elsewhere", "match_code_mismatch", "missing_token", "network_refused",
-    "no_token_account", "not_a_link", "not_a_transaction", "not_awaiting_owner", "not_for_solana", "not_found", "not_linked_yet", "not_open",
-    "not_sending", "not_solana", "nothing_to_revoke", "other_account", "other_delegate", "owner_frozen", "owner_proof_invalid",
-    "owner_proof_owner_mismatch", "owner_proof_required", "proof_reused", "rate_limited", "request_open", "sign_in_required", "solana_owner_unproven", "tx_hash_used",
+    "duplicate_request", "ethereum_account_required", "expected_owner_mismatch", "expected_owner_unproven", "expiry_passed", "idempotency_conflict",
+    "idempotency_key_expired", "idempotency_key_reused", "internal_error", "invalid_expected_owner", "invalid_idempotency_key", "invalid_json", "invalid_kind",
+    "invalid_label", "invalid_request", "invalid_solana", "invalid_solana_owner", "invalid_step", "invalid_then", "invalid_transaction", "invalid_tx_hash",
+    "key_live", "linked_elsewhere", "match_code_mismatch", "missing_token", "network_refused", "no_token_account", "not_a_link", "not_a_transaction",
+    "not_awaiting_owner", "not_for_solana", "not_found", "not_linked_yet", "not_open", "not_sending", "not_solana", "nothing_to_revoke", "other_account",
+    "other_delegate", "owner_frozen", "owner_proof_invalid", "owner_proof_owner_mismatch", "owner_proof_required", "owner_unknown", "owner_wallet_removed",
+    "owner_wallet_required", "proof_reused", "rate_limited", "request_open", "sign_in_required", "solana_owner_unproven", "tx_hash_used",
     "unknown_chain", "unknown_parameter", "unlimited_refused", "unsupported_chain", "unsupported_media_type", "unsupported_rail",
     "value_not_zero", "wallet_asked", "wrong_account", "wrong_amount", "wrong_call", "wrong_recipient", "wrong_signer", "wrong_spender", "wrong_target",
-    "wallet_changed_transaction",
+    "wallet_changed_transaction", "invalid_owner_proof_version", "token_expired",
     // reasons a request or step ended (flow.ts REASONS)
     "agent_cancelled", "agent_removed", "another_open", "approval_expired", "earlier_step", "link_not_done", "mismatch", "no_start_block",
-    "not_landed", "not_requested", "not_signed", "owner_rejected", "owner_stopped", "reverted", "stale_tx", "wallet_timeout",
+    "not_landed", "not_requested", "not_signed", "owner_rejected", "owner_stopped", "page_stopped_before_send", "reverted", "stale_tx", "wallet_timeout",
   ]),
   // agent request proof: error.reason of an agent_proof refusal (proof.ts ProofReason)
   proof: new Set(["missing", "malformed", "stale", "nonce", "replayed", "signature", "agent_mismatch"]),
@@ -126,25 +121,36 @@ export const SITE_WORDS = {
 /** A value the site sent, as one of the words its API documents for `kind`, or "unexpected". */
 export const siteWord = (kind, v) => (typeof v === "string" && SITE_WORDS[kind].has(v) ? v : "unexpected");
 const ACCOUNT_REFUSALS = new Map([
-  ["ethereum_account_required", "ask the owner to sign out, then sign in with an Ethereum wallet and retry"],
-  ["owner_proof_owner_mismatch", "ask the owner to sign the owner-proof message with the Solana wallet they signed in with, then retry"],
-  ["wrong_account", "ask the owner to select the Solana wallet account they signed in with, or sign out and sign in with the paying Solana wallet, then retry"],
+  ["ethereum_account_required", "ask the owner to approve from an account that holds an Ethereum wallet (an account admin adds one on the account page), then retry"],
+  ["owner_proof_owner_mismatch", "ask the owner to sign the owner-proof message with a wallet their account holds for this chain, then retry"],
+  ["owner_wallet_required", "ask an account admin to add this budget's Solana owner wallet to the account on its account page, then request the budget again"],
+  ["wrong_account", "ask the owner to pay from a Solana wallet their account holds (an account admin adds one on the account page), then retry"],
 ]);
 /** Recovery for an account refusal, or null for other errors. */
 export const accountRefusalNext = (code) => ACCOUNT_REFUSALS.get(code) ?? null;
 /** What an open request's reason code says while it still waits for the owner: the site refused an account, not the request. */
 const ACCOUNT_WAITING = new Map([
-  ["ethereum_account_required", "an owner signed in with a Solana account tried to approve, and this chain needs an Ethereum account; the request is still open"],
+  ["ethereum_account_required", "the owner tried to approve from an account that holds no Ethereum wallet, and this chain needs one; the request is still open"],
 ]);
 /** The words for an open request the site refused an account on, with the recovery step, or null. */
 export const accountWaitingWords = (code) => (ACCOUNT_WAITING.has(code) ? `${ACCOUNT_WAITING.get(code)}: ${ACCOUNT_REFUSALS.get(code)}` : null);
 /** Anything shaped like an access token (ssbt_, ssba_, sspt_, sspa_) taken out of a text this client prints or stores. */
 export const scrub = (text) => String(text ?? "").replace(/ss[bp][ta]_[A-Za-z0-9_-]*/g, "[token]");
 /**
- * The agent's access tokens (ssbt_, sspt_) taken out of a line the dispatcher prints. An owner's approval link carries
- * its own token (ssba_, sspa_) after # on purpose, so those stay.
+ * Text the dispatcher prints, without control characters: newline and tab stay (the dispatcher's own layout), every other C0
+ * and C1 character goes, and the Unicode line and paragraph separators become spaces. The characters that hide or reorder
+ * text go too, as in siteText: format characters (zero-width, bidi marks and overrides, the soft hyphen, U+2060-2064) and the
+ * tag block U+E0000-E007F. A rail's log can quote an RPC's or a library's error text (viem and @solana/web3.js put the RPC's
+ * words, revert reasons and program logs in their errors), which must not move the cursor, retitle the terminal, erase what
+ * was printed or reorder it. A newline inside such text is flattened where the rail prints the error (oneLine), not here:
+ * the dispatcher's own output has lines.
  */
-export const scrubAgentTokens = (text) => String(text ?? "").replace(/ss[bp]t_[A-Za-z0-9_-]*/g, "[token]");
+export const terminalText = (text) => String(text ?? "").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "").replace(/[\u2028\u2029]/g, " ").replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, "");
+/**
+ * The agent's access tokens (ssbt_, sspt_) taken out of a line the dispatcher prints, after terminalText. An owner's
+ * approval link carries its own token (ssba_, sspa_) after # on purpose, so those stay.
+ */
+export const scrubAgentTokens = (text) => terminalText(text).replace(/ss[bp]t_[A-Za-z0-9_-]*/g, "[token]");
 
 /** The longest run of token characters held back between two chunks; a longer run is a token and is dropped whole. */
 const TOKEN_HOLD_MAX = 512;
@@ -158,7 +164,7 @@ export function agentTokenScrubber() {
   let inToken = false;
   return {
     push(text) {
-      let s = String(text ?? "");
+      let s = terminalText(text);
       if (inToken) {
         // the rest of a token already replaced by [token]
         const m = /^[A-Za-z0-9_-]*/.exec(s);
@@ -251,6 +257,8 @@ export const isSiteRequestId = (id) => typeof id === "string" && /^b[la]_[A-Za-z
 /** An agent access token: ssbt_... */
 export const isSiteToken = (t) => typeof t === "string" && /^ssbt_[A-Za-z0-9_-]{8,256}$/.test(t);
 
+export const SITE_MAX_BYTES = 1_000_000;
+
 export async function call(url, init, timeoutMs, fetchImpl = fetch) {
   let res;
   try {
@@ -258,14 +266,17 @@ export async function call(url, init, timeoutMs, fetchImpl = fetch) {
   } catch (err) {
     return { ok: false, status: 0, body: null, network: siteText(err?.cause?.code ?? err?.cause?.message ?? err?.message ?? err) };
   }
+  const { bytes, truncated } = await readCapped(res, SITE_MAX_BYTES);
+  // an answer cut off or longer than the cap is no answer to act on: never parsed, never ok
+  if (truncated) return { ok: false, status: res.status, body: null, network: `the answer from ${siteText(new URL(url).host, 80)} was cut off or longer than ${SITE_MAX_BYTES} bytes` };
   let body = null;
-  try { body = await res.json(); } catch {}
+  try { body = JSON.parse(bytes.toString("utf8")); } catch {}
   return { ok: res.ok, status: res.status, body };
 }
 
 /**
  * One read of a request: GET /api/v1/budget/requests/{id}?wait=N. { ok: true, view } or { ok: false, status, reason }.
- * status 0: the site did not answer. The view is the site's JSON: id, kind, state, final, owner, tx_hash, reason, next_action.
+ * status 0: the site did not answer. `asked`: the failed answer itself shows the wallet was asked. The view is the site's JSON: id, kind, state, final, owner, tx_hash, reason, next_action.
  */
 /** @param {{ site: string, id: string, token: string, wait?: number, fetchImpl?: typeof fetch }} args */
 export async function readSiteRequest({ site, id, token, wait = 0, fetchImpl }) {
@@ -275,26 +286,64 @@ export async function readSiteRequest({ site, id, token, wait = 0, fetchImpl }) 
   if (r.ok && r.body && typeof r.body === "object" && typeof r.body.state === "string") return { ok: true, view: r.body };
   const code = r.body?.error?.code ?? r.body?.code ?? r.body?.reason_code;
   const next = accountRefusalNext(code);
-  return { ok: false, status: r.status, code: siteWord("code", code), reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : `${siteFailure(r.status, r.body)}${next ? `; ${next}` : ""}` };
+  // an error answer can show the wallet was asked (`error.money_moved`, even on a 429): the caller keeps that
+  return { ok: false, status: r.status, code: siteWord("code", code), asked: viewEvidence(r.body), reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : `${siteFailure(r.status, r.body)}${next ? `; ${next}` : ""}` };
 }
+
+/** Site states that say the owner's wallet was asked, or a transaction exists. */
+export const WALLET_STATES = new Set(["sending", "sent", "confirmed", "failed", "unknown"]);
+/**
+ * Whether one object of the site's answer (a request, a step, an error) shows that the wallet was asked: wallet_asked, a
+ * transaction, a state that may have sent, or money that may have moved (`money_moved` anything but false or absent).
+ */
+export const sentEvidence = (v) =>
+  !!v && typeof v === "object" && (v.wallet_asked === true || (typeof v.tx_hash === "string" && v.tx_hash !== "") || WALLET_STATES.has(v.state) || (v.money_moved !== undefined && v.money_moved !== null && v.money_moved !== false));
+
+/**
+ * Whether an answer about a request shows that the wallet was asked, anywhere in it: the answer, its `error`, and the steps
+ * of either. The one predicate for the first read, every poll and the answer to a cancel.
+ */
+export const viewEvidence = (v) => {
+  if (!v || typeof v !== "object") return false;
+  const inner = v.error && typeof v.error === "object" ? v.error : undefined;
+  return [v, inner].some((x) => sentEvidence(x) || (Array.isArray(x?.steps) && x.steps.some(sentEvidence)));
+};
 
 /**
  * POST /api/v1/budget/requests/{id}/cancel. The site cancels only while the owner's wallet has not been asked.
- * { cancelled: true } when it did, { cancelled: false, walletAsked, state, reason } when it refused, null when it did not answer.
+ * { cancelled: true } only when the answer is an explicit cancellation of this request with no evidence that the wallet
+ * was asked: `200` with this id, state `cancelled` and `final: true`, or `409 { error: { code: "not_open", state: "cancelled",
+ * wallet_asked: false, tx_hash: null } }` (the site's answer to a second cancel; a refusal carries its fields under `error`);
+ * and no wallet_asked, tx_hash, money_moved or sending/sent/confirmed/failed/unknown state on the request, the refusal or
+ * any of their steps, and no request id other than this one. A 409 not_open has neither an id nor `final`, so it is
+ * accepted without them, but never with an id that is another request's. Anything else, an empty, unreadable or contradictory answer included,
+ * is { cancelled: false, walletAsked, state, reason }: the caller reads it as unknown. null when the site did not answer.
  */
 /** @param {{ site: string, id: string, token: string, fetchImpl?: typeof fetch }} args */
 export async function cancelSiteRequest({ site, id, token, fetchImpl }) {
   if (!isSiteRequestId(id)) return null;
   const r = await call(`${site}${BUDGET_API}/requests/${id}/cancel`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" }, body: "{}" }, 15_000, fetchImpl);
   if (r.status === 0) return null;
+  const b = r.body && typeof r.body === "object" && !Array.isArray(r.body) ? r.body : {};
+  // a refusal carries its fields under `error`; an answer with the request has them at the top
+  const inner = b.error && typeof b.error === "object" && !Array.isArray(b.error) ? b.error : undefined;
+  const e = !r.ok && inner ? inner : b;
   // a documented state, or "unexpected": the site's text is never repeated
-  const state = typeof r.body?.state === "string" ? siteWord("state", r.body.state) : null;
+  const state = typeof e.state === "string" ? siteWord("state", e.state) : null;
   // a link with steps that is linked answers with the request as it stands, steps included: `view`
-  const view = r.ok && Array.isArray(r.body?.steps) ? r.body : undefined;
-  if (r.ok && (state === null || state === "cancelled")) return { cancelled: true, state: "cancelled", view };
-  // refused (the wallet may have been asked, or the request already ended), or steps the wallet was already asked for
-  const walletAsked = r.body?.wallet_asked === true || typeof r.body?.tx_hash === "string";
-  return { cancelled: false, state, walletAsked, reason: siteFailure(r.status, r.body), view };
+  const view = r.ok && Array.isArray(b.steps) ? b : undefined;
+  // the wallet may have been asked: this request, its error or any of their steps says so, or names a transaction
+  const walletAsked = viewEvidence(b);
+  // an id the answer names (itself or in its error) is this request's, or the answer is about another request
+  const ownId = [b.id, inner?.id].every((x) => x === undefined || x === null || x === id);
+  // an answer with the request, about this request: its states can be taken as the site's word on it
+  const same = r.ok && ownId && b.id === id;
+  if (!walletAsked && ownId) {
+    if (r.ok && b.id === id && b.state === "cancelled" && b.final === true) return { cancelled: true, state: "cancelled", view };
+    if (r.status === 409 && e.code === "not_open" && e.state === "cancelled" && e.wallet_asked === false && (e.tx_hash ?? null) === null) return { cancelled: true, state: "cancelled", view };
+  }
+  const reason = r.ok ? "the site's answer to the cancel does not confirm this request was cancelled before the wallet was asked" : siteFailure(r.status, r.body);
+  return { cancelled: false, state, walletAsked, reason, view, same, body: b };
 }
 
 // ---- find: GET /api/v1/budget/services ------------------------------------------------------------------------------
@@ -326,8 +375,11 @@ function serviceOf(s, chainByNetwork) {
   const amount = p && typeof p === "object" ? str(p.amount ?? p.value) : str(p ?? s.amount);
   const asset = p && typeof p === "object" ? str(p.asset ?? p.currency ?? p.symbol) : str(s.asset ?? s.currency) ?? "USDC";
   const network = str(s.network ?? s.chain_id ?? s.chainId);
-  const chain = str(s.chain) ?? (network ? chainByNetwork[network] ?? null : null);
-  return { name: str(s.name ?? s.title) ?? new URL(url).host, price: amount ? `${amount}${asset ? ` ${asset}` : ""}` : null, chain, network, rail: str(s.rail) ?? railOf(network), simulated: simulatedOf(s), url };
+  // the client's own key for a network it knows; the listing's own chain and rail words only for one it does not (data)
+  const known = network && Object.hasOwn(chainByNetwork, network) ? chainByNetwork[network] : undefined;
+  const chain = known ?? str(s.chain);
+  const rail = known ? railOf(network) : str(s.rail) ?? railOf(network);
+  return { name: str(s.name ?? s.title) ?? new URL(url).host, price: amount ? `${amount}${asset ? ` ${asset}` : ""}` : null, chain, network, rail, simulated: simulatedOf(s), url };
 }
 
 /**

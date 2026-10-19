@@ -18,18 +18,20 @@
 // There is no worker process: the site does the work once the
 // owner signs, so this command returns as soon as the link exists (state waiting_owner, an approval id) and
 // `superstables budget wait --id` reads the purchase from the site. The site's word that it paid is not enough: before a
-// purchase is reported paid, its transaction is read from the chain against the purchase nonce, memo or signed message
+// purchase is reported paid, its transaction is read from the chain against the purchase nonce (on EVM chains, the order it commits to), memo or signed message
 // and the exact listed transfer (settlement.mjs); a payment without this proof is unknown. Its record, in the approvals folder (mode 600), is the
 // only place the access token lives, until the purchase is final; nothing here prints or logs it. Plain JavaScript with
 // Node built-ins only, like site.mjs, so the dispatcher and the standalone build share it.
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { approvalsDir, onceDir } from "./paths.mjs";
+import { approvalsDir, onceDir, publicFile } from "./paths.mjs";
+import { readRegularFile } from "./secret-file.mjs";
+import { keccak256 } from "./keccak.mjs";
 import { claim, isApprovalId, newApprovalId, readApproval, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { CHAIN_ID as TEMPO_CHAIN_ID, TOKEN_ADDRESS as PATH_USD, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
-import { accountRefusalNext, accountWaitingWords, call, isOtherSite, siteName, siteText } from "./site.mjs";
+import { DEFAULT_SITE, accountRefusalNext, accountWaitingWords, call, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
 import { readSettlement } from "./settlement.mjs";
 
 /** The chain buy-once used before listings named others; the default in words when nothing else is known. */
@@ -103,13 +105,14 @@ const WORDS = {
     "agent_cancelled", "approval_expired", "authorization_cancelled", "ethereum_account_required", "match_code_mismatch", "not_landed", "not_requested", "not_settled",
     "owner_policy", "owner_proof_owner_mismatch", "owner_rejected", "seller_no_receipt", "seller_refused_payment", "seller_unreachable", "service_no_answer",
     "settlement_failed", "settlement_not_on_chain", "settlement_pending", "stale_tx", "submission_interrupted", "terms_changed", "transaction_mismatch", "wrong_account",
-    "wallet_may_have_sent", "settlement_contradicted", "service_failed",
+    "wallet_may_have_sent", "settlement_contradicted", "service_failed", "payer_mismatch",
   ]),
   error: new Set([
-    "anonymous_purchases_disabled", "bad_request", "chain_unavailable", "ethereum_account_required", "forbidden", "idempotency_key_expired", "idempotency_key_reused",
-    "internal_error", "invalid_idempotency_key", "invalid_params", "invalid_token", "method_not_allowed", "not_awaiting_approval", "not_found",
-    "owner_proof_owner_mismatch", "policy_refused", "price_above_max", "purchase_unresolved", "rate_limited", "seller_error", "service_unavailable", "terms_changed",
-    "terms_mismatch", "too_many_pending", "unauthorized", "unknown_service", "would_not_settle", "wrong_account",
+    "anonymous_purchases_disabled", "bad_request", "body_too_large", "chain_unavailable", "ethereum_account_required", "forbidden", "idempotency_conflict",
+    "idempotency_key_expired", "idempotency_key_reused", "internal_error", "invalid_expected_payer", "invalid_idempotency_key", "invalid_params", "invalid_replay_secret", "invalid_request",
+    "invalid_token", "method_not_allowed", "missing_token", "not_awaiting_approval", "not_found", "owner_proof_owner_mismatch", "payer_mismatch", "payment_outcome_unknown",
+    "policy_refused", "price_above_max", "purchase_unresolved", "rate_limited", "replay_secret_required", "seller_error", "service_unavailable", "terms_changed",
+    "terms_mismatch", "token_expired", "too_many_pending", "unauthorized", "unknown_parameter", "unknown_service", "unsupported_media_type", "would_not_settle", "wrong_account",
   ]),
 };
 /** A listing's parameter name as the command line takes it (--param NAME=VALUE). */
@@ -150,6 +153,10 @@ function moneyMovedOf(...objs) {
  * so it is kept in lowercase. Anything else (a Solana signature or address, base58) is case-sensitive and kept as it is.
  */
 const canonTx = (t) => (typeof t === "string" && /^0x[0-9a-fA-F]{64}$/.test(t) ? t.toLowerCase() : t);
+/** The longest order text kept (the site's order is a few hundred characters); a longer one is not read. */
+const ORDER_MAX = 8192;
+/** A value fixed by the first answer that names it: kept while later answers name the same, null once one names another. */
+const pinned = (was, now) => (was === undefined ? now : now === undefined || was === now ? was : null);
 const canonAddr = (a) => (typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a) ? a.toLowerCase() : a);
 
 /**
@@ -165,7 +172,14 @@ function evidenceOf(view, net) {
   const hashes = net ? pairs.filter(([t]) => isHash(t, net)).map(([t, who]) => [canonTx(t), who]) : [];
   const payers = {};
   for (const [t, who] of hashes) if (isAddress(who, net)) payers[t] = payers[t] === undefined || payers[t] === canonAddr(who) ? canonAddr(who) : null;
+  // the payer this answer names for the signed payment (payment.payer, the receipt's payer): one address, or null when it
+  // names two, or one that is not an address of this network
+  const namedPayers = [p.payer, rc.payer].filter((a) => a !== undefined && a !== null && a !== "");
+  const payer = !namedPayers.length ? undefined : namedPayers.every((a) => isAddress(a, net) && canonAddr(a) === canonAddr(namedPayers[0])) ? canonAddr(namedPayers[0]) : null;
   return {
+    payer,
+    order: typeof p.authorization?.order === "string" && p.authorization.order.length <= ORDER_MAX ? p.authorization.order : undefined,
+    validBefore: Number.isFinite(Date.parse(p.authorization?.valid_before)) ? Math.floor(Date.parse(p.authorization.valid_before) / 1000) : undefined,
     nonce: typeof p.authorization?.nonce === "string" && /^0x[0-9a-fA-F]{64}$/.test(p.authorization.nonce) ? p.authorization.nonce.toLowerCase() : undefined,
     hashes: [...new Set(hashes.map(([t]) => t))],
     payers,
@@ -197,7 +211,10 @@ function unionSeen(seen, ev) {
   for (const [h, who] of Object.entries(s.payers ?? {})) put(h, who);
   for (const [h, who] of Object.entries(ev.payers ?? {})) put(h, who);
   return {
-    nonce: s.nonce === undefined ? ev.nonce : ev.nonce === undefined || s.nonce === ev.nonce ? s.nonce : null,
+    nonce: pinned(s.nonce, ev.nonce),
+    payer: pinned(s.payer === undefined || s.payer === null ? s.payer : canonAddr(s.payer), ev.payer === undefined || ev.payer === null ? ev.payer : canonAddr(ev.payer)),
+    order: pinned(s.order, ev.order),
+    validBefore: pinned(s.validBefore, ev.validBefore),
     hashes: [...new Set([...(s.hashes ?? []), ...(ev.hashes ?? [])].map(canonTx))],
     payers,
     named: Boolean(s.named || ev.named),
@@ -208,7 +225,9 @@ function unionSeen(seen, ev) {
 }
 /** The transaction a record has seen, for a result that is not final: never dropped, even when the site cannot be read. */
 const seenTx = (rec) => (rec?.seen?.hashes?.[0] ? { settle: rec.seen.hashes[0] } : {});
-const anyEvidence = (s) => Boolean(s && (s.hashes?.length || s.named || s.paid || s.moved || s.stepOver));
+const anyEvidence = (s) => Boolean(s && (s.hashes?.length || s.named || s.paid || s.moved || s.stepOver || s.payer !== undefined));
+/** The owner signed (a payer was shown) and nothing else was: no transaction, no paid state, no money_moved. For an agreed "not paid" check. */
+export const signedOnly = (s) => typeof s?.payer === "string" && !s.hashes?.length && !s.named && !s.paid && !s.moved;
 /** What an earlier answer showed, in words, for an answer that is not final. */
 const evidenceWords = (s) =>
   s?.hashes?.length || s?.named ? "named a transaction" : s?.paid ? "said it was paid" : s?.moved ? "said money may have moved" : "showed that the purchase was no longer awaiting approval";
@@ -247,8 +266,9 @@ function verdictHolds(seen, result) {
   if (result?.paid === false) return mayBeUnpaid(seen);
   if (result?.paid === true) {
     const h = canonTx(result.tx?.settle);
-    const who = h ? unionSeen(seen, {}).payers[h] : undefined;
-    return typeof who === "string" && who === canonAddr(result.payer);
+    const now = unionSeen(seen, {});
+    const who = h ? now.payers[h] : undefined;
+    return typeof who === "string" && who === canonAddr(result.payer) && (now.payer === undefined || now.payer === who);
   }
   return true;
 }
@@ -289,7 +309,10 @@ function cachedVerdictHolds(record) {
   const { result, attribution } = record.final;
   if (!verdictHolds(record.seen, result)) return false;
   if (result?.paid !== true) return true;
-  return typeof record.seen?.nonce === "string" && attribution?.nonce === record.seen.nonce && attributionStatus(record, result.tx?.settle) !== "elsewhere";
+  if (!(typeof record.seen?.nonce === "string" && attribution?.nonce === record.seen.nonce)) return false;
+  // records written from version 2 on also pin the payer and the order; older finals keep the meaning they had
+  if (record.attributionVersion >= 2 && (attribution.payer !== record.seen.payer || (attribution.order ?? undefined) !== (record.seen.order ?? undefined))) return false;
+  return attributionStatus(record, result.tx?.settle) !== "elsewhere";
 }
 
 /** A verdict the evidence overrules: unknown, with the transaction it names, never "nothing was paid", never "paid". */
@@ -365,6 +388,43 @@ export async function listOnceServices({ site, fetchImpl }) {
   return { ok: true, services: list.slice(0, 200).map(onceServiceOf).filter(Boolean) };
 }
 
+/** The purchase API's announcement that a creation may name the wallet expected to pay (superstables-app lib/purchases/features.ts). */
+export const EXPECTED_PAYER_FEATURE = "expected_payer";
+
+/**
+ * What the site says its purchase API accepts beyond the first fields: GET /api/v1/purchase/services `features`. Any failure,
+ * or anything but a list of words: none.
+ */
+export async function purchaseFeatures({ site, fetchImpl }) {
+  const r = await call(`${site}${SERVICES_API}`, { headers: { accept: "application/json" } }, 10_000, fetchImpl);
+  const list = r.ok && Array.isArray(r.body?.features) ? r.body.features : [];
+  return new Set(list.filter((x) => typeof x === "string" && /^[a-z0-9_]{1,64}$/.test(x)).slice(0, 50));
+}
+
+/** The variable that holds the owner in a rail's public file. */
+const OWNER_VAR = { evm: "B4_OWNER_ADDRESS", tempo: "OWNER_ADDRESS", solana: "SOLANA_OWNER_ADDRESS" };
+
+/**
+ * The wallet a purchase on `net` expects to pay: the hosted owner this machine recorded for that rail and chain (the public
+ * file `setup --hosted` wrote), only when its approvals are hosted on the same site as this purchase. EVM addresses are
+ * given in lowercase, which the site accepts for any address. null for no owner, another site, local approvals, or a value
+ * that is not an address of the rail. The file is the agent's to write, but a name in it can only make the check stricter.
+ */
+export function expectedPayerFor(net, site) {
+  try {
+    const text = readRegularFile(publicFile(net.rail, net.chain), "the public file");
+    if (!/^APPROVALS=hosted\s*$/m.test(text)) return null;
+    const recorded = siteOrigin(/^SITE=(.*)$/m.exec(text)?.[1]?.trim() || DEFAULT_SITE).origin;
+    const here = siteOrigin(site).origin;
+    if (!recorded || recorded !== here) return null;
+    const owner = new RegExp(`^${OWNER_VAR[net.rail]}=(.*)$`, "m").exec(text)?.[1]?.trim();
+    if (!isAddress(owner, net)) return null;
+    return net.evm ? owner.toLowerCase() : owner;
+  } catch {
+    return null;
+  }
+}
+
 /** GET /api/v1/purchase/services/{id}: { ok: true, service } or { ok: false, status, reason }. */
 async function getOnceService({ site, id, fetchImpl }) {
   const r = await call(`${site}${SERVICES_API}/${encodeURIComponent(id)}`, { headers: { accept: "application/json" } }, 15_000, fetchImpl);
@@ -385,11 +445,11 @@ const errorOf = (r) => {
  * POST /api/v1/purchases. The same key on a retry after a lost answer returns the same purchase. Every answer, each retry
  * and each error included, adds to `seen`: the evidence of this purchase before it has a record of its own.
  */
-async function createPurchase({ site, key, body, net, fetchImpl }) {
+async function createPurchase({ site, key, secret, body, net, fetchImpl }) {
   let last;
   let seen = unionSeen(null, {});
   for (let attempt = 0; attempt < 3; attempt++) {
-    const r = await call(`${site}${PURCHASES_API}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json", "idempotency-key": key }, body: JSON.stringify(body) }, 30_000, fetchImpl);
+    const r = await call(`${site}${PURCHASES_API}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json", "idempotency-key": key, "superstables-replay-secret": secret }, body: JSON.stringify(body) }, 30_000, fetchImpl);
     seen = unionSeen(seen, evidenceOf(r.body, net));
     if (r.ok && r.body && typeof r.body === "object") return { ok: true, purchase: r.body, seen };
     last = { ...errorOf(r), network: r.network };
@@ -475,7 +535,7 @@ function termsOf(service, created, net) {
   const how = net.rail === "tempo"
     ? { enforced: `Your wallet sends one transfer of exactly ${amount} ${net.unit} to ${to}.`, note: "The first approval link you open asks you to sign in with your wallet (a message, no fee). Your wallet may first ask to add Tempo Moderato; you pay the network fee there." }
     : net.rail === "solana"
-      ? { enforced: `Your Solana wallet signs one transfer of exactly ${amount} USDC to ${to}.`, note: "The first approval link you open asks you to sign in with a Solana wallet such as Phantom or an Ethereum wallet such as MetaMask. Signing in signs a message and has no network fee. With a Solana account, pay from the Solana wallet you signed in with. With an Ethereum account, connect a separate Solana wallet. For this purchase on Solana devnet, you don't need SOL: the seller's facilitator pays the network fee." }
+      ? { enforced: `Your Solana wallet signs one transfer of exactly ${amount} USDC to ${to}.`, note: "The first approval link you open asks you to sign in, with a wallet (a message, no network fee) or an email address. Pay from a Solana wallet your account holds, such as Phantom; an account admin adds one on the account page. For this purchase on Solana devnet, you don't need SOL: the seller's facilitator pays the network fee." }
       : { enforced: `Your wallet signs one authorization for exactly ${amount} ${net.unit} to ${to}, usable once.`, note: `The first approval link you open asks you to sign in with your wallet (a message, no fee).${net.chain === ONCE_CHAIN ? "" : ` Your wallet may first ask to add ${net.label}.`} No gas is needed: ${net.gasPaidBy ?? "the seller's facilitator"} pays it.` };
   return {
     title: `Buy once: ${service.id}`,
@@ -515,22 +575,58 @@ export function messageForOwner(r) {
   const what = t.title ?? r.action ?? r.command ?? "this request";
   const unit = !t.unit || t.unit === "USDC" ? "test USDC" : `${t.unit} (testnet)`;
   const hasAmount = t.amount != null && t.amount !== "";
-  const local = /^http:\/\/(127\.0\.0\.1|localhost)/.test(r.url);
+  const hostedOn = typeof r.hosted?.site === "string"; // a site's link, not this client's own page
+  const local = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(r.url);
   let origin = null;
   try { origin = new URL(r.url).origin; } catch {}
   // a link on a site other than www.superstables.com says which site it is, before anything else
-  const other = origin && !local && isOtherSite(origin) ? `This approval link is on ${siteName(origin)}, not www.superstables.com.` : null;
+  const other = origin && (hostedOn || !local) && isOtherSite(origin) ? `This approval link is on ${siteName(origin)}${local ? ", a site on this computer," : ","} not www.superstables.com.` : null;
+  // the account note: a link on a site asks the owner to sign in with their wallet first
+  const account = hostedOn || !local ? `This needs a ${origin ? siteName(origin) : "superstables.com"} account: the link asks you to sign in with your wallet first (a message, no fee).` : null;
+  const minutes = r.expires ? Math.round((Date.parse(r.expires) - Date.now()) / 60000) : NaN;
+  const expiry = Number.isFinite(minutes) && minutes >= 1 ? `The link expires in ${minutes} minute${minutes === 1 ? "" : "s"}.` : null;
+  let port = null;
+  try { port = local && !hostedOn ? new URL(r.url).port : null; } catch {}
+  const ssh = local && port ? `Over SSH, forward the port first: ssh -L ${port}:127.0.0.1:${port} user@this-host` : null;
   return [
     `Review and approve in your wallet: ${what}`,
     other,
     // buy-once: who is paid and for what, in this client's words
     r.command === "buy-once" && r.hosted ? `Paid to ${shortAddress(r.hosted.payTo)} for ${r.service?.id ?? "the service"} (purchase ${r.hosted.requestId} on ${siteName(r.hosted.site)}).` : null,
+    r.command === "buy-once" && r.expectedPayer ? `Pay from ${shortAddress(r.expectedPayer)}.` : null,
     r.url,
     r.matchCode ? `Match code: ${r.matchCode} (pick it on the page)` : null,
     `${hasAmount ? `${t.amount} ${unit} on ${network}.` : `On ${network}.`} ${TESTNET_LINE}`,
+    account,
+    r.command === "buy-once" ? null : enforcementLine(r, t),
+    expiry,
     local ? "Open it in the browser that has your wallet, on this machine." : null,
+    ssh,
     "Tell me when you've approved.",
   ].filter(Boolean).join("\n");
+}
+
+/**
+ * What the chain enforces for a step that allows money, in this client's words, built from the rail and the step's own
+ * terms (the client's tables, never seller or listing text). Null for a step that allows nothing (setup, revoke).
+ */
+function enforcementLine(r, t) {
+  // only a step that lets the agent spend: revoke, recover and fund-agent have an amount but allow nothing
+  if (r.command !== "grant" && r.command !== "setup") return null;
+  const enforced = Array.isArray(t.enforced) ? t.enforced.filter((x) => typeof x === "string") : [];
+  if (t.amount == null || t.amount === "" || enforced.length === 0) return null;
+  if (r.rail === "tempo") {
+    const total = /^A total limit of (.+?)\.(?: |$)/.exec(enforced[0])?.[1];
+    const perPeriod = /^A limit of (.+?) per period/.exec(enforced[0])?.[1];
+    if (!total && !perPeriod) return null; // not a grant's terms: say nothing rather than guess
+    const expiry = enforced.find((x) => /^The expiry\./.test(x))?.match(/After (\S+) /)?.[1];
+    const sellers = enforced.some((x) => /^The seller list\./.test(x));
+    const parts = [total ? `a total cap of ${total}` : `a cap of ${perPeriod} per period`, ...(expiry ? [`an expiry (${expiry})`] : []), ...(sellers ? ["a seller list"] : [])];
+    return `The chain enforces ${parts.length > 2 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts.join(" and ")}; no per-payment limit.`;
+  }
+  const cap = /total at most (.+?)\.(?: |$)/.exec(enforced[0])?.[1];
+  if (!cap) return null;
+  return `The chain enforces a total cap of ${cap} only: no expiry, no seller list and no per-payment limit.`;
 }
 
 // ---- records ---------------------------------------------------------------------------------------------------------
@@ -643,7 +739,10 @@ export async function findOpenOnce({ fetchImpl } = {}) {
     // the record as it now is: with the payment evidence this read kept
     const rec = s.record ?? r;
     // an outcome that is not established yet (unknown, not final): never "waiting for the owner", never replaced
-    if (s.result?.paid === true) continue; // delivery is complete; wait still rechecks chain finality
+    // paid and stored final (settled at a final block, and the site finished it): it no longer holds the next one
+    if (s.result?.paid === true && (rec.final || rec.finalityAbandonedAt)) continue;
+    // paid, but not final yet (the payment is not final on chain, or the site has not finished it): it still does
+    if (s.result?.paid === true) return { record: rec, paidNotFinal: true };
     if (!s.final && s.result) return { record: rec, unresolved: s.result.reason };
     if (!s.final) return { record: rec, unreadable: s.unreachable ?? null };
     // no answer to store yet (a refused read, or payment not shown on chain): still open
@@ -651,6 +750,8 @@ export async function findOpenOnce({ fetchImpl } = {}) {
   }
   return null;
 }
+
+const FINALITY_ABANDONED = "the owner stopped waiting for this payment to become final. It was read on chain as paid, but not final. Never pay for it again";
 
 /** What to do about an open record the site will not end: only the owner gives it up. */
 const ABANDON = (id) => `if the site never ends it, only the owner may give it up with superstables budget wait --id ${id} --abandon (the payment then stays unknown)`;
@@ -662,9 +763,14 @@ const ABANDON = (id) => `if the site never ends it, only the owner may give it u
  */
 export async function abandonOnce(record, { fetchImpl } = {}) {
   const s = await settleOnce(record, { waitS: 0, fetchImpl });
+  const at = new Date().toISOString();
+  // paid on chain, but not final: the owner stops waiting for finality. The payment was read, so the answer stays paid
+  if (s.result?.paid === true && !(s.record ?? record).final) {
+    const fresh = updateApproval(record.id, (now) => (now.final ? null : { finalityAbandonedAt: at }));
+    return { final: true, code: s.code, result: { ...s.result, finalityAbandonedAt: at, next: FINALITY_ABANDONED }, record: fresh };
+  }
   // ended on the site and recorded: that is the answer (a payment the chain does not show yet is not recorded: give it up)
   if (s.final && s.result?.final !== false) return s;
-  const at = new Date().toISOString();
   const result = {
     ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, purchase: record.hosted?.requestId, service: record.service?.id,
     state: "unknown", paid: null, delivered: null, amount: null, tx: seenTx(s.record ?? record), abandonedAt: at,
@@ -723,6 +829,7 @@ async function finalOf(record, view, { deadline } = {}) {
   let chainWords = null;
   let keep = true;
   let chainFinal = null;
+  let unattributed = false;
   const candidates = [...new Set([...now.hashes, ...seen.hashes])];
   if (paid === true || (paid === null && candidates.length)) {
     let unresolved = false;
@@ -730,8 +837,9 @@ async function finalOf(record, view, { deadline } = {}) {
     for (const h of candidates) {
       const who = seen.payers?.[h] ?? null;
       // the chain check fits in the command's deadline: one that runs out is unread, so the answer is unknown and not final
-      const c = await chainCheck(record, net, h, who, deadline);
+      const c = await chainCheck(record, net, h, who, deadline, seen);
       if ((c.state === "settled" || c.state === "included") && who) { hash = h; payer = who; paid = true; chainFinal = c.state === "settled"; keep = chainFinal && view.final === true; chainWords = c.reason; break; }
+      if (c.unattributed) unattributed = true;
       if (c.state !== "mismatch") unresolved = true;
       first ??= c.reason;
     }
@@ -773,29 +881,83 @@ async function finalOf(record, view, { deadline } = {}) {
   if (chainWords) {
     // the site says paid, or names a transaction, and the chain does not show the payment (yet): never "paid", never
     // "nothing paid"
-    const next = keep
+    const next = keep && unattributed
+      ? `a payment may have left, but it cannot be tied to this purchase: never buy this again. Ask the owner to check their wallet activity and the receipts on their ${site} account`
+      : keep
       ? `the chain does not show the payment ${site} reports: never buy this again. Ask the owner to check their wallet activity and the receipts on their ${site} account`
       : `${site} reports a payment that cannot be verified yet: never buy this again. Run superstables budget wait --id ${record.id} --shown later to read it again`;
     const said = sitePaid ? `${site} says paid` : hash ? `${site} ${now.hashes.includes(hash) ? "names" : "named"} transaction ${hash} but does not say it was paid` : `${site} said paid earlier`;
     // not stored (keep false): a later wait reads it again, so it is not final
     return { keep, code: 5, result: { ok: false, ...base, state: "unknown", ...(keep ? {} : { final: false }), next, reason: `${said}, but ${chainWords}` } };
   }
-  return { keep, code: 5, result: { ok: false, ...base, state: "unknown", next: `a payment may have left: never buy this again. Ask the owner to check their wallet activity and the receipts on their ${site} account`, reason: seen.named && !hash ? `${site} names a transaction this client cannot read as one on ${net.label}, so whether it was paid is unknown` : seen.paid ? `${site} said paid earlier and names no transaction to check, so whether it was paid is unknown` : view.state === "failed" && p.status === "unknown" ? `${site} found no transfer for it as of its last check, and one could still arrive, so whether it was paid is unknown` : seen.moved ? `${site} says money may have moved (money_moved, or an uncertain or unknown payment), so whether it was paid is unknown` : reason ?? "the site cannot say whether the payment happened" } };
+  return { keep, code: 5, result: { ok: false, ...base, state: "unknown", next: `a payment may have left: never buy this again. Ask the owner to check their wallet activity and the receipts on their ${site} account`, reason: typeof seen.payer === "string" && (ended || p.status === "not_paid") && !seen.named && !seen.paid ? `${site} says it was not paid, but the owner's wallet signed a payment for it (from ${seen.payer}), and this client does not take the site's word alone that a signed payment can no longer settle, so whether it was paid is unknown` : seen.named && !hash ? `${site} names a transaction this client cannot read as one on ${net.label}, so whether it was paid is unknown` : seen.paid ? `${site} said paid earlier and names no transaction to check, so whether it was paid is unknown` : view.state === "failed" && p.status === "unknown" ? `${site} found no transfer for it as of its last check, and one could still arrive, so whether it was paid is unknown` : seen.moved ? `${site} says money may have moved (money_moved, or an uncertain or unknown payment), so whether it was paid is unknown` : reason ?? "the site cannot say whether the payment happened" } };
 }
 
 /**
  * The payment on chain: the transaction the site names must move exactly the purchase's amount of the listed token to the
  * listed recipient (from the payer it names), after the purchase was created. { state: "settled" | "included" | "mismatch" | "unread", reason }.
  */
-async function chainCheck(record, net, hash, payer, deadline) {
+async function chainCheck(record, net, hash, payer, deadline, seen = record.seen ?? {}) {
   const h = record.hosted ?? {};
   if (!hash) return { state: "unread", reason: "the site names no transaction for it" };
   if (!isDecimal(h.amount) || !isAddress(h.payTo, net)) return { state: "mismatch", reason: "this purchase's record has no amount or recipient to check the payment against" };
+  const bound = attributionProblem(record, net, seen, hash, payer);
+  if (bound) return bound;
   const attribution = attributionStatus(record, hash);
   if (attribution === "unread") return { state: "unread", reason: `the saved record linking transaction ${hash} to a single purchase could not be read. Whether this purchase was paid is unknown. Do not pay again.` };
   if (attribution === "elsewhere") return { state: "mismatch", reason: `transaction ${hash} is already recorded as payment for another single purchase on superstables.com. Whether this purchase was paid is unknown. Do not pay again.` };
   const notBefore = Math.floor(Date.parse(record.createdAt) / 1000);
-  return readSettlement({ rail: net.rail, chain: net.chain, tx: hash, payer, payTo: h.payTo, asset: net.asset, amount: micro(h.amount), notBefore: Number.isFinite(notBefore) ? notBefore : 0, nonce: record.seen?.nonce, deadline });
+  return readSettlement({ rail: net.rail, chain: net.chain, tx: hash, payer, payTo: h.payTo, asset: net.asset, amount: micro(h.amount), notBefore: Number.isFinite(notBefore) ? notBefore : 0, nonce: seen.nonce, deadline });
+}
+
+/** The CAIP-2 id of a record's network, as the site's order names it. */
+const caipOf = (chain) => Object.keys(ONCE_NETWORKS).find((k) => ONCE_NETWORKS[k].chain === chain);
+
+/**
+ * Why the payment the site names for this purchase cannot be tied to it, before the chain is read, or null. The payer and
+ * the authorization nonce are the ones the site's first answer that named them gave (pinned in the record's `seen`: a later
+ * different one makes it null). On the EVM chains, the nonce must be keccak256 of the order the site shows, and the order
+ * must name this purchase and its terms. On Solana devnet and Tempo Moderato, the chain checks (settlement.mjs) read the
+ * signed message and the memo against the pinned nonce. { state: "mismatch", unattributed: true } for what no later answer
+ * can change, { state: "unread" } for what a later answer can still show.
+ */
+function attributionProblem(record, net, seen, hash, who) {
+  const site = siteName(record.hosted?.site ?? "");
+  const no = (reason) => ({ state: "mismatch", unattributed: true, reason: `${reason}. Whether this purchase was paid is unknown. Do not pay again.` });
+  // the wallet this purchase named as its payer: the one that signed it, and the one the payment was named with
+  if (record.expectedPayer) {
+    for (const named of [who, seen.payer]) {
+      if (typeof named === "string" && !sameAddress(named, record.expectedPayer, net)) return no(`transaction ${hash} was named with the payer ${named}, not ${record.expectedPayer}, the wallet this purchase expected to pay`);
+    }
+  }
+  if (seen.payer === null) return no(`${site}'s answers named different payers for this purchase's payment`);
+  if (typeof seen.payer === "string" && who !== seen.payer) return no(`transaction ${hash} was named with ${who ? `the payer ${who}` : "no payer"}, not ${seen.payer}, who signed this purchase's payment`);
+  if (net.rail === "evm") {
+    if (typeof seen.nonce !== "string") return null; // readSettlement: no payment identity
+    if (seen.order === null) return no(`${site}'s answers showed different orders for this purchase's payment`);
+    if (seen.order === undefined) return { state: "unread", reason: `${site} shows no order behind this purchase's authorization nonce yet, so its payment cannot be tied to this purchase` };
+    const wrong = orderProblem(record, net, seen);
+    if (wrong) return no(wrong);
+  }
+  return null;
+}
+
+/** Why the order the site shows does not commit this purchase's authorization nonce to this purchase and its terms, or "". */
+function orderProblem(record, net, seen) {
+  if (keccak256(seen.order) !== seen.nonce) return "the order the site shows does not hash to this purchase's authorization nonce";
+  let o;
+  try { o = JSON.parse(seen.order); } catch { return "the order the site shows is not readable"; }
+  if (!o || typeof o !== "object" || o.v !== "superstables-order/1") return "the order the site shows is not a superstables-order/1 order";
+  // one reading only: the site's text is JSON.stringify of the fields in this order, so a text with a repeated key or other spacing is not its own
+  if (JSON.stringify(o) !== seen.order) return "the order the site shows is not in its canonical form";
+  const KEYS = ["v", "purchase", "service", "request", "pay", "salt"], PAY = ["network", "asset", "to", "amount"];
+  if (Object.keys(o).join() !== KEYS.join() || Object.keys(o.pay ?? {}).join() !== PAY.join()) return "the order the site shows has other fields than a superstables-order/1 order";
+  const id = record.hosted?.requestId;
+  if (o.purchase !== id) return `the authorization nonce commits to ${isPurchaseId(o.purchase) ? `purchase ${o.purchase}` : "another purchase"}, not ${id}`;
+  const pay = o.pay;
+  const same = (record.service?.id === undefined || o.service === record.service.id) && pay.network === caipOf(record.chain)
+    && sameAddress(pay.asset, net.asset, net) && sameAddress(pay.to, record.hosted?.payTo, net) && pay.amount === String(micro(record.hosted?.amount));
+  return same ? "" : "the order behind the authorization nonce names other terms than this purchase (its service, network, token, recipient or amount)";
 }
 
 /** What a caller waiting for the owner is told while the purchase is not final. */
@@ -876,6 +1038,9 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
   record = accumulate(record, null);
   if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
   const h = record.hosted;
+  // the record is the agent's to write, and the site's "not paid" ends a purchase: a site the owner does not allow now is not read
+  const allowed = siteOrigin(h.site, "verdict");
+  if (allowed.error) return { final: false, record, unreachable: `${siteName(h.site)} is not an approval site the owner allows now, so nothing was read from it (the owner allows it with ${allowed.ownerCommand ?? "superstables owner settings show"})` };
   const r = await readPurchase({ site: h.site, id: h.requestId, token: h.token, wait: waitS, timeoutMs: readTimeoutMs, fetchImpl });
   // every answer's payment evidence is kept in the record, an error envelope's money_moved included
   if (!r.ok) {
@@ -891,7 +1056,9 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
         ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, purchase: h.requestId, service: record.service?.id,
         state: "unknown", final: false, paid: null, delivered: null, amount: null, tx: seenTx(record),
         status: r.status, reasonCode: r.code, reason: `the purchase cannot be read: ${r.reason}${possible ? "; a payment may have left" : ""}`,
-        next: `${next ?? "ask the owner to check the purchase on their account"}; run superstables budget wait --id ${record.id} --shown again. The payment outcome is unknown; do not start another purchase for this request`,
+        next: r.code === "token_expired"
+          ? `the site no longer answers for this purchase (its access token expired); ask the owner to check it on their account; ${ABANDON(record.id)}`
+          : `${next ?? "ask the owner to check the purchase on their account"}; run superstables budget wait --id ${record.id} --shown again. The payment outcome is unknown; do not start another purchase for this request`,
       } };
     }
     // not readable now, but an earlier answer carried payment evidence: unknown, never "waiting for the owner"
@@ -920,7 +1087,7 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
       let stored = false;
       const fresh = updateApproval(record.id, (current) => {
         const seen = unionSeen(current.seen, record.seen ?? {});
-        if (current.final || !verdictHolds(seen, result) || !seen.nonce || seen.nonce !== record.seen?.nonce || !claimAttribution(current, result.tx.settle)) return { included: null };
+        if (current.final || !verdictHolds(seen, result) || !seen.nonce || seen.nonce !== record.seen?.nonce || seen.payer !== record.seen?.payer || seen.order !== record.seen?.order || !claimAttribution(current, result.tx.settle)) return { included: null };
         stored = true;
         return { included: { code, result } };
       }) ?? readApproval(record.id) ?? record;
@@ -939,9 +1106,9 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
     let stored = false;
     const committed = updateApproval(record.id, (now) => {
       const seen = unionSeen(now.seen, record.seen ?? {});
-      if (now.final || !verdictHolds(seen, result) || !seen.nonce || seen.nonce !== record.seen?.nonce || !claimAttribution(now, result.tx.settle)) return null;
+      if (now.final || !verdictHolds(seen, result) || !seen.nonce || seen.nonce !== record.seen?.nonce || seen.payer !== record.seen?.payer || seen.order !== record.seen?.order || !claimAttribution(now, result.tx.settle)) return null;
       stored = true;
-      return { state: "final", endedAt: new Date().toISOString(), final: { code, result, attribution: { nonce: seen.nonce } }, hosted: { ...now.hosted, token: undefined } };
+      return { state: "final", endedAt: new Date().toISOString(), final: { code, result, attribution: { nonce: seen.nonce, ...(seen.payer ? { payer: seen.payer } : {}), ...(seen.order ? { order: seen.order } : {}), ...(seen.validBefore ? { validBefore: seen.validBefore } : {}) } }, hosted: { ...now.hosted, token: undefined } };
     });
     if (stored) release(record.rail, record.chain, record.id);
     done = { record: committed, stored };
@@ -1019,8 +1186,14 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
 
   const found = await findOpenOnce({ fetchImpl });
   const open = found?.record;
+  if (open && found.paidNotFinal) {
+    return refused(`buy-once purchase ${open.id} was paid, but its payment is not final yet: one at a time`, `nothing was started. Do not pay for it again. Run superstables budget wait --id ${open.id} --shown later; a new purchase can start once that payment is final. Only the owner may stop waiting for its finality: superstables budget wait --id ${open.id} --abandon`, 3, { pending: open, pendingState: "paid_not_final" });
+  }
   if (open && found.unresolved) {
     return refused(`buy-once purchase ${open.id} has no final answer yet (${found.unresolved}): one at a time`, found.next ? `${found.next}; ${ABANDON(open.id)}` : `nothing was started. Run superstables budget wait --id ${open.id} --shown later to read it again; ${ABANDON(open.id)}`, 3, { pending: open, pendingState: "unknown" });
+  }
+  if (open && (replace || found.unreadable) && siteOrigin(open.hosted.site, "verdict").error) {
+    return refused(`the pending purchase ${open.id} was made on ${siteName(open.hosted.site)}, which is not an approval site the owner allows now, so ${replace ? "it is not replaced" : "nothing was read from it"}`, `nothing was started and nothing was sent to it; ${ABANDON(open.id)}`, 3, { pending: open });
   }
   if (open && found.unreadable && !replace) {
     return refused(`buy-once purchase ${open.id} has no final answer and ${siteName(open.hosted.site)} could not be read just now (${found.unreadable}): one at a time`, `nothing was started. Run superstables budget wait --id ${open.id} --shown when the site answers; ${ABANDON(open.id)}`, 3, { pending: open });
@@ -1030,7 +1203,7 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
       return refused(`buy-once purchase ${open.id} could not be cancelled and may still be open on ${siteName(open.hosted.site)}: one at a time`, `nothing was started. Its approval link was never shown, so do not send the owner anything for it. Run superstables budget wait --id ${open.id} --shown until the site says it ended, or rerun with --replace to ask the site to cancel it again; ${ABANDON(open.id)}`, 3, { pending: open });
     }
     if (!replace) {
-      return refused(`buy-once purchase ${open.id} is still waiting for the owner: one at a time`, `nothing was started. Write the pending approval link, the code and the terms in your reply to the owner and end your turn there. When they say they've approved, run superstables budget wait --id ${open.id} --shown. Only if the owner asks to replace it and has not started approving: rerun with --replace`, 3, { pending: open });
+      return refused(`buy-once purchase ${open.id} is still waiting for the owner: one at a time`, `nothing was started. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run superstables budget wait --id ${open.id} --shown. Only if the owner asks to replace it and has not started approving: rerun with --replace`, 3, { pending: open });
     }
     // a purchase that ever named a transaction, said paid or said money may have moved is never replaced
     if (!mayBeUnpaid(open.seen)) return refused(`the pending purchase ${open.id} may already have been paid (${siteName(open.hosted.site)} named a transaction or a payment for it), so it is not replaced`, `superstables budget wait --id ${open.id} --shown`, 3, { pending: open });
@@ -1082,12 +1255,15 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
       next: `never buy this again. Ask the owner to check their wallet activity and the receipts on their ${siteName(site)} account; superstables budget wait --id ${recordId} prints this again`,
       reason: `${why}, but its answers name a transaction, a payment or money that may have moved, so whether it was paid is unknown`,
     };
-    saveApproval({ id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "unknown", attributionVersion: 1, createdAt: new Date().toISOString(), action: "buy-once", url: null, expires: null, matchCode: null, terms: null, service: { id: service.id, name: service.name }, max, pid: null, seen });
+    saveApproval({ id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "unknown", attributionVersion: 2, createdAt: new Date().toISOString(), action: "buy-once", url: null, expires: null, matchCode: null, terms: null, service: { id: service.id, name: service.name }, max, pid: null, seen });
     recordFinal(recordId, 5, result);
     return { ok: false, code: 5, state: "unknown", record: readApproval(recordId), final: true, result, reason: result.reason, next: result.next };
   };
 
-  const created = await createPurchase({ site, key: randomUUID(), body: { service_id: service.id, params: checked.params, max_amount: max }, net, fetchImpl });
+  // the hosted owner recorded here for this chain, named to the site only when it says it takes the field
+  const payer = expectedPayerFor(net, site);
+  const sendPayer = payer !== null && (await purchaseFeatures({ site, fetchImpl })).has(EXPECTED_PAYER_FEATURE);
+  const created = await createPurchase({ site, key: randomUUID(), secret: randomBytes(32).toString("hex"), body: { service_id: service.id, params: checked.params, max_amount: max, ...(sendPayer ? { expected_payer: payer } : {}) }, net, fetchImpl });
   if (!created.ok) {
     // any answer, any retry, that carried payment evidence: never "nothing was paid"
     if (!mayBeUnpaid(created.seen)) return unknownWithoutId(created.seen, `${siteName(site)} did not confirm creation of the purchase (${created.reason})`);
@@ -1114,7 +1290,7 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
     const why = c?.cancelled ? "the site cancelled it, but its creation answer already named a transaction or a payment" : c ? `the site did not cancel it (${c.reason})` : "the site could not be reached to cancel it";
     const expiresAt = Date.parse(approval.expires_at);
     const record = saveApproval({
-      id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "cancel_unconfirmed", attributionVersion: 1, createdAt: new Date().toISOString(),
+      id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "cancel_unconfirmed", attributionVersion: 2, createdAt: new Date().toISOString(),
       action: "buy-once", url: null, expires: Number.isFinite(expiresAt) ? new Date(expiresAt).toISOString() : null, matchCode: null, terms: null,
       service: { id: service.id, name: service.name }, max, pid: null, cancelUnconfirmed: scrub(siteText(`${reason}; ${why}`, 600)),
       ...(mayBeUnpaid(seen) ? {} : { seen }),
@@ -1144,13 +1320,16 @@ async function startOnceLocked(recordId, { site, service: serviceId, params, max
   if (!Number.isFinite(Date.parse(approval.expires_at))) return cancelAndRefuse("the purchase has no expiry");
   const wrong = mismatchOf(p, service, max);
   if (wrong) return cancelAndRefuse(`the site's purchase does not match the listing: ${wrong}`);
+  // the site listed the feature and did not take the field: the purchase is not used
+  if (sendPayer && !sameAddress(p.expected_payer, payer, net)) return cancelAndRefuse(`${siteName(site)} did not confirm the wallet expected to pay (${payer})`);
 
   const terms = termsOf(service, p, net);
   const expires = new Date(approval.expires_at).toISOString();
   // The access token lives only in this record (mode 600) until the purchase is final (recordFinal removes it).
   const record = saveApproval({
-    id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "waiting_owner", attributionVersion: 1, createdAt: new Date().toISOString(),
+    id: recordId, command: "buy-once", rail: net.rail, chain: net.chain, state: "waiting_owner", attributionVersion: 2, createdAt: new Date().toISOString(),
     action: "buy-once", url: link.href, expires, matchCode: approval.match_code, terms, service: { id: service.id, name: service.name }, max, pid: null,
+    ...(sendPayer ? { expectedPayer: payer } : {}),
     ...(mayBeUnpaid(born) ? {} : { seen: born }),
     // the amount, recipient and token checked against the listing and --max: a payment is read from the chain against them
     hosted: { site, requestId: id, kind: "purchase", matchCode: approval.match_code, token, amount: p.terms.amount.decimal, payTo: p.terms.recipient, asset: net.asset },

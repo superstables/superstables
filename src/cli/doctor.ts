@@ -16,25 +16,33 @@
 
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DEFAULT_NETWORK } from "../core/chain.js";
 import { HOSTED_DEMO_SERVICE_URL, indexUrl } from "../core/discovery.js";
 import { FACILITATORS } from "../core/facilitator.js";
+import { readBody } from "../core/http.js";
 import {
   DEFAULT_APPROVE_PORT,
+  accountPolicyPath,
+  approvePort,
   approvePortFromEnvironment,
   browserWalletPath,
   ensureDir,
   homeDir,
   policyPath,
+  recordsDir,
   walletDir,
+  walletSocketPath,
   walletUrl,
+  walletUrlFromEnvironment,
 } from "../core/home.js";
-import { loadPolicy } from "../core/policy.js";
+import { loadOptionalPolicy, loadPolicy } from "../core/policy.js";
 import { clientVersion } from "../core/version.js";
+import { privateDirProblem } from "../core/private-dir.mjs";
+import { Records } from "../core/records.js";
 import { walletStatus } from "../core/signer/wallet.js";
 import { policySummary } from "../wallet/daemon.js";
-import { keyExists, keyPath } from "../wallet/keystore.js";
+import { keyExists, keyPath, keyStorage } from "../wallet/keystore.js";
 import { walletModeFromEnvironment, type WalletMode } from "./signer.js";
 
 /** Long enough for a loaded public facilitator, short enough that ten checks stay bearable. */
@@ -71,8 +79,8 @@ export async function runDoctor(mode: WalletMode = walletModeFromEnvironment()):
   const offline = doctorIsOffline();
   const checks: Check[] =
     mode === "browser"
-      ? [homeCheck(), policyCheck(), browserWalletCheck(), await approvalPageCheck()]
-      : [homeCheck(), policyCheck(), keyCheck(), await walletCheck()];
+      ? [homeCheck(), recordsCheck(), policyCheck(), ...accountPolicyCheck(), browserWalletCheck(), await approvalPageCheck()]
+      : [homeCheck(), recordsCheck(), policyCheck(), ...accountPolicyCheck(), keyCheck(), await walletCheck()];
 
   if (offline) {
     for (const name of ["demo service", "Superstables index", ...FACILITATORS.map(hostOf)]) {
@@ -107,12 +115,34 @@ export function formatReport(report: DoctorReport): string {
     ...checkLines,
   ];
   lines.push("");
+  const optional = report.checks.filter((check) => !check.ok && !check.essential);
   lines.push(
-    report.ok
-      ? "Everything this machine needs is in place."
-      : "Something essential is missing; the lines marked ✗ above say what.",
+    !report.ok
+      ? "Something essential is missing; the lines marked ✗ above say what."
+      : optional.length === 0
+        ? "Everything this machine needs is in place."
+        : `Everything pay needs is in place. ${optional.length === 1 ? "1 optional check" : `${optional.length} optional checks`} failed (marked ✗): ${optional.map(optionalEffect).join("; ")}.`,
   );
   return lines.join("\n");
+}
+
+/** What a failed optional check puts at risk, in a few words. */
+function optionalEffect(check: Check): string {
+  const facilitators = FACILITATORS.map(hostOf);
+  if (facilitators.includes(check.name)) return `${check.name} (sellers that settle through it may not complete a payment)`;
+  switch (check.name) {
+    case "demo service":
+      return "demo service (the built-in market data listing may not answer)";
+    case "Superstables index":
+      return "Superstables index (find may miss listings from the index)";
+    case "payment records":
+      return "payment records (some history may not read back)";
+    case "wallet":
+    case "browser wallet":
+      return `${check.name} (the owner's wallet may not be ready)`;
+    default:
+      return check.name;
+  }
 }
 
 // ── This machine ───────────────────────────────────────────────────────────────────────
@@ -130,6 +160,28 @@ function homeCheck(): Check {
   }
 }
 
+/** The payment records: a private folder, every line readable. Reported, not enforced: a payment can still be made. */
+function recordsCheck(): Check {
+  const name = "payment records";
+  const dir = recordsDir();
+  const problem = privateDirProblem(dir, { root: homeDir() });
+  if (problem) return { name, ok: false, detail: problem, essential: false };
+  if (!existsSync(dir)) return { name, ok: true, detail: `${dir}: none yet`, essential: false };
+  try {
+    const skipped = new Records(dir).skippedLines();
+    if (skipped.length === 0) return { name, ok: true, detail: `${dir}: every line reads`, essential: false };
+    const n = skipped.reduce((sum, s) => sum + s.lines, 0);
+    return {
+      name,
+      ok: false,
+      essential: false,
+      detail: `${n} unreadable line${n === 1 ? "" : "s"} (${skipped.map((s) => `${s.lines} in ${s.file}`).join(", ")}) in ${dir}: they are skipped, so a payment written there is not shown and does not count toward the daily cap`,
+    };
+  } catch (err) {
+    return { name, ok: false, detail: `${dir} could not be read: ${messageOf(err)}`, essential: false };
+  }
+}
+
 function policyCheck(): Check {
   const path = policyPath();
   try {
@@ -137,15 +189,42 @@ function policyCheck(): Check {
     const where = existsSync(path) ? path : `${path} (missing, built-in defaults apply)`;
     return { name: "spend policy", ok: true, detail: `${where}: ${policySummary(policy)}`, essential: true };
   } catch (err) {
-    return { name: "spend policy", ok: false, detail: `${path} could not be read: ${messageOf(err)}`, essential: true };
+    return { name: "spend policy", ok: false, detail: messageOf(err), essential: true };
+  }
+}
+
+/** The account's own ~/.superstables/policy.yaml, which applies as well when it is another file that is there. */
+function accountPolicyCheck(): Check[] {
+  const path = accountPolicyPath();
+  if (resolve(path) === resolve(policyPath())) return [];
+  try {
+    const policy = loadOptionalPolicy(path);
+    if (!policy) return [];
+    return [{ name: "account spend policy", ok: true, detail: `${path} (applies as well): ${policySummary(policy)}`, essential: true }];
+  } catch (err) {
+    // Not only a malformed file: one that cannot be opened (a directory above it closed to this user) refuses payments too.
+    return [{ name: "account spend policy", ok: false, detail: messageOf(err), essential: true }];
   }
 }
 
 function keyCheck(): Check {
   const path = keyPath(walletDir());
-  return keyExists(walletDir())
-    ? { name: "wallet key", ok: true, detail: path, essential: true }
-    : { name: "wallet key", ok: false, detail: "no key yet: run `superstables wallet init`", essential: true };
+  if (!keyExists(walletDir())) return { name: "wallet key", ok: false, detail: "no key yet: run `superstables wallet init`", essential: true };
+  let storage: ReturnType<typeof keyStorage>;
+  try {
+    storage = keyStorage(walletDir());
+  } catch (err) {
+    // a key file the wallet cannot read (another user can, it is not a key) cannot sign either
+    return { name: "wallet key", ok: false, detail: messageOf(err), essential: true };
+  }
+  return storage === "encrypted"
+    ? { name: "wallet key", ok: true, detail: `${path} (encrypted)`, essential: true }
+    : {
+        name: "wallet key",
+        ok: true,
+        detail: `${path} (unencrypted: anyone who can read it can sign; \`superstables wallet encrypt\`)`,
+        essential: true,
+      };
 }
 
 /**
@@ -175,11 +254,11 @@ function browserWalletCheck(): Check {
 /**
  * Can this machine serve the approval page? The one thing that would stop it is a port the
  * owner fixed with SUPERSTABLES_APPROVE_PORT already being taken, so the check is to bind it
- * and let it go again. The default port being taken stops nothing: pay takes a free one.
+ * and let it go again. The port this install uses being taken stops nothing: pay takes a free one.
  */
 async function approvalPageCheck(): Promise<Check> {
   const chosen = approvePortFromEnvironment();
-  const port = chosen ?? DEFAULT_APPROVE_PORT;
+  const port = chosen ?? homeApprovePort();
   const server = createServer();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -220,6 +299,26 @@ async function approvalPageCheck(): Promise<Check> {
   }
 }
 
+/** The port pay tries first in this home, or DEFAULT_APPROVE_PORT when its file cannot be used (pay falls back the same way). */
+function homeApprovePort(): number {
+  try {
+    return approvePort();
+  } catch {
+    return DEFAULT_APPROVE_PORT;
+  }
+}
+
+/** Where the agent reaches the local wallet: SUPERSTABLES_WALLET_URL when set, otherwise the wallet's socket. */
+function walletAddress(): string {
+  const url = walletUrlFromEnvironment();
+  if (url) return url;
+  try {
+    return walletSocketPath() ?? walletUrl();
+  } catch (err) {
+    return messageOf(err);
+  }
+}
+
 async function walletCheck(): Promise<Check> {
   try {
     const status = await walletStatus({ fetchImpl: timedFetch });
@@ -228,14 +327,14 @@ async function walletCheck(): Promise<Check> {
     return {
       name: "wallet",
       ok: true,
-      detail: `running at ${walletUrl()} as ${status.address} (${balance})`,
+      detail: `running at ${walletAddress()} as ${status.address} (${balance})`,
       essential: false,
     };
   } catch {
     return {
       name: "wallet",
       ok: false,
-      detail: `not answering at ${walletUrl()}: start it with \`superstables wallet serve\``,
+      detail: `not answering at ${walletAddress()}: start it with \`superstables wallet serve\``,
       essential: false,
     };
   }
@@ -278,16 +377,22 @@ function facilitatorChecks(): Promise<Check[]> {
   return Promise.all(FACILITATORS.map(facilitatorCheck));
 }
 
+/** The most read of a facilitator's /supported answer: the networks and schemes it settles, a few KB. */
+const SUPPORTED_MAX_BYTES = 256 * 1024;
+
 async function facilitatorCheck(url: string): Promise<Check> {
   const name = hostOf(url);
   try {
     const res = await timedFetch(`${url}/supported`, { headers: { accept: "application/json" } });
     if (!res.ok) return { name, ok: false, detail: `answered HTTP ${res.status} on /supported`, essential: false };
-    const body = (await res.json()) as { kinds?: { network?: string; scheme?: string }[] };
-    const kinds = body.kinds ?? [];
-    const supported = kinds.some(
-      (kind) => kind.network === DEFAULT_NETWORK.caip2 || kind.network === DEFAULT_NETWORK.v1Name,
-    );
+    // read up to the cap, within the same five seconds: a longer answer is not a capability list this check reads
+    const { text, end } = await readBody(res, SUPPORTED_MAX_BYTES, CHECK_TIMEOUT_MS, SUPPORTED_MAX_BYTES + 1);
+    if (end === "cap") return { name, ok: false, detail: `answered /supported with more than ${SUPPORTED_MAX_BYTES / 1024} KB`, essential: false };
+    if (end !== "eof") return { name, ok: false, detail: "did not finish answering /supported", essential: false };
+    let body: { kinds?: unknown } | null;
+    try { body = JSON.parse(text); } catch { return { name, ok: false, detail: "answered /supported, but not with JSON", essential: false }; }
+    const kinds = Array.isArray(body?.kinds) ? (body.kinds as { network?: unknown }[]) : [];
+    const supported = kinds.some((kind) => kind?.network === DEFAULT_NETWORK.caip2 || kind?.network === DEFAULT_NETWORK.v1Name);
     return supported
       ? { name, ok: true, detail: `settles exact payments on ${DEFAULT_NETWORK.label}`, essential: false }
       : { name, ok: false, detail: `answered, but does not list ${DEFAULT_NETWORK.caip2}`, essential: false };

@@ -5,16 +5,20 @@
 // key file is read only when a test names it with --owner-key-file (loadOwnerKeyFile), and never
 // in the same process as the agent file (contract rule 1). Never logs a private key.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { Account, Addresses, createClient, http } from 'viem/tempo'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 
-import { CHAIN_ID as CHAIN_ID_, RPC_URL as RPC_URL_, TOKEN_DECIMALS as TOKEN_DECIMALS_, TOKEN_LABEL as TOKEN_LABEL_ } from './constants.mjs'
-import { agentKeyFile, ownerKeyFile, publicFile } from '../../paths.mjs'
+import { CHAIN_ID as CHAIN_ID_, RPC_URL as RPC_URL_, TESTNET, TOKEN_DECIMALS as TOKEN_DECIMALS_, TOKEN_LABEL as TOKEN_LABEL_ } from './constants.mjs'
+import { HOME, agentKeyFile, ensurePrivateDir, ownerKeyFile, publicFile } from '../../paths.mjs'
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from '../../secret-file.mjs'
+import { RPC_MAX_BYTES, cappedRpcFetch } from '../../rpc.mjs'
 import { markSend } from '../../proof.mjs'
+import { agentBinding, hostedFlags, legacyWarning } from '../../owner-binding.mjs'
+import { noteBinding } from '../../page-facts.mjs'
+import { chainGate, chainGateSettings } from '../../../src/core/chain-gate.js'
 
 export const RPC_URL: string = RPC_URL_
 export const EXPLORER_BASE = 'https://explore.testnet.tempo.xyz'
@@ -29,11 +33,11 @@ export const TOKEN_DECIMALS: number = TOKEN_DECIMALS_
 export const TOKEN_LABEL: string = TOKEN_LABEL_
 
 /**
- * Seller text (its challenge, its answer, its errors) on one log line: control characters, newlines included, and the Unicode
- * line separators become spaces. A seller must not be able to start a line of its own on stdout, where the dispatcher reads
- * APPROVE and RESULT lines. The same rule as evm's oneLine.
+ * Seller text (its challenge, its answer, its errors) on one log line, at most `max` characters: control characters, newlines
+ * included, become spaces; format, bidi and Unicode tag characters are removed. A seller must not be able to start a line of
+ * its own on stdout, where the dispatcher reads APPROVE and RESULT lines. The same rule as untrustedText (src/core/text.ts).
  */
-export const oneLine = (s: unknown, max = 300): string => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim().slice(0, max)
+export const oneLine = (s: unknown, max = 300): string => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, '').trim().slice(0, max)
 
 // Key files (contract rule 1). Owner and agent keys never share a file.
 //   the owner's wallet  holds the owner key. setup, grant and revoke ask it on the owner page.
@@ -167,7 +171,7 @@ export function writePublicEnv(updates: Record<string, string>, drop: string[] =
   for (const k of Object.keys(updates)) if (/PRIVATE|MNEMONIC|PASSWORD/i.test(k)) throw new Error(`${k} does not belong in the public file`)
   const env: Record<string, string> = { ...loadPublicEnv(), ...updates }
   for (const k of drop) delete env[k]
-  mkdirSync(dirname(PUBLIC_ENV_PATH), { recursive: true, mode: 0o700 })
+  ensurePrivateDir(dirname(PUBLIC_ENV_PATH), { root: HOME })
   writeFileSync(PUBLIC_ENV_PATH, '# Tempo public addresses only. Read commands use this file. No secrets.\n' + Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n') + '\n', { mode: 0o644 })
 }
 
@@ -209,12 +213,27 @@ export function accessKeyAccountForOwner(ownerAddress: Address, privateKey: Hex)
   return Account.fromSecp256k1(privateKey, { access: ownerAddress })
 }
 
+/** The chain gate for this rail's one chain: '' when this build may sign, ask the owner's wallet or send on it, else why not. */
+export function tempoGate(): string {
+  return chainGate({ rail: 'tempo', key: 'tempo-moderato', testnet: TESTNET, token: { symbol: TOKEN_LABEL, address: TOKEN_ADDRESS, decimals: TOKEN_DECIMALS } }, chainGateSettings())
+}
+// No Tempo budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a key
+// file or asks an RPC anything.
+if (tempoGate()) {
+  const command = String(process.argv[1] ?? '').split(/[\\/]/).pop()!.replace(/\.(?:ts|mjs)$/, '') || 'tempo'
+  console.error(`REFUSED: ${tempoGate()}. Nothing was signed or sent.`)
+  console.log(`RESULT ${JSON.stringify({ ok: false, command, rail: 'tempo', chain: 'moderato', state: 'refused_precheck', reason: tempoGate(), next: 'nothing was signed or sent; this build signs on Tempo Moderato only' })}`)
+  process.exit(3)
+}
+
 export function makeClient(account?: ReturnType<typeof ownerAccount> | ReturnType<typeof agentAccessKeyAccount>) {
+  const gate = tempoGate()
+  if (gate) throw new Error(`${gate}; nothing was signed or sent`)
   return createClient({
     account,
     testnet: true,
     // a broadcast prints SENDING before it leaves (../../proof.mjs)
-    transport: http(RPC_URL, { onFetchRequest: (_request, init) => markSend(init.body) }),
+    transport: http(RPC_URL, { onFetchRequest: (_request, init) => markSend(init.body), fetchFn: cappedRpcFetch(RPC_MAX_BYTES), maxResponseBodySize: RPC_MAX_BYTES }),
     feeToken: TOKEN_ADDRESS,
   })
 }
@@ -286,4 +305,35 @@ export function describeError(err: unknown): string {
   }
   if (seen.size) return [...seen].join(' | ')
   return e?.message ?? String(err)
+}
+
+/**
+ * The owner and agent addresses of an owner plan (grant) for the agent key `label` ('' is the primary). Before it returns, the owner's
+ * setup signature for that label in the public file must name this agent address for the owner on record, the address must be the
+ * key on this machine when the agent file is here, and it must not be retired (../../owner-binding.mjs). Otherwise `refuse(reason, next)`
+ * ends the command (exit 3) before any page or send. A public file from before the signature was kept goes on, with one warning line.
+ */
+export async function ownerPlanCtx(label: string, refuse: (reason: string, next: string) => never): Promise<{ owner: Address; agent: Address }> {
+  const pub = loadPublicEnv()
+  const owner = pub.OWNER_ADDRESS as Address | undefined
+  const agent = pub[`AGENT${label}_ADDRESS`] as Address | undefined
+  const flag = label ? ` --agent ${label}` : ''
+  if (!owner || !agent) return refuse(`the public file names no owner or no agent${label ? ` ${label}` : ''}`, `superstables budget setup --rail tempo${flag}`)
+  const hosted = label ? '' : hostedFlags(pub)
+  const next = `check ${PUBLIC_ENV_PATH}: run superstables budget setup --rail tempo${flag}${hosted} where the agent key is, to record the owner's signature again. The owner can still end the key from any machine: superstables budget revoke --rail tempo${flag}`
+  let keyAgent: string | null = null
+  if (existsSync(AGENT_ENV_PATH)) {
+    const file = agentFileText()
+    if (file.problem !== undefined) return refuse(file.problem, next)
+    const env = parseEnvFile(file.text)
+    const key = env[`AGENT${label}_PRIVATE_KEY`]
+    if (key) {
+      try { keyAgent = privateKeyToAddress(key as Hex) } catch { return refuse(`${AGENT_ENV_PATH} holds an AGENT${label}_PRIVATE_KEY that is not a key`, next) }
+    } else if (env[`AGENT${label}_ADDRESS`]) keyAgent = env[`AGENT${label}_ADDRESS`]
+  }
+  const b = await agentBinding('tempo', { owner, agent, lines: pub }, { label, keyAgent, file: PUBLIC_ENV_PATH, testnet: TESTNET === true })
+  if (b.state === 'refused') return refuse(b.problem, next)
+  noteBinding(b) // the page this plan opens says whether the owner signed this agent
+  if (b.state === 'legacy') console.error(legacyWarning('tempo', PUBLIC_ENV_PATH, agent, `${flag}${hosted}`))
+  return { owner, agent }
 }

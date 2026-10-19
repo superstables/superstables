@@ -50,10 +50,12 @@ export {
   addressUrl,
   describeNetwork,
   fromAtomic,
+  fromAtomicString,
   isAddress,
   isSameAddress,
   networkFor,
   toAtomic,
+  toAtomicExact,
   toCaip2,
   txUrl,
   usdcBalance,
@@ -62,18 +64,22 @@ export {
 export type { EvmNetwork, NetworkInfo, Rail, SolanaNetwork, TempoNetwork } from "./core/chain.js";
 export { SUPPORTED_NETWORKS } from "./core/rails/index.js";
 
-export { NotPaidEndpointError, detect, parseChallenge, sameTerms, termsFor } from "./core/x402.js";
+export { NotPaidEndpointError, SellerUnreachableError, detect, parseChallenge, sameTerms, termsFor } from "./core/x402.js";
 export type { Challenge, RawAccept, Supported, Unsupported } from "./core/x402.js";
 
 // ── Policy ─────────────────────────────────────────────────────────────────────────────
 export {
+  CAP_DECIMALS,
   DEFAULT_POLICY,
   POLICY_EXAMPLE,
+  capUnits,
   evaluatePolicy,
   formatMoney,
+  loadPaymentPolicy,
   loadPolicy,
   parseMoney,
   parsePolicy,
+  policyAmount,
   round6,
 } from "./core/policy.js";
 // The policy engine's own input type. Named for what it is here, so it cannot be mistaken
@@ -120,6 +126,7 @@ export {
   DEFAULT_APPROVE_PORT,
   DEFAULT_DEMO_SERVICE_PORT,
   DEFAULT_WALLET_PORT,
+  accountPolicyPath,
   agentTokenPath,
   approvalsPath,
   approvePortFromEnvironment,

@@ -21,8 +21,10 @@ import type { OwnerChain, OwnerTerms, SolanaTransactionPort } from "../../src/co
 import { verifyEd25519 } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { DEFAULT_SITE } from "../site.mjs";
-import { DEFAULT_RPC } from "../rpc.mjs";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, formatUnits, parseEnvFile, retryRead, sleep } from "./lib.mjs";
+import { DEFAULT_RPC, ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
+import { rpcFacts } from "../page-facts.mjs";
+import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
+import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, agreedAccount, clusterProblem, formatUnits, USDC_DECIMALS, oneLine, parseEnvFile, retryRead, sleep } from "./lib.mjs";
 
 export { closeOwnerPage };
 
@@ -34,6 +36,7 @@ export const SOLANA_OWNER_CHAIN: OwnerChain = {
   explorer: "https://explorer.solana.com",
   explorerQuery: "?cluster=devnet",
   walletChain: "solana:devnet",
+  genesis: SOLANA_DEVNET_GENESIS,
   nativeCurrency: { name: "SOL", symbol: "SOL", decimals: 9 },
   testnet: true,
 };
@@ -42,6 +45,18 @@ export const SOLANA_OWNER_CHAIN: OwnerChain = {
 export function emit(command: string, exit: number, o: Record<string, unknown>): number {
   console.log(`RESULT ${JSON.stringify({ ok: exit === 0, command, rail: "solana", chain: "devnet", ...o })}`);
   return exit;
+}
+
+// An owner script reads and sends only through an RPC the owner set (or the built-in one): a variable that names another is
+// refused here, before this script reads a key, asks the owner or sends anything. The dispatcher refuses it earlier; this
+// covers a script run directly. (src/core/owner-settings.js)
+{
+  const problem = ownerRpcProblem("solana", "devnet");
+  if (problem) {
+    const command = String(process.argv[1] ?? "").split(/[\\/]/).pop()!.replace(/\.(?:ts|mjs)$/, "") || "owner";
+    console.log(`REFUSED: ${problem}. Nothing was asked or sent.`);
+    process.exit(emit(command, 3, { state: "refused_precheck", reason: problem, next: ownerRpcNext("solana", "devnet") }));
+  }
 }
 
 /** undefined: read the public file. setup decides for itself (--hosted), before the file says anything. */
@@ -71,8 +86,9 @@ function revokeWithoutAgentKey(site: string, reason: string): never {
 
 export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved } = ownerPageFor({
   chain: SOLANA_OWNER_CHAIN,
+  pageFacts: () => ({ rpc: rpcFacts("solana", "devnet") }),
   walletWords: "any Solana wallet, such as Phantom, Solflare or Backpack",
-  hostedWalletWords: "a Solana wallet such as Phantom or an Ethereum wallet such as MetaMask to sign in; with a Solana account, use the Solana wallet you signed in with to add this agent; with an Ethereum account, also connect a Solana wallet for this agent",
+  hostedWalletWords: "a Solana wallet such as Phantom, held by their account, to add this agent; an account admin adds wallets on the account page",
   statusCommand: "superstables budget status --rail solana",
   emit,
   railFlag: "--rail solana",
@@ -267,6 +283,11 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
   const refused = (reason: string) => ({ status: "refused" as const, reason });
   const port: SolanaTransactionPort = {
     async prepare() {
+      const cluster = await clusterProblem(conn);
+      if (cluster) {
+        log(`REFUSED: ${cluster}. Nothing was built.`);
+        throw new Error(`${cluster}; nothing was built or sent`);
+      }
       const { blockhash, lastValidBlockHeight } = await retryRead(() => conn.getLatestBlockhash("confirmed"));
       const tx = new Transaction({ feePayer: owner, blockhash, lastValidBlockHeight }).add(...instructions());
       issued = { message: tx.serializeMessage(), blockhash, lastValidBlockHeight };
@@ -293,6 +314,11 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
       if (count !== 1) return refused(`The wallet returned ${count} signatures; this transaction has exactly one signer, you.`);
       const signature = raw.subarray(at, at + 64);
       if (!verifyEd25519(owner.toBase58(), message, signature)) return refused(`That is not a signature by ${owner.toBase58()}.`);
+      const cluster = await clusterProblem(conn);
+      if (cluster) {
+        issued = null;
+        return refused(`${cluster}, so the command did not send it.`);
+      }
       const height = await retryRead(() => conn.getBlockHeight("confirmed"));
       if (height > want.lastValidBlockHeight) {
         issued = null;
@@ -308,8 +334,8 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
       } catch (err) {
         // any error, the RPC's own refusal included, leaves it tracked: once it left this machine only the chain says
         // whether it landed
-        const text = String((err as Error)?.message ?? err);
-        log(`the send answered with an error (${text.slice(0, 160)}); it may have gone out, the command reads the chain`);
+        const text = oneLine((err as Error)?.message ?? err, 160);
+        log(`the send answered with an error (${text}); it may have gone out, the command reads the chain`);
       }
       return { status: "sent", hash: sig };
     },
@@ -367,10 +393,54 @@ export async function confirmSent(conn: Connection, s: Issued, waitMs = 120_000)
   return { status: "unknown" };
 }
 
+export type Finalized = { final: boolean; slot?: number; failed?: boolean };
+
+/**
+ * Whether a transaction the command saw land has reached `finalized`: polls its signature status (with the history search) every
+ * two seconds for up to `waitMs` (a minute). `{ final: true }` once the status says finalized (`failed` when it finalized with an
+ * error); `{ final: false }` when the time runs out, with the last slot it was seen in. A read that fails is only a poll lost: this
+ * never throws and never says final without the chain saying so. `confirmSent` is unchanged: it is what detects the landing.
+ */
+export async function finalizedOf(conn: Connection, signature: string, waitMs = 60_000): Promise<Finalized> {
+  const until = Date.now() + waitMs;
+  let slot: number | undefined;
+  for (;;) {
+    try {
+      const st = (await retryRead(() => conn.getSignatureStatuses([signature], { searchTransactionHistory: true }))).value[0];
+      if (st) {
+        if (typeof st.slot === "number") slot = st.slot;
+        if (st.confirmationStatus === "finalized") return st.err ? { final: true, failed: true, slot } : { final: true, slot };
+      }
+    } catch { /* a lost poll */ }
+    if (Date.now() >= until) return { final: false, slot };
+    await sleep(2000);
+  }
+}
+
+/**
+ * The owner's token account at `finalized` from slot `slot` on, as the owner's endpoints agree: the engine's answer (agreed, with the
+ * account or null, or why not). The endpoints may be a moment behind the one that said finalized, so a short wait for them is built in.
+ */
+export async function agreedFinalAccount(ata: string, slot: number | undefined, tries = 6, gapMs = 2000): Promise<Awaited<ReturnType<typeof agreedAccount>>> {
+  const at = slot === undefined ? undefined : BigInt(slot);
+  let got = await agreedAccount(ata, { minSlot: at, atLeast: at, purpose: "owner" });
+  for (let i = 1; i < tries && !got.agreed; i++) {
+    await sleep(gapMs);
+    got = await agreedAccount(ata, { minSlot: at, atLeast: at, purpose: "owner" });
+  }
+  return got;
+}
+
+export const LANDED_SOLANA_REVOKE = "Sent and included on Solana. Your USDC account shows no delegate, but the transaction is not finalized yet. Until then, check superstables budget status before you rely on it. This does not recover tokens already transferred. You can close this page.";
+export const LANDED_SOLANA_GRANT = "Sent and included on Solana. The chain shows your budget, but the transaction is not finalized yet. You can close this page. To end it: superstables budget revoke --rail solana. You approve that in your wallet too.";
+export const LANDED_SOLANA_FUND = "Sent and included on Solana. Your agent's balance shows the transfer, but the transaction is not finalized yet. You can close this page.";
+
 // ── terms ────────────────────────────────────────────────────────────────────────────────────────────────
 
 const walletNote =
   "Check the terms before signing. The command allows only small network fee additions before sending your signed transaction, then checks the result on Solana. If the wallet cannot show or simulate the effects, reject if you cannot verify them.";
+
+const FEE_SHOWS = "A network fee in SOL, typically 0.000005 SOL";
 
 export function grantTerms(p: { owner: string; agent: string; ata: string; cap: bigint; held: bigint }): OwnerTerms {
   const amt = `${formatUnits(p.cap)} USDC`;
@@ -402,6 +472,11 @@ export function grantTerms(p: { owner: string; agent: string; ata: string; cap: 
       "To end the budget at any time: superstables budget revoke --rail solana. You approve that in your wallet too.",
       "This grants permission; it does not transfer USDC now. You pay a network fee, typically 0.000005 SOL for this transaction. Check the wallet fee and grant only an amount you accept putting at risk.",
     ],
+    walletShows: [
+      `SPL Token approveChecked: delegate ${p.agent}, amount ${p.cap}, decimals ${USDC_DECIMALS}: ${amt}`,
+      `From your USDC account ${p.ata}`,
+      FEE_SHOWS,
+    ],
   };
 }
 
@@ -420,6 +495,7 @@ export function revokeTerms(p: { owner: string; agent: string | null; ata: strin
     enforced: ["Once this revoke takes effect, transactions using this delegation fail, including ones signed earlier. The key cannot use this delegation even if stolen."],
     notEnforced: ["No reversal of transfers confirmed before this revoke. It does not recover tokens already moved or stop the key spending its own funds."],
     notes: [walletNote, "This removes spending permission; it does not return funds. You pay a network fee, typically 0.000005 SOL. Check the wallet fee. You can grant a new budget later."],
+    walletShows: [`SPL Token Revoke: clears the delegate on your USDC account ${p.ata}`, FEE_SHOWS],
   };
 }
 
@@ -442,5 +518,6 @@ export function fundTerms(p: { owner: string; agent: string; lamports: bigint; a
       "The agent controls the transferred SOL and can send it elsewhere. This does not grant permission to spend your USDC.",
       "Revoking the budget does not undo this transfer. Unspent SOL stays in the agent account. This tool has no Solana recovery command.",
     ],
+    walletShows: [`System transfer of ${p.lamports} lamports: ${sol(p.lamports)} SOL`, `To: ${p.agent}`, FEE_SHOWS],
   };
 }

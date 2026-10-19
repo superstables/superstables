@@ -2,23 +2,27 @@
 // Chain-specific behavior is marked "CHAIN:" below.
 //   1. GET the seller (free) -> 402 with the price.
 //   2. Prechecks (rule 4), all before anything is signed or sent: token, decimals, precision, price vs --max,
-//      recipient vs --pay-to, authorization lifetime, then (unless `precheck: false`) the budget expiry, the allowance,
+//      recipient (not the zero address, the token, the agent or the owner) vs --pay-to, authorization lifetime (a whole number
+//      of seconds, 30 to 600), then (unless `precheck: false`) the budget expiry, the allowance,
 //      the owner's balance and the agent's own balance (must be 0, and have the gas for the pull and for the cancel and return a
-//      failure would need, at the current fee).
+//      failure would need, at the current fee; on a chain whose gas is the budget token, no earlier purchase's price may still be in
+//      the agent key).
 //   3. Journal the intent (rule 5), then the agent pulls exactly the price: USDC.transferFrom(owner, agent, price).
-//      THIS PURCHASE'S OWN pull must land before it may pay.
-//   4. The official x402 client carries the payment, and the EIP-3009 authorization it carries is built here with from = agent
-//      and the operation's own nonce, which is marked with the seller's referral when the index gave one (normal EOA signature).
-//      The signer re-checks the exact message (recipient, amount, token, payer, lifetime, nonce) before it signs. The paid
-//      request carries that referral's token.
+//      THIS PURCHASE'S OWN pull must land before it may pay. One purchase per agent key and chain at a time, from the balance
+//      checks to its end (op-lock.mjs requireKeyLock).
+//   4. Before the pull the x402 client builds the exact payment it would send and the signer checks it without signing; after the
+//      pull it signs it, once, with from = agent (normal EOA signature). The EIP-3009 authorization is built here with the
+//      operation's own nonce, which is marked with the seller's referral when the index gave one. The signer checks the whole
+//      message (EIP-712 domain name, version, chain and token, recipient, amount, payer, lifetime, nonce) against the option that
+//      passed the prechecks. The paid request carries that referral's token.
 //   5. The settlement is read back from the chain (the operation's own authorization nonce), not from the seller.
 //   6. If the pull landed and the payment did not settle: never re-pay. Cancel the open authorization on chain, then
 //      return the price to the owner (USDC.transfer), after a fresh chain read. See ops.ts makeSafe.
-import { requireRecordLock } from "../op-lock.mjs";
-import { encodeFunctionData, getAddress, isAddress, parseUnits, type Address, type Hex } from "viem";
+import { requireRecordLock, requireKeyLock } from "../op-lock.mjs";
+import { encodeFunctionData, getAddress, hashTypedData, isAddress, parseUnits, type Address, type Hex } from "viem";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
-import { ExactEvmScheme } from "@x402/evm";
+import { ExactEvmScheme, authorizationTypes } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import { refusedChainWords } from "../next-steps.mjs";
 import { nonceReferral, referralNonce } from "../../src/core/referral-nonce.ts";
@@ -28,15 +32,24 @@ import { PURCHASE_REF_HEADER, REFERRAL_HEADER } from "../../src/seller/referral.
 import {
   OPS_DIR, SYM, oneLine,
   sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, chainReason, publicClient, sleep,
-  agentGas, gasWords, fundAgentNext, GasShort, ChainRefused,
+  agentGas, gasWords, fundAgentNext, GasShort, ChainRefused, assertRpcChain,
   type AgentCtx, type Wallet, type GasNeed, type GasOp,
 } from "./lib.ts";
 import {
-  newJournal, readJournal, writeJournal, reconcileJournal, readSettlement, readPull, makeSafe, otherOpWithTx, addFee, exitCodeFor, REUSABLE, PENDING,
+  newJournal, readJournal, writeJournal, reconcileJournal, readSettlement, readPull, makeSafe, otherOpWithTx, addFee, exitCodeFor, pendingJournalsFor, scanJournals, atomicUsdc, REUSABLE, PENDING,
   type Journal, type JournalReferral, type OpState,
 } from "./ops.ts";
 
-const MAX_AUTH_LIFETIME_S = 3600; // an authorization that can be settled later than this is refused
+/** The longest authorization a budget purchase signs: a seller asking for longer is refused (the x402 client signs exactly the seller's window). */
+export const MAX_AUTH_LIFETIME_S = 600;
+// A shorter window can expire after the pull and before settlement, which costs gas for a cancel and a refund.
+export const MIN_AUTH_LIFETIME_S = 30;
+/** Seconds tolerated between the x402 client's `now` (validBefore = now + maxTimeoutSeconds, computed in this process right before it asks the signer) and the signer's. */
+export const CLOCK_SLACK_S = 5;
+/** How long a purchase waits for another purchase (or recover) on the same agent key and chain before it refuses. */
+const KEY_WAIT_MS = 600_000;
+/** The most of a 402 answer that is read: the x402 client reads the whole body of one, and a seller can send an endless one. */
+const MAX_CHALLENGE_BYTES = 65_536;
 /** The most of the seller's answer that is kept (buy saves it next to the journal). A longer answer is cut here and flagged. */
 export const MAX_RESPONSE_BYTES = 1_000_000;
 
@@ -66,8 +79,24 @@ async function readCapped(r: Response, cap: number): Promise<{ bytes: Buffer; tr
   return { bytes: Buffer.concat(parts, size), truncated };
 }
 
+/**
+ * Wraps `fetch` so that a 402 answer reaches @x402/fetch with at most 64 KB of body (it reads the whole of one with `.text()`),
+ * rebuilt as a new Response with the same status and headers. Any other status is passed on as it is.
+ */
+export function capChallengeBody(inner: typeof fetch): typeof fetch {
+  return async (input: any, init?: any) => {
+    const r = await inner(input, init);
+    if (r.status !== 402) return r;
+    const { bytes } = await readCapped(r, MAX_CHALLENGE_BYTES);
+    const headers = new Headers(r.headers);
+    // the body was decoded by fetch and may have been cut: these no longer describe it
+    for (const h of ["content-length", "content-encoding", "transfer-encoding"]) headers.delete(h);
+    return new Response(bytes, { status: 402, statusText: r.statusText, headers });
+  };
+}
+
 /** The rule 4 checks on one payment option. Returns the reason to refuse, or null. Pure. */
-export function checkAccept(a: any, o: { max: bigint; payTo?: string }): string | null {
+export function checkAccept(a: any, o: { max: bigint; payTo?: string; agent?: string; owner?: string }): string | null {
   const asset = String(a.asset ?? "");
   if (asset.toLowerCase() !== USDC.toLowerCase()) return `token ${asset || "(none)"} is not ${CFG.label} ${SYM} ${USDC}`;
   const dec = a.extra?.decimals;
@@ -86,10 +115,33 @@ export function checkAccept(a: any, o: { max: bigint; payTo?: string }): string 
   if (price === 0n) return "price is zero";
   if (price > o.max) return `price ${usdc(price)} ${SYM} exceeds --max ${usdc(o.max)} ${SYM}`;
   if (!isAddress(String(a.payTo ?? ""))) return `recipient "${a.payTo}" is not an address`;
+  const to = String(a.payTo).toLowerCase();
+  if (/^0x0{40}$/.test(to)) return "recipient is the zero address";
+  if (to === USDC.toLowerCase()) return `recipient is the ${SYM} token contract itself`;
+  if (o.agent && to === o.agent.toLowerCase()) return "recipient is this agent's own key";
+  if (o.owner && to === o.owner.toLowerCase()) return "recipient is the owner's wallet, which funds this budget";
   if (o.payTo && String(a.payTo).toLowerCase() !== o.payTo.toLowerCase()) return `recipient ${a.payTo} is not the expected --pay-to ${o.payTo}`;
-  const timeout = Number(a.maxTimeoutSeconds ?? 0);
-  if (timeout > MAX_AUTH_LIFETIME_S) return `authorization lifetime ${timeout}s is longer than ${MAX_AUTH_LIFETIME_S}s`;
+  const t = a.maxTimeoutSeconds;
+  if (typeof t !== "number" || !Number.isInteger(t) || t < MIN_AUTH_LIFETIME_S || t > MAX_AUTH_LIFETIME_S) return `authorization lifetime ${oneLine(JSON.stringify(t ?? null), 40)} is not a whole number of seconds from ${MIN_AUTH_LIFETIME_S} to ${MAX_AUTH_LIFETIME_S}`;
   return null;
+}
+
+/** JSON with object keys sorted at every level: two options are the same only if every field is. */
+const canonical = (v: unknown): string =>
+  JSON.stringify(v, (_k, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, (x as any)[k]])) : x));
+
+/**
+ * Whether two payment options are the same one: every field, `extra` included (deep equality). A seller can list two options that
+ * differ only in one field (a 1 s lifetime first, a 60 s one second): only the one that passed the prechecks may be signed.
+ * Pure.
+ */
+export function sameOption(a: any, b: any): boolean {
+  return !!a && !!b && typeof a === "object" && typeof b === "object" && canonical(a) === canonical(b);
+}
+
+/** The options the x402 client may select: only the one that passed the prechecks (none before one has). Pure. */
+export function onlyOption(reqs: any[], chosen: any): any[] {
+  return chosen ? reqs.filter((r) => sameOption(r, chosen)) : [];
 }
 
 /**
@@ -192,6 +244,44 @@ export type PurchaseResult = {
   exitCode: number; // ops.ts exitCodeFor: 0 settled and delivered (or quoted); 1 failed / refused by the chain; 3 refused before signing; 4 paid, not delivered; 5 unknown
 };
 
+/** Thrown by the signer during the dry run before the pull: carries what it found wrong with the payment, or null. */
+class ProbeDone extends Error { constructor(public problem: string | null) { super("probe"); } }
+
+/** Why the signer refuses this EIP-712 request, or null. Pure. */
+export function typedDataProblem(m: any, o: { chosen: any; selected: any; payer: string; now: number; nonce?: string }): string | null {
+  const { chosen, selected, payer, now } = o;
+  const d = m?.domain ?? {}, msg = m?.message ?? {};
+  if (!chosen) return "no validated quote";
+  if (!selected || !sameOption(selected, chosen)) return "the x402 client did not confirm it is signing the option that passed the prechecks";
+  if (m?.primaryType !== "TransferWithAuthorization") return `the request is ${oneLine(String(m?.primaryType), 40)}, not an EIP-3009 TransferWithAuthorization`;
+  if (d.name !== CFG.domain.name || String(d.version) !== CFG.domain.version)
+    return `signing domain ${oneLine(String(d.name), 60)}/${oneLine(String(d.version), 20)} is not ${CFG.label} ${SYM}'s (${CFG.domain.name}/${CFG.domain.version})`;
+  if (Number(d.chainId ?? 0) !== CFG.chainId) return `signing domain chainId is not ${CFG.chainId}`;
+  if (String(d.verifyingContract ?? "").toLowerCase() !== USDC.toLowerCase()) return `signing domain is not ${CFG.label} ${SYM}`;
+  if (String(msg.from ?? "").toLowerCase() !== payer.toLowerCase()) return "payer is not the agent";
+  if (String(msg.to ?? "").toLowerCase() !== String(chosen.payTo).toLowerCase()) return "authorization recipient differs from the validated quote";
+  let value: bigint, after: bigint, before: bigint;
+  try { value = BigInt(msg.value); after = BigInt(msg.validAfter ?? 0); before = BigInt(msg.validBefore); }
+  catch { return "authorization value or validity window is not a whole number"; }
+  if (value !== BigInt(chosen.amount ?? chosen.maxAmountRequired)) return "authorization amount differs from the validated quote";
+  if (after > BigInt(now)) return "authorization is not valid yet";
+  if (before <= BigInt(now)) return "authorization has already expired";
+  if (before > BigInt(now + Number(chosen.maxTimeoutSeconds) + CLOCK_SLACK_S)) return `authorization would stay valid longer than ${chosen.maxTimeoutSeconds} s`;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(String(msg.nonce ?? ""))) return "authorization nonce is not 32 bytes";
+  if (o.nonce !== undefined && String(msg.nonce).toLowerCase() !== o.nonce.toLowerCase()) return "authorization nonce is not this operation's";
+  // The fields above are the ones that matter to a person; the digest pins the rest: no extra domain field (a salt), no overridden
+  // EIP712Domain type, no extra or renamed struct field. What is signed is exactly the token's EIP-3009 authorization.
+  try {
+    const expected = {
+      domain: { name: CFG.domain.name, version: CFG.domain.version, chainId: CFG.chainId, verifyingContract: USDC as Address },
+      types: authorizationTypes, primaryType: "TransferWithAuthorization" as const,
+      message: { from: msg.from as Address, to: msg.to as Address, value, validAfter: after, validBefore: before, nonce: msg.nonce as `0x${string}` },
+    };
+    if (hashTypedData(m) !== hashTypedData(expected)) return "the typed data is not the token's EIP-3009 authorization";
+  } catch { return "the typed data is not the token's EIP-3009 authorization"; }
+  return null;
+}
+
 class Stop extends Error {
   constructor(public kind: "precheck" | "chain" | "quote" | "reconciled", public reason: string, public next?: string) { super(reason); }
 }
@@ -205,17 +295,36 @@ export { exitCodeFor };
 
 export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
   const lock = requireRecordLock(OPS_DIR, o.op);
-  try { return await purchaseLocked(o); }
-  finally { lock.release(); }
+  const hold: { key: { release(): void } | null } = { key: null };
+  try {
+    const r = await purchaseLocked(o, hold);
+    if (GAS.isUsdc && hold.key) await noteArrivals(r.journal, (o.agent ?? o.c.wallet).account.address, o.tag).catch(() => {});
+    return r;
+  } finally { hold.key?.release(); lock.release(); }   // key first: the reverse of acquisition
 }
 
-async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
+/** CHAIN (gas in USDC): after a purchase that settled, or failed with its price returned, the agent key holds at most what it held
+ *  right before the pull less the gas it spent. Anything above that arrived from outside (a seller refund). Report it; it is not reserve. */
+async function noteArrivals(j: Journal, agent: Address, tag?: string) {
+  if (!j.agentUsdcBefore || !(j.state === "settled" || (j.state === "failed" && j.returned))) return;
+  const before = parseUnits(j.agentUsdcBefore, USDC_DECIMALS);                                   // ERC-20 view = floor(native / 1e12)
+  const gas = BigInt(j.agentFeeWei ?? "0") / 10n ** BigInt(GAS.decimals - USDC_DECIMALS);        // native wei -> token units, rounded down
+  const now = await usdcBalance(agent);
+  const extra = now - (before - gas);   // before - floor(fee/1e12) is the HIGHEST balance the purchase can leave: never a false report
+  if (extra <= 0n) return;
+  const note = `the agent key holds ${usdc(extra)} ${SYM} more than before this purchase less its gas: money arrived from outside (a seller refund?). It is not gas reserve; the owner returns it with superstables budget recover --rail evm --chain ${CFG.key}`;
+  j.notes.push(note); writeJournal(j);
+  console.log(oneLine(tag ? `[${tag}] ${note}` : note, 2000));
+}
+
+async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } | null }): Promise<PurchaseResult> {
   const { c, url, max } = o;
   // one line per call: reasons can quote the seller's 402 (asset, payTo, domain name)
   const log = (s: string) => console.log(oneLine(o.tag ? `[${o.tag}] ${s}` : s, 2000));
   const agent = o.agent ?? c.wallet;
   const precheck = o.precheck ?? true;
   const httpTimeoutMs = o.httpTimeoutMs ?? 60_000;
+  await assertRpcChain(); // a wrong chain is refused here, before any record exists
 
   const j = newJournal({ op: o.op, url, owner: c.owner, agent: agent.account.address, token: USDC, max: usdc(max), expectPayTo: o.payTo });
   const res: PurchaseResult = { state: "quoted", ok: false, journal: j, pulled: 0n, signedPayment: false, exitCode: 0 };
@@ -258,25 +367,27 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
 
   let chosen: any = null;
   let stop: Stop | null = null;
+  let selected: any = null;   // what onBeforePaymentCreation confirmed, deep-equal to chosen
+  let probing = false;        // the dry run before the pull: check, never sign
+  let signatures = 0;
   const signer = {
     address: agent.account.address,
     async signTypedData(m: any) {
+      // One payment signature per purchase: a second one would replace the journaled authorization while the first may be with the seller.
+      if (!probing && signatures > 0) {
+        stop = new Stop("reconciled", "signer refused: the x402 client asked for a second payment signature in one purchase; the first authorization stands and the chain decides");
+        j.notes.push(stop.reason); writeJournal(j);
+        throw stop;
+      }
       // last gate before a signature exists: the message must be exactly the quote that passed the prechecks
-      const msg = m.message ?? {};
-      const bad =
-        !chosen ? "no validated quote" :
-        Number(m.domain?.chainId ?? 0) !== CFG.chainId ? `signing domain chainId is not ${CFG.chainId}` :
-        String(m.domain?.verifyingContract ?? "").toLowerCase() !== USDC.toLowerCase() ? "signing domain is not " + CFG.label + ` ${SYM}` :
-        String(msg.from ?? "").toLowerCase() !== agent.account.address.toLowerCase() ? "payer is not the agent" :
-        String(msg.nonce ?? "").toLowerCase() !== String(j.authorizationNonce).toLowerCase() ? "authorization nonce is not this operation's" :
-        String(msg.to ?? "").toLowerCase() !== String(chosen.payTo).toLowerCase() ? "authorization recipient differs from the validated quote" :
-        BigInt(msg.value ?? -1) !== BigInt(chosen.amount ?? chosen.maxAmountRequired) ? "authorization amount differs from the validated quote" :
-        Number(msg.validBefore ?? 0) > Math.floor(Date.now() / 1000) + MAX_AUTH_LIFETIME_S + 60 ? "authorization would stay valid too long" :
-        null;
+      const bad = typedDataProblem(m, { chosen, selected, payer: agent.account.address, now: Math.floor(Date.now() / 1000), nonce: j.authorizationNonce });
+      if (probing) throw new ProbeDone(bad);
       if (bad || res.pulled === 0n) {
         stop = new Stop("precheck", bad ? `signer refused: ${bad}` : "signer refused: this purchase's own pull has not landed");
         throw stop;
       }
+      signatures++;
+      const msg = m.message;
       // journal the authorization BEFORE the signature exists outside this process
       j.auth = { nonce: msg.nonce, validBefore: Number(msg.validBefore), validAfter: Number(msg.validAfter ?? 0), value: String(msg.value), to: msg.to, from: msg.from };
       j.signed = true;
@@ -286,12 +397,21 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
     },
   };
   const nonce = j.authorizationNonce!;
-  const core = new x402Client().register(NETWORK as `${string}:${string}`, withNonce(new ExactEvmScheme(signer as any), signer, nonce));
+  // the client can only ever select the option that passed the prechecks: its selector, its policy, and a hook before it builds a payment
+  const core = new x402Client((_v: number, reqs: any[]) => {
+    const same = reqs.filter((r) => sameOption(r, chosen));
+    if (!same.length) throw new Error("no option equals the one that passed the prechecks");
+    return same[0];
+  }).register(NETWORK as `${string}:${string}`, withNonce(new ExactEvmScheme(signer as any), signer, nonce));
   // x402 v1 sellers name the chain the old way ("base-sepolia") and have their own table and scheme class. register() takes
   // no version argument: a v1 name registered there is never matched, and every v1 seller was refused.
   for (const legacy of CFG.legacyNetworks) core.registerV1(legacy, withNonce(new ExactEvmSchemeV1(signer as any), signer, nonce));
   // only the option that passed the prechecks can be selected
-  core.registerPolicy((_v: number, reqs: any[]) => (chosen ? reqs.filter((r) => r.asset === chosen.asset && r.payTo === chosen.payTo && String(r.amount ?? r.maxAmountRequired) === String(chosen.amount ?? chosen.maxAmountRequired) && r.network === chosen.network && r.scheme === chosen.scheme) : []));
+  core.registerPolicy((_v: number, reqs: any[]) => onlyOption(reqs, chosen));
+  core.onBeforePaymentCreation(async ({ selectedRequirements }: any) => {
+    if (!chosen || !sameOption(selectedRequirements, chosen)) return { abort: true, reason: "the client selected an option other than the one that passed the prechecks" };
+    selected = selectedRequirements;
+  });
   // CHAIN: the SDK signs only "default assets" (a table inside @x402/evm 2.27.0 that does not list Arc's USDC yet) or assets named in
   // spendControls.allowedAssets. Without this entry the client refuses Arc AFTER the pull has landed (seen on Arc Testnet: the pull was
   // returned, gas wasted). So the chain's USDC is allowed explicitly, capped at --max. The same call is dry-run before the pull below.
@@ -308,7 +428,7 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
       const reasons: string[] = [];
       let pick: any = null;
       for (const x of opts) {
-        const why = checkAccept(x, { max, payTo: o.payTo });
+        const why = checkAccept(x, { max, payTo: o.payTo, agent: o.c.agent, owner: o.c.owner });
         if (!why) { pick = x; break; }
         reasons.push(why);
       }
@@ -322,15 +442,31 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
       const onchainDecimals = await publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: "decimals" }).catch(() => null);
       if (onchainDecimals !== USDC_DECIMALS) throw new Stop("precheck", `could not confirm ${SYM} has ${USDC_DECIMALS} decimals on chain (read ${onchainDecimals})`);
       chosen = pick;
-      // Ask the x402 client itself, BEFORE the pull, whether it will sign this exact option (spend controls, registered scheme, policy).
-      // Its refusal after a landed pull would cost gas and force a return.
+      // Dry run BEFORE the pull: the x402 client builds the exact payment it would send (selection, spend controls, policy, the
+      // hook, the scheme) and hands the message to the signer, which checks it and stops without signing. A refusal after a landed
+      // pull would cost gas for the cancel and the return.
+      probing = true;
       try {
-        const sel: any = (core as any).selectPaymentRequirements(paymentRequired.x402Version, paymentRequired.accepts);
-        if (!sel || sel.asset !== pick.asset || sel.payTo !== pick.payTo || sel.network !== pick.network || String(sel.amount ?? sel.maxAmountRequired) !== String(pick.amount ?? pick.maxAmountRequired)) throw new Error("the client would select a different option than the one that passed the prechecks");
+        await core.createPaymentPayload(paymentRequired);
+        throw new Error("the x402 client built a payment without asking the signer");
       } catch (e: any) {
-        throw new Stop("precheck", `the x402 client would not sign this option (${String(e?.message ?? e).split("\n")[0]}); nothing was pulled`);
+        if (!(e instanceof ProbeDone)) throw new Stop("precheck", `the x402 client would not sign this option (${oneLine(String(e?.message ?? e).split("\n")[0], 300)}); nothing was pulled`);
+        if (e.problem) throw new Stop("precheck", `REFUSED: the payment the x402 client would sign does not match the checked option: ${e.problem}. Nothing was signed or pulled.`);
+      } finally {
+        probing = false;
+        selected = null; // the real payment is confirmed again
       }
       if (o.quoteOnly) throw new Stop("quote", `quote only: ${usdc(price)} ${SYM} to ${pick.payTo}`);
+      // One purchase (or recover) at a time per agent key and chain, from the balance checks to the end of the purchase (released
+      // in purchase()): two would read the same agent balance and sign the same nonce.
+      const key = await requireKeyLock(OPS_DIR, agent.account.address, {
+        waitMs: KEY_WAIT_MS,
+        onWait: (busy: any) => log(`waiting for another purchase on this agent key to finish (${busy.holder ? `process ${busy.holder}` : "holder unknown"}); nothing is signed meanwhile`),
+      });
+      if (!key.ok) throw new Stop("precheck",
+        `REFUSED: another purchase is still using this agent key on ${CFG.label} after ${KEY_WAIT_MS / 1000} s (${oneLine(key.details, 300)}). Nothing was signed or pulled.`,
+        `buy again with the same --op once it has ended; if none is running, the owner checks in their own terminal and runs "superstables budget unlock --rail evm --chain ${CFG.key} --agent-key --confirm"`);
+      hold.key = key;
       if (precheck) {
         const now = Math.floor(Date.now() / 1000);
         if (c.expiry && now > c.expiry) throw new Stop("precheck", `REFUSED: the budget expired at ${new Date(c.expiry * 1000).toISOString()} (public state file; the chain does not enforce it). The owner should revoke. No pull was made.`);
@@ -341,10 +477,30 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
         const ownerBal = await usdcBalance(c.owner);
         if (price > ownerBal) throw new Stop("precheck", `REFUSED AT THE PULL: price ${usdc(price)} exceeds the owner's ${SYM} balance ${usdc(ownerBal)} (the allowance is ${usdc(allowance)}). No transferFrom was sent.`);
         const held = await usdcBalance(agent.account.address);
-        // CHAIN: where USDC is also the gas token (Arc) the agent always holds its gas reserve, so 0 is the wrong test. It may hold
-        // up to reserveMax; more than that is treated as stranded funds.
-        // Money in the agent key between purchases is a seller refund (PayAI Echo refunds the payer, which is the agent) or funds an
-        // earlier purchase stranded. Refuse, and tell the owner the one command that returns it.
+        // CHAIN: where USDC is also the gas token (Arc) the agent always holds a gas reserve, so 0 is the wrong test. A price an earlier
+        // purchase pulled into the agent key and has not settled or returned is never gas reserve: it is refused by its journal, at
+        // any amount. What no journal explains may be gas the owner sent; up to reserveMax of it is tolerated, as before.
+        if (GAS.isUsdc) {
+          // a journal that cannot be read could be one that holds a stranded price: it is never counted as gas reserve either
+          const scan = scanJournals(agent.account.address);
+          const blind = scan.unreadable.filter((u) => u.file !== `${o.op}.json`);
+          if (blind.length) throw new Stop("precheck",
+            `REFUSED: journal ${oneLine(blind.slice(0, 3).map((u) => `${u.file} (${u.why})`).join(", "), 300)} cannot be read; on ${CFG.label} any money it holds is not gas reserve. Nothing was signed or pulled.`,
+            `the owner looks at the file(s) in ${OPS_DIR} (reconcile --op reads a journal), then buy again`);
+          const open = pendingJournalsFor(agent.account.address, scan).filter((p) => p.op !== o.op);
+          if (open.length) {
+            let owed = 0n, unreadable = false;
+            for (const p of open) {
+              const pulled = atomicUsdc(p.pulled ?? p.price ?? "0"), back = atomicUsdc(p.returned ?? "0");
+              if (pulled === null || back === null) { unreadable = true; continue; }
+              owed += pulled > back ? pulled - back : 0n;
+            }
+            const ops = open.slice(0, 5).map((p) => p.op).join(", ");
+            throw new Stop("precheck",
+              `REFUSED: ${open.length === 1 ? "operation" : "operations"} ${ops} pulled ${unreadable ? "an unknown amount of" : usdc(owed)} ${SYM} into the agent key and ${open.length === 1 ? "is" : "are"} not settled or returned in the journal; on ${CFG.label} that money is not gas reserve. Nothing was signed or pulled.`,
+              `run "${cmd("reconcile.ts", `--op ${open[0].op}`)}"; if it is still not settled, the owner runs "superstables budget recover --rail evm --chain ${CFG.key} --op ${open[0].op}", then buy again`);
+          }
+        }
         if (GAS.isUsdc ? held > GAS.reserveMax! : held > 0n) {
           const recover = `superstables budget recover --rail evm --chain ${CFG.key}`;
           throw new Stop("precheck",
@@ -424,14 +580,14 @@ async function purchaseLocked(o: PurchaseOpts): Promise<PurchaseResult> {
 
   // one deadline per request: a seller that never answers must not hang the purchase. No redirects: the paid retry
   // carries PAYMENT-SIGNATURE, which fetch would take to whatever host a redirect names.
-  const timedFetch: typeof fetch = (input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) });
+  const timedFetch: typeof fetch = capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) }));
   const pay = wrapFetchWithPayment(onPaidRequest(timedFetch, referralHeaders(j)), http);
   let r: Response;
   try {
     r = await pay(url);
   } catch (e: any) {
     const st = stop as Stop | null;
-    res.error = String(e.message ?? e).split("\n")[0];
+    res.error = oneLine(e.message ?? e, 300);
     if (st?.kind === "quote") { log(st.reason); return finish("quoted", st.reason, "buy again without --quote-only to purchase"); }
     if (st?.kind === "precheck" && !j.pullTx) { log(st.reason); return finish("refused_precheck", st.reason, st.next ?? "nothing was signed or sent"); }
     if (st?.kind === "chain") { log(st.reason); return finish("refused_chain", st.reason, refusedChainWords(j.pullTx).next); }

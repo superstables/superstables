@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { runsInHostNamespace } from '../helpers/namespace-probes.js';
 import { pathToFileURL } from 'node:url';
 
 const root = resolve(process.env.BUDGET_RACE_ROOT ?? join(import.meta.dirname, '../..'));
@@ -38,7 +39,7 @@ for (const cap of [false, true]) {
     expect(existsSync(path)).toBe(false); expect(readFileSync(journal, 'utf8')).toBe('{"state":"submitted","transaction":"retained-evidence"}');
   });
 }
-it.runIf(process.platform === 'linux')('legacy verified live cap rejects plain and unverified unlock', () => {
+it.runIf(runsInHostNamespace)('legacy verified live cap rejects plain and unverified unlock', () => {
   const b = box(), identity = createIdentitySource().record();
   const path = join(b.records, 'cap.lock'), bytes = JSON.stringify({ pid: identity.pid, pidStart: identity.pidStart, owner: '0.3.0-owner' });
   writeFileSync(path, bytes);

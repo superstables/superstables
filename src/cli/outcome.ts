@@ -7,7 +7,7 @@
 // They are mapped from the attempt's recorded state, never from what the caller hoped for.
 
 import { networkFor, shortLabel } from "../core/chain.js";
-import { policyPath } from "../core/home.js";
+import { accountPolicyPath, policyPath } from "../core/home.js";
 import { railFor } from "../core/rails/index.js";
 import type { Attempt, Quote } from "../core/types.js";
 import { FINAL_ATTEMPT_STATES } from "../core/types.js";
@@ -74,7 +74,25 @@ export function requoteCommand(quote: Pick<Quote, "url" | "serviceId" | "request
     const params = Object.entries(quote.request.params).map(([key, value]) => ` --param ${shellWord(`${key}=${value}`)}`);
     return `superstables quote --service ${shellWord(quote.serviceId)}${params.join("")}${on}`;
   }
-  return `superstables quote ${shellWord(quote.url)}${on}`;
+  return `superstables quote ${shellWord(retryUrl(quote.url))}${on}`;
+}
+
+/**
+ * The address to quote again. A quote taken from an old record may name a seller over plain http; the client takes https
+ * from anyone but this computer, so the next step names the https address instead of one it would itself refuse. An
+ * explicit :80 goes with the scheme, and an address with a user name or password is left as it was rather than carried
+ * into a new suggestion.
+ */
+function retryUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" || ["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname)) return url;
+    if (parsed.username || parsed.password) return url;
+    parsed.protocol = "https:";
+    return parsed.href;
+  } catch {
+    return url; // not a URL: repeated as it was
+  }
 }
 
 /** The status command that searches the payment's chain for it, when its rail can search. */
@@ -85,6 +103,16 @@ function searchCommand(attempt: Attempt): string {
 /** An attempt whose matching payment was seen on chain and then removed from it. */
 export function inclusionRemoved(attempt: Attempt): boolean {
   return attempt.state === "uncertain" && attempt.paymentIncluded === true;
+}
+
+/**
+ * The policy file the owner edits when a refusal is wrong: the account's own ~/.superstables/policy.yaml when the reason
+ * ends with "(in <that file>)" (the account's policy refused, see evaluatePolicy), else the one SUPERSTABLES_POLICY or
+ * SUPERSTABLES_HOME names.
+ */
+export function policyFileFor(reason: string | undefined): string {
+  const account = accountPolicyPath();
+  return reason?.endsWith(`(in ${account})`) ? account : policyPath();
 }
 
 /** The terminal's Next line. A removed inclusion's warning is already in the opening, so it is not repeated here. */
@@ -98,6 +126,8 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
   const requote = requoteCommand(quote);
   switch (attempt.state) {
     case "awaiting_approval":
+      // Nothing is signed, and only the pay command that started it moves this record: another status changes nothing.
+      return "Nothing is signed yet. This record changes only while the `superstables pay` command that started it keeps running, so running `superstables status` again will not move it. Wait for that command, or ask the owner whether the approval is still open.";
     case "approved":
     case "submitting":
       return `Run \`superstables status ${attempt.id}\` to see where it got to.`;
@@ -139,7 +169,7 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
     }
     case "failed":
       if (attempt.refusal === "policy") {
-        return `A spend policy refused it. \`superstables policy show\` prints the rules; the owner edits ${policyPath()} if they are wrong.`;
+        return `A spend policy refused it. \`superstables policy show\` prints the rules; the owner edits ${policyFileFor(attempt.reason)} if they are wrong.`;
       }
       if (attempt.refusal === "approval_page") {
         return (

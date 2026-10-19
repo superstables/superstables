@@ -1,0 +1,11 @@
+{
+  "scenario": "payment-outcome-with-tx",
+  "agent": "claude-sonnet",
+  "model": "sonnet",
+  "skill": "cli",
+  "started": "2026-10-18T15:24:45.822Z",
+  "env": {},
+  "exit": 0,
+  "seconds": 17,
+  "finished": "2026-10-18T15:25:03.287Z"
+}

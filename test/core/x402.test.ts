@@ -2,10 +2,10 @@
 // whether this client can pay at all. Everything it refuses must be refused with a reason a
 // person can act on, because "unsupported" alone tells an agent nothing.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { DeadlineError, UnsupportedX402Version, detect, parseChallenge, readSellerChallenge, sameTerms, termsFor, type RawAccept } from "../../src/core/x402.js";
+import { DeadlineError, SellerUnreachableError, UnsupportedX402Version, detect, detectPayment, parseChallenge, readSellerChallenge, sameTerms, termsFor, type RawAccept } from "../../src/core/x402.js";
 import { encodePaymentRequiredHeader } from "@x402/core/http";
 import { usdcRequirement } from "../../src/core/chain.js";
 
@@ -142,6 +142,27 @@ describe("termsFor", () => {
     expect(termsFor({ ...v2, amount: undefined }, 2)).toMatchObject({ supported: false });
     expect(termsFor({ ...v2, payTo: "not-an-address" }, 2)).toMatchObject({ supported: false });
   });
+
+  it("refuses an amount that is zero, not canonical, not a string, or 2^256 or more", () => {
+    for (const amount of ["0", "007", 1000, "1e6", String(2n ** 256n)]) {
+      expect(termsFor({ ...v2, amount: amount as string }, 2), String(amount)).toMatchObject({
+        supported: false,
+        reason: expect.stringMatching(/missing, zero, not a canonical whole number of base units, or too large/),
+      });
+    }
+    expect(termsFor({ ...v1, maxAmountRequired: "0" }, 1)).toMatchObject({ supported: false });
+    expect(termsFor({ ...v2, amount: String(2n ** 256n - 1n) }, 2).supported).toBe(true);
+  });
+
+  it("refuses the zero address, and the token contract itself, as the recipient", () => {
+    const zero = termsFor({ ...v2, payTo: `0x${"00".repeat(20)}` }, 2);
+    expect(zero).toMatchObject({ supported: false, reason: "the recipient is the zero address" });
+    const asset = usdcRequirement(0.01, PAY_TO).asset;
+    for (const payTo of [asset, asset.toLowerCase()]) {
+      expect(termsFor({ ...v2, payTo }, 2), payTo).toMatchObject({ supported: false, reason: "the recipient is the USDC contract itself" });
+    }
+    expect(termsFor({ ...v2, payTo: 5 as unknown as string }, 2)).toMatchObject({ supported: false });
+  });
 });
 
 describe("parseChallenge", () => {
@@ -195,6 +216,39 @@ describe("sameTerms", () => {
 });
 
 describe("detect", () => {
+  it("refuses a seller on plain http before any request", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 402 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(detect("http://example.com/x")).rejects.toThrow(/^the seller URL is plain http/);
+      await expect(detectPayment("http://127.0.0.2:9/x")).rejects.toThrow(/^the seller URL is plain http/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("names the host and the cause when the seller cannot be reached at all, and says nothing was paid", async () => {
+    // A refused connection, for real: a port that was open a moment ago.
+    const probe: Server = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const refused = await detect(`http://127.0.0.1:${port}/paid`).catch((err: unknown) => err);
+    expect(refused).toBeInstanceOf(SellerUnreachableError);
+    expect((refused as Error).message).toBe(`could not reach 127.0.0.1:${port} (ECONNREFUSED); nothing was paid`);
+    expect((refused as Error).message).not.toBe("fetch failed");
+
+    // A name that does not resolve
+    const dns = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("getaddrinfo ENOTFOUND nope.example"), { code: "ENOTFOUND" }) });
+    vi.stubGlobal("fetch", vi.fn(async () => { throw dns; }));
+    try {
+      await expect(detect("https://nope.example/x")).rejects.toThrow("could not reach nope.example (ENOTFOUND); nothing was paid");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("gives up on a service that drips its answer forever, within its own deadline", async () => {
     // A 402 whose body never ends: one byte every 50 ms. A timeout on the request alone does not end it.
     const sockets = new Set<import("node:net").Socket>();

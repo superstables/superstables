@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../../budget/secret-file.mjs";
+import { UNSAFE_SECRET_FILE, prepareSecretFile, readSecretFile, replaceSecretFile } from "../../budget/secret-file.mjs";
 
 let dir: string;
 beforeEach(() => {
@@ -72,6 +72,35 @@ describe("replaceSecretFile", () => {
     const stuck = ((fd: number, buf: Buffer, off: number, len: number) => (calls++ === 0 ? writeSync(fd, buf, off, Math.min(5, len)) : 0)) as unknown as typeof writeSync;
     expect(() => replaceSecretFile(path, "NEW=a much longer key line\n", { writeSync: stuck })).toThrow(/short write: 5 of/);
     expect(readFileSync(path, "utf8")).toBe("OLD=the only copy\n");
+    expect(readdirSync(dir)).toEqual(["agent.env"]);
+  });
+});
+
+describe("prepareSecretFile", () => {
+  it("leaves the file alone until commit, which renames the 0600 replacement over it; discard removes it", () => {
+    const path = join(dir, "agent.env");
+    writeFileSync(path, "OLD\n", { mode: 0o600 });
+    const swap = prepareSecretFile(path, "NEW\n");
+    expect(readFileSync(path, "utf8")).toBe("OLD\n");
+    expect(readdirSync(dir)).toHaveLength(2);
+    swap.commit();
+    expect(readFileSync(path, "utf8")).toBe("NEW\n");
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dir)).toEqual(["agent.env"]);
+    const again = prepareSecretFile(path, "X\n");
+    again.discard();
+    expect(readdirSync(dir)).toEqual(["agent.env"]);
+  });
+  it("throws and leaves nothing behind when the folder cannot be written", () => {
+    const path = join(dir, "agent.env");
+    writeFileSync(path, "OLD\n", { mode: 0o600 });
+    chmodSync(dir, 0o500);
+    try {
+      expect(codeOf(() => prepareSecretFile(path, "NEW\n"))).toBe("EACCES");
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    expect(readFileSync(path, "utf8")).toBe("OLD\n");
     expect(readdirSync(dir)).toEqual(["agent.env"]);
   });
 });

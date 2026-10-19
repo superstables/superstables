@@ -44,6 +44,13 @@ export interface OwnerTerms {
   notEnforced: string[];
   /** Small print: how to undo it, what the wallet popup will show. */
   notes: string[];
+  /**
+   * The exact values the wallet will show for this action, one line each, with the raw value next to the readable one; for
+   * settings signing, one line per field the wallet's prompt will show, and what it means. Left out (a sign-in) there is no block.
+   */
+  walletShows?: string[];
+  /** A token approval or transfer: the page offers the token to the wallet first, so it can show amounts in the token's units. */
+  watchToken?: boolean;
 }
 
 /** Chain parameters in the shape wallet_addEthereumChain expects (chainId as a number here). */
@@ -59,6 +66,8 @@ export interface OwnerChain {
   explorerQuery?: string;
   /** solana: the Wallet Standard chain, e.g. "solana:devnet". */
   walletChain?: string;
+  /** solana: the cluster's genesis hash, which names it. */
+  genesis?: string;
   nativeCurrency: { name: string; symbol: string; decimals: number };
   testnet: boolean;
 }
@@ -66,7 +75,7 @@ export interface OwnerChain {
 /** Everything the page's script needs. */
 export interface OwnerPageFacts {
   id: string;
-  kind: "connect" | "evm-transaction" | "solana-transaction";
+  kind: "connect" | "evm-transaction" | "solana-transaction" | "settings";
   chain: OwnerChain;
   chainIdHex: string;
   /** The only account that may act (a transaction), or undefined (a connect: any account). */
@@ -75,9 +84,19 @@ export interface OwnerPageFacts {
   recordedOwner?: string;
   /** Exactly what the wallet is asked to send. */
   transaction?: { to: string; data: string; value: string };
-  /** The sign-in message a connect asks the wallet to sign. */
+  /** The sign-in message a connect asks the wallet to sign; the text a Solana wallet signs for the settings. */
   message?: string;
+  /** settings, EVM: the EIP-712 typed data (JSON text) eth_signTypedData_v4 is asked to sign. */
+  typedData?: string;
   expiresAt: number;
+  /** The address this page is served from, e.g. http://127.0.0.1:41233. */
+  origin?: string;
+  /** The RPC hosts the command reads and where they come from. */
+  rpc?: { hosts: string[]; source: "owner node" | "owner settings" | "environment variable" | "built-in" };
+  /** The token to offer the wallet before an approval or a transfer of it. */
+  token?: { address: string; symbol: string; decimals: number };
+  /** Whether the owner signed the agent address at setup. Only a signed or a legacy record has a page. */
+  binding?: { state: "signed"; signedAt?: string } | { state: "legacy" };
 }
 
 const OWNER_STYLE = `
@@ -92,11 +111,28 @@ const OWNER_STYLE = `
   .limits > div:only-child { grid-column: 1 / -1; }
   @media (max-width: 600px) { .limits { grid-template-columns: minmax(0, 1fr); } }
   .owner-box { font-size: 15px; }
+  .rows dd { white-space: pre-line; }
   .owner-box .mono { display: block; margin: 6px 0; font-size: 14px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
   #wallet-list { margin-top: 12px; }
   #wallet-list button { height: 40px; padding: 0 14px; font-size: 14px; background: var(--bg-2); }
   #wallet-list img { width: 18px; height: 18px; border-radius: 4px; }
+  .tag.good { margin-left: 0; color: var(--good); border-color: var(--good-line); }
+  .tag.warn { margin-left: 0; color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+  .rows .why { display: block; margin-top: 8px; font-size: 14px; color: var(--ink-2); }
+  .wallet-shows { margin-top: 20px; padding: 14px 16px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg-2); font-size: 14.5px; overflow-wrap: anywhere; }
+  .wallet-shows strong { display: block; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 6px; }
+  .wallet-shows ul { margin: 0; padding-left: 18px; }
+  .wallet-shows li { font-family: var(--mono); font-size: 13px; }
+  .wallet-shows li + li { margin-top: 6px; }
 `;
+
+const WARN_LIGHT = "--warn: #8A5A00; --warn-bg: rgba(178, 106, 0, 0.08);";
+const WARN_DARK = "--warn: #F2B65C; --warn-bg: rgba(242, 182, 92, 0.08);";
+/** The page's styles, with an amber that reads on the look's own background (the site's look is dark first, the plain one light first). */
+function ownerStyle(look: PageLook): string {
+  const [first, other, scheme] = look === "superstables" ? [WARN_DARK, WARN_LIGHT, "light"] : [WARN_LIGHT, WARN_DARK, "dark"];
+  return `${OWNER_STYLE}  :root { ${first} }\n  @media (prefers-color-scheme: ${scheme}) { :root { ${other} } }\n`;
+}
 
 /**
  * The page's own script. Exported so a test can parse it: there is no build step here, and a
@@ -120,6 +156,9 @@ export const OWNER_PAGE_SCRIPT = `
   var busy = false;
   var done = false;
   var sentHash = null;
+  // the wallet was asked to send: nothing the owner does in the wallet after that changes who or where this page sends
+  var asking = false;
+  var offered = false;
 
   function el(id) { return document.getElementById(id); }
   function show(id, on) { var node = el(id); if (node) node.hidden = !on; }
@@ -271,6 +310,19 @@ export const OWNER_PAGE_SCRIPT = `
         el("account").textContent = account;
         show("account-row", true);
         show("account", true);
+        if (facts.kind === "settings") {
+          say("Check your wallet: it is asking you to sign your settings. It grants no spending permission and has no network fee.");
+          return provider.request({ method: "eth_signTypedData_v4", params: [account, facts.typedData] })
+            .then(function (signature) { return post("/signed", { address: account, signature: signature }); })
+            .then(function (answer) {
+              if (!answer.ok) throw new Error(answer.data.error || "the command did not accept this signature");
+              document.body.setAttribute("data-state", "connected");
+              show("connect", false);
+              show("reject", false);
+              setBusy(false);
+              say("Signed. The command is checking and recording your settings.");
+            });
+        }
         if (facts.kind === "connect") {
           say("Check your wallet: sign the message to prove this address is yours. It grants no spending permission and has no network fee.");
           return provider.request({ method: "personal_sign", params: [hexOf(facts.message), account] })
@@ -288,6 +340,8 @@ export const OWNER_PAGE_SCRIPT = `
           .then(function () { return post("/account", { address: account }); })
           .then(function (answer) {
             if (!answer.ok) throw new Error(answer.data.error || "the command would not prepare this for that account");
+            // the wallet moved while the command answered: the watcher already asked to connect again
+            if (!account) { setBusy(false); return; }
             document.body.setAttribute("data-state", "ready");
             show("connect", false);
             show("send", true);
@@ -302,27 +356,73 @@ export const OWNER_PAGE_SCRIPT = `
       });
   }
 
+  // Offer the budget token to the wallet, once, so it can show amounts in the token's units. A refusal or a failure never
+  // stops the send.
+  function offerToken() {
+    var t = facts.token;
+    if (!t || offered) return Promise.resolve();
+    offered = true;
+    say("Your wallet may ask to add " + t.symbol + " so it can show amounts in " + t.symbol + ". You can decline: nothing is sent either way.");
+    return Promise.resolve()
+      .then(function () { return provider.request({ method: "wallet_watchAsset", params: { type: "ERC20", options: { address: t.address, symbol: t.symbol, decimals: t.decimals } } }); })
+      .then(function () {}, function () {});
+  }
+
+  function onChain() {
+    return provider.request({ method: "eth_chainId" }).then(function (id) {
+      if (String(id).toLowerCase() !== facts.chainIdHex.toLowerCase()) throw new Error("the wallet is on another network");
+    });
+  }
+
   function send() {
     if (!account || !facts.transaction) return;
+    // the account that was connected when the button was pressed: a later switch in the wallet does not change it
+    var from = account;
+    var told = false;
     setBusy(true);
     say("Review the transaction and network fee in your wallet. Confirm only if they match your intent.");
-    post("/sending", { address: account })
+    // Everything that can still say no comes before the command is told the wallet is being asked: the network is switched
+    // and read, the token is offered, the network is read once more. A failure there sent nothing, and says so.
+    ensureChain()
+      .then(offerToken)
+      .then(onChain)
+      .then(function () {
+        told = true;
+        return post("/sending", { address: from });
+      })
       .then(function (answer) {
         if (!answer.ok) throw new Error(answer.data.error || "the command will not take this transaction any more");
+        // the wallet switched account or network while the command was told: ready was dropped, so the wallet is not asked
+        if (account !== from) { var moved = new Error("the wallet switched while the command was told"); moved.moved = true; throw moved; }
+        asking = true;
+        say("Review the transaction and network fee in your wallet. Confirm only if they match your intent.");
         return provider.request({
           method: "eth_sendTransaction",
-          params: [{ from: account, to: facts.transaction.to, data: facts.transaction.data, value: facts.transaction.value }]
+          params: [{ from: from, to: facts.transaction.to, data: facts.transaction.data, value: facts.transaction.value, chainId: facts.chainIdHex }]
         });
       })
       .then(function (hash) {
         sentHash = hash;
         waiting(hash);
-        return post("/sent", { address: account, hash: hash });
+        return post("/sent", { address: from, hash: hash });
       })
       .then(function (answer) {
         if (answer && !answer.ok) say(answer.data.error || "The command did not accept the transaction hash. Check wallet activity and the budget status before trying again.", "bad");
       })
       .catch(function (err) {
+        if (!told) {
+          setBusy(false);
+          if (err && err.code === 4001) say("You cancelled in your wallet. Nothing was sent. You can try again, or reject.", "bad");
+          else if (/another network/.test(reason(err))) say("Your wallet is not on " + facts.chain.chainName + ", so it was not asked to send. Nothing was sent.", "bad");
+          else say("Could not check your wallet's network: " + reason(err) + ". Nothing was sent. You can try again, or reject.", "bad");
+          return;
+        }
+        if (err && err.moved) {
+          post("/reject", { by: "page" }).then(function (answer) {
+            rejected(answer, "Your wallet switched account or network before it was asked to send, so it was not asked. This approval link is closed. Run the command again for a new one.");
+          }, notAnswering);
+          return;
+        }
         if (err && err.code === 4001) {
           post("/reject", { by: "wallet" }).then(function (answer) {
             rejected(answer, "Your wallet reported that you rejected this request. This approval link is closed. The command cannot prove from this page that nothing was submitted, so it reports the result as unknown until it checks the chain. Any existing budget stays in effect.");
@@ -353,7 +453,7 @@ export const OWNER_PAGE_SCRIPT = `
     var f = w && w.features;
     if (!f || !f["standard:connect"]) return false;
     if (w.chains && w.chains.length && w.chains.indexOf(facts.chain.walletChain) < 0) return false;
-    return facts.kind === "connect" ? !!f["solana:signMessage"] : !!f["solana:signTransaction"];
+    return facts.kind === "connect" || facts.kind === "settings" ? !!f["solana:signMessage"] : !!f["solana:signTransaction"];
   }
 
   // ── choosing a wallet: the same list for both families ──────────────────────────────────
@@ -440,12 +540,22 @@ export const OWNER_PAGE_SCRIPT = `
     if (!p.on || watched.indexOf(p) >= 0) return;
     watched.push(p);
     p.on("accountsChanged", function (accounts) {
-      if (p !== provider || done || sentHash || !accounts || accounts.length === 0) return;
+      if (p !== provider || done || sentHash || asking || !accounts || accounts.length === 0) return;
       if (account && String(accounts[0]).toLowerCase() === account.toLowerCase()) return;
       account = null;
       show("send", false);
       show("connect", true);
       say("You switched accounts. Connect again.");
+    });
+    // Another network drops ready too: connecting again switches the wallet back. The wallet also reports the switch the page
+    // itself asked for, to the right network, which changes nothing.
+    p.on("chainChanged", function (id) {
+      if (p !== provider || done || sentHash || asking) return;
+      if (String(id).toLowerCase() === facts.chainIdHex.toLowerCase()) return;
+      account = null;
+      show("send", false);
+      show("connect", true);
+      say("Your wallet switched to another chain. Connect again to switch it back to " + facts.chain.chainName + ".");
     });
   }
 
@@ -486,6 +596,22 @@ export const OWNER_PAGE_SCRIPT = `
         el("account").textContent = account;
         show("account-row", true);
         show("account", true);
+        if (facts.kind === "settings") {
+          say("Check " + w.name + ": sign the message to sign your settings. It grants no spending permission and has no network fee.");
+          return Promise.resolve(w.features["solana:signMessage"].signMessage({ account: walletAccount, message: new TextEncoder().encode(facts.message) }))
+            .then(function (outputs) {
+              var o = outputs[0];
+              return post("/signed", { address: account, signature: b64(o.signature), signedMessage: b64(o.signedMessage) });
+            })
+            .then(function (answer) {
+              if (!answer.ok) throw new Error(answer.data.error || "the command did not accept this signature");
+              document.body.setAttribute("data-state", "connected");
+              show("connect", false);
+              show("reject", false);
+              setBusy(false);
+              say("Signed. The command is checking and recording your settings.");
+            });
+        }
         if (facts.kind === "connect") {
           say("Check " + w.name + ": sign the message to prove this address is yours. It grants no spending permission and has no network fee.");
           return Promise.resolve(w.features["solana:signMessage"].signMessage({ account: walletAccount, message: new TextEncoder().encode(facts.message) }))
@@ -613,10 +739,28 @@ function list(items: string[]): string {
 const OWNER_LEDE = "Review the terms here before you sign with your own wallet. Your wallet keeps its signing key.";
 
 /** The whole page for one owner action, terms and all, ready to serve. */
-export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look: PageLook = pageLook()): string {
+export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look: PageLook = pageLook(), nonce?: string): string {
+  const scriptAttr = nonce ? ` nonce="${nonce}"` : "";
   const left = Math.max(0, Math.round((facts.expiresAt - Date.now()) / 1000));
   const clock = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
-  const chainCell = esc(facts.chain.chainName);
+  const solana = facts.chain.family === "solana";
+  // The network by what identifies it: the chain id, or the cluster's genesis hash. A name alone is not a fact.
+  const chainCell = esc(
+    solana
+      ? facts.chain.genesis ? `${facts.chain.chainName} (cluster genesis ${facts.chain.genesis.slice(0, 8)}…)` : facts.chain.chainName
+      : `${facts.chain.chainName} (chain id ${facts.chain.chainId})`,
+  );
+  const rpcRow = facts.rpc && facts.rpc.hosts.length > 0 ? `<dt>RPC the command reads</dt><dd>${esc(`${facts.rpc.hosts.join(", ")} (${facts.rpc.source})`)}</dd>` : "";
+  const originRow = facts.origin ? `<dt>This page</dt><dd>${esc(`${facts.origin}, served by the command on this machine (not superstables.com)`)}</dd>` : "";
+  const bindingRow =
+    facts.binding?.state === "signed"
+      ? `<dt>Agent binding</dt><dd><span class="tag good">signed by you at setup</span></dd>`
+      : facts.binding?.state === "legacy"
+        ? `<dt>Agent binding</dt><dd><span class="tag warn">not signed at setup</span> <span class="why">This agent address was recorded by an older version, without your signature. Continue only if it is the agent you set up.</span></dd>`
+        : "";
+  const shows = terms.walletShows?.length
+    ? `<div class="wallet-shows"><strong>What your wallet will show</strong>${list(terms.walletShows)}</div>`
+    : "";
   const rows = terms.rows
     .map((row) => `<dt>${esc(row.label)}</dt><dd${row.mono ? ' class="mono"' : ""}>${esc(row.value)}</dd>`)
     .join("\n      ");
@@ -627,8 +771,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
       ${terms.notEnforced.length ? `<div class="no"><strong>The chain does not enforce</strong>${list(terms.notEnforced)}</div>` : ""}
     </div>`
       : "";
-  const solana = facts.chain.family === "solana";
-  const primary = facts.kind === "connect" ? "" : `<button id="send" class="primary" data-act="send" hidden>Review in wallet</button>`;
+  const primary = facts.kind === "connect" || facts.kind === "settings" ? "" : `<button id="send" class="primary" data-act="send" hidden>Review in wallet</button>`;
   const noWallet = solana
     ? `A Solana wallet is needed in this browser (Phantom, Solflare, Backpack, ...). For example, install Phantom from
     <a href="${PHANTOM_DOWNLOAD_URL}" rel="noreferrer noopener">${PHANTOM_DOWNLOAD_URL}</a>, then reload this page.
@@ -638,7 +781,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
     You can still reject without one.`;
   // A Solana wallet cannot be switched to devnet by a page: the owner does it once in the wallet.
   const networkHint =
-    solana && facts.kind !== "connect" && facts.chain.testnet
+    solana && facts.kind !== "connect" && facts.kind !== "settings" && facts.chain.testnet
       ? `<div id="network-hint" class="note">Before you approve: switch your wallet to Solana devnet. For example, in Phantom: open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet. If the wallet cannot simulate the transaction, its effects have not been checked by the wallet. Reject if you cannot verify what you are signing.</div>`
       : "";
   // Who this page acts for. Setup proves control of an address, not who the person is, so the
@@ -649,7 +792,9 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
     ${facts.kind === "connect" ? "Replace it only if you are its owner and mean to move the budget to another wallet." : "This page acts only for that wallet. If this isn't your wallet, stop: reject and do not connect."}</div>`
     : facts.kind === "connect"
       ? `<div class="note owner-box">Setup records the wallet you connect as the budget owner. Only the owner should do this, or someone with the owner watching. If an agent or someone else sent you this approval link and you are not the owner, stop and reject.</div>`
-      : "";
+      : facts.kind === "settings"
+        ? `<div class="note owner-box">Signing records the wallet you connect as the signer of these settings. Only the owner should do this. If an agent or someone else sent you this approval link and you are not the owner, stop and reject.</div>`
+        : "";
   const body = `
   ${ownerBox}
 
@@ -663,9 +808,13 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
     <dl class="rows">
       ${rows}
       <dt>Network</dt><dd>${chainCell}</dd>
+      ${rpcRow}
+      ${originRow}
+      ${bindingRow}
       <dt id="account-row" hidden>Connected wallet</dt><dd id="account" class="mono" hidden></dd>
       <dt id="expiry-row">Approval link expires in</dt><dd id="expiry-val"><span id="expiry">${clock}</span></dd>
     </dl>
+    ${shows}
     ${limits}
     ${networkHint}
     <div id="say" class="note" hidden></div>
@@ -679,14 +828,14 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
   </div>
 
 <script id="owner-facts" type="application/json">${inlineJson(facts)}</script>
-<script>${OWNER_PAGE_SCRIPT}</script>`;
+<script${scriptAttr}>${OWNER_PAGE_SCRIPT}</script>`;
   return framePage({
     look,
     title: terms.title,
-    eyebrow: facts.kind === "connect" ? "Owner sign-in" : "Agent request",
+    eyebrow: facts.kind === "connect" ? "Owner sign-in" : facts.kind === "settings" ? "Owner settings" : "Agent request",
     lede: OWNER_LEDE,
     testnet: facts.chain.testnet,
-    style: OWNER_STYLE,
+    style: ownerStyle(look),
     body,
   });
 }
