@@ -1,0 +1,14 @@
+{
+  "name": "superstables",
+  "owner": { "name": "Superstables" },
+  "metadata": {
+    "description": "Superstables tools and skills for finding services and paying with test tokens."
+  },
+  "plugins": [
+    {
+      "name": "superstables",
+      "source": "./plugin",
+      "description": "Find services and request purchases with approval on superstables.com. Includes the CLI payments skill for agents that can run commands. Testnet only."
+    }
+  ]
+}
