@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Synchronize the plugin's CLI skill and versions. --check reports drift without writing.
-import { chmodSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { trackedFiles } from "./package-root.mjs";
@@ -12,7 +12,7 @@ function runInPlugin(version) {
   const cli = `npx --yes @superstables/client@${version}`;
   return `**This skill needs an agent that can run commands.** In a chat app without a terminal, use the Superstables tools from this plugin instead: the \`superstables\` skill.
 
-Run the CLI as \`${cli} <command>\`, for example \`${cli} find weather\` or \`${cli} budget doctor --rail evm\`. If \`superstables\` is already installed at version ${version}, that works too. Node 22 or newer is required. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine. Never run unscoped \`npx superstables\`: it can download a different package. Use the scoped, pinned package above.`;
+Run the CLI as \`${cli} <command>\`, for example \`${cli} find weather\` or \`${cli} budget doctor --rail evm\`. In the commands below, \`superstables\` stands for that command. If \`superstables\` is already installed at version ${version}, that works too. Node 22 or newer is required. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine. Never run unscoped \`npx superstables\`: it can download a different package. Use the scoped, pinned package above.`;
 }
 
 function statIfPresent(path) {
@@ -24,9 +24,9 @@ function statIfPresent(path) {
   }
 }
 
-function refuseSymlinkPath(path) {
-  const parent = dirname(path);
-  if (parent !== path) refuseSymlinkPath(parent);
+function refuseSymlinkPath(path, root) {
+  if (path === root) return;
+  refuseSymlinkPath(dirname(path), root);
   if (statIfPresent(path)?.isSymbolicLink()) throw new Error(`Symlinks are not allowed: ${path}`);
 }
 
@@ -48,16 +48,16 @@ function filesIn(dir, prefix = "") {
 
 /** @param {{ root: string, check?: boolean }} options */
 export function syncPlugin({ root, check = false }) {
-  root = resolve(root);
+  root = realpathSync(root);
   const plugin = join(root, "plugin");
   const destinationPath = (file) => {
     const path = resolve(plugin, file);
     if (!path.startsWith(plugin + sep)) throw new Error(`Destination must stay under plugin/: ${path}`);
-    refuseSymlinkPath(path);
+    refuseSymlinkPath(path, root);
     return path;
   };
   const source = join(root, SKILL);
-  refuseSymlinkPath(source);
+  refuseSymlinkPath(source, root);
   filesIn(source);
   const destination = destinationPath(SKILL);
   const bundled = filesIn(destination).sort();
@@ -110,7 +110,7 @@ export function syncPlugin({ root, check = false }) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   try {
     const args = process.argv.slice(2);
     if (args.some((arg) => arg !== "--check")) throw new Error("Usage: node scripts/plugin-sync.mjs [--check]");

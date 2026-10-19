@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { syncPlugin } from "../../scripts/plugin-sync.mjs";
@@ -39,6 +39,21 @@ describe("plugin synchronization", () => {
     expect(() => syncPlugin({ root: repo, check: true })).not.toThrow();
   });
 
+  it("synchronizes a repository reached through a symlinked ancestor", () => {
+    const root = fixture();
+    const ancestor = mkdtempSync(join(tmpdir(), "plugin-sync-ancestor-"));
+    scratch.push(ancestor);
+    symlinkSync(dirname(root), join(ancestor, "linked"), "dir");
+    const linkedRoot = join(ancestor, "linked", basename(root));
+    mkdirSync(join(root, "scripts"));
+    for (const script of ["plugin-sync.mjs", "package-root.mjs"]) cpSync(join(repo, "scripts", script), join(root, "scripts", script));
+    const result = spawnSync(process.execPath, [join(linkedRoot, "scripts/plugin-sync.mjs")], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("Plugin skill and versions synchronized.\n");
+    expect(readFileSync(join(root, bundle, "references/pay.md"), "utf8")).toBe("Payment instructions.\n");
+    expect(() => syncPlugin({ root: linkedRoot, check: true })).not.toThrow();
+  });
+
   it("copies tracked skill files, removes stale files and leaves untracked source files out", () => {
     const root = fixture();
     write(root, `${skill}/scratch.txt`, "Do not ship.\n");
@@ -58,6 +73,7 @@ describe("plugin synchronization", () => {
     expect(bundled).toContain("the `superstables` skill");
     expect(bundled).toContain("npx --yes @superstables/client@1.2.3 find weather");
     expect(bundled).toContain("npx --yes @superstables/client@1.2.3 budget doctor --rail evm");
+    expect(bundled).toContain("budget doctor --rail evm`. In the commands below, `superstables` stands for that command. If `superstables` is already installed");
     expect(bundled).toContain("Never run unscoped `npx superstables`");
     expect(bundled).not.toContain("<!--");
     expect(bundled).toMatch(/^---\nname: superstables-payments\n---\n\nBefore\.\n[\s\S]*\nAfter\.\n$/);
