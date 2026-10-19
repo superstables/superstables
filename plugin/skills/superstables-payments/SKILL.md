@@ -18,9 +18,9 @@ Terms used below: the **owner** controls the wallet and approves; the **agent** 
 
 ## Running the CLI
 
-<!-- run: scripts/skill.mjs puts the standalone skill's own paragraph here -->
-`superstables` is the client's command, on the PATH once linked from a checkout of the client repository (`npm ci`, `npm run build` and `npm link` at its root). Never run it as `npx superstables`: where the client is not found, npx downloads and runs whatever package the npm registry has under that name. It needs Node 22 or newer, on Linux or macOS (on Windows, WSL). Keys and state are in `$SUPERSTABLES_HOME` (default `~/.superstables`).
-<!-- /run -->
+**This skill needs an agent that can run commands.** In a chat app without a terminal, use the Superstables tools from this plugin instead: the `superstables` skill.
+
+Run the CLI as `npx --yes @superstables/client@0.4.0 <command>`, for example `npx --yes @superstables/client@0.4.0 find weather` or `npx --yes @superstables/client@0.4.0 budget doctor --rail evm`. If `superstables` is already installed at version 0.4.0, that works too. Node 22 or newer is required. Keys and state are in `$SUPERSTABLES_HOME` (default `~/.superstables`), shared with any other copy of the tool on this machine. Never run unscoped `npx superstables`: it can download a different package. Use the scoped, pinned package above.
 
 Every command has `--help` that lists its flags, whether it moves money, who runs it, what it prints and its exit codes. Read a command's `--help` before its first use instead of guessing flags. `superstables budget --help` also maps chain names to rails and lists the owner's steps per rail. Every `superstables budget` command accepts `--site <origin>`; pass one only when the owner gave you that site, and then pass it to each (safety rule 9).
 

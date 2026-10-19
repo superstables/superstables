@@ -9,7 +9,7 @@ Use the connected Superstables tools to find a service and request a purchase.
 Testnet only: test tokens, no real money.
 
 - `get_my_account`: read the account and wallets connected to this chat.
-- `find_services`: find services, prices, chains and required inputs. This pays nothing.
+- `find_services`: find services, prices, chains and required inputs. No sign-in needed. This pays nothing.
 - `request_purchase`: request a service by its `service_id` and inputs. Use a new `operation_id` for each purchase; reuse it when retrying the same request on the same connection.
 - `get_purchase_status`: read the purchase's payment status, service response and receipt using its `purchase_id`.
 

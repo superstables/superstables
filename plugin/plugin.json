@@ -2,10 +2,18 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "superstables",
   "version": "0.4.0",
-  "description": "Find services and request purchases with approval on superstables.com. Includes the CLI payments skill for agents that can run commands. Testnet only.",
-  "author": { "name": "Superstables" },
+  "description": "Find services and request purchases with approval on superstables.com. Includes the CLI payments skill, with budgets, for agents that can run commands. Testnet only.",
+  "author": {
+    "name": "Superstables"
+  },
   "homepage": "https://www.superstables.com",
   "repository": "https://github.com/superstables/superstables",
   "license": "Apache-2.0",
-  "keywords": ["payments", "services", "mcp", "cli", "testnet"]
+  "keywords": [
+    "payments",
+    "services",
+    "mcp",
+    "cli",
+    "testnet"
+  ]
 }

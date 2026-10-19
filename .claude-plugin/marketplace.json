@@ -8,7 +8,7 @@
     {
       "name": "superstables",
       "source": "./plugin",
-      "description": "Find services and request purchases with approval on superstables.com. Includes the CLI payments skill for agents that can run commands. Testnet only."
+      "description": "Find services and request purchases with approval on superstables.com. Includes the CLI payments skill, with budgets, for agents that can run commands. Testnet only."
     }
   ]
 }
