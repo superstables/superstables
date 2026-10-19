@@ -224,7 +224,7 @@ describe("evm: records of the owner's last action, and the other paths that must
     expect(g.result.state).toBe("landed");
     // a grant drops the revoke's record, tx and block with it
     expect(c.pub()).not.toMatch(/^B4_REVOKED_(AT|TX|BLOCK)=/m);
-    // the owner then zeroes the allowance above the final head; the revoke time is recorded the way recover's own revoke writes it
+    // the owner then zeroes the allowance above the final head
     const raw = await c.owner.signTransaction({ chainId: 84532, nonce: c.chain.sentRaw.filter((t) => t.from.toLowerCase() === c.owner.address.toLowerCase()).length, to: c.chain.usdcAddress as `0x${string}`, data: encodeFunctionData({ abi: approveAbi, functionName: "approve", args: [c.agent.address, 0n] }), gas: 100000n, maxFeePerGas: 10n ** 9n, maxPriorityFeePerGas: 10n ** 9n, type: "eip1559" });
     await rawSend(c.chain.url, raw);
     // the revoke is recorded at the time of the block that zeroed the allowance, which is after the final block whatever the chain's
@@ -392,7 +392,7 @@ async function solanaCase(o: { delegate?: boolean } = {}) {
   solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: o.delegate === false ? null : SOL_AGENT, delegated: o.delegate === false ? 0n : 50_000n });
   solana.balances.set(SOL_OWNER, 1_000_000_000n);
   // The client process does not spend the real minute `finalizedOf` waits for a signature that is only confirmed (see the helper).
-  const NODE_OPTIONS = [process.env.NODE_OPTIONS, `--import ${fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url))}`].filter(Boolean).join(" ");
+  const NODE_OPTIONS = [process.env.NODE_OPTIONS, `--import=${fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url))}`].filter(Boolean).join(" ");
   const run = (args: string[]) => cli(args, { SUPERSTABLES_HOME: home, SUPERSTABLES_SOLANA_RPC: solana.url, NODE_OPTIONS });
   const keyArgs = ["--owner-key-file", join(home, "owner.env"), "--yes"];
   return { solana, home, run, keyArgs, pub: () => readFileSync(pubFile, "utf8") };
@@ -409,8 +409,9 @@ describe("solana: confirmed is not finalized", () => {
     expect(c.pub()).toMatch(/^REVOKED_TX=\S+$/m);
     expect(c.pub()).toMatch(/^REVOKED_SLOT=\d+$/m);
     expect(c.pub()).toMatch(/^REVOKED_AT=\d+$/m);
-    // the client polled for the whole minute it waits (every two seconds, skipped in time by the helper), not once
-    expect(c.solana.calls.filter((m) => m === "getSignatureStatuses").length).toBeGreaterThanOrEqual(30);
+    // the client polled through the minute it waits (every two seconds, skipped in time by the helper; polls that take real time
+    // shorten it a little), not once or twice: a wait that ended early would show far fewer than 20
+    expect(c.solana.calls.filter((m) => m === "getSignatureStatuses").length).toBeGreaterThanOrEqual(20);
   }, 150_000);
 
   it("revoke finalized: revoked, final true", async () => {

@@ -56,7 +56,7 @@ afterEach(async () => {
 });
 
 // A client process that loads this file does not spend the real minute `finalizedOf` waits for a signature that is only confirmed.
-const SKIP_FINALITY_WAIT = `--import ${fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url))}`;
+const SKIP_FINALITY_WAIT = `--import=${fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url))}`;
 
 function budget(args: string[], o: { skipFinalityWait?: boolean } = {}): Promise<{ code: number; stdout: string; stderr: string; result: any; approve: any }> {
   return new Promise((done, fail) => {
