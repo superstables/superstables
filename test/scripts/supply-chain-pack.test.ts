@@ -33,7 +33,7 @@ afterAll(() => {
 });
 
 describe("the npm package", () => {
-  it("holds no source map, and holds the SBOM", () => {
+  it("holds no source map, holds the SBOM, and holds the shrinkwrap that pins the indirect dependencies", () => {
     const r = spawnSync("npm", ["pack", "--dry-run", "--json"], { cwd: copy, env: cleanEnv, encoding: "utf8", timeout: 120_000 });
     expect(r.status, r.stderr).toBe(0);
     // npm 10 prints prepack's own output to stdout before the JSON
@@ -44,6 +44,8 @@ describe("the npm package", () => {
     const paths: string[] = packed.files.map((f: { path: string }) => f.path);
     expect(paths.filter((p) => p.endsWith(".map"))).toEqual([]);
     expect(paths).toContain("dist/sbom.cdx.json");
+    expect(paths).toContain("npm-shrinkwrap.json");
+    expect(paths).not.toContain("package-lock.json");
   }, 150_000);
 });
 

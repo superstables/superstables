@@ -117,7 +117,8 @@ function installedVersions(nodeModules) {
   return found;
 }
 
-// What package-lock.json says an install of the client gets: its production entries (no dev, no optional peers).
+// What the lockfile (package-lock.json, and npm-shrinkwrap.json, which a test keeps identical) says an install of the client
+// gets: its production entries (no dev, no optional peers).
 const tested = new Set(
   Object.entries(JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8")).packages)
     .filter(([k, v]) => k && !v.dev && !v.optional && !v.devOptional)
@@ -133,6 +134,7 @@ function checkInstalled(route, nodeModules) {
   check(route, "the package has dist/budget/cli.mjs", existsSync(join(pkg, "dist", "budget", "cli.mjs")));
   check(route, "the package has dist/budget/THIRD_PARTY_NOTICES.txt", existsSync(join(pkg, "dist", "budget", "THIRD_PARTY_NOTICES.txt")));
   check(route, "the package has no budget/ sources", !existsSync(join(pkg, "budget")));
+  check(route, "the package has npm-shrinkwrap.json", existsSync(join(pkg, "npm-shrinkwrap.json")));
   const present = BUDGET_ONLY.filter((p) => existsSync(join(nodeModules, p)) || existsSync(join(pkg, "node_modules", p)));
   check(route, "no budget-only package installed", present.length === 0, present.join(", "));
   // A dependency range somewhere down the tree that a newer release now satisfies shows here, as a package that the
@@ -140,7 +142,7 @@ function checkInstalled(route, nodeModules) {
   const got = installedVersions(nodeModules);
   const extra = [...got].filter((p) => !tested.has(p));
   const missing = [...tested].filter((p) => !got.has(p));
-  check(route, "installs exactly the versions package-lock.json resolved", !extra.length && !missing.length, [...extra.map((p) => `+${p}`), ...missing.map((p) => `-${p}`)].join(" "));
+  check(route, "installs exactly the versions npm-shrinkwrap.json locks", !extra.length && !missing.length, [...extra.map((p) => `+${p}`), ...missing.map((p) => `-${p}`)].join(" "));
 }
 
 // ---- the checkout copy: the files git knows about or would add, as they are on disk now ----------------------------

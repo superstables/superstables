@@ -38,6 +38,12 @@ const sha256 = (file: string) => createHash("sha256").update(readFileSync(file))
 const files = (dir: string) => readdirSync(dir, { recursive: true }).map(String).filter((f) => statSync(join(dir, f)).isFile()).sort();
 
 describe("pins", () => {
+  it("npm-shrinkwrap.json, the lockfile the package publishes, is package-lock.json byte for byte", () => {
+    // npx and npm install use the shrinkwrap in a published package and ignore package-lock.json. With both files in a
+    // checkout, npm updates only the shrinkwrap, so after a dependency change run: cp npm-shrinkwrap.json package-lock.json
+    expect(readFileSync(join(root, "npm-shrinkwrap.json"), "utf8")).toBe(readFileSync(join(root, "package-lock.json"), "utf8"));
+  });
+
   it("every runtime dependency is an exact version, and it is the version the lockfile resolved", () => {
     expect(Object.keys(pkg.dependencies).length).toBeGreaterThan(0);
     for (const [name, spec] of Object.entries<string>(pkg.dependencies)) {

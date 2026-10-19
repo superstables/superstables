@@ -16,7 +16,7 @@
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
   },
   "publishConfig": { "access": "public" },
-  "files": ["dist", "policy.example.yaml", "README.md", "CHANGELOG.md", "LICENSE"],
+  "files": ["dist", "policy.example.yaml", "npm-shrinkwrap.json", "README.md", "CHANGELOG.md", "LICENSE"],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/budget-build.mjs",
     "prepare": "node scripts/prepare.mjs",
