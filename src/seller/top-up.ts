@@ -5,11 +5,13 @@
 // two reads and the one create that come before it, plus the checks that tie the answer to the request.
 //
 // The API key travels only to the Superstables origin, in an Authorization header, and never appears in a
-// message: a site (or a proxy) that echoes it back has it redacted before anything is printed.
+// message: an answer that holds it (a site or a proxy echoing it back) is refused before anything is saved or printed.
 
 import { BASE_SEPOLIA, fromAtomicString, toAtomicExact } from "../core/chain.js";
-import { readCapped } from "../core/http.js";
+import { readBody, readCapped } from "../core/http.js";
 import { siteFor } from "../core/owner-settings.js";
+import { untrustedJson, untrustedText } from "../core/text.js";
+import type { Attempt } from "../core/types.js";
 
 /** The seller API key: a secret the seller portal issues (sssk_ followed by base64url characters). */
 export const SELLER_API_KEY_ENV = "SUPERSTABLES_SELLER_API_KEY";
@@ -19,8 +21,9 @@ export const TOP_UPS_PATH = "/api/v1/seller/top-ups";
 /** The chain a top-up is paid on: Base Sepolia, in test USDC. */
 export const TOP_UP_NETWORK = BASE_SEPOLIA;
 const TOP_UP_DECIMALS = TOP_UP_NETWORK.token.decimals;
-/** The least the site will take. */
+/** The least and the most the site will take. */
 export const MIN_TOP_UP_ATOMIC = 10n ** BigInt(TOP_UP_DECIMALS);
+export const MAX_TOP_UP_ATOMIC = 1_000n * MIN_TOP_UP_ATOMIC;
 /** The site rechecks a pending payment before answering a read, so a read can take about eight seconds. */
 export const SELLER_API_TIMEOUT_MS = 20_000;
 const MAX_ANSWER_BYTES = 256 * 1024;
@@ -36,6 +39,8 @@ export interface TopUp {
   status: TopUpStatus | string;
   payUrl?: string;
   createdAt?: string;
+  /** The site no longer takes a payment for it (it was asked for before the fees address changed). */
+  retired?: boolean;
 }
 
 /** One line of the seller's credit ledger, as the site describes it. */
@@ -90,6 +95,7 @@ export function parseTopUpAmount(input: string): TopUpAmount {
     throw new Error(`"${input}" has more than ${TOP_UP_DECIMALS} decimal places`);
   }
   if (atomic < MIN_TOP_UP_ATOMIC) throw new Error("the smallest top-up is 1 USDC");
+  if (atomic > MAX_TOP_UP_ATOMIC) throw new Error("the largest top-up is 1000 USDC");
   return { decimal: fromAtomicString(atomic, TOP_UP_DECIMALS), atomic: atomic.toString() };
 }
 
@@ -107,14 +113,14 @@ export function readSellerApiKey(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * The Superstables origin the seller API is read from: SUPERSTABLES_SITE when set, else the owner's site, else
- * superstables.com. The key travels there, so it is checked like a read of the site: an https superstables.com host, or
- * this machine for local and staging development, and nothing else.
+ * The Superstables origin the seller API is used on: SUPERSTABLES_SITE when set, else the owner's site, else
+ * superstables.com. The key and a payment go there, so it is checked like an owner action: www.superstables.com, or a
+ * site the owner has allowed in their settings (staging, this machine), and nothing else.
  */
 export function sellerSite(site: string | undefined = process.env.SUPERSTABLES_SITE): URL {
-  const got = siteFor("read", site?.trim() || undefined);
+  const got = siteFor("owner", site?.trim() || undefined);
   if ("error" in got) {
-    throw new Error(`the seller API is read only on superstables.com (or on this machine, for development): ${got.error}`);
+    throw new Error(`the seller API is used only on a site the owner allows: ${got.error}`);
   }
   const url = new URL(got.origin);
   if (url.username || url.password) throw new Error("the Superstables site must not contain a user name or password");
@@ -138,6 +144,7 @@ export function topUpProblem(topUp: TopUp, site: URL, expected: TopUpAmount): st
     return `the site gave the top-up an unknown status ("${display(topUp.status)}")`;
   }
   if (topUp.status !== "open") return undefined;
+  if (topUp.retired) return "the site gave the top-up as retired, which it can no longer take a payment for";
   if (!topUp.payUrl) return "the site did not give the top-up a pay link";
   let url: URL;
   try {
@@ -152,6 +159,11 @@ export function topUpProblem(topUp: TopUp, site: URL, expected: TopUpAmount): st
     return `the top-up's pay link is not this top-up's pay path (expected ${topUpPayPath(topUp.id)}, got ${display(url.pathname)})`;
   }
   return undefined;
+}
+
+/** The pay link as the URL parser writes it: what topUpProblem checked, and what is quoted and paid. Call it after topUpProblem. */
+export function topUpPayHref(topUp: TopUp): string {
+  return new URL(topUp.payUrl as string).href;
 }
 
 /**
@@ -201,6 +213,7 @@ export function topUpFromAnswer(body: unknown): TopUp {
     status,
     ...(typeof record.pay_url === "string" ? { payUrl: record.pay_url } : {}),
     ...(typeof record.created_at === "string" ? { createdAt: record.created_at } : {}),
+    ...(record.retired === true ? { retired: true } : {}),
   };
 }
 
@@ -211,7 +224,7 @@ export function creditFromAnswer(body: unknown): SellerCredit {
   }
   const record = body as Record<string, unknown>;
   const credit = objectField(record.credit);
-  const balance = decimalField(credit?.balance ?? record.balance ?? record.credit_balance);
+  const balance = signedDecimalField(credit?.balance ?? record.balance ?? record.credit_balance);
   const asset = stringField(credit?.asset ?? record.asset) ?? TOP_UP_NETWORK.token.symbol;
   const topUps = listField(record.top_ups ?? record.topUps ?? credit?.top_ups ?? credit?.topUps).map((entry) => topUpRecord(entry));
   const entries = listField(record.entries ?? record.ledger ?? credit?.entries ?? credit?.ledger).map((entry) => entryRecord(entry));
@@ -254,7 +267,88 @@ export async function readSellerCredit(options: {
     fetch: options.fetch,
     timeoutMs: options.timeoutMs,
   });
-  return creditFromAnswer(answer);
+  return scrubbed(creditFromAnswer(answer), options.apiKey);
+}
+
+/** What is said when an answer held the key. It never repeats the answer. */
+export const KEY_ECHOED_MESSAGE = "the site's answer contained the API key, so it was discarded unread";
+
+/** The text of every string in a value, with the key redacted and the characters a terminal must not get removed. */
+export function scrubbed<T>(value: T, secret: string): T {
+  return untrustedJson(JSON.parse(redactSecret(JSON.stringify(value), secret)) as T);
+}
+
+/**
+ * `fetch`, except that an answer holding the key (in its body, or in a header, plain or as base64) is refused with a
+ * SellerApiError before the caller reads it. The caller keeps reading the answer itself, under its own cap and
+ * deadline: this reads a copy of it, up to MAX_ANSWER_BYTES * 16.
+ */
+export function keyGuardedFetch(apiKey: string, inner: typeof fetch = (input, init) => fetch(input, init)): typeof fetch {
+  return async (input, init) => {
+    const res = await inner(input, init);
+    const copy = res.clone();
+    const { text } = await readBody(copy, MAX_ANSWER_BYTES * 16, SELLER_API_TIMEOUT_MS);
+    if (holdsSecret(text, res.headers, apiKey)) {
+      res.body?.cancel().catch(() => undefined);
+      throw new SellerApiError("key_echoed", KEY_ECHOED_MESSAGE, res.status);
+    }
+    return res;
+  };
+}
+
+function holdsSecret(text: string, headers: Headers, secret: string): boolean {
+  if (!secret) return false;
+  if (text.includes(secret)) return true;
+  let held = false;
+  headers.forEach((value) => {
+    // A header such as PAYMENT-REQUIRED carries its JSON as base64.
+    if (value.includes(secret) || Buffer.from(value, "base64").toString("utf8").includes(secret)) held = true;
+  });
+  return held;
+}
+
+/** The id of the top-up whose pay link a URL is on this site, or undefined for any other URL. */
+export function topUpIdFromPayUrl(url: string, site: URL): string | undefined {
+  try {
+    const parsed = new URL(url);
+    if (parsed.origin !== site.origin) return undefined;
+    const match = new RegExp(`^${TOP_UPS_PATH}/([^/]+)/pay$`).exec(parsed.pathname);
+    return match && UUID.test(match[1] as string) ? (match[1] as string).toLowerCase() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** An attempt whose payment may have moved, or may still: it is not over, or it ended without the chain's word that nothing was paid. */
+function mayHavePaid(attempt: Attempt): boolean {
+  if (["awaiting_approval", "approved", "submitting", "uncertain", "paid_service_failed"].includes(attempt.state)) return true;
+  return attempt.state === "failed" && attempt.chain !== "unpaid" && attempt.transaction !== undefined;
+}
+
+/**
+ * Why another top-up must not be created yet, or undefined when none is in doubt. A top-up is in doubt when the site
+ * lists one as pending, or when this machine has a payment for one of this site's top-ups that may have moved money and
+ * the site does not list that top-up as paid (or retired). Creating and paying another meanwhile could pay twice.
+ */
+export function earlierTopUpProblem(input: { site: URL; credit: SellerCredit; attempts: Attempt[] }): string | undefined {
+  const listed = new Map(input.credit.topUps.map((topUp) => [topUp.id.toLowerCase(), topUp]));
+  const doubts: string[] = [];
+  for (const topUp of input.credit.topUps) {
+    if (topUp.status === "pending") doubts.push(`top-up ${display(topUp.id)} is pending on the site`);
+  }
+  for (const attempt of input.attempts) {
+    const id = topUpIdFromPayUrl(attempt.url, input.site);
+    if (!id || !mayHavePaid(attempt)) continue;
+    const site = listed.get(id);
+    if (site && (site.status === "paid" || site.retired)) continue;
+    doubts.push(`top-up ${id} has a payment (attempt ${attempt.id}, ${attempt.state}) that may have moved money`);
+  }
+  if (doubts.length === 0) return undefined;
+  const shown = doubts.slice(0, 3).join("; ") + (doubts.length > 3 ? `; and ${doubts.length - 3} more` : "");
+  return (
+    `an earlier top-up is not settled: ${shown}. A new top-up could pay twice. Run \`superstables seller credit\` to see ` +
+    "where it stands (it rechecks pending top-ups), and `superstables status <attempt>` to search a payment on chain"
+  );
 }
 
 // ── Internals ───────────────────────────────────────────────────────────────────────────
@@ -291,6 +385,8 @@ async function call(options: {
   } catch (err) {
     throw new SellerApiError("invalid_response", `the seller API's answer could not be read (${messageOf(err)})`, res.status);
   }
+  // An answer that holds the key is not read at all: nothing of it is parsed, kept or repeated.
+  if (holdsSecret(text, res.headers, options.apiKey)) throw new SellerApiError("key_echoed", KEY_ECHOED_MESSAGE, res.status);
   let body: unknown;
   try {
     body = JSON.parse(text) as unknown;
@@ -306,9 +402,9 @@ async function call(options: {
 /** The site's `{ error: { code, message, money_moved } }`, bounded and with the key redacted. */
 function errorFrom(res: Response, body: unknown, apiKey: string): SellerApiError {
   const error = (body as { error?: { code?: unknown; message?: unknown } } | undefined)?.error;
-  const code = typeof error?.code === "string" && error.code.length <= 120 ? error.code : `http_${res.status}`;
+  const code = typeof error?.code === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(error.code) ? error.code : `http_${res.status}`;
   // The site's words may quote the request back, and this one carries the key: redact before it can be printed.
-  const said = typeof error?.message === "string" ? redactSecret(error.message.replace(/\s+/g, " "), apiKey).slice(0, 300) : "";
+  const said = typeof error?.message === "string" ? untrustedText(redactSecret(error.message, apiKey), 300) : "";
   const detail = said ? `: ${said}` : "";
   return new SellerApiError(
     code,
@@ -336,6 +432,7 @@ function topUpRecord(entry: unknown): TopUp {
     status: stringField(record.status) ?? "",
     ...(stringField(record.pay_url) !== undefined ? { payUrl: stringField(record.pay_url) as string } : {}),
     ...(stringField(record.created_at) !== undefined ? { createdAt: stringField(record.created_at) as string } : {}),
+    ...(record.retired === true ? { retired: true } : {}),
   };
 }
 
@@ -349,8 +446,9 @@ function entryRecord(entry: unknown): CreditEntry {
       ? { kind: stringField(record.kind ?? record.type ?? record.reason ?? record.description) as string }
       : {}),
     ...(signedDecimalField(record.amount) !== undefined ? { amount: signedDecimalField(record.amount) as string } : {}),
-    ...(stringField(record.reference ?? record.id ?? record.top_up_id ?? record.purchase_id) !== undefined
-      ? { reference: stringField(record.reference ?? record.id ?? record.top_up_id ?? record.purchase_id) as string }
+    // The ledger entry's own id is no reference; `source_id` is what it was made for: a top-up, a sale, a refund.
+    ...(stringField(record.source_id ?? record.reference ?? record.top_up_id ?? record.purchase_id) !== undefined
+      ? { reference: stringField(record.source_id ?? record.reference ?? record.top_up_id ?? record.purchase_id) as string }
       : {}),
   };
 }

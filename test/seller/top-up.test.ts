@@ -4,6 +4,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { BASE_SEPOLIA } from "../../src/core/chain.js";
+import type { Attempt } from "../../src/core/types.js";
+import { accountHomeWith } from "../helpers/owner-settings.js";
 import {
   MIN_TOP_UP_ATOMIC,
   SELLER_API_KEY_ENV,
@@ -14,10 +16,13 @@ import {
   creditFromAnswer,
   parseTopUpAmount,
   readSellerApiKey,
+  earlierTopUpProblem,
+  keyGuardedFetch,
   readSellerCredit,
   redactSecret,
   sellerSite,
   topUpFromAnswer,
+  topUpPayHref,
   topUpPayPath,
   topUpProblem,
   topUpTermsProblem,
@@ -57,6 +62,11 @@ describe("parseTopUpAmount", () => {
     expect(parseTopUpAmount("1")).toEqual({ decimal: "1", atomic: String(MIN_TOP_UP_ATOMIC) });
   });
 
+  it("takes the largest top-up the site does, and refuses more", () => {
+    expect(parseTopUpAmount("1000")).toEqual({ decimal: "1000", atomic: "1000000000" });
+    expect(() => parseTopUpAmount("1000.000001")).toThrow(/largest top-up is 1000 USDC/);
+  });
+
   it("refuses anything that is not a plain decimal at least 1 USDC", () => {
     for (const input of ["", "  ", "-5", "+5", ".5", "1e3", "0x10", "5 USDC", "1,5"]) {
       expect(() => parseTopUpAmount(input), input).toThrow(/not a USD amount/);
@@ -81,15 +91,31 @@ describe("readSellerApiKey", () => {
 });
 
 describe("sellerSite", () => {
-  it("takes superstables.com, a Superstables host, and this machine", () => {
+  // The key and a payment go to this site, so it is held to the trust of an owner action (src/core/owner-settings.js).
+  it("takes www.superstables.com, and this machine where the owner allows it", () => {
     expect(sellerSite("https://www.superstables.com").origin).toBe("https://www.superstables.com");
-    expect(sellerSite("https://staging.superstables.com").origin).toBe("https://staging.superstables.com");
+    expect(sellerSite("https://superstables.com").origin).toBe("https://www.superstables.com");
+    // The test account allows loopback sites (test/account-guard.mjs).
     expect(sellerSite("http://127.0.0.1:3000").origin).toBe("http://127.0.0.1:3000");
   });
 
-  it("refuses another site, which would receive the key", () => {
-    for (const site of ["https://evil.example", "http://evil.example", "not a url"]) {
-      expect(() => sellerSite(site), site).toThrow(/seller API is read only on superstables.com/);
+  it("refuses any other site, which would receive the key", () => {
+    for (const site of ["https://evil.example", "http://evil.example", "not a url", "https://evil.superstables.com", "https://staging.superstables.com", "https://www.superstables.com:8443"]) {
+      expect(() => sellerSite(site), site).toThrow(/seller API is used only on a site the owner allows|not a URL/);
+    }
+  });
+
+  it("takes a site the owner has allowed in their settings, and only on the production defaults otherwise", () => {
+    const before = process.env.SUPERSTABLES_TEST_ACCOUNT_HOME;
+    try {
+      process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = accountHomeWith({ version: 1, site: { allowStaging: true } });
+      expect(sellerSite("https://staging.superstables.com").origin).toBe("https://staging.superstables.com");
+      expect(() => sellerSite("http://127.0.0.1:3000")).toThrow(/owner allows/);
+      process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = accountHomeWith(null);
+      expect(() => sellerSite("https://staging.superstables.com")).toThrow(/owner allows/);
+    } finally {
+      if (before === undefined) delete process.env.SUPERSTABLES_TEST_ACCOUNT_HOME;
+      else process.env.SUPERSTABLES_TEST_ACCOUNT_HOME = before;
     }
   });
 });
@@ -105,6 +131,16 @@ describe("topUpProblem", () => {
     const problem = topUpProblem(topUp({ payUrl: `https://evil.example${topUpPayPath(ID)}` }), SITE, expected);
     expect(problem).toContain("https://evil.example");
     expect(problem).toContain(SITE.origin);
+  });
+
+  it("hands on the pay link as the URL parser writes it, which is what was checked", () => {
+    const loud = topUp({ payUrl: `https://WWW.SUPERSTABLES.COM:443${topUpPayPath(ID)}` });
+    expect(topUpProblem(loud, SITE, expected)).toBeUndefined();
+    expect(topUpPayHref(loud)).toBe(`${SITE.origin}${topUpPayPath(ID)}`);
+  });
+
+  it("refuses a top-up the site gives as retired", () => {
+    expect(topUpProblem(topUp({ retired: true }), SITE, expected)).toContain("retired");
   });
 
   it("refuses a pay link for another top-up's id, and any query or fragment", () => {
@@ -180,6 +216,17 @@ describe("answers from the seller API", () => {
     expect(nested.entries).toEqual([]);
   });
 
+  it("reads the ledger's reference from source_id, a retired top-up as retired and a negative balance as it is", () => {
+    const credit = creditFromAnswer({
+      balance: "-0.4",
+      top_ups: [{ id: ID, amount: "10", status: "open", retired: true, pay_url: null }],
+      entries: [{ id: "entry-1", kind: "fee", source_id: "sale-9", amount: "-0.4", created_at: "2026-10-20T00:00:00.000Z" }],
+    });
+    expect(credit.balance).toBe("-0.4");
+    expect(credit.topUps[0]).toMatchObject({ status: "open", retired: true });
+    expect(credit.entries[0]).toEqual({ at: "2026-10-20T00:00:00.000Z", kind: "fee", amount: "-0.4", reference: "sale-9" });
+  });
+
   it("leaves out what the site did not send, rather than guessing", () => {
     const credit = creditFromAnswer({});
     expect(credit).toEqual({ asset: "USDC", topUps: [], entries: [] });
@@ -210,13 +257,33 @@ describe("the seller API calls", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("redacts the key when the site echoes it back in an error", async () => {
+  it("refuses an answer that holds the key, whatever field or status it is in, and repeats none of it", async () => {
+    const answers: [string, number, unknown][] = [
+      ["an error message", 401, { error: { code: "unauthorized", message: `the key ${KEY} is not valid` } }],
+      ["an error code", 401, { error: { code: KEY, message: "no" } }],
+      ["a top-up field", 201, { top_up: { id: ID, amount: "10", status: KEY } }],
+      ["a credit field", 200, { balance: "1", entries: [{ source_id: KEY }] }],
+    ];
+    for (const [where, status, body] of answers) {
+      const fetchImpl = (async () => new Response(JSON.stringify(body), { status })) as typeof fetch;
+      for (const call of [
+        () => createTopUp({ site: SITE, apiKey: KEY, amount: "10", fetch: fetchImpl }),
+        () => readSellerCredit({ site: SITE, apiKey: KEY, fetch: fetchImpl }),
+      ]) {
+        const err = await call().catch((e: Error) => e);
+        expect(err, where).toBeInstanceOf(SellerApiError);
+        expect((err as SellerApiError).code, where).toBe("key_echoed");
+        expect(JSON.stringify({ message: (err as Error).message, code: (err as SellerApiError).code }), where).not.toContain(KEY);
+      }
+    }
+  });
+
+  it("strips control characters from the words of an error", async () => {
     const fetchImpl = (async () =>
-      new Response(JSON.stringify({ error: { code: "unauthorized", message: `the key ${KEY} is not valid` } }), { status: 401 })) as typeof fetch;
-    const err = await createTopUp({ site: SITE, apiKey: KEY, amount: "10", fetch: fetchImpl }).catch((e: Error) => e);
-    expect(err).toBeInstanceOf(SellerApiError);
-    expect((err as Error).message).toContain("[redacted]");
-    expect((err as Error).message).not.toContain(KEY);
+      new Response(JSON.stringify({ error: { code: "bad\ncode", message: "line one\u001b[31m\nline two" } }), { status: 400 })) as typeof fetch;
+    const err = (await createTopUp({ site: SITE, apiKey: KEY, amount: "10", fetch: fetchImpl }).catch((e: Error) => e)) as SellerApiError;
+    expect(err.code).toBe("http_400");
+    expect(err.message).not.toMatch(/[\u0000-\u001f]/);
   });
 
   it("reads the credit with a GET", async () => {
@@ -236,5 +303,61 @@ describe("redactSecret", () => {
   it("replaces every occurrence, and leaves text alone when there is no secret", () => {
     expect(redactSecret(`a ${KEY} b ${KEY}`, KEY)).toBe("a [redacted] b [redacted]");
     expect(redactSecret("nothing here", "")).toBe("nothing here");
+  });
+});
+
+describe("keyGuardedFetch", () => {
+  const guarded = (response: () => Response) => keyGuardedFetch(KEY, (async () => response()) as typeof fetch);
+
+  it("passes an answer without the key on, whole and readable", async () => {
+    const res = await guarded(() => new Response('{"ok":true}', { status: 402, headers: { "payment-required": "e30=" } }))("https://www.superstables.com/x");
+    expect(res.status).toBe(402);
+    expect(await res.text()).toBe('{"ok":true}');
+  });
+
+  it("refuses an answer with the key in its body or in a header, plain or base64", async () => {
+    const answers = [
+      () => new Response(`{"x":"${KEY}"}`),
+      () => new Response("{}", { headers: { "x-echo": KEY } }),
+      () => new Response("{}", { headers: { "payment-required": Buffer.from(`{"x":"${KEY}"}`).toString("base64") } }),
+    ];
+    for (const answer of answers) {
+      const err = await guarded(answer)("https://www.superstables.com/x").catch((e: Error) => e);
+      expect(err).toBeInstanceOf(SellerApiError);
+      expect((err as SellerApiError).message).not.toContain(KEY);
+    }
+  });
+});
+
+describe("earlierTopUpProblem", () => {
+  const credit = (topUps: TopUp[]) => ({ asset: "USDC", topUps, entries: [] });
+  const attempt = (state: string, overrides: Record<string, unknown> = {}) =>
+    ({ id: "a-1", url: `${SITE.origin}${topUpPayPath(ID)}`, state, ...overrides }) as unknown as Attempt;
+
+  it("is silent when nothing is in doubt", () => {
+    expect(earlierTopUpProblem({ site: SITE, credit: credit([topUp({ status: "paid" })]), attempts: [attempt("settled"), attempt("denied"), attempt("failed")] })).toBeUndefined();
+  });
+
+  it("names a top-up the site lists as pending", () => {
+    expect(earlierTopUpProblem({ site: SITE, credit: credit([topUp({ status: "pending" })]), attempts: [] })).toContain(`top-up ${ID} is pending`);
+  });
+
+  it("names a payment on this machine that may have moved money, until the site lists its top-up as paid or retired", () => {
+    for (const state of ["awaiting_approval", "approved", "submitting", "uncertain", "paid_service_failed"]) {
+      expect(earlierTopUpProblem({ site: SITE, credit: credit([topUp()]), attempts: [attempt(state)] }), state).toContain("attempt a-1");
+    }
+    expect(earlierTopUpProblem({ site: SITE, credit: credit([]), attempts: [attempt("uncertain", { transaction: "0x1" })] })).toContain("attempt a-1");
+    expect(earlierTopUpProblem({ site: SITE, credit: credit([topUp({ status: "paid" })]), attempts: [attempt("uncertain")] })).toBeUndefined();
+    expect(earlierTopUpProblem({ site: SITE, credit: credit([topUp({ retired: true })]), attempts: [attempt("paid_service_failed")] })).toBeUndefined();
+  });
+
+  it("counts a failed attempt only when it names a transaction the chain has not called unpaid", () => {
+    expect(earlierTopUpProblem({ site: SITE, credit: credit([]), attempts: [attempt("failed", { transaction: "0x1" })] })).toContain("attempt a-1");
+    expect(earlierTopUpProblem({ site: SITE, credit: credit([]), attempts: [attempt("failed", { transaction: "0x1", chain: "unpaid" })] })).toBeUndefined();
+  });
+
+  it("ignores payments for anything but this site's top-up pay links", () => {
+    const other = [attempt("uncertain", { url: `https://staging.superstables.com${topUpPayPath(ID)}` }), attempt("uncertain", { url: `${SITE.origin}/api/v1/purchases/x` })];
+    expect(earlierTopUpProblem({ site: SITE, credit: credit([]), attempts: other })).toBeUndefined();
   });
 });
