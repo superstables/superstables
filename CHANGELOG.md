@@ -7,10 +7,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- The chain check right after a payment retries briefly and no longer reports a false "removed" when the endpoint lags the newest block.
-
 ### Added
 
 - `@superstables/client/seller` reads the `Superstables-Referral` header on a paid request and verifies the token against the keys superstables.com publishes. See `docs/seller-referrals.md`.
@@ -25,6 +21,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `seller top-up` pays only the top-up it just asked for: the answer's id and amount (from 1 to 1000 USDC), its pay link on the Superstables origin with that top-up's own path, and a 402 on Base Sepolia in test USDC for exactly that amount. Any mismatch is refused with nothing paid. The site is held to the trust of an owner action: `www.superstables.com`, or a site the owner allowed in their settings.
 - A top-up that may have been paid is never reported as unpaid, and never sends the seller to a new one. A pay link that answers `payment_pending` (409), 502, or any status with `money_moved` other than `false` is not paid again, on the quote's read, on the payment's own read after it, and on the answer to the payment; `seller credit` says where it stands. A retired top-up (410) is the one case that asks for a new one. `seller top-up` refuses to create another while the site lists one as pending, a payment is under way, or one that ended in doubt is for a top-up the site does not list; `seller credit` and `status <attempt>` clear it. A failure while following a payment that started is reported from that payment's record.
 - The seller API key comes from `SUPERSTABLES_SELLER_API_KEY`, goes only to the Superstables origin, and is never printed or saved: a site's answer that holds it is discarded unread, before it reaches a record or a line of output.
+
+### Fixed
+
+- The chain check right after a payment retries briefly and no longer reports a false "removed" when the endpoint lags the newest block.
 
 ## [0.5.0] - Agent plugin, key protection and safer payments
 
