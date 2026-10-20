@@ -99,6 +99,12 @@ Start here, one purchase on superstables.com:
   superstables budget find --once                      the services you can buy this way
   superstables budget buy-once --service <id> --max M  the owner approves one purchase on superstables.com
 
+Seller credit (a seller account on superstables.com):
+  superstables seller credit                          the prepaid credit referral fees come out of
+  superstables seller top-up <amount>                 add to it with test USDC on Base Sepolia
+  The seller API key comes from SUPERSTABLES_SELLER_API_KEY and goes only to the Superstables
+  origin, never into this output. A top-up is paid like any purchase: the owner approves it.
+
 Start here, budget: superstables budget setup --rail evm
   \`superstables setup\` is for pay only. Budgets are a separate tool; each subcommand takes --help.
   An owner command prints an approval link: an agent may start it and hand it to the owner,
@@ -162,6 +168,8 @@ Environment:
                                  socket in the wallet folder; its page is on http://127.0.0.1:${DEFAULT_WALLET_PORT})
   SUPERSTABLES_DOCTOR_OFFLINE    1: doctor skips the network checks
   SUPERSTABLES_DEMO_PAY_TO       where demo-service's earnings go
+  SUPERSTABLES_SELLER_API_KEY    the seller API key seller credit and seller top-up send to superstables.com
+                                 (never printed)
 
 Output:
   find, quote, pay, status, receipts and attempts take --json: one JSON value on stdout, progress
