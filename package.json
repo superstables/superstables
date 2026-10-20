@@ -21,6 +21,7 @@
     "build": "tsc -p tsconfig.build.json && node scripts/budget-build.mjs",
     "prepare": "node scripts/prepare.mjs",
     "prepack": "node scripts/prepare.mjs --pack",
+    "postpack": "node scripts/shrinkwrap.mjs remove",
     "prepublishOnly": "node scripts/publish-check.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs",

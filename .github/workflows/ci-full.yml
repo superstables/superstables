@@ -122,7 +122,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      - name: Install five ways and run
+      - name: Install six ways and run
         run: node scripts/install-check.mjs
         env:
           TMPDIR: ${{ runner.temp }}

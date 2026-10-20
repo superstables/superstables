@@ -38,10 +38,26 @@ const sha256 = (file: string) => createHash("sha256").update(readFileSync(file))
 const files = (dir: string) => readdirSync(dir, { recursive: true }).map(String).filter((f) => statSync(join(dir, f)).isFile()).sort();
 
 describe("pins", () => {
-  it("npm-shrinkwrap.json, the lockfile the package publishes, is package-lock.json byte for byte", () => {
-    // npx and npm install use the shrinkwrap in a published package and ignore package-lock.json. With both files in a
-    // checkout, npm updates only the shrinkwrap, so after a dependency change run: cp npm-shrinkwrap.json package-lock.json
-    expect(readFileSync(join(root, "npm-shrinkwrap.json"), "utf8")).toBe(readFileSync(join(root, "package-lock.json"), "utf8"));
+  it("the published shrinkwrap is written when the tarball is made: no npm-shrinkwrap.json is tracked, and dev entries are not published", async () => {
+    // At the checkout root, npm reads npm-shrinkwrap.json as the lockfile of `npm ci`, so a production-only one would drop
+    // the dev tools; scripts/prepare.mjs --pack writes it into the tarball's folder and `postpack` removes it.
+    const tracked = spawnSync("git", ["ls-files", "npm-shrinkwrap.json"], { cwd: root, encoding: "utf8" });
+    expect(tracked.stdout.trim()).toBe("");
+    const { productionLock } = await import(pathToFileURL(join(root, "scripts", "shrinkwrap.mjs")).href);
+    const lockfile = read("package-lock.json");
+    const derived = productionLock(lockfile);
+    expect(Object.keys(lockfile.packages).some((k) => lockfile.packages[k].dev), "this test needs a lock with dev entries").toBe(true);
+    expect(Object.keys(derived.packages).length).toBeLessThan(Object.keys(lockfile.packages).length);
+    for (const [key, entry] of Object.entries<any>(derived.packages)) {
+      expect(entry.dev || entry.optional || entry.devOptional, key).toBeFalsy();
+    }
+    expect(derived.packages[""].devDependencies).toBeUndefined();
+    expect(derived.packages[""].dependencies).toEqual(pkg.dependencies);
+    for (const name of ["vitest", "typescript", "esbuild", "tsx", "@solana/web3.js", "mppx", "bs58", "@x402/fetch"]) {
+      expect(derived.packages[`node_modules/${name}`], name).toBeUndefined();
+    }
+    // every runtime dependency stays, at the version the lock resolved
+    for (const name of Object.keys(pkg.dependencies)) expect(derived.packages[`node_modules/${name}`]?.version, name).toBe(lockfile.packages[`node_modules/${name}`].version);
   });
 
   it("every runtime dependency is an exact version, and it is the version the lockfile resolved", () => {
