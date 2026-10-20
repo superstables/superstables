@@ -109,7 +109,8 @@ export function updateApproval(id, fn) {
 
 /**
  * Finish a record under its lock, deciding from the record as stored now: `decide` gets it (never a final one) and
- * returns { code, result } to store, or null to store nothing. The same as recordFinal otherwise. Returns the record, and
+ * returns { code, result, record? } to store (`record`: more fields for the record itself), or null to store nothing. The same as
+ * recordFinal otherwise. Returns the record, and
  * whether this call made it final.
  */
 export function recordFinalWith(id, decide) {
@@ -118,7 +119,7 @@ export function recordFinalWith(id, decide) {
     if (before.final) return null;
     decided = decide(before);
     if (!decided) return null;
-    return { state: "final", endedAt: new Date().toISOString(), final: { code: decided.code, result: decided.result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
+    return { ...(decided.record ?? {}), state: "final", endedAt: new Date().toISOString(), final: { code: decided.code, result: decided.result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
   });
   if (record && decided) release(record.rail, record.chain, id);
   return { record, stored: Boolean(record && decided) };
@@ -384,6 +385,26 @@ export async function stopGroup(pgid, { start, startUtc, location = {}, graceMs 
 async function stopRecord(record) {
   await stopGroup(record.pid, { start: record.pidStart, startUtc: record.pidStartUtc, location: { ...record, createdAt: record.foreground ? record.createdAt : undefined } });
   if (record.railPgid) await stopGroup(record.railPgid, { start: record.railPgidStart, startUtc: record.railPgidStartUtc, location: { ...record, selfStartedAt: record.railSelfStartedAt, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs, createdAt: undefined } });
+}
+
+/**
+ * The owner gives up an approval no later `wait` can settle (their own terminal asks for it, never an agent call): stop
+ * everything it started, then end it with the result `build` returns, under the record's lock and only if no process of it
+ * runs and no result was stored first. So a worker's own final, a restart, and this give-up cannot both happen: whichever
+ * the record's lock admits first stands, and a restart finds the record final. The record keeps everything it holds (its
+ * evidence, the request id and site, its log) except the access token. Nothing is asked of the site.
+ * @returns {Promise<{ kind: "abandoned" | "ended" | "running", record: any }>} `ended`: a result was already stored (the
+ * record is returned); `running`: a process of the approval could not be stopped, and nothing was stored.
+ */
+export async function abandonApproval(id, build, { stop = stopRecord, attempts = 3 } = {}) {
+  let record = readApproval(id);
+  for (let attempt = 0; record && !record.final && attempt < attempts; attempt++) {
+    await stop(record);
+    const out = recordFinalWith(id, (before) => (processesAlive(before) ? null : build(before)));
+    record = out.record;
+    if (out.stored) return { kind: "abandoned", record };
+  }
+  return { kind: record?.final ? "ended" : "running", record };
 }
 
 // ── one approval at a time per rail and chain ──────────────────────────────────────────────────────────

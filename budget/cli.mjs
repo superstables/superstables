@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, RESUME_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -449,16 +449,23 @@ request, a single request marked sent with a transaction hash (the chain checks 
 site answers anything else (an unreadable or missing request, an error, a request not yet final), wait keeps answering
 unknown, final false, and other owner commands on that chain stay blocked. An agent stops and asks the owner. The owner
 checks the request on superstables.com, then reruns the original owner command with --replace (the site must confirm the
-cancellation, and it is refused once the wallet was asked), or unlocks the chain's approvals in their own terminal (unlock
---rail evm --chain C --approvals --confirm). Unlocking does not resolve the request: its outcome stays unknown, and the
-next wait can lock the chain again.
+cancellation, and it is refused once the wallet was asked), or gives the approval up in their own terminal (wait --id ID
+--abandon). Clearing the chain's approval lock with unlock does not resolve the request: its outcome stays unknown, and
+the next wait can lock the chain again.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
 approval sent nothing; after setup --hosted with --grant or --fund, or recover, an earlier step may have completed (read
 steps, tx and budget status). Run the owner command again for a new one (setup reuses the agent key it created).
---abandon (the owner only, for a buy-once purchase the site never ends): reads the site once; if the purchase still has
+--abandon has two uses. The owner runs it themselves, in their own terminal; an agent must not. The client checks for a terminal
+and a typed confirmation, not who is typing. For a buy-once purchase the site never ends: it reads the site once; if the purchase still has
 no final answer, keeps its record, marks it given up with the time, and returns state unknown, exit 5, final true. The
 payment stays unknown; buy-once can start a new purchase. A purchase read as paid whose payment is not final keeps its
-paid result, is marked finalityAbandonedAt, and no longer holds the next buy-once. An agent never runs it.`,
+paid result, is marked finalityAbandonedAt, and no longer holds the next buy-once.
+For a background owner approval with no result: the owner types its id and abandon, and it stops the approval's processes
+and ends it with state unknown, exit 5, final true, abandonedAt. The record and its evidence stay, the chain is free, and
+no later wait restarts it. Changes already written on this machine are not undone. The request on the site is not cancelled
+and may still be open there, and the owner's wallet may have sent a transaction whose outcome this record does not know:
+check the request on the site and the wallet's activity before another owner command. An approval that ended first keeps
+its own result.`,
       money: "no. It never approves, signs or sends anything.",
       who: "anyone, usually the agent that started the owner command, after the owner says they've approved.",
       example: "superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60",
@@ -2272,14 +2279,71 @@ async function finishHosted(f, record, timeoutMs) {
   return r;
 }
 
+/**
+ * The owner gives up a background owner approval (wait --abandon): only from their own terminal, after typing its id. It
+ * stops the approval's processes and ends it unknown, keeping its record; no later wait restarts it, and the chain is
+ * free. Nothing is asked of the site, so the request may still be open there. Returns null when the approval had already
+ * ended: its own result stands and wait answers it.
+ */
+async function abandonOwnerApproval(record, f) {
+  const id = record.id;
+  const site = record.hosted?.site ? siteName(record.hosted.site) : null;
+  const base = { command: record.command, rail: record.rail, chain: record.chain, id };
+  if (!process.stdin.isTTY) {
+    return emit(3, { ...base, state: "refused_precheck", reason: "owner_terminal_required", next: `only the owner gives up an approval, in their own terminal. Stop and ask the owner; nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown` });
+  }
+  const terminal = createInterface({ input: process.stdin, output: process.stderr });
+  let typed;
+  try {
+    const lines = terminal[Symbol.asyncIterator]();
+    log(`Giving up approval ${id} (${record.command} on ${record.rail} ${record.chain}). This stops its background worker and ends it with the outcome unknown. It does not cancel the request${site ? ` on ${site}` : ""} and does not undo anything the owner's wallet may have sent. Afterwards no later wait restarts it and other owner commands can run on this chain. Check the wallet's activity${site ? ` and the request on ${site}` : ""} first.`);
+    log(`To give it up, type ${id} abandon exactly:`);
+    typed = await lines.next();
+  } catch { typed = { done: true }; }
+  finally { terminal.close(); }
+  if (typed.done || typed.value !== `${id} abandon`) {
+    log("Confirmation did not match. Nothing was changed.");
+    return emit(3, { ...base, state: "refused_precheck", reason: "owner_confirmation_mismatch", next: `nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown` });
+  }
+  const at = new Date().toISOString();
+  const out = await abandonApproval(id, (before) => {
+    const asked = recordMayHaveSent(before);
+    const where = before.hosted?.site ? siteName(before.hosted.site) : "the approval site";
+    return {
+      code: 5,
+      record: { abandoned: { at, walletMayHaveBeenAsked: asked, requestId: before.hosted?.requestId ?? null, site: before.hosted?.site ?? null } },
+      result: {
+        ok: false, command: before.command, rail: before.rail, chain: before.chain, id, state: "unknown", final: true, abandonedAt: at, url: before.url,
+        next: `do not run this or another owner command on this chain until the owner has checked: the request${before.hosted?.requestId ? ` ${before.hosted.requestId}` : ""} on ${where} (it may still be open, and an approval there changes nothing here now) and the wallet's activity (${asked ? "the owner's wallet was asked to send" : "the owner's wallet may have been asked to send"}). Then read what the chain shows with ${statusCommand({ rail: before.rail, chain: before.chain })}`,
+        reason: `given up by the owner at ${at} without a final result: nothing local decided what became of it, and the request on ${where} was not cancelled`,
+      },
+    };
+  });
+  if (out.kind === "abandoned") {
+    log(`superstables budget: ${id} (${record.command}) given up without a final result. The request${site ? ` on ${site}` : ""} was not cancelled and may still be open; whether the owner's wallet sent anything is unknown: check its activity.`);
+    return emit(5, out.record.final.result);
+  }
+  if (out.kind === "ended") return null;
+  return emit(5, { ...base, state: "unknown", final: false, reason: "a process of the approval is still running and could not be stopped, so nothing was ended", next: `stop every process of approval ${id} (its worker and rail script), then run superstables budget wait --id ${id} --abandon again in your own terminal` });
+}
+
 async function wait({ f }) {
-  const once = readApproval(f.id);
+  let once = readApproval(f.id);
   // --site names the site the approval was made on: another one is a mistake, not a different request
   const madeOn = once?.hosted?.site ? siteOrigin(once.hosted.site, "read").origin : null;
   if (f.site !== undefined && madeOn && madeOn !== f.site) return badInput({ command: "wait" }, `--site ${f.site} is not the site this approval was made on (${madeOn}): use --site ${madeOn}, or leave --site out`);
+  // an owner approval that ran in the background and has no result: the owner gives it up (one that ended is answered as wait does)
+  if (f.abandon && once && OWNER_COMMANDS.has(once.command) && !once.foreground && !once.final) {
+    const done = await abandonOwnerApproval(once, f);
+    if (done !== null) return done;
+    f = { ...f, abandon: false };
+    once = readApproval(f.id);
+  } else if (f.abandon && once?.final && OWNER_COMMANDS.has(once.command)) {
+    f = { ...f, abandon: false };
+  }
   if (f.abandon) {
     // the owner gives up a buy-once purchase the site does not end: the record stays, marked, and the payment stays unknown
-    if (once?.command !== "buy-once") return badInput({ command: "wait" }, `--abandon is for a buy-once purchase; ${f.id} is ${once ? `a ${once.command}` : "not one on this machine"}`);
+    if (once?.command !== "buy-once") return badInput({ command: "wait" }, `--abandon is for a buy-once purchase or a background owner approval; ${f.id} is ${once ? `a ${once.command}${once.foreground ? " running in a terminal: stop it there" : ""}` : "not one on this machine"}`);
     // a purchase that already ended is answered as every wait answers it: its stored answer, checked against the evidence
     // (abandonOnce reads it through settleOnce, which never repeats a stored answer the evidence no longer supports)
     const s = await abandonOnce(once);

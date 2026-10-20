@@ -731,16 +731,23 @@ request, a single request marked sent with a transaction hash (the chain checks 
 site answers anything else (an unreadable or missing request, an error, a request not yet final), wait keeps answering
 unknown, final false, and other owner commands on that chain stay blocked. An agent stops and asks the owner. The owner
 checks the request on superstables.com, then reruns the original owner command with --replace (the site must confirm the
-cancellation, and it is refused once the wallet was asked), or unlocks the chain's approvals in their own terminal (unlock
---rail evm --chain C --approvals --confirm). Unlocking does not resolve the request: its outcome stays unknown, and the
-next wait can lock the chain again.
+cancellation, and it is refused once the wallet was asked), or gives the approval up in their own terminal (wait --id ID
+--abandon). Clearing the chain's approval lock with unlock does not resolve the request: its outcome stays unknown, and
+the next wait can lock the chain again.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
 approval sent nothing; after setup --hosted with --grant or --fund, or recover, an earlier step may have completed (read
 steps, tx and budget status). Run the owner command again for a new one (setup reuses the agent key it created).
---abandon (the owner only, for a buy-once purchase the site never ends): reads the site once; if the purchase still has
+--abandon has two uses. The owner runs it themselves, in their own terminal; an agent must not. The client checks for a terminal
+and a typed confirmation, not who is typing. For a buy-once purchase the site never ends: it reads the site once; if the purchase still has
 no final answer, keeps its record, marks it given up with the time, and returns state unknown, exit 5, final true. The
 payment stays unknown; buy-once can start a new purchase. A purchase read as paid whose payment is not final keeps its
-paid result, is marked finalityAbandonedAt, and no longer holds the next buy-once. An agent never runs it.
+paid result, is marked finalityAbandonedAt, and no longer holds the next buy-once.
+For a background owner approval with no result: the owner types its id and abandon, and it stops the approval's processes
+and ends it with state unknown, exit 5, final true, abandonedAt. The record and its evidence stay, the chain is free, and
+no later wait restarts it. Changes already written on this machine are not undone. The request on the site is not cancelled
+and may still be open there, and the owner's wallet may have sent a transaction whose outcome this record does not know:
+check the request on the site and the wallet's activity before another owner command. An approval that ended first keeps
+its own result.
 
 Moves money: no. It never approves, signs or sends anything.
 Run by: anyone, usually the agent that started the owner command, after the owner says they've approved.
