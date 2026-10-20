@@ -388,23 +388,30 @@ async function stopRecord(record) {
 }
 
 /**
+ * Whether an approval's worker was launched a moment ago and its process is not in the record yet (startDetached saves the
+ * record, spawns the worker, then publishes its pid): the worker may be running unseen, so nothing ends the approval yet.
+ */
+export const startingUp = (record) => Boolean(record && !record.final && !record.foreground && record.pid == null && !(Date.now() - Date.parse(record.createdAt) >= STARTUP_GRACE_MS));
+
+/**
  * The owner gives up an approval no later `wait` can settle (their own terminal asks for it, never an agent call): stop
  * everything it started, then end it with the result `build` returns, under the record's lock and only if no process of it
- * runs and no result was stored first. So a worker's own final, a restart, and this give-up cannot both happen: whichever
+ * runs, its worker is not still being launched, and no result was stored first. So a worker's own final, a restart, and this give-up cannot both happen: whichever
  * the record's lock admits first stands, and a restart finds the record final. The record keeps everything it holds (its
  * evidence, the request id and site, its log) except the access token. Nothing is asked of the site.
- * @returns {Promise<{ kind: "abandoned" | "ended" | "running", record: any }>} `ended`: a result was already stored (the
- * record is returned); `running`: a process of the approval could not be stopped, and nothing was stored.
+ * @returns {Promise<{ kind: "abandoned" | "ended" | "running" | "starting", record: any }>} `ended`: a result was already
+ * stored (the record is returned); `running`: a process of the approval could not be stopped; `starting`: its worker is
+ * still being launched. Nothing was stored in the last two.
  */
 export async function abandonApproval(id, build, { stop = stopRecord, attempts = 3 } = {}) {
   let record = readApproval(id);
   for (let attempt = 0; record && !record.final && attempt < attempts; attempt++) {
     await stop(record);
-    const out = recordFinalWith(id, (before) => (processesAlive(before) ? null : build(before)));
+    const out = recordFinalWith(id, (before) => (processesAlive(before) || startingUp(before) ? null : build(before)));
     record = out.record;
     if (out.stored) return { kind: "abandoned", record };
   }
-  return { kind: record?.final ? "ended" : "running", record };
+  return { kind: record?.final ? "ended" : startingUp(record) ? "starting" : "running", record };
 }
 
 // ── one approval at a time per rail and chain ──────────────────────────────────────────────────────────

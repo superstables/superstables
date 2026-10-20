@@ -51,7 +51,7 @@ function budget(args: string[], extraEnv: Record<string, string> = {}, terminal?
     tree.set({ "base-sepolia": [{ url: rpc!.url, operator: "fake-a" }, { url: `${rpc!.url}/`, operator: "fake-b" }], "arc-testnet": [{ url: rpc!.url, operator: "fake-a" }] });
     const preload = terminal === undefined ? [] : ["--import", resolve(ROOT, "test/helpers/budget-owner-terminal.mjs")];
     const child = spawn(process.execPath, [...preload, resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
-    if (terminal !== undefined) child.stdin.end(terminal);
+    child.stdin.end(terminal ?? "");
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -159,13 +159,13 @@ describe("wait --abandon on a background owner approval", () => {
 
     const agent = await budget(abandonArgs(id));
     expect(agent.code, agent.stderr).toBe(3);
-    expect(agent.result).toMatchObject({ state: "refused_precheck", reason: "owner_terminal_required", id });
+    expect(agent.result).toMatchObject({ state: "refused_precheck", reason: "owner_terminal_required", id, final: false });
     expect(agent.result.next).toMatch(/ask the owner/);
 
     for (const answer of ["\n", `${id}\n`, `abandon\n`, `${id} abandon extra\n`, `${id} ABANDON\n`]) {
       const wrong = await budget(abandonArgs(id), {}, answer);
       expect(wrong.code, `${JSON.stringify(answer)}: ${wrong.stderr}`).toBe(3);
-      expect(wrong.result).toMatchObject({ state: "refused_precheck", reason: "owner_confirmation_mismatch" });
+      expect(wrong.result).toMatchObject({ state: "refused_precheck", reason: "owner_confirmation_mismatch", final: false });
     }
     // no input at all
     expect((await budget(abandonArgs(id), {}, "")).result).toMatchObject({ reason: "owner_confirmation_mismatch" });
@@ -327,6 +327,50 @@ describe("wait --abandon on a background owner approval", () => {
     expect(publicFile()).toBe(publicBefore);
     expect(record(id).abandoned).toBeUndefined();
   }, 300_000);
+
+  it("a command that only claims to be the approval's worker (its environment variables set by hand) is refused and ends nothing", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const path = join(approvals(), `${id}.json`);
+    // a restarted worker's whole identity, with the takeover marked: what a worker needs to record a result
+    const r = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({ ...r, resumes: 1, resume: { takenOver: 1 } }, null, 2) + "\n");
+    const before = readFileSync(path, "utf8");
+    const claims: Record<string, string>[] = [
+      { SUPERSTABLES_BUDGET_APPROVAL_ID: id },
+      { SUPERSTABLES_BUDGET_APPROVAL_ID: id, SUPERSTABLES_BUDGET_RESUME: id, SUPERSTABLES_BUDGET_RESUME_GENERATION: "1" },
+    ];
+    for (const env of claims) {
+      for (const terminal of [undefined, typed(id)]) {
+        const run = await budget(abandonArgs(id), env, terminal);
+        expect(run.code, `${JSON.stringify(env)} ${terminal}: ${run.stderr}`).toBe(3);
+        expect(run.result).toMatchObject({ state: "refused_precheck", reason: "owner_terminal_required" });
+        expect(readFileSync(path, "utf8")).toBe(before);
+        expect(existsSync(lockPath())).toBe(true);
+      }
+    }
+    expect(JSON.parse(before).final).toBeUndefined();
+    expect(JSON.parse(before).hosted.token).toMatch(/^ssbt_/);
+  }, 300_000);
+
+  it("a command running in a terminal is not given up here: it is stopped there", async () => {
+    await fakeChain(0n, 10000n);
+    const holder = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+    holder.unref();
+    try {
+      mkdirSync(approvals(), { recursive: true });
+      const id = "oa-20261020999999-abcdef01";
+      const path = join(approvals(), `${id}.json`);
+      writeFileSync(path, JSON.stringify({ id, command: "setup", rail: "evm", chain: "base-sepolia", state: "running", foreground: true, createdAt: new Date().toISOString(), pid: holder.pid, deadline: null }, null, 2) + "\n");
+      const before = readFileSync(path, "utf8");
+      const run = await budget(abandonArgs(id), {}, typed(id));
+      expect(run.code, run.stderr).toBe(2);
+      expect(run.stderr).toMatch(/running in a terminal: stop it there/);
+      expect(readFileSync(path, "utf8")).toBe(before);
+      expect(alive(holder.pid!)).toBe(true);
+    } finally { try { process.kill(-holder.pid!, "SIGKILL"); } catch { /* gone */ } }
+  }, 60_000);
 
   it("is for owner approvals and buy-once only: a foreground command or an unknown id is refused", async () => {
     await fakeChain(0n, 10000n);

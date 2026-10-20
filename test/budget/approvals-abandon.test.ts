@@ -105,6 +105,27 @@ describe("abandonApproval", () => {
     killGroup(revived!.pid);
   });
 
+  it("a worker launched a moment ago and not yet in the record is not ended: its process may be running unseen", async () => {
+    const id = await open({ pid: null, pidStart: undefined, pidStartUtc: undefined, state: "starting", createdAt: new Date().toISOString() });
+    const out = await approvals.abandonApproval(id, build, { attempts: 2 });
+    expect(out.kind).toBe("starting");
+    expect(approvals.readApproval(id)?.final).toBeUndefined();
+    expect(approvals.readApproval(id)?.hosted?.token).toBeDefined();
+    expect(approvals.findPending("evm", "base-sepolia")?.id).toBe(id);
+    // the same record a minute past the startup grace: no worker ever came, so it can end
+    approvals.updateApproval(id, () => ({ createdAt: new Date(Date.now() - 5 * 60_000).toISOString() }));
+    expect((await approvals.abandonApproval(id, build)).kind).toBe("abandoned");
+  });
+
+  it("a worker that publishes its process after the give-up cannot undo it", async () => {
+    const id = await open({ pid: null, pidStart: undefined, pidStartUtc: undefined, state: "starting", createdAt: new Date(Date.now() - 5 * 60_000).toISOString() });
+    expect((await approvals.abandonApproval(id, build)).kind).toBe("abandoned");
+    // startDetached publishes the pid of the worker it launched: a final record takes no such change
+    approvals.updateApproval(id, () => ({ pid: 4242 }));
+    expect(approvals.readApproval(id)?.pid ?? null).toBeNull();
+    expect(approvals.readApproval(id)?.final).toMatchObject({ code: 5 });
+  });
+
   it("an approval that has ended is not changed", async () => {
     const id = await open();
     approvals.recordFinal(id, 3, { ok: false, state: "refused_precheck" });

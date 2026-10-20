@@ -2289,8 +2289,14 @@ async function abandonOwnerApproval(record, f) {
   const id = record.id;
   const site = record.hosted?.site ? siteName(record.hosted.site) : null;
   const base = { command: record.command, rail: record.rail, chain: record.chain, id };
-  if (!process.stdin.isTTY) {
-    return emit(3, { ...base, state: "refused_precheck", reason: "owner_terminal_required", next: `only the owner gives up an approval, in their own terminal. Stop and ask the owner; nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown` });
+  // A refusal here records nothing: emit stores a result for the approval a worker's environment names, and a command that
+  // only claims to be that worker (the variable set by hand) must not end any approval by being refused.
+  const refuse = (reason, next) => {
+    writeResult({ ok: false, ...base, state: "refused_precheck", final: false, reason, next });
+    process.exit(3);
+  };
+  if (!process.stdin.isTTY || WORKER_ID !== undefined) {
+    return refuse("owner_terminal_required", `only the owner gives up an approval, in their own terminal. Stop and ask the owner; nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown`);
   }
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
   let typed;
@@ -2303,7 +2309,7 @@ async function abandonOwnerApproval(record, f) {
   finally { terminal.close(); }
   if (typed.done || typed.value !== `${id} abandon`) {
     log("Confirmation did not match. Nothing was changed.");
-    return emit(3, { ...base, state: "refused_precheck", reason: "owner_confirmation_mismatch", next: `nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown` });
+    return refuse("owner_confirmation_mismatch", `nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown`);
   }
   const at = new Date().toISOString();
   const out = await abandonApproval(id, (before) => {
@@ -2324,6 +2330,8 @@ async function abandonOwnerApproval(record, f) {
     return emit(5, out.record.final.result);
   }
   if (out.kind === "ended") return null;
+  if (!out.record) return emit(2, { ...base, state: "failed", reason: `approval ${id} no longer exists under ${approvalsDir()}`, next: "check the id and the home the command ran under; nothing was changed" });
+  if (out.kind === "starting") return emit(5, { ...base, state: "unknown", final: false, reason: "the approval's background worker was started a moment ago and is not recorded yet, so nothing was ended", next: `wait a minute, then run superstables budget wait --id ${id} --abandon again in your own terminal` });
   return emit(5, { ...base, state: "unknown", final: false, reason: "a process of the approval is still running and could not be stopped, so nothing was ended", next: `stop every process of approval ${id} (its worker and rail script), then run superstables budget wait --id ${id} --abandon again in your own terminal` });
 }
 
