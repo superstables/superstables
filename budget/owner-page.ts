@@ -28,7 +28,7 @@ import {
 } from "../src/core/signer/owner-approval-server.ts";
 import { ownerApprovalsLog } from "./paths.mjs";
 import { bindingFacts } from "./page-facts.mjs";
-import { HOLDER_ENV, RESUME_ENV, readApproval, readRequestFact, recordHosted, recordTakenOver, saveRequestFact } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, canResume, readApproval, readRequestFact, recordHosted, recordTakenOver, saveRequestFact } from "./approvals.mjs";
 import { sendBegan } from "./proof.mjs";
 import { HOSTED_KIND, HostedApprovals, HostedRefusal, type HostedBundleOutcome, type HostedSettings, type HostedStep, type PriorLink } from "./hosted.ts";
 import { DEFAULT_SITE, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
@@ -121,6 +121,13 @@ function hostedFor(settings: Omit<HostedSettings, "auditPath" | "onRecord">): Ho
       ...settings,
       // from the moment the request is checked and in hand, what this worker ends with (a refusal included) is the approval's result
       ...(hosted ? { resume: hosted, onTakeover: () => recordTakenOver(holder!) } : {}),
+      // Time running out, or a site that cannot be read, is no answer about the request: the worker of an approval a later wait can
+      // finish leaves with no result (the dispatcher records none) and that wait reads the request again.
+      onUnresolved: (why) => {
+        if (!holder || !canResume(readApproval(holder))) return;
+        process.stderr.write(`superstables budget: approval ${holder}: ${why}; this worker recorded no result, and budget wait checks the request again\n`);
+        process.exit(5);
+      },
       auditPath: ownerApprovalsLog(),
       // the access token lives in the approval record (mode 600), where --replace and wait find it; never in a log
       onRecord: (record) => { if (holder) recordHosted(holder, record); },

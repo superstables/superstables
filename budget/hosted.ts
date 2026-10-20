@@ -281,6 +281,11 @@ export interface HostedSettings {
   resume?: HostedRecord;
   /** Called once the site has answered about the recorded request (after the check that it is the one this command asks for): from then on this worker's results count. */
   onTakeover?: () => void;
+  /**
+   * Called when a request would be ended only because time ran out or the site could not be read (or refused the agent's token),
+   * not because the site said anything about it. A caller that can leave the approval open for a later worker does not return.
+   */
+  onUnresolved?: (why: string) => void;
 }
 
 /**
@@ -664,6 +669,7 @@ export class HostedApprovals {
     void this.poll({ seen, id: created.id, token: created.token, kind, title: input.terms.title, expected, matchCode: created.matchCode, localDeadline, siteExpiry: created.expiresAt, resolve, record, ...(taken ? { fresh: true } : {}), ...(proofVersion ? { proofVersion } : {}) }).catch((err: Error) => {
       this.learners.delete(created.id);
       this.cancellations.delete(created.id);
+      this.s.onUnresolved?.(`the command stopped reading the request: ${scrub(siteText(err.message))}`);
       resolve({ status: "expired", reason: `the command stopped reading the request: ${scrub(siteText(err.message))}`, sending: kind !== "link" });
     });
     return {
@@ -887,6 +893,8 @@ export class HostedApprovals {
       readFrom = Date.now();
       this.s.onTakeover?.();
     };
+    /** An answer about this request: its own id at both envelope levels. Another request's answer is nothing about this one. */
+    const mine = (v: any) => !!v && typeof v === "object" && v.id === p.id && !(v.error && typeof v.error === "object" && v.error.id != null && v.error.id !== p.id);
     // Every cancellation of this approval (the deadline, a refused owner, close()) is the one shared call. What its answer
     // shows of the wallet is taken in, and written to the log, before the call resolves: close() may be followed by an exit.
     this.learners.set(p.id, (c) => {
@@ -941,6 +949,7 @@ export class HostedApprovals {
       // past the expiry (and, once the wallet was asked, the time for its hash to come back) without a final answer: the
       // request may still be open on the site, so a transaction is never reported as "nothing sent"
       if (now > Math.max(expiry, readFrom) + (walletAsked ? grace : 30_000) && now >= freshUntil) {
+        this.s.onUnresolved?.("time ran out before the site confirmed what became of the request");
         return end("expired", walletAsked ? `the wallet was asked to send, but no transaction came back from ${this.name}` : `no final answer from ${this.s.site} by the time the approval link expired; the request may still be open there`, tx);
       }
       const waitS = Math.max(0, Math.min(this.s.pollWaitS ?? 20, Math.ceil((expiry - now) / 1000)));
@@ -964,15 +973,21 @@ export class HostedApprovals {
         // request: only the site saying it does not know the request (404, 410) or its documented refusal is.
         const answered = [404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code));
         if (answered || ([401, 403].includes(r.status ?? 0) && freshUntil !== Infinity)) {
-          tookOver();
+          if (answered) tookOver();
+          else this.s.onUnresolved?.(`the site refused the agent's access to the request (${r.reason})`);
           return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx);
         }
         await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
         continue;
       }
       lastContact = Date.now();
-      tookOver();
       const v = r.view;
+      // an answer about another request decides nothing about this one
+      if (!mine(v)) {
+        await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
+        continue;
+      }
+      tookOver();
       const state = String(v.state);
       const seenNow = seenOf(this.w, v);
       if (seenNow.asked) walletAsked = true;
@@ -1224,6 +1239,7 @@ export class HostedApprovals {
         }
         if (withdrawn) return finish(owner ? null : `the approval link expired without a completed approval, and the request was cancelled on ${this.name}; nothing was sent`);
       }
+      if (now > Math.max(deadline, readFrom) + (asked() ? grace : (this.s.quietGraceMs ?? 30_000)) && now >= freshUntil) this.s.onUnresolved?.("time ran out before the site confirmed what became of the request");
       if (now > Math.max(deadline, readFrom) + (asked() ? grace : (this.s.quietGraceMs ?? 30_000)) && now >= freshUntil) return finish(`no final answer from ${this.s.site} in time; the request may still be open there`);
       const waitS = Math.max(0, Math.min(this.s.pollWaitS ?? 20, Math.ceil((deadline - now) / 1000)));
       readAt = Date.now();
@@ -1238,7 +1254,8 @@ export class HostedApprovals {
         // as in poll(): before the request has been read once, only the site's own "unknown request" or refusal is an answer
         const answered = [404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code));
         if (answered || ([401, 403].includes(r.status ?? 0) && freshUntil !== Infinity)) {
-          tookOver();
+          if (answered) tookOver();
+          else this.s.onUnresolved?.(`the site refused the agent's access to the request (${r.reason})`);
           // withdraw it first: an answer that confirms it is the only proof the steps were never asked
           if (!cancelTried) {
             cancelTried = true;
@@ -1250,12 +1267,12 @@ export class HostedApprovals {
         continue;
       }
       lastContact = Date.now();
-      tookOver();
       const v = r.view;
       const trusted = own(v);
       // first of all: what this answer shows of the wallet, before its owner proof, step states or finality are looked at
       learn(v, trusted);
       if (!trusted) continue; // about another request: its evidence is kept, nothing else
+      tookOver();
       const state = String(v.state);
       const reason = siteReason(this.name, v);
       const named: string | null = owner ? null : this.w.owner(v.owner);

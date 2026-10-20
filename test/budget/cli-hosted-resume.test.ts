@@ -495,6 +495,36 @@ describe("grant, revoke and fund-agent, when the host ends the worker before the
     expect(lines("B4_REVOKED_TX")).toBe(1);
   }, 300_000);
 
+  it("after the first read the site goes quiet past the request's time: the worker leaves with no result, nothing is cancelled or ended, and the next wait finishes it", async () => {
+    hostedChain();
+    site.owner = OWNER;
+    site.expiresInMs = 3000;
+    await fakeChain(0n, 10000n);
+    const id = await start(["grant", "--rail", "evm", "--amount", "0.01", "--timeout", "10"]);
+    await endEveryProcess(id);
+    let reads = 0;
+    // the site is quiet: it answers neither reads nor the cancel
+    site.cancelFails = true;
+    site.readAnswer = (_r, view) => (++reads === 1 ? { status: 200, body: { ...view, state: "awaiting_owner", final: false } } : { status: 503, body: {} });
+    const quiet = await budget(["wait", "--shown", "--id", id, "--timeout", "55"]);
+    expect(quiet.result).toMatchObject({ final: false });
+    expect(record(id).final).toBeUndefined();
+    expect(record(id).hosted.token).toMatch(/^ssbt_/);
+    // the cancel was tried and not answered: the request is not cancelled
+    expect(site.requests[0].state).not.toBe("cancelled");
+    expect(existsSync(lockPath())).toBe(true);
+    await endEveryProcess(id);
+    site.readAnswer = undefined;
+    site.cancelFails = false;
+    Object.assign(site.requests[0], { state: "confirmed", tx_hash: GRANT_HASH, wallet_asked: true });
+    chain.approved = true;
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ command: "grant", state: "settled", final: true });
+    expect(lines("B4_CAP")).toBe(1);
+    expect(site.posts).toHaveLength(1);
+  }, 300_000);
+
   it("fund-agent: the later wait checks the transfer against the agent's balance from before the owner sent it", async () => {
     hostedChain();
     site.owner = OWNER;

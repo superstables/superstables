@@ -2,7 +2,7 @@
 // the next `wait` starts the worker again (once, however many ask at once), and a worker that was started again records a
 // result only once it has the request in hand. Small scripts stand in for the worker. No network.
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -120,11 +120,12 @@ describe("restartWorker", () => {
   const script = () => {
     const file = join(home, `worker-${n}.mjs`);
     writeFileSync(file, `
-      import { readFileSync } from "node:fs";
+      import { readFileSync, writeFileSync } from "node:fs";
       import { RESUME_ENV, WORKER_ENV } from ${JSON.stringify(new URL("../../budget/approvals.mjs", import.meta.url).pathname)};
       if (process.env[RESUME_ENV] !== process.env[WORKER_ENV]) process.exit(9);
       // the restarted command asks the site this approval was made on, whatever the environment it was started from says
       if (process.env.SUPERSTABLES_SITE !== ${JSON.stringify(HOSTED.site)}) process.exit(8);
+      writeFileSync(${JSON.stringify(join(home, "worker-ready"))}, "ok");
       setTimeout(() => {}, 3000);
     `);
     return file;
@@ -132,8 +133,12 @@ describe("restartWorker", () => {
 
   it("starts the same worker with RESUME_ENV, records its pid and a fresh deadline, and counts the restart", async () => {
     const id = await openApproval({ deadline: Date.now() - 1000, railPgid: 123, railPgidStart: "x" });
+    rmSync(join(home, "worker-ready"), { force: true });
     const r = approvals.restartWorker(id, { cmd: process.execPath, script: script(), cwd: home });
     expect(r.started).toBe(true);
+    // the worker's own checks (RESUME_ENV, the recorded site) ran and passed: it wrote its marker after them
+    for (let i = 0; i < 100 && !existsSync(join(home, "worker-ready")); i++) await new Promise((x) => setTimeout(x, 100));
+    expect(existsSync(join(home, "worker-ready"))).toBe(true);
     const rec = approvals.readApproval(id)!;
     expect(rec.pid).toBe(r.record.pid);
     expect(rec.pid).not.toBe(undefined);

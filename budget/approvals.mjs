@@ -745,8 +745,8 @@ function restartLocked(id, { cmd, script, cwd, env }, remember) {
     // (SUPERSTABLES_SITE) must not take another from the environment `wait` runs in
     const launched = launchWorker(id, { cmd, args: [script, ...before.workerArgs], cwd, env: { ...env, [RESUME_ENV]: id, SUPERSTABLES_SITE: before.hosted.site } });
     remember(launched);
-    // a worker that could not start counts as a restart that never took the request over
-    if (!launched.child.pid) return { resumes: (before.resumes ?? 0) + 1 };
+    // a worker that could not start: nothing was started, and the approval stays as it was
+    if (!launched.child.pid) return null;
     return {
       pidStartUtc: undefined, selfStartedAt: undefined,
       ...startOf(launched.child.pid),
@@ -983,8 +983,8 @@ function sentUnknown(record, reason) {
  * A new link during the wait (recover's second owner step) returns at once, so the caller can show it.
  * A hosted request whose worker is gone and that a later command can finish (canResume) returns { final: false, resume: true }
  * instead of being ended, every time: the caller starts the worker again (restartWorker), and a worker that ends with no
- * result leaves the approval open for the next `wait`. Only an approval that cannot be finished (not resumable, or restarted
- * a worker that read the request on the site) ends the way an approval whose worker is gone always has.
+ * result leaves the approval open for the next `wait`. Only an approval that cannot be finished (not resumable) ends the way an
+ * approval whose worker is gone always has: the site is asked to cancel it, else unknown.
  */
 export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
   const first = readApproval(id);
@@ -1013,8 +1013,7 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
       // a hosted request is still on the site: ask it to cancel first (refused once the wallet was asked)
       const h = record.hosted?.token ? record.hosted : null;
       const cancelled = h ? (await cancelSiteRequest({ site: h.site, id: h.requestId, token: h.token }))?.cancelled === true : false;
-      // decided from the record as stored under its lock: a final another process stored meanwhile stands
-      // decided from the record as stored under its lock: a worker another command started meanwhile keeps the approval open
+      // decided from the record as stored under its lock: a final another process stored meanwhile stands, and a worker another command started meanwhile keeps the approval open
       const { record: ended } = recordFinalWith(id, (before) => (processesAlive(before) || canResume(before) ? null : abandoned(before, cancelled)));
       const stored = ended ?? readApproval(id);
       if (!stored?.final) continue;

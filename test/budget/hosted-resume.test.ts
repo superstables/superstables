@@ -192,6 +192,51 @@ describe("a hosted request taken over by a later worker", () => {
     }
   });
 
+  it("an answer that names another request decides nothing about this one: no takeover, no outcome, until the site answers about it", async () => {
+    for (const asked of ["tx", "link"] as const) {
+      const record = asked === "tx" ? await firstWorker() : await (async () => {
+        gone = false;
+        await client({ fetchImpl: deadFetch }).request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, then: THEN });
+        gone = true;
+        return records.at(-1)!;
+      })();
+      const r = site.requests.at(-1)!;
+      site.readAnswer = (_r, view) => ({ status: 200, body: { ...view, id: "ba_other", state: "rejected" } });
+      let taken = 0;
+      const c = client({ resume: record, onTakeover: () => taken++ });
+      const h = asked === "tx" ? await grant(c) : await c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, then: THEN });
+      const settled = asked === "tx" ? h.settled : h.bundle!.then(() => "bundle");
+      const raced = await Promise.race([settled.then(() => "settled"), new Promise((x) => setTimeout(() => x("open"), 1500))]);
+      expect(raced, asked).toBe("open");
+      expect(taken, asked).toBe(0);
+      expect(r.cancels, asked).toBe(0);
+      site.readAnswer = undefined;
+      if (asked === "tx") Object.assign(r, { state: "confirmed", tx_hash: HASH, wallet_asked: true });
+      else {
+        Object.assign(r, { state: "linked", owner: OWNER });
+        Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND_HASH, wallet_asked: true });
+        Object.assign(r.steps![1], { state: "confirmed", tx_hash: HASH, wallet_asked: true });
+      }
+      await settled;
+      expect(taken, asked).toBe(1);
+    }
+  });
+
+  it("time running out, or a refused token, after a read is reported to onUnresolved before the request is ended: a caller that can leave it open does", async () => {
+    site.expiresInMs = 100;
+    const record = await firstWorker();
+    await new Promise((r) => setTimeout(r, 300));
+    // a first read that shows nothing final, then reads that fail until past the local deadline and grace
+    let reads = 0;
+    site.readAnswer = (_r, view) => (++reads === 1 ? { status: 200, body: { ...view, state: "sending", wallet_asked: true } } : { status: 503, body: {} });
+    const why: string[] = [];
+    const h = await grant(client({ resume: { ...record, deadline: Date.now() - 1000 }, sendingGraceMs: 50, onUnresolved: (w) => why.push(w) }));
+    expect(await h.settled).toMatchObject({ status: "expired" });
+    expect(why).toHaveLength(1);
+    expect(why[0]).toMatch(/time ran out/);
+    expect(site.requests[0].cancels).toBeLessThanOrEqual(1);
+  });
+
   it("a link with steps: the bundle settles from the recorded request, with the owner proof checked", async () => {
     gone = false;
     const first = client({ fetchImpl: deadFetch });
