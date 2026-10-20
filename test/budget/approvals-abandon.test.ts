@@ -151,3 +151,53 @@ describe("abandonApproval", () => {
     }
   });
 });
+
+describe("spawnRail", () => {
+  const sleeper = () => spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+
+  it("names the rail script's group in the step that starts it: a give-up after that stops it", async () => {
+    const id = await open({}, liveWorker());
+    const { child, ended } = approvals.spawnRail(id, sleeper);
+    expect(ended).toBe(false);
+    expect(approvals.readApproval(id)?.railPgid).toBe(child.pid);
+    expect(alive(child.pid)).toBe(true);
+    const out = await approvals.abandonApproval(id, build);
+    expect(out.kind).toBe("abandoned");
+    for (let i = 0; i < 50 && alive(child.pid); i++) await new Promise((x) => setTimeout(x, 100));
+    expect(alive(child.pid)).toBe(false);
+    killGroup(approvals.readApproval(id)!.pid);
+  });
+
+  it("holds the record's lock while it starts the rail script: nothing can end or restart the approval in between", async () => {
+    const id = await open({}, liveWorker());
+    const saved = approvals.recordLockOptions.timeoutMs;
+    approvals.recordLockOptions.timeoutMs = 300;
+    let blocked: unknown;
+    try {
+      const { child } = approvals.spawnRail(id, () => {
+        try { approvals.updateApproval(id, { probe: true }); } catch (err) { blocked = err; }
+        return sleeper();
+      });
+      killGroup(child.pid);
+    } finally { approvals.recordLockOptions.timeoutMs = saved; }
+    expect(blocked).toBeTruthy();
+    expect(approvals.readApproval(id)?.probe).toBeUndefined();
+    killGroup(approvals.readApproval(id)!.pid);
+  });
+
+  it("starts nothing for an approval that has a result", async () => {
+    const id = await open();
+    approvals.recordFinal(id, 5, { ok: false, state: "unknown" });
+    let called = false;
+    const out = approvals.spawnRail(id, () => { called = true; return sleeper(); });
+    expect(out).toEqual({ child: null, ended: true });
+    expect(called).toBe(false);
+  });
+
+  it("starts the rail script for a record that is not there, as it always did", () => {
+    const out = approvals.spawnRail("oa-20261020000000-00000000", sleeper);
+    expect(out.ended).toBe(false);
+    expect(out.child.pid).toBeGreaterThan(0);
+    killGroup(out.child.pid);
+  });
+});

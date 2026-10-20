@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, RESUME_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -1092,12 +1092,16 @@ function run(spec) {
     const own = Boolean(APPROVAL_ID);
     // the rail script adds a hosted request (site, request id, access token) to this approval's record: HOLDER_ENV names it
     const env = own ? { ...process.env, [HOLDER_ENV]: APPROVAL_ID } : process.env;
-    const p = spawnIdentified(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env, detached: own });
-    currentChild = p;
-    if (own && p.pid) {
-      setRailGroup(APPROVAL_ID, p.pid);
-      p.once('identity', selfStartedAt => setRailGroup(APPROVAL_ID, p.pid, selfStartedAt));
+    const start = () => spawnIdentified(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], env, detached: own });
+    // the rail script's group is recorded in the step that starts it (spawnRail): a give-up sees it, or finds nothing started
+    const started = own ? spawnRail(APPROVAL_ID, start) : { child: start(), ended: false };
+    if (started.ended) {
+      log(`superstables budget: approval ${APPROVAL_ID} already has a result; nothing was started`);
+      process.exit(5);
     }
+    const p = started.child;
+    currentChild = p;
+    if (own && p.pid) p.once('identity', selfStartedAt => setRailGroup(APPROVAL_ID, p.pid, selfStartedAt));
     let stdout = "";
     let partial = "";
     let stderrTail = "";
@@ -2314,7 +2318,9 @@ async function abandonOwnerApproval(record, f) {
     return refuse("owner_confirmation_mismatch", `nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown`);
   }
   const at = new Date().toISOString();
-  const out = await abandonApproval(id, (before) => {
+  let out;
+  try {
+  out = await abandonApproval(id, (before) => {
     const asked = recordMayHaveSent(before);
     const where = before.hosted?.site ? siteName(before.hosted.site) : "the approval site";
     return {
@@ -2327,6 +2333,10 @@ async function abandonOwnerApproval(record, f) {
       },
     };
   });
+  } catch (err) {
+    // the record is locked by a process that is still running (a worker starting its rail script, another command): nothing was changed
+    return emit(5, { ...base, state: "unknown", final: false, reason: `the approval's record is busy, so nothing was ended: ${clean(err.message)}`, next: `run superstables budget wait --id ${id} --abandon again in your own terminal in a minute` });
+  }
   if (out.kind === "abandoned") {
     log(`superstables budget: ${id} (${record.command}) given up without a final result. The request${site ? ` on ${site}` : ""} was not cancelled and may still be open; whether the owner's wallet sent anything is unknown: check its activity.`);
     return emit(5, out.record.final.result);

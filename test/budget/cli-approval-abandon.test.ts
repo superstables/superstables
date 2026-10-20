@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { encodeFunctionData, pad, parseAbi, toEventSelector } from "viem";
 import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
@@ -365,6 +365,35 @@ describe("wait --abandon on a background owner approval", () => {
     expect(later.code, later.stderr).toBe(5);
     expect(later.result).toMatchObject({ state: "unknown", final: true, id, abandonedAt: gone.result.abandonedAt });
     expect(existsSync(lockPath())).toBe(false);
+  }, 120_000);
+
+  it("given up while the worker is paused between starting its rail script and recording it: the give-up waits for the record, then stops the rail script too", async () => {
+    const hang = createServer(() => { /* never answers */ });
+    await new Promise<void>((r) => hang.listen(0, "127.0.0.1", () => r()));
+    rpc = { url: `http://127.0.0.1:${(hang.address() as { port: number }).port}`, close: () => new Promise<void>((r) => { hang.closeAllConnections(); hang.close(() => r()); }) } as TestServer;
+    writeAgent();
+    mkdirSync(join(home, "budget", "public"), { recursive: true });
+    writeFileSync(publicPath(), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${AGENT}\n`);
+    const trace = join(home, "pause-trace.json");
+    const hook = `--import ${pathToFileURL(resolve(fileURLToPath(new URL("../../", import.meta.url)), "test/helpers/pause-after-rail-spawn.mjs")).href}`;
+    const launcher = budget(setupArgs(), { NODE_OPTIONS: hook, PAUSE_TRACE: trace });
+    for (let i = 0; i < 200 && !existsSync(trace); i++) await new Promise((x) => setTimeout(x, 100));
+    expect(existsSync(trace)).toBe(true);
+    const { worker, rail, id } = JSON.parse(readFileSync(trace, "utf8"));
+    // the worker is stopped holding the record's lock, before the rail script's group is named in it
+    expect(record(id).railPgid).toBeUndefined();
+    const resumed = new Promise<void>((done) => setTimeout(() => { try { process.kill(worker, "SIGCONT"); } catch { /* gone */ } done(); }, 2500));
+    const gone = await budget(abandonArgs(id), {}, typed(id));
+    await resumed;
+    expect(gone.code, gone.stderr).toBe(5);
+    expect(gone.result).toMatchObject({ state: "unknown", final: true, id });
+    // the rail script was named in the record by the time the give-up read it, so it was stopped with the worker
+    for (let i = 0; i < 50 && alive(rail); i++) await new Promise((x) => setTimeout(x, 100));
+    expect(alive(rail)).toBe(false);
+    expect(alive(worker)).toBe(false);
+    expect(record(id)).toMatchObject({ abandoned: expect.any(Object), final: { code: 5 } });
+    expect(existsSync(lockPath())).toBe(false);
+    await launcher;
   }, 120_000);
 
   it("a command that only claims to be the approval's worker (its environment variables set by hand) is refused and ends nothing", async () => {
