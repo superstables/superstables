@@ -37,6 +37,8 @@ export interface ChainCheck {
   included?: true;
   /** A successful read found no receipt, distinct from an unreadable RPC. */
   missing?: true;
+  /** The receipt's block could not be verified yet. */
+  unread?: true;
   /** Positive canonical evidence of removal, distinct from a null receipt. */
   removed?: true;
   paymentBlock?: string;
@@ -104,7 +106,7 @@ export async function checkSettlement(
   }
   const proof = await inclusion(rpc.url, receipt, network.finality, options);
   if (proof === "removed") return { chain: "unchecked", missing: true, removed: true, reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." };
-  if (proof === "unread") return { chain: "unchecked", reason: "the transaction's block could not be verified" };
+  if (proof === "unread") return { chain: "unchecked", unread: true, reason: "the transaction's block could not be verified" };
   if (receipt.status !== "0x1") return { chain: "mismatch", mismatchKind: proof === "final" ? "final_execution" : "provisional_execution", reason: "the transaction failed on chain" };
 
   const usdc = network.usdc.address;
