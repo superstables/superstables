@@ -698,7 +698,8 @@ if (process.env[WORKER_ENV] && !WORKER_ID) {
   process.stderr.write(`superstables budget: approval ${process.env[WORKER_ENV]} has ended; this worker has nothing to do\n`);
   process.exit(0);
 }
-if (WORKER_ID) adoptWorker(WORKER_ID);
+// a worker never runs `wait`: a `wait` that carries a worker's variable (by hand) adopts nothing and writes no process into any record
+if (WORKER_ID && !process.argv.slice(2).includes("wait")) adoptWorker(WORKER_ID);
 // The approval this process holds the chain for: the worker's, or a blocking owner command's own (ownerGate).
 let APPROVAL_ID = WORKER_ID;
 let FOREGROUND = false;
@@ -2213,8 +2214,9 @@ async function ownerGate({ cmd, f, ctx }) {
   if (r.kind === "final") {
     // it ended before it needed the owner (a refusal before any page, or nothing to do): the same RESULT as blocking
     const { code, result } = r.record.final;
-    // one that may have sent keeps its record and id, for every later wait
-    if (!recordMayHaveSent(r.record)) {
+    // one that may have sent keeps its record and id, for every later wait; so does one the owner gave up (its request id and
+    // the site are what they check before another owner command)
+    if (!recordMayHaveSent(r.record) && !r.record.abandoned) {
       delete result.id;
       forget(id);
     }

@@ -89,20 +89,21 @@ describe("abandonApproval", () => {
 
   it("a worker started again after the stop (a restart that raced) is never marked ended while it runs: nothing is stored", async () => {
     const id = await open();
-    let revived: ReturnType<typeof liveWorker> | undefined;
+    const revived: ReturnType<typeof liveWorker>[] = [];
     const out = await approvals.abandonApproval(id, build, {
       attempts: 2,
       stop: async () => {
         // a wait restarted the worker between the stop and the write: the record names a process that runs
-        revived = liveWorker();
-        approvals.updateApproval(id, () => ({ ...revived }));
+        const w = liveWorker();
+        revived.push(w);
+        approvals.updateApproval(id, () => ({ ...w }));
       },
     });
     expect(out.kind).toBe("running");
     expect(approvals.readApproval(id)?.final).toBeUndefined();
     expect(approvals.readApproval(id)?.hosted?.token).toBeDefined();
     expect(approvals.findPending("evm", "base-sepolia")?.id).toBe(id);
-    killGroup(revived!.pid);
+    for (const w of revived) killGroup(w.pid);
   });
 
   it("a worker launched a moment ago and not yet in the record is not ended: its process may be running unseen", async () => {

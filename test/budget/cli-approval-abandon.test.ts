@@ -3,6 +3,7 @@
 // the chain, and no later wait restarts it. The request on the site is not cancelled. The real dispatcher and evm rail
 // scripts against a fake superstables.com and a fake Base Sepolia RPC. No network, no real key.
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -328,6 +329,44 @@ describe("wait --abandon on a background owner approval", () => {
     expect(record(id).abandoned).toBeUndefined();
   }, 300_000);
 
+  it("given up while the command that started it still waits for its first link: the record and its id are kept for every later wait", async () => {
+    // the rail's first chain read never answers, so the launcher waits for a link that does not come
+    const hang = createServer(() => { /* never answers */ });
+    await new Promise<void>((r) => hang.listen(0, "127.0.0.1", () => r()));
+    rpc = { url: `http://127.0.0.1:${(hang.address() as { port: number }).port}`, close: () => new Promise<void>((r) => { hang.closeAllConnections(); hang.close(() => r()); }) } as TestServer;
+    writeAgent();
+    mkdirSync(join(home, "budget", "public"), { recursive: true });
+    writeFileSync(publicPath(), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${AGENT}\n`);
+    const launcher = budget(setupArgs());
+    let id = "";
+    for (let i = 0; i < 200 && !id; i++) {
+      await new Promise((x) => setTimeout(x, 100));
+      const f = existsSync(approvals()) ? readdirSync(approvals()).find((n) => /^oa-.*\.json$/.test(n)) : undefined;
+      const r = f ? JSON.parse(readFileSync(join(approvals(), f), "utf8")) : null;
+      if (r?.pid && Array.isArray(r.workerArgs)) id = r.id;
+    }
+    expect(id).not.toBe("");
+    // the rail script has asked the site by now in a real run: its request is in the record, and the approval can be resumed
+    const path = join(approvals(), `${id}.json`);
+    const r = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({ ...r, hosted: { site: site.url, requestId: "bl_test0001", kind: "link", matchCode: "ABC-DEF", token: "ssbt_test_bl_test0001secret", resumable: true, intent: "a".repeat(64) } }, null, 2) + "\n");
+
+    const gone = await budget(abandonArgs(id), {}, typed(id));
+    expect(gone.code, gone.stderr).toBe(5);
+    expect(gone.result).toMatchObject({ state: "unknown", final: true, id });
+    const answered = await launcher;
+    expect(answered.code, answered.stderr).toBe(5);
+    expect(answered.result).toMatchObject({ state: "unknown", final: true, id, abandonedAt: gone.result.abandonedAt });
+    // the record, its request id and its log are still there, and every later wait answers the same
+    expect(existsSync(path)).toBe(true);
+    expect(record(id)).toMatchObject({ abandoned: { requestId: "bl_test0001", site: site.url }, final: { code: 5 } });
+    expect(existsSync(join(approvals(), `${id}.log`))).toBe(true);
+    const later = await budget(["wait", "--shown", "--id", id, "--timeout", "30"]);
+    expect(later.code, later.stderr).toBe(5);
+    expect(later.result).toMatchObject({ state: "unknown", final: true, id, abandonedAt: gone.result.abandonedAt });
+    expect(existsSync(lockPath())).toBe(false);
+  }, 120_000);
+
   it("a command that only claims to be the approval's worker (its environment variables set by hand) is refused and ends nothing", async () => {
     await fakeChain(0n, 10000n);
     const id = await startSetup();
@@ -353,6 +392,20 @@ describe("wait --abandon on a background owner approval", () => {
     expect(JSON.parse(before).final).toBeUndefined();
     expect(JSON.parse(before).hosted.token).toMatch(/^ssbt_/);
   }, 300_000);
+
+  it("a refused give-up writes nothing even into a record whose worker is not recorded yet, whatever environment it carries", async () => {
+    await fakeChain(0n, 10000n);
+    mkdirSync(approvals(), { recursive: true });
+    const id = "oa-20261020999998-abcdef02";
+    const path = join(approvals(), `${id}.json`);
+    writeFileSync(path, JSON.stringify({ id, command: "setup", rail: "evm", chain: "base-sepolia", state: "starting", createdAt: new Date().toISOString(), pid: null, workerArgs: ["setup"], timeoutS: 600, deadline: Date.now() + 600_000 }, null, 2) + "\n");
+    const before = readFileSync(path, "utf8");
+    for (const [env, terminal] of [[{}, undefined], [{ SUPERSTABLES_BUDGET_APPROVAL_ID: id }, undefined], [{ SUPERSTABLES_BUDGET_APPROVAL_ID: id }, typed(id)], [{ SUPERSTABLES_BUDGET_APPROVAL_ID: id }, "wrong\n"]] as const) {
+      const run = await budget(abandonArgs(id), { ...env }, terminal);
+      expect(run.code, `${JSON.stringify(env)} ${terminal}: ${run.stderr}`).toBe(3);
+      expect(readFileSync(path, "utf8")).toBe(before);
+    }
+  }, 120_000);
 
   it("a command running in a terminal is not given up here: it is stopped there", async () => {
     await fakeChain(0n, 10000n);
