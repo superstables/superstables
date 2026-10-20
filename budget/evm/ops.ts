@@ -410,7 +410,8 @@ export async function readSettlement(j: Journal): Promise<Settlement> {
       const final = head !== null && await canonicalReceipt(receipt, head);
       const matches = (name: "AuthorizationUsed" | "AuthorizationCanceled") => parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: name }).some((l) => l.address.toLowerCase() === USDC.toLowerCase() && l.args.authorizer.toLowerCase() === j.agent.toLowerCase() && l.args.nonce.toLowerCase() === auth.nonce.toLowerCase());
       if (matches("AuthorizationCanceled")) {
-        const finalCanceled = final && head !== null && await publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: "authorizationState", args: [j.agent, auth.nonce], blockNumber: head.number ?? undefined });
+        // read where the chain keeps state at its final block: the agreeing endpoints, not always this RPC (rpc-endpoints.mjs)
+        const finalCanceled = final && await authorizationStateAgreed(j.agent, auth.nonce, receipt.blockNumber).then((st) => st.agreed && st.value === true);
         if (final && !finalCanceled) return { kind: "pending", used: false, canceled: false, reason: "the cancellation's final nonce state could not be verified" };
         return { kind: "canceled", used: false, canceled: finalCanceled, final: finalCanceled, cancelTx: hash };
       }

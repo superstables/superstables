@@ -64,6 +64,26 @@ describe("checkSettlement", () => {
     expect(await withReceipt(undefined)).toEqual({ chain: "unchecked", missing: true, reason: "the chain does not show the transaction yet" });
   });
 
+  it.each(["0xf", null, "0x10", "0x11"])("requires a finalized head past the payment before reporting a different hash as removed (head %s)", async (head) => {
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const call = JSON.parse(String(init?.body));
+      const result = call.method === "eth_chainId" ? "0x14a34"
+        : call.method === "eth_getTransactionReceipt" ? {
+          transactionHash: TX, status: "0x1", blockNumber: "0x10",
+          blockHash: `0x${"aa".repeat(32)}`,
+        }
+        : call.params[0] === "finalized" ? (head === null ? null : { number: head })
+        : { number: "0x10", hash: `0x${"bb".repeat(32)}` };
+      return Response.json({ jsonrpc: "2.0", id: call.id, result });
+    };
+    const result = await checkSettlement(PAYMENT, { rpcUrl: "http://127.0.0.1:8545", fetchImpl });
+    if (head === "0x10" || head === "0x11") {
+      expect(result).toMatchObject({ chain: "unchecked", removed: true, missing: true });
+    } else {
+      expect(result).toEqual({ chain: "unchecked", unread: true, reason: "the transaction's block could not be verified" });
+    }
+  });
+
   it("leaves it unchecked when the RPC is down or does not answer", async () => {
     chain = await startFakeBaseSepolia();
     chain.down = true;
@@ -142,6 +162,27 @@ describe("findAuthorization", () => {
     expect(unfinal).not.toHaveProperty("never");
     // No validBefore recorded: never called final.
     expect(await find({ validBefore: undefined })).toEqual({ found: false, reason: "the chain shows the owner's authorization unused so far" });
+  });
+
+  it("reads state at the final block through the set's state endpoint when the primary keeps only recent state", async () => {
+    chain = await startFakeBaseSepolia();
+    // Robinhood Chain Testnet's official RPC: the latest state and the logs, but no state at the finalized block.
+    const pruned = await chain.mirror((method, params) => {
+      if (method === "eth_call" && BigInt(params[1] as string) < chain!.head.number) throw new Error("historical state is not available");
+      return undefined;
+    });
+    try {
+      chain.finalizedLag = 5;
+      const validBefore = new Date((chain.head.timestamp + 60) * 1000).toISOString();
+      chain.advance(600);
+      const at = (url: string, operator: string) => ({ url, operator, source: "caller" as const, id: operator });
+      const set = (state?: string) => () => ({ primary: at(pruned.url, "pruned"), ...(state ? { state: at(state, "state") } : {}), verdict: [at(chain!.url, "state")], quorum: 1, agreement: "caller" as const });
+      const find = (endpointsFor: ReturnType<typeof set>) => findAuthorization({ ...PAYMENT, network: BASE_SEPOLIA.caip2, transaction: undefined, validBefore, since: new Date().toISOString() }, { endpointsFor });
+      expect(await find(set())).toMatchObject({ found: false, unreadable: true });
+      expect(await find(set(chain.url))).toMatchObject({ found: false, never: true });
+    } finally {
+      await pruned.close();
+    }
   });
 
   it("calls a cancelled authorization final only in a final block, and decides nothing when the chain cannot be read", async () => {

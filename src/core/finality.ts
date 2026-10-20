@@ -17,8 +17,9 @@ export async function inclusion(url: string, receipt: Inclusion, finality: "fina
     const head = await rpcCall<{ number?: unknown } | null>(url, "eth_getBlockByNumber", [finality === "instant" ? "latest" : "finalized", false], options).catch(() => null);
     const block = await rpcCall<{ number?: unknown; hash?: unknown } | null>(url, "eth_getBlockByNumber", [receipt.blockNumber, false], options);
     if (!quantity(block?.number) || BigInt(block.number) !== BigInt(receipt.blockNumber) || !hash(block?.hash)) return "unread";
-    if (block.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) return "removed";
-    return quantity(head?.number) && BigInt(head.number) >= BigInt(receipt.blockNumber) ? "final" : "included";
+    const final = quantity(head?.number) && BigInt(head.number) >= BigInt(receipt.blockNumber);
+    if (block.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) return final ? "removed" : "unread";
+    return final ? "final" : "included";
   } catch {
     return "unread";
   }
