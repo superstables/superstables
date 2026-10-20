@@ -16,9 +16,10 @@ export interface PaymentContext {
   signer: Signer & { status(): Promise<WalletStatus> };
 }
 
-export function paymentContext(): PaymentContext {
+/** `fetch` replaces the engine's own, for a command that screens every answer a seller gives (`seller top-up`). */
+export function paymentContext(options: { fetch?: typeof fetch } = {}): PaymentContext {
   const records = new Records(recordsDir());
   const policy = loadPaymentPolicy();
   const signer = signerFor();
-  return { records, policy, engine: new PaymentEngine({ records, policy, signer }), signer };
+  return { records, policy, engine: new PaymentEngine({ records, policy, signer, ...(options.fetch ? { fetchImpl: options.fetch } : {}) }), signer };
 }

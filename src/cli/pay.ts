@@ -85,11 +85,8 @@ export async function approveAndPay(deps: PaymentContext, quoteId: string, optio
         : `${messageOf(err)}; \`superstables quote --service <id>\` or \`superstables quote <url>\` takes one.`,
     );
   }
-  options.say(`Paying ${options.label ?? `quote ${quoteId}`} (attempt ${started.id}).`);
-
-  // Ctrl-C, or an agent's tool killing the command, is the end of the wait: the page goes
-  // away with this process, and the record has to say so rather than stay "awaiting". The
-  // reason names the process, not the owner, so whoever stopped it can tell.
+  // From here a payment exists. Whatever goes wrong next, the attempt's record says how far it got: a throw is never
+  // "not started", and an attempt that is not over is stopped as unknown, never reported as unpaid.
   let interrupted = false;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted = true;
@@ -109,35 +106,66 @@ export async function approveAndPay(deps: PaymentContext, quoteId: string, optio
       "stopped",
     );
   };
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
-  process.once("exit", onExit);
+  try {
+    options.say(`Paying ${options.label ?? `quote ${quoteId}`} (attempt ${started.id}).`);
 
-  const waitMs = options.wait === undefined ? PAY_CEILING_MS : options.wait * 1000;
-  let attempt = await engine.waitForAttempt(started.id, waitMs);
-  if (!isFinalAttempt(attempt) && !interrupted) {
-    if (attempt.state === "awaiting_approval") {
-      attempt =
-        engine.stop(
-          started.id,
-          options.wait === undefined
-            ? `\`${command}\` stopped waiting before the owner decided`
-            : `\`${command}\` stopped waiting after --wait ${options.wait} s, before the owner decided`,
-          "wait",
-        ) ?? attempt;
-    } else {
-      // Approved: the credential may be on its way, so this is not the moment to walk away.
-      attempt = await engine.waitForAttempt(started.id, SUBMIT_GRACE_MS);
-      if (!isFinalAttempt(attempt)) attempt = engine.stop(started.id, `\`${command}\` stopped waiting`) ?? attempt;
+    // Ctrl-C, or an agent's tool killing the command, is the end of the wait: the page goes
+    // away with this process, and the record has to say so rather than stay "awaiting". The
+    // reason names the process, not the owner, so whoever stopped it can tell.
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+    process.once("exit", onExit);
+
+    const waitMs = options.wait === undefined ? PAY_CEILING_MS : options.wait * 1000;
+    let attempt = await engine.waitForAttempt(started.id, waitMs);
+    if (!isFinalAttempt(attempt) && !interrupted) {
+      if (attempt.state === "awaiting_approval") {
+        attempt =
+          engine.stop(
+            started.id,
+            options.wait === undefined
+              ? `\`${command}\` stopped waiting before the owner decided`
+              : `\`${command}\` stopped waiting after --wait ${options.wait} s, before the owner decided`,
+            "wait",
+          ) ?? attempt;
+      } else {
+        // Approved: the credential may be on its way, so this is not the moment to walk away.
+        attempt = await engine.waitForAttempt(started.id, SUBMIT_GRACE_MS);
+        if (!isFinalAttempt(attempt)) attempt = engine.stop(started.id, `\`${command}\` stopped waiting`) ?? attempt;
+      }
     }
+    return engine.getAttempt(started.id) ?? attempt;
+  } catch (err) {
+    let recorded = engine.getAttempt(started.id);
+    try {
+      recorded = engine.stop(started.id, `\`${command}\` failed while waiting: ${messageOf(err)}`) ?? recorded;
+    } catch {
+      // the record keeps what it has
+    }
+    throw new PaymentStartedError(started.id, err, recorded);
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    process.off("exit", onExit);
+    engine.events.off("transition", onTransition);
+    // The browser signer listens on loopback for as long as it exists; let the command exit.
+    await closeSigner(signer);
   }
-  process.off("SIGINT", onSignal);
-  process.off("SIGTERM", onSignal);
-  process.off("exit", onExit);
-  engine.events.off("transition", onTransition);
-  // The browser signer listens on loopback for as long as it exists; let the command exit.
-  await closeSigner(signer);
-  return engine.getAttempt(started.id) ?? attempt;
+}
+
+/**
+ * The payment was started, and the command failed while following it. `attempt` is what the records say about it now;
+ * what became of the money is that attempt's state, and unknown when it is not final.
+ */
+export class PaymentStartedError extends Error {
+  constructor(
+    readonly attemptId: string,
+    cause: unknown,
+    readonly attempt?: Attempt,
+  ) {
+    super(`${messageOf(cause)}. The payment (attempt ${attemptId}) had started: \`superstables status ${attemptId}\` says where it got to`, { cause });
+    this.name = "PaymentStartedError";
+  }
 }
 
 /** A signer that binds a port has to give it back before the command exits. */
