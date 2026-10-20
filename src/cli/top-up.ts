@@ -10,13 +10,14 @@
 
 import { shownTransaction } from "../core/pay.js";
 import { quote as takeQuote } from "../core/quote.js";
-import { untrustedJson, untrustedUrl } from "../core/text.js";
+import { SellerTextError, untrustedJson, untrustedUrl } from "../core/text.js";
 import type { Attempt, Quote } from "../core/types.js";
 import { NotPaidEndpointError } from "../core/x402.js";
 import {
   TOP_UP_NETWORK,
   createTopUp,
   redactSecret,
+  topUpFromAnswer,
   topUpProblem,
   topUpTermsProblem,
   type SellerCredit,
@@ -183,7 +184,24 @@ async function topUpSteps(input: {
       exitCode: err instanceof CliError ? err.exitCode : EXIT.failed,
     };
   }
-  return { topUp, amount, quote, attempt, ...paidOutcome(quote, attempt) };
+  return { topUp: latestTopUp(topUp, attempt), amount, quote, attempt, ...paidOutcome(quote, attempt) };
+}
+
+/**
+ * The site's own latest word on the top-up, from a 200 answer to the payment, when that answer names this
+ * top-up. Anything else keeps what creation said: the status is printed, and this command never pays from it.
+ */
+function latestTopUp(created: TopUp, attempt: Attempt): TopUp {
+  if (attempt.serviceStatus !== 200 || !attempt.serviceBody) return created;
+  try {
+    const body = JSON.parse(attempt.serviceBody) as unknown;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return created;
+    const answer = "top_up" in (body as Record<string, unknown>) ? body : { top_up: body };
+    const site = topUpFromAnswer(answer);
+    return site.id === created.id && site.status ? { ...created, status: site.status } : created;
+  } catch {
+    return created;
+  }
 }
 
 /** The top-up as this command prints it: one field per fact, then what happened and what to run next. */
@@ -345,10 +363,20 @@ function unreadablePayLink(topUp: TopUp, amount: TopUpAmount, err: unknown): Top
       exitCode: EXIT.failed,
     };
   }
+  if (err instanceof SellerTextError) {
+    // The seller's offers, labelled as its words: the client's own sentence is in err.message.
+    return {
+      topUp,
+      amount,
+      message: `${err.message}. Nothing was paid; this command pays only Base Sepolia test USDC for the amount it asked for.`,
+      next: `Run \`${TOP_UP_COMMAND} ${amount.decimal}\` again for a new top-up, and report the pay link to Superstables.`,
+      exitCode: EXIT.failed,
+    };
+  }
   return {
     topUp,
     amount,
-    message: `The top-up's pay link asked for no payment this client can read (${messageOf(err)}). Nothing was paid.`,
+    message: `The top-up's pay link could not be read (${messageOf(err)}). Nothing was paid.`,
     next: `Run \`${TOP_UP_COMMAND} ${amount.decimal}\` again for a new top-up, and report the pay link to Superstables.`,
     exitCode: EXIT.failed,
   };

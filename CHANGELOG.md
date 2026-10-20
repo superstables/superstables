@@ -66,6 +66,8 @@ Owner actions are now reported as final only once the chain says so. A grant, re
 - On Tempo Moderato, a referred payment's MPP client id is `superstables:<referral id>`, so its memo holds the referral's fingerprint in bytes 15 to 24.
 - `superstables budget buy` on Solana and Tempo sends the seller's referral, and marks the payment the same way. The operation keeps its referral for every run under the same `--op`.
 - `superstables demo-service` can publish a claim challenge (`SUPERSTABLES_CLAIM_CHALLENGE`). It is off unless set.
+- `superstables seller credit` prints the seller's prepaid credit balance, the latest top-ups and credit entries; `--json` prints them as one object. `superstables seller top-up <amount>` adds to the balance with test USDC on Base Sepolia, paid through the same signer, spend policy and owner approval as any purchase.
+- `seller top-up` pays only the top-up it just asked for: the answer's id and amount, its pay link on the Superstables origin with that top-up's own path, and a 402 on Base Sepolia in test USDC for exactly that amount. Any mismatch is refused with nothing paid. A pay link that answers `payment_pending` (409), 502 or `top_up_retired` (410) is never paid again; a retired top-up is the one case that asks for a new one. The seller API key comes from `SUPERSTABLES_SELLER_API_KEY`, goes only to the Superstables origin, and is never printed. See `docs/seller-referrals.md`.
 
 ### Changed
 

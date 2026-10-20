@@ -125,6 +125,7 @@ Start here, budget: superstables budget setup --rail evm
 Who runs what:
   owner   setup, wallet init, wallet serve, wallet open, policy init, owner settings, and every approval
   agent   find, quote, pay, status, receipts, attempts, doctor
+  seller  seller credit and seller top-up, with the seller account's key
   Either may run the read-only commands.
 
 Owner settings:
@@ -172,8 +173,8 @@ Environment:
                                  (never printed)
 
 Output:
-  find, quote, pay, status, receipts and attempts take --json: one JSON value on stdout, progress
-  and notes on stderr. An error under --json is {"error", "exit_code"} on stdout.
+  find, quote, pay, status, receipts, attempts and the seller commands take --json: one JSON value
+  on stdout, progress and notes on stderr. An error under --json is {"error", "exit_code"} on stdout.
 
 ${EXIT_CODE_TABLE}
 `;

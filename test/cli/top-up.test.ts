@@ -98,6 +98,34 @@ describe("seller top-up", () => {
     });
   });
 
+  it("prints the status the site gave the top-up in its answer to the payment", async () => {
+    const answered = await run(
+      ports({
+        pay: async () =>
+          attempt("settled", {
+            chain: "verified",
+            chainFinal: true,
+            serviceStatus: 200,
+            serviceBody: JSON.stringify({ top_up: { id: ID, amount: "10", status: "paid" } }),
+          }),
+      }),
+    );
+    expect(answered.topUp.status).toBe("paid");
+    // An answer that names another top-up changes nothing here: the status is display only.
+    const other = await run(
+      ports({
+        pay: async () =>
+          attempt("settled", {
+            chain: "verified",
+            chainFinal: true,
+            serviceStatus: 200,
+            serviceBody: JSON.stringify({ top_up: { id: "3f1c9a2e-0000-4000-8000-000000000009", amount: "10", status: "paid" } }),
+          }),
+      }),
+    );
+    expect(other.topUp.status).toBe("open");
+  });
+
   it("prints the top-up, the payment and the next step, one fact per line", async () => {
     const lines: string[] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((line: string) => {

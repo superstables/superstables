@@ -158,3 +158,42 @@ starts, and a later run under the same `--op` uses them again.
 `superstables find --json` shows a listing's `referral` as `{ expiresAt, terms }`, without the token.
 The receipt records `discoveredVia: "superstables"` and `referral: { id, listingId, terms }`.
 `SUPERSTABLES_REFERRALS=off` stops the client from remembering and sending referrals.
+
+## Credit and top-ups
+
+A seller account at superstables.com keeps prepaid credit in USDC, and the fee of each referred
+sale is taken from it. Two commands work with it:
+
+```bash
+superstables seller credit
+superstables seller top-up 25
+```
+
+The seller API key comes from `SUPERSTABLES_SELLER_API_KEY`, which the seller portal issues. It is
+sent only to the Superstables origin this client already uses, in an `Authorization` header, and no
+command prints it: an answer that quotes the key back has it redacted first. `SUPERSTABLES_SITE` is
+the same site setting the rest of the client reads for local and staging work.
+
+`superstables seller credit` prints the balance, the latest top-ups and the latest credit entries,
+and rechecks pending top-ups before it answers, so it can take about eight seconds. `--json` prints
+the same as one object.
+
+`superstables seller top-up <amount>` creates one top-up for a USD amount of at least 1, then pays it
+like any other x402 purchase: the same signer, spend policy and approval in the owner's wallet as
+`pay`. Before anything is signed, the command checks the answer and the payment request against what
+it asked for:
+
+- the top-up id is a UUID, and the amount is exactly the one requested;
+- the pay link is on the Superstables origin, at `/api/v1/seller/top-ups/<that id>/pay`, with no query
+  string or fragment;
+- the 402 is on Base Sepolia (`eip155:84532`), in test USDC, for exactly that amount, with the exact
+  scheme.
+
+Any mismatch is refused, and nothing is paid. The payment asks for the terms again before the owner
+is asked, and refuses changed ones, as `pay` does.
+
+Top-ups are on Base Sepolia in test USDC for now. The credit is added once the payment's block is
+final on chain; `superstables seller credit` shows when it has landed. If the site reports a payment
+as pending (409 `payment_pending`) or cannot confirm it (502), whether the money moved is unknown:
+do not pay that top-up again, and run `superstables seller credit` later. A retired top-up (410
+`top_up_retired`) cannot be paid at all; ask for a new one.

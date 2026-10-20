@@ -70,7 +70,7 @@ import {
   policyFileFor,
 } from "./outcome.js";
 import { approveAndPay } from "./pay.js";
-import { CREDIT_COMMAND, TOP_UP_COMMAND, clientPorts, creditJson, printCredit, printTopUp, runTopUp, topUpJson } from "./top-up.js";
+import { clientPorts, creditJson, printCredit, printTopUp, runTopUp, topUpJson, type TopUpResult } from "./top-up.js";
 import { walletModeFromEnvironment, type WalletMode } from "./signer.js";
 import { attemptView, messageFor } from "./views.js";
 import {
@@ -79,6 +79,7 @@ import {
   readSellerApiKey,
   readSellerCredit,
   sellerSite,
+  type SellerCredit,
   type TopUpAmount,
 } from "../seller/top-up.js";
 
@@ -960,7 +961,7 @@ explain(
       const { site, apiKey } = sellerClient();
       const amount = sellerAmount(input);
       const deps = paymentContext();
-      let result;
+      let result: TopUpResult;
       try {
         result = await runTopUp({ site, apiKey, amount, say, ports: clientPorts(deps, options.wait) });
       } catch (err) {
@@ -1012,7 +1013,7 @@ explain(
     .option("--json", "print the balance, top-ups and entries as one JSON object")
     .action(async (options: { json?: boolean }) => {
       const { site, apiKey } = sellerClient();
-      let credit;
+      let credit: SellerCredit;
       try {
         credit = await readSellerCredit({ site, apiKey });
       } catch (err) {
