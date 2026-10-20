@@ -2334,6 +2334,7 @@ async function abandonOwnerApproval(record, f) {
     };
   });
   } catch (err) {
+    if (err?.code !== "RECORD_BUSY") throw err;
     // the record is locked by a process that is still running (a worker starting its rail script, another command): nothing was changed
     return emit(5, { ...base, state: "unknown", final: false, reason: `the approval's record is busy, so nothing was ended: ${clean(err.message)}`, next: `run superstables budget wait --id ${id} --abandon again in your own terminal in a minute` });
   }

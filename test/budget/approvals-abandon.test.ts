@@ -185,6 +185,40 @@ describe("spawnRail", () => {
     killGroup(approvals.readApproval(id)!.pid);
   });
 
+  it("a worker that dies between starting its rail script and recording it leaves a mark: for a minute the approval is not ended", async () => {
+    const id = await open({}, liveWorker());
+    // the write that would name the rail script fails (a disk fault), after the script was started
+    let writes = 0;
+    approvals.recordTestHook.inLock = () => { if (++writes === 2) throw new Error("ENOSPC: no space left on device"); };
+    let started: ReturnType<typeof spawn> | undefined;
+    try {
+      expect(() => approvals.spawnRail(id, () => (started = sleeper()))).toThrow(/ENOSPC/);
+    } finally { approvals.recordTestHook.inLock = null; }
+    // the script that was started was stopped, not left to run unseen
+    for (let i = 0; i < 50 && started?.pid && alive(started.pid); i++) await new Promise((x) => setTimeout(x, 50));
+    expect(alive(started!.pid!)).toBe(false);
+    // and the record still says a script was being started: a give-up refuses, storing nothing
+    expect(approvals.readApproval(id)?.railSpawning).toBeGreaterThan(0);
+    expect(approvals.readApproval(id)?.railPgid).toBeUndefined();
+    const refused = await approvals.abandonApproval(id, build, { attempts: 1 });
+    expect(refused.kind).toBe("starting");
+    expect(approvals.readApproval(id)?.final).toBeUndefined();
+    // a minute later nothing is in flight any more
+    approvals.updateApproval(id, () => ({ railSpawning: Date.now() - 2 * 60_000 }));
+    expect((await approvals.abandonApproval(id, build)).kind).toBe("abandoned");
+    killGroup(approvals.readApproval(id)!.pid);
+  });
+
+  it("a rail script that was named clears the mark", async () => {
+    const id = await open({}, liveWorker());
+    const { child } = approvals.spawnRail(id, sleeper);
+    const record = approvals.readApproval(id);
+    expect(record?.railSpawning).toBeUndefined();
+    expect(record?.railPgid).toBe(child.pid);
+    killGroup(child.pid);
+    killGroup(record!.pid);
+  });
+
   it("starts nothing for an approval that has a result", async () => {
     const id = await open();
     approvals.recordFinal(id, 5, { ok: false, state: "unknown" });

@@ -244,7 +244,13 @@ async function holdingRecordLock(id, fn) {
   ensureDir();
   const path = recordLockFile(id);
   const me = lockOwnerText();
-  acquireSync(path, me, Date.now() + recordLockOptions.timeoutMs, breakDeadLock);
+  try {
+    acquireSync(path, me, Date.now() + recordLockOptions.timeoutMs, breakDeadLock);
+  } catch (err) {
+    // the lock is held by a process that is still running: the caller can say so and ask to be run again
+    if (err && typeof err === "object") err.code = "RECORD_BUSY";
+    throw err;
+  }
   heldRecordLocks.add(id);
   try {
     return await fn();
@@ -412,10 +418,13 @@ async function stopRecord(record) {
 }
 
 /**
- * Whether an approval's worker was launched a moment ago and its process is not in the record yet (startDetached saves the
- * record, spawns the worker, then publishes its pid): the worker may be running unseen, so nothing ends the approval yet.
+ * Whether something of an approval was started a moment ago and is not in the record yet: its worker (startDetached saves the
+ * record, spawns the worker, then publishes its pid) or its rail script (spawnRail marks the record before it starts one). It
+ * may be running unseen, so nothing ends the approval yet.
  */
-export const startingUp = (record) => Boolean(record && !record.final && !record.foreground && record.pid == null && !(Date.now() - Date.parse(record.createdAt) >= STARTUP_GRACE_MS));
+export const startingUp = (record) => Boolean(record && !record.final && !record.foreground
+  && ((record.pid == null && !(Date.now() - Date.parse(record.createdAt) >= STARTUP_GRACE_MS))
+    || (record.railSpawning && Date.now() - record.railSpawning < STARTUP_GRACE_MS)));
 
 /**
  * The owner gives up an approval no later `wait` can settle (their own terminal asks for it, never an agent call): stop
@@ -587,11 +596,22 @@ export function setRailGroup(id, pgid, selfStartedAt) {
 export function spawnRail(id, spawn) {
   let child = null;
   let ended = false;
-  const record = update(id, (before) => {
-    if (before.final) { ended = true; return null; }
-    child = spawn();
-    return child?.pid ? railFields(child.pid) : null;
-  });
+  // A worker that dies between starting the rail script and recording it leaves this mark and no group: for a minute nothing
+  // ends the approval (startingUp), because a rail script may be running that the record does not name.
+  const marked = update(id, (before) => (before.final ? null : { railSpawning: Date.now() }));
+  if (marked?.final) return { child: null, ended: true };
+  let record;
+  try {
+    record = update(id, (before) => {
+      if (before.final) { ended = true; return null; }
+      child = spawn();
+      return { ...(child?.pid ? railFields(child.pid) : {}), railSpawning: undefined };
+    });
+  } catch (err) {
+    // the rail script may have started and not been recorded: it would run unseen, so it is stopped
+    if (child?.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* gone */ } } }
+    throw err;
+  }
   if (!record && !child) child = spawn();
   return { child, ended };
 }

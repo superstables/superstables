@@ -396,6 +396,26 @@ describe("wait --abandon on a background owner approval", () => {
     await launcher;
   }, 120_000);
 
+  it("a record locked by a process that is still running: the give-up stores nothing and says it is not final", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    // a live process holds the record's lock
+    const holder = spawn("sleep", ["120"], { detached: true, stdio: "ignore" });
+    holder.unref();
+    try {
+      const { createIdentitySource } = await import("../../budget/lock-identity.mjs");
+      writeFileSync(join(approvals(), `${id}.json.lock`), JSON.stringify({ pid: holder.pid, ...createIdentitySource().fields(holder.pid!), owner: "test" }));
+      const before = readFileSync(join(approvals(), `${id}.json`), "utf8");
+      const busy = await budget(abandonArgs(id), {}, typed(id));
+      expect(busy.code, busy.stderr).toBe(5);
+      expect(busy.result).toMatchObject({ state: "unknown", final: false, id });
+      expect(busy.result.reason).toMatch(/record is busy/);
+      expect(readFileSync(join(approvals(), `${id}.json`), "utf8")).toBe(before);
+      expect(existsSync(lockPath())).toBe(true);
+    } finally { try { process.kill(-holder.pid!, "SIGKILL"); } catch { /* gone */ } rmSync(join(approvals(), `${id}.json.lock`), { force: true }); }
+  }, 120_000);
+
   it("a command that only claims to be the approval's worker (its environment variables set by hand) is refused and ends nothing", async () => {
     await fakeChain(0n, 10000n);
     const id = await startSetup();
