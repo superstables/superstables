@@ -24,6 +24,7 @@ import "./cli-guard.mjs";
 // exactly the cap), 5 the wallet may have sent it but no hash came back, 1 anything else that failed.
 import { type Hex } from "viem";
 import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, USDC, publicClient, assertRpcChain, tx, allowanceAgreed, agreementWords, finalityOf, usuallyWords, sleep, publicEnv } from "./lib.ts";
+import { requestFact, resuming } from "../owner-page.ts";
 import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, grantMismatchSteps, tokenRow, approveRow, approveShows, capWords, REVOKE_HINT, grantTx, grantSteps, approveResetHostedProblem, grantEnforced, GRANT_NOT_ENFORCED, landedGrant, chainFlag } from "./owner.ts";
 import { differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
@@ -51,7 +52,9 @@ const liveRefusal = () => {
 
 // The grant needs the allowance at 0 at the chain's final block, not only on the first endpoint: a revoke still short of final could be
 // undone by the chain, and an approve over a live allowance is what this command never does. --replace revokes first itself.
-if (!verifyOnly && !(replace && OWNER_KEY_FILE && beforeAllow > 0n) && !(!OWNER_KEY_FILE && approveResetHostedProblem())) {
+// A resumed worker (wait finishing a grant the owner already approved) asks nothing again, and the allowance it reads is the
+// owner's own grant, so the refusals below that read the chain's state before asking are not run for it.
+if (!verifyOnly && !resuming() && !(replace && OWNER_KEY_FILE && beforeAllow > 0n) && !(!OWNER_KEY_FILE && approveResetHostedProblem())) {
   const atFinal = await allowanceAgreed(pub.owner, pub.agent);
   if (!atFinal.agreed) {
     const reason = `the allowance at the chain's final block could not be confirmed (${agreementWords(atFinal)})`;
@@ -101,18 +104,19 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   approveBlock = { blockNumber: sent.blockNumber, blockHash: sent.blockHash };
 } else if (!verifyOnly) {
   // Refuse here, before any link exists, whatever would make the owner's approval fail or unsafe.
-  if (beforeAllow > 0n) liveRefusal();
+  if (beforeAllow > 0n && !resuming()) liveRefusal();
   const reset = approveResetHostedProblem();
   if (reset) {
     console.log(`REFUSED: ${reset}. Nothing was requested.`);
     process.exit(result(3, { state: "refused_precheck", reason: reset, next: "this token's budgets are approved on this computer only: ask the owner to set this chain up without --hosted" }));
   }
-  if (!GAS.isUsdc && ownerGas === 0n) {
+  if (!GAS.isUsdc && ownerGas === 0n && !resuming()) {
     const reason = `the owner ${pub.owner} has no ${GAS.symbol} to pay the fee for the approval`;
     console.log(`REFUSED: ${reason}`);
     process.exit(result(3, { state: "refused_precheck", reason, next: `fund the owner with ${CFG.label} ${GAS.symbol}, then grant again (superstables budget doctor --rail evm names the faucet)` }));
   }
-  const startBlock = await publicClient.getBlockNumber();
+  // the block the owner's transaction must be mined after: kept with the approval for a worker that finishes it later
+  const startBlock = await requestFact("grant", () => publicClient.getBlockNumber());
   const { handle, outcome } = await askTransaction("grant", pub.owner, { to: USDC, data }, {
     title: "Grant a spending budget",
     amount: usdc(cap),

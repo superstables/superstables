@@ -34,7 +34,7 @@ import type { Address, Hex } from "viem";
 import { EVM_CHAINS } from "./chains.mjs";
 import { SYM, CFG, GAS, emit, arg, flag, AGENT_ENV, PUBLIC_ENV, OWNER_KEY_FILE, publicEnv, writePublic, need, newKey, ownerKeyEnv, agentFileValues, usdcBalance, nativeBalance, usdc, gasFmt, allowanceOf, allowanceAgreed, agreementWords, usuallyWords, toUsdc, usageError, assertRpcChain, assertReadChain, readChainProblem, publicClient, tx, oneLine } from "./lib.ts";
 import { askConnect, endUnapproved, closeOwnerPage, chainFlag, useApprovalSite, fundingTx, fundValue, DEFAULT_FUND_AMOUNT, grantTx, approveResetHostedProblem, grantEnforced, GRANT_NOT_ENFORCED, approveRow, capWords, checkFundSent, checkGrantSent, REVOKE_HINT, type SentCheck } from "./owner.ts";
-import { NEW_OWNER } from "../owner-page.ts";
+import { NEW_OWNER, requestFact, resuming } from "../owner-page.ts";
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from "../hosted.ts";
 import { chosenSite, isSiteRequestId, siteOrigin } from "../site.mjs";
 import { retiredProblem } from "../retired.mjs";
@@ -205,7 +205,9 @@ if (p.B4_AGENT_ADDRESS && !same(p.B4_AGENT_ADDRESS, agentAddr)) {
 // still records its owner, which only --new-owner replaces
 const recorded = p.B4_OWNER_ADDRESS && (!p.B4_AGENT_ADDRESS || same(p.B4_AGENT_ADDRESS, agentAddr)) ? (p.B4_OWNER_ADDRESS as Address) : undefined;
 if (recorded && (NEW_OWNER || (BUNDLE && CAP !== undefined))) await assertReadChain("setup"); // before the first allowance or balance read
-if (NEW_OWNER && recorded) {
+// A resumed worker (wait finishing an approval the owner already gave) asks nothing again, and the chain no longer reads as it
+// did before the owner approved, so the checks that refuse from the chain's state below are not run for it.
+if (NEW_OWNER && recorded && !resuming()) {
   // never move the owner while the agent can still spend from the old one
   const live = await allowanceOf(recorded, agentAddr).catch(() => null);
   if (live === null || live > 0n) {
@@ -242,7 +244,7 @@ if (BUNDLE) {
   }
   if (CAP !== undefined) {
     // a live allowance is never overwritten silently (grant refuses the same way), and an unreadable one is not taken as 0
-    if (!createdNow) {
+    if (!createdNow && !resuming()) {
       const refuse = (reason: string, next: string): never => {
         console.log(`REFUSED: ${reason}. Nothing was requested.`);
         return process.exit(emit("setup", 3, { state: "refused_precheck", reason, ...(recorded ? { owner: recorded } : {}), next }));
@@ -272,15 +274,19 @@ if (BUNDLE) {
     const g = grantTx(agentAddr, CAP);
     then.push({ kind: "grant", transaction: { to: g.to, data: g.data, value: "0x0" } });
   }
-  try {
-    await assertRpcChain();
-    startBlock = await publicClient.getBlockNumber();
-  } catch (e) {
-    const reason = `could not read ${CFG.label} before asking (${oneLine((e as Error).message, 300)}); the transactions could not be checked afterwards`;
-    console.log(`REFUSED: ${reason}. Nothing was requested.`);
-    process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: `superstables budget doctor --rail evm${chainFlag} checks the RPC; then run the same command again` }));
-  }
-  agentHad = await nativeBalance(agentAddr).catch(() => 0n);
+  // what the owner's transactions are checked against, kept with the approval for a worker that finishes it later
+  ({ startBlock, agentHad } = await requestFact("setup", async () => {
+    try {
+      await assertRpcChain();
+      startBlock = await publicClient.getBlockNumber();
+    } catch (e) {
+      const reason = `could not read ${CFG.label} before asking (${oneLine((e as Error).message, 300)}); the transactions could not be checked afterwards`;
+      console.log(`REFUSED: ${reason}. Nothing was requested.`);
+      process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: `superstables budget doctor --rail evm${chainFlag} checks the RPC; then run the same command again` }));
+    }
+    agentHad = await nativeBalance(agentAddr).catch(() => 0n);
+    return { startBlock, agentHad };
+  }));
   console.log(`one approval link: the owner adds this agent, then their wallet ${[FUND_AMT ? `sends it ${FUND_AMT} ${GAS.symbol} for gas` : "", CAP !== undefined ? `approves a budget of ${capWords(CAP)}` : ""].filter(Boolean).join(", then ")}. Transactions are checked from block ${startBlock + 1n} on.`);
 }
 

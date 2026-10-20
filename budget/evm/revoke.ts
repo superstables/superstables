@@ -17,6 +17,7 @@ import "./cli-guard.mjs";
 import { encodeFunctionData } from "viem";
 import { SYM, flag, emit, readCtx, ownerCtx, OWNER_KEY_FILE, allowanceOf, usdcBalance, usdc, readUntil, send, writePublic, erc20Abi, USDC, assertRpcChain, assertReadChain, tx, allowanceAgreed, finalityOf, thatTakes, usuallyWords } from "./lib.ts";
 import { revokeInWallet, chainFlag } from "./owner.ts";
+import { requestFact } from "../owner-page.ts";
 
 const p = readCtx();
 if (flag("plan")) {
@@ -27,7 +28,8 @@ if (flag("plan")) {
 }
 
 await assertRpcChain();
-const before = await allowanceOf(p.owner, p.agent);
+// kept with the approval: a worker that finishes a revoke the owner already approved reports the allowance as it was before
+const before = await requestFact("allowanceBefore", () => allowanceOf(p.owner, p.agent));
 console.log(`allowance before: ${usdc(before)} ${SYM}`);
 if (before === 0n) console.log(`the allowance reads 0 on this RPC; sending approve(agent, 0) anyway: one read is not proof that nothing is live`);
 let revokeTx: string;
