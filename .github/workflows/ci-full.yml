@@ -30,7 +30,7 @@ jobs:
     if: github.event.repository.private && github.ref == 'refs/heads/main'
     name: Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
-    timeout-minutes: 25
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

@@ -1,6 +1,6 @@
 {
   "name": "@superstables/client",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Superstables client: discover paid services, quote them, and pay from an owner-controlled wallet. CLI and agent skill.",
   "license": "Apache-2.0",
   "repository": { "type": "git", "url": "https://github.com/superstables/superstables.git" },
@@ -29,7 +29,9 @@
     "test:live": "SUPERSTABLES_LIVE=1 node scripts/test.mjs test/live",
     "dev": "tsx src/cli/main.ts",
     "skill": "node scripts/skill.mjs",
-    "skill:check": "node scripts/skill-check.mjs",
+    "skill:check": "node scripts/plugin-sync.mjs --check && node scripts/skill-check.mjs",
+    "plugin:sync": "node scripts/plugin-sync.mjs",
+    "plugin:check": "node scripts/plugin-sync.mjs --check",
     "install-check": "node scripts/install-check.mjs",
     "docs:cli": "node scripts/cli-docs.mjs",
     "audit:shipped": "node scripts/bundle-audit.mjs",

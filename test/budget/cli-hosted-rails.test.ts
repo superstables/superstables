@@ -55,9 +55,13 @@ afterEach(async () => {
   rmSync(home, { recursive: true, force: true });
 });
 
-function budget(args: string[]): Promise<{ code: number; stdout: string; stderr: string; result: any; approve: any }> {
+// A client process that loads this file does not spend the real minute `finalizedOf` waits for a signature that is only confirmed.
+const SKIP_FINALITY_WAIT = `--import=${fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url))}`;
+
+function budget(args: string[], o: { skipFinalityWait?: boolean } = {}): Promise<{ code: number; stdout: string; stderr: string; result: any; approve: any }> {
   return new Promise((done, fail) => {
     const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
+    if (o.skipFinalityWait) env.NODE_OPTIONS = [process.env.NODE_OPTIONS, SKIP_FINALITY_WAIT].filter(Boolean).join(" ");
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
@@ -459,7 +463,7 @@ describe("solana, hosted", () => {
     solana.confirmationStatus = "confirmed";
     write(file("keys", "budget", "solana-agent.env"), `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);
     write(file("budget", "public", "solana-devnet.env"), `SOLANA_OWNER_ADDRESS=${SOL_OWNER}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\nREVOKED_AT=1\nREVOKED_TX=oldRevoke\nREVOKED_SLOT=2\nGRANT_SLOT=3\n`, 0o644); // an older revoke and grant of this pair
-    const first = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, ...flags]);
+    const first = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, ...flags], { skipFinalityWait: true }); // the approval worker it starts waits for finality
     expect(first.code, first.stderr).toBe(0);
     solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: null, delegated: 0n });
     const r = site.requests[0];
