@@ -28,6 +28,16 @@ export interface QuoteDeps {
   policy: Policy;
   /** Take only an offer on this chain (its key, CAIP-2 id or x402 v1 name), when a seller offers several. */
   chain?: string;
+  /** A secret of the caller's that no seller has any business echoing: a challenge that holds it is refused before it is saved. */
+  secret?: string;
+}
+
+/** A seller's challenge held the caller's secret. Its words are neither saved nor repeated. */
+export class SecretEchoedError extends Error {
+  constructor() {
+    super("the seller's answer contained a secret this command holds, so it was discarded unread");
+    this.name = "SecretEchoedError";
+  }
 }
 
 /**
@@ -40,6 +50,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
   const { url, request, service } = resolveTarget(input);
 
   const challenge: SellerChallenge = await detectPayment(url);
+  if (deps.secret && JSON.stringify(challenge).includes(deps.secret)) throw new SecretEchoedError();
   const { chosen, others } = firstSupported(challenge, url, deps.chain);
 
   const asset = chosen.terms.asset;
