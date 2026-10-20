@@ -150,6 +150,11 @@ export interface PushRail extends RailCommon {
    * the referral the paid request carries, if any.
    */
   paymentMemo(offer: Offer, referralId?: string): string;
+  /**
+   * What a memo says about the seller's challenge alone, without the referral it carries: two memos with the same key
+   * are two transfers for one challenge, whatever referral each carried.
+   */
+  challengeKey(memo: string): string;
   /** How long to wait for the owner's transaction to show on chain before the seller is called. */
   readonly confirmWaitMs: number;
 }

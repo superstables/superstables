@@ -396,10 +396,11 @@ export class PaymentEngine {
     }
 
     // A push payment is found on chain by its memo, which the seller's challenge decides. A seller that hands out the
-    // same challenge again would make a second transfer indistinguishable from the first, so a memo an earlier attempt
-    // already used is refused before anyone is asked (and again, under the cap lock, right before the wallet is asked).
+    // same challenge again would make a second transfer indistinguishable from the first, so a challenge an earlier
+    // attempt already used is refused before anyone is asked (and again, under the cap lock, right before the wallet is
+    // asked). The referral is no part of that: an earlier attempt with another referral, or none, used it all the same.
     if (rail.flow === "push") {
-      const reused = this.records.attemptsWithMemo(rail.paymentMemo(offer, referral?.id), attempt.id)[0];
+      const reused = this.records.attemptsWithMemo(rail.paymentMemo(offer, referral?.id), attempt.id, rail.challengeKey)[0];
       if (reused) {
         this.settleState(attempt, "failed", { refusal: "invalid", reason: reusedChallenge(reused.id) });
         return;
@@ -498,7 +499,7 @@ export class PaymentEngine {
             const judged = await withFileLock(join(this.records.dir, CAP_LOCK), () => {
               if (isFinal(attempt.state)) return { allowed: false, final: true };
               if (attempt.state === "approved") return { allowed: attempt.payer === intent.payer && attempt.paymentMemo === intent.memo };
-              const reused = this.records.attemptsWithMemo(intent.memo!, attempt.id)[0];
+              const reused = this.records.attemptsWithMemo(intent.memo!, attempt.id, rail.challengeKey)[0];
               if (reused) return { allowed: false, reused: reusedChallenge(reused.id) };
               const checked = this.reservationOpen(attempt) ? { allowed: true } : this.reserve(attempt, quote);
               if (checked.allowed) {
@@ -1047,10 +1048,13 @@ function attributedCheck(records: Records, attempt: Attempt, rail: RailAdapter, 
   return owner ? { chain: "mismatch", reason: `transaction ${transaction} is already recorded as the payment of attempt ${owner}` } : check;
 }
 
-/** Does the signed payment carry this referral on chain: in its EIP-3009 nonce, its Solana memo or its Tempo memo? */
+/**
+ * Does the signed payment carry this referral on chain: in its EIP-3009 nonce, its Solana memo or its Tempo memo? A memo
+ * the seller fixed is the seller's, however much it looks like the marker.
+ */
 function carriesReferral(signed: SignResult, referralId: string, offer: Offer, rail: RailAdapter): boolean {
   if (signed.kind === "eip3009") return nonceReferral(String(signed.payload.authorization.nonce ?? "")) === referralId;
-  if (signed.kind === "solana-transaction") return memoReferral(signed.memo) === referralId;
+  if (signed.kind === "solana-transaction") return (offer.requirement as { extra?: { memo?: unknown } }).extra?.memo === undefined && memoReferral(signed.memo) === referralId;
   return rail.flow === "push" && signed.memo.toLowerCase() === rail.paymentMemo(offer, referralId).toLowerCase();
 }
 

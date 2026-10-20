@@ -15,7 +15,7 @@ import { inclusion } from "../finality.js";
 import { encodeFunctionData, getAddress, keccak256, toBytes, toHex, type Hex } from "viem";
 import { TEMPO_MODERATO, fromAtomic, isAddress, isTransactionId, mainnetName } from "../chain.js";
 import { hashCredential, type MppChallenge } from "../mpp.js";
-import { tempoClientId } from "../referral-memo.mjs";
+import { tempoChallengeKey, tempoClientId } from "../referral-memo.mjs";
 import { rpcCall, verifiedRpc } from "../rpc.js";
 import { searchLogs } from "../log-windows.mjs";
 import type { ChainCheck } from "../settlement.js";
@@ -341,6 +341,8 @@ export const tempoRail: PushRail = {
     const challenge = offer.requirement as MppChallenge;
     return mppMemo(challenge.id, challenge.realm, tempoClientId(referralId));
   },
+
+  challengeKey: tempoChallengeKey,
 
   isTransaction(value: unknown): value is string {
     return isTransactionId(TEMPO_MODERATO.caip2, value);

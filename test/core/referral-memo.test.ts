@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { budgetMemo, memoReferral, referralIdBytes, solanaMemo, tempoClientId } from "../../src/core/referral-memo.mjs";
+import { budgetMemo, memoReferral, referralIdBytes, solanaMemo, tempoChallengeKey, tempoClientId } from "../../src/core/referral-memo.mjs";
 import { PURCHASE_REF_HEADER, REFERRAL_HEADER, operationReferral, paidReferralHeaders, referralFor } from "../../src/core/referral-store.mjs";
 import { mppMemo } from "../../src/core/rails/tempo.js";
 import { PURCHASE_REF_HEADER as SELLER_PURCHASE_REF_HEADER, REFERRAL_HEADER as SELLER_REFERRAL_HEADER } from "../../src/seller/referral.js";
@@ -102,6 +102,18 @@ describe("the Tempo memo", () => {
     expect(memo).toBe(Attribution.encode({ challengeId, serverId: realm }));
     expect(memo.slice(32, 52)).toBe("0".repeat(20));
     expect(mppMemo(challengeId, realm, tempoClientId("ref_bad"))).toBe(memo);
+  });
+
+  it("keys a memo by its challenge alone: the same under any referral or none, different for another challenge or realm", () => {
+    const none = mppMemo(challengeId, realm);
+    const key = tempoChallengeKey(none);
+    expect(key).toBe(none);
+    expect(tempoChallengeKey(mppMemo(challengeId, realm, tempoClientId(ref)))).toBe(key);
+    expect(tempoChallengeKey(mppMemo(challengeId, realm, tempoClientId("ref_BAAAAAAAAAAAAAAAAAAAAA")))).toBe(key);
+    expect(tempoChallengeKey(mppMemo(challengeId, realm, tempoClientId(ref)).toUpperCase().replace("0X", "0x"))).toBe(key);
+    expect(tempoChallengeKey(mppMemo("ch_124", realm))).not.toBe(key);
+    expect(tempoChallengeKey(mppMemo(challengeId, "other.example"))).not.toBe(key);
+    expect(tempoChallengeKey("0xABC")).toBe("0xabc");
   });
 });
 

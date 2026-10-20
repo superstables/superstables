@@ -16,6 +16,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { DEFAULT_NETWORK } from "../../src/core/chain.js";
 import { Records, attemptRunner } from "../../src/core/records.js";
 import { formatReport } from "../../src/cli/doctor.js";
+import { referralKey, signReferral } from "../helpers/referrals.js";
 import { sendJson, startFacilitator, startPaidEndpoint, startServer, type TestServer } from "../helpers/servers.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -738,6 +739,74 @@ describe("the account's own spend policy", () => {
 
     const alone = await run(["policy", "show"], { SUPERSTABLES_TEST_ACCOUNT_HOME: join(home, "nobody") });
     expect(alone.stdout).not.toContain("also applies");
+  }, 90_000);
+});
+
+// ── A referral token goes to the seller on the paid request, and nowhere else ───────
+
+describe("find and quote output for a listing that carries a referral", () => {
+  const servers: TestServer[] = [];
+  let seller!: Awaited<ReturnType<typeof startPaidEndpoint>>;
+  let token = "";
+  let indexUrl = "";
+
+  beforeAll(async () => {
+    const facilitator = await startFacilitator();
+    seller = await startPaidEndpoint(facilitator.url);
+    token = signReferral(referralKey(), { aud: new URL(seller.url).origin, jti: "ref_AAECAwQFBgcICQoLDA0ODw" }).token;
+    const index = await startServer((_req, res) =>
+      sendJson(res, 200, {
+        services: [{
+          id: new URL(seller.url).host,
+          name: "Market data",
+          description: "A paid endpoint.",
+          endpoint: `${seller.url}/v1/market`,
+          rails: ["x402"],
+          chains: ["base-sepolia"],
+          live: true,
+          referral: { token, expires_at: new Date(Date.now() + 3600_000).toISOString(), terms: "terms-1" },
+        }],
+      }),
+    );
+    servers.push(facilitator, seller, index);
+    indexUrl = `${index.url}/api/v1/services`;
+  });
+
+  afterAll(async () => {
+    await Promise.all(servers.map((server) => server.close()));
+  });
+
+  it("never prints the token, in the table or in --json, and still quotes under the referral", async () => {
+    const env = { SUPERSTABLES_INDEX_URL: indexUrl, SUPERSTABLES_DEMO_SERVICES: "off", SUPERSTABLES_APPROVE_PORT: "0" };
+    const quoted = (r: Run) => `${r.stdout}\n${r.stderr}`;
+
+    const table = await run(["find", "zzqx", "--all"], env);
+    expect(table.code).toBe(0);
+    expect(table.stdout).toContain(new URL(seller.url).host);
+    expect(quoted(table)).not.toContain(token);
+
+    const found = await run(["find", "zzqx", "--all", "--json"], env);
+    expect(found.code).toBe(0);
+    const { services } = JSON.parse(found.stdout) as { services: { id: string; referral?: Record<string, unknown> }[] };
+    const listed = services.find((svc) => svc.id === new URL(seller.url).host);
+    // The listing says that it has a referral, with its expiry and terms, and nothing that is the token
+    expect(listed?.referral).toEqual({ expiresAt: expect.any(String), terms: "terms-1" });
+    expect(quoted(found)).not.toContain(token);
+    expect(quoted(found)).not.toContain(token.split(".")[1]!);
+
+    // The find above remembered it for this home: a quote for the seller carries it, and prints no token
+    const url = `${seller.url}/v1/market?asset=BTC`;
+    const asJson = await run(["quote", url, "--json"], env);
+    expect(asJson.code).toBe(0);
+    const quote = JSON.parse(asJson.stdout) as { id: string; referral?: { id: string; listingId: string; terms: string } };
+    expect(quote.referral).toMatchObject({ id: "ref_AAECAwQFBgcICQoLDA0ODw", terms: "terms-1" });
+    expect(quoted(asJson)).not.toContain(token);
+    expect(quoted(asJson)).not.toContain(token.split(".")[1]!);
+
+    const asText = await run(["quote", url], env);
+    expect(asText.code).toBe(0);
+    expect(quoted(asText)).not.toContain(token);
+    expect(quoted(asText)).not.toContain(token.split(".")[1]!);
   }, 90_000);
 });
 

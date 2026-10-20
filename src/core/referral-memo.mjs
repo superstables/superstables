@@ -84,3 +84,14 @@ export function memoReferral(memo) {
 export function tempoClientId(id) {
   return idBody(id) ? `${TEMPO_CLIENT_ID_PREFIX}${id}` : undefined;
 }
+
+/**
+ * A Tempo memo with its client-id slot (bytes 15 to 24) zeroed, lowercased: what it says about the seller's challenge (id
+ * and realm) alone. The same challenge has the same key under any referral, or none.
+ * @param {string} memo
+ * @returns {string}
+ */
+export function tempoChallengeKey(memo) {
+  const hex = memo.toLowerCase();
+  return /^0x[0-9a-f]{64}$/.test(hex) ? `${hex.slice(0, 32)}${"0".repeat(20)}${hex.slice(52)}` : hex;
+}

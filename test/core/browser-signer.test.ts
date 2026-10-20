@@ -342,6 +342,25 @@ describe("the browser-wallet signer", () => {
     expect(await recoverTypedDataAddress({ ...typedData, signature: result.payload.signature as `0x${string}` } as never)).toBe(account.address);
   });
 
+  it("refuses a signature over another nonce than the one asked for, and keeps waiting for the right one", async () => {
+    const signer = newSigner();
+    const account = privateKeyToAccount(generatePrivateKey());
+    const nonce = referralNonce("ref_AAECAwQFBgcICQoLDA0ODw");
+    let link = "";
+    const pending = signer.sign({ ...signRequest(), nonce }, { onPending: (_id, url) => (link = url ?? "") });
+    await waitFor(() => link !== "");
+
+    const typedData = await connect(link, account);
+    const own = await signWith(account, { ...typedData, message: { ...typedData.message, nonce: referralNonce() } });
+    const refused = await postJson(`${link}/signature`, { address: account.address, signature: own });
+    expect(refused.status).toBe(400);
+    expect((await getJson(`${link}/state`)).body.status).toBe("pending");
+
+    const signature = await signWith(account, typedData);
+    expect((await postJson(`${link}/signature`, { address: account.address, signature })).status).toBe(200);
+    expect(((await pending).payload.authorization as Record<string, string>).nonce).toBe(nonce);
+  });
+
   it("refuses a signature from another key, and keeps waiting for the right one", async () => {
     const signer = newSigner();
     const account = privateKeyToAccount(generatePrivateKey());
