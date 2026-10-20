@@ -121,10 +121,11 @@ function hostedFor(settings: Omit<HostedSettings, "auditPath" | "onRecord">): Ho
       ...settings,
       // from the moment the request is checked and in hand, what this worker ends with (a refusal included) is the approval's result
       ...(hosted ? { resume: hosted, onTakeover: () => recordTakenOver(holder!) } : {}),
-      // Time running out, or a site that cannot be read, is no answer about the request: the worker of an approval a later wait can
-      // finish leaves with no result (the dispatcher records none) and that wait reads the request again.
+      // Time running out, or a site that cannot be read, is no answer about the request: a restarted worker leaves with no
+      // result (the dispatcher records none) and the next wait reads the request again.
       onUnresolved: (why) => {
-        if (!holder || !canResume(readApproval(holder))) return;
+        // only a restarted worker: a first worker that is still running ends as it always did, with its own unknown
+        if (!resuming() || !holder || !canResume(readApproval(holder))) return;
         process.stderr.write(`superstables budget: approval ${holder}: ${why}; this worker recorded no result, and budget wait checks the request again\n`);
         process.exit(5);
       },
