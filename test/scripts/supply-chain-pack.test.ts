@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { unzipSync } from "fflate";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -33,7 +33,7 @@ afterAll(() => {
 });
 
 describe("the npm package", () => {
-  it("holds no source map, and holds the SBOM", () => {
+  it("holds no source map, holds the SBOM, and holds the shrinkwrap that pins the indirect dependencies", () => {
     const r = spawnSync("npm", ["pack", "--dry-run", "--json"], { cwd: copy, env: cleanEnv, encoding: "utf8", timeout: 120_000 });
     expect(r.status, r.stderr).toBe(0);
     // npm 10 prints prepack's own output to stdout before the JSON
@@ -44,6 +44,27 @@ describe("the npm package", () => {
     const paths: string[] = packed.files.map((f: { path: string }) => f.path);
     expect(paths.filter((p) => p.endsWith(".map"))).toEqual([]);
     expect(paths).toContain("dist/sbom.cdx.json");
+    expect(paths).toContain("npm-shrinkwrap.json");
+    expect(paths).not.toContain("package-lock.json");
+  }, 150_000);
+
+  it("packs a production-only shrinkwrap derived from package-lock.json, and leaves none behind", async () => {
+    const out = mkdtempSync(join(tmpdir(), "superstables-shrinkwrap-pack-"));
+    try {
+      const r = spawnSync("npm", ["pack", "--pack-destination", out], { cwd: copy, env: cleanEnv, encoding: "utf8", timeout: 120_000 });
+      expect(r.status, r.stderr).toBe(0);
+      const tgz = join(out, readdirSync(out).find((f) => f.endsWith(".tgz"))!);
+      const packed = execFileSync("tar", ["-xzOf", tgz, "package/npm-shrinkwrap.json"], { encoding: "utf8" });
+      const lockText = readFileSync(join(root, "package-lock.json"), "utf8");
+      const { shrinkwrapText } = await import(pathToFileURL(join(root, "scripts", "shrinkwrap.mjs")).href);
+      expect(packed, "the packed shrinkwrap is package-lock.json without its dev and optional entries").toBe(shrinkwrapText(lockText));
+      const packages = JSON.parse(packed).packages as Record<string, any>;
+      expect(Object.entries(packages).filter(([k, v]) => k && (v.dev || v.optional || v.devOptional)).map(([k]) => k)).toEqual([]);
+      expect(packages[""].devDependencies).toBeUndefined();
+      expect(existsSync(join(copy, "npm-shrinkwrap.json")), "postpack removes it from the checkout").toBe(false);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
   }, 150_000);
 });
 

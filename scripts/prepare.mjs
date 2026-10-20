@@ -6,7 +6,8 @@
 // `prepack` (node scripts/prepare.mjs --pack) runs on `npm pack` and `npm publish`, before the tarball is made. It
 // empties dist/ and builds, and refuses when the build tools are missing, so a tarball only ever holds what this build
 // produced: never a file an earlier build or a person left in dist/ (dist/ is ignored by git, so nothing else would
-// notice one).
+// notice one). It then writes npm-shrinkwrap.json, the production-only lockfile that goes into the tarball
+// (scripts/shrinkwrap.mjs); `postpack` removes it again.
 //
 // `prepare` (node scripts/prepare.mjs) runs:
 //   - on `npm install` or `npm ci` in a checkout (dev packages included, unless --omit=dev),
@@ -25,6 +26,7 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanBuild } from "./package-root.mjs";
+import { writeShrinkwrap } from "./shrinkwrap.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(join(root, "package.json"));
@@ -48,6 +50,7 @@ const missing = tools.filter((name) => {
 if (missing.length === 0) {
   // `npm run build`, without going through npm again, into an empty dist/: tsc, then the budget build.
   cleanBuild(root);
+  if (pack) writeShrinkwrap(root);
 } else if (pack) {
   console.error(`prepack: refusing to pack: the build tools are not installed (${missing.join(", ")}: dev packages), so dist/ cannot be rebuilt from the sources.`);
   console.error("prepack: run npm ci (with dev packages) and pack again.");

@@ -5,6 +5,9 @@
 //              then the command through `npm exec` in the checkout, with --no, so npx never downloads a package of that name
 //   tarball    npm pack in that checkout, then npm install <tgz> in an empty folder
 //   global     the same tarball, npm install -g into an empty prefix, the way the README installs it from npm
+//   registry   the same tarball served by a registry on 127.0.0.1 that reports it has a shrinkwrap, as registry.npmjs.org
+//              does, then `npx --yes @superstables/client@<version>` with an empty npm cache. npm honours the shrinkwrap
+//              only for a package that comes from a registry, so this is the route that shows what npx installs.
 //   omit-dev   the same checkout after npm prune --omit=dev: no tsx, no budget-only packages, so budget runs dist/budget
 //   git        npm install git+file://...#<commit> in an empty folder: npm clones, installs the dev packages, runs
 //              `prepare` (the build) and installs what it packs. It installs HEAD, committed changes only.
@@ -15,16 +18,17 @@
 //                                            a RESULT line and exit 0 or 1, never a crash)
 // and checks what the route must and must not install. Every command has a time limit, so nothing can hang.
 //
-// node scripts/install-check.mjs [checkout] [tarball] [global] [omit-dev] [git] [--keep]   (no route named: all five)
+// node scripts/install-check.mjs [checkout] [tarball] [global] [registry] [omit-dev] [git] [--keep]   (no route named: all six)
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isProduction } from "./shrinkwrap.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ROUTES = ["checkout", "tarball", "global", "omit-dev", "git"];
+const ROUTES = ["checkout", "tarball", "global", "registry", "omit-dev", "git"];
 const args = process.argv.slice(2);
 const keep = args.includes("--keep");
 const unknown = args.filter((a) => a !== "--keep" && !ROUTES.includes(a));
@@ -117,30 +121,37 @@ function installedVersions(nodeModules) {
   return found;
 }
 
-// What package-lock.json says an install of the client gets: its production entries (no dev, no optional peers).
+// What the lockfile (package-lock.json, which the published npm-shrinkwrap.json is derived from) says an install of the
+// client gets: its production entries (no dev, no optional peers).
 const tested = new Set(
   Object.entries(JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8")).packages)
-    .filter(([k, v]) => k && !v.dev && !v.optional && !v.devOptional)
+    .filter(([k, v]) => k && isProduction(v))
     .map(([k, v]) => `${k.slice(k.lastIndexOf("node_modules/") + "node_modules/".length)}@${v.version}`),
 );
 
 /**
  * Checks an installed @superstables/client: dist/budget with its notices, no budget-only packages. `nodeModules` is the
  * node_modules it was installed into; a global install puts the package's own dependencies in its own node_modules.
+ * `fromShrinkwrap` is true for an install that npm resolved from the package's npm-shrinkwrap.json (a registry install):
+ * npm then puts the client's dependencies in the client's own node_modules, which it does not for an install from a file.
+ * `hasShrinkwrap` is false for the git route: npm runs `prepare` there and not `prepack`, so what it packs from the clone
+ * has no shrinkwrap, and the install resolves its dependencies when it runs.
  */
-function checkInstalled(route, nodeModules) {
+function checkInstalled(route, nodeModules, { fromShrinkwrap = false, hasShrinkwrap = true } = {}) {
   const pkg = join(nodeModules, "@superstables", "client");
   check(route, "the package has dist/budget/cli.mjs", existsSync(join(pkg, "dist", "budget", "cli.mjs")));
   check(route, "the package has dist/budget/THIRD_PARTY_NOTICES.txt", existsSync(join(pkg, "dist", "budget", "THIRD_PARTY_NOTICES.txt")));
   check(route, "the package has no budget/ sources", !existsSync(join(pkg, "budget")));
+  check(route, hasShrinkwrap ? "the package has npm-shrinkwrap.json" : "the package has no npm-shrinkwrap.json (git installs are not pinned)", existsSync(join(pkg, "npm-shrinkwrap.json")) === hasShrinkwrap);
   const present = BUDGET_ONLY.filter((p) => existsSync(join(nodeModules, p)) || existsSync(join(pkg, "node_modules", p)));
   check(route, "no budget-only package installed", present.length === 0, present.join(", "));
+  if (fromShrinkwrap) check(route, "npm honoured the shrinkwrap: the client has its own node_modules", existsSync(join(pkg, "node_modules")));
   // A dependency range somewhere down the tree that a newer release now satisfies shows here, as a package that the
   // lockfile (the tested set) does not name.
   const got = installedVersions(nodeModules);
   const extra = [...got].filter((p) => !tested.has(p));
   const missing = [...tested].filter((p) => !got.has(p));
-  check(route, "installs exactly the versions package-lock.json resolved", !extra.length && !missing.length, [...extra.map((p) => `+${p}`), ...missing.map((p) => `-${p}`)].join(" "));
+  check(route, `installs exactly the production versions package-lock.json resolved${fromShrinkwrap ? " (the published shrinkwrap)" : ""}`, !extra.length && !missing.length, [...extra.map((p) => `+${p}`), ...missing.map((p) => `-${p}`)].join(" "));
 }
 
 // ---- the checkout copy: the files git knows about or would add, as they are on disk now ----------------------------
@@ -178,6 +189,25 @@ function packCheckout() {
   return tarball;
 }
 
+/** Starts scripts/local-registry.mjs for the tarball; resolves to its URL once it listens. */
+let registry = null;
+async function startRegistry(tgz) {
+  const child = spawn(process.execPath, [join(root, "scripts", "local-registry.mjs"), tgz], { stdio: ["ignore", "pipe", "inherit"] });
+  registry = child;
+  const url = await new Promise((done, fail) => {
+    let out = "";
+    child.stdout.on("data", (chunk) => {
+      out += chunk;
+      if (out.includes("\n")) done(out.trim());
+    });
+    child.on("error", fail);
+    child.on("exit", (code) => fail(new Error(`the local registry exited (${code}) before it listened`)));
+  });
+  console.log(`\ninstall-check: local registry for ${tgz} at ${url}`);
+  return url;
+}
+process.on("exit", () => registry?.kill());
+
 const version = JSON.parse(execFileSync("node", ["-p", "JSON.stringify(require('./package.json').version)"], { cwd: root, encoding: "utf8" }));
 
 for (const route of routes) {
@@ -201,6 +231,18 @@ for (const route of routes) {
       checkInstalled(route, join(prefix, "lib", "node_modules"));
       exercise(route, [join(prefix, "bin", "superstables")], { version: new RegExp(`^superstables budget ${version.replace(/\./g, "\\.")} \\(standalone build`), cwd: emptyDir("run-global") });
     }
+    if (route === "registry") {
+      const tgz = packCheckout();
+      const url = await startRegistry(tgz);
+      const cache = emptyDir("npm-cache-registry");
+      const env = { ...cleanEnv, npm_config_cache: cache };
+      sh("npx", ["--yes", `--@superstables:registry=${url}`, `@superstables/client@${version}`, "--help"], emptyDir("run-registry"), env);
+      const installs = readdirSync(join(cache, "_npx"));
+      check(route, "npx made one install in its cache", installs.length === 1, installs.join(", "));
+      const nodeModules = join(cache, "_npx", installs[0], "node_modules");
+      checkInstalled(route, nodeModules, { fromShrinkwrap: true });
+      exercise(route, [join(nodeModules, ".bin", "superstables")], { version: new RegExp(`^superstables budget ${version.replace(/\./g, "\\.")} \\(standalone build`), cwd: emptyDir("run-registry-commands") });
+    }
     if (route === "omit-dev") {
       prepareCheckout();
       sh("npm", ["prune", "--omit=dev", "--no-audit", "--no-fund"], checkoutDir);
@@ -222,7 +264,7 @@ for (const route of routes) {
       sh("git", ["branch", "install-check", sha], src);
       const dir = emptyDir("install-git");
       sh("npm", ["install", "--no-audit", "--no-fund", `git+${pathToFileURL(src).href}#install-check`], dir);
-      checkInstalled(route, join(dir, "node_modules"));
+      checkInstalled(route, join(dir, "node_modules"), { hasShrinkwrap: false });
       exercise(route, [join(dir, "node_modules", ".bin", "superstables")], { version: new RegExp(`^superstables budget ${version.replace(/\./g, "\\.")} \\(standalone build, commit ${sha.slice(0, 7)}`), cwd: emptyDir("run-git") });
     }
   } catch (err) {
@@ -235,6 +277,8 @@ for (const route of routes) {
   const mine = results.filter((r) => r.route === route);
   console.log(`  ${mine.every((r) => r.ok) && mine.length ? "ok  " : "FAIL"}  ${route} (${mine.filter((r) => r.ok).length}/${mine.length} checks)`);
 }
+// the local registry's child process and its stdout pipe would keep node running after the last route
+registry?.kill();
 if (keep) console.log(`\nkept ${work}`);
 else rmSync(work, { recursive: true, force: true });
 if (failures.length) {

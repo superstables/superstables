@@ -7,3 +7,4 @@ coverage/
 .DS_Store
 build/
 scratch/
+/npm-shrinkwrap.json
