@@ -141,6 +141,29 @@ describe("the approval page for a Solana payment", () => {
     expect(await post(`${link}/prepare`, { address: solanaKey().address })).toMatchObject({ status: 400 });
   });
 
+  it("writes the referral's marker unless the seller's memo is a string", async () => {
+    // A memo that is not a string is not the seller's: the offer check refuses it, and the step would not send it as one.
+    const judged = judgeAccept(sellerAccept(), 2);
+    if (!judged.supported) throw new Error(judged.reason);
+    const requirement = judged.offer.requirement as { extra: Record<string, unknown> };
+    for (const memo of [42, null, { text: "order-7" }]) {
+      const handle = server.request({
+        kind: "solana-transaction",
+        verified: { ...judged.offer.terms, payer: "" },
+        reported: { target: "https://seller.example/paid", serviceName: "Claimed by the agent" },
+        requirement: { ...requirement, extra: { ...requirement.extra, memo } } as never,
+        x402Version: 2,
+        timeoutMs: 60_000,
+        referralId: "ref_AAECAwQFBgcICQoLDA0ODw",
+      });
+      const transaction = await prepared(handle.url);
+      const built = VersionedTransaction.deserialize(Buffer.from(transaction, "base64"));
+      const keys = built.message.staticAccountKeys.map((k) => k.toBase58());
+      const memoIx = built.message.compiledInstructions.find((ix) => keys[ix.programIdIndex] === "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")!;
+      expect(Buffer.from(memoIx.data).toString(), JSON.stringify(memo)).toMatch(/^ss1AAECAwQFBgcICQoLDA0ODw[A-Za-z0-9_-]{7}$/);
+    }
+  });
+
   it("builds nothing on an RPC that is not Solana devnet, nor when devnet does not answer", async () => {
     const { link } = waiting();
     expect((await post(`${link}/account`, { address: owner.address })).status).toBe(200);
