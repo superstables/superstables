@@ -204,25 +204,32 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
   try {
     const head = await blockAt(rpc.url, "latest", options);
     if (!head) return unreadable;
-    const usedAt = async (block: bigint) =>
+    const usedOn = async (url: string, block: bigint) =>
       decodeFunctionResult({
         abi: AUTHORIZATION_STATE_ABI,
         functionName: "authorizationState",
         data: (await rpcCall<string>(
-          rpc.url,
+          url,
           "eth_call",
           [{ to: network.usdc.address, data: encodeFunctionData({ abi: AUTHORIZATION_STATE_ABI, functionName: "authorizationState", args: [input.payer as `0x${string}`, input.nonce as `0x${string}`] }) }, hex(block)],
           options,
         )) as `0x${string}`,
       });
-    if (!(await usedAt(head.number))) {
+    // State at the final block is read where the chain keeps it (verifiedRpc `state`), which is not always the primary.
+    let stateRpc: Promise<{ url: string } | { error: string }> | undefined;
+    const usedAtFinal = async (block: bigint) => {
+      const at = await (stateRpc ??= verifiedRpc(network, { ...choice, state: true }));
+      if ("error" in at) throw new Error(at.error);
+      return usedOn(at.url, block);
+    };
+    if (!(await usedOn(rpc.url, head.number))) {
       const validBefore = Date.parse(input.validBefore ?? "") / 1000;
       if (!Number.isFinite(validBefore)) return { found: false, reason: "the chain shows the owner's authorization unused so far" };
       const priorBlock = typeof input.paymentBlock === "string" && /^0x[0-9a-fA-F]+$/.test(input.paymentBlock) ? BigInt(input.paymentBlock) : undefined;
       // (this one never releases a hold: the payment turns uncertain, and stays counted, on one endpoint's word)
       if (priorBlock !== undefined) {
         const final = await finalBlock(rpc.url, network, head, options);
-        if (final && final.number > priorBlock && !(await usedAt(final.number))) return { found: false, inclusionGone: true, reason: "the authorization is unused at a final head past the earlier payment block" };
+        if (final && final.number > priorBlock && !(await usedAtFinal(final.number))) return { found: false, inclusionGone: true, reason: "the authorization is unused at a final head past the earlier payment block" };
       }
       if (head.timestamp < validBefore) return { found: false, reason: `the chain shows the owner's authorization unused so far; it can still be used until ${iso(validBefore)}` };
       // Past validBefore by the latest block. "Never" is the word of a final block: one dated at or past validBefore,
@@ -231,7 +238,7 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
       if (!final || final.timestamp < validBefore) {
         return { found: false, reason: `the chain shows the owner's authorization unused, and past its expiry at ${iso(validBefore)}, but no final block confirms that yet` };
       }
-      if (await usedAt(final.number)) return unreadable;
+      if (await usedAtFinal(final.number)) return unreadable;
       // One RPC shows it. A "never" that releases the hold needs the verdict set to agree at a final block of its own.
       const dead = await confirmAuthorizationDead(network, { payer: input.payer, nonce: input.nonce, validBefore }, choice);
       if (dead.dead) {
@@ -255,7 +262,7 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
       const at = typeof log.blockNumber === "string" && /^0x[0-9a-fA-F]+$/.test(log.blockNumber) ? BigInt(log.blockNumber) : undefined;
       if (!final || at === undefined || at > final.number || log.removed === true || !isHash(log.blockHash)) return false;
       const block = await blockAt(rpc.url, at, options);
-      return !!block?.hash && same(block.hash, log.blockHash) && (await usedAt(final.number));
+      return !!block?.hash && same(block.hash, log.blockHash) && (await usedAtFinal(final.number));
     };
     const since = Date.parse(input.since ?? "") / 1000;
     const start = Number.isFinite(since) ? await firstBlockFrom(rpc.url, since - SEARCH_MARGIN_S, head, network, options) : 0n;

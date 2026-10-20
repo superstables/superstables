@@ -2,9 +2,10 @@
 // endpoint that answers another chain, and say so in words.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BASE_SEPOLIA, TEMPO_MODERATO } from "../../src/core/chain.js";
+import { ARBITRUM_SEPOLIA, BASE_SEPOLIA, ROBINHOOD_TESTNET, TEMPO_MODERATO } from "../../src/core/chain.js";
 import { forgetIdentities } from "../../src/core/rpc-quorum.mjs";
 import { findAuthorization } from "../../src/core/settlement.js";
+import { verifiedRpc } from "../../src/core/rpc.js";
 import { tempoRail } from "../../src/core/rails/tempo.js";
 import { startFakeBaseSepolia } from "../helpers/fake-base-sepolia.js";
 import type { TestServer } from "../helpers/servers.js";
@@ -77,5 +78,18 @@ describe("balances", () => {
     vi.stubEnv("SUPERSTABLES_RPC_URL", wrong.url);
     const { usdcBalance, BASE_SEPOLIA: network } = await import("../../src/core/chain.js");
     await expect(usdcBalance(PAYER, network)).rejects.toThrow(/answers chain id 1/);
+  });
+});
+
+describe("the endpoint for state at the final block", () => {
+  it("is dRPC on Robinhood Chain Testnet, whose official RPC keeps only recent state; elsewhere it is the primary", async () => {
+    const calls: string[] = [];
+    const chainOf = (url: string) => (url.includes("robinhood") ? ROBINHOOD_TESTNET.chainId : ARBITRUM_SEPOLIA.chainId);
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => inMemory(() => `0x${chainOf(String(input)).toString(16)}`, calls)(input, init)) as typeof fetch;
+    expect(await verifiedRpc(ROBINHOOD_TESTNET, { fetchImpl })).toEqual({ url: "https://rpc.testnet.chain.robinhood.com" });
+    expect(await verifiedRpc(ROBINHOOD_TESTNET, { fetchImpl, state: true })).toEqual({ url: "https://robinhood-testnet.drpc.org" });
+    expect(await verifiedRpc(ARBITRUM_SEPOLIA, { fetchImpl, state: true })).toEqual({ url: "https://sepolia-rollup.arbitrum.io/rpc" });
+    // each is asked which chain it is on first
+    expect(calls).toContain("https://robinhood-testnet.drpc.org eth_chainId");
   });
 });

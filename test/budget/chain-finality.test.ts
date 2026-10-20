@@ -174,6 +174,20 @@ describe("budget EVM finality", () => {
     rpc.getTransactionReceipt.mockResolvedValue(receipt());
     expect((await (await ops()).readSettlement(journal())).canceled).toBe(false);
   });
+  it("reads a final cancellation's nonce state through the agreeing endpoints, not the RPC, which may keep only recent state", async () => {
+    // Robinhood Chain Testnet's official RPC answers the latest state (block 110) but not the finalized block's (100).
+    rpc.getBlock.mockImplementation(async ({ blockTag, blockNumber }) => ({ number: blockNumber ?? (blockTag === "finalized" ? 100n : 110n), timestamp: 2000n, hash: BLOCK_HASH }));
+    rpc.readContract.mockImplementation(async ({ blockNumber }) => {
+      if (blockNumber !== undefined && blockNumber < 110n) throw new Error("historical state is not available");
+      return true;
+    });
+    rpc.getLogs.mockImplementation(async ({ event }) => event.name === "AuthorizationCanceled" ? [used("AuthorizationCanceled")] : []);
+    rpc.getTransactionReceipt.mockResolvedValue(receipt([used("AuthorizationCanceled")]));
+    const stateAgreed = vi.fn(async () => ({ agreed: true, value: true, block: { number: 100n, hash: BLOCK_HASH, timestamp: 2000, highest: 100n }, agreement: "single", operators: ["drpc"] }));
+    vi.doMock("../../budget/evm/lib.js", async (original) => ({ ...await original<object>(), OPS_DIR: dir, publicClient: rpc, ...agreedFromClient(rpc, TOKEN), authorizationStateAgreed: stateAgreed, sendJournaled, usdcBalance, allowanceOf: async () => 10000n, USDC: TOKEN, sleep: async () => {}, retry: async <T,>(f: () => Promise<T>) => f(), readUntil: async <T,>(read: () => Promise<T>) => read() }));
+    expect(await (await ops()).readSettlement(journal())).toMatchObject({ kind: "canceled", used: false, canceled: true, final: true });
+    expect(stateAgreed).toHaveBeenCalledWith(AGENT, NONCE, 100n);
+  });
   it("identifies the different final nonce-consuming transaction before proving no pull", async () => {
     const replacement: Hex = `0x${"12".repeat(32)}`;
     rpc.getTransactionReceipt.mockImplementation(async ({ hash }) => hash === HASH ? null : { ...receipt([]), transactionHash: replacement, blockNumber: 80n });

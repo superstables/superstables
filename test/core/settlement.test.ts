@@ -164,6 +164,27 @@ describe("findAuthorization", () => {
     expect(await find({ validBefore: undefined })).toEqual({ found: false, reason: "the chain shows the owner's authorization unused so far" });
   });
 
+  it("reads state at the final block through the set's state endpoint when the primary keeps only recent state", async () => {
+    chain = await startFakeBaseSepolia();
+    // Robinhood Chain Testnet's official RPC: the latest state and the logs, but no state at the finalized block.
+    const pruned = await chain.mirror((method, params) => {
+      if (method === "eth_call" && BigInt(params[1] as string) < chain!.head.number) throw new Error("historical state is not available");
+      return undefined;
+    });
+    try {
+      chain.finalizedLag = 5;
+      const validBefore = new Date((chain.head.timestamp + 60) * 1000).toISOString();
+      chain.advance(600);
+      const at = (url: string, operator: string) => ({ url, operator, source: "caller" as const, id: operator });
+      const set = (state?: string) => () => ({ primary: at(pruned.url, "pruned"), ...(state ? { state: at(state, "state") } : {}), verdict: [at(chain!.url, "state")], quorum: 1, agreement: "caller" as const });
+      const find = (endpointsFor: ReturnType<typeof set>) => findAuthorization({ ...PAYMENT, network: BASE_SEPOLIA.caip2, transaction: undefined, validBefore, since: new Date().toISOString() }, { endpointsFor });
+      expect(await find(set())).toMatchObject({ found: false, unreadable: true });
+      expect(await find(set(chain.url))).toMatchObject({ found: false, never: true });
+    } finally {
+      await pruned.close();
+    }
+  });
+
   it("calls a cancelled authorization final only in a final block, and decides nothing when the chain cannot be read", async () => {
     chain = await startFakeBaseSepolia();
     chain.settle({ from: PAYER, to: PAY_TO, value: 10000n, nonce: NONCE });
