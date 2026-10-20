@@ -20,6 +20,7 @@ const SLOW = [
   "test/budget/evm-quorum.test.ts",
   "test/budget/guidance.test.ts",
   "test/budget/hosted-cancel.test.ts",
+  "test/budget/hosted-sink.test.ts",
   "test/budget/hosted.test.ts",
   "test/budget/journal-durability.test.ts",
   "test/budget/journal-shape.test.ts",

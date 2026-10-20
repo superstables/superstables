@@ -120,15 +120,17 @@ function hostedFor(settings: Omit<HostedSettings, "auditPath" | "onRecord">): Ho
     hostedClient = new HostedApprovals({
       ...settings,
       // from the moment the request is checked and in hand, what this worker ends with (a refusal included) is the approval's result
-      ...(hosted ? { resume: hosted, onTakeover: () => recordTakenOver(holder!) } : {}),
-      // Time running out, or a site that cannot be read, is no answer about the request: a restarted worker leaves with no
-      // result (the dispatcher records none) and the next wait reads the request again.
-      onUnresolved: (why) => {
-        // only a restarted worker: a first worker that is still running ends as it always did, with its own unknown
-        if (!resuming() || !holder || !canResume(readApproval(holder))) return;
-        process.stderr.write(`superstables budget: approval ${holder}: ${why}; this worker recorded no result, and budget wait checks the request again\n`);
-        process.exit(5);
-      },
+      ...(hosted ? {
+        resume: hosted,
+        onTakeover: () => recordTakenOver(holder!),
+        // The sink's exit (hosted.ts header): a restarted worker whose outcome rests on nothing the site confirmed (time ran out, the
+        // site cannot be read or refuses the token, an exception) leaves with no result. The dispatcher records none, and the next
+        // wait reads the request again.
+        onUnresolved: (why: string): void => {
+          process.stderr.write(`superstables budget: approval ${holder}: ${why}; this worker recorded no result, and budget wait checks the request again\n`);
+          process.exit(5);
+        },
+      } : {}),
       auditPath: ownerApprovalsLog(),
       // the access token lives in the approval record (mode 600), where --replace and wait find it; never in a log
       onRecord: (record) => { if (holder) recordHosted(holder, record); },

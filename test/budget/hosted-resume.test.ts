@@ -26,8 +26,10 @@ describe("a hosted request taken over by a later worker", () => {
   let site: FakeSite;
   let dir: string;
   let records: HostedRecord[];
+  /** What the sink told onUnresolved: in a worker it exits; here it only records why. */
+  let unresolved: string[];
   const client = (over: Partial<ConstructorParameters<typeof HostedApprovals>[0]> = {}) =>
-    new HostedApprovals({ site: site.url, rail: "evm", chain: "base-sepolia", agentKey: KEY, auditPath: join(dir, "audit.jsonl"), onRecord: (r) => records.push(r), pollWaitS: 0, minPollMs: 20, resumable: true, ...over });
+    new HostedApprovals({ site: site.url, rail: "evm", chain: "base-sepolia", agentKey: KEY, auditPath: join(dir, "audit.jsonl"), onRecord: (r) => records.push(r), pollWaitS: 0, minPollMs: 20, resumable: true, ...(over.resume ? { onUnresolved: (why: string) => { unresolved.push(why); } } : {}), ...over });
   const grant = (c: HostedApprovals, over: { transaction?: typeof GRANT_TX; action?: string; timeoutMs?: number } = {}) =>
     c.request({ kind: "evm-transaction", action: over.action ?? "grant", account: OWNER, transaction: over.transaction ?? GRANT_TX, terms: TERMS, timeoutMs: over.timeoutMs ?? 60_000 });
   /**
@@ -50,6 +52,7 @@ describe("a hosted request taken over by a later worker", () => {
     site = await startFakeSite();
     dir = mkdtempSync(join(tmpdir(), "ss-hosted-resume-"));
     records = [];
+    unresolved = [];
   });
   afterEach(async () => {
     await site.close();
@@ -220,21 +223,6 @@ describe("a hosted request taken over by a later worker", () => {
       await settled;
       expect(taken, asked).toBe(1);
     }
-  });
-
-  it("time running out, or a refused token, after a read is reported to onUnresolved before the request is ended: a caller that can leave it open does", async () => {
-    site.expiresInMs = 100;
-    const record = await firstWorker();
-    await new Promise((r) => setTimeout(r, 300));
-    // a first read that shows nothing final, then reads that fail until past the local deadline and grace
-    let reads = 0;
-    site.readAnswer = (_r, view) => (++reads === 1 ? { status: 200, body: { ...view, state: "sending", wallet_asked: true } } : { status: 503, body: {} });
-    const why: string[] = [];
-    const h = await grant(client({ resume: { ...record, deadline: Date.now() - 1000 }, sendingGraceMs: 50, onUnresolved: (w) => why.push(w) }));
-    expect(await h.settled).toMatchObject({ status: "expired" });
-    expect(why).toHaveLength(1);
-    expect(why[0]).toMatch(/time ran out/);
-    expect(site.requests[0].cancels).toBeLessThanOrEqual(1);
   });
 
   it("a link with steps: the bundle settles from the recorded request, with the owner proof checked", async () => {
