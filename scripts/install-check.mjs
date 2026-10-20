@@ -277,6 +277,8 @@ for (const route of routes) {
   const mine = results.filter((r) => r.route === route);
   console.log(`  ${mine.every((r) => r.ok) && mine.length ? "ok  " : "FAIL"}  ${route} (${mine.filter((r) => r.ok).length}/${mine.length} checks)`);
 }
+// the local registry's child process and its stdout pipe would keep node running after the last route
+registry?.kill();
 if (keep) console.log(`\nkept ${work}`);
 else rmSync(work, { recursive: true, force: true });
 if (failures.length) {

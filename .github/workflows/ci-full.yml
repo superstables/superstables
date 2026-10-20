@@ -1,13 +1,14 @@
 # The whole suite, the build, the skill zip, an audit of every package the client ships, a check that two builds of
-# the commit are identical, and the five install routes, on main, every night and on demand. It is not the release
+# the commit are identical, and the six install routes, on main, every night and on demand. It is not the release
 # gate: superstables-release requires the CI workflow (ci.yml) on the exact commit it releases.
 # It runs only in the private repo; the public copy of this file never starts a job.
 #
 # The tests never reach the network (they stand up their own servers on loopback), so CI needs
 # no keys, no funded wallet and no facilitator.
 #
-# The install job installs the client the five ways people do (the packed tarball, a global
-# install, a checkout, a checkout without dev packages, a git URL) and runs it, with scripts/install-check.mjs. Its
+# The install job installs the client the six ways people do (the packed tarball, a global
+# install, npx from a registry, a checkout, a checkout without dev packages, a git URL) and runs it, with
+# scripts/install-check.mjs. Its
 # `budget doctor` reads a public testnet RPC; everything else stays local.
 
 name: CI full
