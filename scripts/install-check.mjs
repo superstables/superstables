@@ -134,13 +134,15 @@ const tested = new Set(
  * node_modules it was installed into; a global install puts the package's own dependencies in its own node_modules.
  * `fromShrinkwrap` is true for an install that npm resolved from the package's npm-shrinkwrap.json (a registry install):
  * npm then puts the client's dependencies in the client's own node_modules, which it does not for an install from a file.
+ * `hasShrinkwrap` is false for the git route: npm runs `prepare` there and not `prepack`, so what it packs from the clone
+ * has no shrinkwrap, and the install resolves its dependencies when it runs.
  */
-function checkInstalled(route, nodeModules, { fromShrinkwrap = false } = {}) {
+function checkInstalled(route, nodeModules, { fromShrinkwrap = false, hasShrinkwrap = true } = {}) {
   const pkg = join(nodeModules, "@superstables", "client");
   check(route, "the package has dist/budget/cli.mjs", existsSync(join(pkg, "dist", "budget", "cli.mjs")));
   check(route, "the package has dist/budget/THIRD_PARTY_NOTICES.txt", existsSync(join(pkg, "dist", "budget", "THIRD_PARTY_NOTICES.txt")));
   check(route, "the package has no budget/ sources", !existsSync(join(pkg, "budget")));
-  check(route, "the package has npm-shrinkwrap.json", existsSync(join(pkg, "npm-shrinkwrap.json")));
+  check(route, hasShrinkwrap ? "the package has npm-shrinkwrap.json" : "the package has no npm-shrinkwrap.json (git installs are not pinned)", existsSync(join(pkg, "npm-shrinkwrap.json")) === hasShrinkwrap);
   const present = BUDGET_ONLY.filter((p) => existsSync(join(nodeModules, p)) || existsSync(join(pkg, "node_modules", p)));
   check(route, "no budget-only package installed", present.length === 0, present.join(", "));
   if (fromShrinkwrap) check(route, "npm honoured the shrinkwrap: the client has its own node_modules", existsSync(join(pkg, "node_modules")));
@@ -262,7 +264,7 @@ for (const route of routes) {
       sh("git", ["branch", "install-check", sha], src);
       const dir = emptyDir("install-git");
       sh("npm", ["install", "--no-audit", "--no-fund", `git+${pathToFileURL(src).href}#install-check`], dir);
-      checkInstalled(route, join(dir, "node_modules"));
+      checkInstalled(route, join(dir, "node_modules"), { hasShrinkwrap: false });
       exercise(route, [join(dir, "node_modules", ".bin", "superstables")], { version: new RegExp(`^superstables budget ${version.replace(/\./g, "\\.")} \\(standalone build, commit ${sha.slice(0, 7)}`), cwd: emptyDir("run-git") });
     }
   } catch (err) {
