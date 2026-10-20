@@ -6,8 +6,9 @@ import { describe, expect, it, vi } from "vitest";
 import { BASE_SEPOLIA } from "../../src/core/chain.js";
 import type { PaymentTerms, Attempt, Quote } from "../../src/core/types.js";
 import { NotPaidEndpointError } from "../../src/core/x402.js";
+import { PaymentStartedError } from "../../src/cli/pay.js";
 import { printTopUp, runTopUp, topUpJson, type TopUpPorts } from "../../src/cli/top-up.js";
-import { TOP_UP_NETWORK, parseTopUpAmount, topUpPayPath, type TopUp } from "../../src/seller/top-up.js";
+import { TOP_UP_NETWORK, parseTopUpAmount, topUpPayPath, type SellerCredit, type TopUp } from "../../src/seller/top-up.js";
 
 const KEY = `sssk_${"a".repeat(40)}`;
 const SITE = new URL("https://www.superstables.com");
@@ -64,8 +65,12 @@ function attempt(state: Attempt["state"], overrides: Partial<Attempt> = {}): Att
 }
 
 /** The three ways this command acts, so a test can see which of them ran, and how often. */
-function ports(options: { created?: TopUp; quote?: () => Promise<Quote>; pay?: () => Promise<Attempt> } = {}) {
+function ports(
+  options: { created?: TopUp; quote?: () => Promise<Quote>; pay?: () => Promise<Attempt>; credit?: SellerCredit; attempts?: Attempt[] } = {},
+) {
   const made: TopUpPorts = {
+    credit: vi.fn(async () => options.credit ?? { asset: "USDC", topUps: [], entries: [] }),
+    attempts: vi.fn(() => options.attempts ?? []),
     create: vi.fn(async () => options.created ?? topUp()),
     quote: vi.fn(options.quote ?? (async () => quote())),
     pay: vi.fn(options.pay ?? (async () => attempt("settled", { chain: "verified", chainFinal: true }))),
@@ -279,6 +284,76 @@ describe("seller top-up", () => {
     expect(result.exitCode).toBe(3);
     expect(result.message).toContain("rejected");
     expect(result.next).toContain("Nothing was charged");
+  });
+
+  it("quotes and pays the pay link as the URL parser writes it, not as the site wrote it", async () => {
+    const made = ports({ created: topUp({ payUrl: `https://WWW.SUPERSTABLES.COM:443${topUpPayPath(ID)}` }) });
+    await run(made);
+    expect(made.quote).toHaveBeenCalledWith(PAY_URL);
+  });
+
+  it("honours money_moved on any status of the pay link's answer", async () => {
+    for (const [status, moved] of [[429, "unknown"], [500, "unknown"], [418, true], [403, "unknown"]] as const) {
+      const made = ports({
+        quote: async () => {
+          throw new NotPaidEndpointError(PAY_URL, status, JSON.stringify({ error: { code: "x", money_moved: moved } }));
+        },
+      });
+      const result = await run(made);
+      expect(result.exitCode, String(status)).toBe(5);
+      expect(result.next, String(status)).not.toContain("superstables seller top-up");
+      expect(result.message, String(status)).not.toMatch(/nothing was paid/i);
+    }
+  });
+
+  it("does not say a payment was not started when the command failed while following it", async () => {
+    const started = (recorded?: Attempt) =>
+      ports({
+        pay: async () => {
+          throw new PaymentStartedError("a-1", new Error("the disk is full"), recorded);
+        },
+      });
+    // No record of how far it got, or one that is not over: unknown.
+    for (const recorded of [undefined, attempt("submitting")]) {
+      const result = await run(started(recorded));
+      expect(result.exitCode).toBe(5);
+      expect(result.message).toContain("unknown");
+      expect(result.message).not.toContain("not started");
+      expect(result.next).toContain("superstables status a-1");
+      expect(result.next).not.toContain("superstables seller top-up");
+    }
+    // A record that ended says how it ended.
+    const settled = await run(started(attempt("settled", { chain: "verified", chainFinal: true })));
+    expect(settled.exitCode).toBe(0);
+    const uncertain = await run(started(attempt("uncertain", { reason: "the service answered 500 without a payment receipt" })));
+    expect(uncertain.exitCode).toBe(5);
+  });
+
+  it("refuses before creating anything while an earlier top-up may have been paid", async () => {
+    const made = ports({ attempts: [attempt("uncertain", { url: PAY_URL })] });
+    await expect(run(made)).rejects.toThrow(/an earlier top-up is not settled/);
+    expect(made.create).not.toHaveBeenCalled();
+    const pendingOnSite = ports({ credit: { asset: "USDC", topUps: [topUp({ status: "pending" })], entries: [] } });
+    await expect(run(pendingOnSite)).rejects.toThrow(/pending on the site/);
+    expect(pendingOnSite.create).not.toHaveBeenCalled();
+  });
+
+  it("redacts the key from every field it prints, and strips control characters from the site's words", async () => {
+    const created = topUp({ status: `refunded ${KEY}\u001b[31m`, createdAt: `at ${KEY}` });
+    const lines: string[] = [];
+    const result = await runTopUp({ site: SITE, apiKey: KEY, amount: AMOUNT, say: (line) => lines.push(line), ports: ports({ created }) });
+    expect(JSON.stringify(topUpJson(result))).not.toContain(KEY);
+    expect(JSON.stringify(result)).not.toContain(KEY);
+    expect(JSON.stringify(result)).not.toContain("\u001b");
+    const progress = await runTopUp({
+      site: SITE,
+      apiKey: KEY,
+      amount: AMOUNT,
+      say: (line) => lines.push(line),
+      ports: ports({ pay: async () => { throw new Error("x"); } }),
+    });
+    expect(progress.exitCode).toBeGreaterThan(0);
+    expect(lines.join("\n")).not.toContain(KEY);
   });
 
   it("never prints the key, whatever happened", async () => {

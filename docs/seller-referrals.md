@@ -170,15 +170,17 @@ superstables seller top-up 25
 ```
 
 The seller API key comes from `SUPERSTABLES_SELLER_API_KEY`, which the seller portal issues. It is
-sent only to the Superstables origin this client already uses, in an `Authorization` header, and no
-command prints it: an answer that quotes the key back has it redacted first. `SUPERSTABLES_SITE` is
-the same site setting the rest of the client reads for local and staging work.
+sent only to the Superstables origin, in an `Authorization` header, and no command prints or saves it:
+an answer that quotes the key back is discarded unread, and every line the commands print is redacted
+as well. The origin is held to the trust of an owner action: `SUPERSTABLES_SITE` when set, else the
+owner's site, else `https://www.superstables.com`, and it must be that site or one the owner allowed
+in their settings (staging, this machine). Any other host is refused before a request is sent.
 
 `superstables seller credit` prints the balance, the latest top-ups and the latest credit entries,
 and rechecks pending top-ups before it answers, so it can take about eight seconds. `--json` prints
 the same as one object.
 
-`superstables seller top-up <amount>` creates one top-up for a USD amount of at least 1, then pays it
+`superstables seller top-up <amount>` creates one top-up for a USD amount from 1 to 1000, then pays it
 like any other x402 purchase: the same signer, spend policy and approval in the owner's wallet as
 `pay`. Before anything is signed, the command checks the answer and the payment request against what
 it asked for:
@@ -192,8 +194,19 @@ it asked for:
 Any mismatch is refused, and nothing is paid. The payment asks for the terms again before the owner
 is asked, and refuses changed ones, as `pay` does.
 
+Before it creates anything, the command reads the credit and refuses (exit 3) while an earlier top-up
+may have been paid: the site lists one as `pending`, or this machine has a payment for one of the
+site's top-ups that is not over, ended unknown, or was paid without the credit confirmed, and the site
+does not list that top-up as paid or retired. Run `superstables seller credit`, and
+`superstables status <attempt>` for the payment, to see where it stands.
+
 Top-ups are on Base Sepolia in test USDC for now. The credit is added once the payment's block is
 final on chain; `superstables seller credit` shows when it has landed. If the site reports a payment
-as pending (409 `payment_pending`) or cannot confirm it (502), whether the money moved is unknown:
-do not pay that top-up again, and run `superstables seller credit` later. A retired top-up (410
-`top_up_retired`) cannot be paid at all; ask for a new one.
+as pending (409 `payment_pending`) or cannot confirm it (502), or answers with `money_moved` other
+than `false` on any status, whether the money moved is unknown: do not pay that top-up again, do not
+ask for another, and run `superstables seller credit` later. That holds for the first read of the pay
+link, for the payment's own read of it after the quote, and for the answer to the payment. A pay link
+that answers 200 means the site counts the top-up as paid. A retired top-up (410 `top_up_retired`)
+cannot be paid at all; ask for a new one. The command says "nothing was charged" only when nothing
+was signed, and a failure while it follows a payment that started is reported from that payment's
+record, as unknown when the record is not final.

@@ -75,6 +75,7 @@ import { walletModeFromEnvironment, type WalletMode } from "./signer.js";
 import { attemptView, messageFor } from "./views.js";
 import {
   SELLER_API_KEY_ENV,
+  keyGuardedFetch,
   parseTopUpAmount,
   readSellerApiKey,
   readSellerCredit,
@@ -934,8 +935,8 @@ const seller = explain(
   {
     notes: [
       "The seller API key comes from SUPERSTABLES_SELLER_API_KEY, the key the seller portal issues. It is sent only " +
-        "to the Superstables origin this client already uses, in an Authorization header, and it is never printed: a " +
-        "site that echoes it back has it redacted first.",
+        "to the Superstables origin this client already uses, in an Authorization header, and it is never printed or " +
+        "saved: an answer that holds it is discarded unread.",
     ],
     money: "only `seller top-up`, and only for the payment the owner approves in their wallet.",
     who: "the seller (the owner of the seller account), in a terminal of their own.",
@@ -949,7 +950,7 @@ explain(
   seller
     .command("top-up")
     .description("add to the seller's Superstables credit, with test USDC on Base Sepolia")
-    .argument("<amount>", "how much credit to add, in USDC, at least 1 (for example 25 or 25.50)")
+    .argument("<amount>", "how much credit to add, in USDC, from 1 to 1000 (for example 25 or 25.50)")
     .option(
       "--wait <seconds>",
       "stop waiting for the owner's decision after this many seconds (default: until the approval window closes)",
@@ -960,10 +961,11 @@ explain(
       const say = options.json ? (line: string) => console.error(line) : (line: string) => console.log(line);
       const { site, apiKey } = sellerClient();
       const amount = sellerAmount(input);
-      const deps = paymentContext();
+      // Every answer a seller gives the payment is screened for the key before the engine reads or keeps it.
+      const deps = paymentContext({ fetch: keyGuardedFetch(apiKey) });
       let result: TopUpResult;
       try {
-        result = await runTopUp({ site, apiKey, amount, say, ports: clientPorts(deps, options.wait) });
+        result = await runTopUp({ site, apiKey, amount, say, ports: clientPorts(deps, { apiKey, wait: options.wait }) });
       } catch (err) {
         if (err instanceof CliError) throw err;
         throw new CliError(
@@ -985,11 +987,16 @@ explain(
         "site's origin with exactly that id's pay path and no query or fragment, and a payment on Base Sepolia " +
         "(eip155:84532) in test USDC for exactly the amount asked for. Any mismatch is refused and nothing is paid. " +
         "`pay` asks for the terms again before the owner is asked, and refuses changed ones as it does for a quote.",
-      "The site is the one this client already uses: SUPERSTABLES_SITE when set (a superstables.com host, staging, " +
-        "or this machine), else the owner's site, else superstables.com. There is no flag that sends the key anywhere else.",
+      "The site is held to the trust of an owner action: SUPERSTABLES_SITE when set, else the owner's site, else " +
+        "www.superstables.com, and it must be www.superstables.com or a site the owner allowed in their settings " +
+        "(staging, this machine). There is no flag that sends the key anywhere else.",
+      "No new top-up is created while an earlier one may have been paid: the site lists one as pending, or this " +
+        "machine has a payment for one that is not over or ended unknown and the site does not list it as paid. " +
+        "`superstables seller credit` and `superstables status <attempt>` say where it stands.",
       "The credit is added once the payment's block is final on chain. A payment the site reports as pending, or " +
-        "cannot confirm, is never paid again from here: `superstables seller credit` rechecks it. The default spend " +
-        "policy allows 0.05 USDC per payment, so a top-up needs a raised cap in the policy file.",
+        "cannot confirm, or answers with money_moved other than false, on any HTTP status, is never paid again from " +
+        "here: `superstables seller credit` rechecks it. \"Nothing was charged\" is said only when nothing was " +
+        "signed. The default spend policy allows 0.05 USDC per payment, so a top-up needs a raised cap in the policy file.",
     ],
     money: "yes, once, and only after the owner approves it in their own wallet: test USDC on Base Sepolia.",
     who: "the seller (the owner of the seller account).",
@@ -999,10 +1006,10 @@ explain(
       "--json, one object: top_up {id, amount, status, pay_url}, quote_id, attempt_id, state, chain, chain_final, " +
       "message, next, exit_code.",
     exits:
-      "0 paid (also when the site says this top-up is already paid), 1 nothing was paid (the site refused, the pay " +
+      "0 paid (also when the site says this top-up is already paid), 1 nothing was signed (the site refused, the pay " +
       "link was not payable, or the approval expired), 2 bad input (no key, a bad amount or site), 3 refused (the " +
-      "answer or the 402 named another top-up, or a spend policy refused it), 4 paid but the site's answer failed, " +
-      "5 unknown (a payment may have moved: do not pay again)",
+      "answer or the 402 named another top-up, an earlier top-up may have been paid, or a spend policy refused it), " +
+      "4 paid but the site's answer failed, 5 unknown (a payment may have moved: do not pay again)",
   },
 );
 

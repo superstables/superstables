@@ -681,7 +681,7 @@ Commands:
 
 The seller API key comes from SUPERSTABLES_SELLER_API_KEY, the key the seller portal issues. It is
 sent only to the Superstables origin this client already uses, in an Authorization header, and it is
-never printed: a site that echoes it back has it redacted first.
+never printed or saved: an answer that holds it is discarded unread.
 
 Moves money: only `seller top-up`, and only for the payment the owner approves in their wallet.
 Run by: the seller (the owner of the seller account), in a terminal of their own.
@@ -701,8 +701,8 @@ Usage: superstables seller top-up [options] <amount>
 add to the seller's Superstables credit, with test USDC on Base Sepolia
 
 Arguments:
-  amount            how much credit to add, in USDC, at least 1 (for example 25
-                    or 25.50)
+  amount            how much credit to add, in USDC, from 1 to 1000 (for example
+                    25 or 25.50)
 
 Options:
   --wait <seconds>  stop waiting for the owner's decision after this many
@@ -721,14 +721,19 @@ Base Sepolia (eip155:84532) in test USDC for exactly the amount asked for. Any m
 and nothing is paid. `pay` asks for the terms again before the owner is asked, and refuses changed
 ones as it does for a quote.
 
-The site is the one this client already uses: SUPERSTABLES_SITE when set (a superstables.com host,
-staging, or this machine), else the owner's site, else superstables.com. There is no flag that sends
-the key anywhere else.
+The site is held to the trust of an owner action: SUPERSTABLES_SITE when set, else the owner's site,
+else www.superstables.com, and it must be www.superstables.com or a site the owner allowed in their
+settings (staging, this machine). There is no flag that sends the key anywhere else.
+
+No new top-up is created while an earlier one may have been paid: the site lists one as pending, or
+this machine has a payment for one that is not over or ended unknown and the site does not list it
+as paid. `superstables seller credit` and `superstables status <attempt>` say where it stands.
 
 The credit is added once the payment's block is final on chain. A payment the site reports as
-pending, or cannot confirm, is never paid again from here: `superstables seller credit` rechecks it.
-The default spend policy allows 0.05 USDC per payment, so a top-up needs a raised cap in the policy
-file.
+pending, or cannot confirm, or answers with money_moved other than false, on any HTTP status, is
+never paid again from here: `superstables seller credit` rechecks it. "Nothing was charged" is said
+only when nothing was signed. The default spend policy allows 0.05 USDC per payment, so a top-up
+needs a raised cap in the policy file.
 
 Moves money: yes, once, and only after the owner approves it in their own wallet: test USDC on Base
   Sepolia.
@@ -739,11 +744,11 @@ Example:
 Prints: the top-up's id, amount, chain, status, the payment's outcome and transaction, and the next
   command. With --json, one object: top_up {id, amount, status, pay_url}, quote_id, attempt_id,
   state, chain, chain_final, message, next, exit_code.
-Exit codes: 0 paid (also when the site says this top-up is already paid), 1 nothing was paid (the
+Exit codes: 0 paid (also when the site says this top-up is already paid), 1 nothing was signed (the
   site refused, the pay link was not payable, or the approval expired), 2 bad input (no key, a bad
-  amount or site), 3 refused (the answer or the 402 named another top-up, or a spend policy refused
-  it), 4 paid but the site's answer failed, 5 unknown (a payment may have moved: do not pay again)
-  (the full table: superstables --help)
+  amount or site), 3 refused (the answer or the 402 named another top-up, an earlier top-up may have
+  been paid, or a spend policy refused it), 4 paid but the site's answer failed, 5 unknown (a
+  payment may have moved: do not pay again) (the full table: superstables --help)
 ```
 
 ## superstables seller credit

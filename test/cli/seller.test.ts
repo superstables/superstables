@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { accountHomeWith } from "../helpers/owner-settings.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const TSX = resolve(ROOT, "node_modules/tsx/dist/cli.mjs");
@@ -121,6 +122,7 @@ describe("superstables seller", () => {
 
   it("refuses a top-up whose pay link is another site, pays nothing and names that site", async () => {
     creates = 0;
+    creditAnswer = () => ({ status: 200, body: { balance: "0", top_ups: [], entries: [] } });
     createAnswer = () => ({
       status: 201,
       body: {
@@ -141,11 +143,67 @@ describe("superstables seller", () => {
     expect(result.stdout + result.stderr).not.toContain(KEY);
   });
 
+  it("does not create a top-up while the site lists one as pending", async () => {
+    creates = 0;
+    creditAnswer = () => ({
+      status: 200,
+      body: { balance: "0", top_ups: [{ id: ID, amount: "10", status: "pending", retired: false }], entries: [] },
+    });
+    const result = await run(["seller", "top-up", "10"]);
+    expect(result.code).toBe(3);
+    expect(creates).toBe(0);
+    expect(result.stderr).toContain("pending on the site");
+    expect(result.stderr).toContain("superstables seller credit");
+  });
+
+  it("shows a retired top-up as retired and the ledger's source_id as its reference", async () => {
+    creditAnswer = () => ({
+      status: 200,
+      body: {
+        balance: "-0.4",
+        top_ups: [{ id: ID, amount: "10", status: "open", retired: true, pay_url: null }],
+        entries: [{ id: "entry-1", kind: "fee", source_id: "sale-9", amount: "-0.4", created_at: "2026-10-20T00:00:00.000Z" }],
+      },
+    });
+    const result = await run(["seller", "credit"]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("-0.4 USDC");
+    expect(result.stdout).toMatch(/retired/);
+    expect(result.stdout).toContain("sale-9");
+    expect(result.stdout).not.toContain("entry-1");
+  });
+
+  it("refuses an answer that echoes the key, prints none of it, and keeps the key off both streams", async () => {
+    creditAnswer = () => ({ status: 200, body: { balance: "1", entries: [{ source_id: KEY }], top_ups: [] } });
+    const result = await run(["seller", "credit"]);
+    expect(result.code).toBe(1);
+    expect(result.stdout + result.stderr).not.toContain(KEY);
+    creditAnswer = () => ({ status: 401, body: { error: { code: KEY, message: "no" } } });
+    const coded = await run(["seller", "credit", "--json"]);
+    expect(coded.code).toBe(1);
+    expect(coded.stdout + coded.stderr).not.toContain(KEY);
+  });
+
+  it("sends the key only to a site the owner allows: another Superstables host is refused before any request", async () => {
+    creates = 0;
+    const result = await run(["seller", "credit"], {
+      SUPERSTABLES_SITE: "https://staging.superstables.com",
+      SUPERSTABLES_TEST_ACCOUNT_HOME: accountHomeWith(null),
+    });
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("owner allows");
+    expect(result.stdout + result.stderr).not.toContain(KEY);
+  });
+
   it("checks the amount before it sends anything", async () => {
     creates = 0;
     const result = await run(["seller", "top-up", "0.5"]);
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("smallest top-up is 1 USDC");
+    expect(creates).toBe(0);
+    const big = await run(["seller", "top-up", "1000.01"]);
+    expect(big.code).toBe(2);
+    expect(big.stderr).toContain("largest top-up is 1000 USDC");
     expect(creates).toBe(0);
   });
 
