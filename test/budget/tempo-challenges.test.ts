@@ -214,6 +214,27 @@ describe("claimChallenge", () => {
     expect(claimChallenge(`${plain.slice(0, 12)}${"cd".repeat(5)}${plain.slice(22)}`, "b")).toBe("");
   });
 
+  it("holds a challenge that an earlier build claimed under the whole memo, referred or not", async () => {
+    const { CLAIMS_DIR, claimChallenge } = await load();
+    const withClient = (base: string, fill: string) => `${base.slice(0, 32)}${fill.repeat(20)}${base.slice(52)}`;
+    claimChallenge(memo(7), "x"); // makes the folder
+    // an earlier build named the file by the memo as paid, referral bytes included
+    const legacy = (base: string, op: string) => writeFileSync(join(CLAIMS_DIR, base.slice(2).toLowerCase()), `${op}\n`, { mode: 0o600 });
+    legacy(withClient(memo(8), "a"), "old-referred");
+    expect(claimChallenge(withClient(memo(8), "b"), "new")).toBe("operation old-referred");
+    expect(claimChallenge(withClient(memo(8), "0"), "new")).toBe("operation old-referred");
+    expect(claimChallenge(withClient(memo(8), "a"), "old-referred")).toBe("");
+    expect(claimChallenge(withClient(memo(8), "c"), "old-referred")).toBe("");
+    expect(readdirSync(CLAIMS_DIR)).not.toContain(claimName(memo(8)));
+    // a name that was already the challenge's key is the same file as before
+    legacy(withClient(memo(9), "0"), "old-plain");
+    expect(claimChallenge(withClient(memo(9), "a"), "new")).toBe("operation old-plain");
+    expect(claimChallenge(withClient(memo(9), "0"), "old-plain")).toBe("");
+    // an unreadable earlier claim holds the challenge too
+    writeFileSync(join(CLAIMS_DIR, withClient(memo(11), "a").slice(2)), "");
+    expect(claimChallenge(withClient(memo(11), "b"), "new")).toBe("another operation");
+  });
+
   it("refuses a memo that is not 32 bytes of hex", async () => {
     const { claimChallenge } = await load();
     for (const bad of ["", "0x12", "../../etc/passwd", `0x${"zz".repeat(32)}`]) expect(() => claimChallenge(bad, "a")).toThrow(/32 bytes/);

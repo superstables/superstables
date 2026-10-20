@@ -1054,7 +1054,7 @@ function attributedCheck(records: Records, attempt: Attempt, rail: RailAdapter, 
  */
 function carriesReferral(signed: SignResult, referralId: string, offer: Offer, rail: RailAdapter): boolean {
   if (signed.kind === "eip3009") return nonceReferral(String(signed.payload.authorization.nonce ?? "")) === referralId;
-  if (signed.kind === "solana-transaction") return (offer.requirement as { extra?: { memo?: unknown } }).extra?.memo === undefined && memoReferral(signed.memo) === referralId;
+  if (signed.kind === "solana-transaction") return typeof (offer.requirement as { extra?: { memo?: unknown } }).extra?.memo !== "string" && memoReferral(signed.memo) === referralId;
   return rail.flow === "push" && signed.memo.toLowerCase() === rail.paymentMemo(offer, referralId).toLowerCase();
 }
 

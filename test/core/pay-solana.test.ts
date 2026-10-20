@@ -167,6 +167,16 @@ describe("a referred Single purchase on Solana devnet", () => {
     }
   });
 
+  it("refuses a memo that is not a string: it is not the seller's, and the client writes no marker over it", async () => {
+    for (const memo of [42, null, { text: "order-42" }]) {
+      const s = await stack();
+      referred(s, ID);
+      s.seller.accept.extra = { feePayer: s.seller.feePayer, memo };
+      await expect(pay(s), JSON.stringify(memo)).rejects.toThrow(/the offer's memo is malformed/);
+      expect(s.seller.lastPaidHeaders?.["superstables-referral"]).toBeUndefined();
+    }
+  });
+
   it("keeps 32 random hex characters without a referral, with a malformed id, or with referrals off", async () => {
     const plain = await stack();
     expect((await pay(plain)).state).toBe("settled");
