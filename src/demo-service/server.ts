@@ -14,6 +14,10 @@
 // It talks to the facilitators directly (a few lines of failover below) rather than through
 // the SDK's payment core: the seller side and the buyer side must be able to fail
 // independently, and a test that exercises both should not have one of them mock the other.
+//
+// A claim challenge, which lets the operator prove to superstables.com that it controls this
+// host, is off unless the operator switches it on (the CLI reads it from the environment, see
+// sellerOptionsFromEnvironment).
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {
@@ -25,6 +29,7 @@ import { HTTPFacilitatorClient } from "@x402/core/server";
 import type { PaymentPayload, PaymentRequired, PaymentRequirements, SettleResponse, VerifyResponse } from "@x402/core/types";
 import { BASE_SEPOLIA, isSameAddress, toCaip2, usdcRequirement } from "../core/chain.js";
 import { DEFAULT_DEMO_SERVICE_PORT } from "../core/home.js";
+import { CLAIM_HEADER } from "../seller/referral.js";
 import { DEMO_ASSETS, fetchSpotPrices, type PriceLookup, type SpotPrice } from "./prices.js";
 
 /** Public Base Sepolia facilitators, tried in this order. They submit the transfer and pay the gas. */
@@ -55,6 +60,12 @@ export interface DemoHandlerOptions {
   quiet?: boolean;
   /** Where prices come from. Injectable so tests never reach the network. */
   priceSource?: PriceLookup;
+  /**
+   * A claim challenge from superstables.com (ssc_…): served at /.well-known/superstables.txt and sent as the
+   * Superstables-Claim header on every answer of the market endpoint, so the site can confirm this host is the
+   * operator's.
+   */
+  claimChallenge?: string;
 }
 
 export interface DemoServiceOptions extends DemoHandlerOptions {
@@ -92,6 +103,17 @@ function sendJson(res: ServerResponse, status: number, body: unknown, headers: R
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+const CLAIM_CHALLENGE = /^ssc_[A-Za-z0-9_-]{1,200}$/;
+
+/** The claim challenge from SUPERSTABLES_CLAIM_CHALLENGE, off when unset. Throws on a value that cannot be used. */
+export function sellerOptionsFromEnvironment(env: NodeJS.ProcessEnv = process.env): Pick<DemoHandlerOptions, "claimChallenge"> {
+  const claim = env.SUPERSTABLES_CLAIM_CHALLENGE?.trim();
+  if (claim && !CLAIM_CHALLENGE.test(claim)) {
+    throw new Error("SUPERSTABLES_CLAIM_CHALLENGE is not a claim challenge: it is ssc_ followed by base64url characters");
+  }
+  return claim ? { claimChallenge: claim } : {};
 }
 
 /**
@@ -155,6 +177,10 @@ export function createDemoHandler(opts: DemoHandlerOptions): (req: IncomingMessa
   const log = (line: string) => {
     if (!opts.quiet) console.log(`[demo-service] ${line}`);
   };
+  const claim = opts.claimChallenge;
+  if (claim !== undefined && !CLAIM_CHALLENGE.test(claim)) {
+    throw new TypeError("claimChallenge is not a claim challenge: it is ssc_ followed by base64url characters");
+  }
 
   const challengeFor = (resourceUrl: string, error: string): PaymentRequired => ({
     x402Version: 2,
@@ -205,6 +231,8 @@ export function createDemoHandler(opts: DemoHandlerOptions): (req: IncomingMessa
 
   const handleMarket = async (req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> => {
     const resourceUrl = url.toString();
+    // On every answer of the listed endpoint, whatever its status: superstables.com may read it from any of them.
+    if (claim) res.setHeader(CLAIM_HEADER, claim);
 
     // 1. Validate first. A buyer must never be charged for a request we were going to refuse.
     const raw = url.searchParams.get("asset");
@@ -308,6 +336,11 @@ export function createDemoHandler(opts: DemoHandlerOptions): (req: IncomingMessa
         await handleMarket(req, res, url);
         return;
       }
+      if (url.pathname === "/.well-known/superstables.txt" && claim) {
+        res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+        res.end(`superstables-claim=${claim}\n`);
+        return;
+      }
       sendJson(res, 404, { error: `no such endpoint: ${url.pathname}`, endpoint: "/v1/market" });
     } catch (err) {
       // Nothing above this line should throw; if it does, say so without leaking internals.
@@ -347,6 +380,7 @@ export async function startDemoService(opts: DemoServiceOptions): Promise<DemoSe
   // published as, so the line a reader can use is the loopback one.
   const url = `http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${boundPort}`;
   log(`${SERVICE_NAME} on ${url} — ${priceDecimal} USDC per call on ${network.label}, paid to ${opts.payTo}`);
+  if (opts.claimChallenge) log(`claim challenge served at ${url}/.well-known/superstables.txt and on every answer of /v1/market`);
 
   return {
     port: boundPort,

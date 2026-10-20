@@ -13,7 +13,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./seller": { "types": "./dist/seller/index.d.ts", "import": "./dist/seller/index.js" }
   },
   "publishConfig": { "access": "public" },
   "files": ["dist", "policy.example.yaml", "npm-shrinkwrap.json", "README.md", "CHANGELOG.md", "LICENSE"],

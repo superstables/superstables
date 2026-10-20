@@ -2,7 +2,7 @@
 // owner's wallet. All three are real HTTP servers on 127.0.0.1 port 0, so the tests exercise
 // the same code paths as production without a network and without a private key that matters.
 
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { decodePaymentSignatureHeader, encodePaymentRequiredHeader, encodePaymentResponseHeader } from "@x402/core/http";
 import type { PaymentRequirements, SettleResponse } from "@x402/core/types";
@@ -107,6 +107,8 @@ export interface PaidEndpoint extends TestServer {
   options: PaidEndpointOptions;
   payTo: string;
   requests: number;
+  /** Every request's headers, in order, and whether it carried a payment credential. */
+  seen: { paid: boolean; headers: IncomingHttpHeaders }[];
 }
 
 /**
@@ -125,12 +127,14 @@ export async function startPaidEndpoint(
   };
   const payTo = privateKeyToAccount(generatePrivateKey()).address;
   const state = { requests: 0 };
+  const seen: PaidEndpoint["seen"] = [];
 
   const server = await startServer(async (req, res) => {
     state.requests += 1;
     const self = `http://127.0.0.1:${(req.socket.address() as AddressInfo).port}${req.url ?? "/"}`;
     const requirement: PaymentRequirements = usdcRequirement(options.price, payTo);
     const credential = req.headers["payment-signature"];
+    seen.push({ paid: typeof credential === "string", headers: { ...req.headers } });
 
     if (typeof credential !== "string") {
       const challenge = {
@@ -168,6 +172,7 @@ export async function startPaidEndpoint(
     ...server,
     options,
     payTo,
+    seen,
     get requests() {
       return state.requests;
     },
@@ -219,7 +224,7 @@ export async function startWallet(mode: WalletMode = "approve"): Promise<FakeWal
     }
 
     if (req.method === "POST" && path === "/requests") {
-      const body = JSON.parse(await readBody(req)) as { sign: { requirements: PaymentRequirements; x402Version: 1 | 2 } };
+      const body = JSON.parse(await readBody(req)) as { sign: { requirements: PaymentRequirements; x402Version: 1 | 2; nonce?: `0x${string}` } };
       const judged = termsFor(body.sign.requirements, body.sign.x402Version);
       if (!judged.supported) {
         sendJson(res, 200, { id: "rejected", status: "rejected", createdAt: Date.now(), expiresAt: Date.now(), reason: judged.reason });
@@ -238,7 +243,7 @@ export async function startWallet(mode: WalletMode = "approve"): Promise<FakeWal
         return;
       }
       // The owner will "decide" on the next poll; sign now so the answer is ready.
-      const result = await signer.sign({ kind: "eip3009", requirements: judged.requirement, x402Version: body.sign.x402Version });
+      const result = await signer.sign({ kind: "eip3009", requirements: judged.requirement, x402Version: body.sign.x402Version, nonce: body.sign.nonce });
       const view: WalletRequestView = {
         id,
         status: "pending",

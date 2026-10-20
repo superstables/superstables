@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { authorizationTypes } from "@x402/evm";
+import { verifyTypedData } from "viem";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   ARC_USDC, AGENT, OWNER, makeChain, makeHome, startSeller, usdc, type FakeEvm, type SellerOpts,
@@ -66,15 +67,21 @@ const sentKinds = (chain: FakeEvm) => chain.sentRaw.map((t) => t.data.slice(0, 1
 const TRANSFER_FROM = "0x23b872dd", CANCEL = "0x5a049a70";
 
 describe("the signer checks the whole payment before the pull", () => {
-  it.concurrent("a library that signs over another domain version is refused before anything is pulled", async () => {
+  it.concurrent("a library that signs over another domain version is not the one that signs: the authorization is built here over the token's own domain", async () => {
     const s = await setup(), sel = await seller(s);
     const r = await buy(s, sel.url, "t1a", {}, preload("x402-domain-version.mjs"));
-    expect(r.code, r.stdout + r.stderr).toBe(3);
-    expect(r.result.state).toBe("refused_precheck");
-    expect(r.result.reason).toContain("signing domain USDC/1 is not Base Sepolia USDC's (USDC/2)");
-    expect(s.chain.sentRaw).toEqual([]);
-    expect(sel.creds).toEqual([]);
-    expect(s.chain.nativeOf(AGENT.address)).toBe(10n ** 17n);
+    expect(r.result.state, r.stdout + r.stderr).toBe("settled");
+    expect(sel.creds).toHaveLength(1);
+    const { payload, accepted } = sel.creds[0];
+    const genuine = await verifyTypedData({
+      address: AGENT.address,
+      domain: { name: "USDC", version: "2", chainId: s.chainId, verifyingContract: accepted.asset },
+      types: { TransferWithAuthorization: authorizationTypes.TransferWithAuthorization },
+      primaryType: "TransferWithAuthorization",
+      message: { ...payload.authorization, value: BigInt(payload.authorization.value), validAfter: BigInt(payload.authorization.validAfter), validBefore: BigInt(payload.authorization.validBefore) },
+      signature: payload.signature,
+    });
+    expect(genuine).toBe(true);
   }, 90_000);
 
   it.concurrent("a seller that names another domain version is refused before the pull (regression guard)", async () => {
@@ -174,6 +181,12 @@ describe("typedDataProblem", () => {
     // 600 s is the most a purchase signs: a 600 s option never gets 660
     expect(problem(withMessage({ validBefore: BigInt(now + 660) }), { chosen: { ...chosen, maxTimeoutSeconds: 600 }, selected: { ...chosen, maxTimeoutSeconds: 600 } })).toBe("authorization would stay valid longer than 600 s");
     expect(problem(withMessage({ nonce: "0x12" }))).toBe("authorization nonce is not 32 bytes");
+  });
+  it("accepts only the nonce this operation holds, in any case", () => {
+    const own = "0x" + "ab".repeat(32);
+    expect(problem(good(), { nonce: own })).toBeNull();
+    expect(problem(withMessage({ nonce: own.toUpperCase().replace("0X", "0x") }), { nonce: own })).toBeNull();
+    expect(problem(good(), { nonce: "0x" + "cd".repeat(32) })).toBe("authorization nonce is not this operation's");
   });
   it("refuses typed data whose digest is not the token's EIP-3009 authorization", () => {
     const digest = "the typed data is not the token's EIP-3009 authorization";

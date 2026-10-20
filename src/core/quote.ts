@@ -8,11 +8,12 @@
 import { detectPayment, type SellerChallenge } from "./x402.js";
 import { judgeOffers } from "./rails/index.js";
 import type { Offer } from "./rails/types.js";
-import { SellerTextError, untrustedText } from "./text.js";
+import { SellerTextError, mentionsSecret, untrustedText } from "./text.js";
 import { chainName, payNetworkFor } from "./routes.js";
 import { evaluatePolicy, policyAmount, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
 import { Records } from "./records.js";
+import { referralFor } from "./referrals.js";
 import type { Quote, ResolvedRequest, ServiceListing } from "./types.js";
 
 /** How long a quote is good for. Long enough to ask a human, short enough to re-check. */
@@ -27,6 +28,16 @@ export interface QuoteDeps {
   policy: Policy;
   /** Take only an offer on this chain (its key, CAIP-2 id or x402 v1 name), when a seller offers several. */
   chain?: string;
+  /** A secret of the caller's that no seller has any business echoing: a challenge that holds it is refused before it is saved. */
+  secret?: string;
+}
+
+/** A seller's challenge held the caller's secret. Its words are neither saved nor repeated. */
+export class SecretEchoedError extends Error {
+  constructor() {
+    super("the seller's answer contained a secret this command holds, so it was discarded unread");
+    this.name = "SecretEchoedError";
+  }
 }
 
 /**
@@ -39,6 +50,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
   const { url, request, service } = resolveTarget(input);
 
   const challenge: SellerChallenge = await detectPayment(url);
+  if (deps.secret && mentionsSecret(JSON.stringify(challenge), deps.secret)) throw new SecretEchoedError();
   const { chosen, others } = firstSupported(challenge, url, deps.chain);
 
   const asset = chosen.terms.asset;
@@ -51,6 +63,14 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
     spentTodayHasOpen: deps.records.spentTodayHasOpen(asset),
   };
   const verdict = evaluatePolicy(deps.policy, payment);
+  // A referral the index gave for this exact origin, if one is remembered and has not expired (core/referrals.ts). The
+  // quote records which one; the token stays in the remembered referrals until the paid request reads it.
+  // A quote for a listing takes only that listing's referral, even when another one is remembered for the same origin.
+  const found = referralFor(url, deps.records.dir);
+  const referral =
+    found && (!service || found.listingId === service.id)
+      ? { id: found.id, listingId: found.listingId, terms: found.terms, expiresAt: found.expiresAt }
+      : undefined;
 
   const now = Date.now();
   const record: Quote = {
@@ -69,6 +89,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
     ...(others.length ? { otherChains: others } : {}),
     policy: { allowed: verdict.allowed, reason: verdict.reason, checks: policyChecks(deps.policy, payment) },
     approval: "wallet",
+    ...(referral ? { referral } : {}),
   };
   return deps.records.saveQuote(record);
 }

@@ -141,6 +141,29 @@ describe("the approval page for a Solana payment", () => {
     expect(await post(`${link}/prepare`, { address: solanaKey().address })).toMatchObject({ status: 400 });
   });
 
+  it("writes the referral's marker unless the seller's memo is a string", async () => {
+    // A memo that is not a string is not the seller's: the offer check refuses it, and the step would not send it as one.
+    const judged = judgeAccept(sellerAccept(), 2);
+    if (!judged.supported) throw new Error(judged.reason);
+    const requirement = judged.offer.requirement as { extra: Record<string, unknown> };
+    for (const memo of [42, null, { text: "order-7" }]) {
+      const handle = server.request({
+        kind: "solana-transaction",
+        verified: { ...judged.offer.terms, payer: "" },
+        reported: { target: "https://seller.example/paid", serviceName: "Claimed by the agent" },
+        requirement: { ...requirement, extra: { ...requirement.extra, memo } } as never,
+        x402Version: 2,
+        timeoutMs: 60_000,
+        referralId: "ref_AAECAwQFBgcICQoLDA0ODw",
+      });
+      const transaction = await prepared(handle.url);
+      const built = VersionedTransaction.deserialize(Buffer.from(transaction, "base64"));
+      const keys = built.message.staticAccountKeys.map((k) => k.toBase58());
+      const memoIx = built.message.compiledInstructions.find((ix) => keys[ix.programIdIndex] === "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")!;
+      expect(Buffer.from(memoIx.data).toString(), JSON.stringify(memo)).toMatch(/^ss1AAECAwQFBgcICQoLDA0ODw[A-Za-z0-9_-]{7}$/);
+    }
+  });
+
   it("builds nothing on an RPC that is not Solana devnet, nor when devnet does not answer", async () => {
     const { link } = waiting();
     expect((await post(`${link}/account`, { address: owner.address })).status).toBe(200);
@@ -184,8 +207,11 @@ describe("the approval page for a Solana payment", () => {
       lastValidBlockHeight: chain.height + 150,
       // the slot devnet had reached when the transaction was built: a search for it starts there
       searchFromSlot: chain.height + 10,
+      // no referral and no memo from the seller: 32 random hex characters, as the transaction carries them
+      memo: expect.stringMatching(/^[0-9a-f]{32}$/),
       signer: owner.address,
     });
+    expect(Buffer.from(signed, "base64").toString("latin1")).toContain(result.memo);
     // one signature per approval: a second one is not taken
     expect(await post(`${link}/signed`, { address: owner.address, signedTransaction: signed })).toMatchObject({ status: 409 });
   });

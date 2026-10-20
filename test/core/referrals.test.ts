@@ -1,0 +1,429 @@
+// Referral transport on the buyer's side: a referral the Superstables index gives for a listing is remembered by the
+// listing's origin, attached to a quote for that exact origin while it has not expired, and sent to the seller on the
+// paid request only, with the attempt id as the purchase reference. The receipt records which referral went, never
+// the token. SUPERSTABLES_REFERRALS=off neither remembers nor sends.
+
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { findServices, getService } from "../../src/core/discovery.js";
+import { PaymentEngine, shownReceipt } from "../../src/core/pay.js";
+import { DEFAULT_POLICY } from "../../src/core/policy.js";
+import { quote } from "../../src/core/quote.js";
+import { Records } from "../../src/core/records.js";
+import { REFERRALS_FILE, referralFor, rememberReferrals } from "../../src/core/referrals.js";
+import { nonceReferral } from "../../src/core/referral-nonce.js";
+import { BrowserWalletSigner } from "../../src/core/signer/browser.js";
+import { LocalKeySigner } from "../../src/core/signer/local.js";
+import type { SignRequest, Signer } from "../../src/core/signer/types.js";
+import { WalletSigner } from "../../src/core/signer/wallet.js";
+import type { ServiceListing } from "../../src/core/types.js";
+import { attemptView } from "../../src/cli/views.js";
+import { startFakeMppSeller, startFakeTempoPay } from "../helpers/fake-tempo-pay.js";
+import { referralKey, signReferral } from "../helpers/referrals.js";
+import { sendJson, startFacilitator, startPaidEndpoint, startServer, startWallet, type PaidEndpoint } from "../helpers/servers.js";
+
+const opened: { close(): Promise<void> }[] = [];
+const key = referralKey();
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  delete process.env.SUPERSTABLES_INDEX_URL;
+  delete process.env.SUPERSTABLES_REFERRALS;
+  while (opened.length) await opened.pop()!.close();
+});
+
+function records(): Records {
+  return new Records(join(mkdtempSync(join(tmpdir(), "superstables-referrals-")), "records"));
+}
+
+/** A token whose audience is the origin of `endpoint`, as the site writes them. */
+function tokenFor(endpoint: string, claims: Parameters<typeof signReferral>[1] = {}) {
+  return signReferral(key, { aud: new URL(endpoint).origin, ...claims });
+}
+
+function inAnHour(): string {
+  return new Date(Date.now() + 3600_000).toISOString();
+}
+
+/** An index that lists `rows`, at SUPERSTABLES_INDEX_URL. */
+async function index(rows: Record<string, unknown>[]): Promise<void> {
+  const server = await startServer((_req, res) => sendJson(res, 200, { services: rows }));
+  opened.push(server);
+  process.env.SUPERSTABLES_INDEX_URL = `${server.url}/api/v1/services`;
+}
+
+function row(endpoint: string, referral?: Record<string, unknown>, id = new URL(endpoint).host): Record<string, unknown> {
+  return {
+    id,
+    name: `Service at ${id}`,
+    description: "A paid endpoint.",
+    endpoint,
+    rails: ["x402"],
+    chains: ["base-sepolia"],
+    assets: ["USDC"],
+    price: { display: "0.01 USDC", usd: 0.01 },
+    live: true,
+    ...(referral ? { referral } : {}),
+  };
+}
+
+function indexListing(endpoint: string, token: string, expiresAt = inAnHour()): ServiceListing {
+  return {
+    id: new URL(endpoint).host,
+    name: "listed",
+    description: "",
+    endpoint,
+    method: "GET",
+    params: [],
+    payment: { rail: "x402", scheme: "exact", network: "eip155:84532", networkLabel: "Base Sepolia", asset: "USDC" },
+    source: "superstables-index",
+    testnet: true,
+    actionable: false,
+    referral: { token, expiresAt, terms: "terms-1" },
+  };
+}
+
+interface X402Stack {
+  seller: PaidEndpoint;
+  records: Records;
+  engine: PaymentEngine;
+  endpoint: string;
+}
+
+async function x402Stack(): Promise<X402Stack> {
+  const facilitator = await startFacilitator();
+  const seller = await startPaidEndpoint(facilitator.url);
+  const wallet = await startWallet();
+  opened.push(facilitator, seller, wallet);
+  const r = records();
+  const engine = new PaymentEngine({
+    records: r,
+    policy: DEFAULT_POLICY,
+    signer: new WalletSigner({ url: wallet.url, agentToken: wallet.token, pollMs: 5, timeoutMs: 3_000 }),
+  });
+  return { seller, records: r, engine, endpoint: `${seller.url}/v1/market` };
+}
+
+describe("remembering referrals from the index", () => {
+  it("keeps an index listing's referral on the listing and remembers it by origin, in a 0600 file", async () => {
+    const r = records();
+    const { token } = signReferral(key);
+    const expires = inAnHour();
+    await index([
+      row("https://api.example.com/v1/weather", { token, expires_at: expires, terms: "terms-1" }),
+      row("https://plain.example.org/v1/data"),
+    ]);
+    const { services } = await findServices({ records: r, includeIndex: true });
+    const listed = services.find((s) => s.id === "api.example.com");
+    expect(listed?.referral).toEqual({ token, expiresAt: expires, terms: "terms-1" });
+    expect(services.find((s) => s.id === "plain.example.org")?.referral).toBeUndefined();
+
+    const path = join(r.dir, REFERRALS_FILE);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    const saved = JSON.parse(readFileSync(path, "utf8"));
+    expect(Object.keys(saved)).toEqual(["https://api.example.com"]);
+    expect(saved["https://api.example.com"]).toMatchObject({ listingId: "api.example.com", token, expiresAt: expires, terms: "terms-1", seenAt: expect.any(String) });
+  });
+
+  it("remembers what getService finds in the index too", async () => {
+    const r = records();
+    const { token } = signReferral(key);
+    await index([row("https://api.example.com/v1/weather", { token, expires_at: inAnHour(), terms: "terms-1" })]);
+    expect((await getService("api.example.com", { records: r }))?.referral?.token).toBe(token);
+    expect(referralFor("https://api.example.com/v1/weather?city=Lisbon", r.dir)?.token).toBe(token);
+  });
+
+  it("drops a referral that is not a token, or has no expiry, and remembers nothing that is not from the index", async () => {
+    const r = records();
+    const { token } = signReferral(key);
+    await index([
+      row("https://a.example.com/x", { token: `${token}\r\nx-evil: 1`, expires_at: inAnHour(), terms: "t" }),
+      row("https://b.example.com/x", { token, terms: "t" }),
+    ]);
+    const { services } = await findServices({ records: r });
+    expect(services.filter((s) => s.referral)).toEqual([]);
+    rememberReferrals([{ ...indexListing("https://c.example.com/x", token), source: "demo-catalogue" }], r.dir);
+    expect(referralFor("https://c.example.com/x", r.dir)).toBeUndefined();
+  });
+
+  it("drops expired referrals when it writes, and ignores one that expires after it was written", () => {
+    const r = records();
+    const now = new Date();
+    const soon = "https://soon.example.com/x";
+    rememberReferrals([indexListing(soon, tokenFor(soon).token, new Date(now.getTime() + 1000).toISOString())], r.dir, now);
+    expect(referralFor(soon, r.dir, now)).toBeDefined();
+    expect(referralFor(soon, r.dir, new Date(now.getTime() + 2000))).toBeUndefined();
+    const later = "https://later.example.com/x";
+    rememberReferrals([indexListing(later, tokenFor(later).token)], r.dir, new Date(now.getTime() + 2000));
+    expect(Object.keys(JSON.parse(readFileSync(join(r.dir, REFERRALS_FILE), "utf8")))).toEqual(["https://later.example.com"]);
+    // An already expired referral is never written.
+    const past = "https://past.example.com/x";
+    rememberReferrals([indexListing(past, tokenFor(past).token, new Date(now.getTime() - 1000).toISOString())], r.dir, now);
+    expect(referralFor(past, r.dir, now)).toBeUndefined();
+  });
+
+  it("never remembers a referral for longer than its token's own exp, nor one without an exp", () => {
+    const r = records();
+    const endpoint = "https://short.example.com/x";
+    const exp = Math.floor(Date.now() / 1000) + 120;
+    rememberReferrals([indexListing(endpoint, tokenFor(endpoint, { exp }).token, inAnHour())], r.dir);
+    expect(referralFor(endpoint, r.dir)?.expiresAt).toBe(new Date(exp * 1000).toISOString());
+    expect(referralFor(endpoint, r.dir, new Date((exp + 1) * 1000))).toBeUndefined();
+
+    const other = "https://noexp.example.com/x";
+    rememberReferrals([indexListing(other, tokenFor(other, { exp: undefined as unknown as number }).token)], r.dir);
+    expect(referralFor(other, r.dir)).toBeUndefined();
+  });
+
+  it("skips a token whose exp is out of range without losing the other listings written with it", () => {
+    const r = records();
+    const bad = "https://bad.example.com/x";
+    const good = "https://good.example.com/x";
+    rememberReferrals(
+      [
+        indexListing(bad, tokenFor(bad, { exp: -1e20 }).token, "not a date"),
+        indexListing(good, tokenFor(good).token),
+      ],
+      r.dir,
+    );
+    expect(referralFor(bad, r.dir)).toBeUndefined();
+    expect(referralFor(good, r.dir)).toBeDefined();
+  });
+
+  it("removes its temporary file when the referrals file cannot be replaced", () => {
+    const r = records();
+    // A directory where the file should be: the rename fails.
+    mkdirSync(join(r.dir, REFERRALS_FILE, "blocked"), { recursive: true });
+    const endpoint = "https://api.example.com/x";
+    rememberReferrals([indexListing(endpoint, tokenFor(endpoint).token)], r.dir);
+    expect(readdirSync(r.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("does not use a remembered token whose audience is another origin", () => {
+    const r = records();
+    const endpoint = "https://api.example.com/v1/weather";
+    rememberReferrals([indexListing(endpoint, signReferral(key, { aud: "https://other.example.com" }).token)], r.dir);
+    expect(referralFor(endpoint, r.dir)).toBeUndefined();
+  });
+
+  it("remembers nothing with SUPERSTABLES_REFERRALS=off", async () => {
+    const r = records();
+    process.env.SUPERSTABLES_REFERRALS = "off";
+    await index([row("https://api.example.com/v1/weather", { token: signReferral(key).token, expires_at: inAnHour(), terms: "t" })]);
+    await findServices({ records: r });
+    expect(() => statSync(join(r.dir, REFERRALS_FILE))).toThrow();
+  });
+});
+
+describe("referrals on quotes", () => {
+  it("attaches the referral remembered for the quote URL's exact origin, with the referral id from the token", async () => {
+    const s = await x402Stack();
+    const { token, claims } = tokenFor(s.endpoint);
+    await index([row(s.endpoint, { token, expires_at: inAnHour(), terms: "terms-1" })]);
+    const { services } = await findServices({ records: s.records });
+    const listing = services.find((l) => l.endpoint === s.endpoint)!;
+
+    const byUrl = await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY });
+    expect(byUrl.referral).toEqual({ id: claims.jti, listingId: listing.id, terms: "terms-1", expiresAt: expect.any(String) });
+    const byService = await quote({ service: listing, params: {} }, { records: s.records, policy: DEFAULT_POLICY });
+    expect(byService.referral?.id).toBe(claims.jti);
+    // The token stays in the remembered referrals: it is not copied into the quotes.
+    expect(readFileSync(join(s.records.dir, "quotes.jsonl"), "utf8")).not.toContain(token);
+  });
+
+  it("attaches nothing to a quote for a listing other than the one the referral was remembered for", async () => {
+    const s = await x402Stack();
+    rememberReferrals([indexListing(s.endpoint, tokenFor(s.endpoint).token)], s.records.dir);
+    const listing = { ...indexListing(s.endpoint, "unused"), id: "another-listing-on-this-origin" };
+    expect((await quote({ service: listing, params: {} }, { records: s.records, policy: DEFAULT_POLICY })).referral).toBeUndefined();
+    // And at pay time: a quote for another listing never sends the token remembered for this one.
+    const forged = await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY });
+    expect(forged.referral).toBeDefined();
+    s.records.saveQuote({ ...forged, serviceId: "another-listing-on-this-origin" });
+    const done = await s.engine.waitForAttempt(s.engine.startPayment(forged.id).id, 10_000);
+    expect(done.state).toBe("settled");
+    expect(done.referral).toBeUndefined();
+    expect(s.seller.seen.filter((r) => r.paid)[0]!.headers["superstables-referral"]).toBeUndefined();
+  });
+
+  it("attaches nothing for another origin, an expired referral, or with referrals off", async () => {
+    const s = await x402Stack();
+    const { token } = tokenFor(s.endpoint);
+    const other = new URL(s.endpoint);
+    other.hostname = "localhost";
+    rememberReferrals([indexListing(other.toString(), token)], s.records.dir);
+    expect((await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY })).referral).toBeUndefined();
+
+    rememberReferrals([indexListing(s.endpoint, token, new Date(Date.now() + 50).toISOString())], s.records.dir);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect((await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY })).referral).toBeUndefined();
+
+    rememberReferrals([indexListing(s.endpoint, token)], s.records.dir);
+    process.env.SUPERSTABLES_REFERRALS = "off";
+    expect((await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY })).referral).toBeUndefined();
+  });
+});
+
+describe("referrals on x402 payments", () => {
+  it("sends the token and the attempt id on the paid request only, and records the referral without the token", async () => {
+    const s = await x402Stack();
+    const { token, claims } = tokenFor(s.endpoint);
+    rememberReferrals([indexListing(s.endpoint, token)], s.records.dir);
+    const q = await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY });
+    const done = await s.engine.waitForAttempt(s.engine.startPayment(q.id).id, 10_000);
+    expect(done.state).toBe("settled");
+
+    const paid = s.seller.seen.filter((r) => r.paid);
+    const unpaid = s.seller.seen.filter((r) => !r.paid);
+    expect(paid).toHaveLength(1);
+    expect(paid[0]!.headers["superstables-referral"]).toBe(token);
+    expect(paid[0]!.headers["superstables-purchase-ref"]).toBe(done.id);
+    // The nonce the owner signed names the same referral as the token.
+    expect(nonceReferral(done.authorizationNonce!)).toBe(claims.jti);
+    // The quote's probe and the engine's fresh challenge: neither carries the referral.
+    expect(unpaid.length).toBeGreaterThanOrEqual(2);
+    for (const request of unpaid) {
+      expect(request.headers["superstables-referral"]).toBeUndefined();
+      expect(request.headers["superstables-purchase-ref"]).toBeUndefined();
+    }
+
+    const record = { id: claims.jti, listingId: new URL(s.endpoint).host, terms: "terms-1" };
+    expect(done).toMatchObject({ discoveredVia: "superstables", referral: record });
+    const receipt = s.records.getReceipt(done.receiptId!)!;
+    expect(receipt).toMatchObject({ discoveredVia: "superstables", referral: record });
+    expect(JSON.stringify(receipt)).not.toContain(token);
+    expect(shownReceipt(receipt)).toMatchObject({ discoveredVia: "superstables", referral: record });
+    expect(attemptView({ records: s.records }, done).receipt).toMatchObject({ discovered_via: "superstables", referral: record });
+  });
+
+  it("sends nothing when the quote has no referral, when it expired before the paid request, or with referrals off", async () => {
+    const s = await x402Stack();
+    const plain = await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY });
+    const first = await s.engine.waitForAttempt(s.engine.startPayment(plain.id).id, 10_000);
+    expect(first.state).toBe("settled");
+    expect(first.referral).toBeUndefined();
+    expect(s.records.getReceipt(first.receiptId!)?.discoveredVia).toBeUndefined();
+
+    const { token } = tokenFor(s.endpoint);
+    rememberReferrals([indexListing(s.endpoint, token)], s.records.dir);
+    const lapsed = await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY });
+    expect(lapsed.referral).toBeDefined();
+    // The remembered referral expires between the quote and the paid request.
+    const path = join(s.records.dir, REFERRALS_FILE);
+    const remembered = JSON.parse(readFileSync(path, "utf8"));
+    const origin = new URL(s.endpoint).origin;
+    writeFileSync(path, JSON.stringify({ [origin]: { ...remembered[origin], expiresAt: new Date(Date.now() - 1000).toISOString() } }));
+    const second = await s.engine.waitForAttempt(s.engine.startPayment(lapsed.id).id, 10_000);
+    expect(second.state).toBe("settled");
+    expect(second.referral).toBeUndefined();
+    expect(second.authorizationNonce).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(nonceReferral(second.authorizationNonce!)).toBeUndefined();
+    rememberReferrals([indexListing(s.endpoint, token)], s.records.dir);
+
+    const off = await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY });
+    expect(off.referral).toBeDefined();
+    process.env.SUPERSTABLES_REFERRALS = "off";
+    const third = await s.engine.waitForAttempt(s.engine.startPayment(off.id).id, 10_000);
+    expect(third.state).toBe("settled");
+    expect(third.discoveredVia).toBeUndefined();
+
+    expect(s.seller.seen.filter((r) => r.paid)).toHaveLength(3);
+    for (const request of s.seller.seen) expect(request.headers["superstables-referral"]).toBeUndefined();
+  });
+
+  it("sends no token when the wallet signed a nonce of its own, so token and nonce never name different referrals", async () => {
+    const facilitator = await startFacilitator();
+    const seller = await startPaidEndpoint(facilitator.url);
+    opened.push(facilitator, seller);
+    const r = records();
+    const local = new LocalKeySigner(privateKeyToAccount(generatePrivateKey()));
+    // A wallet from before the payment engine chose the nonce: it ignores the one it is handed.
+    const ownNonce: Signer = { kind: "local", address: (network) => local.address(network), sign: (req) => local.sign({ ...req, nonce: undefined } as SignRequest) };
+    const engine = new PaymentEngine({ records: r, policy: DEFAULT_POLICY, signer: ownNonce });
+    const endpoint = `${seller.url}/v1/market`;
+    rememberReferrals([indexListing(endpoint, tokenFor(endpoint).token)], r.dir);
+    const q = await quote({ url: `${endpoint}?asset=BTC` }, { records: r, policy: DEFAULT_POLICY });
+    expect(q.referral).toBeDefined();
+
+    const done = await engine.waitForAttempt(engine.startPayment(q.id).id, 10_000);
+    expect(done.state).toBe("settled");
+    expect(nonceReferral(done.authorizationNonce!)).toBeUndefined();
+    expect(done.referral).toBeUndefined();
+    const paid = seller.seen.filter((x) => x.paid);
+    expect(paid).toHaveLength(1);
+    expect(paid[0]!.headers["superstables-referral"]).toBeUndefined();
+    expect(paid[0]!.headers["superstables-purchase-ref"]).toBeUndefined();
+  });
+});
+
+describe("a referral never costs a payment", () => {
+  it("pays without the referral when the attempt cannot record it", async () => {
+    const s = await x402Stack();
+    rememberReferrals([indexListing(s.endpoint, tokenFor(s.endpoint).token)], s.records.dir);
+    const q = await quote({ url: `${s.endpoint}?asset=BTC` }, { records: s.records, policy: DEFAULT_POLICY });
+    expect(q.referral).toBeDefined();
+    const save = s.records.saveAttempt.bind(s.records);
+    vi.spyOn(s.records, "saveAttempt").mockImplementation((attempt) => {
+      if (attempt.referral) throw new Error("ENOSPC: no space left on device");
+      return save(attempt);
+    });
+    const done = await s.engine.waitForAttempt(s.engine.startPayment(q.id).id, 10_000);
+    expect(done.state).toBe("settled");
+    expect(done.referral).toBeUndefined();
+    const paid = s.seller.seen.filter((r) => r.paid);
+    expect(paid).toHaveLength(1);
+    expect(paid[0]!.headers["superstables-referral"]).toBeUndefined();
+    expect(paid[0]!.headers["superstables-purchase-ref"]).toBeUndefined();
+  });
+});
+
+describe("referrals on Tempo payments", () => {
+  it("sends the token and the attempt id on the paid request only", async () => {
+    const chain = await startFakeTempoPay();
+    const seller = await startFakeMppSeller(chain, { recipient: "0x2222222222222222222222222222222222222222" });
+    const dir = mkdtempSync(join(tmpdir(), "superstables-referrals-tempo-"));
+    const signer = new BrowserWalletSigner({ port: 0, home: dir, policy: DEFAULT_POLICY, timeoutMs: 10_000, balance: false });
+    const r = new Records(join(dir, "records"));
+    const engine = new PaymentEngine({ records: r, policy: DEFAULT_POLICY, signer, rpcUrl: chain.url });
+    opened.push(chain, seller, { close: () => signer.close() });
+
+    const { token, claims } = tokenFor(`${seller.url}/paid`);
+    rememberReferrals([indexListing(`${seller.url}/paid`, token)], r.dir);
+    const q = await quote({ url: `${seller.url}/paid` }, { records: r, policy: DEFAULT_POLICY });
+    expect(q.referral?.id).toBe(claims.jti);
+    const attempt = engine.startPayment(q.id);
+    const link = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("no approval link")), 10_000);
+      const check = () => {
+        const url = engine.getAttempt(attempt.id)?.approvalUrl;
+        if (url) {
+          clearTimeout(timer);
+          resolve(url);
+        }
+      };
+      engine.events.on("transition", check);
+      check();
+    });
+    const post = async (path: string, body: unknown) => {
+      const res = await fetch(`${link}/${path}`, { method: "POST", headers: { "content-type": "application/json", origin: new URL(link).origin }, body: JSON.stringify(body) });
+      return (await res.json()) as Record<string, any>;
+    };
+    const owner = privateKeyToAccount(generatePrivateKey()).address;
+    const call = (await post("account", { address: owner })).transaction;
+    await post("sending", { address: owner });
+    const hash = chain.send(owner, call);
+    await post("sent", { address: owner, hash });
+    const done = await engine.waitForAttempt(attempt.id, 15_000);
+    expect(done.state).toBe("settled");
+
+    const paid = seller.seen.filter((x) => x.paid);
+    expect(paid).toHaveLength(1);
+    expect(paid[0]!.headers["superstables-referral"]).toBe(token);
+    expect(paid[0]!.headers["superstables-purchase-ref"]).toBe(done.id);
+    for (const request of seller.seen.filter((x) => !x.paid)) expect(request.headers["superstables-referral"]).toBeUndefined();
+    expect(r.getReceipt(done.receiptId!)).toMatchObject({ discoveredVia: "superstables", referral: { id: claims.jti } });
+  }, 30_000);
+});

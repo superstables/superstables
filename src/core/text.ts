@@ -27,6 +27,19 @@ export function untrustedText(value: unknown, max = 300): string {
 }
 
 /**
+ * Whether somebody else's text holds a secret of ours: written plainly, or split by the invisible characters that
+ * untrustedText removes, which would put it back together on its way to a terminal.
+ */
+export function mentionsSecret(text: string, secret: string): boolean {
+  return secret !== "" && (text.includes(secret) || text.replace(INVISIBLE, "").includes(secret));
+}
+
+/** Somebody else's text with a secret of ours replaced by a word, whether it was written plainly or split by invisible characters. */
+export function redactSecret(text: string, secret: string): string {
+  return mentionsSecret(text, secret) ? text.replace(INVISIBLE, "").split(secret).join("[redacted]") : text;
+}
+
+/**
  * Somebody else's JSON value as --json prints it: every string in it, object keys included, with CONTROL as a space and
  * INVISIBLE removed, neither trimmed nor shortened. A string without those characters (an address, a hash, an amount, an
  * id, a time) comes out byte for byte. Numbers, booleans and null are kept. Below 64 levels a value is replaced by a

@@ -19,6 +19,8 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 | [`superstables status`](#superstables-status) | where a payment attempt got to, and what to do next |
 | [`superstables receipts`](#superstables-receipts) | the payments made from this machine, newest first |
 | [`superstables attempts`](#superstables-attempts) | every payment attempt, paid or not, newest first |
+| [`superstables seller top-up`](#superstables-seller-top-up) | add to the seller's Superstables credit, with test USDC on Base Sepolia |
+| [`superstables seller credit`](#superstables-seller-credit) | the seller's credit balance, latest top-ups and credit entries |
 | [`superstables demo-service`](#superstables-demo-service) | run the demo paid service, so there is something to buy on this machine |
 | [`superstables doctor`](#superstables-doctor) | check everything pay needs, one line at a time |
 | [`superstables policy show`](#superstables-policy-show) | print the policy in force |
@@ -64,6 +66,8 @@ Commands:
                                  first
   attempts [options]             every payment attempt, paid or not, newest
                                  first
+  seller                         the seller's prepaid credit at Superstables,
+                                 which the fees of referred sales come out of
   demo-service [options]         run the demo paid service, so there is
                                  something to buy on this machine
   budget [args...]               on-chain budgets (testnets): the owner grants a
@@ -107,6 +111,12 @@ Start here, one purchase on superstables.com:
   superstables budget find --once                      the services you can buy this way
   superstables budget buy-once --service <id> --max M  the owner approves one purchase on superstables.com
 
+Seller credit (a seller account on superstables.com):
+  superstables seller credit                          the prepaid credit referral fees come out of
+  superstables seller top-up <amount>                 add to it with test USDC on Base Sepolia
+  The seller API key comes from SUPERSTABLES_SELLER_API_KEY and goes only to the Superstables
+  origin, never into this output. A top-up is paid like any purchase: the owner approves it.
+
 Start here, budget: superstables budget setup --rail evm
   `superstables setup` is for pay only. Budgets are a separate tool; each subcommand takes --help.
   An owner command prints an approval link: an agent may start it and hand it to the owner,
@@ -127,6 +137,7 @@ Start here, budget: superstables budget setup --rail evm
 Who runs what:
   owner   setup, wallet init, wallet serve, wallet open, policy init, owner settings, and every approval
   agent   find, quote, pay, status, receipts, attempts, doctor
+  seller  seller credit and seller top-up, with the seller account's key
   Either may run the read-only commands.
 
 Owner settings:
@@ -157,6 +168,7 @@ Environment:
                                  (most are simulated; the market data service returns live prices)
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; `off` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
+  SUPERSTABLES_REFERRALS         off: do not remember or send the referral tokens of index listings
   SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances and the chain check on a settlement
                                  (https, or http on this machine); wallets adding the chain get the public RPC;
                                  unset: the RPC set with superstables owner settings rpc, else the chain's public one
@@ -169,10 +181,12 @@ Environment:
                                  socket in the wallet folder; its page is on http://127.0.0.1:4411)
   SUPERSTABLES_DOCTOR_OFFLINE    1: doctor skips the network checks
   SUPERSTABLES_DEMO_PAY_TO       where demo-service's earnings go
+  SUPERSTABLES_SELLER_API_KEY    the seller API key seller credit and seller top-up send to superstables.com
+                                 (never printed)
 
 Output:
-  find, quote, pay, status, receipts and attempts take --json: one JSON value on stdout, progress
-  and notes on stderr. An error under --json is {"error", "exit_code"} on stdout.
+  find, quote, pay, status, receipts, attempts and the seller commands take --json: one JSON value
+  on stdout, progress and notes on stderr. An error under --json is {"error", "exit_code"} on stdout.
 
 Exit codes (the same numbers as `superstables budget`):
   0  done: printed what was asked; for pay, the payment settled (chain: verified, or unchecked until checked
@@ -647,6 +661,127 @@ Prints: a table of attempts and their states. With --json, the attempt records n
 Exit codes: 0 listed (also when there are none), 2 bad input (the full table: superstables --help)
 ```
 
+## superstables seller
+
+```text
+Usage: superstables seller [options] [command]
+
+the seller's prepaid credit at Superstables, which the fees of referred sales
+come out of
+
+Options:
+  -h, --help                 display help for command
+
+Commands:
+  top-up [options] <amount>  add to the seller's Superstables credit, with test
+                             USDC on Base Sepolia
+  credit [options]           the seller's credit balance, latest top-ups and
+                             credit entries
+  help [command]             display help for command
+
+The seller API key comes from SUPERSTABLES_SELLER_API_KEY, the key the seller portal issues. It is
+sent only to the Superstables origin this client already uses, in an Authorization header, and it is
+never printed or saved: an answer that holds it is discarded unread.
+
+Moves money: only `seller top-up`, and only for the payment the owner approves in their wallet.
+Run by: the seller (the owner of the seller account), in a terminal of their own.
+Example:
+  $ superstables seller credit
+  $ superstables seller top-up 25
+Prints: see each subcommand's --help.
+Exit codes: 0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not credited, 5 unknown (the full
+  table: superstables --help)
+```
+
+## superstables seller top-up
+
+```text
+Usage: superstables seller top-up [options] <amount>
+
+add to the seller's Superstables credit, with test USDC on Base Sepolia
+
+Arguments:
+  amount            how much credit to add, in USDC, from 1 to 1000 (for example
+                    25 or 25.50)
+
+Options:
+  --wait <seconds>  stop waiting for the owner's decision after this many
+                    seconds (default: until the approval window closes)
+  --json            print the outcome as one JSON object; progress and the
+                    approval link go to stderr
+  -h, --help        display help for command
+
+It creates one top-up with the seller API, then pays it like any other x402 purchase: the same
+signer, the same spend policy and the same approval in the owner's wallet as `pay`. Nothing here
+bypasses them.
+
+Before anything is signed, the answer, the pay link and the 402 are checked: a UUID id, the pay link
+on this site's origin with exactly that id's pay path and no query or fragment, and a payment on
+Base Sepolia (eip155:84532) in test USDC for exactly the amount asked for. Any mismatch is refused
+and nothing is paid. `pay` asks for the terms again before the owner is asked, and refuses changed
+ones as it does for a quote.
+
+The site is held to the trust of an owner action: SUPERSTABLES_SITE when set, else the owner's site,
+else www.superstables.com, and it must be www.superstables.com or a site the owner allowed in their
+settings (staging, this machine). There is no flag that sends the key anywhere else.
+
+No new top-up is created while an earlier one is in doubt: the site lists one as pending, a payment
+on this machine is still under way, or one that ended in doubt (unknown, or paid and not yet
+confirmed on chain) is for a top-up the site does not list. A top-up the site lists as anything but
+pending is not held back by an ended payment, and neither is a retired one, even if an old payment
+may have paid its old address. `superstables seller credit` rechecks pending top-ups, and
+`superstables status <attempt>` searches the chain and ends the attempt, which then holds nothing
+back.
+
+The credit is added once the payment's block is final on chain. A payment the site reports as
+pending, or cannot confirm, or answers with money_moved other than false, on any HTTP status, is
+never paid again from here: `superstables seller credit` rechecks it. "Nothing was charged" is said
+only when nothing was signed. The default spend policy allows 0.05 USDC per payment, so a top-up
+needs a raised cap in the policy file.
+
+Moves money: yes, once, and only after the owner approves it in their own wallet: test USDC on Base
+  Sepolia.
+Run by: the seller (the owner of the seller account).
+Example:
+  $ superstables seller top-up 25
+  $ superstables seller top-up 10.50 --json
+Prints: the top-up's id, amount, chain, status, the payment's outcome and transaction, and the next
+  command. With --json, one object: top_up {id, amount, status, pay_url}, quote_id, attempt_id,
+  state, chain, chain_final, message, next, exit_code.
+Exit codes: 0 paid (also when the site says this top-up is already paid), 1 nothing was signed (the
+  site refused, the pay link was not payable, or the approval expired), 2 bad input (no key, a bad
+  amount or site), 3 refused (the answer or the 402 named another top-up, an earlier top-up is in
+  doubt and none was created, or a spend policy refused it), 4 paid but the site's answer failed, 5
+  unknown (a payment may have moved: do not pay again) (the full table: superstables --help)
+```
+
+## superstables seller credit
+
+```text
+Usage: superstables seller credit [options]
+
+the seller's credit balance, latest top-ups and credit entries
+
+Options:
+  --json      print the balance, top-ups and entries as one JSON object
+  -h, --help  display help for command
+
+Reads the seller API: the balance, the latest top-ups and the latest credit entries. It rechecks
+pending top-ups before it answers, so it can take about eight seconds.
+
+A referred sale's fee comes out of this balance; `seller top-up` adds to it.
+
+Moves money: no.
+Run by: the seller (the owner of the seller account).
+Example:
+  $ superstables seller credit
+  $ superstables seller credit --json
+Prints: the balance, then a table of top-ups and one of credit entries. With --json, one object:
+  balance, asset, network, top_ups, entries, next.
+Exit codes: 0 read, 1 the seller API refused or could not be read, 2 no key or a bad site (the full
+  table: superstables --help)
+```
+
 ## superstables demo-service
 
 ```text
@@ -662,6 +797,10 @@ Options:
 
 The seller side of the demo. Point discovery at it with
 SUPERSTABLES_DEMO_SERVICE_URL=http://127.0.0.1:4402/v1/market.
+
+Claim challenge, off unless set (testnet only): SUPERSTABLES_CLAIM_CHALLENGE=<ssc_...> serves
+/.well-known/superstables.txt and adds a Superstables-Claim header to every answer of /v1/market, so
+superstables.com can confirm this host is yours.
 
 Moves money: it receives test USDC; it never pays.
 Run by: a developer who wants to see the seller side.

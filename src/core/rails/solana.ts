@@ -128,8 +128,8 @@ export const solanaRail: X402Rail = {
     return { supported: true, offer: { rail: "solana", terms, requirement } };
   },
 
-  signRequest(offer, _x402Version, context) {
-    return { kind: "solana-transaction", requirements: offer.requirement as PaymentRequirements, x402Version: 2, context };
+  signRequest(offer, _x402Version, context, referralId) {
+    return { kind: "solana-transaction", requirements: offer.requirement as PaymentRequirements, x402Version: 2, ...(referralId ? { referralId } : {}), context };
   },
 
   signedFacts(signed: SignResult): SignedFacts {

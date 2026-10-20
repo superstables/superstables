@@ -11,18 +11,24 @@
 //      THIS PURCHASE'S OWN pull must land before it may pay. One purchase per agent key and chain at a time, from the balance
 //      checks to its end (op-lock.mjs requireKeyLock).
 //   4. Before the pull the x402 client builds the exact payment it would send and the signer checks it without signing; after the
-//      pull it signs it, once, with from = agent (normal EOA signature). The signer checks the whole message (EIP-712 domain name,
-//      version, chain and token, recipient, amount, payer, lifetime) against the option that passed the prechecks.
+//      pull it signs it, once, with from = agent (normal EOA signature). The EIP-3009 authorization is built here with the
+//      operation's own nonce, which is marked with the seller's referral when the index gave one. The signer checks the whole
+//      message (EIP-712 domain name, version, chain and token, recipient, amount, payer, lifetime, nonce) against the option that
+//      passed the prechecks. The paid request carries that referral's token.
 //   5. The settlement is read back from the chain (the operation's own authorization nonce), not from the seller.
 //   6. If the pull landed and the payment did not settle: never re-pay. Cancel the open authorization on chain, then
 //      return the price to the owner (USDC.transfer), after a fresh chain read. See ops.ts makeSafe.
 import { requireRecordLock, requireKeyLock } from "../op-lock.mjs";
-import { encodeFunctionData, hashTypedData, isAddress, parseUnits, type Address } from "viem";
+import { encodeFunctionData, getAddress, hashTypedData, isAddress, parseUnits, type Address, type Hex } from "viem";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme, authorizationTypes } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import { refusedChainWords } from "../next-steps.mjs";
+import { nonceReferral, referralNonce } from "../../src/core/referral-nonce.ts";
+import { referralFor, type ActiveReferral } from "../../src/core/referrals.ts";
+import { authorizationTypedData } from "../../src/core/signer/steps/eip3009.ts";
+import { PURCHASE_REF_HEADER, REFERRAL_HEADER } from "../../src/seller/referral.ts";
 import {
   OPS_DIR, SYM, oneLine,
   sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, chainReason, publicClient, sleep,
@@ -31,7 +37,7 @@ import {
 } from "./lib.ts";
 import {
   newJournal, readJournal, writeJournal, reconcileJournal, readSettlement, readPull, makeSafe, otherOpWithTx, addFee, exitCodeFor, pendingJournalsFor, scanJournals, atomicUsdc, REUSABLE, PENDING,
-  type Journal, type OpState,
+  type Journal, type JournalReferral, type OpState,
 } from "./ops.ts";
 
 /** The longest authorization a budget purchase signs: a seller asking for longer is refused (the x402 client signs exactly the seller's window). */
@@ -138,6 +144,68 @@ export function onlyOption(reqs: any[], chosen: any): any[] {
   return chosen ? reqs.filter((r) => sameOption(r, chosen)) : [];
 }
 
+/**
+ * The referral an operation pays under and the nonce it signs, decided when it first starts. A later run under the same
+ * --op (one that signed nothing) keeps both, so an operation's attribution never changes. A referral that cannot be read
+ * is no referral: it is never worth a payment.
+ */
+export function operationAttribution(prior: Journal | null, url: string, lookup: (url: string) => ActiveReferral | undefined = referralFor): Pick<Journal, "referral" | "authorizationNonce"> {
+  if (prior?.authorizationNonce) return { ...(prior.referral ? { referral: prior.referral } : {}), authorizationNonce: prior.authorizationNonce };
+  let referral: JournalReferral | undefined;
+  try {
+    const found = lookup(url);
+    if (found) referral = { id: found.id, listingId: found.listingId, terms: found.terms, token: found.token };
+  } catch {}
+  return { ...(referral ? { referral } : {}), authorizationNonce: referralNonce(referral?.id) };
+}
+
+/**
+ * The referral headers of an operation's paid request: the token and the operation id as the purchase reference. None
+ * unless the operation's nonce carries the same referral, so the token never names another referral than the payment.
+ */
+export function referralHeaders(j: Pick<Journal, "op" | "referral" | "authorizationNonce">): Record<string, string> {
+  if (!j.referral || !j.authorizationNonce || nonceReferral(j.authorizationNonce) !== j.referral.id) return {};
+  return { [REFERRAL_HEADER]: j.referral.token, [PURCHASE_REF_HEADER]: j.op };
+}
+
+/** A fetch that adds `headers` to the paid request only, the one carrying the payment, never to the unpaid one. */
+export function onPaidRequest(base: typeof fetch, headers: Record<string, string>): typeof fetch {
+  return (input: any, init?: any) => {
+    const request = new Request(input, init);
+    if (request.headers.has("PAYMENT-SIGNATURE") || request.headers.has("X-PAYMENT")) {
+      for (const [name, value] of Object.entries(headers)) request.headers.set(name, value);
+    }
+    return base(request);
+  };
+}
+
+type TypedDataSigner = { address: Address; signTypedData(m: any): Promise<Hex> };
+
+/**
+ * The SDK's x402 exact scheme for this chain (v1 or v2), with an EIP-3009 payload built here: the same authorization the
+ * SDK builds, over the token's own domain, but with `nonce` instead of one the SDK picks. Any other transfer method stays
+ * the SDK's (checkAccept refuses those before anything is pulled).
+ */
+export function withNonce<S extends ExactEvmScheme | ExactEvmSchemeV1>(scheme: S, signer: TypedDataSigner, nonce: Hex): S {
+  const sdk = scheme.createPaymentPayload.bind(scheme) as (x402Version: number, requirements: any, context?: any) => Promise<any>;
+  return Object.assign(scheme, {
+    async createPaymentPayload(x402Version: number, requirements: any, context?: any) {
+      if (x402Version !== 1 && (requirements.extra?.assetTransferMethod ?? "eip3009") !== "eip3009") return sdk(x402Version, requirements, context);
+      const typed = authorizationTypedData({
+        domain: { name: CFG.domain.name, version: CFG.domain.version, chainId: CFG.chainId, verifyingContract: getAddress(String(requirements.asset)) },
+        requirement: requirements,
+        x402Version: x402Version === 1 ? 1 : 2,
+        payer: signer.address,
+        nonce,
+      });
+      const signature = await signer.signTypedData(typed);
+      const payload = { authorization: { ...typed.message }, signature };
+      // A v1 payload is sent as it is, so it names its scheme and chain itself, as the SDK's v1 scheme does.
+      return x402Version === 1 ? { x402Version, scheme: requirements.scheme, network: requirements.network, payload } : { x402Version, payload };
+    },
+  });
+}
+
 export type PurchaseOpts = {
   url: string;
   c: AgentCtx;
@@ -180,7 +248,7 @@ export type PurchaseResult = {
 class ProbeDone extends Error { constructor(public problem: string | null) { super("probe"); } }
 
 /** Why the signer refuses this EIP-712 request, or null. Pure. */
-export function typedDataProblem(m: any, o: { chosen: any; selected: any; payer: string; now: number }): string | null {
+export function typedDataProblem(m: any, o: { chosen: any; selected: any; payer: string; now: number; nonce?: string }): string | null {
   const { chosen, selected, payer, now } = o;
   const d = m?.domain ?? {}, msg = m?.message ?? {};
   if (!chosen) return "no validated quote";
@@ -200,6 +268,7 @@ export function typedDataProblem(m: any, o: { chosen: any; selected: any; payer:
   if (before <= BigInt(now)) return "authorization has already expired";
   if (before > BigInt(now + Number(chosen.maxTimeoutSeconds) + CLOCK_SLACK_S)) return `authorization would stay valid longer than ${chosen.maxTimeoutSeconds} s`;
   if (!/^0x[0-9a-fA-F]{64}$/.test(String(msg.nonce ?? ""))) return "authorization nonce is not 32 bytes";
+  if (o.nonce !== undefined && String(msg.nonce).toLowerCase() !== o.nonce.toLowerCase()) return "authorization nonce is not this operation's";
   // The fields above are the ones that matter to a person; the digest pins the rest: no extra domain field (a salt), no overridden
   // EIP712Domain type, no extra or renamed struct field. What is signed is exactly the token's EIP-3009 authorization.
   try {
@@ -292,6 +361,10 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
     return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: PENDING.includes(prior.state) ? `run reconcile --op ${o.op}` : "use a new --op" }, exitCode: 3 };
   }
 
+  // Frozen for this operation before anything is signed: a later run under the same --op pays under the same referral.
+  Object.assign(j, operationAttribution(prior, url));
+  if (j.referral) log(`referral ${j.referral.id} for listing ${j.referral.listingId}`);
+
   let chosen: any = null;
   let stop: Stop | null = null;
   let selected: any = null;   // what onBeforePaymentCreation confirmed, deep-equal to chosen
@@ -307,7 +380,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
         throw stop;
       }
       // last gate before a signature exists: the message must be exactly the quote that passed the prechecks
-      const bad = typedDataProblem(m, { chosen, selected, payer: agent.account.address, now: Math.floor(Date.now() / 1000) });
+      const bad = typedDataProblem(m, { chosen, selected, payer: agent.account.address, now: Math.floor(Date.now() / 1000), nonce: j.authorizationNonce });
       if (probing) throw new ProbeDone(bad);
       if (bad || res.pulled === 0n) {
         stop = new Stop("precheck", bad ? `signer refused: ${bad}` : "signer refused: this purchase's own pull has not landed");
@@ -323,15 +396,16 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
       return agent.account.signTypedData(m);
     },
   };
+  const nonce = j.authorizationNonce!;
   // the client can only ever select the option that passed the prechecks: its selector, its policy, and a hook before it builds a payment
   const core = new x402Client((_v: number, reqs: any[]) => {
     const same = reqs.filter((r) => sameOption(r, chosen));
     if (!same.length) throw new Error("no option equals the one that passed the prechecks");
     return same[0];
-  }).register(NETWORK as `${string}:${string}`, new ExactEvmScheme(signer as any));
+  }).register(NETWORK as `${string}:${string}`, withNonce(new ExactEvmScheme(signer as any), signer, nonce));
   // x402 v1 sellers name the chain the old way ("base-sepolia") and have their own table and scheme class. register() takes
   // no version argument: a v1 name registered there is never matched, and every v1 seller was refused.
-  for (const legacy of CFG.legacyNetworks) core.registerV1(legacy, new ExactEvmSchemeV1(signer as any));
+  for (const legacy of CFG.legacyNetworks) core.registerV1(legacy, withNonce(new ExactEvmSchemeV1(signer as any), signer, nonce));
   // only the option that passed the prechecks can be selected
   core.registerPolicy((_v: number, reqs: any[]) => onlyOption(reqs, chosen));
   core.onBeforePaymentCreation(async ({ selectedRequirements }: any) => {
@@ -507,7 +581,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
   // one deadline per request: a seller that never answers must not hang the purchase. No redirects: the paid retry
   // carries PAYMENT-SIGNATURE, which fetch would take to whatever host a redirect names.
   const timedFetch: typeof fetch = capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) }));
-  const pay = wrapFetchWithPayment(timedFetch, http);
+  const pay = wrapFetchWithPayment(onPaidRequest(timedFetch, referralHeaders(j)), http);
   let r: Response;
   try {
     r = await pay(url);

@@ -29,6 +29,7 @@
 import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, openSync, writeSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { Hex } from "viem";
 import { networkFor } from "../chain.js";
 import { DEFAULT_APPROVE_PORT, approvalsPath, ensureDir, recordsDir } from "../home.js";
 import type { RailRequirement } from "../rails/types.js";
@@ -62,6 +63,10 @@ export interface ApprovalRequestInput {
   /** Which spend policy applied. Shown on the page; used for nothing else. */
   policy?: PagePolicy;
   x402Version: 1 | 2;
+  /** EIP-3009: the nonce the payment engine chose for the authorization. */
+  nonce?: Hex;
+  /** Solana and Tempo: the referral the payment engine chose for the memo. */
+  referralId?: string;
   /** How long the person has to decide. */
   timeoutMs: number;
   /** When the approval must end at the latest, if sooner than timeoutMs (a seller's challenge that expires sooner). */
@@ -319,6 +324,8 @@ export class ApprovalServer {
       seller: sellerOf(input.reported?.target),
       requirement: input.requirement,
       x402Version: input.x402Version,
+      ...(input.nonce ? { nonce: input.nonce } : {}),
+      ...(input.referralId ? { referralId: input.referralId } : {}),
       timeoutMs: input.timeoutMs,
       beforeWalletSends: input.beforeWalletSends,
       status: "pending",

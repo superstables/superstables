@@ -7,6 +7,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { decodeFunctionData, parseAbi, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { PaymentEngine, recheckChain, shownAttempt, shownReceipt } from "../../src/core/pay.js";
@@ -20,6 +21,8 @@ import { SignRefused, type Signer, type TempoSignRequest } from "../../src/core/
 
 import { attemptView, messageFor } from "../../src/cli/views.js";
 import { nextFor } from "../../src/cli/outcome.js";
+import { rememberReferrals } from "../../src/core/referrals.js";
+import { referralKey, signReferral } from "../helpers/referrals.js";
 import { PATH_USD, startFakeMppSeller, startFakeTempoPay, type FakeMppSeller, type FakeTempoPay } from "../helpers/fake-tempo-pay.js";
 
 const RECIPIENT = "0x2222222222222222222222222222222222222222";
@@ -90,6 +93,156 @@ async function startTempoPayment(s: Stack) {
   const owner = privateKeyToAccount(generatePrivateKey()).address;
   return { q, attempt, link, owner };
 }
+
+/** The seller's listing in the index carries a referral with this id: remembered as `find` remembers it. */
+function referred(s: Stack, id: string): string {
+  const origin = new URL(s.url).origin;
+  const { token } = signReferral(referralKey(), { jti: id, aud: origin });
+  rememberReferrals([{
+    id: new URL(origin).host, name: "listed", description: "", endpoint: s.url, method: "GET", params: [],
+    payment: { rail: "mpp", scheme: "charge", network: "eip155:42431", networkLabel: "Tempo Moderato", asset: "pathUSD" },
+    source: "superstables-index", testnet: true, actionable: false,
+    referral: { token, expiresAt: new Date(Date.now() + 3600_000).toISOString(), terms: "terms-1" },
+  }], s.records.dir);
+  return token;
+}
+
+const memoOfCall = (data: Hex) => decodeFunctionData({ abi: parseAbi(["function transferWithMemo(address to, uint256 amount, bytes32 memo)"]), data }).args[2];
+
+describe("a referred pay on Tempo Moderato", () => {
+  const ID = "ref_AAECAwQFBgcICQoLDA0ODw";
+  const CLIENT_ID = `superstables:${ID}`;
+
+  it("puts the referral's client id in the memo the wallet sends, the engine records and the seller accepts, and sends its token", async () => {
+    const s = await stack();
+    const token = referred(s, ID);
+    const { attempt, link, owner } = await startTempoPayment(s);
+    const call = (await postJson(`${link}/account`, { address: owner })).body.transaction as { from: string; to: string; data: Hex; value: string };
+    const memo = mppMemo(s.seller.issued.at(-1)!.id, "seller.example", CLIENT_ID);
+    expect(memoOfCall(call.data)).toBe(memo);
+    expect(memo.slice(32, 52)).not.toBe("0".repeat(20));
+    expect((await postJson(`${link}/sending`, { address: owner })).status).toBe(200);
+    expect(s.records.getAttempt(attempt.id)?.paymentMemo).toBe(memo);
+    const hash = s.chain.send(owner, call);
+    expect((await postJson(`${link}/sent`, { address: owner, hash })).status).toBe(200);
+    const done = await s.engine.waitForAttempt(attempt.id, 15_000);
+    expect(done.state, done.reason).toBe("settled");
+    expect(s.seller.paid).toHaveLength(1);
+    const paid = s.seller.seen.filter((r) => r.paid);
+    expect(paid).toHaveLength(1);
+    expect(paid[0]!.headers["superstables-referral"]).toBe(token);
+    expect(paid[0]!.headers["superstables-purchase-ref"]).toBe(attempt.id);
+  });
+
+  it("finds a referred payment whose hash never came back by the same memo", async () => {
+    const s = await stack({ timeoutMs: 1_500 });
+    referred(s, ID);
+    const { attempt, link, owner } = await startTempoPayment(s);
+    const call = (await postJson(`${link}/account`, { address: owner })).body.transaction as { from: string; to: string; data: Hex; value: string };
+    await postJson(`${link}/sending`, { address: owner });
+    const done = await s.engine.waitForAttempt(attempt.id, 10_000);
+    expect(done.state).toBe("uncertain");
+    expect(done.paymentMemo).toBe(mppMemo(s.seller.issued.at(-1)!.id, "seller.example", CLIENT_ID));
+    const hash = s.chain.send(owner, call);
+    const found = await recheckChain(s.records, attempt.id, s.chain.url);
+    expect(found).toMatchObject({ state: "paid_service_failed", transaction: hash, chain: "verified" });
+  });
+
+  it("keeps ten zero bytes in the client slot without a referral or with referrals off, and sends no token", async () => {
+    for (const off of [false, true]) {
+      const s = await stack();
+      if (off) referred(s, ID);
+      if (off) process.env.SUPERSTABLES_REFERRALS = "off";
+      try {
+        const { attempt, link, owner } = await startTempoPayment(s);
+        const call = (await postJson(`${link}/account`, { address: owner })).body.transaction as { from: string; to: string; data: Hex; value: string };
+        expect(memoOfCall(call.data)).toBe(mppMemo(s.seller.issued.at(-1)!.id, "seller.example"));
+        expect(memoOfCall(call.data).slice(32, 52)).toBe("0".repeat(20));
+        await postJson(`${link}/sending`, { address: owner });
+        const hash = s.chain.send(owner, call);
+        await postJson(`${link}/sent`, { address: owner, hash });
+        expect((await s.engine.waitForAttempt(attempt.id, 15_000)).state).toBe("settled");
+        expect(s.seller.seen.filter((r) => r.paid)[0]!.headers["superstables-referral"]).toBeUndefined();
+      } finally {
+        delete process.env.SUPERSTABLES_REFERRALS;
+      }
+    }
+  });
+});
+
+describe("a challenge an earlier payment used, under another referral", () => {
+  const FIRST = "ref_AAECAwQFBgcICQoLDA0ODw";
+  const OTHER = "ref_EBESExQVFhcYGRobHB0eHw";
+
+  /** The first payment of `challengeId`, paid and settled under `firstId` (none when undefined). */
+  async function paidFirst(firstId: string | undefined) {
+    const s = await stack({ challengeId: "the-same-challenge" });
+    if (firstId) referred(s, firstId);
+    const first = await startTempoPayment(s);
+    const prepared = await postJson(`${first.link}/account`, { address: first.owner });
+    await postJson(`${first.link}/sending`, { address: first.owner });
+    const hash = s.chain.send(first.owner, prepared.body.transaction);
+    await postJson(`${first.link}/sent`, { address: first.owner, hash });
+    expect((await s.engine.waitForAttempt(first.attempt.id, 15_000)).state).toBe("settled");
+    expect(s.records.getAttempt(first.attempt.id)?.paymentMemo?.slice(32, 52) === "0".repeat(20)).toBe(firstId === undefined);
+    return { s, first };
+  }
+
+  /** The seller hands the same challenge out again: the second attempt is refused before the wallet is asked. */
+  async function expectRefused(s: Stack, firstId: string) {
+    const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const second = await s.engine.waitForAttempt(s.engine.startPayment(q.id).id, 10_000);
+    expect(second).toMatchObject({ state: "failed", refusal: "invalid" });
+    expect(second.reason).toBe(
+      `the seller's payment challenge is one an earlier payment already used (attempt ${firstId}), so a transfer for it could not be told apart from that payment's; nothing was sent. Quote again for a new challenge`,
+    );
+    expect(second.approvalUrl).toBeUndefined();
+    expect(second.paymentMemo).toBeUndefined();
+    expect(s.chain.transfers.size).toBe(1);
+    expect(s.seller.credentials).toHaveLength(1);
+  }
+
+  it("refuses the same challenge under a different referral id", async () => {
+    const { s, first } = await paidFirst(FIRST);
+    referred(s, OTHER);
+    await expectRefused(s, first.attempt.id);
+  });
+
+  it("refuses the same challenge when the referral has gone", async () => {
+    const { s, first } = await paidFirst(FIRST);
+    process.env.SUPERSTABLES_REFERRALS = "off";
+    try {
+      await expectRefused(s, first.attempt.id);
+    } finally {
+      delete process.env.SUPERSTABLES_REFERRALS;
+    }
+  });
+
+  it("refuses the same challenge under a referral, after a payment without one", async () => {
+    const { s, first } = await paidFirst(undefined);
+    referred(s, FIRST);
+    await expectRefused(s, first.attempt.id);
+  });
+
+  it("asks one wallet only, when two approvals for the same challenge carry different referrals", async () => {
+    const s = await stack({ challengeId: "the-same-challenge" });
+    referred(s, FIRST);
+    const a = await startTempoPayment(s);
+    referred(s, OTHER);
+    const b = await startTempoPayment(s);
+    const callA = (await postJson(`${a.link}/account`, { address: a.owner })).body.transaction as { data: Hex };
+    const callB = (await postJson(`${b.link}/account`, { address: b.owner })).body.transaction as { data: Hex };
+    // The two memos differ in the referral's bytes only
+    expect(memoOfCall(callA.data)).not.toBe(memoOfCall(callB.data));
+    expect(memoOfCall(callA.data).slice(0, 32)).toBe(memoOfCall(callB.data).slice(0, 32));
+    expect((await postJson(`${a.link}/sending`, { address: a.owner })).status).toBe(200);
+    const refused = await postJson(`${b.link}/sending`, { address: b.owner });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/one an earlier payment already used/);
+    expect(await s.engine.waitForAttempt(b.attempt.id, 5_000)).toMatchObject({ state: "failed", refusal: "invalid" });
+    await postJson(`${a.link}/reject`, { by: "wallet" });
+  });
+});
 
 describe("pay on Tempo Moderato", () => {
   it("records the memo before the wallet is asked, checks the owner's transfer on chain, then calls the seller once", async () => {

@@ -14,6 +14,7 @@
 //                       facilitator, which completes and sends it.
 
 import type { PaymentRequirements } from "@x402/core/types";
+import type { Hex } from "viem";
 import type { MppChallenge } from "../mpp.js";
 import type { PaymentContext } from "../types.js";
 
@@ -24,6 +25,11 @@ export interface Eip3009SignRequest {
   requirements: PaymentRequirements;
   /** Which x402 wire version the requirement is in. */
   x402Version: 1 | 2;
+  /**
+   * The authorization's nonce, which the payment engine decides so that a referred payment carries its referral
+   * (core/referral-nonce.ts). Absent, the signer picks a random one.
+   */
+  nonce?: Hex;
   /** What the agent says this is for. Displayed as unverified context; never trusted for the terms. */
   context?: PaymentContext;
 }
@@ -33,6 +39,8 @@ export interface TempoSignRequest {
   kind: "tempo-transfer";
   /** The seller's challenge as it was received. The wallet derives everything it shows from this. */
   challenge: MppChallenge;
+  /** The referral the paid request carries: the transfer's memo names it through MPP's client id (core/referral-memo.mjs). */
+  referralId?: string;
   context?: PaymentContext;
 }
 
@@ -42,6 +50,8 @@ export interface SolanaSignRequest {
   /** The seller's requirement verbatim. */
   requirements: PaymentRequirements;
   x402Version: 2;
+  /** The referral the paid request carries: the transaction's memo names it, unless the seller fixed the memo (core/referral-memo.mjs). */
+  referralId?: string;
   context?: PaymentContext;
 }
 
@@ -75,6 +85,8 @@ export interface SolanaSignResult {
   lastValidBlockHeight?: number;
   /** The slot devnet had reached when the transaction was built: it can only land in a later one. */
   searchFromSlot?: number;
+  /** The memo the transaction carries. */
+  memo?: string;
   /** The owner's address, base58. */
   signer: string;
 }

@@ -277,6 +277,8 @@ export interface SolanaSeller extends TestServer {
   hits: { challenges: number; paid: number };
   /** The last credential, decoded. */
   lastPayment?: Record<string, unknown>;
+  /** The headers of the last paid request. */
+  lastPaidHeaders?: IncomingMessage["headers"];
   /** The transaction it landed for the last payment. */
   landed?: string;
   /** Name this transaction in PAYMENT-RESPONSE instead of the one it landed (a seller that names someone else's). */
@@ -312,6 +314,7 @@ export async function startSolanaSeller(chain: FakeSolanaDevnet, options: { amou
     }
     const payment = decodePaymentSignatureHeader(header) as unknown as Record<string, unknown>;
     seller.lastPayment = payment;
+    seller.lastPaidHeaders = { ...req.headers };
     if (behaviour === "drop-before-landing") {
       req.socket.destroy();
       return;

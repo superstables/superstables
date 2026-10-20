@@ -21,12 +21,13 @@ import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { encodeErrorResult } from "viem";
+import { encodeErrorResult, recoverTypedDataAddress } from "viem";
 import { usdcRequirement } from "../../src/core/chain.js";
 import { PaymentEngine } from "../../src/core/pay.js";
 import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
 import { quote } from "../../src/core/quote.js";
 import { Records } from "../../src/core/records.js";
+import { referralNonce } from "../../src/core/referral-nonce.js";
 import { APPROVAL_PAGE_SCRIPT } from "../../src/core/signer/approval-page.js";
 import { BrowserWalletSigner } from "../../src/core/signer/browser.js";
 import { SignRefused, type Eip3009SignRequest, type SignRequest } from "../../src/core/signer/types.js";
@@ -320,6 +321,44 @@ describe("the browser-wallet signer", () => {
     expect(authorization.nonce).toMatch(/^0x[0-9a-f]{64}$/);
     // The signer remembers the account, so a later status() can name who would pay.
     expect(await signer.address("eip155:84532")).toBe(account.address);
+  });
+
+  it("has the wallet sign the nonce the payment engine chose, so a referred payment recovers to its payer", async () => {
+    const signer = newSigner();
+    const account = privateKeyToAccount(generatePrivateKey());
+    const nonce = referralNonce("ref_AAECAwQFBgcICQoLDA0ODw", (size) => Buffer.alloc(size, 0xaa));
+    let link = "";
+    const pending = signer.sign({ ...signRequest(), nonce }, { onPending: (_id, url) => (link = url ?? "") });
+    await waitFor(() => link !== "");
+
+    const typedData = await connect(link, account);
+    expect(typedData.message.nonce).toBe("0x53535246000102030405060708090a0b0c0d0e0faaaaaaaaaaaaaaaaaaaaaaaa");
+    const signature = await signWith(account, typedData);
+    expect((await postJson(`${link}/signature`, { address: account.address, signature })).status).toBe(200);
+
+    const result = await pending;
+    const authorization = result.payload.authorization as Record<string, string>;
+    expect(authorization.nonce).toBe(nonce);
+    expect(await recoverTypedDataAddress({ ...typedData, signature: result.payload.signature as `0x${string}` } as never)).toBe(account.address);
+  });
+
+  it("refuses a signature over another nonce than the one asked for, and keeps waiting for the right one", async () => {
+    const signer = newSigner();
+    const account = privateKeyToAccount(generatePrivateKey());
+    const nonce = referralNonce("ref_AAECAwQFBgcICQoLDA0ODw");
+    let link = "";
+    const pending = signer.sign({ ...signRequest(), nonce }, { onPending: (_id, url) => (link = url ?? "") });
+    await waitFor(() => link !== "");
+
+    const typedData = await connect(link, account);
+    const own = await signWith(account, { ...typedData, message: { ...typedData.message, nonce: referralNonce() } });
+    const refused = await postJson(`${link}/signature`, { address: account.address, signature: own });
+    expect(refused.status).toBe(400);
+    expect((await getJson(`${link}/state`)).body.status).toBe("pending");
+
+    const signature = await signWith(account, typedData);
+    expect((await postJson(`${link}/signature`, { address: account.address, signature })).status).toBe(200);
+    expect(((await pending).payload.authorization as Record<string, string>).nonce).toBe(nonce);
   });
 
   it("refuses a signature from another key, and keeps waiting for the right one", async () => {

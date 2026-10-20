@@ -206,6 +206,12 @@ export class Records {
     this.dir = dir;
   }
 
+  /** The folder, made private if it is not there yet: for a lock taken before the first record is written. */
+  ensureDir(): string {
+    privateDir(this.dir);
+    return this.dir;
+  }
+
   /** A fresh record id. Random, never derived from anything the seller controls. */
   static newId(): string {
     return randomUUID();
@@ -313,10 +319,13 @@ export class Records {
     }
   }
 
-  /** Other attempts that recorded this Tempo memo: each may have paid with it, or still may. */
-  attemptsWithMemo(memo: string, exclude?: string): Attempt[] {
-    const wanted = memo.toLowerCase();
-    return [...this.byId<Attempt>("attempts.jsonl").values()].filter((a) => a.id !== exclude && a.paymentMemo?.toLowerCase() === wanted);
+  /**
+   * Other attempts that recorded this Tempo memo: each may have paid with it, or still may. With `key`, memos are
+   * compared by what it makes of them (a rail's challengeKey), not as they are.
+   */
+  attemptsWithMemo(memo: string, exclude?: string, key: (memo: string) => string = (m) => m.toLowerCase()): Attempt[] {
+    const wanted = key(memo);
+    return [...this.byId<Attempt>("attempts.jsonl").values()].filter((a) => a.id !== exclude && a.paymentMemo !== undefined && key(a.paymentMemo) === wanted);
   }
 
   /** Other attempts that recorded this owner's signature (Solana): the same signature is the same transaction. */

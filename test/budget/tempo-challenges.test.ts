@@ -157,7 +157,9 @@ describe("signedPayment", () => {
 });
 
 describe("claimChallenge", () => {
+  // The claim names the challenge, not the referral: bytes 15 to 24 of the memo (hex characters 30 to 50) are zeroed
   const memo = (n: number) => `0x${n.toString(16).padStart(2, "0").repeat(32)}`;
+  const claimName = (m: string) => `${m.slice(2, 32)}${"0".repeat(20)}${m.slice(52)}`.toLowerCase();
   let loaded: Promise<any> | undefined;
   // OPS_DIR is fixed when the module first loads, so every case shares one home and takes its own memos
   const load = () => (loaded ??= (async () => {
@@ -174,11 +176,13 @@ describe("claimChallenge", () => {
     expect(claimChallenge(memo(2), "b")).toBe("");
   });
 
-  it("keeps one private file per memo, named by the memo", async () => {
+  it("keeps one private file per challenge, named by its memo without the referral's bytes", async () => {
     const { CLAIMS_DIR, claimChallenge } = await load();
+    const name = claimName(`0x${"0A".repeat(32)}`);
+    expect(name).toBe(`${"0a".repeat(15)}${"00".repeat(10)}${"0a".repeat(7)}`);
     claimChallenge(`0x${"0A".repeat(32)}`, "a");
-    const file = join(CLAIMS_DIR, "0a".repeat(32));
-    expect(readdirSync(CLAIMS_DIR)).toContain("0a".repeat(32));
+    const file = join(CLAIMS_DIR, name);
+    expect(readdirSync(CLAIMS_DIR)).toContain(name);
     expect(statSync(CLAIMS_DIR).mode & 0o777).toBe(0o700);
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(readFileSync(file, "utf8")).toBe("a\n");
@@ -187,14 +191,48 @@ describe("claimChallenge", () => {
   it("never trusts a planted file or link", async () => {
     const { CLAIMS_DIR, claimChallenge } = await load();
     claimChallenge(memo(3), "x"); // makes the folder
-    writeFileSync(join(CLAIMS_DIR, memo(4).slice(2)), "");
+    writeFileSync(join(CLAIMS_DIR, claimName(memo(4))), "");
     expect(claimChallenge(memo(4), "a")).toBe("another operation");
     const target = join(CLAIMS_DIR, "..", "target");
     writeFileSync(target, "keep");
-    symlinkSync(target, join(CLAIMS_DIR, memo(5).slice(2)));
+    symlinkSync(target, join(CLAIMS_DIR, claimName(memo(5))));
     expect(claimChallenge(memo(5), "a")).toBe("another operation");
-    expect(lstatSync(join(CLAIMS_DIR, memo(5).slice(2))).isSymbolicLink()).toBe(true);
+    expect(lstatSync(join(CLAIMS_DIR, claimName(memo(5)))).isSymbolicLink()).toBe(true);
     expect(readFileSync(target, "utf8")).toBe("keep");
+  });
+
+  it("holds a challenge for the operation whatever referral a later memo carries, or none", async () => {
+    const { claimChallenge } = await load();
+    const withClient = (base: string, fill: string) => `${base.slice(0, 32)}${fill.repeat(20)}${base.slice(52)}`;
+    const plain = withClient(memo(6), "0");
+    expect(claimChallenge(withClient(memo(6), "a"), "a")).toBe("");
+    expect(claimChallenge(withClient(memo(6), "b"), "b")).toBe("operation a");
+    expect(claimChallenge(plain, "b")).toBe("operation a");
+    expect(claimChallenge(plain, "a")).toBe("");
+    // another challenge (a different id or realm) is not held
+    expect(claimChallenge(`${plain.slice(0, 52)}${"cd".repeat(6)}ef`, "b")).toBe("");
+    expect(claimChallenge(`${plain.slice(0, 12)}${"cd".repeat(5)}${plain.slice(22)}`, "b")).toBe("");
+  });
+
+  it("holds a challenge that an earlier build claimed under the whole memo, referred or not", async () => {
+    const { CLAIMS_DIR, claimChallenge } = await load();
+    const withClient = (base: string, fill: string) => `${base.slice(0, 32)}${fill.repeat(20)}${base.slice(52)}`;
+    claimChallenge(memo(7), "x"); // makes the folder
+    // an earlier build named the file by the memo as paid, referral bytes included
+    const legacy = (base: string, op: string) => writeFileSync(join(CLAIMS_DIR, base.slice(2).toLowerCase()), `${op}\n`, { mode: 0o600 });
+    legacy(withClient(memo(8), "a"), "old-referred");
+    expect(claimChallenge(withClient(memo(8), "b"), "new")).toBe("operation old-referred");
+    expect(claimChallenge(withClient(memo(8), "0"), "new")).toBe("operation old-referred");
+    expect(claimChallenge(withClient(memo(8), "a"), "old-referred")).toBe("");
+    expect(claimChallenge(withClient(memo(8), "c"), "old-referred")).toBe("");
+    expect(readdirSync(CLAIMS_DIR)).not.toContain(claimName(memo(8)));
+    // a name that was already the challenge's key is the same file as before
+    legacy(withClient(memo(9), "0"), "old-plain");
+    expect(claimChallenge(withClient(memo(9), "a"), "new")).toBe("operation old-plain");
+    expect(claimChallenge(withClient(memo(9), "0"), "old-plain")).toBe("");
+    // an unreadable earlier claim holds the challenge too
+    writeFileSync(join(CLAIMS_DIR, withClient(memo(11), "a").slice(2)), "");
+    expect(claimChallenge(withClient(memo(11), "b"), "new")).toBe("another operation");
   });
 
   it("refuses a memo that is not 32 bytes of hex", async () => {

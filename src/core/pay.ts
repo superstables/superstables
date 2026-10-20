@@ -28,6 +28,10 @@ import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
 import { evaluatePolicy, policyAmount, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
 import { firstPayable, railFor } from "./rails/index.js";
+import { memoReferral } from "./referral-memo.mjs";
+import { nonceReferral } from "./referral-nonce.js";
+import { referralFor, type ActiveReferral } from "./referrals.js";
+import { PURCHASE_REF_HEADER, REFERRAL_HEADER } from "../seller/referral.js";
 import { tokenDomainProblem } from "./token-domain.js";
 import type { ChainReadOptions, Offer, PaymentFacts, PushRail, RailAdapter, X402Rail } from "./rails/types.js";
 import { join } from "node:path";
@@ -351,7 +355,12 @@ export class PaymentEngine {
     try {
       challenge = await this.challengeFor(quote.url);
     } catch (err) {
-      this.settleState(attempt, "failed", { reason: message(err) });
+      // Nothing is signed yet. A seller's non-402 answer is kept as the service's own, so a caller can tell a payment in
+      // flight (a 409, a money_moved of "unknown") from a read that simply failed.
+      this.settleState(attempt, "failed", {
+        reason: message(err),
+        ...(err instanceof NotPaidEndpointError ? { serviceStatus: err.status, serviceBody: err.body.slice(0, SERVICE_BODY_LIMIT) } : {}),
+      });
       return;
     }
 
@@ -367,6 +376,11 @@ export class PaymentEngine {
     // Whoever was waiting may have stopped while the seller was being asked; then nobody
     // is left to show the owner a link, so the owner is not asked.
     if (isFinal(attempt.state)) return;
+
+    // The referral the paid request carries, decided before the owner signs: the payment itself carries it too (an EVM
+    // authorization's nonce, core/referral-nonce.ts; a Solana or Tempo memo, core/referral-memo.mjs), so what is signed
+    // and the token sent name the same referral.
+    const referral = this.paidReferral(quote);
 
     // The owner's signed settings cover the account's spend policy file. When they were signed by the wallet that will pay (or
     // that wallet is not known yet), a policy file that differs from the signed one stops the payment before anyone is asked.
@@ -387,10 +401,11 @@ export class PaymentEngine {
     }
 
     // A push payment is found on chain by its memo, which the seller's challenge decides. A seller that hands out the
-    // same challenge again would make a second transfer indistinguishable from the first, so a memo an earlier attempt
-    // already used is refused before anyone is asked (and again, under the cap lock, right before the wallet is asked).
+    // same challenge again would make a second transfer indistinguishable from the first, so a challenge an earlier
+    // attempt already used is refused before anyone is asked (and again, under the cap lock, right before the wallet is
+    // asked). The referral is no part of that: an earlier attempt with another referral, or none, used it all the same.
     if (rail.flow === "push") {
-      const reused = this.records.attemptsWithMemo(rail.paymentMemo(offer), attempt.id)[0];
+      const reused = this.records.attemptsWithMemo(rail.paymentMemo(offer, referral?.id), attempt.id, rail.challengeKey)[0];
       if (reused) {
         this.settleState(attempt, "failed", { refusal: "invalid", reason: reusedChallenge(reused.id) });
         return;
@@ -445,7 +460,7 @@ export class PaymentEngine {
           description: quote.description,
           quoteId: quote.id,
           attemptId: attempt.id,
-        }),
+        }, referral?.id),
         {
           // Right before the owner is asked: a reservation that lapsed while the signer started (a slow page start, a
           // slow wallet) is checked against the cap again and renewed, or the payment stops with nobody asked.
@@ -475,7 +490,7 @@ export class PaymentEngine {
           // becomes `approved`, which counts toward the cap and ends `uncertain`, never unpaid, if nothing comes back.
           beforeWalletSends: async (intent) => {
             if (rail.flow !== "push") throw new SignRefused("invalid", "this payment's wallet signs; it does not send");
-            if (!intent.memo || intent.memo.toLowerCase() !== rail.paymentMemo(offer).toLowerCase()) {
+            if (!intent.memo || intent.memo.toLowerCase() !== rail.paymentMemo(offer, referral?.id).toLowerCase()) {
               throw new SignRefused("invalid", "the wallet was to be asked for another memo than this payment's, so it was not asked");
             }
             // The chain's head before the wallet is asked: the owner's transfer is in a later block, and a search for it
@@ -489,7 +504,7 @@ export class PaymentEngine {
             const judged = await withFileLock(join(this.records.dir, CAP_LOCK), () => {
               if (isFinal(attempt.state)) return { allowed: false, final: true };
               if (attempt.state === "approved") return { allowed: attempt.payer === intent.payer && attempt.paymentMemo === intent.memo };
-              const reused = this.records.attemptsWithMemo(intent.memo!, attempt.id)[0];
+              const reused = this.records.attemptsWithMemo(intent.memo!, attempt.id, rail.challengeKey)[0];
               if (reused) return { allowed: false, reused: reusedChallenge(reused.id) };
               const checked = this.reservationOpen(attempt) ? { allowed: true } : this.reserve(attempt, quote);
               if (checked.allowed) {
@@ -545,15 +560,15 @@ export class PaymentEngine {
       });
       return;
     }
-    if (rail.flow === "push") return this.submitPush(attempt, quote, offer, rail, signed, started);
-    return this.submitX402(attempt, quote, offer, rail, challenge, signed, started);
+    if (rail.flow === "push") return this.submitPush(attempt, quote, offer, rail, signed, referral, started);
+    return this.submitX402(attempt, quote, offer, rail, challenge, signed, referral, started);
   }
 
   /**
    * x402: the owner's wallet signed, nothing has moved. The signature is sent to the seller once; the seller's
    * facilitator settles it and names a transaction, which the chain is read for.
    */
-  private async submitX402(attempt: Attempt, quote: Quote, offer: Offer, rail: X402Rail, challenge: SellerChallenge, signed: SignResult, started: number): Promise<void> {
+  private async submitX402(attempt: Attempt, quote: Quote, offer: Offer, rail: X402Rail, challenge: SellerChallenge, signed: SignResult, referral: ActiveReferral | undefined, started: number): Promise<void> {
     const x402 = challenge.x402;
     if (!x402) {
       this.settleState(attempt, "failed", { reason: "the seller's challenge has no x402 offer to pay" });
@@ -615,6 +630,7 @@ export class PaymentEngine {
     // 3. Replay the request with the credential. From here on the credential has left this
     //    machine, so every failure is a known-unknown, not a clean failure.
     const header = rail.credentialHeaders(offer, signed, x402);
+    const referralHeaders = this.referralHeaders(attempt, referral, signed, offer, rail);
     let res: Response;
     const deadline = Date.now() + this.timeoutMs;
     try {
@@ -623,7 +639,7 @@ export class PaymentEngine {
         // The credential is on this request, so it goes to the seller this quote named and nowhere else:
         // a redirect would carry it to a host the operator never chose.
         redirect: "error",
-        headers: { ...header, accept: "application/json, */*" },
+        headers: { ...header, ...referralHeaders, accept: "application/json, */*" },
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
@@ -774,7 +790,7 @@ export class PaymentEngine {
    * transfer, with this payment's memo, counts. Then the seller is called once with a credential naming it. A
    * transaction the chain does not show (yet), or shows as something else, ends `uncertain` with the seller not called.
    */
-  private async submitPush(attempt: Attempt, quote: Quote, offer: Offer, rail: PushRail, signed: SignResult, started: number): Promise<void> {
+  private async submitPush(attempt: Attempt, quote: Quote, offer: Offer, rail: PushRail, signed: SignResult, referral: ActiveReferral | undefined, started: number): Promise<void> {
     if (signed.kind !== "tempo-transfer") return;
     // Compared with what was recorded when the wallet was asked, before anything is overwritten.
     const another = attempt.paymentMemo !== signed.memo || !isAddressOn(offer.terms.network, signed.signer) || attempt.payer !== signed.signer;
@@ -809,6 +825,7 @@ export class PaymentEngine {
     }
 
     // The payment is on chain. The seller checks it again and answers once for it.
+    const referralHeaders = this.referralHeaders(attempt, referral, signed, offer, rail);
     let res: Response | undefined;
     let failure = "";
     const deadline = Date.now() + this.timeoutMs;
@@ -816,7 +833,7 @@ export class PaymentEngine {
       res = await this.fetchImpl(quote.url, {
         method: "GET",
         redirect: "error",
-        headers: { ...rail.credentialHeaders(offer, signed), accept: "application/json, */*" },
+        headers: { ...rail.credentialHeaders(offer, signed), ...referralHeaders, accept: "application/json, */*" },
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
@@ -879,6 +896,42 @@ export class PaymentEngine {
   // ── Plumbing ─────────────────────────────────────────────────────────────────────────
 
   /**
+   * The referral this payment's paid request carries: the one remembered for the quote's origin and listing. None when
+   * the quote found no referral, the remembered one has expired or gone since, or SUPERSTABLES_REFERRALS is off. A
+   * referral is never worth a payment: if reading it fails, the payment goes without one.
+   */
+  private paidReferral(quote: Quote): ActiveReferral | undefined {
+    try {
+      if (!quote.referral) return undefined;
+      // The listing the quote was for, when it was for one; otherwise the listing its referral was found for.
+      const found = referralFor(quote.url, this.records.dir);
+      return found && found.listingId === (quote.serviceId ?? quote.referral.listingId) ? found : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * The referral headers for this attempt's paid request: the referral's token, and the attempt id as the purchase
+   * reference (one attempt makes one paid request, and `superstables status` recovers it under the same id). Recorded on
+   * the attempt before the request leaves, so its receipt says the referral went with it. Never on the unpaid challenge
+   * request. A payment that does not carry this referral on chain gets none, so the token never names another referral
+   * than the payment: an EIP-3009 authorization whose wallet chose its own nonce, a Solana payment whose seller fixed the
+   * memo. If the attempt cannot be written, the request goes without them.
+   */
+  private referralHeaders(attempt: Attempt, referral: ActiveReferral | undefined, signed: SignResult, offer: Offer, rail: RailAdapter): Record<string, string> {
+    try {
+      if (!referral || !carriesReferral(signed, referral.id, offer, rail)) return {};
+      const record = { discoveredVia: "superstables" as const, referral: { id: referral.id, listingId: referral.listingId, terms: referral.terms } };
+      this.records.saveAttempt({ ...attempt, ...record });
+      Object.assign(attempt, record);
+      return { [REFERRAL_HEADER]: referral.token, [PURCHASE_REF_HEADER]: attempt.id };
+    } catch {
+      return {};
+    }
+  }
+
+  /**
    * Read the seller's current challenge. Mirrors x402.detect(), but through this engine's
    * fetch so a test (or a future proxy) can stand in for the network.
    */
@@ -895,7 +948,7 @@ export class PaymentEngine {
       throw isRedirectRefusal(err) ? new Error(SELLER_REDIRECTED) : err;
     });
     const body = await readCapped(res, MAX_CHALLENGE_BYTES, deadline - Date.now(), url);
-    if (res.status !== 402) throw new NotPaidEndpointError(url, res.status, body.slice(0, 300));
+    if (res.status !== 402) throw new NotPaidEndpointError(url, res.status, body.slice(0, 300), body);
     return readSellerChallenge({
       paymentRequiredHeader: res.headers.get("payment-required") ?? res.headers.get("x-payment-required"),
       wwwAuthenticate: res.headers.get("www-authenticate"),
@@ -998,6 +1051,16 @@ function attributedCheck(records: Records, attempt: Attempt, rail: RailAdapter, 
   if ((check.chain !== "verified" && !check.included) || rail.rail === "evm" || !transaction) return check;
   const owner = records.paymentOwner(attempt.terms.network, transaction, attempt.id);
   return owner ? { chain: "mismatch", reason: `transaction ${transaction} is already recorded as the payment of attempt ${owner}` } : check;
+}
+
+/**
+ * Does the signed payment carry this referral on chain: in its EIP-3009 nonce, its Solana memo or its Tempo memo? A memo
+ * the seller fixed is the seller's, however much it looks like the marker.
+ */
+function carriesReferral(signed: SignResult, referralId: string, offer: Offer, rail: RailAdapter): boolean {
+  if (signed.kind === "eip3009") return nonceReferral(String(signed.payload.authorization.nonce ?? "")) === referralId;
+  if (signed.kind === "solana-transaction") return typeof (offer.requirement as { extra?: { memo?: unknown } }).extra?.memo !== "string" && memoReferral(signed.memo) === referralId;
+  return rail.flow === "push" && signed.memo.toLowerCase() === rail.paymentMemo(offer, referralId).toLowerCase();
 }
 
 /** Why a push payment whose memo an earlier attempt used is not sent. */
@@ -1539,6 +1602,8 @@ function receiptFor(input: {
     serviceStatus: input.serviceStatus,
     serviceBodyPreview: input.body || undefined,
     ms: input.ms,
+    // The referral the paid request carried, if it carried one: its id, listing and terms, never the token.
+    ...(attempt.referral ? { discoveredVia: "superstables" as const, referral: attempt.referral } : {}),
   };
 }
 

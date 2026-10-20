@@ -32,7 +32,14 @@ Install the CLI from npm:
 npm install -g @superstables/client
 superstables --help
 superstables budget --help
+superstables seller credit
 ```
+
+A seller account at superstables.com keeps prepaid credit, and the fees of referred sales come out
+of it. `superstables seller credit` shows the balance and recent top-ups; `superstables seller top-up 25`
+adds to it with test USDC on Base Sepolia, paid like any other purchase. The seller API key comes
+from `SUPERSTABLES_SELLER_API_KEY` and is never printed. See
+[Seller referrals](docs/seller-referrals.md#credit-and-top-ups).
 
 To build it from source instead, follow [Install from a checkout](docs/install.md#from-a-checkout).
 Continue with [Budgets](docs/budget.md) or [Single purchase](docs/buy-once.md).
@@ -45,6 +52,7 @@ Don't run `npx superstables`; it can download a different package.
 - [Single purchase: on your machine or on superstables.com](docs/buy-once.md)
 - [CLI reference](docs/cli.md) and [budget commands](docs/cli-budget.md)
 - [Receipts and interrupted payments](docs/records.md)
+- [Seller referrals: claim a listing and verify referrals](docs/seller-referrals.md)
 - [Security and spending limits](docs/security.md)
 - [Revoke and uninstall](docs/install.md#uninstalling)
 - [Contributing](README.md#contributing) and [Changelog](CHANGELOG.md)

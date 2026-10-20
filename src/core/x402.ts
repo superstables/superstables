@@ -150,7 +150,8 @@ function networkCause(err: unknown): string | undefined {
 }
 
 export class NotPaidEndpointError extends Error {
-  constructor(readonly url: string, readonly status: number, readonly bodyPreview: string) {
+  /** `body` is the whole capped answer, for a caller that reads its fields; `bodyPreview` is its first 300 characters. */
+  constructor(readonly url: string, readonly status: number, readonly bodyPreview: string, readonly body: string = bodyPreview) {
     super(`Expected HTTP 402 from ${url}, got ${status}: not a paid endpoint (x402 or MPP), or the request is wrong`);
     this.name = "NotPaidEndpointError";
   }
@@ -204,7 +205,7 @@ async function fetch402(
     const signal = init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal;
     const res = await fetch(url, { ...init, redirect: "error", signal });
     const body = await readCapped(res, MAX_CHALLENGE_BYTES, deadline - Date.now(), url);
-    if (res.status !== 402) throw new NotPaidEndpointError(url, res.status, body.slice(0, 300));
+    if (res.status !== 402) throw new NotPaidEndpointError(url, res.status, body.slice(0, 300), body);
     return {
       paymentRequiredHeader: res.headers.get("payment-required") ?? res.headers.get("x-payment-required"),
       wwwAuthenticate: res.headers.get("www-authenticate"),

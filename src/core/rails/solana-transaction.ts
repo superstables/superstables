@@ -5,11 +5,12 @@
 //
 // The transaction is the one @x402/svm's exact scheme builds, as the hosted purchase on superstables.com builds it: a
 // compute-unit limit of 20,000, a price of 1 micro-lamport, one TransferChecked of the mint from the owner's token account
-// to the recipient's, signed by the owner, then a memo that makes it unique. The fee payer is the seller's facilitator
-// (the offer's extra.feePayer): the owner's wallet signs as the token's owner only, and the facilitator adds its signature
-// and sends it.
+// to the recipient's, signed by the owner, then a memo that makes it unique and, for a referred payment, names the
+// referral (../referral-memo.mjs). The fee payer is the seller's facilitator (the offer's extra.feePayer): the owner's
+// wallet signs as the token's owner only, and the facilitator adds its signature and sends it.
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
+import { solanaMemo } from "../referral-memo.mjs";
 import { base58Decode, verifyEd25519 } from "../signer/owner-approval-server.js";
 
 export const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -267,10 +268,13 @@ export function buildPayment(input: {
   amountAtomic: string;
   feePayer: string;
   blockhash: string;
+  /** The seller's own memo (the offer's extra.memo): sent as it is, so it carries no referral. */
   memo?: string;
+  /** The referral the paid request carries: the memo names it when the seller fixed none. */
+  referralId?: string;
 }): BuiltPayment {
   if (input.feePayer === input.owner) throw new Error("the fee payer is the owner's own address");
-  const memo = input.memo ?? randomBytes(16).toString("hex");
+  const memo = input.memo ?? solanaMemo(input.referralId);
   const message = compileMessage(input.feePayer, input.blockhash, [
     computeUnitLimit(COMPUTE_UNIT_LIMIT),
     computeUnitPrice(COMPUTE_UNIT_PRICE_MICROLAMPORTS),

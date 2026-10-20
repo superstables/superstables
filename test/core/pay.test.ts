@@ -9,7 +9,8 @@ import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { decodePaymentResponseHeader, encodePaymentResponseHeader } from "@x402/core/http";
+import { decodePaymentResponseHeader, decodePaymentSignatureHeader, encodePaymentResponseHeader } from "@x402/core/http";
+import { recoverTypedDataAddress } from "viem";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
 import { PaymentEngine, QuoteUsedError, recheckChain, shownAttempt, shownReceipt } from "../../src/core/pay.js";
@@ -17,6 +18,8 @@ import { paymentReceipt, startFakeBaseSepolia } from "../helpers/fake-base-sepol
 import { attemptView, messageFor } from "../../src/cli/views.js";
 import { Records, attemptRunner } from "../../src/core/records.js";
 import { quote } from "../../src/core/quote.js";
+import { rememberReferrals } from "../../src/core/referrals.js";
+import { referralKey, signReferral } from "../helpers/referrals.js";
 import { WalletSigner } from "../../src/core/signer/wallet.js";
 import { SignRefused } from "../../src/core/signer/types.js";
 import { BrowserWalletSigner } from "../../src/core/signer/browser.js";
@@ -125,6 +128,41 @@ describe("PaymentEngine", () => {
     for (const attempt of [started, final, ...s.transitions, s.engine.getAttempt(final.id), ...s.engine.listAttempts()]) {
       expect(attempt).not.toHaveProperty("runner");
     }
+  });
+
+  it("marks a referred payment's nonce with its referral, signed by the payer, and sends the same referral's token", async () => {
+    const s = await stack();
+    const id = "ref_AAECAwQFBgcICQoLDA0ODw";
+    const { token } = signReferral(referralKey(), { jti: id, aud: new URL(s.url).origin });
+    const endpoint = `${new URL(s.url).origin}/v1/market`;
+    rememberReferrals([{
+      id: new URL(s.url).host, name: "listed", description: "", endpoint, method: "GET", params: [],
+      payment: { rail: "x402", scheme: "exact", network: "eip155:84532", networkLabel: "Base Sepolia", asset: "USDC" },
+      source: "superstables-index", testnet: true, actionable: false,
+      referral: { token, expiresAt: new Date(Date.now() + 3600_000).toISOString(), terms: "terms-1" },
+    }], s.records.dir);
+    const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const final = await s.engine.waitForAttempt(s.engine.startPayment(q.id).id, 10_000);
+    expect(final.state).toBe("settled");
+
+    const paid = s.seller.seen.filter((r) => r.paid);
+    expect(paid).toHaveLength(1);
+    expect(paid[0]!.headers["superstables-referral"]).toBe(token);
+    const { payload } = decodePaymentSignatureHeader(String(paid[0]!.headers["payment-signature"])) as unknown as { payload: { authorization: Record<string, string>; signature: `0x${string}` } };
+    const auth = payload.authorization;
+    expect(auth.nonce.slice(0, 42)).toBe("0x53535246000102030405060708090a0b0c0d0e0f");
+    expect(final.authorizationNonce).toBe(auth.nonce);
+    const recovered = await recoverTypedDataAddress({
+      domain: { name: "USDC", version: "2", chainId: 84532, verifyingContract: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" },
+      types: { TransferWithAuthorization: [
+        { name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" },
+        { name: "validAfter", type: "uint256" }, { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" },
+      ] },
+      primaryType: "TransferWithAuthorization",
+      message: { from: auth.from as `0x${string}`, to: auth.to as `0x${string}`, value: BigInt(auth.value), validAfter: BigInt(auth.validAfter), validBefore: BigInt(auth.validBefore), nonce: auth.nonce as `0x${string}` },
+      signature: payload.signature,
+    });
+    expect(recovered).toBe(s.wallet.address);
   });
 
   it("signs nothing and pays nothing when the owner denies", async () => {
