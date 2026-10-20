@@ -43,6 +43,11 @@
 // feature in GET /api/v1/budget/services, and the client checks that the site repeated it. On any site, a bundle whose
 // agent the site adds to another account than the expected one is withdrawn before anything is recorded.
 //
+// A request can outlive the command that made it (a host may end every process of a command when the command ends). A later
+// worker of the same approval takes it over (HostedSettings.resume) instead of creating one: it checks that it asks for the
+// same thing (`intent`), reads the request from the site first, whatever the clock says, and polls it as the first worker would.
+// It never creates a request, and it never cancels one just because the command that took it over ended.
+//
 // Every approval checks the site's owner against the owner recorded at setup (`account`): a request the site ties to another
 // address is cancelled and refused before the link is shown, and at any later point.
 // Once the site reports that the wallet was asked (`wallet_asked`) or a transaction hash exists, an unfinished outcome
@@ -232,7 +237,17 @@ export type HostedKind = "grant" | "revoke" | "fund_agent";
 export const HOSTED_KIND: Record<string, HostedKind> = { grant: "grant", revoke: "revoke", "fund-agent": "fund_agent" };
 
 /** What the approval record keeps (approvals.mjs). The token is the agent's access to this one request. */
-export type HostedRecord = { site: string; requestId: string; token: string; kind: "link" | HostedKind; matchCode: string; /** a link with wallet steps: their kinds, in order */ then?: HostedStep["kind"][] };
+export type HostedRecord = {
+  site: string; requestId: string; token: string; kind: "link" | HostedKind; matchCode: string;
+  /** a link with wallet steps: their kinds, in order */ then?: HostedStep["kind"][];
+  /** a later worker may take this request over (HostedSettings.resumable), with what it needs to do that */
+  resumable?: true;
+  /** a digest of what was asked (kind, rail, chain, agent, the transaction or steps): a worker that takes the request over must ask for the same */
+  intent?: string;
+  /** when the site ends the request, and when this command's own wait ends (ms since the epoch) */
+  expiresAt?: number; deadline?: number;
+  /** a link: the owner-proof version it asked for */ proofVersion?: 2;
+};
 export type HostedRail = "evm" | "tempo" | "solana";
 
 export interface HostedSettings {
@@ -258,6 +273,10 @@ export interface HostedSettings {
   /** A link with steps nobody has been asked about: how long past the expiry to keep reading for a final answer (default 30 s). */
   quietGraceMs?: number;
   fetchImpl?: typeof fetch;
+  /** The command can be run again to finish this request later: the record keeps what a worker needs to take it over. */
+  resumable?: boolean;
+  /** This worker finishes the recorded request an earlier worker made: it creates none (see the header). */
+  resume?: HostedRecord;
 }
 
 /**
@@ -310,6 +329,8 @@ export interface HostedHandle {
   matchCode: string;
   /** The agent was already linked on this chain: no link to show, `settled` is already connected (with a verified proof). */
   alreadyLinked?: boolean;
+  /** An earlier worker made this request and this one finishes it: the link was shown then, so it is not announced again. */
+  adopted?: boolean;
   /** A link: the id and match code the owner signed, for LINK_ID and LINK_CODE in the public file. */
   link?: { id: string; code: string };
   settled: Promise<OwnerActionOutcome>;
@@ -409,7 +430,7 @@ function railWords(rail: HostedRail) {
     isTx: (h: unknown): h is string => typeof h === "string" && (solana ? SOLANA_SIGNATURE.test(h) : /^0x[0-9a-fA-F]{64}$/.test(h)),
   };
 }
-type Poll = { /** what earlier answers showed */ seen?: Seen; /** a link: the owner-proof version it asked for */ proofVersion?: 1 | 2; /** what the approval record holds, so a renewed token replaces it */ record?: HostedRecord; id: string; token: string; kind: HostedRecord["kind"]; title: string; expected?: string; matchCode: string; localDeadline: number; siteExpiry: number; resolve: (o: OwnerActionOutcome) => void };
+type Poll = { /** a request taken over: read it before any expiry is acted on */ fresh?: boolean; /** what earlier answers showed */ seen?: Seen; /** a link: the owner-proof version it asked for */ proofVersion?: 1 | 2; /** what the approval record holds, so a renewed token replaces it */ record?: HostedRecord; id: string; token: string; kind: HostedRecord["kind"]; title: string; expected?: string; matchCode: string; localDeadline: number; siteExpiry: number; resolve: (o: OwnerActionOutcome) => void };
 const FINAL_STATES = new Set(["linked", "confirmed", "failed", "rejected", "expired", "cancelled", "unknown"]);
 const STEP_FINAL = new Set(["confirmed", "failed", "rejected", "expired", "unknown", "skipped", "cancelled"]);
 /** The rail and chain flags of a command: no --chain on a rail's default chain. */
@@ -491,7 +512,19 @@ export class HostedApprovals {
       kind = k;
       body = { kind: k, rail: this.s.rail, chain: this.s.chain, agent, ...(input.kind === "solana-intent" ? { solana: input.solana } : { transaction: input.transaction }) };
     }
-    const answer = await this.create(path, body, kind === "link" ? "bl_" : "ba_");
+    const taken = this.s.resume;
+    const intent = bodyHash(JSON.stringify({ kind, rail: this.s.rail, chain: this.s.chain, agent, then: then ?? null, transaction: (body as { transaction?: unknown }).transaction ?? null, solana: (body as { solana?: unknown }).solana ?? null }));
+    if (taken) {
+      // the request an earlier worker made is the only one this worker may finish, and only for the same ask
+      const problem = taken.kind !== kind ? `it is a ${taken.kind} request and this command asks for a ${kind}`
+        : taken.site !== this.s.site ? "it was made on another site"
+        : taken.intent !== intent ? "this command asks for something other than the recorded request"
+        : "";
+      if (problem) throw new HostedRefusal(`the recorded request ${taken.requestId} cannot be finished: ${problem}. Nothing was created; whether the owner approved it is not known here`, CHECK_CHAIN, { sending: true });
+    }
+    const answer = taken
+      ? { linked: false as const, id: taken.requestId, token: taken.token, url: "", matchCode: taken.matchCode, expiresAt: taken.expiresAt ?? Date.now(), steps: undefined, seen: NOT_SEEN, answer: undefined as unknown }
+      : await this.create(path, body, kind === "link" ? "bl_" : "ba_");
     if (answer.linked && then) {
       // the site must refuse a link with steps for an agent it already linked (409); a 200 here would skip every step
       throw new HostedRefusal(alreadyLinkedWords(this.s.site, answer.owner, this.s.rail), alreadyLinkedNext(this.s.rail, this.s.chain, this.s.site));
@@ -516,7 +549,8 @@ export class HostedApprovals {
       return { id: answer.id, url: "", expiresAt: Date.now(), matchCode: "", alreadyLinked: true, link: { id: prior.linkId, code: prior.linkCode }, settled: Promise.resolve({ status: "connected", address: answer.owner, proof: proofOf(answer.proof) }), finish: () => {} };
     }
     const created = answer;
-    if (then) {
+    // what the first worker checked before it showed the link is not checked again; the polls check the owner on every read
+    if (then && !taken) {
       // the steps the site will ask the owner's wallet for must be exactly the ones sent, in the same order
       const problem = stepsProblem(then, created.steps);
       if (problem) {
@@ -526,26 +560,27 @@ export class HostedApprovals {
         throw new HostedRefusal(`${this.s.site} answered with steps other than the ones asked for (${problem}). ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
       }
     }
-    if (sentOwner && !this.w.same((created.answer as any)?.expected_owner, expectedOwner)) {
+    if (!taken && sentOwner && !this.w.same((created.answer as any)?.expected_owner, expectedOwner)) {
       // the site listed the feature and did not take the field: the request is not used
       const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
       this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: "expected owner not confirmed", sending: created.seen.asked || undefined });
       const a = afterCancel(c, !!then, created.seen);
       throw new HostedRefusal(`${this.s.site} did not confirm that only the owner recorded on this machine (${expectedOwner}) may add this agent; the request is not used. ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
     }
-    if (askedV2 && (created.answer as any)?.owner_proof_version !== 2) {
+    if (!taken && askedV2 && (created.answer as any)?.owner_proof_version !== 2) {
       // the site listed the feature and did not take the field: the request is not used
       const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
       this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: "owner proof version not confirmed", sending: created.seen.asked || undefined });
       const a = afterCancel(c, !!then, created.seen);
       throw new HostedRefusal(`${this.s.site} did not confirm the owner proof that names the account; the request is not used. ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
     }
-    const record: HostedRecord = { site: this.s.site, requestId: created.id, token: created.token, kind, matchCode: created.matchCode, ...(then ? { then: then.map((t) => t.kind) } : {}) };
+    const proofVersion = taken ? taken.proofVersion : askedV2 ? (2 as const) : undefined;
+    const record: HostedRecord = taken ?? { site: this.s.site, requestId: created.id, token: created.token, kind, matchCode: created.matchCode, ...(then ? { then: then.map((t) => t.kind) } : {}), ...(this.s.resumable ? { resumable: true as const, intent, expiresAt: created.expiresAt, ...(proofVersion ? { proofVersion } : {}) } : {}) };
     const expected = input.kind === "connect" ? undefined : this.w.owner(input.account) ?? input.account;
     let seen = created.seen;
 
     // an approval: the site must act for the owner recorded here, before the owner sees a link
-    if (expected) {
+    if (expected && !taken) {
       const read = () => readSiteRequest({ site: this.s.site, id: created.id, token: created.token, wait: 0, fetchImpl: this.s.fetchImpl });
       let first = await read();
       // everything the creation answer and these reads showed, a failed read's error included: a later, cleaner answer never takes it back
@@ -576,11 +611,16 @@ export class HostedApprovals {
         );
       }
     }
-    this.s.onRecord?.(record);
-
     const now = Date.now();
-    const expiresAt = Math.min(now + input.timeoutMs, created.expiresAt);
-    this.audit({ id: created.id, kind, title: input.terms.title, status: "awaiting_owner", hash: seen.hash ?? undefined, sending: seen.asked || undefined });
+    const localDeadline = taken ? taken.deadline ?? now : now + input.timeoutMs;
+    if (!taken) {
+      // what a later worker needs to finish this request: when this command's own wait ends, with the rest of the record
+      if (record.resumable) record.deadline = localDeadline;
+      this.s.onRecord?.(record);
+    }
+
+    const expiresAt = Math.min(localDeadline, created.expiresAt);
+    if (!taken) this.audit({ id: created.id, kind, title: input.terms.title, status: "awaiting_owner", hash: seen.hash ?? undefined, sending: seen.asked || undefined });
     let resolve!: (o: OwnerActionOutcome) => void;
     const settled = new Promise<OwnerActionOutcome>((done) => {
       let answered = false;
@@ -590,11 +630,12 @@ export class HostedApprovals {
         done(o);
       };
     });
-    this.open.set(created.id, { id: created.id, token: created.token });
+    // a request taken over is left open when this command ends: the next one finishes it
+    if (!taken) this.open.set(created.id, { id: created.id, token: created.token });
     if (then) {
       let settle!: (b: HostedBundleOutcome) => void;
       const bundle = new Promise<HostedBundleOutcome>((done) => (settle = done));
-      const base = { id: created.id, token: created.token, kind, title: input.terms.title, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve, record, ...(askedV2 ? { proofVersion: 2 as const } : {}) };
+      const base = { id: created.id, token: created.token, kind, title: input.terms.title, matchCode: created.matchCode, localDeadline, siteExpiry: created.expiresAt, resolve, record, ...(taken ? { fresh: true } : {}), ...(proofVersion ? { proofVersion } : {}) };
       const kinds = then.map((t) => t.kind);
       void this.pollBundle({ ...base, expected: expectedOwner ?? undefined, timeoutMs: input.timeoutMs, kinds, settle, answer: created.answer }).catch((err: Error) => {
         this.learners.delete(created.id);
@@ -610,12 +651,13 @@ export class HostedApprovals {
         expiresAt,
         matchCode: created.matchCode,
         link: { id: created.id, code: created.matchCode },
+        ...(taken ? { adopted: true } : {}),
         settled,
         bundle,
         finish: (verdict) => this.audit(verdictLine(created.id, kind, input.terms.title, verdict)),
       };
     }
-    void this.poll({ seen, id: created.id, token: created.token, kind, title: input.terms.title, expected, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve, record, ...(askedV2 ? { proofVersion: 2 as const } : {}) }).catch((err: Error) => {
+    void this.poll({ seen, id: created.id, token: created.token, kind, title: input.terms.title, expected, matchCode: created.matchCode, localDeadline, siteExpiry: created.expiresAt, resolve, record, ...(taken ? { fresh: true } : {}), ...(proofVersion ? { proofVersion } : {}) }).catch((err: Error) => {
       this.learners.delete(created.id);
       this.cancellations.delete(created.id);
       resolve({ status: "expired", reason: `the command stopped reading the request: ${scrub(siteText(err.message))}`, sending: kind !== "link" });
@@ -626,6 +668,7 @@ export class HostedApprovals {
       expiresAt,
       matchCode: created.matchCode,
       ...(kind === "link" ? { link: { id: created.id, code: created.matchCode } } : {}),
+      ...(taken ? { adopted: true } : {}),
       settled,
       // the site reads the receipt itself; this only records the command's own verdict locally
       finish: (verdict) => this.audit(verdictLine(created.id, kind, input.terms.title, verdict)),
@@ -829,6 +872,9 @@ export class HostedApprovals {
     let cancelTried = false;
     let renewed = false;
     let readAt = 0;
+    // A request an earlier worker made may be past its expiry already, with the owner's answer on the site: it is read before any
+    // expiry is acted on (a minute at most, when it cannot be read).
+    let freshUntil = p.fresh ? Date.now() + 60_000 : 0;
     // Every cancellation of this approval (the deadline, a refused owner, close()) is the one shared call. What its answer
     // shows of the wallet is taken in, and written to the log, before the call resolves: close() may be followed by an exit.
     this.learners.set(p.id, (c) => {
@@ -874,7 +920,7 @@ export class HostedApprovals {
       if (this.stopped) return end("rejected", "the command stopped before this approval completed; check wallet activity before retrying", tx);
       const now = Date.now();
       // the command's own --timeout came first: cancel on the site, which works only while the wallet was not asked
-      if (now >= expiry && !cancelTried && !walletAsked && lastState === "awaiting_owner") {
+      if (now >= expiry && !cancelTried && !walletAsked && lastState === "awaiting_owner" && now >= freshUntil) {
         cancelTried = true;
         const c = await this.cancelOnce(p.id, p.token);
         if (c?.cancelled) return end("expired", `the approval link expired without a completed approval, and the request was cancelled on ${this.name}; nothing was sent`, false);
@@ -882,7 +928,7 @@ export class HostedApprovals {
       }
       // past the expiry (and, once the wallet was asked, the time for its hash to come back) without a final answer: the
       // request may still be open on the site, so a transaction is never reported as "nothing sent"
-      if (now > expiry + (walletAsked ? grace : 30_000)) {
+      if (now > expiry + (walletAsked ? grace : 30_000) && now >= freshUntil) {
         return end("expired", walletAsked ? `the wallet was asked to send, but no transaction came back from ${this.name}` : `no final answer from ${this.s.site} by the time the approval link expired; the request may still be open there`, tx);
       }
       const waitS = Math.max(0, Math.min(this.s.pollWaitS ?? 20, Math.ceil((expiry - now) / 1000)));
@@ -907,6 +953,7 @@ export class HostedApprovals {
         continue;
       }
       lastContact = Date.now();
+      freshUntil = 0;
       const v = r.view;
       const state = String(v.state);
       const seenNow = seenOf(this.w, v);
@@ -987,6 +1034,8 @@ export class HostedApprovals {
     let cancelTried = false;
     let timedOut = false;
     let readAt = 0;
+    // as in poll(): a request taken over is read before any expiry is acted on
+    let freshUntil = p.fresh ? Date.now() + 60_000 : 0;
     /** The link was refused (no valid owner proof): its steps were withdrawn when the site confirmed it, else unknown. */
     let refusedLink: { withdrawn: boolean } | null = null;
     const asked = () => steps.some((s) => s.walletAsked);
@@ -1140,7 +1189,7 @@ export class HostedApprovals {
       // before the link: the link's expiry. After it: --timeout again for the steps, from the moment it was linked.
       const deadline = linkedAt ? Math.max(Math.min(p.localDeadline, p.siteExpiry), linkedAt + p.timeoutMs) : Math.min(p.localDeadline, p.siteExpiry);
       // at the deadline the request is withdrawn on the site (the steps it asked the wallet for stay, as possibly sent)
-      if (now >= deadline && !cancelTried) {
+      if (now >= deadline && !cancelTried && now >= freshUntil) {
         cancelTried = true;
         const c = await this.cancelOnce(p.id, p.token);
         learnCancel(c);
@@ -1150,7 +1199,7 @@ export class HostedApprovals {
         }
         if (withdrawn) return finish(owner ? null : `the approval link expired without a completed approval, and the request was cancelled on ${this.name}; nothing was sent`);
       }
-      if (now > deadline + (asked() ? grace : (this.s.quietGraceMs ?? 30_000))) return finish(`no final answer from ${this.s.site} in time; the request may still be open there`);
+      if (now > deadline + (asked() ? grace : (this.s.quietGraceMs ?? 30_000)) && now >= freshUntil) return finish(`no final answer from ${this.s.site} in time; the request may still be open there`);
       const waitS = Math.max(0, Math.min(this.s.pollWaitS ?? 20, Math.ceil((deadline - now) / 1000)));
       readAt = Date.now();
       const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, fetchImpl: this.s.fetchImpl });
@@ -1173,6 +1222,7 @@ export class HostedApprovals {
         continue;
       }
       lastContact = Date.now();
+      freshUntil = 0;
       const v = r.view;
       const trusted = own(v);
       // first of all: what this answer shows of the wallet, before its owner proof, step states or finality are looked at

@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, recordMayHaveSent, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -441,6 +441,9 @@ waiting_owner it says so in one line and ends its turn again. unknown with final
 after the agent's own revoke) also means the owner has not finished: send the new message_for_owner if url changed, and
 end the turn.
 --site is checked against the site the approval was made on, and refused if it differs.
+Some agent hosts end every process a command started when the command ends. If the background approval of a hosted owner
+command was ended that way, wait starts it again: it finishes the same request from its record on the site, creates no new
+request, and records what the first worker would have recorded. Until it has a result, no other owner command runs on that chain.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
 approval sent nothing; after setup --hosted with --grant or --fund, or recover, an earlier step may have completed (read
 steps, tx and budget status). Run the owner command again for a new one (setup reuses the agent key it created).
@@ -678,6 +681,10 @@ if (WORKER_ID) adoptWorker(WORKER_ID);
 // The approval this process holds the chain for: the worker's, or a blocking owner command's own (ownerGate).
 let APPROVAL_ID = WORKER_ID;
 let FOREGROUND = false;
+// A worker that `wait` started again, to finish an approval whose first worker the host ended (approvals.mjs restartWorker): its
+// rail script takes the site's request over and creates none. It records a result only once it has the request in hand, so a
+// refusal from before that, a signal, or a crash that left no RESULT leaves the approval open for the next `wait`.
+const RESUMING = WORKER_ID !== undefined && process.env[RESUME_ENV] === WORKER_ID;
 
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 // A worker also stores it (and the exit code) in its approval record, for every later `wait`.
@@ -689,6 +696,10 @@ function resultFacts(fields) {
 }
 
 function emit(code, fields) {
+  if (RESUMING && (interrupted || !hasTakenOver(WORKER_ID))) {
+    log(`superstables budget: the resumed approval ${WORKER_ID} ${interrupted ? "was stopped" : "ended before it had the request in hand"}; no result is recorded, and the next wait finishes it`);
+    process.exit(code);
+  }
   const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "agreement", "lastOwnerAction", "ownerRevokeFinal", "revocation", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
@@ -1095,6 +1106,11 @@ function run(spec) {
       if (partial) forward(partial);
       passErr(errScrub.end());
       gate?.flush();
+      // a resumed worker whose rail script left no RESULT (it crashed): nothing is decided from that, the next wait finishes it
+      if (RESUMING && code !== 0 && !railResult(stdout)) {
+        log(`superstables budget: the resumed approval ${WORKER_ID} stopped without a result (${lastError(stderrTail) ?? `exit ${code ?? sig}`}); no result is recorded, and the next wait finishes it`);
+        process.exit(code ?? 1);
+      }
       resolve({ code: code ?? (sig ? 130 : 1), signal: sig ?? null, stdout, error: lastError(stderrTail) });
     });
   });
@@ -2203,6 +2219,30 @@ async function ownerGate({ cmd, f, ctx }) {
   emit(0, { ...ctx, state: "waiting_owner", ...approvalFields(rec), next: waitNext(id, rec), ...(missing ? { reason: missing } : {}) });
 }
 
+/**
+ * The worker of a hosted approval is gone and its request may still be open on the site (a host that ends every process of a
+ * command when the command ends does this). Start the worker again, which takes the request over and does what the first one
+ * would have done, and read until it ends. The owner's answer is on the site, so this finishes the approval from there: it
+ * creates no request, and the chain stays held until a result is stored. Without a worker it can start, nothing is decided.
+ */
+async function finishHosted(f, record, timeoutMs) {
+  let started = { started: false };
+  try {
+    started = restartWorker(f.id, { cmd: process.execPath, script: fileURLToPath(import.meta.url), cwd: process.cwd() });
+  } catch (err) {
+    log(`superstables budget: could not start the background approval ${f.id} again: ${siteText(err.message, 200)}`);
+  }
+  if (!started.started && !processesAlive(readApproval(f.id))) {
+    log(`superstables budget: the background approval ${f.id} stopped and could not be started again`);
+    return emit(5, { command: record.command, rail: record.rail, chain: record.chain, state: "unknown", final: false, id: record.id, url: record.url, next: `${statusCommand({ rail: record.rail, chain: record.chain })}: read whether it landed before running this again. Run superstables budget wait --id ${record.id} --shown again`, reason: "the background approval stopped and could not be started again" });
+  }
+  if (started.started) log(`superstables budget: the background approval ${f.id} had stopped; finishing it from the request on ${siteName(record.hosted.site)}.`);
+  const first = await waitFor(f.id, timeoutMs, { resume: false });
+  // the owner already acted: the restarted worker is checking the chain, which can outlast --timeout
+  const acted = !first?.final && (first?.page?.walletAsked || first?.page?.linked);
+  return acted ? waitFor(f.id, Math.max(RESUME_WAIT_MS - timeoutMs, 0), { resume: false }) : first;
+}
+
 async function wait({ f }) {
   const once = readApproval(f.id);
   // --site names the site the approval was made on: another one is a mistake, not a different request
@@ -2233,7 +2273,9 @@ async function wait({ f }) {
     reason: `this purchase was made on ${siteText(once.hosted.site, 120)}, which is not an approval site the owner allows now; nothing was read from it`,
     next: `do not buy this again. Ask the owner: ${madeOnAllowed.ownerCommand ?? "superstables owner settings show"} in their own terminal, then run superstables budget wait --id ${f.id} --shown` });
   if (once?.command === "buy-once") return waitBuyOnce(once, f);
-  const r = await waitFor(f.id, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);
+  const timeoutMs = (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000;
+  let r = await waitFor(f.id, timeoutMs);
+  if (r?.resume) r = await finishHosted(f, r.record, timeoutMs);
   if (!r) {
     const reason = `no owner approval with id ${f.id} under ${approvalsDir()}`;
     log(`superstables budget: ${reason}`);

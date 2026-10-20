@@ -8,15 +8,18 @@ import "./cli-guard.mjs";
 import { type Hex } from "viem";
 import { SYM, CFG, GAS, emit, arg, gasFmt, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, nativeBalance, usdcBalance, usdc, readUntil, sendNative, usageError, assertRpcChain, tx, finalityOf, thatTakes, usuallyWords } from "./lib.ts";
 import { fundInWallet, fundValue, DEFAULT_FUND_AMOUNT, chainFlag } from "./owner.ts";
+import { requestFact, resuming } from "../owner-page.ts";
 
 const amt = arg("amount") ?? DEFAULT_FUND_AMOUNT;
 let value = 0n;
 try { value = fundValue(amt); } catch (e) { usageError((e as Error).message); }
 const p = await ownerPlanCtx(); // public addresses, checked against the owner's setup signature
 await assertRpcChain();
-const ob = await nativeBalance(p.owner), ab = await nativeBalance(p.agent);
+// the agent's balance before the transfer is kept with the approval: a worker that finishes it later checks the transfer against it
+const ob = await nativeBalance(p.owner), ab = await requestFact("agentBalance", () => nativeBalance(p.agent));
 console.log(`${CFG.label}: owner ${gasFmt(ob)} ${GAS.symbol} (native), agent ${gasFmt(ab)} ${GAS.symbol} (native)`);
-if (ob < value) {
+// a resumed worker asks nothing again, and the owner has spent the gas it is checking
+if (ob < value && !resuming()) {
   console.log(`REFUSED: the owner has less than ${amt} ${GAS.symbol}`);
   process.exit(emit("fundAgent", 3, { state: "refused_precheck", reason: `the owner ${p.owner} has less than ${amt} ${GAS.symbol}`, next: `fund the owner first (superstables budget doctor --rail evm names the faucet)` }));
 }

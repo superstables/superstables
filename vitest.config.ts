@@ -11,6 +11,7 @@ const SLOW = [
   "test/budget/chain-gate.test.ts",
   "test/budget/chain-guard.test.ts",
   "test/budget/cli-hosted-rails.test.ts",
+  "test/budget/cli-hosted-resume.test.ts",
   "test/budget/cli-hosted.test.ts",
   "test/budget/cli-once.test.ts",
   "test/budget/cli.test.ts",

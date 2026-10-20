@@ -28,7 +28,7 @@ import {
 } from "../src/core/signer/owner-approval-server.ts";
 import { ownerApprovalsLog } from "./paths.mjs";
 import { bindingFacts } from "./page-facts.mjs";
-import { HOLDER_ENV, recordHosted } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, readApproval, readRequestFact, recordHosted, recordTakenOver, saveRequestFact } from "./approvals.mjs";
 import { sendBegan } from "./proof.mjs";
 import { HOSTED_KIND, HostedApprovals, HostedRefusal, type HostedBundleOutcome, type HostedSettings, type HostedStep, type PriorLink } from "./hosted.ts";
 import { DEFAULT_SITE, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
@@ -85,12 +85,43 @@ async function page(): Promise<OwnerApprovalServer> {
   return server;
 }
 
+/**
+ * Whether this command finishes an approval an earlier worker began (`wait` started it again, approvals.mjs restartWorker): the
+ * hosted request is then taken over and none is created, and what the command read from the chain before asking comes from
+ * the first run (requestFact), so a refusal that depended on the chain's state then does not apply to an approval already given.
+ */
+export const resuming = (): boolean => Boolean(process.env[RESUME_ENV]) && process.env[RESUME_ENV] === process.env[HOLDER_ENV];
+
+/**
+ * A value a rail script reads from the chain before it asks (the block to read the owner's transaction from, a balance before):
+ * computed and kept with the approval on a first run, read back on a resumed one. Kept before the request exists.
+ */
+export async function requestFact<T>(key: string, compute: () => Promise<T>): Promise<T> {
+  const holder = process.env[HOLDER_ENV];
+  if (resuming()) {
+    const kept = readRequestFact(holder!, key);
+    if (!kept.found) throw new Error(`approval ${holder} did not keep "${key}" from its first run, so it cannot be finished from here; read the chain before running this again`);
+    return kept.value as T;
+  }
+  const value = await compute();
+  if (holder) saveRequestFact(holder, key, value);
+  return value;
+}
+
 let hostedClient: HostedApprovals | undefined;
 function hostedFor(settings: Omit<HostedSettings, "auditPath" | "onRecord">): HostedApprovals {
   if (!hostedClient) {
     const holder = process.env[HOLDER_ENV];
+    // the recorded request this command finishes, when it is a resumed worker: it creates none, whatever else is wrong
+    const hosted = resuming() ? readApproval(holder)?.hosted : undefined;
+    if (resuming()) {
+      if (!hosted) throw new Error(`approval ${holder} has no recorded request to finish, and a resumed command creates none`);
+      // from here on the worker has the request in hand: what it ends with (a refusal included) is the approval's result
+      recordTakenOver(holder!);
+    }
     hostedClient = new HostedApprovals({
       ...settings,
+      ...(hosted ? { resume: hosted } : {}),
       auditPath: ownerApprovalsLog(),
       // the access token lives in the approval record (mode 600), where --replace and wait find it; never in a log
       onRecord: (record) => { if (holder) recordHosted(holder, record); },
@@ -98,6 +129,7 @@ function hostedFor(settings: Omit<HostedSettings, "auditPath" | "onRecord">): Ho
   }
   return hostedClient;
 }
+
 
 /** Keep the page up a moment so it can show the final state, then stop it. A hosted request has no page here to keep up. */
 export async function closeOwnerPage(lingerMs = 4000) {
@@ -262,7 +294,7 @@ export function ownerPageFor(rail: OwnerRail) {
         const handle = await hostedFor(hosted).request({ kind: "connect", terms, timeoutMs: OWNER_TIMEOUT_MS, then, prior: linkOpts.prior ?? null, newOwner: linkOpts.newOwner === true, expectedOwner: linkOpts.expectedOwner }).catch((e) => refusedBySite(action, e));
         // already linked on this chain, with the owner's proof over the link recorded here: no link to show, nothing to wait for
         if (handle.alreadyLinked) console.error(`\nThis agent already belongs to the account of the owner recorded on this machine, on ${hosted.site} (checked against that owner's signed proof); no approval link is needed.\n`);
-        else announce(action, handle, terms, hosted.site);
+        else if (!handle.adopted) announce(action, handle, terms, hosted.site);
         if (handle.bundle) {
           const bundle = await handle.bundle;
           return { handle, outcome: bundle.link, bundle, link: handle.link };
@@ -282,7 +314,7 @@ export function ownerPageFor(rail: OwnerRail) {
       const hosted = hostedSettings(action, "transaction");
       if (hosted) {
         const handle = await hostedFor(hosted).request({ kind: "evm-transaction", action, terms, account: owner, transaction, timeoutMs: OWNER_TIMEOUT_MS }).catch((e) => refusedBySite(action, e));
-        announce(action, handle, terms, hosted.site);
+        if (!handle.adopted) announce(action, handle, terms, hosted.site);
         return settledOf(handle);
       }
       const s = await page();
@@ -299,7 +331,7 @@ export function ownerPageFor(rail: OwnerRail) {
       const hosted = hostedSettings(action, "transaction");
       if (!hosted) throw new Error(`${action} on solana asks through the site only when the chain is hosted`);
       const handle = await hostedFor(hosted).request({ kind: "solana-intent", action, terms, account: owner, solana, timeoutMs: OWNER_TIMEOUT_MS }).catch((e) => refusedBySite(action, e));
-      announce(action, handle, terms, hosted.site);
+      if (!handle.adopted) announce(action, handle, terms, hosted.site);
       return settledOf(handle);
     },
 

@@ -10,7 +10,7 @@ import { rpcFacts } from "../page-facts.mjs";
 import { EVM_CHAINS } from "./chains.mjs";
 import { CHAINS } from "./chains.ts";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
-import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
+import { closeOwnerPage, ownerPageFor, requestFact } from "../owner-page.ts";
 import { ownerEvidence, plannedCall, type EvidenceReads } from "./delegation.ts";
 import { searchLogs } from "../../src/core/log-windows.mjs";
 import { CFG, GAS, SYM, USDC, USDC_DECIMALS, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need, allowanceAgreed, finalityOf, thatTakes, agreementWords } from "./lib.ts";
@@ -100,7 +100,8 @@ export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
       console.log(`REFUSED: ${reason}. Nothing was requested.`);
       process.exit(emit("owner", 3, { state: "refused_precheck", reason, next: "restore the agent key file, or set this chain up again" }));
     }
-    return { site, rail: "evm" as const, chain: CFG.key, agentKey };
+    // every evm owner script keeps what it read before asking (requestFact), so a later worker can finish its request
+    return { site, rail: "evm" as const, chain: CFG.key, agentKey, resumable: true };
   },
 });
 
@@ -381,15 +382,19 @@ const withEarlier = (earlier: Earlier | undefined, o: Record<string, unknown>) =
 
 /** Owner approve(agent, 0) through the wallet page. Returns the verified transaction hash, or exits with a RESULT. */
 export async function revokeInWallet(command: string, owner: Address, agent: Address, title?: string, earlier?: Earlier): Promise<{ hash: Hex; final: boolean; block: bigint }> {
-  const before = await allowanceOf(owner, agent);
-  const held = await usdcBalance(agent);
-  if (!GAS.isUsdc && (await nativeBalance(owner)) === 0n) {
-    const reason = `the owner ${owner} has no ${GAS.symbol} to pay the fee for the revoke`;
-    console.log(`REFUSED: ${reason}`);
-    process.exit(emit(command, 3, withEarlier(earlier, { state: "refused_precheck", reason, allowance: usdc(before), next: `fund the owner with ${CFG.label} ${GAS.symbol}, then revoke again` })));
-  }
+  // what the request is built from and the owner's transaction is checked against: kept with the approval, so a worker that
+  // finishes it later (wait, after the host ended the first one) reads the same
+  const { before, held, startBlock } = await requestFact("revoke", async () => {
+    const before = await allowanceOf(owner, agent);
+    const held = await usdcBalance(agent);
+    if (!GAS.isUsdc && (await nativeBalance(owner)) === 0n) {
+      const reason = `the owner ${owner} has no ${GAS.symbol} to pay the fee for the revoke`;
+      console.log(`REFUSED: ${reason}`);
+      process.exit(emit(command, 3, withEarlier(earlier, { state: "refused_precheck", reason, allowance: usdc(before), next: `fund the owner with ${CFG.label} ${GAS.symbol}, then revoke again` })));
+    }
+    return { before, held, startBlock: await publicClient.getBlockNumber() };
+  });
   const data = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [agent, 0n] });
-  const startBlock = await publicClient.getBlockNumber();
   const { handle, outcome } = await askTransaction(command === "recover" ? "recover-revoke" : "revoke", owner, { to: USDC, data }, revokeTerms(owner, agent, before, held, title));
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved(command, outcome, { ...earlier?.result, allowance: usdc(before) }, undefined, earlier?.done);
   if (outcome.status !== "sent") throw new Error(`unexpected owner page outcome ${outcome.status}`);
@@ -466,7 +471,7 @@ export function fundingTx(agent: Address, value: bigint, _hosted: boolean): { to
 
 /** Owner sends the agent `value` of the gas token through the wallet page. Returns the verified hash and whether its block is final, or exits with a RESULT. */
 export async function fundInWallet(command: string, owner: Address, agent: Address, value: bigint, amt: string, agentHas: bigint, earlier?: Earlier): Promise<{ hash: Hex; final: boolean }> {
-  const startBlock = await publicClient.getBlockNumber();
+  const startBlock = await requestFact("fund", () => publicClient.getBlockNumber());
   const action = command === "recover" ? "recover-gas" : "fund-agent";
   // recover's owner steps stay on this computer, so only fund-agent can be hosted
   const t = fundingTx(agent, value, action === "fund-agent" && approvalSite() !== null);
