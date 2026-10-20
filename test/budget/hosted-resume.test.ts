@@ -140,6 +140,29 @@ describe("a hosted request taken over by a later worker", () => {
     });
   });
 
+  it("a site that cannot be read decides nothing: the request stays unresolved however far past its expiry, until the site answers", async () => {
+    site.expiresInMs = 100;
+    const record = await firstWorker();
+    await new Promise((r) => setTimeout(r, 300));
+    site.readAnswer = () => ({ status: 503, body: { error: "unavailable" } });
+    const h = await grant(client({ resume: { ...record, deadline: Date.now() - 1000 }, quietGraceMs: 20, sendingGraceMs: 20 }));
+    const raced = await Promise.race([h.settled.then(() => "settled"), new Promise((r) => setTimeout(() => r("open"), 1500))]);
+    expect(raced).toBe("open");
+    expect(site.requests[0].cancels).toBe(0);
+    site.readAnswer = undefined;
+    Object.assign(site.requests[0], { state: "confirmed", tx_hash: HASH, wallet_asked: true });
+    expect(await h.settled).toEqual({ status: "sent", address: OWNER, hash: HASH });
+  });
+
+  it("onTakeover is called once the recorded request is checked and in hand, and not for a request it refuses", async () => {
+    const record = await firstWorker();
+    let taken = 0;
+    await grant(client({ resume: record, onTakeover: () => taken++ }));
+    expect(taken).toBe(1);
+    await grant(client({ resume: { ...record, intent: "0".repeat(64) }, onTakeover: () => taken++ })).catch(() => {});
+    expect(taken).toBe(1);
+  });
+
   it("a link with steps: the bundle settles from the recorded request, with the owner proof checked", async () => {
     gone = false;
     const first = client({ fetchImpl: deadFetch });

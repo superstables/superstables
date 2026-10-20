@@ -9,7 +9,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed and fixed
 
-- **Hosted budgets in agent hosts that end background processes:** some hosts, Codex among them, end every process a command started when the command ends, which took the background approval with it before the owner approved. `budget wait` now finishes a hosted EVM setup, grant, revoke or fund-agent from the request on the site: it creates no new request and records what the background approval would have recorded. Until it has a result, other owner commands on that chain are refused. Tempo and Solana hosted approvals behave as before.
+- **Resume budget approvals after a background worker stops:** `budget wait` can now finish EVM `setup`, `grant`, `revoke` and `fund-agent` requests approved on superstables.com when an agent host stops the background worker. It reuses the existing request and runs the original checks and local writes. Until a result is recorded, other owner commands on that chain are refused. For Tempo and Solana, `wait` ends a stopped approval as before, and other owner commands on that chain are now refused until it does. Testnet only.
 
 ## [0.5.0] - Agent plugin, key protection and safer payments
 

@@ -116,12 +116,11 @@ function hostedFor(settings: Omit<HostedSettings, "auditPath" | "onRecord">): Ho
     const hosted = resuming() ? readApproval(holder)?.hosted : undefined;
     if (resuming()) {
       if (!hosted) throw new Error(`approval ${holder} has no recorded request to finish, and a resumed command creates none`);
-      // from here on the worker has the request in hand: what it ends with (a refusal included) is the approval's result
-      recordTakenOver(holder!);
     }
     hostedClient = new HostedApprovals({
       ...settings,
-      ...(hosted ? { resume: hosted } : {}),
+      // from the moment the request is checked and in hand, what this worker ends with (a refusal included) is the approval's result
+      ...(hosted ? { resume: hosted, onTakeover: () => recordTakenOver(holder!) } : {}),
       auditPath: ownerApprovalsLog(),
       // the access token lives in the approval record (mode 600), where --replace and wait find it; never in a log
       onRecord: (record) => { if (holder) recordHosted(holder, record); },
@@ -247,8 +246,15 @@ export function ownerPageFor(rail: OwnerRail) {
   /** The hosted settings for this action, or undefined for the page on this computer. */
   function hostedSettings(action: string, kind: "connect" | "transaction") {
     const recorded = rail.hostedSite?.();
+    // A resumed worker finishes the hosted request recorded for its approval, and asks nowhere else: no page on this computer, no
+    // other site. When it cannot reach that request it ends with nothing recorded, and the next wait tries again.
+    if (resuming() && (!recorded || !rail.hosted)) throw new Error("this approval's chain is no longer set up for approvals on the site, so its recorded request is not finished here");
     if (!recorded || !rail.hosted) return undefined;
     const site = siteOrigin(recorded, "owner");
+    if (site.error && resuming()) {
+      console.log(`UNKNOWN: the site recorded for this chain (${siteText(recorded, 120)}) is not an approval site the owner allows now: ${site.error}. The request recorded for this approval was not read.`);
+      process.exit(rail.emit(action, 5, { state: "unknown", reason: `the site is not allowed now: ${site.error}`, next: `${rail.statusCommand}: read whether it landed before running this again` }));
+    }
     if (site.error) {
       // the kill switch must work on an install whose recorded site the owner no longer allows: revoke asks on this machine
       if (action === "revoke" && site.ownerCommand) {

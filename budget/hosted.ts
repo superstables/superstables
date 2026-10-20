@@ -277,6 +277,8 @@ export interface HostedSettings {
   resumable?: boolean;
   /** This worker finishes the recorded request an earlier worker made: it creates none (see the header). */
   resume?: HostedRecord;
+  /** Called once this worker has checked that the recorded request is the one its command asks for and has it in hand. */
+  onTakeover?: () => void;
 }
 
 /**
@@ -520,7 +522,8 @@ export class HostedApprovals {
         : taken.site !== this.s.site ? "it was made on another site"
         : taken.intent !== intent ? "this command asks for something other than the recorded request"
         : "";
-      if (problem) throw new HostedRefusal(`the recorded request ${taken.requestId} cannot be finished: ${problem}. Nothing was created; whether the owner approved it is not known here`, CHECK_CHAIN, { sending: true });
+      if (problem) throw new HostedRefusal(`the recorded request ${taken.requestId} cannot be finished: ${problem}. No new request was created; whether the owner approved it is not known here`, CHECK_CHAIN, { sending: true });
+      this.s.onTakeover?.();
     }
     const answer = taken
       ? { linked: false as const, id: taken.requestId, token: taken.token, url: "", matchCode: taken.matchCode, expiresAt: taken.expiresAt ?? Date.now(), steps: undefined, seen: NOT_SEEN, answer: undefined as unknown }
@@ -873,8 +876,8 @@ export class HostedApprovals {
     let renewed = false;
     let readAt = 0;
     // A request an earlier worker made may be past its expiry already, with the owner's answer on the site: it is read before any
-    // expiry is acted on (a minute at most, when it cannot be read).
-    let freshUntil = p.fresh ? Date.now() + 60_000 : 0;
+    // expiry is acted on, however long that takes (a site that cannot be read decides nothing; the worker's own deadline ends it).
+    let freshUntil = p.fresh ? Infinity : 0;
     // Every cancellation of this approval (the deadline, a refused owner, close()) is the one shared call. What its answer
     // shows of the wallet is taken in, and written to the log, before the call resolves: close() may be followed by an exit.
     this.learners.set(p.id, (c) => {
@@ -1035,7 +1038,7 @@ export class HostedApprovals {
     let timedOut = false;
     let readAt = 0;
     // as in poll(): a request taken over is read before any expiry is acted on
-    let freshUntil = p.fresh ? Date.now() + 60_000 : 0;
+    let freshUntil = p.fresh ? Infinity : 0;
     /** The link was refused (no valid owner proof): its steps were withdrawn when the site confirmed it, else unknown. */
     let refusedLink: { withdrawn: boolean } | null = null;
     const asked = () => steps.some((s) => s.walletAsked);

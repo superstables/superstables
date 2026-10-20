@@ -723,9 +723,9 @@ waiting_owner it says so in one line and ends its turn again. unknown with final
 after the agent's own revoke) also means the owner has not finished: send the new message_for_owner if url changed, and
 end the turn.
 --site is checked against the site the approval was made on, and refused if it differs.
-Some agent hosts end every process a command started when the command ends. If the background approval of a hosted owner
-command was ended that way, wait starts it again: it finishes the same request from its record on the site, creates no new
-request, and records what the first worker would have recorded. Until it has a result, no other owner command runs on that chain.
+Some agent hosts end every process a command started when the command ends. For EVM owner commands approved on
+superstables.com, wait can restart a stopped worker, read the existing request from the site, and run the original checks
+and local writes without creating a new request. Other owner commands on that chain remain blocked until a result is recorded.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
 approval sent nothing; after setup --hosted with --grant or --fund, or recover, an earlier step may have completed (read
 steps, tx and budget status). Run the owner command again for a new one (setup reuses the agent key it created).

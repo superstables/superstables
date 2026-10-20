@@ -107,10 +107,29 @@ describe("waitFor, with the worker gone", () => {
     expect(JSON.stringify(approvals.readApproval(id))).not.toContain("ssbt_");
   });
 
-  it("with resume off (the worker was just started again and is gone too) it ends the same way", async () => {
-    const id = await openApproval();
-    const r = await approvals.waitFor(id, 0, { resume: false });
+  it("an approval whose restarted workers never took the request over, MAX_FAILED_RESTARTS times, ends the way it always did", async () => {
+    const id = await openApproval({ resumes: approvals.MAX_FAILED_RESTARTS });
+    expect(approvals.canResume(approvals.readApproval(id))).toBe(false);
+    const r = await approvals.waitFor(id, 0);
     expect(r).toMatchObject({ final: true, code: 5 });
+  });
+
+  it("a restart that did take the request over is no failure, however many there were", async () => {
+    const id = await openApproval({ resumes: 40, resume: { takenOver: 38 } });
+    expect(approvals.canResume(approvals.readApproval(id))).toBe(true);
+    expect(await approvals.waitFor(id, 0)).toMatchObject({ final: false, resume: true });
+  });
+
+  it("never ends an approval on a worker that another command started while it was asking the site to cancel", async () => {
+    const id = await openApproval({ resumes: approvals.MAX_FAILED_RESTARTS });
+    // the worker is back by the time the abandoned result is decided: the record is left open
+    const live = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    const fields = createIdentitySource().fields(live.pid!);
+    approvals.updateApproval(id, () => ({ ...fields, pid: live.pid! }));
+    const r = await approvals.waitFor(id, 200);
+    expect(r).toMatchObject({ final: false });
+    expect(approvals.readApproval(id)?.final).toBeUndefined();
+    killGroup(live.pid!);
   });
 });
 
@@ -121,6 +140,8 @@ describe("restartWorker", () => {
       import { readFileSync } from "node:fs";
       import { RESUME_ENV, WORKER_ENV } from ${JSON.stringify(new URL("../../budget/approvals.mjs", import.meta.url).pathname)};
       if (process.env[RESUME_ENV] !== process.env[WORKER_ENV]) process.exit(9);
+      // the restarted command asks the site this approval was made on, whatever the environment it was started from says
+      if (process.env.SUPERSTABLES_SITE !== ${JSON.stringify(HOSTED.site)}) process.exit(8);
       setTimeout(() => {}, 3000);
     `);
     return file;

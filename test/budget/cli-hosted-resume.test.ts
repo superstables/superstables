@@ -6,7 +6,7 @@
 // The property, on every path: after the owner approves, exactly one local budget record exists, whether it came from the
 // worker, a later command, both or a retry; and nothing new is asked of the owner before the recorded request is reconciled.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { encodeFunctionData, pad, parseAbi, toEventSelector } from "viem";
 import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { evmOwner, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
+import { accountHomeWith } from "../helpers/owner-settings.js";
 import type { TestServer } from "../helpers/servers.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -46,10 +47,11 @@ afterEach(async () => {
 });
 
 type Run = { code: number; stdout: string; stderr: string; result: any };
-function budget(args: string[]): Promise<Run> {
+function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<Run> {
   return new Promise((done, fail) => {
     const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: rpc!.url };
     for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_BUDGET_HOLDER", "SUPERSTABLES_BUDGET_RESUME"]) delete env[k];
+    Object.assign(env, extraEnv);
     tree.set({ "base-sepolia": [{ url: rpc!.url, operator: "fake-a" }, { url: `${rpc!.url}/`, operator: "fake-b" }], "arc-testnet": [{ url: rpc!.url, operator: "fake-a" }] });
     const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
     let stdout = "";
@@ -74,9 +76,9 @@ const lines = (key: string) => publicFile().split("\n").filter((l) => l.startsWi
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 /** What Codex does when the command that started the worker ends: every process of it goes, the rail script's group too. */
-async function endEveryProcess(id: string) {
+async function endEveryProcess(id: string, signal: NodeJS.Signals = "SIGKILL") {
   const r = record(id);
-  for (const pgid of [r.pid, r.railPgid]) if (pgid) { try { process.kill(-pgid, "SIGKILL"); } catch { /* already gone */ } }
+  for (const pgid of [r.pid, r.railPgid]) if (pgid) { try { process.kill(-pgid, signal); } catch { /* already gone */ } }
   for (let i = 0; i < 100 && [r.pid, r.railPgid].some((p) => p && alive(p)); i++) await new Promise((x) => setTimeout(x, 50));
   expect([r.pid, r.railPgid].some((p) => p && alive(p))).toBe(false);
 }
@@ -133,12 +135,12 @@ function approveSetup() {
   chain.approved = true;
 }
 const setupArgs = () => ["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund"];
-const startSetup = async () => {
+const startSetup = async (args = setupArgs(), env: Record<string, string> = {}) => {
   writeAgent();
   mkdirSync(join(home, "budget", "public"), { recursive: true });
   // a reused key is granted over only when the owner is on record and the endpoints read its allowance at a final block
   writeFileSync(publicPath(), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${AGENT}\n`);
-  const first = await budget(setupArgs());
+  const first = await budget(args, env);
   expect(first.code, first.stderr).toBe(0);
   expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF" });
   return first.result.id as string;
@@ -288,7 +290,7 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     expect(site.posts).toHaveLength(1);
   }, 240_000);
 
-  it("a record whose request is not the one the command asks for: unknown, never another request, never a cancel", async () => {
+  it("a record whose request is not the one the command asks for: nothing is created or cancelled and the approval stays open; after five such restarts it ends as an approval whose worker is gone always did", async () => {
     await fakeChain(0n, 10000n);
     const id = await startSetup();
     await endEveryProcess(id);
@@ -296,14 +298,103 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     const r = record(id);
     writeFileSync(path, JSON.stringify({ ...r, hosted: { ...r.hosted, intent: "0".repeat(64) } }));
     approveSetup();
-    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "60"]);
-    expect(done.code).toBe(5);
-    expect(done.result).toMatchObject({ state: "unknown", final: true });
-    expect(done.result.reason).toMatch(/cannot be finished: this command asks for something other than the recorded request/);
+    const first = await budget(["wait", "--shown", "--id", id, "--timeout", "30"]);
+    expect(first.code).toBe(5);
+    expect(first.result).toMatchObject({ state: "unknown", final: false });
+    expect(record(id).final).toBeUndefined();
+    expect(readFileSync(join(approvals(), `${id}.log`), "utf8")).toMatch(/cannot be finished: this command asks for something other than the recorded request/);
     expect(site.posts).toHaveLength(1);
     expect(site.requests[0].cancels).toBe(0);
     expect(publicFile()).not.toMatch(/^B4_CAP=/m);
+    expect(existsSync(lockPath())).toBe(true);
+    // enough restarts that never took the request over: the old ending, which asks the site and reports unknown
+    writeFileSync(path, JSON.stringify({ ...record(id), resumes: 5 }));
+    const last = await budget(["wait", "--shown", "--id", id, "--timeout", "30"]);
+    expect(last.result).toMatchObject({ state: "unknown", final: true });
+    expect(site.posts).toHaveLength(1);
   }, 240_000);
+
+  it("the restarted worker stops while this wait is still reading: nothing is decided, and the next wait finishes the approval", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const waiting = budget(["wait", "--shown", "--id", id, "--timeout", "40"]);
+    // the restarted worker is recorded once it started
+    for (let i = 0; i < 200 && !record(id).resumes; i++) await new Promise((x) => setTimeout(x, 100));
+    await new Promise((x) => setTimeout(x, 2500));
+    await endEveryProcess(id);
+    const stopped = await waiting;
+    expect(stopped.code).toBe(5);
+    expect(stopped.result).toMatchObject({ state: "unknown", final: false });
+    expect(record(id).final).toBeUndefined();
+    expect(site.requests[0]).toMatchObject({ state: "awaiting_owner", cancels: 0 });
+    expect(existsSync(lockPath())).toBe(true);
+    approveSetup();
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.result).toMatchObject({ state: "ok", final: true, owner: OWNER });
+    expect(lines("B4_CAP")).toBe(1);
+    expect(site.posts).toHaveLength(1);
+  }, 300_000);
+
+  it("a worker that starts after its approval has ended does nothing: no chain lock, no new approval, no request", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    approveSetup();
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.result).toMatchObject({ state: "ok", final: true });
+    const files = () => readdirSync(approvals()).filter((f) => /^oa-.*\.json$/.test(f)).sort();
+    const before = files();
+    const worker = await budget([...setupArgs(), "--wait", "--no-open"], { SUPERSTABLES_BUDGET_APPROVAL_ID: id, SUPERSTABLES_BUDGET_RESUME: id });
+    expect(worker.code).toBe(0);
+    expect(worker.stderr).toMatch(/has ended; this worker has nothing to do/);
+    expect(files()).toEqual(before);
+    expect(existsSync(lockPath())).toBe(false);
+    expect(site.posts).toHaveLength(1);
+  }, 240_000);
+
+  it("the site taken from SUPERSTABLES_SITE when the command started is the one the restarted worker asks, whatever wait's environment says", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup(["setup", "--rail", "evm", "--hosted", "--grant", "0.01", "--fund"], { SUPERSTABLES_SITE: site.url });
+    await endEveryProcess(id);
+    approveSetup();
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ state: "ok", final: true, site: site.url });
+    expect(lines("B4_CAP")).toBe(1);
+    expect(site.posts).toHaveLength(1);
+  }, 240_000);
+
+  it("a site that cannot be read after the first worker ended decides nothing: the approval stays open, and the next wait finishes it", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    approveSetup();
+    site.readAnswer = () => ({ status: 503, body: { error: "unavailable" } });
+    const early = await budget(["wait", "--shown", "--id", id, "--timeout", "8"]);
+    expect(early.result).toMatchObject({ final: false });
+    expect(record(id).final).toBeUndefined();
+    expect(site.requests[0].cancels).toBe(0);
+    expect(existsSync(lockPath())).toBe(true);
+    await endEveryProcess(id);
+    site.readAnswer = undefined;
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.result).toMatchObject({ state: "ok", final: true });
+    expect(lines("B4_CAP")).toBe(1);
+  }, 300_000);
+
+  it("a worker stopped by SIGTERM (a host that asks politely) leaves the approval open too", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id, "SIGTERM");
+    approveSetup();
+    // give the worker's own signal handling time to finish what it does
+    await new Promise((x) => setTimeout(x, 1500));
+    expect(record(id).final).toBeUndefined();
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.result).toMatchObject({ state: "ok", final: true, owner: OWNER });
+    expect(lines("B4_CAP")).toBe(1);
+    expect(site.posts).toHaveLength(1);
+  }, 300_000);
 });
 
 describe("grant, revoke and fund-agent, when the host ends the worker before the owner approves", () => {
@@ -354,6 +445,32 @@ describe("grant, revoke and fund-agent, when the host ends the worker before the
     expect(readFileSync(join(approvals(), `${id}.log`), "utf8")).toMatch(/allowance before: 0\.01/);
     expect(site.posts).toHaveLength(1);
   }, 240_000);
+
+  it("revoke: a site the owner no longer allows is not a reason to ask on the page on this computer: the approval stays open, nothing new is requested", async () => {
+    hostedChain("10000");
+    site.owner = OWNER;
+    await fakeChain(10000n, 0n);
+    const id = await start(["revoke", "--rail", "evm"]);
+    await endEveryProcess(id);
+    Object.assign(site.requests[0], { state: "confirmed", tx_hash: REVOKE_HASH, wallet_asked: true });
+    chain.approved = true;
+    const noSite = accountHomeWith({ version: 1, rpcEnv: { allowLoopback: true } });
+    const stalled = await budget(["wait", "--shown", "--id", id, "--timeout", "20"], { SUPERSTABLES_TEST_ACCOUNT_HOME: noSite });
+    expect(stalled.result).toMatchObject({ final: false });
+    const r = record(id);
+    expect(r.final).toBeUndefined();
+    // the recorded hosted request is still there, and no local page was opened for a second revoke
+    expect(r.hosted?.token).toMatch(/^ssbt_/);
+    expect(String(r.url ?? "")).not.toMatch(/\/owner\/[0-9a-f]{32}/);
+    expect(readdirSync(approvals()).filter((f) => /^oa-.*\.json$/.test(f))).toHaveLength(1);
+    expect(site.posts).toHaveLength(1);
+    // allowed again: finished from the same request
+    await endEveryProcess(id);
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ command: "revoke", final: true });
+    expect(lines("B4_REVOKED_TX")).toBe(1);
+  }, 300_000);
 
   it("fund-agent: the later wait checks the transfer against the agent's balance from before the owner sent it", async () => {
     hostedChain();
