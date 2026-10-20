@@ -278,16 +278,27 @@ export async function call(url, init, timeoutMs, fetchImpl = fetch) {
  * One read of a request: GET /api/v1/budget/requests/{id}?wait=N. { ok: true, view } or { ok: false, status, reason }.
  * status 0: the site did not answer. `asked`: the failed answer itself shows the wallet was asked. The view is the site's JSON: id, kind, state, final, owner, tx_hash, reason, next_action.
  */
-/** @param {{ site: string, id: string, token: string, wait?: number, fetchImpl?: typeof fetch }} args */
-export async function readSiteRequest({ site, id, token, wait = 0, fetchImpl }) {
+/**
+ * `own`: the answer must be about this request, and is checked here, once. A view is ok only when its `id` is this request's;
+ * an answer (ok or an error) that names another request, in its own `id` or in `error.id`, is `{ ok: false, foreign: true }`:
+ * nothing in it is an answer about this request but whether the wallet was asked (`asked`, evidence that is kept). A documented
+ * error that names no id is accepted as the site's answer. Without `own` (a first worker, buy-once) the reader is as it was.
+ * @param {{ site: string, id: string, token: string, wait?: number, own?: boolean, fetchImpl?: typeof fetch }} args
+ */
+export async function readSiteRequest({ site, id, token, wait = 0, own = false, fetchImpl }) {
   if (!isSiteRequestId(id)) return { ok: false, status: 0, reason: "not a request id" };
   const w = Math.max(0, Math.min(20, Math.floor(wait)));
   const r = await call(`${site}${BUDGET_API}/requests/${id}?wait=${w}`, { headers: { authorization: `Bearer ${token}`, accept: "application/json" } }, (w + 15) * 1000, fetchImpl);
+  if (own) {
+    const named = [r.body?.id, r.body?.error?.id].filter((x) => x !== undefined && x !== null);
+    const foreign = named.some((x) => x !== id) || (r.ok && r.body?.id !== id);
+    if (foreign && !r.network) return { ok: false, status: r.status, foreign: true, asked: viewEvidence(r.body), reason: "the site's answer is about another request" };
+  }
   if (r.ok && r.body && typeof r.body === "object" && typeof r.body.state === "string") return { ok: true, view: r.body };
   const code = r.body?.error?.code ?? r.body?.code ?? r.body?.reason_code;
   const next = accountRefusalNext(code);
   // an error answer can show the wallet was asked (`error.money_moved`, even on a 429): the caller keeps that
-  return { ok: false, status: r.status, code: siteWord("code", code), asked: viewEvidence(r.body), reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : `${siteFailure(r.status, r.body)}${next ? `; ${next}` : ""}` };
+  return { ok: false, status: r.status, own: own || undefined, code: siteWord("code", code), asked: viewEvidence(r.body), reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : `${siteFailure(r.status, r.body)}${next ? `; ${next}` : ""}` };
 }
 
 /** Site states that say the owner's wallet was asked, or a transaction exists. */

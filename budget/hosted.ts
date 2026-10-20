@@ -43,6 +43,21 @@
 // feature in GET /api/v1/budget/services, and the client checks that the site repeated it. On any site, a bundle whose
 // agent the site adds to another account than the expected one is withdrawn before anything is recorded.
 //
+// A request can outlive the command that made it (a host may end every process of a command when the command ends). A later
+// worker of the same approval takes it over (HostedSettings.resume) instead of creating one: it checks that it asks for the
+// same thing (`intent`), reads the request from the site first, whatever the clock says, and polls it as the first worker would.
+// It never creates a request, and it never cancels one just because the command that took it over ended.
+//
+// The sink rule. A restarted worker delivers an outcome (to `settled` and `bundle`) only through settleOne and settleBundle, and only
+// with a `Confirmed` basis, which is one of these: a successful (2xx) read of the request with this request's own id (readSiteRequest
+// with `own`, checked there once) that is `final: true`, or `sent` with a transaction hash (not final on the site: the rail reads the
+// chain from the hash); or the site's confirmed cancel of it (cancelSiteRequest). A link with steps needs `final: true` as a whole: one
+// step's `sent`, or the link's `linked`, says nothing of the others. No basis is built from a read that was not a 2xx: a 404, 410 or 400 (whatever its body: the site answers a wrong or stale token
+// as it answers an unknown request), a 401 or 403, a 5xx, a cut-off or unparsable body, a timeout, an exception, close() all have no
+// basis. The sink parks the client and calls `onUnresolved`, which does not return in a worker (it leaves with no result and the next
+// `wait` reads the request again). A first worker has no sink: it settles as it always did.
+// test/budget/hosted-sink.test.ts fails if any other code resolves a poll.
+//
 // Every approval checks the site's owner against the owner recorded at setup (`account`): a request the site ties to another
 // address is cancelled and refused before the link is shown, and at any later point.
 // Once the site reports that the wallet was asked (`wallet_asked`) or a transaction hash exists, an unfinished outcome
@@ -232,7 +247,17 @@ export type HostedKind = "grant" | "revoke" | "fund_agent";
 export const HOSTED_KIND: Record<string, HostedKind> = { grant: "grant", revoke: "revoke", "fund-agent": "fund_agent" };
 
 /** What the approval record keeps (approvals.mjs). The token is the agent's access to this one request. */
-export type HostedRecord = { site: string; requestId: string; token: string; kind: "link" | HostedKind; matchCode: string; /** a link with wallet steps: their kinds, in order */ then?: HostedStep["kind"][] };
+export type HostedRecord = {
+  site: string; requestId: string; token: string; kind: "link" | HostedKind; matchCode: string;
+  /** a link with wallet steps: their kinds, in order */ then?: HostedStep["kind"][];
+  /** a later worker may take this request over (HostedSettings.resumable), with what it needs to do that */
+  resumable?: true;
+  /** a digest of what was asked (kind, rail, chain, agent, the transaction or steps): a worker that takes the request over must ask for the same */
+  intent?: string;
+  /** when the site ends the request, and when this command's own wait ends (ms since the epoch) */
+  expiresAt?: number; deadline?: number;
+  /** a link: the owner-proof version it asked for */ proofVersion?: 2;
+};
 export type HostedRail = "evm" | "tempo" | "solana";
 
 export interface HostedSettings {
@@ -258,6 +283,18 @@ export interface HostedSettings {
   /** A link with steps nobody has been asked about: how long past the expiry to keep reading for a final answer (default 30 s). */
   quietGraceMs?: number;
   fetchImpl?: typeof fetch;
+  /** The command can be run again to finish this request later: the record keeps what a worker needs to take it over. */
+  resumable?: boolean;
+  /** This worker finishes the recorded request an earlier worker made: it creates none (see the header). */
+  resume?: HostedRecord;
+  /** Called once the site has answered about the recorded request (after the check that it is the one this command asks for): from then on this worker's results count. */
+  onTakeover?: () => void;
+  /**
+   * The sink's exit (see the header). Called when a restarted worker's outcome rests on nothing the site confirmed (time ran out,
+   * the site could not be read or refused the agent's token, an exception, the client was closed). Required with `resume`.
+   * In a worker it does not return: the worker leaves with no result and the next wait reads the request again.
+   */
+  onUnresolved?: (why: string) => void;
 }
 
 /**
@@ -310,6 +347,8 @@ export interface HostedHandle {
   matchCode: string;
   /** The agent was already linked on this chain: no link to show, `settled` is already connected (with a verified proof). */
   alreadyLinked?: boolean;
+  /** An earlier worker made this request and this one finishes it: the link was shown then, so it is not announced again. */
+  adopted?: boolean;
   /** A link: the id and match code the owner signed, for LINK_ID and LINK_CODE in the public file. */
   link?: { id: string; code: string };
   settled: Promise<OwnerActionOutcome>;
@@ -409,7 +448,7 @@ function railWords(rail: HostedRail) {
     isTx: (h: unknown): h is string => typeof h === "string" && (solana ? SOLANA_SIGNATURE.test(h) : /^0x[0-9a-fA-F]{64}$/.test(h)),
   };
 }
-type Poll = { /** what earlier answers showed */ seen?: Seen; /** a link: the owner-proof version it asked for */ proofVersion?: 1 | 2; /** what the approval record holds, so a renewed token replaces it */ record?: HostedRecord; id: string; token: string; kind: HostedRecord["kind"]; title: string; expected?: string; matchCode: string; localDeadline: number; siteExpiry: number; resolve: (o: OwnerActionOutcome) => void };
+type Poll = { /** a request taken over: read it before any expiry is acted on */ fresh?: boolean; /** what earlier answers showed */ seen?: Seen; /** a link: the owner-proof version it asked for */ proofVersion?: 1 | 2; /** what the approval record holds, so a renewed token replaces it */ record?: HostedRecord; id: string; token: string; kind: HostedRecord["kind"]; title: string; expected?: string; matchCode: string; localDeadline: number; siteExpiry: number; resolve: (o: OwnerActionOutcome) => void };
 const FINAL_STATES = new Set(["linked", "confirmed", "failed", "rejected", "expired", "cancelled", "unknown"]);
 const STEP_FINAL = new Set(["confirmed", "failed", "rejected", "expired", "unknown", "skipped", "cancelled"]);
 /** The rail and chain flags of a command: no --chain on a rail's default chain. */
@@ -417,6 +456,38 @@ const railFlags = (rail: HostedRail, chain: string) => (rail === "evm" ? `--rail
 
 /** The budget API's announcement that a link may name its owner (superstables-app lib/budget/features.ts). */
 export const EXPECTED_OWNER_FEATURE = "expected_owner";
+
+/**
+ * What a restarted worker's outcome rests on. Only the factories below make one, each from an answer of the site that is about
+ * this request (its id). null is "rests on nothing the site said": the sink parks instead of delivering.
+ */
+export class Confirmed {
+  private constructor(readonly by: "view" | "whole" | "cancel") {}
+  /**
+   * A successful read of a single request, under this request's id, that is `final: true`, or `sent` with a transaction hash (the
+   * site does not call `sent` final: the rail reads the chain from the hash). `v` is the view of a read that was ok (r.view): never
+   * the result of a failed read, and no factory here takes one.
+   */
+  static ofView(id: string, v: unknown): Confirmed | null {
+    const view = v as { id?: unknown; state?: unknown; final?: unknown; tx_hash?: unknown } | null;
+    if (!view || typeof view !== "object" || view.id !== id || typeof view.state !== "string") return null;
+    const sentWithHash = view.state === "sent" && typeof view.tx_hash === "string" && view.tx_hash !== "";
+    return view.final === true || sentWithHash ? new Confirmed("view") : null;
+  }
+  /**
+   * A successful read of a link with steps that the site calls final as a whole (`final: true`), under this request's id. One
+   * step's state (sent, linked, confirmed) says nothing about the others, so it is not enough for a bundle.
+   */
+  static ofWhole(id: string, v: unknown): Confirmed | null {
+    const view = v as { id?: unknown; state?: unknown; final?: unknown } | null;
+    return view && typeof view === "object" && view.id === id && typeof view.state === "string" && view.final === true ? new Confirmed("whole") : null;
+  }
+  /** The site's confirmed cancel of this request (cancelSiteRequest checks its id and that the wallet was not asked). */
+  static ofCancel(c: { cancelled?: boolean } | null | undefined): Confirmed | null {
+    return c?.cancelled === true ? new Confirmed("cancel") : null;
+  }
+}
+type Basis = Confirmed | null;
 
 export class HostedApprovals {
   private readonly s: HostedSettings;
@@ -435,9 +506,40 @@ export class HostedApprovals {
 
   private readonly w: ReturnType<typeof railWords>;
 
+  /** A restarted worker's client that was parked by the sink: it delivers nothing more. */
+  private parked = false;
+
   constructor(settings: HostedSettings) {
+    // a restarted worker is only safe with its sink wired: without onUnresolved an outcome with no basis could not be held back
+    if (settings.resume && !settings.onUnresolved) throw new Error("a client that finishes a recorded request needs onUnresolved");
     this.s = settings;
     this.w = railWords(settings.rail);
+  }
+
+  /**
+   * The sink's gate. A restarted worker's outcome without a basis is not delivered: the client is parked and onUnresolved is
+   * told why (in a worker it does not return). True when the caller must not deliver. A first worker has no gate.
+   */
+  private parks(basis: Basis, why: string): boolean {
+    if (!this.s.resume) return false;
+    if (this.parked) return true;
+    if (basis) return false;
+    this.parked = true;
+    this.s.onUnresolved!(why);
+    return true;
+  }
+
+  /** The one place a single request's outcome is delivered (the sink). */
+  private settleOne(p: Poll, basis: Basis, why: string, outcome: OwnerActionOutcome) {
+    if (this.parks(basis, why)) return;
+    p.resolve(outcome);
+  }
+
+  /** The one place a link with steps delivers its outcome (the sink). */
+  private settleBundle(p: { resolve: (o: OwnerActionOutcome) => void; settle: (b: HostedBundleOutcome) => void }, basis: Basis, why: string, out: HostedBundleOutcome) {
+    if (this.parks(basis, why)) return;
+    p.resolve(out.link);
+    p.settle(out);
   }
 
   get site(): string {
@@ -491,7 +593,19 @@ export class HostedApprovals {
       kind = k;
       body = { kind: k, rail: this.s.rail, chain: this.s.chain, agent, ...(input.kind === "solana-intent" ? { solana: input.solana } : { transaction: input.transaction }) };
     }
-    const answer = await this.create(path, body, kind === "link" ? "bl_" : "ba_");
+    const taken = this.s.resume;
+    const intent = bodyHash(JSON.stringify({ kind, rail: this.s.rail, chain: this.s.chain, agent, then: then ?? null, transaction: (body as { transaction?: unknown }).transaction ?? null, solana: (body as { solana?: unknown }).solana ?? null }));
+    if (taken) {
+      // the request an earlier worker made is the only one this worker may finish, and only for the same ask
+      const problem = taken.kind !== kind ? `it is a ${taken.kind} request and this command asks for a ${kind}`
+        : taken.site !== this.s.site ? "it was made on another site"
+        : taken.intent !== intent ? "this command asks for something other than the recorded request"
+        : "";
+      if (problem) throw new HostedRefusal(`the recorded request ${taken.requestId} cannot be finished: ${problem}. No new request was created; whether the owner approved it is not known here`, CHECK_CHAIN, { sending: true });
+    }
+    const answer = taken
+      ? { linked: false as const, id: taken.requestId, token: taken.token, url: "", matchCode: taken.matchCode, expiresAt: taken.expiresAt ?? Date.now(), steps: undefined, seen: NOT_SEEN, answer: undefined as unknown }
+      : await this.create(path, body, kind === "link" ? "bl_" : "ba_");
     if (answer.linked && then) {
       // the site must refuse a link with steps for an agent it already linked (409); a 200 here would skip every step
       throw new HostedRefusal(alreadyLinkedWords(this.s.site, answer.owner, this.s.rail), alreadyLinkedNext(this.s.rail, this.s.chain, this.s.site));
@@ -516,7 +630,8 @@ export class HostedApprovals {
       return { id: answer.id, url: "", expiresAt: Date.now(), matchCode: "", alreadyLinked: true, link: { id: prior.linkId, code: prior.linkCode }, settled: Promise.resolve({ status: "connected", address: answer.owner, proof: proofOf(answer.proof) }), finish: () => {} };
     }
     const created = answer;
-    if (then) {
+    // what the first worker checked before it showed the link is not checked again; the polls check the owner on every read
+    if (then && !taken) {
       // the steps the site will ask the owner's wallet for must be exactly the ones sent, in the same order
       const problem = stepsProblem(then, created.steps);
       if (problem) {
@@ -526,26 +641,27 @@ export class HostedApprovals {
         throw new HostedRefusal(`${this.s.site} answered with steps other than the ones asked for (${problem}). ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
       }
     }
-    if (sentOwner && !this.w.same((created.answer as any)?.expected_owner, expectedOwner)) {
+    if (!taken && sentOwner && !this.w.same((created.answer as any)?.expected_owner, expectedOwner)) {
       // the site listed the feature and did not take the field: the request is not used
       const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
       this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: "expected owner not confirmed", sending: created.seen.asked || undefined });
       const a = afterCancel(c, !!then, created.seen);
       throw new HostedRefusal(`${this.s.site} did not confirm that only the owner recorded on this machine (${expectedOwner}) may add this agent; the request is not used. ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
     }
-    if (askedV2 && (created.answer as any)?.owner_proof_version !== 2) {
+    if (!taken && askedV2 && (created.answer as any)?.owner_proof_version !== 2) {
       // the site listed the feature and did not take the field: the request is not used
       const c = await cancelSiteRequest({ site: this.s.site, id: created.id, token: created.token, fetchImpl: this.s.fetchImpl });
       this.audit({ id: created.id, kind, title: input.terms.title, status: "refused", reason: "owner proof version not confirmed", sending: created.seen.asked || undefined });
       const a = afterCancel(c, !!then, created.seen);
       throw new HostedRefusal(`${this.s.site} did not confirm the owner proof that names the account; the request is not used. ${a.words}`, a.sending ? CHECK_CHAIN : "try again later", { sending: a.sending });
     }
-    const record: HostedRecord = { site: this.s.site, requestId: created.id, token: created.token, kind, matchCode: created.matchCode, ...(then ? { then: then.map((t) => t.kind) } : {}) };
+    const proofVersion = taken ? taken.proofVersion : askedV2 ? (2 as const) : undefined;
+    const record: HostedRecord = taken ?? { site: this.s.site, requestId: created.id, token: created.token, kind, matchCode: created.matchCode, ...(then ? { then: then.map((t) => t.kind) } : {}), ...(this.s.resumable ? { resumable: true as const, intent, expiresAt: created.expiresAt, ...(proofVersion ? { proofVersion } : {}) } : {}) };
     const expected = input.kind === "connect" ? undefined : this.w.owner(input.account) ?? input.account;
     let seen = created.seen;
 
     // an approval: the site must act for the owner recorded here, before the owner sees a link
-    if (expected) {
+    if (expected && !taken) {
       const read = () => readSiteRequest({ site: this.s.site, id: created.id, token: created.token, wait: 0, fetchImpl: this.s.fetchImpl });
       let first = await read();
       // everything the creation answer and these reads showed, a failed read's error included: a later, cleaner answer never takes it back
@@ -576,33 +692,39 @@ export class HostedApprovals {
         );
       }
     }
-    this.s.onRecord?.(record);
-
     const now = Date.now();
-    const expiresAt = Math.min(now + input.timeoutMs, created.expiresAt);
-    this.audit({ id: created.id, kind, title: input.terms.title, status: "awaiting_owner", hash: seen.hash ?? undefined, sending: seen.asked || undefined });
+    const localDeadline = taken ? taken.deadline ?? now : now + input.timeoutMs;
+    if (!taken) {
+      // what a later worker needs to finish this request: when this command's own wait ends, with the rest of the record
+      if (record.resumable) record.deadline = localDeadline;
+      this.s.onRecord?.(record);
+    }
+
+    const expiresAt = Math.min(localDeadline, created.expiresAt);
+    if (!taken) this.audit({ id: created.id, kind, title: input.terms.title, status: "awaiting_owner", hash: seen.hash ?? undefined, sending: seen.asked || undefined });
     let resolve!: (o: OwnerActionOutcome) => void;
-    const settled = new Promise<OwnerActionOutcome>((done) => {
+    const settled = new Promise<OwnerActionOutcome>((deliverOnce) => {
       let answered = false;
       resolve = (o) => {
         if (answered) return;
         answered = true;
-        done(o);
+        deliverOnce(o);
       };
     });
-    this.open.set(created.id, { id: created.id, token: created.token });
+    // a request taken over is left open when this command ends: the next one finishes it
+    if (!taken) this.open.set(created.id, { id: created.id, token: created.token });
     if (then) {
       let settle!: (b: HostedBundleOutcome) => void;
-      const bundle = new Promise<HostedBundleOutcome>((done) => (settle = done));
-      const base = { id: created.id, token: created.token, kind, title: input.terms.title, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve, record, ...(askedV2 ? { proofVersion: 2 as const } : {}) };
+      const bundle = new Promise<HostedBundleOutcome>((deliverBundle) => (settle = deliverBundle));
+      const base = { id: created.id, token: created.token, kind, title: input.terms.title, matchCode: created.matchCode, localDeadline, siteExpiry: created.expiresAt, resolve, record, ...(taken ? { fresh: true } : {}), ...(proofVersion ? { proofVersion } : {}) };
       const kinds = then.map((t) => t.kind);
-      void this.pollBundle({ ...base, expected: expectedOwner ?? undefined, timeoutMs: input.timeoutMs, kinds, settle, answer: created.answer }).catch((err: Error) => {
+      const bundlePoll = { ...base, expected: expectedOwner ?? undefined, timeoutMs: input.timeoutMs, kinds, settle, answer: created.answer };
+      void this.pollBundle(bundlePoll).catch((err: Error) => {
         this.learners.delete(created.id);
         this.cancellations.delete(created.id);
         const reason = `the command stopped reading the request: ${scrub(siteText(err.message))}`;
         const out: HostedBundleOutcome = { link: { status: "expired", reason, sending: true }, steps: kinds.map((k) => ({ kind: k, state: "stopped", hash: null, reason, reasonCode: null, walletAsked: true })) };
-        resolve(out.link);
-        settle(out);
+        this.settleBundle(bundlePoll, null, reason, out);
       });
       return {
         id: created.id,
@@ -610,15 +732,18 @@ export class HostedApprovals {
         expiresAt,
         matchCode: created.matchCode,
         link: { id: created.id, code: created.matchCode },
+        ...(taken ? { adopted: true } : {}),
         settled,
         bundle,
         finish: (verdict) => this.audit(verdictLine(created.id, kind, input.terms.title, verdict)),
       };
     }
-    void this.poll({ seen, id: created.id, token: created.token, kind, title: input.terms.title, expected, matchCode: created.matchCode, localDeadline: now + input.timeoutMs, siteExpiry: created.expiresAt, resolve, record, ...(askedV2 ? { proofVersion: 2 as const } : {}) }).catch((err: Error) => {
+    const singlePoll = { seen, id: created.id, token: created.token, kind, title: input.terms.title, expected, matchCode: created.matchCode, localDeadline, siteExpiry: created.expiresAt, resolve, record, ...(taken ? { fresh: true } : {}), ...(proofVersion ? { proofVersion } : {}) };
+    void this.poll(singlePoll).catch((err: Error) => {
       this.learners.delete(created.id);
       this.cancellations.delete(created.id);
-      resolve({ status: "expired", reason: `the command stopped reading the request: ${scrub(siteText(err.message))}`, sending: kind !== "link" });
+      const reason = `the command stopped reading the request: ${scrub(siteText(err.message))}`;
+      this.settleOne(singlePoll, null, reason, { status: "expired", reason, sending: kind !== "link" });
     });
     return {
       id: created.id,
@@ -626,6 +751,7 @@ export class HostedApprovals {
       expiresAt,
       matchCode: created.matchCode,
       ...(kind === "link" ? { link: { id: created.id, code: created.matchCode } } : {}),
+      ...(taken ? { adopted: true } : {}),
       settled,
       // the site reads the receipt itself; this only records the command's own verdict locally
       finish: (verdict) => this.audit(verdictLine(created.id, kind, input.terms.title, verdict)),
@@ -829,11 +955,23 @@ export class HostedApprovals {
     let cancelTried = false;
     let renewed = false;
     let readAt = 0;
+    // A request an earlier worker made may be past its expiry already, with the owner's answer on the site: it is read before any
+    // expiry is acted on, however long that takes (a site that cannot be read decides nothing; the worker's own deadline ends it).
+    let freshUntil = p.fresh ? Infinity : 0;
+    // when the first read of a request taken over succeeded: the time the owner has to send is counted from then at the earliest
+    let readFrom = 0;
+    const tookOver = () => {
+      if (freshUntil !== Infinity) return;
+      freshUntil = 0;
+      readFrom = Date.now();
+      this.s.onTakeover?.();
+    };
     // Every cancellation of this approval (the deadline, a refused owner, close()) is the one shared call. What its answer
     // shows of the wallet is taken in, and written to the log, before the call resolves: close() may be followed by an exit.
     this.learners.set(p.id, (c) => {
       if (!tx || !c) return;
-      const found = this.w.isTx((c.body as { tx_hash?: unknown } | undefined)?.tx_hash) ? (c.body as { tx_hash: string }).tx_hash : null;
+      // a restarted worker takes a transaction only from an answer about this request
+      const found = this.w.isTx((c.body as { tx_hash?: unknown } | undefined)?.tx_hash) && (c.same === true || !this.s.resume) ? (c.body as { tx_hash: string }).tx_hash : null;
       if (found) hash = found;
       if (!c.walletAsked && !found) return;
       walletAsked = true;
@@ -842,7 +980,8 @@ export class HostedApprovals {
         this.audit({ id: p.id, kind: p.kind, title: p.title, status: siteWord("state", lastState), hash: hash ?? undefined, sending: true });
       }
     });
-    const end = async (status: "rejected" | "expired", why: string, sending: boolean) => {
+    const end = async (status: "rejected" | "expired", why: string, sending: boolean, basis: Basis) => {
+      if (this.parks(basis, why)) return;
       // a cancellation still in flight (close()) is waited for: its answer can show the wallet was asked
       const pending = this.cancellations.get(p.id);
       if (pending) {
@@ -858,36 +997,37 @@ export class HostedApprovals {
       const reason = scrub(sending && /nothing was sent/i.test(why) ? unsaid(why) : why);
       this.open.delete(p.id);
       this.audit({ id: p.id, kind: p.kind, title: p.title, status, reason, hash: hash ?? undefined, sending: sending || undefined });
-      p.resolve({ status, reason, sending });
+      this.settleOne(p, basis, why, { status, reason, sending });
     };
-    const done = (o: OwnerActionOutcome) => {
+    const done = (o: OwnerActionOutcome, basis: Basis) => {
+      if (this.parks(basis, "a result")) return;
       this.learners.delete(p.id);
       this.cancellations.delete(p.id);
       this.open.delete(p.id);
-      p.resolve(o);
+      this.settleOne(p, basis, "a result", o);
     };
     for (;;) {
       // a long poll that returns at once (wait=0 near the expiry, or a site that does not hold): at most one read a second
       const gap = this.s.minPollMs ?? 1000;
       const since = Date.now() - readAt;
       if (since < gap) await sleep(gap - since);
-      if (this.stopped) return end("rejected", "the command stopped before this approval completed; check wallet activity before retrying", tx);
+      if (this.stopped) return end("rejected", "the command stopped before this approval completed; check wallet activity before retrying", tx, null);
       const now = Date.now();
       // the command's own --timeout came first: cancel on the site, which works only while the wallet was not asked
-      if (now >= expiry && !cancelTried && !walletAsked && lastState === "awaiting_owner") {
+      if (now >= expiry && !cancelTried && !walletAsked && lastState === "awaiting_owner" && now >= freshUntil) {
         cancelTried = true;
         const c = await this.cancelOnce(p.id, p.token);
-        if (c?.cancelled) return end("expired", `the approval link expired without a completed approval, and the request was cancelled on ${this.name}; nothing was sent`, false);
+        if (c?.cancelled) return end("expired", `the approval link expired without a completed approval, and the request was cancelled on ${this.name}; nothing was sent`, false, Confirmed.ofCancel(c));
         if (c?.walletAsked) walletAsked = true;
       }
       // past the expiry (and, once the wallet was asked, the time for its hash to come back) without a final answer: the
       // request may still be open on the site, so a transaction is never reported as "nothing sent"
-      if (now > expiry + (walletAsked ? grace : 30_000)) {
-        return end("expired", walletAsked ? `the wallet was asked to send, but no transaction came back from ${this.name}` : `no final answer from ${this.s.site} by the time the approval link expired; the request may still be open there`, tx);
+      if (now > Math.max(expiry, readFrom) + (walletAsked ? grace : 30_000) && now >= freshUntil) {
+        return end("expired", walletAsked ? `the wallet was asked to send, but no transaction came back from ${this.name}` : `no final answer from ${this.s.site} by the time the approval link expired; the request may still be open there`, tx, null);
       }
       const waitS = Math.max(0, Math.min(this.s.pollWaitS ?? 20, Math.ceil((expiry - now) / 1000)));
       readAt = Date.now();
-      const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, fetchImpl: this.s.fetchImpl });
+      const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, own: !!this.s.resume, fetchImpl: this.s.fetchImpl });
       if (!r.ok) {
         // an error answer can show the wallet was asked too (money_moved), and is logged like any other evidence
         if (r.asked) {
@@ -898,16 +1038,27 @@ export class HostedApprovals {
           }
         }
         // an access token the site expired: one renewal with a fresh agent signature, then the same read again
-        if (r.status === 401 && r.code === "token_expired" && !renewed) {
+        if (r.status === 401 && r.code === "token_expired" && (!renewed || freshUntil === Infinity)) {
           renewed = true;
           if (await this.renewed(p)) continue;
         }
-        if ([401, 403, 404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code))) return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx);
+        // Before a request taken over has been read once, a token that cannot be renewed or a refused read is no answer about the
+        // request: only the site saying it does not know the request (404, 410) or its documented refusal is.
+        // A restarted worker settles on no read that was not a success: a 400, 404 or 410 (whatever its body) is not the site saying it
+        // does not know the request, because the site answers a wrong or stale token the same way. It parks (the sink has no basis).
+        if (this.s.resume && [400, 404, 410].includes(r.status ?? 0)) return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx, null);
+        // an answer about another request decides nothing about this one: its evidence is kept, nothing else (readSiteRequest `own`)
+        const foreign = "foreign" in r && r.foreign === true;
+        const answered = !foreign && ([404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code)));
+        if (answered || (!foreign && [401, 403].includes(r.status ?? 0) && freshUntil !== Infinity)) {
+          return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx, null);
+        }
         await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
         continue;
       }
       lastContact = Date.now();
       const v = r.view;
+      tookOver();
       const state = String(v.state);
       const seenNow = seenOf(this.w, v);
       if (seenNow.asked) walletAsked = true;
@@ -927,7 +1078,7 @@ export class HostedApprovals {
         const c = FINAL_STATES.has(state) ? null : await this.cancelOnce(p.id, p.token);
         if (c?.walletAsked) walletAsked = true;
         const who = owner ? `acts for ${owner}` : "no longer names the account this approval is for";
-        return end("rejected", `${this.name} ${who}, not the owner recorded on this machine (${p.expected}); the request was ${c?.cancelled ? "cancelled" : "not used"}`, walletAsked || (tx && !FINAL_STATES.has(state) && c?.cancelled !== true));
+        return end("rejected", `${this.name} ${who}, not the owner recorded on this machine (${p.expected}); the request was ${c?.cancelled ? "cancelled" : "not used"}`, walletAsked || (tx && !FINAL_STATES.has(state) && c?.cancelled !== true), FINAL_STATES.has(state) ? Confirmed.ofView(p.id, v) : Confirmed.ofCancel(c));
       }
       switch (state) {
         case "awaiting_owner":
@@ -935,35 +1086,35 @@ export class HostedApprovals {
           continue;
         case "linked":
           if (tx) break;
-          if (!owner) return end("rejected", `${this.name} reported the agent as added without an owner address`, false);
+          if (!owner) return end("rejected", `${this.name} reported the agent as added without an owner address`, false, Confirmed.ofView(p.id, v));
           {
             // the owner is recorded only with their own signature over this link
             const problem = await ownerProofProblem(v.owner_proof, this.facts(owner, p.id, p.matchCode), this.proofOf(p, v));
-            if (problem) return end("rejected", `${this.name} reported the agent as added to ${owner}, but ${problem}. Nothing was recorded`, false);
+            if (problem) return end("rejected", `${this.name} reported the agent as added to ${owner}, but ${problem}. Nothing was recorded`, false, Confirmed.ofView(p.id, v));
           }
           this.audit({ id: p.id, kind: p.kind, title: p.title, status: "connected", address: owner });
-          return done({ status: "connected", address: owner, proof: proofOf(v.owner_proof) });
+          return done({ status: "connected", address: owner, proof: proofOf(v.owner_proof) }, Confirmed.ofView(p.id, v));
         case "sent":
         case "confirmed":
         case "failed":
           if (!tx) break;
           // a hash the site reported as failed is still read from the chain, but it never settles there
-          if (hash) return done({ status: "sent", address: owner ?? p.expected!, hash, ...(state === "failed" ? { siteFailed: siteFailedWords(this.name, v.reason_code) } : {}) });
-          if (state === "failed") return end("rejected", reason || `${this.name} reports the transaction failed, without a hash`, true);
+          if (hash) return done({ status: "sent", address: owner ?? p.expected!, hash, ...(state === "failed" ? { siteFailed: siteFailedWords(this.name, v.reason_code) } : {}) }, Confirmed.ofView(p.id, v));
+          if (state === "failed") return end("rejected", reason || `${this.name} reports the transaction failed, without a hash`, true, Confirmed.ofView(p.id, v));
           continue;
         case "rejected":
-          return end("rejected", reason || (walletAsked ? "a rejection was reported after the wallet was asked to send; the chain must be checked" : `the owner rejected the request on ${this.name}`), tx && walletAsked);
+          return end("rejected", reason || (walletAsked ? "a rejection was reported after the wallet was asked to send; the chain must be checked" : `the owner rejected the request on ${this.name}`), tx && walletAsked, Confirmed.ofView(p.id, v));
         case "expired":
-          return end("expired", reason || `the approval link expired on ${this.name} without a completed approval`, tx && walletAsked);
+          return end("expired", reason || `the approval link expired on ${this.name} without a completed approval`, tx && walletAsked, Confirmed.ofView(p.id, v));
         case "cancelled":
           // cancelled, but the wallet may have been asked before: never "before the wallet was asked; nothing was sent"
-          return end("rejected", tx && walletAsked ? `${reason ? `${reason}; ` : ""}the request was cancelled on ${this.name}, but the owner's wallet may have been asked before, so whether anything was sent is unknown; the chain must be checked` : reason || `the request was cancelled on ${this.name} before the wallet was asked; nothing was sent`, tx && walletAsked);
+          return end("rejected", tx && walletAsked ? `${reason ? `${reason}; ` : ""}the request was cancelled on ${this.name}, but the owner's wallet may have been asked before, so whether anything was sent is unknown; the chain must be checked` : reason || `the request was cancelled on ${this.name} before the wallet was asked; nothing was sent`, tx && walletAsked, Confirmed.ofView(p.id, v));
         case "unknown":
           // the site cannot tell whether the wallet sent it: never "nothing sent"; the command reads the chain
-          if (hash && tx) return done({ status: "sent", address: owner ?? p.expected!, hash });
-          return end("expired", reason || `${this.name} cannot tell whether the wallet sent the transaction; the chain must be checked`, true);
+          if (hash && tx) return done({ status: "sent", address: owner ?? p.expected!, hash }, Confirmed.ofView(p.id, v));
+          return end("expired", reason || `${this.name} cannot tell whether the wallet sent the transaction; the chain must be checked`, true, Confirmed.ofView(p.id, v));
       }
-      if (v.final === true) return end("rejected", `${this.name} ended the request in state "${siteWord("state", state)}"${reason ? `: ${reason}` : ""}`, tx);
+      if (v.final === true) return end("rejected", `${this.name} ended the request in state "${siteWord("state", state)}"${reason ? `: ${reason}` : ""}`, tx, Confirmed.ofView(p.id, v));
     }
   }
 
@@ -987,6 +1138,15 @@ export class HostedApprovals {
     let cancelTried = false;
     let timedOut = false;
     let readAt = 0;
+    // as in poll(): a request taken over is read before any expiry is acted on
+    let freshUntil = p.fresh ? Infinity : 0;
+    let readFrom = 0;
+    const tookOver = () => {
+      if (freshUntil !== Infinity) return;
+      freshUntil = 0;
+      readFrom = Date.now();
+      this.s.onTakeover?.();
+    };
     /** The link was refused (no valid owner proof): its steps were withdrawn when the site confirmed it, else unknown. */
     let refusedLink: { withdrawn: boolean } | null = null;
     const asked = () => steps.some((s) => s.walletAsked);
@@ -999,6 +1159,8 @@ export class HostedApprovals {
     let unexplained = false;
     /** The site confirmed this request cancelled or final. */
     let withdrawn = false;
+    /** The site's confirmed cancel of this request, once it has given one. */
+    let cancelConfirmed: Basis = null;
     const NOT_ASKED = new Set(["skipped", "cancelled", "rejected", "expired"]);
     /** An answer about this request: its id, and no other id in its error. */
     const own = (v: any) => !!v && typeof v === "object" && v.id === p.id && !(v.error && typeof v.error === "object" && v.error.id != null && v.error.id !== p.id);
@@ -1037,7 +1199,8 @@ export class HostedApprovals {
         if (ev) {
           carried.add(i);
           s.walletAsked = true;
-          if (this.w.isTx(w.tx_hash)) s.hash = w.tx_hash;
+          // a restarted worker takes a transaction only from an answer about this request
+          if (this.w.isTx(w.tx_hash) && (trusted || !this.s.resume)) s.hash = w.tx_hash;
         }
         if (trusted) {
           s.state = typeof w.state === "string" ? siteWord("state", w.state) : s.state;
@@ -1075,6 +1238,7 @@ export class HostedApprovals {
       if (c.cancelled) {
         learn(c.view, true);
         withdrawn = true;
+        cancelConfirmed = Confirmed.ofCancel(c);
         return;
       }
       learn(c.body, c.same === true);
@@ -1084,10 +1248,11 @@ export class HostedApprovals {
     this.learners.set(p.id, learnCancel);
     /** A step as it ends: proven, sent (its hash is read from the chain), or unknown. */
     const isClean = (i: number) => !unexplained && !steps[i].walletAsked && !steps[i].hash && (proven[i] || (withdrawn && !owner && !refusedLink));
-    const finish = async (why: string | null) => {
+    const finish = async (why: string | null, basis: Basis) => {
       // a cancellation still in flight (close()) is waited for: its answer is learned before anything is concluded
       const pending = this.cancellations.get(p.id);
       if (pending) await pending;
+      if (this.parks(basis, why ?? "the request was refused")) return;
       this.open.delete(p.id);
       this.learners.delete(p.id);
       this.cancellations.delete(p.id);
@@ -1119,87 +1284,46 @@ export class HostedApprovals {
       for (const s of steps) this.audit({ id: p.id, kind: s.kind, title: p.title, status: s.state, reason: s.reason || undefined, hash: s.hash ?? undefined, sending: s.walletAsked || s.state === "unknown" || undefined });
       if ("reason" in link) link.reason = scrub(link.reason);
       for (const s of steps) s.reason = scrub(s.reason);
-      p.resolve(link);
-      p.settle({ link, steps });
+      this.settleBundle(p, basis, why ?? "", { link, steps });
     };
-    // the creation answer, before any read
-    learn(p.answer, own(p.answer));
-    for (;;) {
-      const gap = this.s.minPollMs ?? 1000;
-      const since = Date.now() - readAt;
-      if (since < gap) await sleep(gap - since);
-      if (this.stopped) {
-        // close() cancels through the same shared call, so this one reuses its answer
-        if (!cancelTried) {
-          cancelTried = true;
-          learnCancel(await this.cancelOnce(p.id, p.token));
-        }
-        return finish("the command stopped before this request completed; check wallet activity before retrying");
-      }
-      const now = Date.now();
-      // before the link: the link's expiry. After it: --timeout again for the steps, from the moment it was linked.
-      const deadline = linkedAt ? Math.max(Math.min(p.localDeadline, p.siteExpiry), linkedAt + p.timeoutMs) : Math.min(p.localDeadline, p.siteExpiry);
-      // at the deadline the request is withdrawn on the site (the steps it asked the wallet for stay, as possibly sent)
-      if (now >= deadline && !cancelTried) {
-        cancelTried = true;
-        const c = await this.cancelOnce(p.id, p.token);
-        learnCancel(c);
-        if (!owner && c) {
-          timedOut = true;
-          linkState = "expired";
-        }
-        if (withdrawn) return finish(owner ? null : `the approval link expired without a completed approval, and the request was cancelled on ${this.name}; nothing was sent`);
-      }
-      if (now > deadline + (asked() ? grace : (this.s.quietGraceMs ?? 30_000))) return finish(`no final answer from ${this.s.site} in time; the request may still be open there`);
-      const waitS = Math.max(0, Math.min(this.s.pollWaitS ?? 20, Math.ceil((deadline - now) / 1000)));
-      readAt = Date.now();
-      const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, fetchImpl: this.s.fetchImpl });
-      if (!r.ok) {
-        if (r.asked) unexplain();
-        // an access token the site expired: one renewal with a fresh agent signature, then the same read again
-        if (r.status === 401 && r.code === "token_expired" && !renewed) {
-          renewed = true;
-          if (await this.renewed(p)) continue;
-        }
-        if ([401, 403, 404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code))) {
-          // withdraw it first: an answer that confirms it is the only proof the steps were never asked
-          if (!cancelTried) {
-            cancelTried = true;
-            learnCancel(await this.cancelOnce(p.id, p.token));
-          }
-          return finish(`${this.s.site} no longer answers for this request (${r.reason})`);
-        }
-        await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
-        continue;
-      }
-      lastContact = Date.now();
-      const v = r.view;
-      const trusted = own(v);
-      // first of all: what this answer shows of the wallet, before its owner proof, step states or finality are looked at
-      learn(v, trusted);
-      if (!trusted) continue; // about another request: its evidence is kept, nothing else
+    /**
+     * What a refusal of the link (a different owner, an owner proof that fails) rests on: the whole bundle final in the read, the
+     * site's confirmed cancel, or the cancel's own-id answer when that is the bundle final as a whole. A step's `sent` or the link's
+     * `linked` is none of these.
+     */
+    const refusalBasis = (v: unknown, c: Awaited<ReturnType<typeof cancelSiteRequest>>): Basis =>
+      Confirmed.ofWhole(p.id, v) ?? Confirmed.ofCancel(c) ?? (c?.same === true ? Confirmed.ofWhole(p.id, c.body) : null);
+    /**
+     * An answer about this request, as it stands: the link's owner proof, the steps' states, finality. True when it ended the
+     * request (finish was called). Used for every read, and in a restarted worker for the site's answer to the cancel.
+     */
+    const view = async (v: any): Promise<boolean> => {
       const state = String(v.state);
       const reason = siteReason(this.name, v);
       const named: string | null = owner ? null : this.w.owner(v.owner);
       if (named && p.expected && !this.w.same(named, p.expected)) {
         // the site added the agent to another account than the owner recorded here: its steps are withdrawn, nothing is recorded
         refusedLink = { withdrawn: false };
-        learnCancel(await this.cancelOnce(p.id, p.token));
+        const c = await this.cancelOnce(p.id, p.token);
+        learnCancel(c);
         refusedLink.withdrawn = steps.every((s, i) => !s.hash && isClean(i));
         linkState = "rejected";
         linkReason = `${this.name} reported the agent as added to ${named}, but this machine records the owner ${p.expected}. Nothing was recorded; its wallet steps were ${refusedLink.withdrawn ? "withdrawn" : "not confirmed withdrawn"}`;
-        return finish(null);
+        await finish(null, refusalBasis(v, c));
+        return true;
       }
       if (named) {
         // the owner is recorded only with their own signature over this link; without it the steps are withdrawn
         const problem = await ownerProofProblem(v.owner_proof, this.facts(named, p.id, p.matchCode), this.proofOf(p, v));
         if (problem) {
           refusedLink = { withdrawn: false };
-          learnCancel(await this.cancelOnce(p.id, p.token));
+          const c = await this.cancelOnce(p.id, p.token);
+          learnCancel(c);
           refusedLink.withdrawn = steps.every((s, i) => !s.hash && isClean(i));
           linkState = "rejected";
           linkReason = `${this.name} reported the agent as added to ${named}, but ${problem}. Nothing was recorded; its wallet steps were ${refusedLink.withdrawn ? "withdrawn" : "not confirmed withdrawn"}`;
-          return finish(null);
+          await finish(null, refusalBasis(v, c));
+          return true;
         }
         owner = named;
         linkProof = proofOf(v.owner_proof);
@@ -1217,8 +1341,78 @@ export class HostedApprovals {
       if (v.final === true) {
         if (!owner && state === "linked") linkReason = `${this.name} reported the agent as added without an owner address`;
         else withdrawn = true;
-        return finish(null);
+        await finish(null, Confirmed.ofWhole(p.id, v));
+        return true;
       }
+      return false;
+    };
+    // the creation answer, before any read
+    learn(p.answer, own(p.answer));
+    for (;;) {
+      const gap = this.s.minPollMs ?? 1000;
+      const since = Date.now() - readAt;
+      if (since < gap) await sleep(gap - since);
+      if (this.stopped) {
+        // close() cancels through the same shared call, so this one reuses its answer. A request taken over is left open.
+        if (!cancelTried && !this.s.resume) {
+          cancelTried = true;
+          learnCancel(await this.cancelOnce(p.id, p.token));
+        }
+        return finish("the command stopped before this request completed; check wallet activity before retrying", null);
+      }
+      const now = Date.now();
+      // before the link: the link's expiry. After it: --timeout again for the steps, from the moment it was linked.
+      const deadline = linkedAt ? Math.max(Math.min(p.localDeadline, p.siteExpiry), linkedAt + p.timeoutMs) : Math.min(p.localDeadline, p.siteExpiry);
+      // at the deadline the request is withdrawn on the site (the steps it asked the wallet for stay, as possibly sent)
+      if (now >= deadline && !cancelTried && now >= freshUntil) {
+        cancelTried = true;
+        const c = await this.cancelOnce(p.id, p.token);
+        learnCancel(c);
+        // The site's answer to the cancel can be the request as it stands: linked, its steps sent, final. A restarted worker takes
+        // that as it takes a read (the owner proof is checked, the steps are taken in) before anything reads as expired.
+        if (this.s.resume && c?.same === true && !c.cancelled && (await view(c.body))) return;
+        if (!owner && c) {
+          timedOut = true;
+          linkState = "expired";
+        }
+        if (withdrawn) return finish(owner ? null : `the approval link expired without a completed approval, and the request was cancelled on ${this.name}; nothing was sent`, cancelConfirmed);
+      }
+      if (now > Math.max(deadline, readFrom) + (asked() ? grace : (this.s.quietGraceMs ?? 30_000)) && now >= freshUntil) return finish(`no final answer from ${this.s.site} in time; the request may still be open there`, null);
+      const waitS = Math.max(0, Math.min(this.s.pollWaitS ?? 20, Math.ceil((deadline - now) / 1000)));
+      readAt = Date.now();
+      const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, own: !!this.s.resume, fetchImpl: this.s.fetchImpl });
+      if (!r.ok) {
+        if (r.asked) unexplain();
+        // an access token the site expired: one renewal with a fresh agent signature, then the same read again
+        if (r.status === 401 && r.code === "token_expired" && (!renewed || freshUntil === Infinity)) {
+          renewed = true;
+          if (await this.renewed(p)) continue;
+        }
+        // as in poll(): before the request has been read once, only the site's own "unknown request" or refusal is an answer, and
+        // an answer that names another request (readSiteRequest `own`) is none
+        const foreign = "foreign" in r && r.foreign === true;
+        const answered = !foreign && ([404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code)));
+        // a restarted worker settles on no read that was not a success (as in poll()): a 400, 404 or 410 parks, whatever its body
+        const refusedRead = this.s.resume ? [400, 404, 410].includes(r.status ?? 0) : answered;
+        if (refusedRead || (!foreign && [401, 403].includes(r.status ?? 0) && freshUntil !== Infinity)) {
+          // withdraw it first: an answer that confirms it is the only proof the steps were never asked
+          if (!cancelTried && !this.s.resume) {
+            cancelTried = true;
+            learnCancel(await this.cancelOnce(p.id, p.token));
+          }
+          return finish(`${this.s.site} no longer answers for this request (${r.reason})`, null);
+        }
+        await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
+        continue;
+      }
+      lastContact = Date.now();
+      const v = r.view;
+      const trusted = own(v);
+      // first of all: what this answer shows of the wallet, before its owner proof, step states or finality are looked at
+      learn(v, trusted);
+      if (!trusted) continue; // about another request: its evidence is kept, nothing else
+      tookOver();
+      if (await view(v)) return;
     }
   }
 
