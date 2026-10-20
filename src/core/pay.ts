@@ -1048,10 +1048,13 @@ function attributedCheck(records: Records, attempt: Attempt, rail: RailAdapter, 
   return owner ? { chain: "mismatch", reason: `transaction ${transaction} is already recorded as the payment of attempt ${owner}` } : check;
 }
 
-/** Does the signed payment carry this referral on chain: in its EIP-3009 nonce, its Solana memo or its Tempo memo? */
+/**
+ * Does the signed payment carry this referral on chain: in its EIP-3009 nonce, its Solana memo or its Tempo memo? A memo
+ * the seller fixed is the seller's, however much it looks like the marker.
+ */
 function carriesReferral(signed: SignResult, referralId: string, offer: Offer, rail: RailAdapter): boolean {
   if (signed.kind === "eip3009") return nonceReferral(String(signed.payload.authorization.nonce ?? "")) === referralId;
-  if (signed.kind === "solana-transaction") return memoReferral(signed.memo) === referralId;
+  if (signed.kind === "solana-transaction") return (offer.requirement as { extra?: { memo?: unknown } }).extra?.memo === undefined && memoReferral(signed.memo) === referralId;
   return rail.flow === "push" && signed.memo.toLowerCase() === rail.paymentMemo(offer, referralId).toLowerCase();
 }
 

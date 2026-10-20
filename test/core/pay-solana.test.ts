@@ -150,6 +150,23 @@ describe("a referred Single purchase on Solana devnet", () => {
     expect(final.referral).toBeUndefined();
   });
 
+  it("sends a seller's memo that looks like a marker unchanged, and no token for it", async () => {
+    // The marker is "ss1", 22 characters of a referral id and 7 more. A seller's own memo is never rewritten, and never
+    // taken for the payment's own marker, not even one that spells out this very referral.
+    const otherId = "AAAAAAAAAAAAAAAAAAAAAA"; // well formed, but not this listing's referral
+    for (const memo of ["ss1-order-42", `ss1${otherId}`, `ss1${otherId}abcdefg`, "ss1AAECAwQFBgcICQoLDA0ODwabcdefg", "rb:op-1;ss1AAECAwQFBgcICQoLDA0ODw"]) {
+      const s = await stack();
+      referred(s, ID);
+      s.seller.accept.extra = { feePayer: s.seller.feePayer, memo };
+      const final = await pay(s);
+      expect(final.state, final.reason).toBe("settled");
+      expect(sentMemo(s)).toBe(memo);
+      expect(s.seller.lastPaidHeaders?.["superstables-referral"]).toBeUndefined();
+      expect(s.seller.lastPaidHeaders?.["superstables-purchase-ref"]).toBeUndefined();
+      expect(final.referral).toBeUndefined();
+    }
+  });
+
   it("keeps 32 random hex characters without a referral, with a malformed id, or with referrals off", async () => {
     const plain = await stack();
     expect((await pay(plain)).state).toBe("settled");
