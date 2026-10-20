@@ -145,15 +145,16 @@ export function verdictSet(network: NetworkInfo, options: EndpointChoice = {}): 
 /**
  * The RPC this chain is read through, after asking it which chain it is on (once per process): no read is made from an
  * endpoint that answers another chain. An `error` says why nothing was read; `wrongChain` marks an endpoint that answered
- * another chain, or another genesis.
+ * another chain, or another genesis. `state`: the endpoint for reads of state at the final block (the set's `state`), which
+ * on a chain whose RPC keeps only recent state is not the primary.
  */
-export async function verifiedRpc(network: NetworkInfo, options: EndpointChoice & RpcOptions = {}): Promise<{ url: string } | { error: string; wrongChain?: true }> {
+export async function verifiedRpc(network: NetworkInfo, options: EndpointChoice & RpcOptions & { state?: boolean } = {}): Promise<{ url: string } | { error: string; wrongChain?: true }> {
   let url: string;
   const given = options.endpointsFor?.(network);
   const pinned = options.rpcUrlFor?.(network);
   if (given) {
     if ("error" in given) return { error: `the chain was not read: ${given.error}` };
-    url = given.primary.url;
+    url = ((options.state && given.state) || given.primary).url;
   } else if (pinned) {
     url = pinned;
   } else {
@@ -161,7 +162,7 @@ export async function verifiedRpc(network: NetworkInfo, options: EndpointChoice 
     if ("error" in chosen) return { error: `the chain was not read: ${chosen.error}` };
     // The table's own first endpoint is the default; a table that names another one (a copy in a test) is followed.
     const set = endpointSet(network.key, "read", { envUrl: network.rpcEnv ? process.env[network.rpcEnv] : undefined, envName: network.rpcEnv, testnet: network.testnet });
-    url = "error" in set ? chosen.url : set.primary.url;
+    url = "error" in set ? chosen.url : ((options.state && set.state) || set.primary).url;
   }
   const words = await checkIdentity(url, identityOf(network), rpcCaller(options));
   if (words === "") return { url };
