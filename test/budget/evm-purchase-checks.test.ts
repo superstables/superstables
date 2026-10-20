@@ -182,6 +182,12 @@ describe("typedDataProblem", () => {
     expect(problem(withMessage({ validBefore: BigInt(now + 660) }), { chosen: { ...chosen, maxTimeoutSeconds: 600 }, selected: { ...chosen, maxTimeoutSeconds: 600 } })).toBe("authorization would stay valid longer than 600 s");
     expect(problem(withMessage({ nonce: "0x12" }))).toBe("authorization nonce is not 32 bytes");
   });
+  it("accepts only the nonce this operation holds, in any case", () => {
+    const own = "0x" + "ab".repeat(32);
+    expect(problem(good(), { nonce: own })).toBeNull();
+    expect(problem(withMessage({ nonce: own.toUpperCase().replace("0X", "0x") }), { nonce: own })).toBeNull();
+    expect(problem(good(), { nonce: "0x" + "cd".repeat(32) })).toBe("authorization nonce is not this operation's");
+  });
   it("refuses typed data whose digest is not the token's EIP-3009 authorization", () => {
     const digest = "the typed data is not the token's EIP-3009 authorization";
     expect(problem(withDomain({ salt: "0x" + "11".repeat(32) }))).toBe(digest);
