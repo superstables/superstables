@@ -50,6 +50,16 @@ describe("the sink is the only place a poll is settled", () => {
     expect(spots.filter((s) => !/finish: \(verdict\)|finish\(\)|\.finish\(/.test(s))).toEqual([]);
   });
 
+  it("no basis is built from a read that was not a success: no factory takes a read result, and none is called with one", () => {
+    expect(source).not.toMatch(/ofDenial/);
+    const fromRead = code.map((l, i) => ({ l, i })).filter(({ l }) => /Confirmed\.of\w+\(\s*(?:p\.id\s*,\s*)?r\b/.test(l)).map(({ l, i }) => `${i + 1}: ${l.trim()}`);
+    expect(fromRead).toEqual([]);
+    // the views a basis is made from are the ones of a read that was ok (`r.view`, held as `v`) or a cancel's answer
+    const callers = code.map((l, i) => ({ l, i })).filter(({ l }) => /Confirmed\.of(?:View|Whole)\(/.test(l) && !/static of/.test(l));
+    expect(callers.length).toBeGreaterThan(8);
+    expect(callers.filter(({ l }) => !/Confirmed\.of(?:View|Whole)\(p\.id, (?:v|c\.body)\)/.test(l)).map(({ l, i }) => `${i + 1}: ${l.trim()}`)).toEqual([]);
+  });
+
   it("a Confirmed basis can only be made from an answer about the request", () => {
     expect(Confirmed.ofView("ba_1", { id: "ba_1", state: "confirmed" })).not.toBeNull();
     expect(Confirmed.ofView("ba_1", { id: "ba_1", state: "sent" })).not.toBeNull();
@@ -61,12 +71,13 @@ describe("the sink is the only place a poll is settled", () => {
     expect(Confirmed.ofCancel({ cancelled: true })).not.toBeNull();
     expect(Confirmed.ofCancel({ cancelled: false })).toBeNull();
     expect(Confirmed.ofCancel(null)).toBeNull();
-    expect(Confirmed.ofDenial({ ok: false, own: true, status: 404 })).not.toBeNull();
-    expect(Confirmed.ofDenial({ ok: false, own: true, status: 410 })).not.toBeNull();
-    expect(Confirmed.ofDenial({ ok: false, own: true, status: 403 })).toBeNull();
-    expect(Confirmed.ofDenial({ ok: false, own: false, status: 404 })).toBeNull();
-    expect(Confirmed.ofDenial({ ok: false, own: true, foreign: true, status: 404 })).toBeNull();
-    expect(Confirmed.ofDenial({ ok: true, own: true, status: 404 })).toBeNull();
+    // a bundle is final as a whole or not at all: one step's state says nothing about the others
+    expect(Confirmed.ofWhole("ba_1", { id: "ba_1", state: "confirmed", final: true })).not.toBeNull();
+    expect(Confirmed.ofWhole("ba_1", { id: "ba_1", state: "sent", final: false })).toBeNull();
+    expect(Confirmed.ofWhole("ba_1", { id: "ba_1", state: "linked" })).toBeNull();
+    expect(Confirmed.ofWhole("ba_1", { id: "ba_2", state: "confirmed", final: true })).toBeNull();
+    // there is no basis from a refusal to know the request, whatever its status or body
+    expect(Object.getOwnPropertyNames(Confirmed).filter((n) => n.startsWith("of")).sort()).toEqual(["ofCancel", "ofView", "ofWhole"]);
   });
 
   it("a client that finishes a recorded request is refused without the sink's exit", () => {
@@ -123,8 +134,11 @@ describe("every path that cannot rest on the site's word parks a restarted worke
   const deadFetch: typeof fetch = (input, init) => (gone ? new Promise<Response>(() => {}) : fetch(input, init));
   const client = (over: Partial<ConstructorParameters<typeof HostedApprovals>[0]> = {}) =>
     new HostedApprovals({ site: site.url, rail: "evm", chain: "base-sepolia", agentKey: KEY, auditPath: join(dir, "audit.jsonl"), onRecord: (r) => records.push(r), pollWaitS: 0, minPollMs: 20, resumable: true, ...over });
-  const restarted = (record: HostedRecord, over: Partial<ConstructorParameters<typeof HostedApprovals>[0]> = {}) =>
-    client({ resume: { ...record, deadline: Date.now() - 1000 }, onTakeover: () => taken++, onUnresolved: (why) => { unresolved.push(why); }, sendingGraceMs: 50, quietGraceMs: 50, ...over });
+  // a client left polling by an earlier test must not write into this test's list: each takes the list of its own test
+  const restarted = (record: HostedRecord, over: Partial<ConstructorParameters<typeof HostedApprovals>[0]> = {}) => {
+    const mine = unresolved;
+    return client({ resume: { ...record, deadline: Date.now() - 1000 }, onTakeover: () => taken++, onUnresolved: (why) => { mine.push(why); }, sendingGraceMs: 50, quietGraceMs: 50, ...over });
+  };
   const grant = (c: HostedApprovals) => c.request({ kind: "evm-transaction", action: "grant", account: OWNER, transaction: GRANT_TX, terms: TERMS, timeoutMs: 60_000 });
   const link = (c: HostedApprovals, then?: typeof THEN) => c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, ...(then ? { then } : {}) });
   /** The first worker made the request and is gone. */
@@ -214,22 +228,21 @@ describe("every path that cannot rest on the site's word parks a restarted worke
       expect(site.requests.at(-1)!.cancels).toBe(0);
     });
 
-    it("an answer that names another request, as a view or as an error, decides nothing", async () => {
-      for (const answer of [(_r: unknown, view: any) => ({ status: 200, body: { ...view, id: OTHER_ID, state: "rejected", final: true } }), () => ({ status: 404, body: { error: { code: "not_found", id: OTHER_ID } } }), () => ({ status: 410, body: { error: { code: "gone", id: OTHER_ID } } }), () => ({ status: 400, body: { error: { code: "wrong_account", id: OTHER_ID } } })]) {
-        taken = 0;
-        site.readAnswer = undefined;
-        const { record, r } = await first(what);
-        site.readAnswer = answer as never;
-        const h = await ask(what, restarted(record));
-        expect(await delivered(what, h, 700), `${what}`).toBe(false);
-        expect(taken).toBe(0);
-        expect(r.cancels).toBe(0);
-        // the site answers about this request: the outcome is delivered
-        site.readAnswer = undefined;
-        complete(what, r);
-        expect(await delivered(what, h, 3000)).toBe(true);
-        expect(taken).toBe(1);
-      }
+    it("a successful read that names another request decides nothing about this one: it is read again until the site answers about it", async () => {
+      taken = 0;
+      site.readAnswer = undefined;
+      const { record, r } = await first(what);
+      site.readAnswer = (_r, view) => ({ status: 200, body: { ...view, id: OTHER_ID, state: "rejected", final: true } });
+      const h = await ask(what, restarted(record));
+      expect(await delivered(what, h, 700)).toBe(false);
+      expect(taken).toBe(0);
+      expect(r.cancels).toBe(0);
+      // the site answers about this request: the outcome is delivered
+      site.readAnswer = undefined;
+      complete(what, r);
+      expect(await delivered(what, h, 3000)).toBe(true);
+      expect(taken).toBe(1);
+      expect(unresolved).toEqual([]);
     });
 
     it("the owner is not the one on record and the cancel cannot be confirmed", async () => {
@@ -252,16 +265,83 @@ describe("every path that cannot rest on the site's word parks a restarted worke
     });
   });
 
-  it("a request the site says it does not know, under its own id, is delivered (404, 410)", async () => {
-    for (const status of [404, 410]) {
-      unresolved.length = 0;
-      site.readAnswer = undefined;
-      const { record } = await first("tx");
-      site.readAnswer = () => ({ status, body: { error: { code: status === 404 ? "not_found" : "gone" } } });
-      const h = await grant(restarted(record));
-      expect(await delivered("tx", h, 3000), `${status}`).toBe(true);
-      expect(unresolved).toEqual([]);
+  /**
+   * A restarted client whose reads of the request are answered by `answer` (everything else goes to the fake site). The answer is
+   * built by the test, so it can be an HTML page or a body that is cut off, which the fake site cannot send.
+   */
+  const readsAnswered = (answer: () => Response): typeof fetch => (input, init) => {
+    const url = String(input);
+    return (init?.method ?? "GET") === "GET" && /\/requests\/b[la]_[^/?]+(\?|$)/.test(url) ? Promise.resolve(answer()) : fetch(input, init);
+  };
+  const BODIES: [string, () => BodyInit | null][] = [
+    ["an HTML page", () => "<html><body>404: NOT_FOUND</body></html>"],
+    ["a body that is cut off at the cap", () => JSON.stringify({ error: { code: "not_found", pad: "x".repeat(1_100_000) } })],
+    ["a clean JSON not_found", () => JSON.stringify({ error: { code: "not_found", message: "no budget request with this id for this token" } })],
+    ["a JSON error that names this request", () => JSON.stringify({ error: { code: "not_found", id: "__ID__" } })],
+    ["a JSON error that names another request", () => JSON.stringify({ error: { code: "not_found", id: OTHER_ID } })],
+    ["no body", () => null],
+  ];
+
+  describe.each(KINDS)("a read that is a 400, 404 or 410 (%s)", (what) => {
+    for (const status of [400, 404, 410]) for (const [name, body] of BODIES) {
+      it(`${status} with ${name} parks, and nothing is delivered or cancelled`, async () => {
+        const { record, r } = await first(what);
+        const fetchImpl = readsAnswered(() => new Response(body()?.toString().replace("__ID__", r.id) ?? null, { status }));
+        const h = await ask(what, restarted(record, { fetchImpl }));
+        expect(await delivered(what, h, 1500)).toBe(false);
+        expect(unresolved).toHaveLength(1);
+        expect(taken).toBe(0);
+        expect(r.cancels).toBe(0);
+      });
     }
+  });
+
+  describe.each(KINDS)("any other read that was not a 2xx (%s)", (what) => {
+    for (const status of [401, 403, 429, 500, 502, 503]) {
+      it(`${status} delivers nothing`, async () => {
+        const { record, r } = await first(what);
+        const fetchImpl = readsAnswered(() => new Response(JSON.stringify({ error: { code: "x" } }), { status }));
+        const h = await ask(what, restarted(record, { fetchImpl }));
+        expect(await delivered(what, h, 1200)).toBe(false);
+        expect(taken).toBe(0);
+        expect(r.cancels).toBe(0);
+      });
+    }
+  });
+
+  describe("a bundle's refusal branches need a whole-bundle terminal read or a confirmed cancel", () => {
+    const other = evmOwner("33");
+    const bundleView = (r: ReturnType<typeof site.requests.at> & object, over: object) => ({ id: r.id, kind: "link", state: "sent", final: false, owner: OWNER, owner_proof: undefined as unknown, steps: [{ index: 0, kind: "fund_agent", state: "sent", tx_hash: FUND_HASH, wallet_asked: true, reason: null, reason_code: null }, { index: 1, kind: "grant", state: "queued", tx_hash: null, wallet_asked: false, reason: null, reason_code: null }], ...over });
+    const expectOther = (c: HostedApprovals) => c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, then: THEN, expectedOwner: other });
+
+    it("an owner that is not the one on record, in a bundle that is not final: parks, with the funding step sent and the grant open", async () => {
+      const { record, r } = await first("bundle");
+      site.cancelFails = true;
+      site.readAnswer = (_r, v) => ({ status: 200, body: bundleView(r, { account_id: v.account_id }) });
+      const h = await expectOther(restarted(record));
+      expect(await delivered("bundle", h, 1500)).toBe(false);
+      expect(unresolved.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("an owner proof that fails, in a bundle that is not final: parks", async () => {
+      const { record, r } = await first("bundle");
+      site.cancelFails = true;
+      site.readAnswer = (_r, v) => ({ status: 200, body: bundleView(r, { account_id: v.account_id, owner_proof: { scheme: "eip191", message: "not the text", signature: "0x00" } }) });
+      const h = await link(restarted(record), THEN);
+      expect(await delivered("bundle", h, 1500)).toBe(false);
+      expect(unresolved.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("the same refusals in a bundle the site calls final are delivered: the whole bundle is terminal", async () => {
+      const { record, r } = await first("bundle");
+      site.cancelFails = true;
+      site.readAnswer = (_r, v) => ({ status: 200, body: bundleView(r, { account_id: v.account_id, state: "confirmed", final: true }) });
+      const h = await expectOther(restarted(record));
+      const out = await Promise.race([h.bundle!, new Promise<null>((x) => setTimeout(() => x(null), 3000))]);
+      expect(out).not.toBeNull();
+      expect(out!.link.status).toBe("rejected");
+      expect(unresolved).toEqual([]);
+    });
   });
 
   it("a deadline cancel that the site answers with the completed bundle: the owner proof is checked and the outcome is the bundle, never expired", async () => {

@@ -49,11 +49,12 @@
 // It never creates a request, and it never cancels one just because the command that took it over ended.
 //
 // The sink rule. A restarted worker delivers an outcome (to `settled` and `bundle`) only through settleOne and settleBundle, and only
-// with a `Confirmed` basis: a read of the request on the site that is terminal and carries this request's own id (readSiteRequest
-// with `own`, checked there once), the site's confirmed cancel of it (cancelSiteRequest), or the site's own refusal to know it
-// (404, 410, a documented 400), again under that id. Everything else (a timeout, a token the site refuses, a site that cannot be read, an
-// exception, close()) has no basis: the sink parks the client and calls `onUnresolved`, which does not return in a worker (it
-// leaves with no result and the next `wait` reads the request again). A first worker has no sink: it settles as it always did.
+// with a `Confirmed` basis, of which there are two: a successful read of the request on the site that is terminal and carries this
+// request's own id (readSiteRequest with `own`, checked there once), or the site's confirmed cancel of it (cancelSiteRequest).
+// No basis is built from a read that was not a 2xx: a 404, 410 or 400 (whatever its body: the site answers a wrong or stale token
+// as it answers an unknown request), a 401 or 403, a 5xx, a cut-off or unparsable body, a timeout, an exception, close() all have no
+// basis. The sink parks the client and calls `onUnresolved`, which does not return in a worker (it leaves with no result and the next
+// `wait` reads the request again). A first worker has no sink: it settles as it always did.
 // test/budget/hosted-sink.test.ts fails if any other code resolves a poll.
 //
 // Every approval checks the site's owner against the owner recorded at setup (`account`): a request the site ties to another
@@ -460,20 +461,27 @@ export const EXPECTED_OWNER_FEATURE = "expected_owner";
  * this request (its id). null is "rests on nothing the site said": the sink parks instead of delivering.
  */
 export class Confirmed {
-  private constructor(readonly by: "view" | "cancel" | "denial") {}
-  /** A read of the request that is terminal (or carries a transaction) and has this request's id. */
+  private constructor(readonly by: "view" | "whole" | "cancel") {}
+  /**
+   * A successful read of a single request that is terminal (or carries a transaction) and has this request's id. `v` is the
+   * view of a read that was ok (r.view): never the result of a failed read.
+   */
   static ofView(id: string, v: unknown): Confirmed | null {
     const view = v as { id?: unknown; state?: unknown; final?: unknown } | null;
     if (!view || typeof view !== "object" || view.id !== id || typeof view.state !== "string") return null;
     return view.final === true || view.state === "sent" || FINAL_STATES.has(view.state) ? new Confirmed("view") : null;
   }
+  /**
+   * A successful read of a link with steps that the site calls final as a whole (`final: true`), under this request's id. One
+   * step's state (sent, linked, confirmed) says nothing about the others, so it is not enough for a bundle.
+   */
+  static ofWhole(id: string, v: unknown): Confirmed | null {
+    const view = v as { id?: unknown; state?: unknown; final?: unknown } | null;
+    return view && typeof view === "object" && view.id === id && typeof view.state === "string" && view.final === true ? new Confirmed("whole") : null;
+  }
   /** The site's confirmed cancel of this request (cancelSiteRequest checks its id and that the wallet was not asked). */
   static ofCancel(c: { cancelled?: boolean } | null | undefined): Confirmed | null {
     return c?.cancelled === true ? new Confirmed("cancel") : null;
-  }
-  /** The site's own "I do not know this request" or documented refusal, read with `own` (so under this request's id). */
-  static ofDenial(r: { ok: boolean; own?: boolean; foreign?: boolean; status?: number; code?: unknown }): Confirmed | null {
-    return !r.ok && r.own === true && !r.foreign && ([404, 410].includes(r.status ?? 0) || (r.status === 400 && !!accountRefusalNext(r.code))) ? new Confirmed("denial") : null;
   }
 }
 type Basis = Confirmed | null;
@@ -1033,12 +1041,14 @@ export class HostedApprovals {
         }
         // Before a request taken over has been read once, a token that cannot be renewed or a refused read is no answer about the
         // request: only the site saying it does not know the request (404, 410) or its documented refusal is.
+        // A restarted worker settles on no read that was not a success: a 400, 404 or 410 (whatever its body) is not the site saying it
+        // does not know the request, because the site answers a wrong or stale token the same way. It parks (the sink has no basis).
+        if (this.s.resume && [400, 404, 410].includes(r.status ?? 0)) return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx, null);
         // an answer about another request decides nothing about this one: its evidence is kept, nothing else (readSiteRequest `own`)
         const foreign = "foreign" in r && r.foreign === true;
         const answered = !foreign && ([404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code)));
         if (answered || (!foreign && [401, 403].includes(r.status ?? 0) && freshUntil !== Infinity)) {
-          if (answered) tookOver();
-          return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx, answered ? Confirmed.ofDenial(r) : null);
+          return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx, null);
         }
         await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
         continue;
@@ -1288,7 +1298,7 @@ export class HostedApprovals {
         refusedLink.withdrawn = steps.every((s, i) => !s.hash && isClean(i));
         linkState = "rejected";
         linkReason = `${this.name} reported the agent as added to ${named}, but this machine records the owner ${p.expected}. Nothing was recorded; its wallet steps were ${refusedLink.withdrawn ? "withdrawn" : "not confirmed withdrawn"}`;
-        await finish(null, Confirmed.ofView(p.id, v) ?? cancelConfirmed);
+        await finish(null, Confirmed.ofWhole(p.id, v) ?? cancelConfirmed);
         return true;
       }
       if (named) {
@@ -1300,7 +1310,7 @@ export class HostedApprovals {
           refusedLink.withdrawn = steps.every((s, i) => !s.hash && isClean(i));
           linkState = "rejected";
           linkReason = `${this.name} reported the agent as added to ${named}, but ${problem}. Nothing was recorded; its wallet steps were ${refusedLink.withdrawn ? "withdrawn" : "not confirmed withdrawn"}`;
-          await finish(null, Confirmed.ofView(p.id, v) ?? cancelConfirmed);
+          await finish(null, Confirmed.ofWhole(p.id, v) ?? cancelConfirmed);
           return true;
         }
         owner = named;
@@ -1319,7 +1329,7 @@ export class HostedApprovals {
       if (v.final === true) {
         if (!owner && state === "linked") linkReason = `${this.name} reported the agent as added without an owner address`;
         else withdrawn = true;
-        await finish(null, Confirmed.ofView(p.id, v));
+        await finish(null, Confirmed.ofWhole(p.id, v));
         return true;
       }
       return false;
@@ -1370,14 +1380,15 @@ export class HostedApprovals {
         // an answer that names another request (readSiteRequest `own`) is none
         const foreign = "foreign" in r && r.foreign === true;
         const answered = !foreign && ([404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code)));
-        if (answered || (!foreign && [401, 403].includes(r.status ?? 0) && freshUntil !== Infinity)) {
-          if (answered) tookOver();
+        // a restarted worker settles on no read that was not a success (as in poll()): a 400, 404 or 410 parks, whatever its body
+        const refusedRead = this.s.resume ? [400, 404, 410].includes(r.status ?? 0) : answered;
+        if (refusedRead || (!foreign && [401, 403].includes(r.status ?? 0) && freshUntil !== Infinity)) {
           // withdraw it first: an answer that confirms it is the only proof the steps were never asked
-          if (!cancelTried) {
+          if (!cancelTried && !this.s.resume) {
             cancelTried = true;
             learnCancel(await this.cancelOnce(p.id, p.token));
           }
-          return finish(`${this.s.site} no longer answers for this request (${r.reason})`, answered ? Confirmed.ofDenial(r) : null);
+          return finish(`${this.s.site} no longer answers for this request (${r.reason})`, null);
         }
         await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
         continue;
