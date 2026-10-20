@@ -22,6 +22,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A top-up that may have been paid is never reported as unpaid, and never sends the seller to a new one. A pay link that answers `payment_pending` (409), 502, or any status with `money_moved` other than `false` is not paid again, on the quote's read, on the payment's own read after it, and on the answer to the payment; `seller credit` says where it stands. A retired top-up (410) is the one case that asks for a new one. `seller top-up` refuses to create another while the site lists one as pending, a payment is under way, or one that ended in doubt is for a top-up the site does not list; `seller credit` and `status <attempt>` clear it. A failure while following a payment that started is reported from that payment's record.
 - The seller API key comes from `SUPERSTABLES_SELLER_API_KEY`, goes only to the Superstables origin, and is never printed or saved: a site's answer that holds it is discarded unread, before it reaches a record or a line of output.
 
+### Fixed
+
+- Budget approvals and recovery on your machine, on Arbitrum Sepolia and Robinhood Chain Testnet, use RPC endpoints that serve finalized state.
+
 ## [0.5.0] - Agent plugin, key protection and safer payments
 
 Testnet only.
