@@ -745,8 +745,8 @@ function restartLocked(id, { cmd, script, cwd, env }, remember) {
     // (SUPERSTABLES_SITE) must not take another from the environment `wait` runs in
     const launched = launchWorker(id, { cmd, args: [script, ...before.workerArgs], cwd, env: { ...env, [RESUME_ENV]: id, SUPERSTABLES_SITE: before.hosted.site } });
     remember(launched);
-    // a worker that could not start: nothing was started, and the approval stays as it was
-    if (!launched.child.pid) return null;
+    // a worker that could not start counts as a restart that never took the request over
+    if (!launched.child.pid) return { resumes: (before.resumes ?? 0) + 1 };
     return {
       pidStartUtc: undefined, selfStartedAt: undefined,
       ...startOf(launched.child.pid),
