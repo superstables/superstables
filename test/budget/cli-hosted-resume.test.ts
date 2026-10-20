@@ -420,6 +420,43 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
   }, 300_000);
 });
 
+describe("an approval the restarted worker cannot read: it parks, holds the chain, and settles once the request is readable", () => {
+  const notFound = () => ({ status: 404, body: { error: { code: "not_found", message: "there is no budget request with this id for this token" } } });
+  for (const [when, firstRead] of [["on the first read", false], ["after a valid non-final read", true]] as const) {
+    it(`a clean JSON 404 ${when}: no result is recorded, the token and the chain lock stay, another owner command is refused; then wait settles it normally`, async () => {
+      await fakeChain(0n, 10000n);
+      const id = await startSetup();
+      await endEveryProcess(id);
+      approveSetup();
+      let reads = 0;
+      site.readAnswer = (_r, view) => (firstRead && ++reads === 1 ? { status: 200, body: { ...view, state: "awaiting_owner", final: false, owner: null } } : notFound());
+      const parked = await budget(["wait", "--shown", "--id", id, "--timeout", "25"]);
+      expect(parked.code).toBe(5);
+      expect(parked.result).toMatchObject({ state: "unknown", final: false });
+      // nothing was decided: no final, the token kept, the chain held
+      expect(record(id).final).toBeUndefined();
+      expect(record(id).hosted.token).toMatch(/^ssbt_/);
+      expect(existsSync(lockPath())).toBe(true);
+      expect(publicFile()).not.toMatch(/^B4_CAP=/m);
+      // another owner command on the chain is refused, and no second request is made
+      const other = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
+      expect(other.code).toBe(3);
+      expect(other.result).toMatchObject({ state: "refused_precheck", id });
+      expect(site.posts).toHaveLength(1);
+      // the same request is readable as final: the next wait settles it, once
+      await endEveryProcess(id);
+      site.readAnswer = undefined;
+      const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+      expect(done.code, done.stderr).toBe(0);
+      expect(done.result).toMatchObject({ state: "ok", final: true, owner: OWNER });
+      expect(lines("B4_CAP")).toBe(1);
+      expect(record(id).hosted.token).toBeUndefined();
+      expect(existsSync(lockPath())).toBe(false);
+      expect(site.posts).toHaveLength(1);
+    }, 400_000);
+  }
+});
+
 describe("grant, revoke and fund-agent, when the host ends the worker before the owner approves", () => {
   const start = async (args: string[]) => {
     const first = await budget(args);

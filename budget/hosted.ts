@@ -49,9 +49,10 @@
 // It never creates a request, and it never cancels one just because the command that took it over ended.
 //
 // The sink rule. A restarted worker delivers an outcome (to `settled` and `bundle`) only through settleOne and settleBundle, and only
-// with a `Confirmed` basis, of which there are two: a successful read of the request on the site that is terminal and carries this
-// request's own id (readSiteRequest with `own`, checked there once), or the site's confirmed cancel of it (cancelSiteRequest).
-// No basis is built from a read that was not a 2xx: a 404, 410 or 400 (whatever its body: the site answers a wrong or stale token
+// with a `Confirmed` basis, which is one of these: a successful (2xx) read of the request with this request's own id (readSiteRequest
+// with `own`, checked there once) that is `final: true`, or `sent` with a transaction hash (not final on the site: the rail reads the
+// chain from the hash); or the site's confirmed cancel of it (cancelSiteRequest). A link with steps needs `final: true` as a whole: one
+// step's `sent`, or the link's `linked`, says nothing of the others. No basis is built from a read that was not a 2xx: a 404, 410 or 400 (whatever its body: the site answers a wrong or stale token
 // as it answers an unknown request), a 401 or 403, a 5xx, a cut-off or unparsable body, a timeout, an exception, close() all have no
 // basis. The sink parks the client and calls `onUnresolved`, which does not return in a worker (it leaves with no result and the next
 // `wait` reads the request again). A first worker has no sink: it settles as it always did.
@@ -463,13 +464,15 @@ export const EXPECTED_OWNER_FEATURE = "expected_owner";
 export class Confirmed {
   private constructor(readonly by: "view" | "whole" | "cancel") {}
   /**
-   * A successful read of a single request that is terminal (or carries a transaction) and has this request's id. `v` is the
-   * view of a read that was ok (r.view): never the result of a failed read.
+   * A successful read of a single request, under this request's id, that is `final: true`, or `sent` with a transaction hash (the
+   * site does not call `sent` final: the rail reads the chain from the hash). `v` is the view of a read that was ok (r.view): never
+   * the result of a failed read, and no factory here takes one.
    */
   static ofView(id: string, v: unknown): Confirmed | null {
-    const view = v as { id?: unknown; state?: unknown; final?: unknown } | null;
+    const view = v as { id?: unknown; state?: unknown; final?: unknown; tx_hash?: unknown } | null;
     if (!view || typeof view !== "object" || view.id !== id || typeof view.state !== "string") return null;
-    return view.final === true || view.state === "sent" || FINAL_STATES.has(view.state) ? new Confirmed("view") : null;
+    const sentWithHash = view.state === "sent" && typeof view.tx_hash === "string" && view.tx_hash !== "";
+    return view.final === true || sentWithHash ? new Confirmed("view") : null;
   }
   /**
    * A successful read of a link with steps that the site calls final as a whole (`final: true`), under this request's id. One
@@ -1284,6 +1287,13 @@ export class HostedApprovals {
       this.settleBundle(p, basis, why ?? "", { link, steps });
     };
     /**
+     * What a refusal of the link (a different owner, an owner proof that fails) rests on: the whole bundle final in the read, the
+     * site's confirmed cancel, or the cancel's own-id answer when that is the bundle final as a whole. A step's `sent` or the link's
+     * `linked` is none of these.
+     */
+    const refusalBasis = (v: unknown, c: Awaited<ReturnType<typeof cancelSiteRequest>>): Basis =>
+      Confirmed.ofWhole(p.id, v) ?? Confirmed.ofCancel(c) ?? (c?.same === true ? Confirmed.ofWhole(p.id, c.body) : null);
+    /**
      * An answer about this request, as it stands: the link's owner proof, the steps' states, finality. True when it ended the
      * request (finish was called). Used for every read, and in a restarted worker for the site's answer to the cancel.
      */
@@ -1294,11 +1304,12 @@ export class HostedApprovals {
       if (named && p.expected && !this.w.same(named, p.expected)) {
         // the site added the agent to another account than the owner recorded here: its steps are withdrawn, nothing is recorded
         refusedLink = { withdrawn: false };
-        learnCancel(await this.cancelOnce(p.id, p.token));
+        const c = await this.cancelOnce(p.id, p.token);
+        learnCancel(c);
         refusedLink.withdrawn = steps.every((s, i) => !s.hash && isClean(i));
         linkState = "rejected";
         linkReason = `${this.name} reported the agent as added to ${named}, but this machine records the owner ${p.expected}. Nothing was recorded; its wallet steps were ${refusedLink.withdrawn ? "withdrawn" : "not confirmed withdrawn"}`;
-        await finish(null, Confirmed.ofWhole(p.id, v) ?? cancelConfirmed);
+        await finish(null, refusalBasis(v, c));
         return true;
       }
       if (named) {
@@ -1306,11 +1317,12 @@ export class HostedApprovals {
         const problem = await ownerProofProblem(v.owner_proof, this.facts(named, p.id, p.matchCode), this.proofOf(p, v));
         if (problem) {
           refusedLink = { withdrawn: false };
-          learnCancel(await this.cancelOnce(p.id, p.token));
+          const c = await this.cancelOnce(p.id, p.token);
+          learnCancel(c);
           refusedLink.withdrawn = steps.every((s, i) => !s.hash && isClean(i));
           linkState = "rejected";
           linkReason = `${this.name} reported the agent as added to ${named}, but ${problem}. Nothing was recorded; its wallet steps were ${refusedLink.withdrawn ? "withdrawn" : "not confirmed withdrawn"}`;
-          await finish(null, Confirmed.ofWhole(p.id, v) ?? cancelConfirmed);
+          await finish(null, refusalBasis(v, c));
           return true;
         }
         owner = named;

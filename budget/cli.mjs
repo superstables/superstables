@@ -444,6 +444,14 @@ end the turn.
 Some agent hosts end every process a command started when the command ends. For EVM owner commands approved on
 superstables.com, wait can restart a stopped worker, read the existing request from the site, and run the original checks
 and local writes without creating a new request. Other owner commands on that chain remain blocked until a result is recorded.
+A worker restarting an already-recorded, resumable EVM approval records a result only from a final response for that
+request, a single request marked sent with a transaction hash (the chain checks then decide), or a confirmed cancellation. If the
+site answers anything else (an unreadable or missing request, an error, a request not yet final), wait keeps answering
+unknown, final false, and other owner commands on that chain stay blocked. An agent stops and asks the owner. The owner
+checks the request on superstables.com, then reruns the original owner command with --replace (the site must confirm the
+cancellation, and it is refused once the wallet was asked), or unlocks the chain's approvals in their own terminal (unlock
+--rail evm --chain C --approvals --confirm). Unlocking does not resolve the request: its outcome stays unknown, and the
+next wait can lock the chain again.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
 approval sent nothing; after setup --hosted with --grant or --fund, or recover, an earlier step may have completed (read
 steps, tx and budget status). Run the owner command again for a new one (setup reuses the agent key it created).
