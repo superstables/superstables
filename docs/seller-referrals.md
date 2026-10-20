@@ -157,7 +157,8 @@ starts, and a later run under the same `--op` uses them again.
 
 `superstables find --json` shows a listing's `referral` as `{ expiresAt, terms }`, without the token.
 The receipt records `discoveredVia: "superstables"` and `referral: { id, listingId, terms }`.
-`SUPERSTABLES_REFERRALS=off` stops the client from remembering and sending referrals.
+`SUPERSTABLES_REFERRALS=off` disables referrals for new payments and budget operations. Retries under
+an existing `--op` keep its recorded attribution, even when referrals are switched off.
 
 ## Credit and top-ups
 

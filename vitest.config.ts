@@ -8,6 +8,7 @@ const SLOW = [
   "test/budget/agent-key-store.test.ts",
   "test/budget/approvals-takeover-generation.test.ts",
   "test/budget/approvals-token.test.ts",
+  "test/budget/cli-approval-abandon.test.ts",
   "test/budget/approve-reset.test.ts",
   "test/budget/chain-gate.test.ts",
   "test/budget/chain-guard.test.ts",

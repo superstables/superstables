@@ -10,20 +10,27 @@ import { setPrerequisiteCheck } from "./chain-gate.js";
 
 /** @typedef {{ url: string, operator: string, domains?: string[] }} TableEndpoint */
 /** @typedef {{ url: string, operator: string, source: "builtin"|"settings"|"env"|"caller", id: string }} Endpoint */
-/** @typedef {{ primary: Endpoint, verdict: Endpoint[], quorum: number,
+/** @typedef {{ primary: Endpoint, state?: Endpoint, verdict: Endpoint[], quorum: number,
  *    agreement: "quorum"|"owner-node"|"single"|"caller" } | { error: string }} EndpointSet */
 /** @typedef {{ urls: string[], ownNode?: boolean, quorum?: number }} OwnerRpc */
 
-/** Index 0 of each chain is its default endpoint and stays the primary for reads. */
+/**
+ * Index 0 of each chain is its default endpoint and stays the primary for reads. Every endpoint of a chain without
+ * RPC_STATE_ENDPOINTS must answer state reads at the `finalized` block, and the primary must answer the chain's log window
+ * (budget/evm/chains.mjs `logRange`). superstables.com's budget chain table (lib/budget/chains.ts, `rpcs`) is this table's
+ * copy: change both together.
+ */
 export const RPC_ENDPOINTS = /** @type {Record<string, TableEndpoint[]>} */ ({
   "base-sepolia": [
     { url: "https://sepolia.base.org", operator: "base" },
     { url: "https://base-sepolia-rpc.publicnode.com", operator: "publicnode" },
   ],
   "arc-testnet": [{ url: "https://rpc.testnet.arc.io", operator: "circle", domains: ["arc.network"] }],
+  // PublicNode refuses state reads at `finalized` ("historical state ... is not available"); Offchain Labs and Tenderly
+  // answer them, and both answer 50,000-block eth_getLogs searches (measured 20 Oct 2026).
   "arbitrum-sepolia": [
     { url: "https://sepolia-rollup.arbitrum.io/rpc", operator: "offchain-labs" },
-    { url: "https://arbitrum-sepolia-rpc.publicnode.com", operator: "publicnode" },
+    { url: "https://arbitrum-sepolia.gateway.tenderly.co", operator: "tenderly" },
   ],
   "polygon-amoy": [
     { url: "https://polygon-amoy-bor-rpc.publicnode.com", operator: "publicnode" },
@@ -39,6 +46,18 @@ export const RPC_ENDPOINTS = /** @type {Record<string, TableEndpoint[]>} */ ({
   "robinhood-testnet": [{ url: "https://rpc.testnet.chain.robinhood.com", operator: "robinhood" }],
   "tempo-moderato": [{ url: "https://rpc.moderato.tempo.xyz", operator: "tempo" }],
   "solana-devnet": [{ url: "https://api.devnet.solana.com", operator: "solana-foundation" }],
+});
+
+/**
+ * The endpoints a chain's state at the `finalized` block is read through, where its RPC_ENDPOINTS keep only recent state.
+ * They replace the table in the verdict set and are where a single finalized-state read goes (`state` of endpointSet); the
+ * primary stays RPC_ENDPOINTS[0], so log searches, sending and wallet setup keep its log window. The same agreement rule
+ * applies. superstables.com's budget chain table (lib/budget/chains.ts, `stateRpcs`) is this table's copy: change both together.
+ */
+export const RPC_STATE_ENDPOINTS = /** @type {Record<string, TableEndpoint[]>} */ ({
+  // The official RPC refuses state reads at `finalized`; dRPC answers them, but eth_getLogs over 100 blocks at most
+  // (measured 20 Oct 2026).
+  "robinhood-testnet": [{ url: "https://robinhood-testnet.drpc.org", operator: "drpc" }],
 });
 
 /**
@@ -83,14 +102,14 @@ export function operatorOf(url) {
 }
 
 /**
- * The provider of a URL on a chain, in this order: the table entry whose URL equals it exactly; the table entry that lists
+ * The provider of a URL on a chain (both tables), in this order: the table entry whose URL equals it exactly; the table entry that lists
  * its registrable domain (the entry's own URL domain, or one of its `domains` aliases); else its own registrable domain.
  * One provider under several domains (Arc: arc.io and arc.network) is one operator, however many URLs name it.
  * @param {string} chainKey
  * @param {string} url
  */
 export function providerOf(chainKey, url) {
-  const table = RPC_ENDPOINTS[chainKey] ?? [];
+  const table = [...(RPC_ENDPOINTS[chainKey] ?? []), ...(RPC_STATE_ENDPOINTS[chainKey] ?? [])];
   const exact = table.find((e) => e.url === url);
   if (exact) return exact.operator;
   const domain = operatorOf(url);
@@ -108,7 +127,10 @@ const distinct = (/** @type {Endpoint[]} */ list) => new Set(list.map((e) => e.o
 /**
  * The endpoints for a chain and purpose ("read" | "verdict" | "owner").
  *   primary  the environment URL when `rpcFor` accepts it, else owner urls[0], else table[0]
- *   verdict  owner urls when set (ownNode with quorum 1: just urls[0], "owner-node"), else the table;
+ *   state    where a single read of state at the final block goes: the primary, but a built-in primary is the chain's first
+ *            RPC_STATE_ENDPOINTS entry when it has one
+ *   verdict  owner urls when set (ownNode with quorum 1: just urls[0], "owner-node"), else the chain's RPC_STATE_ENDPOINTS,
+ *            else the table;
  *            the environment URL joins only as a member it equals (source "env"), or, when the owner allows this computer's
  *            RPCs for the variable, as one more ordinary endpoint in a quorum set whose own operators already reach the
  *            quorum; never in an owner-node or single set, so it never lowers the quorum, changes the label or decides alone.
@@ -139,7 +161,8 @@ export function endpointSet(chainKey, purpose, o) {
   }
   const owner = settings && Object.hasOwn(settings.rpc, chainKey) ? settings.rpc[chainKey] : undefined;
   const testnet = o.testnet;
-  const pinned = owner ? owner.urls.map((u) => endpoint(u, providerOf(chainKey, u), "settings")) : table.map((e) => endpoint(e.url, e.operator, "builtin"));
+  const stateTable = RPC_STATE_ENDPOINTS[chainKey];
+  const pinned = owner ? owner.urls.map((u) => endpoint(u, providerOf(chainKey, u), "settings")) : (stateTable ?? table).map((e) => endpoint(e.url, e.operator, "builtin"));
   const ownerQuorum = Number.isInteger(owner?.quorum) && /** @type {number} */ (owner?.quorum) >= 1 ? /** @type {number} */ (owner?.quorum) : undefined;
   const ownNode = owner?.ownNode === true && (ownerQuorum ?? 1) === 1;
   const verdict = ownNode ? [pinned[0]] : pinned;
@@ -148,7 +171,7 @@ export function endpointSet(chainKey, purpose, o) {
   if (ownNode) [quorum, agreement] = [1, "owner-node"];
   else if (!owner && testnet && distinct(verdict) < 2) [quorum, agreement] = [1, "single"];
   else [quorum, agreement] = [Math.max(owner?.ownNode === true ? 1 : 2, ownerQuorum ?? 2), "quorum"];
-  let primary = pinned[0];
+  let primary = owner ? pinned[0] : endpoint(table[0].url, table[0].operator, "builtin");
   const members = [...verdict];
   const env = typeof o.envUrl === "string" && o.envUrl.trim() !== "" ? o.envUrl.trim() : undefined;
   if (env) {
@@ -166,7 +189,8 @@ export function endpointSet(chainKey, purpose, o) {
       if (chosen.allowedBy === "loopback" && purpose !== "read" && agreement === "quorum" && distinct(members) >= quorum) members.push(primary);
     }
   }
-  return { primary, verdict: members, quorum, agreement: /** @type {any} */ (agreement) };
+  const state = primary.source === "builtin" ? pinned[0] : primary;
+  return { primary, state, verdict: members, quorum, agreement: /** @type {any} */ (agreement) };
 }
 
 /** A caller-pinned set (SDK rpcUrl, tests): one endpoint, quorum 1, "caller". */

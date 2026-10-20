@@ -16,6 +16,7 @@ import { tempoRail } from "../../src/core/rails/tempo.js";
 import { startFakeTempoPay } from "../helpers/fake-tempo-pay.js";
 import { solanaRail } from "../../src/core/rails/solana.js";
 import { buildPayment, checkSigned } from "../../src/core/rails/solana-transaction.js";
+import { rpcCall } from "../../src/core/rpc.js";
 import { checkSettlement } from "../../src/core/settlement.js";
 import type { Attempt } from "../../src/core/types.js";
 import { DEFAULT_POLICY } from "../../src/core/policy.js";
@@ -122,9 +123,24 @@ it("preserves a delivered provisional payment and its receipt through failed rea
   expect(records.getReceipt(attempt.receiptId!)).toEqual(receipt);
   expect(await recheckChain(records, attempt.id, chain.url)).toMatchObject({ state: "uncertain", paymentIncluded: true });
 });
+it("status preserves an included payment through a non-final hash change, then reports it removed once final", async () => {
+  const { chain, records, home, attempt } = await deliveredNonFinalPayment();
+  const before = records.getAttempt(attempt.id);
+  const receipt = records.getReceipt(attempt.receiptId!);
+  chain.receipts.set(attempt.transaction!, await rpcCall(chain.url, "eth_getTransactionReceipt", [attempt.transaction!]));
+  chain.used.delete(attempt.authorizationNonce!);
+  expect(await cliStatus(home, chain.url, attempt.id)).toMatchObject({ state: "settled", chain: "verified", chain_final: false });
+  expect(records.getAttempt(attempt.id)).toEqual(before);
+  expect(records.getReceipt(attempt.receiptId!)).toEqual(receipt);
+  chain.advance(10);
+  expect(await cliStatus(home, chain.url, attempt.id)).toMatchObject({ state: "uncertain", chain: "unchecked", chain_final: null,
+    chain_reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." });
+  expect(records.spentToday("USDC")).toBe(0.01);
+});
 it.each(["block hash changed", "log removed"])("reports a successful read showing %s as removed inclusion", async (change) => {
   const { chain, records, attempt } = await deliveredNonFinalPayment();
   chain.used.delete(attempt.authorizationNonce!);
+  if (change === "block hash changed") chain.advance(10);
   const options = { rpcUrlFor: () => chain.url, fetchImpl: async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const call = JSON.parse(String(init?.body));
     const response = await fetch(input, init);

@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KNOWN_NETWORKS } from "../../src/core/chain.js";
 import { EVM_CHAINS } from "../../budget/evm/chains.mjs";
-import { callerSet, endpointId, endpointSet, mainnetRpcReady, operatorOf, providerOf, RPC_ENDPOINTS, RPC_TESTNETS } from "../../src/core/rpc-endpoints.mjs";
+import { callerSet, endpointId, endpointSet, mainnetRpcReady, operatorOf, providerOf, RPC_ENDPOINTS, RPC_STATE_ENDPOINTS, RPC_TESTNETS } from "../../src/core/rpc-endpoints.mjs";
 import { defaultOwnerSettings, readOwnerSettings } from "../../src/core/owner-settings.js";
 import { agreeAtFinalEvm, agreeAtFinalSolana, agreementWords, canonical, endpointSetErrorWords, checkIdentity, forgetIdentities } from "../../src/core/rpc-quorum.mjs";
 
@@ -552,9 +552,9 @@ describe("providers", () => {
     expect(s).toMatchObject({ primary: { operator: "circle", source: "env" } });
   });
 
-  it("a pin on arbitrum.io with a trailing slash and a pin on publicnode are two providers", () => {
-    pin("arbitrum-sepolia", { urls: ["https://sepolia-rollup.arbitrum.io/rpc/", "https://arbitrum-sepolia-rpc.publicnode.com"] });
-    expect(operators(endpointSet("arbitrum-sepolia", "verdict", { testnet: true }))).toEqual(["offchain-labs", "publicnode"]);
+  it("a pin on arbitrum.io with a trailing slash and a pin on tenderly are two providers", () => {
+    pin("arbitrum-sepolia", { urls: ["https://sepolia-rollup.arbitrum.io/rpc/", "https://arbitrum-sepolia.gateway.tenderly.co"] });
+    expect(operators(endpointSet("arbitrum-sepolia", "verdict", { testnet: true }))).toEqual(["offchain-labs", "tenderly"]);
   });
 
   it("resolves by exact URL, then the entry's domains, then the URL's own registrable domain", () => {
@@ -577,5 +577,61 @@ describe("providers", () => {
     const s = endpointSet("arc-testnet", "verdict", { envUrl: "https://rpc.testnet.arc.io/", testnet: true });
     expect(s).toMatchObject({ primary: { url: "https://rpc.testnet.arc.io", operator: "circle", source: "env" } });
     expect(endpointSet("arc-testnet", "verdict", { envUrl: "https://elsewhere.example", testnet: true })).toHaveProperty("error");
+  });
+});
+
+// Verdicts read state at the `finalized` block. Endpoints that keep only recent state refuse that ("historical state ... is
+// not available": PublicNode on Arbitrum Sepolia, the official RPC on Robinhood Chain Testnet, 20 Oct 2026), so every
+// verdict endpoint must serve it, and log searches stay on the primary. superstables.com's budget chain table is a copy.
+describe("endpoints that serve finalized state", () => {
+  afterEach(() => noPins());
+  const urls = (s: ReturnType<typeof endpointSet>) => ("error" in s ? ["error"] : s.verdict.map((e) => e.url));
+  const ROBINHOOD = "https://rpc.testnet.chain.robinhood.com";
+  const DRPC = "https://robinhood-testnet.drpc.org";
+
+  it("Arbitrum Sepolia is confirmed by Offchain Labs and Tenderly, and read through Offchain Labs", () => {
+    expect(RPC_ENDPOINTS["arbitrum-sepolia"]).toEqual([
+      { url: "https://sepolia-rollup.arbitrum.io/rpc", operator: "offchain-labs" },
+      { url: "https://arbitrum-sepolia.gateway.tenderly.co", operator: "tenderly" },
+    ]);
+    const s = endpointSet("arbitrum-sepolia", "verdict", { testnet: true });
+    expect(s).toMatchObject({ quorum: 2, agreement: "quorum", primary: { url: "https://sepolia-rollup.arbitrum.io/rpc", source: "builtin" }, state: { url: "https://sepolia-rollup.arbitrum.io/rpc" } });
+    expect(urls(s)).toEqual(["https://sepolia-rollup.arbitrum.io/rpc", "https://arbitrum-sepolia.gateway.tenderly.co"]);
+    expect(RPC_STATE_ENDPOINTS["arbitrum-sepolia"]).toBeUndefined();
+  });
+
+  it("Robinhood Chain Testnet reads finalized state through dRPC, and the rest through the official RPC", () => {
+    expect(RPC_ENDPOINTS["robinhood-testnet"]).toEqual([{ url: ROBINHOOD, operator: "robinhood" }]);
+    expect(RPC_STATE_ENDPOINTS["robinhood-testnet"]).toEqual([{ url: DRPC, operator: "drpc" }]);
+    for (const purpose of ["read", "verdict", "owner"] as const) {
+      const s = endpointSet("robinhood-testnet", purpose, { testnet: true });
+      expect(s, purpose).toMatchObject({ quorum: 1, agreement: "single", primary: { url: ROBINHOOD, operator: "robinhood", source: "builtin" }, state: { url: DRPC, operator: "drpc", source: "builtin" } });
+      expect(urls(s), purpose).toEqual([DRPC]);
+    }
+    // the same rule as any other chain: one operator is a single set on a testnet only
+    expect(endpointSet("robinhood-testnet", "verdict", { testnet: false })).toMatchObject({ quorum: 2, agreement: "quorum" });
+    expect(providerOf("robinhood-testnet", DRPC)).toBe("drpc");
+    expect(providerOf("robinhood-testnet", "https://other.drpc.org")).toBe("drpc");
+  });
+
+  it("an RPC variable or the owner's RPCs still decide where finalized state is read", () => {
+    const env = endpointSet("robinhood-testnet", "verdict", { envUrl: ROBINHOOD, testnet: true });
+    expect(env).toMatchObject({ primary: { url: ROBINHOOD, source: "env" }, state: { url: ROBINHOOD, source: "env" } });
+    expect(urls(env)).toEqual([DRPC]);
+    expect(endpointSet("robinhood-testnet", "read", { envUrl: "https://mine.example", testnet: true })).toMatchObject({ state: { url: "https://mine.example", source: "env" } });
+    // dRPC is not the chain's RPC: as a variable it is refused for a verdict, as any other URL the owner did not set
+    expect(endpointSet("robinhood-testnet", "verdict", { envUrl: DRPC, envName: "B4_RPC_ROBINHOOD_TESTNET", testnet: true })).toEqual({ error: expect.stringContaining("B4_RPC_ROBINHOOD_TESTNET") });
+    pin("robinhood-testnet", { urls: ["https://a.mine.example", "https://b.other.example"] });
+    const owner = endpointSet("robinhood-testnet", "verdict", { testnet: true });
+    expect(owner).toMatchObject({ quorum: 2, primary: { url: "https://a.mine.example", source: "settings" }, state: { url: "https://a.mine.example", source: "settings" } });
+    expect(urls(owner)).toEqual(["https://a.mine.example", "https://b.other.example"]);
+  });
+
+  it("every chain with state endpoints is a known chain whose first table entry is still its primary", () => {
+    for (const [key, list] of Object.entries(RPC_STATE_ENDPOINTS)) {
+      expect(RPC_ENDPOINTS[key], key).toBeDefined();
+      expect(list.length, key).toBeGreaterThan(0);
+      expect(endpointSet(key, "read", { testnet: true }), key).toMatchObject({ primary: { url: RPC_ENDPOINTS[key][0].url } });
+    }
   });
 });
