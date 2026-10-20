@@ -109,7 +109,8 @@ export function updateApproval(id, fn) {
 
 /**
  * Finish a record under its lock, deciding from the record as stored now: `decide` gets it (never a final one) and
- * returns { code, result } to store, or null to store nothing. The same as recordFinal otherwise. Returns the record, and
+ * returns { code, result, record? } to store (`record`: more fields for the record itself), or null to store nothing. The same as
+ * recordFinal otherwise. Returns the record, and
  * whether this call made it final.
  */
 export function recordFinalWith(id, decide) {
@@ -118,7 +119,7 @@ export function recordFinalWith(id, decide) {
     if (before.final) return null;
     decided = decide(before);
     if (!decided) return null;
-    return { state: "final", endedAt: new Date().toISOString(), final: { code: decided.code, result: decided.result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
+    return { ...(decided.record ?? {}), state: "final", endedAt: new Date().toISOString(), final: { code: decided.code, result: decided.result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
   });
   if (record && decided) release(record.rail, record.chain, id);
   return { record, stored: Boolean(record && decided) };
@@ -231,11 +232,41 @@ function breakDeadLock(path, dead, deadline) {
   }
 }
 
+/** The records whose lock this process holds across asynchronous work (holdingRecordLock). */
+const heldRecordLocks = new Set();
+
+/**
+ * Hold the record's lock from before `fn` reads the record until it is done, across its awaits: no other process changes the
+ * record, starts a worker or a rail script for it (spawnRail, restartWorker), or ends it in between. This process's own record
+ * writes under `fn` run under it, as one step each.
+ */
+async function holdingRecordLock(id, fn) {
+  ensureDir();
+  const path = recordLockFile(id);
+  const me = lockOwnerText();
+  try {
+    acquireSync(path, me, Date.now() + recordLockOptions.timeoutMs, breakDeadLock);
+  } catch (err) {
+    // the lock is held by a process that is still running: the caller can say so and ask to be run again
+    if (err && typeof err === "object") err.code = "RECORD_BUSY";
+    throw err;
+  }
+  heldRecordLocks.add(id);
+  try {
+    return await fn();
+  } finally {
+    heldRecordLocks.delete(id);
+    removeIfSame(path, me);
+  }
+}
+
 /**
  * Run `fn` holding the record's lock: the worker, the caller, `wait` and `--replace` all change a record by reading it
  * and writing it back, so each change is made whole, one process at a time.
  */
 function withRecordLock(id, fn) {
+  // abandonApproval holds the record's lock across its stop (holdingRecordLock): its own writes in that span are made under it
+  if (heldRecordLocks.has(id)) return fn();
   ensureDir();
   const path = recordLockFile(id);
   const me = lockOwnerText();
@@ -386,6 +417,41 @@ async function stopRecord(record) {
   if (record.railPgid) await stopGroup(record.railPgid, { start: record.railPgidStart, startUtc: record.railPgidStartUtc, location: { ...record, selfStartedAt: record.railSelfStartedAt, namespace: 'railNamespace' in record ? record.railNamespace : record.namespace, writtenAt: record.railWrittenAt, bootElapsedMs: record.railBootElapsedMs, createdAt: undefined } });
 }
 
+/**
+ * Whether something of an approval was started a moment ago and is not in the record yet: its worker (startDetached saves the
+ * record, spawns the worker, then publishes its pid) or its rail script (spawnRail marks the record before it starts one). It
+ * may be running unseen, so nothing ends the approval yet.
+ */
+export const startingUp = (record) => Boolean(record && !record.final && !record.foreground
+  && ((record.pid == null && !(Date.now() - Date.parse(record.createdAt) >= STARTUP_GRACE_MS))
+    || (record.railSpawning && Date.now() - record.railSpawning < STARTUP_GRACE_MS)));
+
+/**
+ * The owner gives up an approval no later `wait` can settle (their own terminal asks for it, never an agent call): stop
+ * everything it started, then end it with the result `build` returns, only if no process of it runs, its worker is not still
+ * being launched, and no result was stored first. The record's lock is held from the first read to the write, so what the
+ * record names is all there is: a rail script is started and named in one locked step (spawnRail), a restart is one locked
+ * step too, and neither can happen between the stop and the write. A worker's own final, a restart and this give-up cannot
+ * both happen: whichever the lock admits first stands, and a restart finds the record final. The record keeps everything it holds (its
+ * evidence, the request id and site, its log) except the access token. Nothing is asked of the site.
+ * @returns {Promise<{ kind: "abandoned" | "ended" | "running" | "starting", record: any }>} `ended`: a result was already
+ * stored (the record is returned); `running`: a process of the approval could not be stopped; `starting`: its worker is
+ * still being launched. Nothing was stored in the last two.
+ */
+export async function abandonApproval(id, build, { stop = stopRecord, attempts = 3 } = {}) {
+  if (!isApprovalId(id)) return { kind: "ended", record: null };
+  return holdingRecordLock(id, async () => {
+    let record = readApproval(id);
+    for (let attempt = 0; record && !record.final && attempt < attempts; attempt++) {
+      await stop(record);
+      const out = recordFinalWith(id, (before) => (processesAlive(before) || startingUp(before) ? null : build(before)));
+      record = out.record;
+      if (out.stored) return { kind: "abandoned", record };
+    }
+    return { kind: record?.final ? "ended" : startingUp(record) ? "starting" : "running", record };
+  });
+}
+
 // ── one approval at a time per rail and chain ──────────────────────────────────────────────────────────
 
 function readLock(rail, chain) {
@@ -508,11 +574,46 @@ export function startForeground({ id, command, rail, chain }) {
   saveApproval({ id, command, rail, chain, state: "running", foreground: true, createdAt: new Date().toISOString(), pid: process.pid, ...startOf(process.pid), deadline: null });
 }
 
-/** The process group of a blocking command's rail script (its page and chain reads run there). */
-export function setRailGroup(id, pgid, selfStartedAt) {
+/** The record fields that name a rail script's process group. */
+function railFields(pgid, selfStartedAt) {
   const starts = startOf(pgid);
   if (process.platform === 'darwin' && selfStartedAt !== undefined) starts.selfStartedAt = selfStartedAt;
-  return update(id, { railPgid: pgid, railPgidStart: starts.pidStart, ...(starts.selfStartedAt !== undefined ? { railSelfStartedAt: starts.selfStartedAt } : {}), railWrittenAt: starts.writtenAt, railBootElapsedMs: starts.bootElapsedMs, railNamespace: starts.namespace, ...(starts.pidStartUtc !== undefined ? { railPgidStartUtc: starts.pidStartUtc } : {}) });
+  return { railPgid: pgid, railPgidStart: starts.pidStart, ...(starts.selfStartedAt !== undefined ? { railSelfStartedAt: starts.selfStartedAt } : {}), railWrittenAt: starts.writtenAt, railBootElapsedMs: starts.bootElapsedMs, railNamespace: starts.namespace, ...(starts.pidStartUtc !== undefined ? { railPgidStartUtc: starts.pidStartUtc } : {}) };
+}
+
+/** The process group of a blocking command's rail script (its page and chain reads run there). */
+export function setRailGroup(id, pgid, selfStartedAt) {
+  return update(id, railFields(pgid, selfStartedAt));
+}
+
+/**
+ * Start an approval's rail script and record its process group in one step, under the record's lock: whoever gives the
+ * approval up (abandonApproval) or restarts it decides under the same lock, so it sees the rail script with its group named,
+ * or finds the approval ended and nothing started. `spawn` returns the child. A record that is not there is not a reason to
+ * stop (the rail starts, unrecorded, as it always did); one that has a result is: nothing is started.
+ * @returns {{ child: any, ended: boolean }}
+ */
+export function spawnRail(id, spawn) {
+  let child = null;
+  let ended = false;
+  // A worker that dies between starting the rail script and recording it leaves this mark and no group: for a minute nothing
+  // ends the approval (startingUp), because a rail script may be running that the record does not name.
+  const marked = update(id, (before) => (before.final ? null : { railSpawning: Date.now() }));
+  if (marked?.final) return { child: null, ended: true };
+  let record;
+  try {
+    record = update(id, (before) => {
+      if (before.final) { ended = true; return null; }
+      child = spawn();
+      return { ...(child?.pid ? railFields(child.pid) : {}), railSpawning: undefined };
+    });
+  } catch (err) {
+    // the rail script may have started and not been recorded: it would run unseen, so it is stopped
+    if (child?.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* gone */ } } }
+    throw err;
+  }
+  if (!record && !child) child = spawn();
+  return { child, ended };
 }
 
 /** The worker records its own pid at start, so its process group is known even if the caller died before writing it. */
