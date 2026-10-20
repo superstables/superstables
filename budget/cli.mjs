@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, recordFinal, recordMayHaveSent, replacePending, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -441,6 +441,17 @@ waiting_owner it says so in one line and ends its turn again. unknown with final
 after the agent's own revoke) also means the owner has not finished: send the new message_for_owner if url changed, and
 end the turn.
 --site is checked against the site the approval was made on, and refused if it differs.
+Some agent hosts end every process a command started when the command ends. For EVM owner commands approved on
+superstables.com, wait can restart a stopped worker, read the existing request from the site, and run the original checks
+and local writes without creating a new request. Other owner commands on that chain remain blocked until a result is recorded.
+A worker restarting an already-recorded, resumable EVM approval records a result only from a final response for that
+request, a single request marked sent with a transaction hash (the chain checks then decide), or a confirmed cancellation. If the
+site answers anything else (an unreadable or missing request, an error, a request not yet final), wait keeps answering
+unknown, final false, and other owner commands on that chain stay blocked. An agent stops and asks the owner. The owner
+checks the request on superstables.com, then reruns the original owner command with --replace (the site must confirm the
+cancellation, and it is refused once the wallet was asked), or unlocks the chain's approvals in their own terminal (unlock
+--rail evm --chain C --approvals --confirm). Unlocking does not resolve the request: its outcome stays unknown, and the
+next wait can lock the chain again.
 When the approval link expired before the owner's wallet was asked to send: state refused_precheck, exit 3, and that
 approval sent nothing; after setup --hosted with --grant or --fund, or recover, an earlier step may have completed (read
 steps, tx and budget status). Run the owner command again for a new one (setup reuses the agent key it created).
@@ -674,10 +685,20 @@ const print = (text) => writeSync(1, scrubAgentTokens(text));
 // A background worker for a detached owner approval (approvals.mjs) has its id in the environment.
 const workerRecord = readApproval(process.env[WORKER_ENV]);
 const WORKER_ID = workerRecord && !workerRecord.final ? workerRecord.id : undefined;
+// A worker whose approval has ended (or is gone) before it started has nothing to do. It must never go on as an ordinary owner
+// command: that would claim the chain and ask the owner for a new approval.
+if (process.env[WORKER_ENV] && !WORKER_ID) {
+  process.stderr.write(`superstables budget: approval ${process.env[WORKER_ENV]} has ended; this worker has nothing to do\n`);
+  process.exit(0);
+}
 if (WORKER_ID) adoptWorker(WORKER_ID);
 // The approval this process holds the chain for: the worker's, or a blocking owner command's own (ownerGate).
 let APPROVAL_ID = WORKER_ID;
 let FOREGROUND = false;
+// A worker that `wait` started again, to finish an approval whose first worker the host ended (approvals.mjs restartWorker): its
+// rail script takes the site's request over and creates none. It records a result only once it has the request in hand, so a
+// refusal from before that, a signal, or a crash that left no RESULT leaves the approval open for the next `wait`.
+const RESUMING = WORKER_ID !== undefined && process.env[RESUME_ENV] === WORKER_ID;
 
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 // A worker also stores it (and the exit code) in its approval record, for every later `wait`.
@@ -689,6 +710,12 @@ function resultFacts(fields) {
 }
 
 function emit(code, fields) {
+  // A hosted approval that a later wait can finish stays open when its worker is stopped by a signal, and a restarted worker
+  // records a result only once it has the request in hand: the next wait finishes the approval.
+  if (WORKER_ID && ((interrupted && canResume(readApproval(WORKER_ID))) || (RESUMING && !hasTakenOver(WORKER_ID)))) {
+    log(`superstables budget: approval ${WORKER_ID}: ${interrupted ? "this worker was stopped" : "this worker ended before it had the request in hand"} and recorded no result; run budget wait again to check the approval`);
+    process.exit(code);
+  }
   const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "agreement", "lastOwnerAction", "ownerRevokeFinal", "revocation", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
@@ -1031,7 +1058,7 @@ const evmReadFromResult = (r) => r.state !== "ok" ? { ok: false, code: 1 } : ({ 
 // owner opens, and the command then waits for the owner.
 // Only an owner command has an approval link. A buy, preflight or reconcile never forwards one, whatever its rail printed (a
 // seller's text in the rail's log must not become a link the agent shows the owner).
-let approvalUrl;
+let approvalUrl = RESUMING ? workerRecord.url : undefined;
 // the link is recorded once the rail's words for the owner are on stderr too (linkGate): a caller that returns on the
 // record then has them in the log
 let gate;
@@ -1095,6 +1122,12 @@ function run(spec) {
       if (partial) forward(partial);
       passErr(errScrub.end());
       gate?.flush();
+      // a worker of a hosted approval that a later wait can finish whose rail script left no RESULT (it crashed, or the host ended it
+      // before this worker): nothing is decided from that, the request may still be open on the site and the next wait finishes it
+      if (WORKER_ID && code !== 0 && !railResult(stdout) && (RESUMING || canResume(readApproval(WORKER_ID)))) {
+        log(`superstables budget: approval ${WORKER_ID}: this worker stopped without a result (${lastError(stderrTail) || `exit ${code ?? sig}`}) and recorded none; run budget wait again to check the approval`);
+        process.exit(code ?? 1);
+      }
       resolve({ code: code ?? (sig ? 130 : 1), signal: sig ?? null, stdout, error: lastError(stderrTail) });
     });
   });
@@ -2181,6 +2214,10 @@ async function ownerGate({ cmd, f, ctx }) {
     writeResult(result);
     process.exit(code);
   }
+  if (r.kind === "open") {
+    // the rail asked the site and the worker went before it showed a link: the request may be open there, so it is neither failed nor refused
+    return emit(5, { ...ctx, state: "unknown", final: false, id, next: `the background approval stopped after it asked superstables.com, so the owner may still be able to approve it. Do not start another owner command on this chain. Run superstables budget wait --id ${id} --shown to finish it`, reason: "the background approval stopped before it showed an approval link" });
+  }
   if (r.kind === "unstopped") {
     // a command in the worker's group may still broadcast, whatever the record holds now
     return emit(5, { ...ctx, state: "unknown", id, next: `the background approval could not be stopped, so it may still send a transaction. Check wallet activity and ${statusCommand(f)} before retrying, and do not start another owner command on this chain. The log is ${logFile(id)}`, reason: r.reason });
@@ -2201,6 +2238,38 @@ async function ownerGate({ cmd, f, ctx }) {
     return emit(5, { ...ctx, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} The owner still has to approve the next step: ${waitNext(id, rec, "Do not start another owner command")}`, ...(missing ? { reason: missing } : {}) });
   }
   emit(0, { ...ctx, state: "waiting_owner", ...approvalFields(rec), next: waitNext(id, rec), ...(missing ? { reason: missing } : {}) });
+}
+
+/**
+ * The worker of a hosted approval is gone and its request may still be open on the site (a host that ends every process of a
+ * command when the command ends does this). Start the worker again, which takes the request over and does what the first one
+ * would have done, and read until it ends. The owner's answer is on the site, so this finishes the approval from there: it
+ * creates no request, and the chain stays held until a result is stored. Without a worker it can start, nothing is decided.
+ */
+async function finishHosted(f, record, timeoutMs) {
+  let started = { started: false };
+  try {
+    started = restartWorker(f.id, { cmd: process.execPath, script: fileURLToPath(import.meta.url), cwd: process.cwd() });
+  } catch (err) {
+    log(`superstables budget: could not start the background approval ${f.id} again: ${siteText(err.message, 200)}`);
+  }
+  // nothing decides the approval here: a worker that is not running now leaves it open for the next wait
+  const stopped = (why) => {
+    log(`superstables budget: ${why}`);
+    return emit(5, { command: record.command, rail: record.rail, chain: record.chain, state: "unknown", final: false, id: record.id, url: record.url, next: `${statusCommand({ rail: record.rail, chain: record.chain })}: read whether it landed before running this again. Run superstables budget wait --id ${record.id} --shown again`, reason: why });
+  };
+  const now = readApproval(f.id);
+  if (!started.started && !now?.final && !processesAlive(now)) {
+    if (started.blockedBy) return stopped(`another owner approval (${started.blockedBy.id ?? "unknown"}) holds this chain, so the background approval ${f.id} was not started again`);
+    return stopped(`the background approval ${f.id} stopped and could not be started again just now`);
+  }
+  if (started.started) log(`superstables budget: the background approval ${f.id} had stopped; finishing it from the request on ${siteName(record.hosted.site)}.`);
+  let r = await waitFor(f.id, timeoutMs);
+  // the owner already acted: the restarted worker is checking the chain, which can outlast --timeout
+  const acted = (p) => p && (p.walletAsked || p.linked || /^hosted:(linked|queued|sending|sent|confirmed|failed|unknown)$/.test(p.status));
+  if (!r?.final && !r?.resume && acted(r?.page)) r = await waitFor(f.id, Math.max(RESUME_WAIT_MS - timeoutMs, 0));
+  if (r?.resume) return stopped(`the restarted background approval ${f.id} stopped before it had a result`);
+  return r;
 }
 
 async function wait({ f }) {
@@ -2233,7 +2302,9 @@ async function wait({ f }) {
     reason: `this purchase was made on ${siteText(once.hosted.site, 120)}, which is not an approval site the owner allows now; nothing was read from it`,
     next: `do not buy this again. Ask the owner: ${madeOnAllowed.ownerCommand ?? "superstables owner settings show"} in their own terminal, then run superstables budget wait --id ${f.id} --shown` });
   if (once?.command === "buy-once") return waitBuyOnce(once, f);
-  const r = await waitFor(f.id, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);
+  const timeoutMs = (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000;
+  let r = await waitFor(f.id, timeoutMs);
+  if (r?.resume) r = await finishHosted(f, r.record, timeoutMs);
   if (!r) {
     const reason = `no owner approval with id ${f.id} under ${approvalsDir()}`;
     log(`superstables budget: ${reason}`);
@@ -2405,6 +2476,11 @@ if (WORKER_ID) {
     if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc, location: worker ? { ...worker, selfStartedAt: worker.railSelfStartedAt, namespace: 'railNamespace' in worker ? worker.railNamespace : worker.namespace, writtenAt: worker.railWrittenAt, bootElapsedMs: worker.railBootElapsedMs, createdAt: undefined } : {} }))) {
       // no result while its page may still run: the chain stays held, and wait keeps trying to stop the group
       log(`superstables budget: the approval ran past its deadline and process group ${pgid} would not stop; no result is recorded`);
+      process.exit(5);
+    }
+    // a restarted worker that could not finish in time leaves the approval open: the site may still hold the request
+    if (RESUMING) {
+      log(`superstables budget: approval ${WORKER_ID}: the restarted worker ran past its deadline and recorded no result; run budget wait again to check the approval`);
       process.exit(5);
     }
     emit(5, { command: parsed.cmd, rail: f.rail, chain: f.chain, state: "unknown", url: approvalUrl, next: `superstables budget status --rail ${f.rail} --chain ${f.chain}: read whether it landed before running this again`, reason: "the background approval ran past its deadline and was stopped" });
