@@ -9,7 +9,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { encodeFunctionData, pad, parseAbi, toEventSelector } from "viem";
 import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
@@ -18,7 +18,6 @@ import { accountHomeWith } from "../helpers/owner-settings.js";
 import type { TestServer } from "../helpers/servers.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-void ROOT;
 const OWNER = evmOwner("22");
 const AGENT = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A";
 const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
@@ -576,4 +575,36 @@ describe("grant, revoke and fund-agent, when the host ends the worker before the
     expect(done.result.state).toMatch(/^(settled|landed)$/);
     expect(site.posts).toHaveLength(1);
   }, 240_000);
+});
+
+describe("a restarted worker that runs past its backstop", () => {
+  it("leaves the approval open: no result is recorded, the token and the chain stay, and a later wait can still finish it", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    // the site answers, but never with a final answer: the restarted worker takes the request over and keeps polling
+    site.readAnswer = (_r, view) => ({ status: 200, body: { ...view, state: "awaiting_owner", final: false, owner: null } });
+    const hook = `--import ${pathToFileURL(resolve(ROOT, "test/helpers/shorten-worker-backstop.mjs")).href}`;
+    const stopped = await budget(["wait", "--shown", "--id", id, "--timeout", "30"], { NODE_OPTIONS: hook, BACKSTOP_TEST_MS: "7000" });
+    expect(stopped.code, stopped.stderr).toBe(5);
+    expect(stopped.result).toMatchObject({ state: "unknown", final: false, id });
+    const r = record(id);
+    // the worker had the request in hand (so a result could have been recorded), and the backstop is what ended it
+    expect(r.resumes).toBe(1);
+    expect(r.resume?.takenOver).toBe(1);
+    expect(readFileSync(join(approvals(), `${id}.log`), "utf8")).toMatch(/ran past its deadline and recorded no result|stopped without a result \(exit \d+\) and recorded none/);
+    expect(r.final).toBeUndefined();
+    expect(r.hosted.token).toMatch(/^ssbt_/);
+    expect(existsSync(lockPath())).toBe(true);
+    expect([r.pid, r.railPgid].some((p) => p && alive(p))).toBe(false);
+    expect(publicFile()).not.toMatch(/^B4_CAP=/m);
+    // the owner approves: the next wait finishes it, once
+    site.readAnswer = undefined;
+    approveSetup();
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ state: "ok", final: true });
+    expect(lines("B4_CAP")).toBe(1);
+    expect(site.posts).toHaveLength(1);
+  }, 400_000);
 });

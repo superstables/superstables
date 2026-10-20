@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, RESUME_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -699,6 +699,10 @@ let FOREGROUND = false;
 // rail script takes the site's request over and creates none. It records a result only once it has the request in hand, so a
 // refusal from before that, a signal, or a crash that left no RESULT leaves the approval open for the next `wait`.
 const RESUMING = WORKER_ID !== undefined && process.env[RESUME_ENV] === WORKER_ID;
+// which restart this worker is (NaN without one: such a worker never counts as having taken the request over)
+const RESUME_GENERATION = RESUMING ? Number(process.env[RESUME_GENERATION_ENV]) : undefined;
+// set when the worker's backstop fires: from then on a restarted worker records no result, whatever it had in hand
+let pastBackstop = false;
 
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 // A worker also stores it (and the exit code) in its approval record, for every later `wait`.
@@ -712,7 +716,7 @@ function resultFacts(fields) {
 function emit(code, fields) {
   // A hosted approval that a later wait can finish stays open when its worker is stopped by a signal, and a restarted worker
   // records a result only once it has the request in hand: the next wait finishes the approval.
-  if (WORKER_ID && ((interrupted && canResume(readApproval(WORKER_ID))) || (RESUMING && !hasTakenOver(WORKER_ID)))) {
+  if (WORKER_ID && ((interrupted && canResume(readApproval(WORKER_ID))) || (RESUMING && (pastBackstop || !hasTakenOver(WORKER_ID, RESUME_GENERATION))))) {
     log(`superstables budget: approval ${WORKER_ID}: ${interrupted ? "this worker was stopped" : "this worker ended before it had the request in hand"} and recorded no result; run budget wait again to check the approval`);
     process.exit(code);
   }
@@ -2471,6 +2475,7 @@ if (WORKER_ID) {
   // script's whole process group (the page's process too) before it records the result that frees the chain.
   const f = parsed.f;
   setTimeout(async () => {
+    pastBackstop = true;
     const pgid = currentChild?.pid;
     const worker = readApproval(WORKER_ID);
     if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc, location: worker ? { ...worker, selfStartedAt: worker.railSelfStartedAt, namespace: 'railNamespace' in worker ? worker.railNamespace : worker.namespace, writtenAt: worker.railWrittenAt, bootElapsedMs: worker.railBootElapsedMs, createdAt: undefined } : {} }))) {

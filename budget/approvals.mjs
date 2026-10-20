@@ -58,6 +58,8 @@ export const WORKER_ENV = "SUPERSTABLES_BUDGET_APPROVAL_ID";
 export const HOLDER_ENV = "SUPERSTABLES_BUDGET_HOLDER";
 /** Set in a worker that finishes an approval an earlier worker began: the id of that approval. */
 export const RESUME_ENV = "SUPERSTABLES_BUDGET_RESUME";
+/** The restart a worker is: the record's `resumes` as it was when this worker was started. Only the newest restart marks or relies on a takeover. */
+export const RESUME_GENERATION_ENV = "SUPERSTABLES_BUDGET_RESUME_GENERATION";
 /** How long the owner page keeps a link open after the wallet was asked to send (owner-approval-server.ts). */
 const SENDING_GRACE_S = 120;
 /** Reading the chain after the wallet sent: readSent waits up to 180 s, then the allowance reads. */
@@ -630,14 +632,22 @@ export function readRequestFact(id, key) {
 }
 
 /** The resumed worker took the site's request over: from now on its result may be stored as the approval's final one. */
-export function recordTakenOver(id) {
-  return update(id, (record) => record.final ? null : { resume: { ...record.resume, takenOver: record.resumes ?? 0 } });
+export function recordTakenOver(id, generation) {
+  return update(id, (record) => {
+    if (record.final) return null;
+    const mine = generation ?? record.resumes ?? 0;
+    // a worker that a newer restart replaced marks nothing: only the restart that read the request has taken it over
+    if (mine !== (record.resumes ?? 0)) return null;
+    return { resume: { ...record.resume, takenOver: mine } };
+  });
 }
 
 /** Whether the worker that finishes approval `id` has taken the request over (set by recordTakenOver, once per restart). */
-export const hasTakenOver = (id) => {
+export const hasTakenOver = (id, generation) => {
   const record = readApproval(id);
-  return Boolean(record && record.resume?.takenOver === (record.resumes ?? 0));
+  const mine = generation ?? record?.resumes ?? 0;
+  // the worker's own restart must still be the newest, and must be the one that took the request over
+  return Boolean(record && mine === (record.resumes ?? 0) && record.resume?.takenOver === mine);
 };
 
 /**
@@ -743,7 +753,7 @@ function restartLocked(id, { cmd, script, cwd, env }, remember) {
     if (!canResume(before) || processesAlive(before)) return null;
     // the site this approval was made on is the one the restarted command asks: a command that took it from its environment
     // (SUPERSTABLES_SITE) must not take another from the environment `wait` runs in
-    const launched = launchWorker(id, { cmd, args: [script, ...before.workerArgs], cwd, env: { ...env, [RESUME_ENV]: id, SUPERSTABLES_SITE: before.hosted.site } });
+    const launched = launchWorker(id, { cmd, args: [script, ...before.workerArgs], cwd, env: { ...env, [RESUME_ENV]: id, [RESUME_GENERATION_ENV]: String((before.resumes ?? 0) + 1), SUPERSTABLES_SITE: before.hosted.site } });
     remember(launched);
     // a worker that could not start counts as a restart that never took the request over
     if (!launched.child.pid) return { resumes: (before.resumes ?? 0) + 1 };
