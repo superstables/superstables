@@ -1669,6 +1669,7 @@ const NO_ANSWER_AFTER_BOUNDARY: Record<string, string> = {
   "command policy": "the spend policy file; no payment",
   "command owner": "the owner's settings file (owner settings): it refuses to run without the owner at a terminal and moves no money",
   "command budget": "a group: each of its commands is listed as budget <command>",
+  "command seller": "a group: `seller credit` reads the balance and the top-ups and pays nothing; `seller top-up` pays through the pay path and prints that attempt's own state, never `nothing was paid` once it may have moved (its own cases: test/cli/top-up.test.ts for the outcomes, test/cli/top-up-chain.test.ts through the real quote, engine and signer)",
   "budget doctor": "keys, addresses, RPC and balances; no payment outcome",
   "budget status": "the budget's allowance, expiry and revocation; no purchase outcome",
   "budget preflight": "reads a seller's price; signs nothing",

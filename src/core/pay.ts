@@ -355,7 +355,12 @@ export class PaymentEngine {
     try {
       challenge = await this.challengeFor(quote.url);
     } catch (err) {
-      this.settleState(attempt, "failed", { reason: message(err) });
+      // Nothing is signed yet. A seller's non-402 answer is kept as the service's own, so a caller can tell a payment in
+      // flight (a 409, a money_moved of "unknown") from a read that simply failed.
+      this.settleState(attempt, "failed", {
+        reason: message(err),
+        ...(err instanceof NotPaidEndpointError ? { serviceStatus: err.status, serviceBody: err.body.slice(0, SERVICE_BODY_LIMIT) } : {}),
+      });
       return;
     }
 
@@ -943,7 +948,7 @@ export class PaymentEngine {
       throw isRedirectRefusal(err) ? new Error(SELLER_REDIRECTED) : err;
     });
     const body = await readCapped(res, MAX_CHALLENGE_BYTES, deadline - Date.now(), url);
-    if (res.status !== 402) throw new NotPaidEndpointError(url, res.status, body.slice(0, 300));
+    if (res.status !== 402) throw new NotPaidEndpointError(url, res.status, body.slice(0, 300), body);
     return readSellerChallenge({
       paymentRequiredHeader: res.headers.get("payment-required") ?? res.headers.get("x-payment-required"),
       wwwAuthenticate: res.headers.get("www-authenticate"),

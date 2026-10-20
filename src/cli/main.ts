@@ -26,14 +26,12 @@ import {
   recordsDir,
   walletDir,
 } from "../core/home.js";
-import { PaymentEngine, QuoteUsedError, SERVICE_BODY_LIMIT, paymentOutput, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
-import { POLICY_EXAMPLE, loadPaymentPolicy, loadPolicy, type Policy } from "../core/policy.js";
+import { SERVICE_BODY_LIMIT, paymentOutput, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
+import { POLICY_EXAMPLE, loadPaymentPolicy, loadPolicy } from "../core/policy.js";
 import { QUOTE_TTL_MS, getQuote, quote as takeQuote } from "../core/quote.js";
 import { Records, settleStaleAwaiting } from "../core/records.js";
 import { SellerUnreachableError } from "../core/x402.js";
 import { describeBudgetRoutes } from "../core/routes.js";
-import { BrowserWalletSigner } from "../core/signer/browser.js";
-import type { Signer } from "../core/signer/types.js";
 import { walletStatus } from "../core/signer/wallet.js";
 import type { Attempt, Quote, Receipt, ServiceListing, WalletStatus } from "../core/types.js";
 import { clientVersion } from "../core/version.js";
@@ -54,6 +52,7 @@ import {
 } from "../wallet/keystore.js";
 import { askHidden, askNewPassphrase, canAsk } from "../wallet/passphrase.js";
 import { SellerTextError, UNTRUSTED_LABEL, untrustedJson, untrustedText, untrustedUrl } from "../core/text.js";
+import { paymentContext } from "./context.js";
 import { formatReport, runDoctor } from "./doctor.js";
 import { field, json, money, table, termsMoney, yesNo } from "./format.js";
 import { MAIN_HELP, explain } from "./help.js";
@@ -69,11 +68,21 @@ import {
   isFinalAttempt,
   nextFor,
   policyFileFor,
-  requoteCommand,
-  usedQuoteMessage,
 } from "./outcome.js";
-import { signerFor, walletModeFromEnvironment, type WalletMode } from "./signer.js";
+import { PaymentStartedError, approveAndPay } from "./pay.js";
+import { clientPorts, creditJson, printCredit, printTopUp, runTopUp, topUpJson, type TopUpResult } from "./top-up.js";
+import { walletModeFromEnvironment, type WalletMode } from "./signer.js";
 import { attemptView, messageFor } from "./views.js";
+import {
+  SELLER_API_KEY_ENV,
+  keyGuardedFetch,
+  parseTopUpAmount,
+  readSellerApiKey,
+  readSellerCredit,
+  sellerSite,
+  type SellerCredit,
+  type TopUpAmount,
+} from "../seller/top-up.js";
 
 /**
  * Where the test token comes from: Circle's faucet on every chain `pay` pays USDC on but SKALE Base Sepolia, whose USDC is
@@ -88,14 +97,6 @@ const FAUCET_LINE = `Fund it with test USDC (USDG on Robinhood Chain Testnet) on
 const BROWSER_WINDOW_S = 300;
 /** How long `pay` waits for the local wallet before it gives up (WalletSigner's default). */
 const LOCAL_WINDOW_S = 130;
-/**
- * `pay` with no --wait waits until the attempt ends. The signers' own windows end it well
- * before this; the ceiling only guards against a wallet that never answers at all.
- */
-const PAY_CEILING_MS = 15 * 60_000;
-/** After the owner approved, how long `pay` keeps waiting for the seller to settle and answer. */
-const SUBMIT_GRACE_MS = 150_000;
-
 const program = new Command();
 
 program
@@ -579,7 +580,7 @@ explain(
             "`superstables quote --service <id> --param key=value` or `superstables quote <url>`.",
         );
       }
-      const { records, policy } = context();
+      const { records, policy } = paymentContext();
       let taken: Quote;
       if (options.service) {
         const service = await getService(options.service);
@@ -689,112 +690,32 @@ explain(
     .option("--json", "print the outcome as one JSON object; progress and the approval link go to stderr")
     .action(async (quoteId: string, options: { wait?: number; json?: boolean }) => {
       const say = options.json ? (line: string) => console.error(line) : (line: string) => console.log(line);
-      const { records, engine, signer } = context();
-
-      let linkShown = false;
-      // Subscribe first: the first transition is emitted inside startPayment().
-      engine.events.on("transition", (attempt: Attempt) => {
-        if (attempt.quoteId !== quoteId) return;
-        const last = attempt.history[attempt.history.length - 1];
-        // The creation of the attempt says nothing the next line will not say better.
-        if (attempt.state === "awaiting_approval" && !last?.note) return;
-        if (attempt.approvalUrl && !linkShown) {
-          // The link is the approval in browser mode: printed once, on its own line, unmissable.
-          linkShown = true;
-          say(`  awaiting_approval: waiting for the owner on the approval page (it closes when this command stops)`);
-          say("");
-          say("Open this approval link and approve the payment in your browser wallet:");
-          say(`  ${attempt.approvalUrl}`);
-          const movedFrom = signer instanceof BrowserWalletSigner ? signer.movedFrom : undefined;
-          if (movedFrom !== undefined) {
-            // Another payment is most likely waiting on the usual port. Saying so here is what
-            // keeps an agent from going looking for that process and stopping it.
-            say(
-              `  (port ${movedFrom}, the one this install uses, is busy, probably with another payment waiting for its owner; leave it running. ` +
-                `This page is on port ${new URL(attempt.approvalUrl).port}.)`,
-            );
-          }
-          say("");
-          return;
-        }
-        say(`  ${attempt.state}${lastNote(attempt)}`);
-      });
-
-      let started: Attempt;
+      const deps = paymentContext();
+      // One payment path for `pay` and `seller top-up` (src/cli/pay.ts): the same signer, policy and approval.
+      let attempt: Attempt;
+      let followed = true;
       try {
-        started = engine.startPayment(quoteId);
+        attempt = await approveAndPay(deps, quoteId, {
+          ...(options.wait === undefined ? {} : { wait: options.wait }),
+          say,
+        });
       } catch (err) {
-        await closeSigner(signer);
-        const quote = records.getQuote(quoteId);
-        if (err instanceof QuoteUsedError && (err.attempt || err.attemptId)) {
-          // The payment exists already: point at it, so nobody starts a second one to get a link.
-          throw badInput(err.attempt ? usedQuoteMessage(err.message, err.attempt, quote) : `${err.message}.`);
-        }
-        throw badInput(
-          quote
-            ? `${messageOf(err)}: \`${requoteCommand(quote)}\`, then \`superstables pay <new-quote-id>\`.`
-            : `${messageOf(err)}; \`superstables quote --service <id>\` or \`superstables quote <url>\` takes one.`,
-        );
+        // The command failed while following a payment that had started: report the attempt as the records have it.
+        if (!(err instanceof PaymentStartedError)) throw err;
+        const started = err.attempt ?? deps.records.getAttempt(err.attemptId);
+        if (!started) throw new CliError(untrustedText(err.message, 1_000), EXIT.unknown);
+        console.error(untrustedText(err.message, 1_000));
+        attempt = started;
+        followed = false;
       }
-      say(`Paying quote ${quoteId} (attempt ${started.id}).`);
 
-      // Ctrl-C, or an agent's tool killing the command, is the end of the wait: the page goes
-      // away with this process, and the record has to say so rather than stay "awaiting". The
-      // reason names the process, not the owner, so whoever stopped it can tell.
-      let interrupted = false;
-      const onSignal = (signal: NodeJS.Signals) => {
-        interrupted = true;
-        engine.stop(
-          started.id,
-          `this \`superstables pay\` process was stopped (${signal}) before the owner decided, and its ` +
-            "approval page closed with it; the owner did not reject the payment",
-          "stopped",
-        );
-      };
-      // Records are written synchronously, so even an exit nobody planned leaves the truth behind.
-      const onExit = () => {
-        engine.stop(
-          started.id,
-          "this `superstables pay` process exited before the owner decided, and its approval page closed " +
-            "with it; the owner did not reject the payment",
-          "stopped",
-        );
-      };
-      process.once("SIGINT", onSignal);
-      process.once("SIGTERM", onSignal);
-      process.once("exit", onExit);
-
-      const waitMs = options.wait === undefined ? PAY_CEILING_MS : options.wait * 1000;
-      let attempt = await engine.waitForAttempt(started.id, waitMs);
-      if (!isFinalAttempt(attempt) && !interrupted) {
-        if (attempt.state === "awaiting_approval") {
-          attempt =
-            engine.stop(
-              started.id,
-              options.wait === undefined
-                ? "`superstables pay` stopped waiting before the owner decided"
-                : `\`superstables pay\` stopped waiting after --wait ${options.wait} s, before the owner decided`,
-              "wait",
-            ) ?? attempt;
-        } else {
-          // Approved: the credential may be on its way, so this is not the moment to walk away.
-          attempt = await engine.waitForAttempt(started.id, SUBMIT_GRACE_MS);
-          if (!isFinalAttempt(attempt)) attempt = engine.stop(started.id, "`superstables pay` stopped waiting") ?? attempt;
-        }
-      }
-      process.off("SIGINT", onSignal);
-      process.off("SIGTERM", onSignal);
-      process.off("exit", onExit);
-      // The browser signer listens on loopback for as long as it exists; let the command exit.
-      await closeSigner(signer);
-      attempt = engine.getAttempt(started.id) ?? attempt;
-
-      process.exitCode = exitCodeFor(attempt);
+      // An attempt we could not follow to its end and the records do not show over is unknown, never done.
+      process.exitCode = followed || isFinalAttempt(attempt) ? exitCodeFor(attempt) : EXIT.unknown;
       if (options.json) {
-        console.log(json(attemptJson(records, attempt)));
+        console.log(json(attemptJson(deps.records, attempt, process.exitCode)));
         return;
       }
-      printAttemptOutcome(records, attempt);
+      printAttemptOutcome(deps.records, attempt);
     }),
   {
     notes: [
@@ -920,7 +841,7 @@ explain(
     .option("--limit <n>", "how many to show", toInteger, 20)
     .option("--json", "print the receipt records as a JSON array")
     .action((options: { limit: number; json?: boolean }) => {
-      const all = context().records.listReceipts();
+      const all = paymentContext().records.listReceipts();
       const receipts = all.slice(0, options.limit);
       if (options.json) {
         console.log(json(receipts.map((r) => outsideJson(shownReceipt(r)))));
@@ -929,7 +850,7 @@ explain(
       // whether any receipt exists is read from all of them, never from the --limit window
       if (all.length === 0) {
         // A receipt is written only once a payment is known; an attempt the owner approved may have paid without one.
-        const open = context().records.listAttempts().filter(mayHavePaid);
+        const open = paymentContext().records.listAttempts().filter(mayHavePaid);
         console.log(
           open.length === 0
             ? "No receipt is recorded on this machine. `superstables attempts` lists every attempt and its state."
@@ -980,7 +901,7 @@ explain(
     .option("--limit <n>", "how many to show", toInteger, 20)
     .option("--json", "print the attempt records as a JSON array")
     .action(async (options: { limit: number; json?: boolean }) => {
-      const { records } = context();
+      const { records } = paymentContext();
       // An attempt left waiting by a `pay` that has since stopped is ended here, as `status` would end it.
       const attempts = await Promise.all(records.listAttempts(options.limit).map((a) => settleStaleAwaiting(records, a)));
       if (options.json) {
@@ -1015,6 +936,131 @@ explain(
       "transactionUrl and payer only when well formed; the service's answer and reason, and anything that did not " +
       "pass those checks, are under untrusted_seller_data.",
     exits: "0 listed (also when there are none), 2 bad input",
+  },
+);
+
+// ── seller ───────────────────────────────────────────────────────────────────────────────
+
+const seller = explain(
+  program
+    .command("seller")
+    .description("the seller's prepaid credit at Superstables, which the fees of referred sales come out of"),
+  {
+    notes: [
+      "The seller API key comes from SUPERSTABLES_SELLER_API_KEY, the key the seller portal issues. It is sent only " +
+        "to the Superstables origin this client already uses, in an Authorization header, and it is never printed or " +
+        "saved: an answer that holds it is discarded unread.",
+    ],
+    money: "only `seller top-up`, and only for the payment the owner approves in their wallet.",
+    who: "the seller (the owner of the seller account), in a terminal of their own.",
+    examples: ["superstables seller credit", "superstables seller top-up 25"],
+    prints: "see each subcommand's --help.",
+    exits: "0 done, 1 failed, 2 bad input, 3 refused, 4 paid but not credited, 5 unknown",
+  },
+);
+
+explain(
+  seller
+    .command("top-up")
+    .description("add to the seller's Superstables credit, with test USDC on Base Sepolia")
+    .argument("<amount>", "how much credit to add, in USDC, from 1 to 1000 (for example 25 or 25.50)")
+    .option(
+      "--wait <seconds>",
+      "stop waiting for the owner's decision after this many seconds (default: until the approval window closes)",
+      toNumber,
+    )
+    .option("--json", "print the outcome as one JSON object; progress and the approval link go to stderr")
+    .action(async (input: string, options: { wait?: number; json?: boolean }) => {
+      const say = options.json ? (line: string) => console.error(line) : (line: string) => console.log(line);
+      const { site, apiKey } = sellerClient();
+      const amount = sellerAmount(input);
+      // Every answer a seller gives the payment is screened for the key before the engine reads or keeps it.
+      const deps = paymentContext({ fetch: keyGuardedFetch(apiKey) });
+      let result: TopUpResult;
+      try {
+        result = await runTopUp({ site, apiKey, amount, say, ports: clientPorts(deps, { apiKey, wait: options.wait }) });
+      } catch (err) {
+        if (err instanceof CliError) throw err;
+        throw new CliError(
+          `${messageOf(err)}. Check ${SELLER_API_KEY_ENV}, and \`superstables seller credit\` for where the top-up stands, before trying again.`,
+        );
+      }
+      if (options.json) {
+        console.log(json(topUpJson(result)));
+      } else {
+        printTopUp(result);
+      }
+      process.exitCode = result.exitCode;
+    }),
+  {
+    notes: [
+      "It creates one top-up with the seller API, then pays it like any other x402 purchase: the same signer, the " +
+        "same spend policy and the same approval in the owner's wallet as `pay`. Nothing here bypasses them.",
+      "Before anything is signed, the answer, the pay link and the 402 are checked: a UUID id, the pay link on this " +
+        "site's origin with exactly that id's pay path and no query or fragment, and a payment on Base Sepolia " +
+        "(eip155:84532) in test USDC for exactly the amount asked for. Any mismatch is refused and nothing is paid. " +
+        "`pay` asks for the terms again before the owner is asked, and refuses changed ones as it does for a quote.",
+      "The site is held to the trust of an owner action: SUPERSTABLES_SITE when set, else the owner's site, else " +
+        "www.superstables.com, and it must be www.superstables.com or a site the owner allowed in their settings " +
+        "(staging, this machine). There is no flag that sends the key anywhere else.",
+      "No new top-up is created while an earlier one is in doubt: the site lists one as pending, a payment on this " +
+        "machine is still under way, or one that ended in doubt (unknown, or paid and not yet confirmed on chain) is " +
+        "for a top-up the site does not list. A top-up the site lists as anything but pending is not held back by an " +
+        "ended payment, and neither is a retired one, even if an old payment may have paid its old address. " +
+        "`superstables seller credit` rechecks pending top-ups, and `superstables status <attempt>` searches the " +
+        "chain and ends the attempt, which then holds nothing back.",
+      "The credit is added once the payment's block is final on chain. A payment the site reports as pending, or " +
+        "cannot confirm, or answers with money_moved other than false, on any HTTP status, is never paid again from " +
+        "here: `superstables seller credit` rechecks it. \"Nothing was charged\" is said only when nothing was " +
+        "signed. The default spend policy allows 0.05 USDC per payment, so a top-up needs a raised cap in the policy file.",
+    ],
+    money: "yes, once, and only after the owner approves it in their own wallet: test USDC on Base Sepolia.",
+    who: "the seller (the owner of the seller account).",
+    examples: ["superstables seller top-up 25", "superstables seller top-up 10.50 --json"],
+    prints:
+      "the top-up's id, amount, chain, status, the payment's outcome and transaction, and the next command. With " +
+      "--json, one object: top_up {id, amount, status, pay_url}, quote_id, attempt_id, state, chain, chain_final, " +
+      "message, next, exit_code.",
+    exits:
+      "0 paid (also when the site says this top-up is already paid), 1 nothing was signed (the site refused, the pay " +
+      "link was not payable, or the approval expired), 2 bad input (no key, a bad amount or site), 3 refused (the " +
+      "answer or the 402 named another top-up, an earlier top-up is in doubt and none was created, or a spend policy refused it), " +
+      "4 paid but the site's answer failed, 5 unknown (a payment may have moved: do not pay again)",
+  },
+);
+
+explain(
+  seller
+    .command("credit")
+    .description("the seller's credit balance, latest top-ups and credit entries")
+    .option("--json", "print the balance, top-ups and entries as one JSON object")
+    .action(async (options: { json?: boolean }) => {
+      const { site, apiKey } = sellerClient();
+      let credit: SellerCredit;
+      try {
+        credit = await readSellerCredit({ site, apiKey });
+      } catch (err) {
+        throw new CliError(`${messageOf(err)}. Nothing was paid; check ${SELLER_API_KEY_ENV}.`);
+      }
+      if (options.json) {
+        console.log(json(creditJson(credit)));
+        return;
+      }
+      printCredit(credit);
+    }),
+  {
+    notes: [
+      "Reads the seller API: the balance, the latest top-ups and the latest credit entries. It rechecks pending " +
+        "top-ups before it answers, so it can take about eight seconds.",
+      "A referred sale's fee comes out of this balance; `seller top-up` adds to it.",
+    ],
+    money: "no.",
+    who: "the seller (the owner of the seller account).",
+    examples: ["superstables seller credit", "superstables seller credit --json"],
+    prints:
+      "the balance, then a table of top-ups and one of credit entries. With --json, one object: balance, asset, " +
+      "network, top_ups, entries, next.",
+    exits: "0 read, 1 the seller API refused or could not be read, 2 no key or a bad site",
   },
 );
 
@@ -1218,21 +1264,37 @@ registerOwnerCommand(program);
 
 // ── Plumbing ─────────────────────────────────────────────────────────────────────────────
 
-/** Everything a command needs to read and write this machine's state. Built after --home. */
-function context(): {
-  records: Records;
-  policy: Policy;
-  engine: PaymentEngine;
-  signer: Signer & { status(): Promise<WalletStatus> };
-} {
-  const records = new Records(recordsDir());
-  const parsed = loadPaymentPolicy();
-  const signer = signerFor();
-  return { records, policy: parsed, engine: new PaymentEngine({ records, policy: parsed, signer }), signer };
+/**
+ * The seller API and the key for one `seller` command. A set or a site that is not allowed is bad input, said
+ * before anything is sent; the key is never repeated in the sentence.
+ */
+function sellerClient(): { site: URL; apiKey: string } {
+  let site: URL;
+  let apiKey: string;
+  try {
+    site = sellerSite();
+  } catch (err) {
+    throw badInput(`${messageOf(err)}.`);
+  }
+  try {
+    apiKey = readSellerApiKey();
+  } catch (err) {
+    throw badInput(`${messageOf(err)}.`);
+  }
+  return { site, apiKey };
+}
+
+/** The amount a top-up asks for: a plain USD decimal, at least 1 USDC, with no more decimal places than USDC has. */
+function sellerAmount(input: string): TopUpAmount {
+  try {
+    return parseTopUpAmount(input);
+  } catch (err) {
+    throw badInput(`${messageOf(err)}.`);
+  }
 }
 
 /** What `pay --json` and `status --json` print: the attempt's view, with what the CLI adds to it. */
-function attemptJson(records: Records, attempt: Attempt): Record<string, unknown> {
+function attemptJson(records: Records, attempt: Attempt, exitCode: number = exitCodeFor(attempt)): Record<string, unknown> {
   const view = attemptView({ records }, attempt);
   // A link to an attempt that has ended opens nothing useful; only a live one is worth showing.
   const { history, approval_url, ...rest } = view;
@@ -1242,7 +1304,7 @@ function attemptJson(records: Records, attempt: Attempt): Record<string, unknown
     ...(typeof rest.service_reason === "string" ? { service_reason: untrustedText(rest.service_reason, 300) } : {}),
     final: isFinalAttempt(attempt),
     chain_final: paymentOutput(attempt).chain_final,
-    exit_code: exitCodeFor(attempt),
+    exit_code: exitCode,
     next: nextFor(attempt, getQuote(attempt.quoteId, records)),
     url: attempt.url,
     price: {
@@ -1326,23 +1388,12 @@ function mayHavePaid(attempt: Attempt): boolean {
   return attempt.state === "failed" && attempt.chain !== "unpaid" && shownTransaction(attempt.transaction, attempt.terms.network).hash !== undefined;
 }
 
-/** A signer that binds a port has to give it back before the command exits. */
-async function closeSigner(signer: Signer): Promise<void> {
-  const closable = signer as Signer & { close?: () => Promise<void> };
-  if (typeof closable.close === "function") await closable.close().catch(() => undefined);
-}
-
 function payable(service: ServiceListing): string {
   if (service.actionable) return "yes";
   if (service.routes?.pay) return "with params";
   return "no";
 }
 
-function lastNote(attempt: Attempt): string {
-  const last = attempt.history[attempt.history.length - 1];
-  const note = last?.note ?? attempt.reason;
-  return note ? `: ${untrustedText(note, 1_000)}` : "";
-}
 
 function parseParams(pairs: string[]): Record<string, string> {
   const params: Record<string, string> = {};
