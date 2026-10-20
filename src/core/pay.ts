@@ -14,6 +14,7 @@
 // that could be signed or submitted, so its quote is handed back.
 
 import { EventEmitter } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import { decodePaymentResponseHeader } from "@x402/core/http";
 import type { SettleResponse } from "@x402/core/types";
 import { isAddressOn, isTransactionId, networkFor, shortLabel, txUrl, type NetworkInfo } from "./chain.js";
@@ -698,12 +699,15 @@ export class PaymentEngine {
 
     // 4. The seller reports the money moved. The chain is read to check that the transaction it names is this payment
     //    (the rail's own check); whether the service then did its job is a separate fact.
+    const payment = { ...paymentFacts(attempt, signed.signer), transaction: settlement.transaction };
     const check = attributedCheck(
       this.records,
       attempt,
       rail,
       settlement.transaction,
-      await rail.checkPayment({ ...paymentFacts(attempt, signed.signer), transaction: settlement.transaction }, this.chainRead),
+      await (settlement.success && rail.isTransaction(settlement.transaction)
+        ? checkAfterSettlement(rail, payment, this.chainRead)
+        : rail.checkPayment(payment, this.chainRead)),
     );
     if (failedWithTx && check.chain !== "verified" && !check.included) {
       // The service says the payment did not settle, but names a transaction the chain does not confirm as this payment
@@ -1605,6 +1609,26 @@ function receiptFor(input: {
     // The referral the paid request carried, if it carried one: its id, listing and terms, never the token.
     ...(attempt.referral ? { discoveredVia: "superstables" as const, referral: attempt.referral } : {}),
   };
+}
+
+/** A tip read may lag settlement. Retry only unknown reads, never the payment, within one six-second deadline. */
+async function checkAfterSettlement(rail: X402Rail, payment: PaymentFacts, options: ChainReadOptions): Promise<ChainCheck> {
+  const deadline = AbortSignal.timeout(6_000);
+  const bounded: ChainReadOptions = {
+    ...options,
+    timeoutMs: Math.min(options.timeoutMs ?? 6_000, 6_000),
+    fetchImpl: (input, init) => (options.fetchImpl ?? fetch)(input, {
+      ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline,
+    }),
+  };
+  let check = await rail.checkPayment(payment, bounded);
+  for (let reads = 1; reads < 3 && check.chain === "unchecked" && !check.included && !check.removed && !deadline.aborted; reads++) {
+    await delay(1_000, undefined, { signal: deadline }).catch(() => {});
+    if (deadline.aborted) break;
+    check = await rail.checkPayment(payment, bounded);
+  }
+  return check;
 }
 
 /** Chain reads through one RPC for every chain (tests), one per chain, or each chain's own (chainRpc). */

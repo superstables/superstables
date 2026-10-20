@@ -64,6 +64,26 @@ describe("checkSettlement", () => {
     expect(await withReceipt(undefined)).toEqual({ chain: "unchecked", missing: true, reason: "the chain does not show the transaction yet" });
   });
 
+  it.each(["0xf", null, "0x10", "0x11"])("requires a finalized head past the payment before reporting a different hash as removed (head %s)", async (head) => {
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const call = JSON.parse(String(init?.body));
+      const result = call.method === "eth_chainId" ? "0x14a34"
+        : call.method === "eth_getTransactionReceipt" ? {
+          transactionHash: TX, status: "0x1", blockNumber: "0x10",
+          blockHash: `0x${"aa".repeat(32)}`,
+        }
+        : call.params[0] === "finalized" ? (head === null ? null : { number: head })
+        : { number: "0x10", hash: `0x${"bb".repeat(32)}` };
+      return Response.json({ jsonrpc: "2.0", id: call.id, result });
+    };
+    const result = await checkSettlement(PAYMENT, { rpcUrl: "http://127.0.0.1:8545", fetchImpl });
+    if (head === "0x10" || head === "0x11") {
+      expect(result).toMatchObject({ chain: "unchecked", removed: true, missing: true });
+    } else {
+      expect(result).toEqual({ chain: "unchecked", reason: "the transaction's block could not be verified" });
+    }
+  });
+
   it("leaves it unchecked when the RPC is down or does not answer", async () => {
     chain = await startFakeBaseSepolia();
     chain.down = true;

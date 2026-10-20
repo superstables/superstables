@@ -125,6 +125,7 @@ it("preserves a delivered provisional payment and its receipt through failed rea
 it.each(["block hash changed", "log removed"])("reports a successful read showing %s as removed inclusion", async (change) => {
   const { chain, records, attempt } = await deliveredNonFinalPayment();
   chain.used.delete(attempt.authorizationNonce!);
+  chain.advance(10);
   const options = { rpcUrlFor: () => chain.url, fetchImpl: async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const call = JSON.parse(String(init?.body));
     const response = await fetch(input, init);

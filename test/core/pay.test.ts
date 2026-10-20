@@ -676,6 +676,40 @@ describe("PaymentEngine", () => {
     expect(s.records.getReceipt(pending.receiptId ?? "")?.chain).toBe("verified");
   });
 
+  it.each(["missing", "unread", "still missing"])("rechecks a %s post-settlement read without sending another payment", async (first) => {
+    const s = await stack();
+    const chain = await startFakeBaseSepolia();
+    open.push(chain);
+    chain.finalizedLag = Number(chain.head.number - 15n);
+    chain.dynamic = () => {
+      const a = s.facilitator.lastAuthorization!;
+      return paymentReceipt({ payer: a.from, to: a.to, value: a.value, nonce: a.nonce });
+    };
+    let reads = 0;
+    const lagging = await chain.mirror((method, params) => {
+      if (method === "eth_getTransactionReceipt") {
+        reads++;
+        if (first === "still missing" || (first === "missing" && reads === 1)) return null;
+      }
+      if (first === "unread" && reads === 1 && method === "eth_getBlockByNumber" && params[0] === "0x10") return null;
+      return undefined;
+    });
+    open.push(lagging);
+    const engine = new PaymentEngine({
+      records: s.records, policy: DEFAULT_POLICY, rpcUrl: lagging.url,
+      signer: new WalletSigner({ url: s.wallet.url, agentToken: s.wallet.token, pollMs: 5, timeoutMs: 3_000 }),
+    });
+    const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const final = await engine.waitForAttempt(engine.startPayment(q.id).id, 10_000);
+    expect(reads).toBe(first === "still missing" ? 3 : 2);
+    expect(shownAttempt(final)).toMatchObject({ state: "settled", chain: first === "still missing" ? "unchecked" : "verified", chain_final: first === "still missing" ? null : false });
+    expect(shownReceipt(engine.getReceipt(final.receiptId!)!)).toMatchObject({ chain: final.chain, chain_final: final.chainFinal });
+    expect(s.facilitator.calls).toEqual({ verify: 1, settle: 1 });
+    expect(s.seller.seen.filter(r => r.paid)).toHaveLength(1);
+    expect(s.records.spentToday("USDC")).toBe(0.01);
+    expect(() => engine.startPayment(q.id)).toThrow(QuoteUsedError);
+  });
+
   it("a failed settlement that names a transaction is never 'nothing was paid': the chain decides", async () => {
     const s = await stack();
     const chain = await startFakeBaseSepolia();

@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The chain check right after a payment retries briefly and no longer reports a false "removed" when the endpoint lags the newest block.
+
 ### Added
 
 - `@superstables/client/seller` reads the `Superstables-Referral` header on a paid request and verifies the token against the keys superstables.com publishes. See `docs/seller-referrals.md`.
